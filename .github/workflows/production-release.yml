@@ -308,6 +308,22 @@ jobs:
           for container in read('docker', 'ps', '-a', '--format', '{{.ID}}').splitlines():
               containers.append(read('docker', 'inspect', '--format',
                   '{{.Name}} {{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container))
+          protected_image_ids.update(container.split()[1] for container in containers)
+          unused_images = []
+          image_ids = sorted(set(read('docker', 'image', 'ls', '--no-trunc', '--quiet').splitlines()))
+          if len(image_ids) > 500:
+              raise RuntimeError('Read-only image inventory exceeds bound')
+          image_format = ('{"id":{{json .Id}},"repoTags":{{json .RepoTags}},'
+              '"repoDigests":{{json .RepoDigests}},"sizeBytes":{{json .Size}},'
+              '"sourceCommit":{{json (index .Config.Labels "org.opencontainers.image.revision")}}}')
+          for image_id in image_ids:
+              if image_id in protected_image_ids:
+                  continue
+              metadata = json.loads(read('docker', 'image', 'inspect', '--format', image_format, image_id))
+              revision = metadata['sourceCommit'] or ''
+              if len(revision) != 40 or any(char not in '0123456789abcdef' for char in revision):
+                  metadata['sourceCommit'] = None
+              unused_images.append(metadata)
           repository = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
           images = []
           for line in read('docker', 'image', 'ls', '--format', '{{json .}}').splitlines():
@@ -328,6 +344,7 @@ jobs:
               'servicesUpdated': manifest.get('servicesUpdated'),
               'backups': backup_summary, 'storageDirectories': storage_directories,
               'protectedImageIds': sorted(protected_image_ids),
+              'unusedLocalImages': unused_images,
               'disk': {'totalBytes': usage.total, 'usedBytes': usage.used, 'freeBytes': usage.free},
               'containers': containers, 'images': images,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}))
