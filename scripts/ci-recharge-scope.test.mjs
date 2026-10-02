@@ -66,6 +66,7 @@ test('release workflow diagnostics retain control checks and do not hide applica
     'deploy/aws/cache-cleanup-unified-20261002.json',
     'deploy/aws/cache-cleanup-unified-recovery-20261002.json',
     'deploy/aws/cache-cleanup-recharge-names-20261002.json',
+    'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
     'scripts/production-release/reuse-images.py',
     'docs/PRODUCTION_RELEASE_OIDC.md'
   ];
