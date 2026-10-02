@@ -37,6 +37,8 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/cleanup-verified-backups.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/')))
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
+  if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
+    run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
   const uiChecks = adminUiGuardChecks(mode, changed);
   if (uiChecks.length) {
     for (const name of uiChecks) npm('run', name);

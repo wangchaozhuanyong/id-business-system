@@ -235,5 +235,15 @@ class RechargeExecutionCacheTests(RechargeNamesCacheTests):
         self.assertEqual(self.removals(), [])
 
 
+class StorageCacheTests(RechargeNamesCacheTests):
+    plan_name = 'cache-cleanup-storage-20261002.json'
+
+    def test_all_targets_are_superseded_execution_build(self):
+        self.assertTrue(all(item['tag'].startswith(
+            '4c811392268c19aae803131166b6070344549d1d-36993584579-1-')
+            for item in self.plan['items']))
+        self.assertEqual(len(self.plan['items']), 5)
+
+
 if __name__ == '__main__':
     unittest.main()

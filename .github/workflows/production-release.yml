@@ -14,6 +14,8 @@ on:
           - cleanup_cache
           - verify_backups
           - cleanup_backups
+          - diagnose_storage
+          - cleanup_audit
           - release
       commit:
         description: Exact main commit to publish (40 lowercase hex characters)
@@ -35,6 +37,7 @@ on:
           - unified_recovery_20261002
           - recharge_names_20261002
           - recharge_execution_20261002
+          - storage_20261002
       reuse_image_run:
         description: Optional completed build run to reuse after a release-control-only repair
         required: false
@@ -134,6 +137,7 @@ jobs:
               'unified_recovery_20261002': 'deploy/aws/cache-cleanup-unified-recovery-20261002.json',
               'recharge_names_20261002': 'deploy/aws/cache-cleanup-recharge-names-20261002.json',
               'recharge_execution_20261002': 'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
+              'storage_20261002': 'deploy/aws/cache-cleanup-storage-20261002.json',
           }
           plan = Path(plans[os.environ['CLEANUP_PLAN']]).read_text()
           parsed_plan = json.loads(plan)
@@ -179,6 +183,34 @@ jobs:
           command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
             --document-name AWS-RunShellScript \
             --parameters file://.deploy/production-release/verified-backup-cleanup.json \
+            --query 'Command.CommandId' --output text)"
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
+
+      - name: Diagnose storage or clean approved routine audit records
+        if: inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit'
+        env:
+          STORAGE_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import shlex
+          operation = {'diagnose_storage': 'diagnose', 'cleanup_audit': 'cleanup-audit'}[os.environ['STORAGE_OPERATION']]
+          program = Path('scripts/production-release/storage-maintenance.py').read_text()
+          command = 'python3 -c ' + shlex.quote(program) + ' --operation ' + operation
+          command += ' --expected-current ' + shlex.quote(os.environ['EXPECTED_CURRENT'])
+          if operation == 'cleanup-audit':
+              command += ' --approved-scope audit-routine-20261002T110000Z'
+          Path('.deploy/production-release/storage-maintenance.json').write_text(json.dumps({'commands': [command], 'executionTimeout': ['600']}))
+          PY
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/storage-maintenance.json \
             --query 'Command.CommandId' --output text)"
           aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
           aws ssm get-command-invocation --command-id "$command_id" \
