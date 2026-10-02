@@ -61,6 +61,8 @@ gh workflow run production-release.yml --ref main \
 
 用户于 2026-10-03 进一步要求“帮我清理啊没用的都清理了”，本轮闲置 Docker 发布镜像采用固定保留策略 `current-previous-ecr-cache-v1`：只处理专用 ECR 仓库内符合发布命名的本机镜像，保留当前版、上一版、当前回滚清单以及所有运行／停止容器引用的镜像。删除前核验全部目标在 ECR 中可恢复为相同配置摘要，逐项复核当前版本和容器引用，再按引用执行 `docker image rm --no-prune`；不操作容器、数据卷、数据库、备份、发布目录或远端 ECR。
 
+删除旧镜像后转为闲置的构建层使用独立的一次性 `verify_unused_builder_cache`／`cleanup_unused_builder_cache`，执行时填写核验所得 `cache_plan_sha256`。只允许已审查生产及回滚基线、全部容器属于本项目、52 条缓存且无使用中缓存；只清理构建缓存，保存前后空间及回执，并核对容器镜像身份和空缓存结果。该入口不执行应用发布，也不会自动应用到后续版本。
+
 同一用户清理授权下，旧命名及无标签缓存使用独立固定清单 `deploy/aws/cache-cleanup-unused-legacy-20261003.json`：17 个镜像、18 个标签及 5 个无标签镜像，归属由历史发布清单或旧 Compose 项目标识确认，绑定当前 `c7c7cd5...`、上一版 `220c6f45...`。先执行 `verify_unused_legacy_cache`；核验完成后，`cleanup_unused_legacy_cache` 必须填写同一 `cache_plan_sha256`。固定摘要、全部标签、来源标签、项目标识和当前／回滚／容器引用都须匹配，逐个复核后按精确引用删除；无标签对象按精确镜像 ID 删除，不使用 force 或全局 prune。不修改既有审计数据清理的基线或权限。旧历史构建缓存不再保留，当前与上一版镜像继续按原策略保存；这份清单只执行一次，不进入自动发布保留策略。计划及逐项回执保存在原维护目录。
 
 当前闲置镜像可先使用 `operation=verify_unused_cache` 输出完整计划及 `planSha256`；执行 `cleanup_unused_cache` 必须填写相同 `cache_plan_sha256`，清单变化时停止。成功发布后工作流自动应用同一保留策略，绑定本次部署运行编号和零异常财务巡检；发布失败不执行清理，清理失败保留已上线服务并单独报错。持有既有发布锁，完整计划和执行收据保存至服务器 `maintenance/docker-cache-retention/`；部分失败时逐项删除记录也保留在工作流输出中。此策略只覆盖上述可恢复的发布镜像，其他清理对象仍须另行确认范围。
