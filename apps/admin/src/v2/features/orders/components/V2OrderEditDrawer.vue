@@ -102,6 +102,8 @@
 </template>
 
 <script setup lang="ts">
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
@@ -149,7 +151,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  submit: [payload: UpdateV2OrderInput];
+  submit: [payload: UpdateV2OrderInput, completeSave: () => void];
 }>();
 
 const formRef = ref<FormInstance>();
@@ -165,7 +167,8 @@ const options = ref<V2OrderEntryOptions>({
   settlementPlatforms: [],
   latestFxRates: []
 });
-const form = reactive(createEmptyOrderEditForm());
+const formDraft = useV2FormDraft('order-edit', () => createEmptyOrderEditForm());
+const form = formDraft.form;
 const { dirty: formDirty, capture: captureFormSnapshot } = useV2FormSnapshot(
   () => props.modelValue,
   () => form
@@ -326,7 +329,7 @@ watch(
 watch(
   () => [form.serviceOptionId, form.balanceAmount, form.accountSource, form.customerId],
   () => {
-    if (!initializing && props.order?.operations.canEditCore) {
+    if (!initializing && !formDraft.restoring.value && props.order?.operations.canEditCore) {
       scheduleCandidates();
     }
   }
@@ -335,7 +338,7 @@ watch(
 watch(
   () => form.accountSource,
   () => {
-    if (initializing) return;
+    if (initializing || formDraft.restoring.value) return;
     form.accountDisposition = 'retained';
     form.lockScope = 'by_service';
     form.accountId = '';
@@ -347,7 +350,8 @@ watch(
 watch(
   () => form.customerId,
   () => {
-    if (initializing || form.accountSource !== 'customer_owned') return;
+    if (initializing || formDraft.restoring.value || form.accountSource !== 'customer_owned')
+      return;
     form.accountId = '';
     candidates.value = [];
   }
@@ -362,24 +366,28 @@ watch(
 
 async function initialize(order: V2Order) {
   initializing = true;
-  Object.assign(form, {
-    customerId: order.customer.id,
-    serviceOptionId: order.service.id,
-    accountId: order.account?.id ?? '',
-    accountSource: order.accountSource,
-    accountDisposition: order.accountDisposition === 'sold' ? 'sold' : 'retained',
-    settlementPlatformOptionId: order.settlementPlatform?.id ?? '',
-    platformOrderNo: order.platformOrderNo ?? '',
-    websiteAccount: '',
-    clearWebsiteAccount: false,
-    receivedOriginalAmount: order.receivedOriginalAmount,
-    targetProfitRate: '',
-    balanceAmount: order.balanceAmount,
-    openedAt: order.openedAt ? toV2DateTimeInput(order.openedAt) : null,
-    dueAt: order.dueAt ? toV2DateTimeInput(order.dueAt) : null,
-    lockScope: order.activeLock?.lockScope ?? 'by_service',
-    remark: order.remark ?? ''
-  });
+  formDraft.open(
+    order.id,
+    {
+      customerId: order.customer.id,
+      serviceOptionId: order.service.id,
+      accountId: order.account?.id ?? '',
+      accountSource: order.accountSource,
+      accountDisposition: order.accountDisposition === 'sold' ? 'sold' : 'retained',
+      settlementPlatformOptionId: order.settlementPlatform?.id ?? '',
+      platformOrderNo: order.platformOrderNo ?? '',
+      websiteAccount: '',
+      clearWebsiteAccount: false,
+      receivedOriginalAmount: order.receivedOriginalAmount,
+      targetProfitRate: '',
+      balanceAmount: order.balanceAmount,
+      openedAt: order.openedAt ? toV2DateTimeInput(order.openedAt) : null,
+      dueAt: order.dueAt ? toV2DateTimeInput(order.dueAt) : null,
+      lockScope: order.activeLock?.lockScope ?? 'by_service',
+      remark: order.remark ?? ''
+    },
+    order.updatedAt
+  );
   profitRatePricing.resetPricingInputMode();
   candidates.value = [];
   matchingError.value = '';
@@ -496,7 +504,7 @@ async function submit() {
     openedAt: v2DateTimeInputToIso(form.openedAt),
     dueAt: v2DateTimeInputToIso(form.dueAt),
     remark: form.remark.trim() || null,
-    expectedUpdatedAt: order.updatedAt
+    expectedUpdatedAt: formDraft.version.value ?? order.updatedAt
   };
   if (order.operations.canEditPricing) {
     const platformOrderNo = form.platformOrderNo.trim() || null;
@@ -530,7 +538,7 @@ async function submit() {
   } else if (form.websiteAccount.trim()) {
     payload.websiteAccount = form.websiteAccount.trim();
   }
-  emit('submit', payload);
+  emit('submit', payload, formDraft.beginSave());
 }
 
 onBeforeUnmount(() => {

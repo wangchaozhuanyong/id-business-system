@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
@@ -6,11 +7,15 @@ import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2BalancesApi } from './api';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
-import { ensureV2BusinessNowInput, getV2BusinessNowInput } from '@/v2/runtime/businessClock';
+import { ensureV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { V2_DECIMAL_PLACES, addDecimalStrings } from '@/v2/utils/decimal';
 import { v2DateTimeInputToIso } from '@/v2/utils/dateTime';
-import { buildManualGiftCardCreditPayload, normalizeGiftCardCode } from './gift-card-credit-form';
-import { useTopupListQuery } from './topup-query';
+import {
+  buildManualGiftCardCreditPayload,
+  createEmptyGiftCardCreditForm,
+  normalizeGiftCardCode
+} from './gift-card-credit-form';
+import { useTopupListQuery, type AccountList, type TopupListState } from './topup-query';
 import type {
   V2GiftCardReversalAction,
   V2OptionSelector,
@@ -32,15 +37,10 @@ import {
   servicePath
 } from './topup-workbench-support';
 
-type AccountList = 'available' | 'sold';
-interface TopupListState {
-  page: number;
-  pageSize: number;
-  sortBy: V2TopupWorkbenchSortBy;
-  sortOrder: 'asc' | 'desc';
-}
 export function useTopupWorkbenchPage() {
-  const activeList = ref<AccountList>('available');
+  const activeList = useV2SessionDraft('topups/useTopupWorkbenchPage:activeList', () =>
+    ref<AccountList>('available')
+  );
   const listState = reactive<Record<AccountList, TopupListState>>({
     available: { page: 1, pageSize: 20, sortBy: 'updatedAt', sortOrder: 'desc' },
     sold: { page: 1, pageSize: 20, sortBy: 'updatedAt', sortOrder: 'desc' }
@@ -76,19 +76,12 @@ export function useTopupWorkbenchPage() {
   } | null>(null);
   const reversalIdempotencyKey = ref('');
   const reversalSubmitting = ref(false);
-  const creditForm = reactive({
-    cardNameOptionId: '',
-    countryOptionId: '',
-    code: '',
-    faceValue: '',
-    exchangeRate: '',
-    supplierOptionId: '',
-    creditedAt: getV2BusinessNowInput(),
-    remark: ''
-  });
-  const reversalForm = reactive({
+  const creditFormDraft = useV2FormDraft('gift-card-credit-editor', createEmptyGiftCardCreditForm);
+  const creditForm = creditFormDraft.form;
+  const reversalFormDraft = useV2FormDraft('gift-card-reversal-editor', () => ({
     reason: ''
-  });
+  }));
+  const reversalForm = reversalFormDraft.form;
   const creditDirty = computed(
     () =>
       Boolean(creditInitialSnapshot.value) && snapshotCreditForm() !== creditInitialSnapshot.value
@@ -147,14 +140,16 @@ export function useTopupWorkbenchPage() {
   });
   let reversalLoadSequence = 0;
 
-  const query = reactive({
-    keyword: '',
-    countryOptionId: '',
-    balancePreset: '' as V2TopupBalancePreset,
-    balanceMin: '',
-    balanceMax: '',
-    onlyNormal: true
-  });
+  const query = useV2SessionDraft('topups/useTopupWorkbenchPage:query', () =>
+    reactive({
+      keyword: '',
+      countryOptionId: '',
+      balancePreset: '' as V2TopupBalancePreset,
+      balanceMin: '',
+      balanceMax: '',
+      onlyNormal: true
+    })
+  );
 
   function getTopupListQuery(list: AccountList): V2TopupWorkbenchListQuery {
     const state = listState[list];
@@ -338,8 +333,8 @@ export function useTopupWorkbenchPage() {
     creditDrawerVisible.value = true;
     creditConfirmationVisible.value = false;
     creditIdempotencyKey.value = createIdempotencyKey();
-    Object.assign(
-      creditForm,
+    creditFormDraft.open(
+      account.id,
       createTopupCreditForm(account, cardNameOptions.value[0]?.id ?? '', creditedAt)
     );
     creditInitialSnapshot.value = snapshotCreditForm();
@@ -381,6 +376,7 @@ export function useTopupWorkbenchPage() {
     if (!selectedAccount.value || creditDisabledReason.value || creditSubmitting.value) return;
 
     creditSubmitting.value = true;
+    const completeSave = creditFormDraft.beginSave();
     try {
       const result = await idBusinessV2BalancesApi.confirmGiftCardCredit(
         selectedAccount.value.id,
@@ -410,6 +406,7 @@ export function useTopupWorkbenchPage() {
         ElMessage.success(successMessage);
       }
       creditConfirmationVisible.value = false;
+      completeSave();
       creditDrawerVisible.value = false;
       void loadWorkbench();
     } catch (error) {
@@ -427,7 +424,6 @@ export function useTopupWorkbenchPage() {
     reversalResolved.value = false;
     reversalLimited.value = false;
     pendingReversal.value = null;
-    reversalForm.reason = '';
     reversalConfirmationVisible.value = false;
     reversalDrawerVisible.value = true;
     void loadReversibleGiftCards();
@@ -467,7 +463,7 @@ export function useTopupWorkbenchPage() {
       return;
     }
     pendingReversal.value = { giftCard, action };
-    reversalForm.reason = '';
+    reversalFormDraft.open(`${giftCard.id}:${action}`);
     reversalIdempotencyKey.value = createIdempotencyKey();
     reversalConfirmationVisible.value = true;
   }
@@ -482,6 +478,7 @@ export function useTopupWorkbenchPage() {
     }
 
     reversalSubmitting.value = true;
+    const completeSave = reversalFormDraft.beginSave();
     try {
       const result = await idBusinessV2BalancesApi.reverseGiftCard(pending.giftCard.id, {
         action: pending.action,
@@ -504,6 +501,7 @@ export function useTopupWorkbenchPage() {
             ? '礼品卡已标记被赎回，余额与成本已扣减'
             : '礼品卡已撤回，余额与成本已扣减'
       );
+      completeSave();
       reversalConfirmationVisible.value = false;
       pendingReversal.value = null;
       await Promise.all([loadReversibleGiftCards(), loadWorkbench()]);

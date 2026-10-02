@@ -66,6 +66,7 @@
               :aria-busy="loading"
               :aria-describedby="loginError ? 'v2-login-error-message' : undefined"
               class="v2-horizontal-form v2-login-form"
+              size="large"
               label-position="left"
               label-width="120px"
               require-asterisk-position="right"
@@ -123,6 +124,7 @@
                 <AppButton
                   variant="ghost"
                   class="v2-login-totp-trigger"
+                  size="large"
                   native-type="button"
                   @click="totpToolOpen = true"
                 >
@@ -296,7 +298,7 @@ onMounted(() => {
   border: 1px solid color-mix(in srgb, var(--v3-border) 72%, transparent);
   border-radius: 18px;
   background: color-mix(in srgb, var(--v3-surface-2) 78%, var(--v3-surface));
-  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 50%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--v3-surface) 50%, transparent);
   color: var(--v3-text);
 }
 
@@ -395,53 +397,14 @@ onMounted(() => {
 
 .login-panel :deep(.el-form-item__label) {
   width: 120px !important;
-  height: auto;
   margin: 0;
   padding: 0 18px 0 0;
-  color: var(--v3-text);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.5;
-}
-
-.login-panel :deep(.el-input__wrapper) {
-  min-height: 56px;
-  padding: 0 16px;
-  border: 1px solid var(--v3-border);
-  border-radius: 16px;
-  background: var(--v3-surface);
-  box-shadow: none;
-  transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease,
-    background-color 180ms ease;
-}
-
-.login-panel :deep(.el-input__wrapper:hover) {
-  border-color: var(--v3-muted);
-  box-shadow: none;
-}
-
-.login-panel :deep(.el-input__wrapper.is-focus) {
-  border-color: var(--v3-primary);
-  box-shadow: var(--v3-focus-ring);
-  transform: translateY(-1px);
 }
 
 .login-panel :deep(.el-input__prefix) {
   margin-right: 11px;
   color: var(--v3-text-soft);
   font-size: 20px;
-}
-
-.login-panel :deep(.el-input__inner) {
-  color: var(--v3-text);
-  font-size: 14px;
-}
-
-.login-panel :deep(.el-input__inner::placeholder) {
-  color: var(--v3-muted);
 }
 
 .login-panel :deep(.el-input__inner:-webkit-autofill) {
@@ -455,26 +418,8 @@ onMounted(() => {
   margin-top: -8px;
 }
 
-.login-panel :deep(.v2-login-totp-trigger) {
-  min-height: 38px;
-  border-radius: 12px;
-  font-weight: 650;
-}
-
 .login-panel :deep(.full-button) {
-  min-height: 56px;
   margin-top: 2px;
-  border-radius: 18px;
-  font-size: 15px;
-  font-weight: 700;
-  transition:
-    transform 180ms ease,
-    box-shadow 180ms ease,
-    background-color 180ms ease;
-}
-
-.login-panel :deep(.full-button:active) {
-  transform: translateY(1px) scale(0.99);
 }
 
 @media (max-width: 620px) {
@@ -517,33 +462,17 @@ onMounted(() => {
 
   .login-panel :deep(.el-form-item__label) {
     width: 76px !important;
-    min-height: 50px;
     margin: 0;
-    padding: 14px 0 0;
-    color: var(--v3-text-soft);
-    font-size: 13px;
-    line-height: 1.35;
+    padding: 0;
   }
 
   .login-panel :deep(.el-form-item__content) {
     min-width: 0;
   }
 
-  .login-panel :deep(.el-input__wrapper) {
-    min-height: 50px;
-    padding: 0 13px;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--v3-surface) 88%, var(--color-bg));
-  }
-
   .login-panel :deep(.el-input__prefix) {
     margin-right: 8px;
     font-size: 18px;
-  }
-
-  .login-panel :deep(.full-button) {
-    min-height: 52px;
-    border-radius: 16px;
   }
 }
 
@@ -565,7 +494,6 @@ onMounted(() => {
 
   .login-panel :deep(.el-form-item__label) {
     width: 66px !important;
-    font-size: 12px;
   }
 }
 </style>

@@ -49,8 +49,10 @@ class ReviewedCacheTests(unittest.TestCase):
                 for item in self.plan['items']]})
         raise AssertionError(args)
 
-    def invoke(self, apply=False, plan=None):
+    def invoke(self, apply=False, plan=None, expected_current=None):
         argv = ['cleanup', '--plan-json', json.dumps(plan or self.plan)]
+        if expected_current:
+            argv.extend(['--expected-current', expected_current])
         if apply:
             argv.extend(['--apply', '--approved-plan-sha256', self.digest])
         with patch.object(sys, 'argv', argv), \
@@ -138,7 +140,7 @@ class ReviewedCacheTests(unittest.TestCase):
     def test_approved_older_version_does_not_extend_the_previous_rollback_chain(self):
         self.previous['rollback'] = {'images': {'admin': self.plan['items'][0]['imageId']}}
         self.invoke(True)
-        self.assertEqual(len(self.removals()), 10)
+        self.assertEqual(len(self.removals()), len(self.plan['items']))
 
     def test_local_identity_change_is_rejected(self):
         self.local_wrong = True
@@ -149,13 +151,24 @@ class ReviewedCacheTests(unittest.TestCase):
     def test_plan_change_requires_new_authorization(self):
         changed = copy.deepcopy(self.plan)
         changed['items'].pop()
-        with self.assertRaisesRegex(RuntimeError, 'reviewed ten-reference digest'):
+        with self.assertRaisesRegex(RuntimeError, 'reviewed cache digest'):
             self.invoke(True, changed)
         self.assertEqual(self.removals(), [])
 
 
 class FxSubscriptionCacheTests(ReviewedCacheTests):
     plan_name = 'cache-cleanup-fx-subscription-20261002.json'
+
+
+class UnifiedReleaseCacheTests(ReviewedCacheTests):
+    plan_name = 'cache-cleanup-unified-20261002.json'
+
+    def test_post_release_requires_the_exact_new_current_and_preserves_previous(self):
+        self.manifest['commit'] = 'a' * 40
+        self.assertEqual(self.invoke(expected_current='a' * 40)['mode'], 'PLAN_ONLY')
+        with self.assertRaisesRegex(RuntimeError, 'Production baseline changed'):
+            self.invoke(True, expected_current='b' * 40)
+        self.assertEqual(self.removals(), [])
 
 
 if __name__ == '__main__':

@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref } from 'vue';
@@ -36,21 +37,24 @@ function emptyForm(): EmployeeFormModel {
 
 export function useEmployeesPage() {
   const authStore = useAuthStore();
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    status: '' as V2EmployeeStatus | '',
-    roleId: '',
-    sortBy: 'createdAt' as NonNullable<V2EmployeeListQuery['sortBy']>,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  const query = useV2SessionDraft('employees-filters', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      status: '' as V2EmployeeStatus | '',
+      roleId: '',
+      sortBy: 'createdAt' as NonNullable<V2EmployeeListQuery['sortBy']>,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
   const drawerVisible = ref(false);
   const editingItem = ref<V2Employee | null>(null);
   const saving = ref(false);
   const mutationError = ref('');
-  const form = reactive<EmployeeFormModel>(emptyForm());
-  const formBaseline = ref(JSON.stringify(emptyForm()));
+  const editorDraft = useV2FormDraft('employees-editor', emptyForm);
+  const { form } = editorDraft;
+  const formBaseline = editorDraft.original;
 
   function getListQuery(): V2EmployeeListQuery {
     return {
@@ -187,8 +191,7 @@ export function useEmployeesPage() {
   }
 
   function setForm(next: EmployeeFormModel) {
-    Object.assign(form, next);
-    formBaseline.value = JSON.stringify(next);
+    editorDraft.open(editingItem.value?.id ?? 'create', next, editingItem.value?.updatedAt);
   }
 
   function openCreate() {
@@ -236,10 +239,11 @@ export function useEmployeesPage() {
     }
 
     saving.value = true;
+    const completeSave = editorDraft.beginSave();
     try {
       if (current) {
         const input: UpdateV2EmployeeInput = {
-          expectedUpdatedAt: current.updatedAt,
+          expectedUpdatedAt: editorDraft.version.value ?? current.updatedAt,
           displayName: form.displayName.trim()
         };
         if (!isEditingSelf.value) {
@@ -258,6 +262,7 @@ export function useEmployeesPage() {
         await v2EmployeesApi.create(input);
         ElMessage.success('员工账号已开通');
       }
+      completeSave();
       drawerVisible.value = false;
       await employeesQuery.refresh();
     } catch (error) {

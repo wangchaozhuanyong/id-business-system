@@ -108,7 +108,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
@@ -135,7 +136,11 @@ const detail = ref<V2TopupSupplierLedgerResult | null>(null);
 const loading = ref(false);
 const resolved = ref(false);
 const error = ref('');
-const query = reactive({ page: 1, pageSize: 20 });
+const queryDraft = useV2FormDraft('supplier-fund-details-filters', () => ({
+  page: 1,
+  pageSize: 20
+}));
+const query = queryDraft.form;
 const latestRequest = useV2LatestRequest();
 const displayedPage = computed(() => detail.value?.page ?? query.page);
 const displayedPageSize = computed(() => detail.value?.pageSize ?? query.pageSize);
@@ -144,7 +149,7 @@ function open(item: V2TopupSupplierFundItem) {
   const switchingTarget = supplier.value?.supplier.id !== item.supplier.id;
   supplier.value = item;
   visible.value = true;
-  query.page = 1;
+  queryDraft.open(item.supplier.id);
   if (switchingTarget) {
     detail.value = null;
     resolved.value = false;

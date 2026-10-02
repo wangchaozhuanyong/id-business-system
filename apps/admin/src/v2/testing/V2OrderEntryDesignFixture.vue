@@ -55,6 +55,7 @@
             <section class="v2-order-entry-workspace">
               <el-form
                 class="v2-horizontal-form v2-order-entry-form"
+                size="large"
                 label-position="left"
                 label-width="112px"
                 require-asterisk-position="right"

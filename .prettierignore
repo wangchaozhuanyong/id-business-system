@@ -12,3 +12,8 @@ deploy/nginx/*.conf
 scripts/*.sh
 .dockerignore
 .gitignore
+
+.deploy/
+.runtime/
+.codex-worktrees/
+.worktrees/

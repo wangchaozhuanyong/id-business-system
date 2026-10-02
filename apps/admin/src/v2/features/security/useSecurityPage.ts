@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref } from 'vue';
@@ -59,23 +60,27 @@ const EMPTY_OVERVIEW: V2SecurityOverview = {
 };
 
 export function useSecurityPage() {
-  const activeTab = ref<V2SecurityTab>('login_logs');
+  const activeTab = useV2SessionDraft('security/useSecurityPage:activeTab', () =>
+    ref<V2SecurityTab>('login_logs')
+  );
   const revokingSessionId = ref('');
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    status: '' as '' | 'success' | 'failed' | 'blocked',
-    abnormal: '' as '' | 'true' | 'false',
-    revoked: 'false' as '' | 'true' | 'false',
-    scope: '' as '' | 'admin' | 'api',
-    enabled: '' as '' | 'true' | 'false',
-    sortBy: 'createdAt',
-    sortOrder: 'desc' as 'asc' | 'desc',
-    mfaUserPage: 1,
-    mfaUserPageSize: 10,
-    mfaUserKeyword: ''
-  });
+  const query = useV2SessionDraft('security/useSecurityPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      status: '' as '' | 'success' | 'failed' | 'blocked',
+      abnormal: '' as '' | 'true' | 'false',
+      revoked: 'false' as '' | 'true' | 'false',
+      scope: '' as '' | 'admin' | 'api',
+      enabled: '' as '' | 'true' | 'false',
+      sortBy: 'createdAt',
+      sortOrder: 'desc' as 'asc' | 'desc',
+      mfaUserPage: 1,
+      mfaUserPageSize: 10,
+      mfaUserKeyword: ''
+    })
+  );
 
   function loginQuery(): V2LoginLogListQuery {
     const allowed = ['createdAt', 'username', 'status', 'abnormal', 'ip'] as const;

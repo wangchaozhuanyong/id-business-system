@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { useV2LatestRequest } from './useV2LatestRequest';
 
 describe('useV2LatestRequest', () => {
+  it('returns an aborted handle when a delayed callback runs after disposal', () => {
+    const scope = effectScope();
+    const latest = scope.run(useV2LatestRequest);
+    if (!latest) return;
+    scope.stop();
+    const delayed = latest.begin();
+    expect(delayed.signal.aborted).toBe(true);
+    expect(delayed.isCurrent()).toBe(false);
+  });
   it('aborts the previous request and only accepts the latest request', () => {
     const scope = effectScope();
     const latest = scope.run(useV2LatestRequest);

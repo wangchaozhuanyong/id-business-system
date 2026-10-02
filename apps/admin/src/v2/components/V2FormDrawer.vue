@@ -74,7 +74,7 @@ const props = withDefaults(
     confirmDisabledReason: '',
     confirmLoading: false,
     dirty: false,
-    retainDraft: false
+    retainDraft: true
   }
 );
 

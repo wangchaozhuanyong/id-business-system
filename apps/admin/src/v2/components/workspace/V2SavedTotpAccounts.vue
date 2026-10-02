@@ -275,7 +275,7 @@ const {
   form,
   original: editorSnapshot,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft<SavedTotpForm>('saved-totp-editor', () => ({ name: '', secret: '' }));
 useV2DrawerNavigation(() => {
   editorVisible.value = false;
@@ -384,8 +384,8 @@ function startEdit(item: V2SavedTotpAccount) {
   editorVisible.value = true;
 }
 
-function resetEditor() {
-  completeDraft();
+function resetEditor(completeDraft = beginDraftSave()) {
+  if (!completeDraft()) return;
   editorVisible.value = false;
   editorMode.value = 'create';
   editingId.value = '';
@@ -398,6 +398,7 @@ function resetEditor() {
 async function submitEditor() {
   if (!authStore.writesAllowed || saving.value || !(await validateV2Form(formRef.value))) return;
   saving.value = true;
+  const completeDraft = beginDraftSave();
   mutationError.value = '';
   try {
     if (editorMode.value === 'edit') {
@@ -413,7 +414,7 @@ async function submitEditor() {
       });
       ElMessage.success('2FA 账号已添加');
     }
-    resetEditor();
+    resetEditor(completeDraft);
     await accountsQuery.refresh();
   } catch (error) {
     mutationError.value = getApiErrorMessage(error);

@@ -66,7 +66,7 @@ const {
   form,
   original,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft('recharge-payment-caps', () => ({ amount: '' }));
 const amount = toRef(form, 'amount');
 const saving = ref(false);
@@ -98,6 +98,7 @@ const disabledReason = computed(() =>
 async function save() {
   if (disabledReason.value || saving.value) return;
   saving.value = true;
+  const completeDraft = beginDraftSave();
   saveError.value = '';
   try {
     await rechargeApi.updatePaymentCap(props.plan, props.currencyCode, amount.value);

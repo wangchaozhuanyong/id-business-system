@@ -9,12 +9,14 @@ export interface V2LatestRequestHandle {
 export function useV2LatestRequest() {
   let revision = 0;
   let controller: AbortController | undefined;
+  let disposed = false;
 
   function begin(): V2LatestRequestHandle {
     controller?.abort();
     const requestRevision = ++revision;
     const requestController = new AbortController();
-    controller = requestController;
+    if (disposed) requestController.abort();
+    else controller = requestController;
 
     return {
       signal: requestController.signal,
@@ -34,7 +36,10 @@ export function useV2LatestRequest() {
     controller = undefined;
   }
 
-  onScopeDispose(cancel);
+  onScopeDispose(() => {
+    disposed = true;
+    cancel();
+  });
 
   return { begin, cancel };
 }

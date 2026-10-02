@@ -1,4 +1,14 @@
 import { formatV2Decimal } from '@/v2/utils/decimal';
+import type { V2AccountLifecycle } from './contracts';
+
+export function accountLifecycleLabel(lifecycle: V2AccountLifecycle) {
+  return {
+    available: '可用 ID',
+    disabled: '已停用 ID',
+    sold: '已售出 ID',
+    reported: '已报损 ID'
+  }[lifecycle];
+}
 
 export function formatAccountDecimal(value: string) {
   return formatV2Decimal(value);

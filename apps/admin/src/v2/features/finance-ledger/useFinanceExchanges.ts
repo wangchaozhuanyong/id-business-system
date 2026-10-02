@@ -171,8 +171,8 @@ export function useFinanceExchanges(
       return;
     }
     submitting.value = true;
-    const completeSave = () => formDraft.complete();
-    const completeReason = () => reasonDraft.complete();
+    const completeSave = formDraft.beginSave();
+    const completeReason = reasonDraft.beginSave();
     error.value = '';
     try {
       const payload: V2FinanceExchangeWrite = {
@@ -221,7 +221,7 @@ export function useFinanceExchanges(
       return;
     }
     submitting.value = true;
-    const completeReversalReasonSave = () => reversalReasonDraft.complete();
+    const completeReversalReasonSave = reversalReasonDraft.beginSave();
     error.value = '';
     try {
       await idBusinessV2FinanceApi.reverseExchange(reversing.value.id, {

@@ -1,5 +1,5 @@
-import type { BankRechargeOrderStatus } from './bank-recharge-api';
 import type { V2RechargeJob } from './contracts';
+import type { BankRechargeOrderStatus } from './bank-recharge-api';
 
 export const planLabels = {
   plus: 'ChatGPT Plus',

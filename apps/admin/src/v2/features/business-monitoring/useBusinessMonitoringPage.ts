@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
@@ -22,12 +23,14 @@ import type {
 export function useBusinessMonitoringPage() {
   const router = useRouter();
   const selectedFindingId = ref<string | null>(null);
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    severity: '' as V2BusinessMonitoringSeverity | '',
-    category: '' as V2BusinessMonitoringCategory | ''
-  });
+  const query = useV2SessionDraft('business-monitoring/useBusinessMonitoringPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      severity: '' as V2BusinessMonitoringSeverity | '',
+      category: '' as V2BusinessMonitoringCategory | ''
+    })
+  );
 
   function listQuery(): V2BusinessMonitoringListQuery {
     return {

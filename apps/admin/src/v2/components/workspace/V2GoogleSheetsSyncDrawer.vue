@@ -45,8 +45,8 @@
               <strong>{{ status.enabled ? '已开启' : '已暂停' }}</strong>
             </div>
             <div>
-              <span>同步频率</span>
-              <strong>约 {{ status.syncIntervalSeconds }} 秒</strong>
+              <span>有变化才同步</span>
+              <strong>变更后约 {{ status.automaticTriggerDelaySeconds ?? 5 }} 秒</strong>
             </div>
             <div>
               <span>最后成功</span>
@@ -107,6 +107,22 @@
                   </AppButton>
                 </div>
               </el-form-item>
+              <el-form-item label="网盘目标文件夹">
+                <div class="v2-google-sheets-copy-row">
+                  <el-input
+                    :model-value="status.targetFolderUrl || '尚未配置，由服务器统一设置'"
+                    readonly
+                  />
+                  <AppButton
+                    v-if="status.targetFolderUrl"
+                    size="small"
+                    variant="soft"
+                    @click="openSpreadsheet(status.targetFolderUrl)"
+                  >
+                    打开
+                  </AppButton>
+                </div>
+              </el-form-item>
             </el-form>
             <div class="v2-google-sheets-actions">
               <AppButton
@@ -154,7 +170,10 @@
               <span>{{ status.excludedData.join('、') }}</span>
             </div>
             <footer>
-              <span>每张明细表最多同步最近 10,000 条记录；同步失败不会影响业务录入。</span>
+              <span
+                >无变化不上传；每张表达到 10,000 条数据行时清理最旧 100 条，标题行不计数。每
+                {{ status.syncIntervalSeconds }} 秒只核对版本补漏，失败自动重试。</span
+              >
               <div>
                 <AppButton
                   v-if="status.spreadsheetUrl"
@@ -216,8 +235,11 @@ const form = reactive({ clientId: '', clientSecret: '' });
 
 const syncHelp = [
   '这是单向报表同步，Google 表格不会反向修改系统数据库。',
-  '授权只使用 drive.file，系统只能管理自己创建的报表文件。',
-  '有业务变化时约 30 秒内自动更新，也可以手动立即同步。'
+  '授权只使用 drive.file，系统管理自己的报表和明确授权的目标文件夹。',
+  '有新增、修改或删除才同步，变更后约 5 秒合并触发；没有变化不上传。每 30 秒只核对版本补漏。',
+  '每张表达到 10,000 条数据行就清理最旧 100 条，之后再次达到继续清理；旧数据在上、新数据在下，标题行保留。清理仅作用于网盘报表，原数据库记录保留。',
+  '邮箱池同步邮箱地址；ChatGPT 账号、客户联系方式和银行卡号仅同步脱敏信息。密码、密钥和验证码不会同步。',
+  '配置目标文件夹后，既有报表自动移入，新报表直接创建在该文件夹；文件夹无权访问时显示错误。'
 ];
 const helpLinks = [
   { label: '打开 Google API 凭据', href: 'https://console.cloud.google.com/apis/credentials' },

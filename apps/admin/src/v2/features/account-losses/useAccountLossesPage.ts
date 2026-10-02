@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -16,17 +17,21 @@ interface AccountLossesPageSnapshot {
 }
 
 export function useAccountLossesPage() {
-  const reportedRange = ref<[string, string] | []>([]);
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    countryOptionId: '',
-    saleState: '' as 'available' | 'sold' | '',
-    status: 'active' as 'active' | 'reversed' | '',
-    sortBy: 'reportedAt' as NonNullable<V2AccountLossListQuery['sortBy']>,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  const reportedRange = useV2SessionDraft('account-losses/useAccountLossesPage:reportedRange', () =>
+    ref<[string, string] | []>([])
+  );
+  const query = useV2SessionDraft('account-losses/useAccountLossesPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      countryOptionId: '',
+      saleState: '' as 'available' | 'sold' | '',
+      status: 'active' as 'active' | 'reversed' | '',
+      sortBy: 'reportedAt' as NonNullable<V2AccountLossListQuery['sortBy']>,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
 
   function getListQuery(): V2AccountLossListQuery {
     return {

@@ -229,12 +229,18 @@ import type { V2RechargeAddress, V2RechargeAddressStatus } from './contracts';
 import '@/v2/styles/records.css';
 import './recharge-addresses.css';
 
-const page = ref(1);
-const pageSize = ref(20);
-const keywordInput = ref('');
-const statusInput = ref<V2RechargeAddressStatus | 'all'>('all');
-const keyword = ref('');
-const status = ref<V2RechargeAddressStatus | 'all'>('all');
+const page = useV2SessionDraft('auto-recharge/V2RechargeAddressesView:page', () => ref(1));
+const pageSize = useV2SessionDraft('auto-recharge/V2RechargeAddressesView:pageSize', () => ref(20));
+const keywordInput = useV2SessionDraft('auto-recharge/V2RechargeAddressesView:keywordInput', () =>
+  ref('')
+);
+const statusInput = useV2SessionDraft('auto-recharge/V2RechargeAddressesView:statusInput', () =>
+  ref<V2RechargeAddressStatus | 'all'>('all')
+);
+const keyword = useV2SessionDraft('auto-recharge/V2RechargeAddressesView:keyword', () => ref(''));
+const status = useV2SessionDraft('auto-recharge/V2RechargeAddressesView:status', () =>
+  ref<V2RechargeAddressStatus | 'all'>('all')
+);
 const { pendingStreets, fileName } = useV2SessionDraft('recharge-address-import', () => ({
   pendingStreets: ref<string[]>([]),
   fileName: ref('')

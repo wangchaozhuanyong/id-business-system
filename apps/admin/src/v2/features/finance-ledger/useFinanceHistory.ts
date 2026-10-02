@@ -1,4 +1,5 @@
-import { computed, reactive, ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, reactive, ref } from 'vue';
 import type {
   V2FinanceHistoryBackfillPreview,
   V2FinanceHistoryConfirmationPreview
@@ -21,8 +22,12 @@ export function useFinanceHistory({ refresh }: { refresh: () => Promise<unknown>
     supplierBalancesConfirmed: false,
     historicalExpensesConfirmed: false
   });
-  const historyNote = ref('');
-  const historyReopenReason = ref('');
+  const historyNoteDraft = useV2FormDraft('finance-history-note', () => ({ value: '' }));
+  const historyNote = toRef(historyNoteDraft.form, 'value');
+  const historyReopenReasonDraft = useV2FormDraft('finance-history-reopen-reason', () => ({
+    value: ''
+  }));
+  const historyReopenReason = toRef(historyReopenReasonDraft.form, 'value');
   const historyDrawerDirty = computed(() =>
     historyDrawerMode.value === 'reopen'
       ? Boolean(historyReopenReason.value)
@@ -96,7 +101,7 @@ export function useFinanceHistory({ refresh }: { refresh: () => Promise<unknown>
 
   async function openHistoryConfirmation() {
     historyDrawerMode.value = 'confirm';
-    historyNote.value = '';
+    historyNoteDraft.open('current');
     historyChecklist.financeAccountsConfirmed = false;
     historyChecklist.supplierBalancesConfirmed = false;
     historyChecklist.historicalExpensesConfirmed = false;
@@ -114,7 +119,7 @@ export function useFinanceHistory({ refresh }: { refresh: () => Promise<unknown>
 
   function openHistoryReopen() {
     historyDrawerMode.value = 'reopen';
-    historyReopenReason.value = '';
+    historyReopenReasonDraft.open('current');
     historyDrawerVisible.value = true;
   }
 
@@ -123,6 +128,10 @@ export function useFinanceHistory({ refresh }: { refresh: () => Promise<unknown>
       return showWarning(historyConfirmationDisabledReason.value);
     }
     historySubmitting.value = true;
+    const completeHistoryNoteSave =
+      historyDrawerMode.value === 'confirm' ? historyNoteDraft.beginSave() : () => {};
+    const completeHistoryReopenReasonSave =
+      historyDrawerMode.value === 'reopen' ? historyReopenReasonDraft.beginSave() : () => {};
     try {
       if (historyDrawerMode.value === 'reopen') {
         await idBusinessV2FinanceApi.reopenHistoryConfirmation(historyReopenReason.value.trim());
@@ -136,6 +145,8 @@ export function useFinanceHistory({ refresh }: { refresh: () => Promise<unknown>
         });
         ElMessage.success('历史数据完整性已确认');
       }
+      completeHistoryReopenReasonSave();
+      completeHistoryNoteSave();
       historyDrawerVisible.value = false;
       await refresh();
     } catch (cause) {

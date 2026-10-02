@@ -172,8 +172,10 @@
 </template>
 
 <script setup lang="ts">
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+
 import type { FormInstance, FormRules } from 'element-plus';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   V2_BRANDING_DEFAULTS,
   V2_BRANDING_LIMITS,
@@ -195,9 +197,13 @@ import '@/v2/styles/branding.css';
 
 const formRef = ref<FormInstance>();
 const saving = ref(false);
-const form = reactive<UpdateV2BrandingSettingsInput>({ ...V2_BRANDING_DEFAULTS });
+const formDraft = useV2FormDraft<UpdateV2BrandingSettingsInput>('branding-settings', () => ({
+  ...V2_BRANDING_DEFAULTS
+}));
+const form = formDraft.form;
 const syncedForm = ref<UpdateV2BrandingSettingsInput>({ ...V2_BRANDING_DEFAULTS });
 const expectedUpdatedAt = ref('');
+let initialized = false;
 const brandingQuery = useV2ModuleQuery<V2BrandingSettings>({
   moduleKey: 'branding',
   scope: 'branding',
@@ -265,11 +271,12 @@ watch(
   (settings) => {
     if (!settings) return;
     setV2Branding(settings);
-    if (hasUnsavedChanges.value) return;
+    if (initialized && hasUnsavedChanges.value) return;
     const nextForm = toFormInput(settings);
-    Object.assign(form, nextForm);
-    syncedForm.value = nextForm;
-    expectedUpdatedAt.value = settings.updatedAt;
+    formDraft.open('settings', nextForm, settings.updatedAt);
+    syncedForm.value = JSON.parse(formDraft.original.value) as UpdateV2BrandingSettingsInput;
+    expectedUpdatedAt.value = formDraft.version.value ?? settings.updatedAt;
+    initialized = true;
   },
   { immediate: true }
 );
@@ -281,13 +288,15 @@ async function submit() {
     return;
   }
   saving.value = true;
+  const completeSave = formDraft.beginSave();
   try {
     const settings = await idBusinessV2BrandingApi.update({
       ...form,
       expectedUpdatedAt: expectedUpdatedAt.value
     });
     const nextForm = toFormInput(settings);
-    Object.assign(form, nextForm);
+    completeSave();
+    formDraft.open('settings', nextForm, settings.updatedAt);
     syncedForm.value = nextForm;
     expectedUpdatedAt.value = settings.updatedAt;
     setV2Branding(settings);

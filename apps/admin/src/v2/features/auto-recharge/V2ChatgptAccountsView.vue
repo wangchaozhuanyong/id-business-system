@@ -268,7 +268,7 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
-import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
@@ -287,11 +287,16 @@ function subscriptionLabel(account: BankChatgptAccount) {
   return labels[account.subscriptionState];
 }
 
-const page = ref(1);
-const pageSize = ref(20);
-const keyword = ref('');
-const keywordInput = ref('');
-const subscriptionState = ref('all');
+const page = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:page', () => ref(1));
+const pageSize = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:pageSize', () => ref(20));
+const keyword = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:keyword', () => ref(''));
+const keywordInput = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:keywordInput', () =>
+  ref('')
+);
+const subscriptionState = useV2SessionDraft(
+  'auto-recharge/V2ChatgptAccountsView:subscriptionState',
+  () => ref('all')
+);
 const query = useV2ModuleQuery({
   moduleKey: 'chatgpt-accounts',
   scope: 'auto-recharge',
@@ -389,6 +394,7 @@ function openEdit(account: BankChatgptAccount) {
 async function save() {
   if (!(await validateV2Form(formRef.value))) return;
   saving.value = true;
+  const completeSave = editorDraft.beginSave();
   saveError.value = '';
   try {
     if (editing.value) {
@@ -408,7 +414,7 @@ async function save() {
         remark: form.remark
       });
     }
-    editorDraft.complete();
+    completeSave();
     drawerOpen.value = false;
     form.password = '';
     form.totpSecret = '';

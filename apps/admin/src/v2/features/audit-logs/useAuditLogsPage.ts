@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
@@ -36,20 +37,26 @@ type AuditPageSnapshot =
 
 export function useAuditLogsPage() {
   const router = useRouter();
-  const activeTab = ref<V2AuditLogTab>('operations');
-  const createdRange = ref<[string, string] | []>([]);
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    module: '',
-    operator: '',
-    action: '',
-    fieldName: '',
-    approved: '' as '' | 'true' | 'false',
-    sortBy: 'createdAt',
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  const activeTab = useV2SessionDraft('audit-logs/useAuditLogsPage:activeTab', () =>
+    ref<V2AuditLogTab>('operations')
+  );
+  const createdRange = useV2SessionDraft('audit-logs/useAuditLogsPage:createdRange', () =>
+    ref<[string, string] | []>([])
+  );
+  const query = useV2SessionDraft('audit-logs/useAuditLogsPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      module: '',
+      operator: '',
+      action: '',
+      fieldName: '',
+      approved: '' as '' | 'true' | 'false',
+      sortBy: 'createdAt',
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
   const detailDrawerVisible = ref(false);
   const selectedOperation = ref<V2AuditLogRecord | null>(null);
   const selectedSensitiveAccess = ref<V2SensitiveAccessLogRecord | null>(null);

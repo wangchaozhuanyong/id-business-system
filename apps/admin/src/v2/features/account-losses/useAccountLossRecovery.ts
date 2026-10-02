@@ -1,4 +1,5 @@
-import { computed, ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
@@ -16,7 +17,8 @@ export function useAccountLossRecovery(options: AccountLossRecoveryOptions) {
   const recoveryTarget = ref<V2AccountLossRecord | null>(null);
   const recoveryDialogVisible = ref(false);
   const recoverySubmitting = ref(false);
-  const recoveryReason = ref('');
+  const recoveryReasonDraft = useV2FormDraft('account-loss-recovery-reason', () => ({ value: '' }));
+  const recoveryReason = toRef(recoveryReasonDraft.form, 'value');
   const recoveryIdempotencyKey = ref('');
   const canRecover = computed(
     () =>
@@ -30,7 +32,7 @@ export function useAccountLossRecovery(options: AccountLossRecoveryOptions) {
   function openRecovery(item: V2AccountLossRecord) {
     if (!canRecover.value || item.status !== 'active') return;
     recoveryTarget.value = item;
-    recoveryReason.value = '';
+    recoveryReasonDraft.open(item.id);
     recoveryIdempotencyKey.value = `account-loss-recovery-${globalThis.crypto.randomUUID()}`;
     recoveryDialogVisible.value = true;
   }
@@ -58,6 +60,7 @@ export function useAccountLossRecovery(options: AccountLossRecoveryOptions) {
     }
 
     recoverySubmitting.value = true;
+    const completeRecoveryReasonSave = recoveryReasonDraft.beginSave();
     try {
       await idBusinessV2AccountLossesApi.recover(target.accountId, {
         reason: recoveryReason.value.trim(),
@@ -65,6 +68,7 @@ export function useAccountLossRecovery(options: AccountLossRecoveryOptions) {
         idempotencyKey: recoveryIdempotencyKey.value
       });
       ElMessage.success('ID 已恢复可用，原报损记录和财务冲回已保留');
+      completeRecoveryReasonSave();
       recoveryDialogVisible.value = false;
       recoveryTarget.value = null;
       await options.refreshRecords();

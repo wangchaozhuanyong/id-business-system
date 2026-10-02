@@ -1,7 +1,14 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Subject } from 'rxjs';
+import type { V2ChangePublisherMessage } from '../../common/prisma/v2-change-event.publisher';
 import { IdBusinessV2GoogleSheetsSyncService } from './id-business-v2-google-sheets-sync.service';
 import { IdBusinessV2GoogleSheetsSyncWorker } from './id-business-v2-google-sheets-sync.worker';
+import { IdBusinessV2GoogleApiError } from './providers/id-business-v2-google-api-http';
+import {
+  GOOGLE_SHEETS_RETENTION_KEY,
+  writeGoogleSheetsRetention
+} from './id-business-v2-google-sheets-retention';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -90,12 +97,19 @@ function fixture() {
       if (state.runLeaseId === id)
         Object.assign(state, { runLeaseId: null, runLeaseExpiresAt: null });
     }),
-    listSourceVersions: vi.fn(async () => ({ orders: '1' })),
+    listSourceVersions: vi.fn(async (): Promise<Record<string, string>> => ({ orders: '1' })),
     loadReportSource: vi.fn(async () => ({
       orders: [],
       giftCards: [],
       renewals: [],
-      financeJournals: []
+      financeJournals: [],
+      chatgptAccounts: [],
+      mailboxes: [],
+      bankCards: [],
+      customers: [],
+      wallets: [],
+      financeEntries: [],
+      retention: { records: {} }
     }))
   };
   const encryption = {
@@ -111,10 +125,17 @@ function fixture() {
   };
   const sheets = {
     createSpreadsheet: vi.fn(async () => 'fixture-file'),
+    ensureSpreadsheetInFolder: vi.fn(async () => undefined),
+    ensureReportSheets: vi.fn(async () => undefined),
     replaceReports: vi.fn(async () => undefined),
     spreadsheetUrl: () => 'https://docs.google.com/spreadsheets/d/fixture/edit'
   };
-  const config = { get: vi.fn<() => string | undefined>(() => 'https://id.example.test') };
+  const config = {
+    get: vi.fn<(key: string) => string | undefined>((key) =>
+      key === 'APP_PUBLIC_URL' ? 'https://id.example.test' : undefined
+    )
+  };
+  const changes = new Subject<V2ChangePublisherMessage>();
   const service = new IdBusinessV2GoogleSheetsSyncService(
     repository as never,
     transaction as never,
@@ -131,9 +152,10 @@ function fixture() {
     oauth as never,
     sheets as never,
     transaction as never,
-    audit as never
+    audit as never,
+    { events: () => changes.asObservable() } as never
   );
-  return { state, repository, audit, oauth, sheets, service, worker, config };
+  return { state, repository, audit, oauth, sheets, service, worker, config, changes };
 }
 
 const operator = { id: 'fixture-admin', roles: ['admin'] } as never;
@@ -145,6 +167,235 @@ afterEach(() => {
 });
 
 describe('Google Sheets authorization and sync cancellation', () => {
+  function emitOrderChange(f: ReturnType<typeof fixture>) {
+    f.changes.next({
+      type: 'change',
+      event: {
+        schemaVersion: 1,
+        eventId: 'fixture-event',
+        occurredAt: new Date().toISOString(),
+        scopes: [{ scope: 'orders', version: '2' }]
+      }
+    });
+  }
+
+  it('merges committed writes and runs without any browser subscriber', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.worker.onModuleInit();
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(1);
+      f.repository.listSourceVersions.mockResolvedValue({ orders: '2' });
+      emitOrderChange(f);
+      await vi.advanceTimersByTimeAsync(4_000);
+      emitOrderChange(f);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+    } finally {
+      f.worker.onModuleDestroy();
+    }
+  });
+
+  it('does not acquire a lease, refresh Google authorization or export unchanged data while idle', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.worker.onModuleInit();
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(f.repository.acquireLease).toHaveBeenCalledOnce();
+      expect(f.repository.loadReportSource).toHaveBeenCalledOnce();
+      expect(f.oauth.refresh).toHaveBeenCalledOnce();
+      expect(f.sheets.replaceReports).toHaveBeenCalledOnce();
+    } finally {
+      f.worker.onModuleDestroy();
+    }
+  });
+
+  it('advances the retirement cursor only after all Google writes finish successfully', async () => {
+    const f = fixture();
+    const before = {
+      records: { bankCards: { createdAt: '2026-10-02T00:00:00.000123Z', id: 'card-100' } }
+    };
+    const after = {
+      records: { bankCards: { createdAt: '2026-10-02T00:00:00.000123Z', id: 'card-200' } }
+    };
+    f.state.sourceVersions = { [GOOGLE_SHEETS_RETENTION_KEY]: writeGoogleSheetsRetention(before) };
+    f.repository.loadReportSource.mockResolvedValue({
+      orders: [],
+      giftCards: [],
+      renewals: [],
+      financeJournals: [],
+      chatgptAccounts: [],
+      mailboxes: [],
+      bankCards: [],
+      customers: [],
+      wallets: [],
+      financeEntries: [],
+      retention: after
+    });
+    f.sheets.replaceReports.mockRejectedValueOnce(new Error('fixture-google-failure'));
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    expect((await f.worker.runNow(true)).succeeded).toBe(false);
+    expect((f.state.sourceVersions as Record<string, string>)[GOOGLE_SHEETS_RETENTION_KEY]).toBe(
+      writeGoogleSheetsRetention(before)
+    );
+    expect((await f.worker.runNow(true)).succeeded).toBe(true);
+    expect((f.state.sourceVersions as Record<string, string>)[GOOGLE_SHEETS_RETENTION_KEY]).toBe(
+      writeGoogleSheetsRetention(after)
+    );
+    expect(f.repository.loadReportSource).toHaveBeenCalledWith(before);
+  });
+
+  it('reconciles a lost event from persisted versions and stops event handling on shutdown', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.worker.onModuleInit();
+    await vi.advanceTimersByTimeAsync(5_000);
+    f.repository.listSourceVersions.mockResolvedValue({ orders: '2' });
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+    f.worker.onModuleDestroy();
+    emitOrderChange(f);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps changes received during an in-flight write for a follow-up sync', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const writing = deferred<undefined>();
+    f.sheets.replaceReports.mockReturnValueOnce(writing.promise);
+    f.worker.onModuleInit();
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledOnce();
+      f.repository.listSourceVersions.mockResolvedValue({ orders: '2' });
+      emitOrderChange(f);
+      writing.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+      expect(f.state.sourceVersions).toMatchObject({ orders: '2' });
+    } finally {
+      f.worker.onModuleDestroy();
+    }
+  });
+
+  it('backs off failed external writes even when new data keeps arriving', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const f = fixture();
+    f.sheets.replaceReports.mockRejectedValue(new Error('fixture-google-unavailable'));
+    f.worker.onModuleInit();
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      for (let index = 0; index < 5; index += 1) {
+        emitOrderChange(f);
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      expect(f.sheets.replaceReports).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+      emitOrderChange(f);
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(3);
+    } finally {
+      f.worker.onModuleDestroy();
+    }
+  });
+
+  it('moves an existing report even when business versions did not change', async () => {
+    const f = fixture();
+    await f.worker.runNow(true);
+    f.config.get.mockImplementation((key) =>
+      key === 'GOOGLE_DRIVE_SYNC_FOLDER_ID' ? 'fixture-folder-123' : 'https://id.example.test'
+    );
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10_000);
+    expect((await f.worker.runNow(false)).succeeded).toBe(true);
+    expect(f.sheets.ensureSpreadsheetInFolder).toHaveBeenCalledWith(
+      'fixture-access',
+      'fixture-file',
+      'fixture-folder-123'
+    );
+    expect(f.sheets.createSpreadsheet).toHaveBeenCalledOnce();
+  });
+
+  it('upgrades an existing report without a destination folder even when source data is unchanged', async () => {
+    const f = fixture();
+    await f.worker.runNow(true);
+    f.state.sourceVersions = { ...(f.state.sourceVersions as object), 'report-schema': '1' };
+    const start = Date.now();
+    const time = vi.spyOn(Date, 'now').mockReturnValue(start + 10_000);
+    expect((await f.worker.runNow(false)).succeeded).toBe(true);
+    expect(f.sheets.createSpreadsheet).toHaveBeenCalledOnce();
+    expect(f.sheets.ensureSpreadsheetInFolder).not.toHaveBeenCalled();
+    expect(f.sheets.ensureReportSheets).toHaveBeenLastCalledWith('fixture-access', 'fixture-file', [
+      '订单',
+      '加卡',
+      '续费',
+      '财务汇总',
+      'ChatGPT账号',
+      '验证码邮箱',
+      '银行卡',
+      '客户',
+      '开通',
+      '钱包账户',
+      '收支记账'
+    ]);
+    expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+    time.mockReturnValue(start + 20_000);
+    expect((await f.worker.runNow(false)).skipped).toBe(true);
+    expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+  });
+
+  it('automatically exports a mailbox edit using its persisted workspace version', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.repository.listSourceVersions.mockResolvedValue({ orders: '1', workspace: '1' });
+    f.worker.onModuleInit();
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      f.repository.listSourceVersions.mockResolvedValue({ orders: '1', workspace: '2' });
+      f.changes.next({
+        type: 'change',
+        event: {
+          schemaVersion: 1,
+          eventId: 'mailbox-edit',
+          occurredAt: new Date().toISOString(),
+          scopes: [{ scope: 'workspace', version: '2' }]
+        }
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+      expect(f.state.sourceVersions).toMatchObject({ workspace: '2' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.sheets.replaceReports).toHaveBeenCalledTimes(2);
+    } finally {
+      f.worker.onModuleDestroy();
+    }
+  });
+
+  it('retains the report file and checkpoint when the destination folder is inaccessible', async () => {
+    const f = fixture();
+    f.state.spreadsheetIdEncrypted = 'encrypted-fixture-file';
+    f.state.sourceVersions = { orders: '0' };
+    f.config.get.mockImplementation((key) =>
+      key === 'GOOGLE_DRIVE_SYNC_FOLDER_ID' ? 'fixture-folder-123' : 'https://id.example.test'
+    );
+    f.sheets.ensureSpreadsheetInFolder.mockRejectedValue(
+      new IdBusinessV2GoogleApiError('无法访问目标文件夹', 'GOOGLE_DRIVE_FOLDER_UNAVAILABLE', 404)
+    );
+    expect((await f.worker.runNow(true)).succeeded).toBe(false);
+    expect(f.state.spreadsheetIdEncrypted).toBe('encrypted-fixture-file');
+    expect(f.state.sourceVersions).toEqual({ orders: '0' });
+    expect(f.sheets.replaceReports).not.toHaveBeenCalled();
+  });
+
   it('completes a current authorization and consumes its state once', async () => {
     const f = fixture();
     expect(await f.service.completeAuthorization(callback)).toBe(true);
@@ -248,7 +499,7 @@ describe('Google Sheets authorization and sync cancellation', () => {
     const f = fixture();
     expect((await f.worker.runNow(true)).succeeded).toBe(true);
     expect(f.sheets.replaceReports).toHaveBeenCalledTimes(1);
-    expect(f.state.sourceVersions).toEqual({ orders: '1' });
+    expect(f.state.sourceVersions).toMatchObject({ orders: '1' });
   });
 
   it('contains timer failures before lease acquisition and keeps scheduling retries', async () => {

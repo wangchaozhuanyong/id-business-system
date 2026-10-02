@@ -119,7 +119,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+
+import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
@@ -143,14 +145,18 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  submit: [payload: Omit<RecordV2OrderUpgradeBalanceReturnInput, 'idempotencyKey'>];
+  submit: [
+    payload: Omit<RecordV2OrderUpgradeBalanceReturnInput, 'idempotencyKey'>,
+    completeSave: () => void
+  ];
 }>();
 
 const formRef = ref<FormInstance>();
-const form = reactive({
+const formDraft = useV2FormDraft('order-upgrade-return', () => ({
   returnedBalanceAmount: '',
   reason: ''
-});
+}));
+const form = formDraft.form;
 const preview = ref<V2OrderUpgradeBalanceReturnPreview | null>(null);
 const previewLoading = ref(false);
 const previewError = ref('');
@@ -215,7 +221,7 @@ watch(
     previewError.value = '';
     previewedAmount.value = '';
     if (!visible) return;
-    Object.assign(form, { returnedBalanceAmount: '', reason: '' });
+    formDraft.open(props.order?.id ?? 'none', { returnedBalanceAmount: '', reason: '' });
     captureFormSnapshot();
   }
 );
@@ -266,10 +272,14 @@ watch(
 
 async function submit() {
   if (submitDisabledReason.value || !(await validateV2Form(formRef.value))) return;
-  emit('submit', {
-    returnedBalanceAmount: form.returnedBalanceAmount.trim(),
-    reason: form.reason.trim()
-  });
+  emit(
+    'submit',
+    {
+      returnedBalanceAmount: form.returnedBalanceAmount.trim(),
+      reason: form.reason.trim()
+    },
+    formDraft.beginSave()
+  );
 }
 </script>
 

@@ -1,13 +1,21 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { V2_GOOGLE_SHEETS_REPORT_NAMES } from '@apple-business/shared';
+import type { Subscription } from 'rxjs';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import { V2ChangeEventPublisher } from '../../common/prisma/v2-change-event.publisher';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
   toV2JsonDocument
 } from '../runtime/public-api';
-import { buildIdBusinessV2GoogleSheetsReports } from './id-business-v2-google-sheets-report';
+import { prepareIdBusinessV2GoogleSheetsReports } from './id-business-v2-google-sheets-report';
+import {
+  GOOGLE_SHEETS_RETENTION_KEY,
+  readGoogleSheetsRetention,
+  writeGoogleSheetsRetention
+} from './id-business-v2-google-sheets-retention';
 import { IdBusinessV2GoogleSheetsSyncService } from './id-business-v2-google-sheets-sync.service';
 import {
   IdBusinessV2GoogleSheetsSyncRepository,
@@ -16,15 +24,27 @@ import {
 import { IdBusinessV2GoogleApiError } from './providers/id-business-v2-google-api-http';
 import { IdBusinessV2GoogleSheetsClient } from './providers/id-business-v2-google-sheets.client';
 import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-google-sheets-oauth.client';
+import {
+  affectsGoogleSheetsReports,
+  GOOGLE_SHEETS_CHANGE_DELAY_MS,
+  GOOGLE_SHEETS_RECONCILE_MS,
+  GOOGLE_SHEETS_REPORT_VERSION
+} from './id-business-v2-google-sheets-sync-policy';
 
-const TICK_MS = 30_000;
 const LEASE_MS = 5 * 60_000;
+const MAX_RETRY_MS = 15 * 60_000;
 
 @Injectable()
 export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(IdBusinessV2GoogleSheetsSyncWorker.name);
   private timer: NodeJS.Timeout | null = null;
   private localRunning = false;
+  private changeTimer: NodeJS.Timeout | null = null;
+  private changeSubscription: Subscription | null = null;
+  private pendingChange = false;
+  private stopped = false;
+  private nextAutomaticRunAt = 0;
+  private consecutiveFailures = 0;
 
   constructor(
     private readonly repository: IdBusinessV2GoogleSheetsSyncRepository,
@@ -33,35 +53,75 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
     private readonly googleOAuth: IdBusinessV2GoogleSheetsOAuthClient,
     private readonly googleSheets: IdBusinessV2GoogleSheetsClient,
     private readonly transactionManager: V2CommandTransactionManager,
-    private readonly audit: V2TransactionalAuditService
+    private readonly audit: V2TransactionalAuditService,
+    private readonly changePublisher: V2ChangeEventPublisher
   ) {}
 
   onModuleInit() {
+    this.stopped = false;
+    this.changeSubscription = this.changePublisher.events().subscribe((message) => {
+      if (
+        message.type === 'reconcile' ||
+        message.event.scopes.some(({ scope }) => affectsGoogleSheetsReports(scope))
+      ) {
+        this.scheduleChange();
+      }
+    });
     this.timer = setInterval(() => {
-      void this.runNow(false).catch(() => {
-        this.logger.warn('Google 表格定时检查失败，将在下次检查时重试');
-      });
-    }, TICK_MS);
+      this.runAutomatic();
+    }, GOOGLE_SHEETS_RECONCILE_MS);
     this.timer.unref?.();
+    this.scheduleChange();
   }
 
   onModuleDestroy() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.changeTimer) clearTimeout(this.changeTimer);
+    this.changeSubscription?.unsubscribe();
+    this.changeSubscription = null;
+    this.changeTimer = null;
     this.timer = null;
   }
 
   async runNow(force: boolean, operator?: AuthenticatedUser, requestId = 'google-sheets-sync-run') {
     if (operator) await this.service.getStatus(operator);
     if (this.localRunning) return { skipped: true, status: await this.service.getSystemStatus() };
+    if (!force && Date.now() < this.nextAutomaticRunAt)
+      return { skipped: true, status: await this.service.getSystemStatus() };
+    const previous = await this.repository.getConfiguration();
+    if (
+      !previous?.enabled ||
+      !previous.googleOAuthClientId ||
+      !previous.clientSecretEncrypted ||
+      !previous.refreshTokenEncrypted
+    )
+      return { skipped: true, status: await this.service.getSystemStatus() };
+    const folderId = this.service.destinationFolderId();
+    const versions = {
+      ...(await this.repository.listSourceVersions()),
+      'report-schema': GOOGLE_SHEETS_REPORT_VERSION,
+      'drive-destination': createHash('sha256')
+        .update(folderId ?? 'root')
+        .digest('hex')
+    };
+    if (
+      !force &&
+      this.versionsEqual(previous.sourceVersions, versions) &&
+      previous.spreadsheetIdEncrypted
+    )
+      return { skipped: true, status: await this.service.getSystemStatus() };
     const leaseId = randomUUID();
     const now = new Date();
     const acquired = await this.repository.acquireLease(
       leaseId,
       now,
-      new Date(now.getTime() + LEASE_MS)
+      new Date(now.getTime() + LEASE_MS),
+      force
     );
     if (!acquired) return { skipped: true, status: await this.service.getSystemStatus() };
     this.localRunning = true;
+    this.nextAutomaticRunAt = Date.now() + GOOGLE_SHEETS_CHANGE_DELAY_MS;
     let succeeded = false;
     let runGuard: GoogleSheetsRunGuard = { leaseId };
     try {
@@ -79,7 +139,6 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
         clientSecretEncrypted: record.clientSecretEncrypted,
         refreshTokenEncrypted: record.refreshTokenEncrypted
       };
-      const versions = await this.repository.listSourceVersions();
       if (
         !force &&
         this.versionsEqual(record.sourceVersions, versions) &&
@@ -107,12 +166,11 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
         ? this.service.decryptSecret(record.spreadsheetIdEncrypted, 'Google 表格文件编号')
         : null;
       if (!spreadsheetId) {
-        spreadsheetId = await this.googleSheets.createSpreadsheet(token.accessToken, [
-          '订单',
-          '加卡',
-          '续费',
-          '财务汇总'
-        ]);
+        spreadsheetId = await this.googleSheets.createSpreadsheet(
+          token.accessToken,
+          V2_GOOGLE_SHEETS_REPORT_NAMES,
+          folderId
+        );
         const encryptedSpreadsheetId = this.encryption.encrypt(spreadsheetId);
         if (!encryptedSpreadsheetId) throw new Error('Google 表格文件编号加密失败');
         const saved = await this.repository.updateRunIfCurrent(runGuard, {
@@ -120,23 +178,52 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
         });
         if (!saved) return { skipped: true, status: await this.service.getSystemStatus() };
       }
-      const source = await this.repository.loadReportSource();
-      const reports = buildIdBusinessV2GoogleSheetsReports(source);
+      if (folderId) {
+        if (!(await this.repository.hasCurrentLease(runGuard)))
+          return { skipped: true, status: await this.service.getSystemStatus() };
+        await this.googleSheets.ensureSpreadsheetInFolder(
+          token.accessToken,
+          spreadsheetId,
+          folderId
+        );
+      }
+      if (!(await this.repository.hasCurrentLease(runGuard)))
+        return { skipped: true, status: await this.service.getSystemStatus() };
+      await this.googleSheets.ensureReportSheets(
+        token.accessToken,
+        spreadsheetId,
+        V2_GOOGLE_SHEETS_REPORT_NAMES
+      );
+      const retention = readGoogleSheetsRetention(record.sourceVersions);
+      const source = await this.repository.loadReportSource(retention);
+      const prepared = prepareIdBusinessV2GoogleSheetsReports(source, source.retention);
       if (!(await this.repository.hasCurrentLease(runGuard))) {
         return { skipped: true, status: await this.service.getSystemStatus() };
       }
-      await this.googleSheets.replaceReports(token.accessToken, spreadsheetId, reports);
+      await this.googleSheets.replaceReports(
+        token.accessToken,
+        spreadsheetId,
+        prepared.reports,
+        () => this.repository.hasCurrentLease(runGuard)
+      );
       succeeded = await this.repository.updateRunIfCurrent(runGuard, {
         lastErrorCode: null,
         lastErrorMessage: null,
         lastSucceededAt: new Date(),
-        sourceVersions: versions
+        sourceVersions: {
+          ...versions,
+          [GOOGLE_SHEETS_RETENTION_KEY]: writeGoogleSheetsRetention(prepared.retention)
+        }
       });
+      this.consecutiveFailures = 0;
       if (succeeded && operator?.id) await this.auditManualRun(operator, requestId);
     } catch (error) {
+      this.recordFailure();
       const normalized = this.normalizeError(error);
       await this.repository.updateRunIfCurrent(runGuard, {
-        ...(normalized.status === 404 ? { spreadsheetIdEncrypted: null, sourceVersions: {} } : {}),
+        ...(normalized.status === 404 && normalized.code !== 'GOOGLE_DRIVE_FOLDER_UNAVAILABLE'
+          ? { spreadsheetIdEncrypted: null }
+          : {}),
         lastErrorCode: normalized.code,
         lastErrorMessage: normalized.message
       });
@@ -144,8 +231,40 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
     } finally {
       this.localRunning = false;
       await this.repository.releaseLease(leaseId);
+      if (this.pendingChange && !this.stopped) this.scheduleChange();
     }
     return { skipped: false, status: await this.service.getSystemStatus(), succeeded };
+  }
+
+  private scheduleChange() {
+    this.pendingChange = true;
+    if (this.changeTimer || this.localRunning || this.stopped) return;
+    const delay = Math.max(GOOGLE_SHEETS_CHANGE_DELAY_MS, this.nextAutomaticRunAt - Date.now());
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = null;
+      if (this.localRunning) return;
+      this.pendingChange = false;
+      this.runAutomatic();
+    }, delay);
+    this.changeTimer.unref?.();
+  }
+
+  private runAutomatic() {
+    if (this.stopped || this.localRunning || Date.now() < this.nextAutomaticRunAt) return;
+    void this.runNow(false).catch(() => {
+      this.recordFailure();
+      this.logger.warn('Google 表格定时检查失败，将在下次检查时重试');
+    });
+  }
+
+  private recordFailure() {
+    this.consecutiveFailures += 1;
+    this.nextAutomaticRunAt =
+      Date.now() +
+      Math.min(
+        MAX_RETRY_MS,
+        GOOGLE_SHEETS_RECONCILE_MS * 2 ** Math.min(this.consecutiveFailures - 1, 5)
+      );
   }
 
   private versionsEqual(saved: unknown, current: Record<string, string>) {

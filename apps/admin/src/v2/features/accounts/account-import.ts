@@ -1,3 +1,5 @@
+import { ref } from 'vue';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { decodeCsvTextSafetyPrefix, exportRowsToCsv } from '@/utils/exportCsv';
 import { resolveAccountCountryCsvHeader } from '@/v2/utils/csv';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
@@ -11,6 +13,17 @@ import type { ImportV2AccountRowInput, V2OptionSelector, V2RecordStatus } from '
 export interface AccountImportFailure {
   rowNumber: number;
   reason: string;
+}
+
+export function useAccountImportDraft() {
+  return useV2SessionDraft('accounts-import', () => ({
+    importFilename: ref(''),
+    importRows: ref<ImportV2AccountRowInput[]>([]),
+    importFailures: ref<AccountImportFailure[]>([]),
+    importSourceRowCount: ref(0),
+    importCompleted: ref(false),
+    importSuccessCount: ref(0)
+  }));
 }
 
 interface AccountImportOptions {

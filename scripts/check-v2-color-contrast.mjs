@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { parse as parseVue } from '@vue/compiler-sfc';
+import postcss from 'postcss';
 
 const rootDir = process.cwd();
 const baseCssPath = path.join(rootDir, 'apps/admin/src/v2/styles/base.css');
@@ -10,6 +12,81 @@ const baseCss = readFileSync(baseCssPath, 'utf8');
 const themeSource = readFileSync(themePath, 'utf8');
 const uiRules = readFileSync(uiRulesPath, 'utf8');
 const failures = [];
+
+// A fallback hides a missing token in light mode and can silently break dark mode.
+// Include inline style keys so runtime layout variables are not mistaken for theme tokens.
+const skinSources = collectSkinSources(path.join(rootDir, 'apps/admin/src/v2'));
+const declaredTokens = new Set();
+for (const { source } of skinSources) {
+  for (const match of source.matchAll(/(--v[23]-[a-z0-9-]+)['"]?\s*:/gi)) {
+    declaredTokens.add(match[1]);
+  }
+}
+for (const { filename, source } of skinSources) {
+  const referencedTokens = new Set(
+    [...source.matchAll(/var\(\s*(--v[23]-[a-z0-9-]+)/gi)].map((match) => match[1])
+  );
+  for (const token of referencedTokens) {
+    if (!declaredTokens.has(token)) {
+      failures.push(`${path.relative(rootDir, filename)}: 未定义皮肤变量 ${token}`);
+    }
+  }
+  if (filename === baseCssPath || filename.includes(`${path.sep}testing${path.sep}`)) continue;
+  const styles = filename.endsWith('.css')
+    ? [source]
+    : filename.endsWith('.vue')
+      ? parseVue(source).descriptor.styles.map((style) => style.content)
+      : [];
+  for (const style of styles) {
+    postcss.parse(style).walkDecls((declaration) => {
+      const selector = declaration.parent.selector || '';
+      if (/#[a-f\d]{3,8}\b|rgba?\(/i.test(declaration.value)) {
+        failures.push(
+          `${path.relative(rootDir, filename)}: ${selector} 的 ${declaration.prop} 必须引用共享主题令牌`
+        );
+      }
+      if (
+        selector.includes('.el-form-item__label') &&
+        /^(?:height|min-height|align-items|color|font-size|font-weight|line-height|letter-spacing|padding-top)$/.test(
+          declaration.prop
+        )
+      ) {
+        failures.push(
+          `${path.relative(rootDir, filename)}: 标签 ${declaration.prop} 只能在 base.css 定义`
+        );
+      }
+      if (
+        /\.vendure-(?:copy-btn|mailbox-code|relay-paste-btn|relay-big-copy-btn|relay-search-btn|relay-toggle-body-btn)/.test(
+          selector
+        ) &&
+        /^(?:height|min-height|border(?:-.*)?|background(?:-.*)?|color|box-shadow|font(?:-.*)?|transition|transform)$/.test(
+          declaration.prop
+        )
+      ) {
+        failures.push(
+          `${path.relative(rootDir, filename)}: 操作按钮 ${declaration.prop} 必须复用共享皮肤`
+        );
+      }
+    });
+  }
+  if (filename.endsWith('VendureMailboxManager.vue')) {
+    const template = parseVue(source).descriptor.template?.content || '';
+    if (
+      /<button\b[^>]*class="vendure-(?:copy-btn|mailbox-code|relay-paste-btn|relay-big-copy-btn|relay-toggle-body-btn)/s.test(
+        template
+      )
+    ) {
+      failures.push(`${path.relative(rootDir, filename)}: 操作按钮必须复用 AppButton`);
+    }
+  }
+}
+const shellRule = extractBlock(
+  readFileSync(path.join(rootDir, 'apps/admin/src/v2/styles/v2.css'), 'utf8'),
+  '.v2-shell'
+);
+if (/--v2-[a-z0-9-]+\s*:\s*var\(--v3-/i.test(shellRule)) {
+  failures.push('v2.css: 主题别名必须在 base.css 全局定义，不能只在应用壳内生效');
+}
 
 const lightTokens = readCustomProperties(extractBlock(baseCss, ':root'));
 const darkTokens = new Map(lightTokens);
@@ -168,11 +245,20 @@ if (failures.length) {
 }
 
 console.log(
-  `V2 color contrast check passed (${contrastPairs.length} pairs x 2 themes, 6 button variants, Element Plus theme bridge).`
+  `V2 color contrast check passed (${contrastPairs.length} pairs x 2 themes, 6 button variants, Element Plus theme bridge, no undefined skin tokens, no page palettes or duplicate label skins).`
 );
 
+function collectSkinSources(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) return collectSkinSources(filename);
+    if (!/\.(css|vue|ts)$/.test(entry.name) || /\.(spec|test)\.ts$/.test(entry.name)) return [];
+    return [{ filename, source: readFileSync(filename, 'utf8') }];
+  });
+}
+
 function extractBlock(source, selector) {
-  const selectorIndex = source.indexOf(selector);
+  const selectorIndex = source.search(new RegExp(`^\\s*${escapeRegExp(selector)}\\s*\\{`, 'm'));
   if (selectorIndex === -1) {
     failures.push(`${path.relative(rootDir, baseCssPath)}: 缺少 ${selector}`);
     return '';

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { adminCheckCommands } from './ci-recharge-scope.mjs';
+import { adminCheckCommands, adminUiGuardChecks } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
 const mode = process.env.CHECK_MODE || 'recharge';
@@ -37,18 +37,9 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/cleanup-verified-backups.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/')))
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
-  if (mode === 'admin' || mode === 'mailbox') {
-    const checks = [
-      'check:admin-ui',
-      'check:v2-ui-language',
-      'check:v2-table-standard',
-      'check:v2-loading-standard',
-      'check:v2-color-contrast',
-      'check:v2-isolation',
-      'check:v2-decimal-standard'
-    ];
-    if (mode === 'admin') checks.splice(4, 0, 'check:v2-module-architecture');
-    for (const name of checks) npm('run', name);
+  const uiChecks = adminUiGuardChecks(mode, changed);
+  if (uiChecks.length) {
+    for (const name of uiChecks) npm('run', name);
   } else if (mode !== 'ci-only') {
     npm(
       'run',

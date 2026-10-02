@@ -128,7 +128,7 @@ function indicatorIcon(item: DashboardMetricItem) {
 
 .v2-dashboard-metric:hover {
   border-color: color-mix(in srgb, var(--v2-accent) 32%, var(--v2-border));
-  box-shadow: 0 8px 18px rgba(7, 24, 41, 0.06);
+  box-shadow: var(--v3-shadow-sm);
 }
 
 .v2-dashboard-metric__header,

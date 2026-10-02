@@ -37,7 +37,10 @@ export function useOrderUpgradeBalanceReturn(input: UseOrderUpgradeBalanceReturn
     visible.value = true;
   }
 
-  async function record(payload: Omit<RecordV2OrderUpgradeBalanceReturnInput, 'idempotencyKey'>) {
+  async function record(
+    payload: Omit<RecordV2OrderUpgradeBalanceReturnInput, 'idempotencyKey'>,
+    completeSave?: () => void
+  ) {
     const target = order.value;
     if (!target || !input.canUpdateOrders.value) return;
 
@@ -49,6 +52,7 @@ export function useOrderUpgradeBalanceReturn(input: UseOrderUpgradeBalanceReturn
         idempotencyKey: getOrCreateOrderActionKey(input.actionKeys, 'upgrade-return', target.id)
       });
       input.actionKeys.delete(keyName);
+      completeSave?.();
       visible.value = false;
       order.value = result.order;
       if (input.detail.value?.id === target.id) input.detail.value = result.order;

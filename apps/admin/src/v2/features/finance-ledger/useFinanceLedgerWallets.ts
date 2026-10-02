@@ -1,4 +1,5 @@
-import { computed, reactive, ref, type ComputedRef } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { computed, ref, type ComputedRef } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { ensureV2BusinessNowInput, getV2BusinessNowInput } from '@/v2/runtime/businessClock';
@@ -15,14 +16,15 @@ export function useFinanceLedgerWallets(input: {
 }) {
   const walletDrawerVisible = ref(false);
   const walletSubmitting = ref(false);
-  const walletForm = reactive({
+  const walletFormDraft = useV2FormDraft('finance-wallet-editor', () => ({
     supplierOptionId: '',
     currency: 'CNY' as V2FinanceCurrency,
     openingBalance: '0',
     fxRateToCny: '',
     manualRateReason: '',
     reason: ''
-  });
+  }));
+  const walletForm = walletFormDraft.form;
   const walletDirty = computed(() =>
     Boolean(
       walletForm.supplierOptionId ||
@@ -37,7 +39,7 @@ export function useFinanceLedgerWallets(input: {
   const walletMutationSubmitting = ref(false);
   const walletMutationMode = ref<WalletMutationMode>('deposit');
   const selectedWallet = ref<V2FinanceSupplierWallet | null>(null);
-  const walletMutationForm = reactive({
+  const walletMutationFormDraft = useV2FormDraft('finance-wallet-mutation', () => ({
     financeAccountId: '',
     amount: '',
     creditedAmount: '',
@@ -50,7 +52,8 @@ export function useFinanceLedgerWallets(input: {
     network: '',
     transactionHash: '',
     remark: ''
-  });
+  }));
+  const walletMutationForm = walletMutationFormDraft.form;
   const matchingFinanceAccounts = computed(() =>
     input.accounts.value.filter(
       (item) =>
@@ -63,7 +66,7 @@ export function useFinanceLedgerWallets(input: {
   );
 
   function openWallet() {
-    Object.assign(walletForm, {
+    walletFormDraft.open('create', {
       supplierOptionId: '',
       currency: 'CNY',
       openingBalance: '0',
@@ -86,6 +89,7 @@ export function useFinanceLedgerWallets(input: {
       return showWarning('填写人工汇率时必须说明原因');
     }
     walletSubmitting.value = true;
+    const completeSave = walletFormDraft.beginSave();
     try {
       await idBusinessV2FinanceApi.createSupplierWallet({
         supplierOptionId: walletForm.supplierOptionId,
@@ -96,6 +100,7 @@ export function useFinanceLedgerWallets(input: {
         reason: walletForm.reason.trim(),
         idempotencyKey: globalThis.crypto.randomUUID()
       });
+      completeSave();
       walletDrawerVisible.value = false;
       ElMessage.success('供应商钱包已创建');
       await input.refresh();
@@ -114,7 +119,7 @@ export function useFinanceLedgerWallets(input: {
     }
     selectedWallet.value = wallet;
     walletMutationMode.value = mode;
-    Object.assign(walletMutationForm, {
+    walletMutationFormDraft.open(`${wallet.id}:${mode}`, {
       financeAccountId: '',
       amount: '',
       creditedAmount: '',
@@ -160,6 +165,7 @@ export function useFinanceLedgerWallets(input: {
       return showWarning('填写人工汇率时必须说明原因');
     }
     walletMutationSubmitting.value = true;
+    const completeSave = walletMutationFormDraft.beginSave();
     try {
       if (walletMutationMode.value === 'deposit') {
         await idBusinessV2FinanceApi.depositSupplierWallet(wallet.id, {
@@ -194,6 +200,7 @@ export function useFinanceLedgerWallets(input: {
           idempotencyKey: globalThis.crypto.randomUUID()
         });
       }
+      completeSave();
       walletMutationDrawerVisible.value = false;
       ElMessage.success('供应商钱包账务已更新');
       await input.refresh();

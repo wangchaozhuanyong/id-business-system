@@ -150,14 +150,23 @@
 - 标签必须在控件左侧，所有 `el-form` 使用 `label-position="left"`。
 - 禁止 `label-position="top"` 以及任何“标题在上、输入框在下”的等价实现。
 - 标签与控件水平对齐，标签宽度在同一表单内保持一致。
+- 页面与抽屉、弹窗的标签共用首行控件高度和居中规则；不得保留顶部标签的底部内边距。
+  桌面默认控件与标签最小高度为 36px，窄屏为 44px；帮助文字、校验错误和文本域扩展时，
+  标签仍对齐首行，不跟随整个内容区垂直居中。需要较大控件的表单使用 Element Plus 的 `size="large"`，
+  桌面为 40px，窄屏仍为 44px；禁止在单页重写标签高度、字号、行高、颜色或对齐规则。
+- 业务样式的颜色与阴影只能引用 `base.css` 中的主题令牌，不得另写固定调色板或颜色回退；
+  复制、粘贴等操作同样复用 `AppButton` 的 normal、hover、active、focus、disabled 和 loading 状态，
+  页面只负责位置和宽度，不维护第二套按钮皮肤。运行 `npm run check:v2-color-contrast` 检查规则。
+- 共享筛选与表单样式修改后运行 `node scripts/acceptance-v2-filter-layout.mjs`，
+  测量实际标签文字与下拉值文字，并覆盖桌面、窄屏、列表首末页与空状态。
 - 必填星号紧跟字段标题右侧，统一设置
   `require-asterisk-position="right"`，禁止星号出现在标题左侧。
 - 窄屏可缩窄标签、允许标签换行或将多列折叠为单列，但标签仍在控件左侧。
 - 错误提示靠近对应控件，不通过全局提示代替字段校验。
 - 金额、日期、状态和敏感资料使用适合的数据控件，不用普通文本输入模拟。
 - 新增功能的关闭、取消和导航离页默认只收起表单，保留会话内草稿；重新打开同一资料恢复输入。
-  `V2FormDrawer` 使用 `retain-draft`，父级通过 `useV2SessionDraft`／`useV2FormDraft` 管理草稿，
-  不得在 `closed` 或重新打开时无条件清空。保存成功才清理对应草稿；明确的清空／恢复默认操作
+  `V2FormDrawer` 与 `V2ConfirmDialog` 默认使用 `retain-draft`，父级通过 `useV2SessionDraft`／`useV2FormDraft` 管理草稿，
+  搜索、筛选、排序、分页和页签也使用会话内草稿；不得在 `closed`、切页或重新打开时无条件清空。保存成功按提交快照清理对应草稿；明确的清空／恢复默认操作
   与关闭分开。草稿生命周期和敏感输入边界遵守 `V2_LOADING_STANDARD.md`。
 
 ### 3.1 提交与校验反馈
@@ -227,6 +236,13 @@
   选择器、表格、分页、浮层、弹窗或抽屉颜色；缺失状态必须在全局主题令牌层解决。
 - Teleport 到 `body` 的下拉菜单、日期面板、提示、弹窗和抽屉必须与页面主体使用同一主题，
   不得依赖 `.v2-shell` 后代选择器才能获得正确颜色。
+- `base.css` 是主题令牌、兼容别名和基础组件皮肤的唯一来源。`--v2-*` 主题别名全局映射到
+  `--v3-*`；不得靠浅色常量兜底掩盖未定义变量。`npm run check:v2-color-contrast` 同时检查缺失变量。
+- 输入框、选择器、标签文字、数据表密度、状态标签和分页的公共规则使用 `html[data-v2-theme]`，
+  页面与弹层共用；控件圆角引用 `--v3-radius-control`，默认高度 36px，900px 及以下为 44px。
+  业务样式仅保留必要的排版与特定工作区密度，不重复定义主题色、公共字号或弹层替代皮肤。
+- 修改公共皮肤后运行 `node scripts/acceptance-v2-skin-consistency.mjs`，实测页面与真实弹窗、抽屉的
+  控件、文字位置、表格和状态标签，并覆盖深浅主题、断点两侧、错误、禁用和焦点状态。
 - 每次修改主题令牌或升级 Element Plus 后，必须在深浅主题的 1440px 和 390px 视口复测
   表单、表格、分页、标签、浮层、弹窗和抽屉，并运行 `npm run acceptance:v2-color-contrast`。
 
@@ -243,10 +259,19 @@
 - 检查空表单可点击提交，全部字段错误同时出现，并能滚动、聚焦到第一处错误。
 - 按第 7.1 节执行全局规则检查和受影响的专项验收，记录实际运行的命令、结果及未执行的条件。
 
-## 7.1 新页面与共享布局验收
+### 7.1 新增页面必须复用的规则与验收
 
-新增页面复用本规范的公共页面根、总览、工具栏、表单标签和模块间距；禁止复制独立布局修补对齐。
-共享改动必须运行管理端测试、类型与构建、定向 lint／格式及以下检查：
+本节同样适用于新增抽屉、弹窗、移动卡片和已有页面新增的交互区。先确认规则所属的共享层，缺失能力在该层修复；不得复制一份页面专用皮肤、加载状态机或草稿机制。
+
+| 范围           | 共享实现与要求                                                                                                                                                                                                                                         | 检查入口                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| 页面与筛选布局 | `V2AdminLayout` 统一标题；普通列表用 `V2PageContext.filters`／`actions`，带标题的筛选用 `V2ListToolbar`，总览用 `V2PageOverview`／`V2OverviewMetric`；页面根容器用 `v2-page-layout`，模块间距由 `layout.css`／`V2AsyncRegion` 负责；空间足够保持一行。 | `check:admin-ui`；共享布局变更运行 `acceptance-v2-page-layout.mjs` 和 `acceptance-v2-filter-layout.mjs`。            |
+| 皮肤与控件     | `base.css` 统一主题令牌、兼容别名、尺寸、圆角、文字和标签对齐；业务操作用 `AppButton`，下拉及 Teleport 弹层使用同一主题。                                                                                                                              | `check:v2-color-contrast`；共享皮肤变更运行 `acceptance-v2-skin-consistency.mjs` 和 `acceptance:v2-color-contrast`。 |
+| 表格与中文     | `V2Table`、`V2TableColumn`、`V2TableActionColumn` 绑定登记的 schema，显示中文标签和统一操作列档位。                                                                                                                                                    | `check:v2-table-standard`、`check:v2-ui-language`；表格布局变更运行 `acceptance:v2-table-layout`。                   |
+| 加载与刷新     | `useV2ModuleQuery` 管理读取，`V2AsyncRegion` 提供唯一主反馈；刷新保留内容，失败保留内容并可重试。                                                                                                                                                      | `check:v2-loading-standard`；查询交互变更运行 `acceptance-v2-refresh-interaction.mjs`。                              |
+| 输入与切页     | `useV2SessionDraft`／`useV2FormDraft` 保留表单、搜索、筛选、排序、分页和页签；草稿按资料隔离，保存成功按提交快照清理。                                                                                                                                 | `check:v2-loading-standard` 内含输入保留检查；草稿交互变更运行 `acceptance-v2-input-retention.mjs`。                 |
+
+新增或修改界面完成后，必须运行以下全局静态检查；精简前端 CI 也执行相同规则，不得借模块分类跳过。
 
 ```bash
 npm run check:admin-ui
@@ -256,9 +281,13 @@ npm run check:v2-table-standard
 npm run check:v2-loading-standard
 npm run check:v2-module-architecture
 npm run check:v2-isolation
-node scripts/acceptance-v2-page-layout.mjs
-node scripts/acceptance-v2-filter-layout.mjs
 ```
 
-页面验收覆盖深浅主题、宽屏单行、窄屏自然换行、真实文字节点对齐、模块间距、首末页、空状态、刷新及失败重试。
-新页面补充实际路由场景，共享夹具通过不能代替实际页面验收。
+界面代码变更另外运行相关管理端测试、类型检查、lint 和构建。按实际修改运行表中的专项验收，
+新页面自身必须补充真实路由的验收场景；现有共享脚本通过不能代替新页面验收。覆盖：
+
+- 深浅主题；1440px、1024px、901px、900px、768px 和 390px；测量真实标签／控件文字，检查空间足够时单行、窄屏自然换行、无重叠溢出。
+- 首次加载、已有内容刷新、失败重试、第一页、最后一页、空状态、长文本、禁用、焦点、权限不足以及弹层状态。
+- 关闭重开、切页返回、记录切换、保存失败、成功清理、保存期间继续编辑、迟到响应及身份清理；具体行为遵守 `V2_LOADING_STANDARD.md`。
+
+只修改规则文档或 CI 选择器时，运行受影响的控制检查与选择器测试即可；无需启动 API、数据库或重跑未受影响的业务验收。

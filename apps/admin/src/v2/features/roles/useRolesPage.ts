@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref, watch } from 'vue';
@@ -21,6 +22,7 @@ import type {
   V2SensitiveDisplayPolicy
 } from './contracts';
 import {
+  PERMISSION_MODULE_LABELS,
   filterRolePermissionGroups,
   getInitialExpandedPermissionModules,
   type V2RolePermissionWorkspaceGroup
@@ -42,24 +44,6 @@ export interface V2SensitiveDisplayFieldGroup {
   contexts: V2SensitiveDisplayCatalogItem[];
 }
 
-const PERMISSION_MODULE_LABELS: Record<string, string> = {
-  'apple.account': 'ID 资料',
-  'apple.secret': 'ID 敏感资料',
-  'apple.balance': '余额与加卡',
-  'apple.topup_supplier_fund': '供应商资金',
-  'apple.gift_card': '礼品卡',
-  'apple.order': '订单',
-  'apple.activation': '开通记录',
-  'apple.renewal_task': '续费',
-  'apple.exchange_rate': '汇率',
-  customer: '客户',
-  'data.dictionary': '业务选项',
-  audit_log: '审计日志',
-  'id_business_v2.renewal_warning': '续费预警',
-  'data.analytics': '经营分析',
-  finance: '财务'
-};
-
 function emptyForm(): RoleFormModel {
   return {
     name: '',
@@ -72,13 +56,15 @@ function emptyForm(): RoleFormModel {
 }
 
 export function useRolesPage() {
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    sortBy: 'code' as NonNullable<V2RoleListQuery['sortBy']>,
-    sortOrder: 'asc' as 'asc' | 'desc'
-  });
+  const query = useV2SessionDraft('roles-filters', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      sortBy: 'code' as NonNullable<V2RoleListQuery['sortBy']>,
+      sortOrder: 'asc' as 'asc' | 'desc'
+    })
+  );
   const drawerVisible = ref(false);
   const editingItem = ref<V2Role | null>(null);
   const members = ref<V2RoleMember[]>([]);
@@ -88,12 +74,18 @@ export function useRolesPage() {
   const detailRequest = useV2LatestRequest();
   const saving = ref(false);
   const mutationError = ref('');
-  const permissionKeyword = ref('');
-  const selectedPermissionsOnly = ref(false);
+  const permissionKeyword = useV2SessionDraft('roles-permission-filters:permissionKeyword', () =>
+    ref('')
+  );
+  const selectedPermissionsOnly = useV2SessionDraft(
+    'roles-permission-filters:selectedPermissionsOnly',
+    () => ref(false)
+  );
   const expandedPermissionModules = ref<string[]>([]);
   const permissionValidationAttempted = ref(false);
-  const form = reactive<RoleFormModel>(emptyForm());
-  const formBaseline = ref(JSON.stringify(emptyForm()));
+  const editorDraft = useV2FormDraft('roles-editor', emptyForm);
+  const { form } = editorDraft;
+  const formBaseline = editorDraft.original;
 
   function getListQuery(): V2RoleListQuery {
     return {
@@ -298,13 +290,10 @@ export function useRolesPage() {
   }
 
   function setForm(next: RoleFormModel) {
-    Object.assign(form, next);
-    formBaseline.value = JSON.stringify(next);
+    editorDraft.open(editingItem.value?.id ?? 'create', next, editingItem.value?.updatedAt);
   }
 
   function resetPermissionWorkspace(permissionIds: string[]) {
-    permissionKeyword.value = '';
-    selectedPermissionsOnly.value = false;
     permissionValidationAttempted.value = false;
     expandedPermissionModules.value = getInitialExpandedPermissionModules(
       permissionGroups.value,
@@ -454,10 +443,7 @@ export function useRolesPage() {
     if (policy) policy.mode = mode;
   }
 
-  function clearPermissionFilters() {
-    permissionKeyword.value = '';
-    selectedPermissionsOnly.value = false;
-  }
+  function clearPermissionFilters() {}
 
   async function submitRole(formInstance?: FormInstance) {
     permissionValidationAttempted.value = true;
@@ -481,10 +467,11 @@ export function useRolesPage() {
     }
 
     saving.value = true;
+    const completeSave = editorDraft.beginSave();
     try {
       if (current) {
         const input: UpdateV2RoleInput = {
-          expectedUpdatedAt: current.updatedAt,
+          expectedUpdatedAt: editorDraft.version.value ?? current.updatedAt,
           name: form.name.trim(),
           description: form.description.trim(),
           permissionIds: [...form.permissionIds],
@@ -505,6 +492,7 @@ export function useRolesPage() {
         await v2RolesApi.create(input);
         ElMessage.success('角色已创建');
       }
+      completeSave();
       drawerVisible.value = false;
       await rolesQuery.refresh();
     } catch (error) {

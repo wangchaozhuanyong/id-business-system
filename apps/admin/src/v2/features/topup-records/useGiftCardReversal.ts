@@ -1,4 +1,5 @@
-import { computed, ref, type Ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, ref, type Ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { idBusinessV2BalancesApi } from './api';
@@ -20,7 +21,8 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
   const reversalDialogVisible = ref(false);
   const reversalSubmitting = ref(false);
   const pendingReversal = ref<PendingGiftCardReversal | null>(null);
-  const reversalReason = ref('');
+  const reversalReasonDraft = useV2FormDraft('gift-card-reversal-reason', () => ({ value: '' }));
+  const reversalReason = toRef(reversalReasonDraft.form, 'value');
   const reversalIdempotencyKey = ref('');
   const reportAccountLoss = ref(false);
   const showAccountLossOption = computed(() =>
@@ -51,7 +53,7 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
       return;
     }
     pendingReversal.value = { giftCard, action };
-    reversalReason.value = '';
+    reversalReasonDraft.open(`${giftCard.id}:${action}`);
     reversalIdempotencyKey.value = globalThis.crypto.randomUUID();
     reportAccountLoss.value = false;
     reversalDialogVisible.value = true;
@@ -63,6 +65,7 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
     if (!pending || reason.length < 2 || reversalSubmitting.value) return;
 
     reversalSubmitting.value = true;
+    const completeReversalReasonSave = reversalReasonDraft.beginSave();
     try {
       const result = await idBusinessV2BalancesApi.reverseGiftCard(
         pending.giftCard.id,
@@ -81,6 +84,7 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
       ElMessage.success(
         result.idempotentReplay ? `该请求已经完成：${successMessage}` : successMessage
       );
+      completeReversalReasonSave();
       reversalDialogVisible.value = false;
       pendingReversal.value = null;
       await options.reloadGiftCards();

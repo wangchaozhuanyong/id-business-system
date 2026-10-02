@@ -690,16 +690,6 @@
   line-height: 1.5;
 }
 
-@media (max-width: 1180px) {
-  .vendure-mailbox-toolbar {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .vendure-mailbox-toolbar__actions {
-    justify-content: flex-start;
-  }
-}
-
 @media (max-width: 760px) {
   .vendure-mailbox-tabs {
     width: 100%;

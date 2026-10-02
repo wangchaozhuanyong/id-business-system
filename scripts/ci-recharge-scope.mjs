@@ -8,7 +8,7 @@ export function isCiOnly(paths) {
   return (
     paths.length > 0 &&
     paths.every((p) =>
-      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|remote-deploy)(?:\.test)?\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:20261001|fx-subscription-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|remote-deploy)(?:\.test)?\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:20261001|fx-subscription-20261002|unified-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
         p
       )
     )
@@ -48,6 +48,22 @@ export function checkMode(paths, oldSchema, newSchema) {
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
   if (isAdminOnly(paths)) return 'admin';
   return 'full';
+}
+
+export function adminUiGuardChecks(mode, paths) {
+  if (mode !== 'admin' && mode !== 'mailbox' && mode !== 'recharge') return [];
+  const hasV2Changes = paths.some((p) => p.startsWith('apps/admin/src/v2/'));
+  if (mode === 'recharge' && !hasV2Changes) return [];
+  return [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    ...(mode === 'admin' || hasV2Changes ? ['check:v2-module-architecture'] : []),
+    'check:v2-isolation',
+    'check:v2-decimal-standard'
+  ];
 }
 
 export function adminCheckCommands(mode, paths) {

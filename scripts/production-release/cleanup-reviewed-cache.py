@@ -3,6 +3,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,8 +18,16 @@ REVIEWED_PLANS = {
         'd3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-',
         '73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-',
     ),
+    '66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': (
+        '7008a91537caa36a90cd8f5f616c9c6f37ce5f5d-36885081577-1-',
+        '848d2c6cdce43909cfe981eca23dcaf8782a96ad-36831835914-1-',
+        'ddbcc8b5c117638e6f4fed668285ab4fadd1968a-36853839850-1-',
+        'f3558f30d09f1eebf62c171b23e1b497e22993e2-36899703841-1-',
+    ),
 }
 
+REVIEWED_PLAN_COUNTS = {'66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': 12}
+POST_RELEASE_PLANS = {'66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d'}
 
 def require(condition, label):
     if not condition:
@@ -52,22 +61,28 @@ def main():
     parser.add_argument('--plan-json', required=True)
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--approved-plan-sha256')
+    parser.add_argument('--expected-current')
     args = parser.parse_args()
     plan = json.loads(args.plan_json)
     digest = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    require(digest in REVIEWED_PLANS, 'Plan differs from the reviewed ten-reference digest')
+    require(digest in REVIEWED_PLANS, 'Plan differs from the reviewed cache digest')
     if args.apply:
         require(args.approved_plan_sha256 == digest, 'Explicit plan approval required')
     prefixes = REVIEWED_PLANS[digest]
+    expected_current = args.expected_current or plan['expectedCurrent']
+    require(re.fullmatch(r'[0-9a-f]{40}', expected_current), 'Invalid production baseline')
+    require(not args.expected_current or digest in POST_RELEASE_PLANS,
+            'This reviewed plan does not allow a post-release baseline')
     require(plan['repository'] == '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
             'Unexpected repository')
-    require(len(plan['items']) == 10, 'Expected exactly ten reviewed cache references')
+    require(len(plan['items']) == REVIEWED_PLAN_COUNTS.get(digest, 10),
+            'Reviewed cache reference count changed')
     lock = None
     if args.apply:
         lock = (BASE / '.deploy.lock').open('a')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     manifest = current()
-    require(manifest['commit'] == plan['expectedCurrent'], 'Production baseline changed')
+    require(manifest['commit'] == expected_current, 'Production baseline changed')
     previous_path = Path(manifest['previousRelease']).resolve()
     require(previous_path.parent == BASE / 'releases', 'Unexpected previous release path')
     previous = json.loads((previous_path / 'release-manifest.json').read_text())
@@ -76,6 +91,10 @@ def main():
     approved = []
     services = {(prefix, service) for prefix in prefixes for service in
                 ('admin', 'api', 'migrate', 'media-resolver', 'auto-recharge')}
+    if digest in POST_RELEASE_PLANS:
+        # This exact reviewed digest contains two complete old releases and two admin-only caches.
+        services = {(prefix, item['tag'][len(prefix):]) for prefix in prefixes
+                    for item in plan['items'] if item['tag'].startswith(prefix)}
     for item in plan['items']:
         tag = item['tag']
         prefix = next((prefix for prefix in prefixes if tag.startswith(prefix)), None)
@@ -101,7 +120,7 @@ def main():
     removed = []
     if args.apply:
         for reference, image_id, tag in approved:
-            require(current()['commit'] == plan['expectedCurrent'], 'Production baseline changed')
+            require(current()['commit'] == expected_current, 'Production baseline changed')
             require(image_id not in active_images(), 'Cache became used by a container')
             run('docker', 'image', 'rm', '--no-prune', reference)
             removed.append(tag)

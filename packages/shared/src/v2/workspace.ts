@@ -549,10 +549,23 @@ export interface V2RelayJobList {
   items: V2RelayJob[];
 }
 
-export const V2_GOOGLE_SHEETS_REPORT_NAMES = ['订单', '加卡', '续费', '财务汇总'] as const;
+export const V2_GOOGLE_SHEETS_REPORT_NAMES = [
+  '订单',
+  '加卡',
+  '续费',
+  '财务汇总',
+  'ChatGPT账号',
+  '验证码邮箱',
+  '银行卡',
+  '客户',
+  '开通',
+  '钱包账户',
+  '收支记账'
+] as const;
 
 export interface V2GoogleSheetsSyncStatus {
   authorized: boolean;
+  automaticTriggerDelaySeconds?: number;
   callbackUrl: string;
   clientId: string | null;
   configured: boolean;
@@ -565,6 +578,7 @@ export interface V2GoogleSheetsSyncStatus {
   spreadsheetUrl: string | null;
   syncIntervalSeconds: number;
   syncing: boolean;
+  targetFolderUrl?: string | null;
 }
 
 export interface SaveV2GoogleSheetsSyncConfigInput {

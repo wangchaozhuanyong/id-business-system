@@ -1294,6 +1294,8 @@
 </template>
 
 <script setup lang="ts">
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+
 import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import type {
   V2VendureMailboxAlias,
@@ -1303,7 +1305,7 @@ import type {
   V2VendureMailboxPublicQueryResult,
   V2VendureMailboxStatus
 } from '@apple-business/shared';
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { toRef, computed, onBeforeUnmount, ref, watch } from 'vue';
 import { Check, CopyDocument, RefreshRight, Search } from '@element-plus/icons-vue';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -1326,16 +1328,22 @@ import './vendure-mailbox.css';
 type TabName = 'primary' | 'aliases' | 'mails' | 'relay-query';
 type PendingAction = null | (() => Promise<void>);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const activeTab = ref<TabName>('primary');
-const page = ref(1);
-const pageSize = ref(20);
-const keywordInput = ref('');
-const keyword = ref('');
-const statusInput = ref('');
-const status = ref('');
-const primaryAccountId = ref('');
-const virtualEmailId = ref('');
-const unassignedOnly = ref(false);
+const activeTab = useV2SessionDraft('auto-recharge/VendureMailboxManager:activeTab', () =>
+  ref<TabName>('primary')
+);
+const page = useV2SessionDraft('auto-recharge/VendureMailboxManager:page', () => ref(1));
+const pageSize = useV2SessionDraft('auto-recharge/VendureMailboxManager:pageSize', () => ref(20));
+const keywordInput = useV2SessionDraft('auto-recharge/VendureMailboxManager:keywordInput', () =>
+  ref('')
+);
+const keyword = useV2SessionDraft('auto-recharge/VendureMailboxManager:keyword', () => ref(''));
+const statusInput = useV2SessionDraft('auto-recharge/VendureMailboxManager:statusInput', () =>
+  ref('')
+);
+const status = useV2SessionDraft('auto-recharge/VendureMailboxManager:status', () => ref(''));
+const primaryAccountId = useV2SessionDraft('vendure-mailbox:primaryAccountId', () => ref(''));
+const virtualEmailId = useV2SessionDraft('vendure-mailbox:virtualEmailId', () => ref(''));
+const unassignedOnly = useV2SessionDraft('vendure-mailbox:unassignedOnly', () => ref(false));
 const activeOperationKey = ref('');
 const saving = computed(() => Boolean(activeOperationKey.value));
 const operationMessage = ref('');
@@ -1593,8 +1601,10 @@ interface RelayQueryResult {
   }>;
 }
 
-const relayInput = ref('');
-const quickSelectedAliasEmail = ref('');
+const relayInput = useV2SessionDraft('vendure-mailbox:relayInput', () => ref(''));
+const quickSelectedAliasEmail = useV2SessionDraft('vendure-mailbox:quickSelectedAliasEmail', () =>
+  ref('')
+);
 const relayLoading = ref(false);
 const relayError = ref('');
 const relayResult = ref<RelayQueryResult | null>(null);
@@ -1896,14 +1906,15 @@ function primaryActionFeedbackIsError(primaryId: string) {
 }
 
 const primaryDrawerOpen = ref(false);
-const primaryForm = reactive({
+const primaryFormDraft = useV2FormDraft('vendure-primary-editor', () => ({
   id: '',
   email: '',
   appPassword: '',
   note: '',
   codeResetIntervalDays: 30,
   status: 'ACTIVE'
-});
+}));
+const primaryForm = primaryFormDraft.form;
 const primaryInitialState = ref('');
 function primaryFormState() {
   return JSON.stringify(primaryForm);
@@ -1913,7 +1924,7 @@ const primaryDirty = computed(
 );
 function openPrimaryCreate() {
   clearNotice();
-  Object.assign(primaryForm, {
+  primaryFormDraft.open('create', {
     id: '',
     email: '',
     appPassword: '',
@@ -1926,7 +1937,7 @@ function openPrimaryCreate() {
 }
 function openPrimaryEdit(row: V2VendureMailboxPrimaryAccount) {
   clearNotice();
-  Object.assign(primaryForm, {
+  primaryFormDraft.open(row.id, {
     id: row.id,
     email: row.email,
     appPassword: '',
@@ -1938,6 +1949,7 @@ function openPrimaryEdit(row: V2VendureMailboxPrimaryAccount) {
   primaryDrawerOpen.value = true;
 }
 function savePrimary() {
+  const completeSave = primaryFormDraft.beginSave();
   void run(async () => {
     if (
       !EMAIL_PATTERN.test(primaryForm.email.trim()) ||
@@ -1959,6 +1971,7 @@ function savePrimary() {
         note: primaryForm.note,
         codeResetIntervalDays: primaryForm.codeResetIntervalDays
       });
+    completeSave();
     primaryDrawerOpen.value = false;
     await afterWrite(primaryForm.id ? '主邮箱已更新' : '主邮箱已新增');
   });
@@ -2043,14 +2056,15 @@ function handlePrimaryCommand(row: V2VendureMailboxPrimaryAccount, command: stri
 }
 
 const aliasDrawerOpen = ref(false);
-const aliasForm = reactive({
+const aliasFormDraft = useV2FormDraft('vendure-alias-editor', () => ({
   id: '',
   primaryAccountId: '',
   aliasEmail: '',
   note: '',
   codeResetIntervalDays: 30,
   status: 'ACTIVE'
-});
+}));
+const aliasForm = aliasFormDraft.form;
 const aliasInitialState = ref('');
 function aliasFormState() {
   return JSON.stringify(aliasForm);
@@ -2060,7 +2074,7 @@ const aliasDirty = computed(
 );
 function openAliasCreate() {
   clearNotice();
-  Object.assign(aliasForm, {
+  aliasFormDraft.open('create', {
     id: '',
     primaryAccountId: primaryAccountId.value || primaryItems.value[0]?.id || '',
     aliasEmail: '',
@@ -2073,7 +2087,7 @@ function openAliasCreate() {
 }
 function openAliasEdit(row: V2VendureMailboxAlias) {
   clearNotice();
-  Object.assign(aliasForm, {
+  aliasFormDraft.open(row.id, {
     id: row.id,
     primaryAccountId: row.primaryAccountId,
     aliasEmail: row.aliasEmail,
@@ -2085,6 +2099,7 @@ function openAliasEdit(row: V2VendureMailboxAlias) {
   aliasDrawerOpen.value = true;
 }
 function saveAlias() {
+  const completeSave = aliasFormDraft.beginSave();
   void run(async () => {
     if (
       !EMAIL_PATTERN.test(aliasForm.aliasEmail.trim()) ||
@@ -2105,6 +2120,7 @@ function saveAlias() {
         note: aliasForm.note,
         codeResetIntervalDays: aliasForm.codeResetIntervalDays
       });
+    completeSave();
     aliasDrawerOpen.value = false;
     await afterWrite(aliasForm.id ? '虚拟邮箱已更新' : '虚拟邮箱已新增');
   });
@@ -2139,10 +2155,15 @@ function handleAliasCommand(row: V2VendureMailboxAlias, command: string) {
 }
 
 const batchDrawerOpen = ref(false);
-const batchForm = reactive({ primaryAccountId: '', rawInput: '', codeResetIntervalDays: 30 });
+const batchFormDraft = useV2FormDraft('vendure-alias-batch', () => ({
+  primaryAccountId: '',
+  rawInput: '',
+  codeResetIntervalDays: 30
+}));
+const batchForm = batchFormDraft.form;
 function openAliasBatch() {
   clearNotice();
-  Object.assign(batchForm, {
+  batchFormDraft.open('create', {
     primaryAccountId: primaryAccountId.value || primaryItems.value[0]?.id || '',
     rawInput: '',
     codeResetIntervalDays: 30
@@ -2150,10 +2171,12 @@ function openAliasBatch() {
   batchDrawerOpen.value = true;
 }
 function saveAliasBatch() {
+  const completeSave = batchFormDraft.beginSave();
   void run(async () => {
     if (!batchForm.primaryAccountId || !batchForm.rawInput.trim())
       throw new Error('请选择主邮箱并填写要导入的虚拟邮箱');
     const result = await vendureMailboxApi.batchCreateAliases(batchForm);
+    completeSave();
     batchDrawerOpen.value = false;
     await afterWrite(
       `批量导入完成：新增 ${result.createdCount} 个，跳过 ${result.skippedCount} 个${result.errors.length ? `，失败 ${result.errors.length} 个` : ''}`
@@ -2175,13 +2198,14 @@ function openMail(row: V2VendureMailboxMail) {
   mailDrawerOpen.value = true;
 }
 const reassignDrawerOpen = ref(false);
-const reassignAliasId = ref('');
+const reassignAliasIdDraft = useV2FormDraft('vendure-mail-reassignment', () => ({ value: '' }));
+const reassignAliasId = toRef(reassignAliasIdDraft.form, 'value');
 const reassignInitialAliasId = ref('');
 const reassignDirty = computed(() => reassignAliasId.value !== reassignInitialAliasId.value);
 function handleMailCommand(row: V2VendureMailboxMail, command: string) {
   selectedMail.value = row;
   if (command === 'reassign') {
-    reassignAliasId.value = row.virtualEmailId ?? '';
+    reassignAliasIdDraft.open(row.id, { value: row.virtualEmailId ?? '' });
     reassignInitialAliasId.value = reassignAliasId.value;
     clearNotice();
     reassignDrawerOpen.value = true;
@@ -2194,9 +2218,11 @@ function handleMailCommand(row: V2VendureMailboxMail, command: string) {
     });
 }
 function saveReassignment() {
+  const completeSave = reassignAliasIdDraft.beginSave();
   void run(async () => {
     if (!selectedMail.value || !reassignAliasId.value) throw new Error('请选择要分配的虚拟邮箱');
     await vendureMailboxApi.reassignMail(selectedMail.value.id, reassignAliasId.value);
+    completeSave();
     reassignDrawerOpen.value = false;
     await afterWrite('邮件归属已更新');
   });

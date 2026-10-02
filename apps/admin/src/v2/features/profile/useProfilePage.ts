@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref, watch } from 'vue';
@@ -23,7 +24,9 @@ import type {
 
 export function useProfilePage() {
   const router = useRouter();
-  const query = reactive({ page: 1, pageSize: 10 });
+  const query = useV2SessionDraft('profile/useProfilePage:query', () =>
+    reactive({ page: 1, pageSize: 10 })
+  );
   const revokingSessionId = ref('');
   const revokingOthers = ref(false);
 

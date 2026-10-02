@@ -20,7 +20,7 @@ function readStyle(relativePath: string) {
 
 const businessMonitoringCss = readStyle('../styles/business-monitoring.css');
 const recordsCss = readStyle('../styles/records.css');
-const v2Css = readStyle('../styles/v2.css');
+const baseCss = readStyle('../styles/base.css');
 
 const emptyStateFixtures = [
   accountsFixture,
@@ -43,9 +43,9 @@ describe('scheme 3 design completion contract', () => {
   });
 
   it('keeps shared pagination and compact controls at the minimum click target size', () => {
-    expect(v2Css).toContain('.v2-shell .el-pagination button');
-    expect(v2Css).toContain('min-width: 36px');
-    expect(v2Css).toContain('min-height: 36px');
+    expect(baseCss).toContain('html[data-v2-theme] .el-pagination button');
+    expect(baseCss).toContain('min-width: 36px');
+    expect(baseCss).toContain('min-height: 36px');
     expect(businessMonitoringCss).toMatch(
       /\.v2-business-monitoring-severity button\s*\{[^}]*min-height: 36px/s
     );
@@ -56,10 +56,10 @@ describe('scheme 3 design completion contract', () => {
   });
 
   it('gives every semantic table status a distinct shared visual treatment', () => {
-    expect(v2Css).toContain('.v2-table-column--status .el-tag');
-    expect(v2Css).toContain('.el-tag.v2-status-tag');
+    expect(baseCss).toContain('.v2-table-column--status .el-tag');
+    expect(baseCss).toContain('.el-tag.v2-status-tag');
     for (const statusType of ['primary', 'success', 'warning', 'danger', 'info']) {
-      expect(v2Css).toContain(`.el-tag--${statusType}`);
+      expect(baseCss).toContain(`.el-tag--${statusType}`);
       expect(themeComponentsFixture).toContain(`statusType: '${statusType}'`);
     }
   });

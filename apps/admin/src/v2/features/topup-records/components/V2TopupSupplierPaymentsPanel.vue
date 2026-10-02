@@ -370,7 +370,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+
+import { toRef, computed, reactive, ref, watch } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -407,16 +409,18 @@ const summary = reactive<V2TopupSupplierPaymentListResult['summary']>({
   activeCreditedCny: '0',
   weightedAverageRate: null
 });
-const query = reactive({
-  page: 1,
-  pageSize: 20,
-  keyword: '',
-  supplierOptionId: '',
-  status: '' as '' | 'active' | 'reversed',
-  dateRange: [] as string[],
-  sortBy: 'paidAt' as NonNullable<V2TopupSupplierPaymentListQuery['sortBy']>,
-  sortOrder: 'desc' as 'asc' | 'desc'
-});
+const query = useV2SessionDraft('topup-records/components/V2TopupSupplierPaymentsPanel:query', () =>
+  reactive({
+    page: 1,
+    pageSize: 20,
+    keyword: '',
+    supplierOptionId: '',
+    status: '' as '' | 'active' | 'reversed',
+    dateRange: [] as string[],
+    sortBy: 'paidAt' as NonNullable<V2TopupSupplierPaymentListQuery['sortBy']>,
+    sortOrder: 'desc' as 'asc' | 'desc'
+  })
+);
 
 function getListQuery(): V2TopupSupplierPaymentListQuery {
   return {
@@ -462,7 +466,10 @@ const error = computed(() =>
 
 const reversalVisible = ref(false);
 const reversalSubmitting = ref(false);
-const reversalReason = ref('');
+const reversalReasonDraft = useV2FormDraft('supplier-payment-reversal-reason', () => ({
+  value: ''
+}));
+const reversalReason = toRef(reversalReasonDraft.form, 'value');
 const selectedPayment = ref<V2TopupSupplierPaymentItem | null>(null);
 const reversalDisabledReason = computed(() => {
   if (!selectedPayment.value) return '未选择付款记录';
@@ -522,7 +529,7 @@ function handleSortChange(sort: { prop?: string; order?: 'ascending' | 'descendi
 
 function openReversal(payment: V2TopupSupplierPaymentItem) {
   selectedPayment.value = payment;
-  reversalReason.value = '';
+  reversalReasonDraft.open(payment.id);
   reversalVisible.value = true;
 }
 
@@ -530,12 +537,14 @@ async function submitReversal() {
   const payment = selectedPayment.value;
   if (!payment || reversalSubmitting.value || reversalDisabledReason.value) return;
   reversalSubmitting.value = true;
+  const completeReversalReasonSave = reversalReasonDraft.beginSave();
   try {
     await idBusinessV2TopupSupplierFundsApi.reversePayment(payment.id, {
       reason: reversalReason.value.trim(),
       idempotencyKey: globalThis.crypto.randomUUID()
     });
     ElMessage.success('付款已撤销，供应商余额已通过反向流水扣回');
+    completeReversalReasonSave();
     reversalVisible.value = false;
     selectedPayment.value = null;
     await refresh();

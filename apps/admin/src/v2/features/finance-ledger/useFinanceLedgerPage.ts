@@ -1,4 +1,5 @@
-import { computed, reactive, ref } from 'vue';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, reactive, ref } from 'vue';
 import type {
   V2FinanceAccount,
   V2FinanceAccountStatus,
@@ -82,17 +83,23 @@ export function useFinanceLedgerPage(
   const canAdjust = computed(() => hasUserPermission(authStore.user, 'finance.adjust'));
   const canManage = computed(() => hasUserPermission(authStore.user, 'finance.manage'));
   const canClose = computed(() => hasUserPermission(authStore.user, 'finance.close'));
-  const activeTab = ref<FinanceLedgerTab>(expenseOnly ? 'expenses' : 'accounts');
-  const cashbookView = ref<FinanceCashbookView>('inflows');
-  const filters = reactive({
-    currency: '' as V2FinanceCurrency | '',
-    inflowNature: '' as V2FinanceInflowNature | '',
-    periodMonth: '',
-    journalType: '' as V2FinanceJournalType | ''
-  });
-  const inflowPage = ref(1);
-  const expensePage = ref(1);
-  const journalPage = ref(1);
+  const activeTab = useV2SessionDraft(`${moduleKey}:activeTab`, () =>
+    ref<FinanceLedgerTab>(expenseOnly ? 'expenses' : 'accounts')
+  );
+  const cashbookView = useV2SessionDraft(`${moduleKey}:cashbookView`, () =>
+    ref<FinanceCashbookView>('inflows')
+  );
+  const filters = useV2SessionDraft(`${moduleKey}:filters`, () =>
+    reactive({
+      currency: '' as V2FinanceCurrency | '',
+      inflowNature: '' as V2FinanceInflowNature | '',
+      periodMonth: '',
+      journalType: '' as V2FinanceJournalType | ''
+    })
+  );
+  const inflowPage = useV2SessionDraft(`${moduleKey}:inflowPage`, () => ref(1));
+  const expensePage = useV2SessionDraft(`${moduleKey}:expensePage`, () => ref(1));
+  const journalPage = useV2SessionDraft(`${moduleKey}:journalPage`, () => ref(1));
   const pageSize = 50;
 
   const ledgerQuery = useV2ModuleQuery<FinanceLedgerSnapshot>({
@@ -170,7 +177,7 @@ export function useFinanceLedgerPage(
   const accountDrawerVisible = ref(false);
   const accountSubmitting = ref(false);
   const editingAccount = ref<V2FinanceAccount | null>(null);
-  const accountForm = reactive({
+  const accountFormDraft = useV2FormDraft('finance-account-editor', () => ({
     name: '',
     accountType: 'bank' as V2FinanceAccountType,
     currency: 'CNY' as V2FinanceCurrency,
@@ -179,7 +186,8 @@ export function useFinanceLedgerPage(
     manualRateReason: '',
     remark: '',
     status: 'active' as V2FinanceAccountStatus
-  });
+  }));
+  const accountForm = accountFormDraft.form;
   const accountDirty = computed(() =>
     Boolean(
       accountForm.name ||
@@ -194,8 +202,11 @@ export function useFinanceLedgerPage(
   const expenseDrawerVisible = ref(false);
   const expenseSubmitting = ref(false);
   const editingExpense = ref<V2FinanceExpense | null>(null);
-  const expenseCorrectionReason = ref('');
-  const expenseForm = reactive({
+  const expenseCorrectionReasonDraft = useV2FormDraft('finance-expense-correction-reason', () => ({
+    value: ''
+  }));
+  const expenseCorrectionReason = toRef(expenseCorrectionReasonDraft.form, 'value');
+  const expenseFormDraft = useV2FormDraft('finance-expense-editor', () => ({
     categoryOptionId: '',
     financeAccountId: '',
     amount: '',
@@ -204,7 +215,8 @@ export function useFinanceLedgerPage(
     manualRateReason: '',
     payee: '',
     remark: ''
-  });
+  }));
+  const expenseForm = expenseFormDraft.form;
   const selectedExpenseAccount = computed(() =>
     accounts.value.find((item) => item.id === expenseForm.financeAccountId)
   );
@@ -223,12 +235,19 @@ export function useFinanceLedgerPage(
   const reversalDrawerVisible = ref(false);
   const reversalSubmitting = ref(false);
   const selectedJournal = ref<V2FinanceJournal | null>(null);
-  const reversalReason = ref('');
+  const reversalReasonDraft = useV2FormDraft('finance-journal-reversal-reason', () => ({
+    value: ''
+  }));
+  const reversalReason = toRef(reversalReasonDraft.form, 'value');
 
   const periodDrawerVisible = ref(false);
   const periodSubmitting = ref(false);
   const periodMutationMode = ref<PeriodMutationMode>('close');
-  const periodForm = reactive({ month: currentV2BusinessMonth(getV2BusinessNowMs()), reason: '' });
+  const periodFormDraft = useV2FormDraft('finance-period-editor', () => ({
+    month: currentV2BusinessMonth(getV2BusinessNowMs()),
+    reason: ''
+  }));
+  const periodForm = periodFormDraft.form;
 
   function refresh() {
     return ledgerQuery.refresh();
@@ -254,16 +273,20 @@ export function useFinanceLedgerPage(
 
   function openAccount(account?: V2FinanceAccount) {
     editingAccount.value = account ?? null;
-    Object.assign(accountForm, {
-      name: account?.name ?? '',
-      accountType: account?.accountType ?? 'bank',
-      currency: account?.currency ?? 'CNY',
-      openingBalance: account?.openingBalance ?? '0',
-      fxRateToCny: '',
-      manualRateReason: '',
-      remark: account?.remark ?? '',
-      status: account?.status ?? 'active'
-    });
+    accountFormDraft.open(
+      account?.id ?? 'create',
+      {
+        name: account?.name ?? '',
+        accountType: account?.accountType ?? 'bank',
+        currency: account?.currency ?? 'CNY',
+        openingBalance: account?.openingBalance ?? '0',
+        fxRateToCny: '',
+        manualRateReason: '',
+        remark: account?.remark ?? '',
+        status: account?.status ?? 'active'
+      },
+      account?.updatedAt
+    );
     accountDrawerVisible.value = true;
   }
 
@@ -281,10 +304,11 @@ export function useFinanceLedgerPage(
       return showWarning('填写人工汇率时必须说明原因');
     }
     accountSubmitting.value = true;
+    const completeSave = accountFormDraft.beginSave();
     try {
       if (editingAccount.value) {
         await idBusinessV2FinanceApi.updateAccount(editingAccount.value.id, {
-          expectedUpdatedAt: editingAccount.value.updatedAt,
+          expectedUpdatedAt: accountFormDraft.version.value ?? editingAccount.value.updatedAt,
           name: accountForm.name.trim(),
           status: accountForm.status,
           remark: accountForm.remark.trim()
@@ -301,6 +325,7 @@ export function useFinanceLedgerPage(
           idempotencyKey: requestKey()
         });
       }
+      completeSave();
       accountDrawerVisible.value = false;
       ElMessage.success(editingAccount.value ? '资金账户已更新' : '资金账户已创建');
     } catch (cause) {
@@ -317,12 +342,12 @@ export function useFinanceLedgerPage(
       return;
     }
     editingExpense.value = expense ?? null;
-    expenseCorrectionReason.value = '';
-    Object.assign(expenseForm, {
+    expenseCorrectionReasonDraft.open(expense?.id ?? 'create');
+    expenseFormDraft.open(expense?.id ?? 'create', {
       categoryOptionId: expense?.categoryOptionId ?? '',
       financeAccountId: expense?.financeAccountId ?? '',
       amount: expense?.amountOriginal ?? '',
-      occurredAt: expense?.occurredAt ? toV2DateTimeInput(expense.occurredAt) : businessNow,
+      occurredAt: expense?.occurredAt ? toV2DateTimeInput(expense.occurredAt) : (businessNow ?? ''),
       fxRateToCny: '',
       manualRateReason: '',
       payee: expense?.payee ?? '',
@@ -349,6 +374,8 @@ export function useFinanceLedgerPage(
       return showWarning('填写人工汇率时必须说明原因');
     }
     expenseSubmitting.value = true;
+    const completeExpenseCorrectionReasonSave = expenseCorrectionReasonDraft.beginSave();
+    const completeSave = expenseFormDraft.beginSave();
     try {
       const payload = {
         categoryOptionId: expenseForm.categoryOptionId,
@@ -370,6 +397,8 @@ export function useFinanceLedgerPage(
       } else {
         await idBusinessV2FinanceApi.createExpense(payload);
       }
+      completeSave();
+      completeExpenseCorrectionReasonSave();
       expenseDrawerVisible.value = false;
       ElMessage.success(
         editingExpense.value ? '原流水已冲销，正确开支已重新入账' : '经营开支已入账'
@@ -385,7 +414,7 @@ export function useFinanceLedgerPage(
     const blockedReason = journalReversalBlockReason(journal);
     if (blockedReason) return showWarning(blockedReason);
     selectedJournal.value = journal;
-    reversalReason.value = '';
+    reversalReasonDraft.open(journal.id);
     reversalDrawerVisible.value = true;
   }
 
@@ -396,11 +425,13 @@ export function useFinanceLedgerPage(
     const blockedReason = journalReversalBlockReason(selectedJournal.value);
     if (blockedReason) return showWarning(blockedReason);
     reversalSubmitting.value = true;
+    const completeReversalReasonSave = reversalReasonDraft.beginSave();
     try {
       await idBusinessV2FinanceApi.reverseJournal(selectedJournal.value.id, {
         reason: reversalReason.value.trim(),
         idempotencyKey: requestKey()
       });
+      completeReversalReasonSave();
       reversalDrawerVisible.value = false;
       ElMessage.success('原账务已冲销，请按正确证据重新记账');
     } catch (cause) {
@@ -417,8 +448,10 @@ export function useFinanceLedgerPage(
       return;
     }
     periodMutationMode.value = mode;
-    periodForm.month = period?.month ?? currentV2BusinessMonth(businessNow);
-    periodForm.reason = '';
+    periodFormDraft.open(`${mode}:${period?.month ?? 'current'}`, {
+      month: period?.month ?? currentV2BusinessMonth(businessNow),
+      reason: ''
+    });
     periodDrawerVisible.value = true;
   }
 
@@ -430,12 +463,14 @@ export function useFinanceLedgerPage(
       return showWarning('重新打开月份必须填写原因');
     }
     periodSubmitting.value = true;
+    const completeSave = periodFormDraft.beginSave();
     try {
       if (periodMutationMode.value === 'close') {
         await idBusinessV2FinanceApi.closePeriod(periodForm.month);
       } else {
         await idBusinessV2FinanceApi.reopenPeriod(periodForm.month, periodForm.reason.trim());
       }
+      completeSave();
       periodDrawerVisible.value = false;
       ElMessage.success(periodMutationMode.value === 'close' ? '月份已关账' : '月份已重新打开');
     } catch (cause) {

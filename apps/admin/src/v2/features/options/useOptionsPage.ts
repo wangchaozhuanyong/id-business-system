@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, markRaw, reactive, ref, watch, type Component } from 'vue';
 import { useRoute } from 'vue-router';
 import {
@@ -72,8 +73,11 @@ export function useOptionsPage() {
   };
   const requestedType =
     typeof route.query.type === 'string' ? (route.query.type as V2OptionType) : 'id_status';
-  const selectedType = ref<V2OptionType>(requestedType);
-  const renderedType = ref<V2OptionType>(requestedType);
+  const selectedType = useV2SessionDraft('options/useOptionsPage:selectedType', () =>
+    ref<V2OptionType>(requestedType)
+  );
+  if (typeof route.query.type === 'string') selectedType.value = requestedType;
+  const renderedType = ref<V2OptionType>(selectedType.value);
   const items = ref<V2Option[]>([]);
   const total = ref(0);
   const drawerVisible = ref(false);
@@ -85,18 +89,21 @@ export function useOptionsPage() {
   const countryOptionsLoading = ref(false);
   let forceNextListRequest = false;
 
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    status: '' as V2OptionStatus | '',
-    sortBy: 'sortOrder' as 'name' | 'sortOrder' | 'status' | 'createdAt' | 'updatedAt',
-    sortOrder: 'asc' as 'asc' | 'desc'
-  });
+  const query = useV2SessionDraft('options-filters', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      status: '' as V2OptionStatus | '',
+      sortBy: 'sortOrder' as 'name' | 'sortOrder' | 'status' | 'createdAt' | 'updatedAt',
+      sortOrder: 'asc' as 'asc' | 'desc'
+    })
+  );
   const renderedQuery = ref(snapshotQuery());
   const listResolved = ref(false);
 
-  const form = reactive<OptionFormState>(createEmptyForm());
+  const editorDraft = useV2FormDraft('options-editor', createEmptyForm);
+  const { form } = editorDraft;
   const currencyOptions = [
     'USD',
     'CNY',
@@ -332,7 +339,7 @@ export function useOptionsPage() {
   async function openCreate() {
     editingItem.value = null;
     autoMatchedCountryCurrencyCode = '';
-    Object.assign(form, createEmptyForm(), { type: selectedType.value });
+    editorDraft.open(`create:${selectedType.value}`, { type: selectedType.value });
     drawerVisible.value = true;
     await loadRelatedOptions();
   }
@@ -341,19 +348,23 @@ export function useOptionsPage() {
     if (item.isSystem) return;
     editingItem.value = item;
     autoMatchedCountryCurrencyCode = '';
-    Object.assign(form, {
-      type: item.type,
-      name: item.name,
-      parentId: item.parentId ?? '',
-      countryOptionId: item.countryOptionId ?? '',
-      businessAmount: Number(item.businessAmount ?? 0),
-      currencyCode: item.currencyCode ?? '',
-      fixedFee: Number(item.fixedFee),
-      percentageFee: Number(item.percentageFee),
-      sortOrder: item.sortOrder,
-      active: item.status === 'active',
-      remark: item.remark ?? ''
-    });
+    editorDraft.open(
+      item.id,
+      {
+        type: item.type,
+        name: item.name,
+        parentId: item.parentId ?? '',
+        countryOptionId: item.countryOptionId ?? '',
+        businessAmount: Number(item.businessAmount ?? 0),
+        currencyCode: item.currencyCode ?? '',
+        fixedFee: Number(item.fixedFee),
+        percentageFee: Number(item.percentageFee),
+        sortOrder: item.sortOrder,
+        active: item.status === 'active',
+        remark: item.remark ?? ''
+      },
+      item.updatedAt
+    );
     drawerVisible.value = true;
     await loadRelatedOptions();
   }
@@ -424,11 +435,12 @@ export function useOptionsPage() {
     };
 
     saving.value = true;
+    const completeSave = editorDraft.beginSave();
     try {
       if (editingItem.value) {
         await idBusinessV2OptionsApi.update(editingItem.value.id, {
           ...payload,
-          expectedUpdatedAt: editingItem.value.updatedAt
+          expectedUpdatedAt: editorDraft.version.value ?? editingItem.value.updatedAt
         });
         ElMessage.success('选项已更新');
       } else {
@@ -438,6 +450,7 @@ export function useOptionsPage() {
         } satisfies CreateV2OptionInput);
         ElMessage.success('选项已新增');
       }
+      completeSave();
       drawerVisible.value = false;
       void loadOptions(true);
     } catch (error) {

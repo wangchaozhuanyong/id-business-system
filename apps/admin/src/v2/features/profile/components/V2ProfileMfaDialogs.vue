@@ -7,6 +7,7 @@
     confirm-text="验证并绑定"
     :confirm-loading="page.mfaEnabling"
     :dirty="true"
+    :retain-draft="false"
     @confirm="page.enableMfa(mfaCodeFormRef)"
   >
     <el-alert

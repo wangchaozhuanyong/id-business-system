@@ -142,7 +142,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+
+import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { QuestionFilled } from '@element-plus/icons-vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
@@ -161,16 +163,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  submit: [payload: Omit<RefundV2OrderInput, 'idempotencyKey'>];
+  submit: [payload: Omit<RefundV2OrderInput, 'idempotencyKey'>, completeSave: () => void];
 }>();
 
 const formRef = ref<FormInstance>();
-const form = reactive({
+const formDraft = useV2FormDraft('order-refund', () => ({
   refundCostAmount: '0',
   reason: '',
   balanceRefundMode: 'none' as 'none' | 'full' | 'custom',
   customRefundBalanceAmount: ''
-});
+}));
+const form = formDraft.form;
 const { dirty: formDirty, capture: captureFormSnapshot } = useV2FormSnapshot(
   () => props.modelValue,
   () => form
@@ -229,7 +232,7 @@ watch(
   () => [props.modelValue, props.order?.id] as const,
   ([visible]) => {
     if (!visible) return;
-    Object.assign(form, {
+    formDraft.open(props.order?.id ?? 'none', {
       refundCostAmount: props.order?.refundCostAmount ?? '0',
       reason: '',
       balanceRefundMode: 'none',
@@ -241,14 +244,18 @@ watch(
 
 async function submit() {
   if (submitDisabledReason.value || !(await validateV2Form(formRef.value))) return;
-  emit('submit', {
-    refundCostAmount: form.refundCostAmount.trim(),
-    reason: form.reason.trim(),
-    balanceRefundMode: form.balanceRefundMode,
-    ...(form.balanceRefundMode === 'custom'
-      ? { customRefundBalanceAmount: form.customRefundBalanceAmount.trim() }
-      : {})
-  });
+  emit(
+    'submit',
+    {
+      refundCostAmount: form.refundCostAmount.trim(),
+      reason: form.reason.trim(),
+      balanceRefundMode: form.balanceRefundMode,
+      ...(form.balanceRefundMode === 'custom'
+        ? { customRefundBalanceAmount: form.customRefundBalanceAmount.trim() }
+        : {})
+    },
+    formDraft.beginSave()
+  );
 }
 
 function isNonNegativeDecimal(value: unknown) {

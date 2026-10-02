@@ -31,6 +31,7 @@ on:
         options:
           - initial_20261001
           - fx_subscription_20261002
+          - unified_20261002
 
 permissions:
   actions: read
@@ -115,13 +116,16 @@ jobs:
           plans = {
               'initial_20261001': 'deploy/aws/cache-cleanup-20261001.json',
               'fx_subscription_20261002': 'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
+              'unified_20261002': 'deploy/aws/cache-cleanup-unified-20261002.json',
           }
           plan = Path(plans[os.environ['CLEANUP_PLAN']]).read_text()
           parsed_plan = json.loads(plan)
-          if parsed_plan['expectedCurrent'] != os.environ['EXPECTED_CURRENT']:
+          if os.environ['CLEANUP_PLAN'] != 'unified_20261002' and parsed_plan['expectedCurrent'] != os.environ['EXPECTED_CURRENT']:
               raise SystemExit('Cleanup expected_current differs from the reviewed plan')
           digest = hashlib.sha256(json.dumps(parsed_plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
           command = 'python3 -c ' + shlex.quote(program) + ' --plan-json ' + shlex.quote(plan)
+          if os.environ['CLEANUP_PLAN'] == 'unified_20261002':
+              command += ' --expected-current ' + shlex.quote(os.environ['EXPECTED_CURRENT'])
           if os.environ['CLEANUP_OPERATION'] == 'cleanup_cache':
               command += ' --apply --approved-plan-sha256 ' + digest
           parameters = {'commands': [command], 'executionTimeout': ['600']}

@@ -34,7 +34,10 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 
 ## UI 强制规则
 
+- 本节及 `docs/UI_DESIGN.md` 适用于现有页面和以后新增的页面、抽屉、弹窗及移动卡片；新增页面先按该文档第 7.1 节接入共享实现，再完成验收。
+- 全局问题必须修复所属共享层。`apps/admin/src/v2/styles/base.css` 是主题令牌、兼容别名和基础组件皮肤的唯一来源；页面不得复制颜色、控件尺寸、标签对齐或按钮状态皮肤，也不得用单页深色覆盖、负边距和空白占位修补。
 - 搜索、筛选和操作区空间足够时必须同一行，空间不足时自然换行；普通列表复用 `V2PageContext` 的 `filters`／`actions` 插槽，带标题的分组筛选复用 `V2ListToolbar`，页首总览复用 `V2PageOverview`／`V2OverviewMetric`；根容器使用 `v2-page-layout`，模块间距由 `layout.css` 和 `V2AsyncRegion` 管理，不得用额外独立行或不确定的百分比宽度制造提前换行。
+- 业务操作复用 `AppButton`，表单复用公共标签与控件规则；默认桌面 36px，`size="large"` 为 40px，900px 及以下为 44px。帮助文字和错误提示出现后，标签仍对齐首行控件；内嵌按钮不得撑高输入框。
 - 中文界面的用户可见文案默认使用简体中文；中文界面不得直接展示内部字段 key、枚举值或数据库字段名，
   必须先映射为中文标签。新增或修改界面后必须运行 `npm run check:v2-ui-language`。
 - 表单标签必须在控件左侧；禁止顶部标签布局。
@@ -61,8 +64,17 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 - 禁止业务页直接使用 `v-loading`、`el-skeleton`、`ElLoading` 或全页遮罩。
 - KeepAlive 只允许订单录入草稿页。
 
+## 输入与切页规则
+
+- 除订单录入的既有 KeepAlive 例外外，表单、搜索词、筛选、排序、分页和页签统一通过 `useV2SessionDraft`／`useV2FormDraft` 登记；在当前标签页、同一登录身份内切页返回或关闭重开时恢复。普通页面禁止用 KeepAlive、浏览器存储或单页备份变量另建保留机制。
+- 关闭、取消和成功切页只收起界面，不清空输入；导航失败保留界面。新增／编辑草稿按功能和资料标识隔离，默认复用保留草稿的 `V2FormDrawer`／`V2ConfirmDialog`。
+- 保存前调用 `useV2FormDraft.beginSave()` 捕获提交快照，成功才清理对应快照；失败保留输入，迟到响应不得清除后续编辑或其他资料。恢复编辑时保留原始版本校验依据，不用最新响应替换草稿的原始版本。
+- 明确的清空／恢复默认与关闭分开。整页刷新、退出登录、会话失效或身份切换清理会话草稿；临时验证码、银行卡安全码和单次付款授权不保留。具体生命周期和验收见 `docs/V2_LOADING_STANDARD.md`。
+
 ## 检查与交付
 
+- 新增或修改 V2 界面必须运行 `check:admin-ui`、`check:v2-ui-language`、`check:v2-color-contrast`、`check:v2-table-standard`、`check:v2-loading-standard`、`check:v2-module-architecture` 和 `check:v2-isolation`；加载检查包含输入保留检查。前端精简 CI 也必须执行这些规则，不得因模块分类而漏跑皮肤、加载或草稿检查。
+- 静态检查不能代替页面验收：按 `docs/UI_DESIGN.md` 第 7.1 节复核深浅主题、响应式、真实文字对齐及加载／草稿生命周期。修改共享规则须回归使用该规则的页面；仅修改规则文档或 CI 选择器时运行受影响的控制检查，不启动无关业务套件。
 - 发布检查按 `scripts/ci-recharge-scope.mjs` 的范围执行；文档/CI 修复只跑控制检查，普通 V2 前端改动不启动 API、MySQL、财务全套或无关浏览器验收。
 - main 复用已通过 PR 的相同源码树证据；缺失证据先定位原因，不重复派发完整 CI。源码、依赖或检查命令变化时只补相应检查。
 - 一次发布保留一份 SHA、检查、镜像、迁移和验收记录；已通过且输入未变的步骤不重复执行，不以空提交或反复手动触发代替诊断。

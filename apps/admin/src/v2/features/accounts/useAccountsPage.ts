@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2AccountsApi } from './api';
@@ -12,11 +13,10 @@ import {
   isNonNegativeDecimal,
   isNonNegativeExchangeRate,
   isZeroDecimal,
-  normalizeDecimalInput,
-  type AccountFormState
+  normalizeDecimalInput
 } from './account-form';
 import { exportAccountRowsToCsv } from './account-export';
-import { formatAccountDate, formatAccountDecimal } from './account-format';
+import { accountLifecycleLabel, formatAccountDate, formatAccountDecimal } from './account-format';
 import {
   countActiveAccountsFilters,
   normalizeAccountsListQuery,
@@ -26,7 +26,7 @@ import {
 import {
   downloadAccountImportTemplate,
   prepareAccountImport,
-  type AccountImportFailure
+  useAccountImportDraft
 } from './account-import';
 import { useAccountLossReporting } from './useAccountLossReporting';
 import { useAccountPermissions } from './useAccountPermissions';
@@ -37,7 +37,6 @@ import { useAccountSaleRecovery } from './useAccountSaleRecovery';
 import { useAccountSensitiveAccess } from './useAccountSensitiveAccess';
 import type {
   CreateV2AccountInput,
-  ImportV2AccountRowInput,
   UpdateV2AccountInput,
   V2Account,
   V2AccountLifecycle,
@@ -60,41 +59,37 @@ export function useAccountsPage() {
   const importing = ref(false);
   const importDialogVisible = ref(false);
   const importFileInput = ref<HTMLInputElement | null>(null);
-  const importFilename = ref('');
-  const importRows = ref<ImportV2AccountRowInput[]>([]);
-  const importFailures = ref<AccountImportFailure[]>([]);
-  const importSourceRowCount = ref(0);
-  const importCompleted = ref(false);
-  const importSuccessCount = ref(0);
+  const {
+    importFilename,
+    importRows,
+    importFailures,
+    importSourceRowCount,
+    importCompleted,
+    importSuccessCount
+  } = useAccountImportDraft();
   const revealTarget = ref<V2Account | null>(null);
   const revealDialogVisible = ref(false);
   const revealing = ref(false);
-
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    countryOptionId: '',
-    statusOptionId: '',
-    supplierOptionId: '',
-    recordStatus: '' as V2RecordStatus | '',
-    saleState: '' as 'available' | 'sold' | '',
-    lifecycle: 'available' as V2AccountLifecycle,
-    sortBy: 'updatedAt' as NonNullable<V2AccountListQuery['sortBy']>,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
-  const activeFilterCount = computed(() => countActiveAccountsFilters(query));
-  const lifecycleLabel = computed(
-    () =>
-      ({
-        available: '可用 ID',
-        disabled: '已停用 ID',
-        sold: '已售出 ID',
-        reported: '已报损 ID'
-      })[query.lifecycle]
+  const query = useV2SessionDraft('accounts-filters', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      countryOptionId: '',
+      statusOptionId: '',
+      supplierOptionId: '',
+      recordStatus: '' as V2RecordStatus | '',
+      saleState: '' as 'available' | 'sold' | '',
+      lifecycle: 'available' as V2AccountLifecycle,
+      sortBy: 'updatedAt' as NonNullable<V2AccountListQuery['sortBy']>,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
   );
+  const activeFilterCount = computed(() => countActiveAccountsFilters(query));
+  const lifecycleLabel = computed(() => accountLifecycleLabel(query.lifecycle));
 
-  const form = reactive<AccountFormState>(emptyAccountForm());
+  const editorDraft = useV2FormDraft('accounts-editor', emptyAccountForm);
+  const { form } = editorDraft;
   const purchaseSourceState = useAccountPurchaseSources(form, editingItem);
   const refreshCreateOptions = useAccountCreateOptions({
     countryOptions,
@@ -355,7 +350,7 @@ export function useAccountsPage() {
   function openCreate() {
     editingItem.value = null;
     const normalStatus = statusOptions.value.find((option) => option.code === 'normal');
-    Object.assign(form, emptyAccountForm(), {
+    editorDraft.open('create', {
       countryOptionId: countryOptions.value[0]?.id ?? '',
       statusOptionId: normalStatus?.id ?? ''
     });
@@ -388,31 +383,35 @@ export function useAccountsPage() {
       return;
     }
     editingItem.value = item;
-    Object.assign(form, {
-      appleId: '',
-      password: '',
-      phone: '',
-      securityInfo: '',
-      countryOptionId: item.countryOptionId,
-      statusOptionId: item.statusOptionId,
-      supplierOptionId: item.supplierOptionId ?? '',
-      currentBalance: item.currentBalance,
-      exchangeRate: calculateExchangeRate(item.currentBalance, item.balanceCostAmount) ?? '0',
-      balanceCostAmount: item.balanceCostAmount,
-      balanceAdjustmentReason: '',
-      purchaseCost: Number(item.purchaseCost),
-      purchaseOriginalAmount: item.purchaseOriginalAmount,
-      purchaseCurrency: item.purchaseCurrency,
-      purchaseFxRateToCny: item.purchaseFxRateToCny,
-      purchaseSourceId: item.purchaseFinanceAccountId
-        ? `account:${item.purchaseFinanceAccountId}`
-        : item.purchaseSupplierAccountId
-          ? `wallet:${item.purchaseSupplierAccountId}`
-          : '',
-      purchaseManualRateReason: '',
-      purchasedAt: toV2DateTimeInput(item.purchasedAt),
-      remark: item.remark ?? ''
-    });
+    editorDraft.open(
+      item.id,
+      {
+        appleId: '',
+        password: '',
+        phone: '',
+        securityInfo: '',
+        countryOptionId: item.countryOptionId,
+        statusOptionId: item.statusOptionId,
+        supplierOptionId: item.supplierOptionId ?? '',
+        currentBalance: item.currentBalance,
+        exchangeRate: calculateExchangeRate(item.currentBalance, item.balanceCostAmount) ?? '0',
+        balanceCostAmount: item.balanceCostAmount,
+        balanceAdjustmentReason: '',
+        purchaseCost: Number(item.purchaseCost),
+        purchaseOriginalAmount: item.purchaseOriginalAmount,
+        purchaseCurrency: item.purchaseCurrency,
+        purchaseFxRateToCny: item.purchaseFxRateToCny,
+        purchaseSourceId: item.purchaseFinanceAccountId
+          ? `account:${item.purchaseFinanceAccountId}`
+          : item.purchaseSupplierAccountId
+            ? `wallet:${item.purchaseSupplierAccountId}`
+            : '',
+        purchaseManualRateReason: '',
+        purchasedAt: toV2DateTimeInput(item.purchasedAt),
+        remark: item.remark ?? ''
+      },
+      item.updatedAt
+    );
     drawerVisible.value = true;
   }
 
@@ -438,11 +437,12 @@ export function useAccountsPage() {
     };
 
     saving.value = true;
+    const completeSave = editorDraft.beginSave();
     try {
       if (editingItem.value) {
         const payload: UpdateV2AccountInput = {
           ...commonPayload,
-          expectedUpdatedAt: editingItem.value.updatedAt,
+          expectedUpdatedAt: editorDraft.version.value ?? editingItem.value.updatedAt,
           purchaseCost: form.purchaseCost
         };
         if (form.appleId.trim()) payload.appleId = form.appleId.trim();
@@ -483,6 +483,7 @@ export function useAccountsPage() {
         await idBusinessV2AccountsApi.create(payload);
         ElMessage.success('ID 资料已新增');
       }
+      completeSave();
       drawerVisible.value = false;
       void loadAccounts();
     } catch (error) {

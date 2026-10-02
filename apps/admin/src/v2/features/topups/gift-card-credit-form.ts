@@ -1,3 +1,4 @@
+import { getV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import type { V2GiftCardCreditPayload } from './contracts';
 
 export function normalizeGiftCardCode(value: string) {
@@ -42,5 +43,18 @@ export function buildManualGiftCardCreditPayload(input: {
       ? { confirmedSoldByOrderId: input.confirmedSoldByOrderId }
       : {}),
     ...(remark ? { remark } : {})
+  };
+}
+
+export function createEmptyGiftCardCreditForm() {
+  return {
+    cardNameOptionId: '',
+    countryOptionId: '',
+    code: '',
+    faceValue: '',
+    exchangeRate: '',
+    supplierOptionId: '',
+    creditedAt: getV2BusinessNowInput(),
+    remark: ''
   };
 }

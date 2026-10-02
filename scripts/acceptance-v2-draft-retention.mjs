@@ -223,10 +223,10 @@ async function main() {
       const detour = check.path === '/v2/options' ? '/v2/orders' : '/v2/options';
       await navigateWithinV2(page, detour);
       await navigateWithinV2(page, check.path);
-      assert.equal(await input.inputValue(), '', `${check.path} 仍被 KeepAlive 保留临时筛选`);
+      assert.equal(await input.inputValue(), marker, `${check.path} 切页后没有恢复搜索草稿`);
     }
 
-    await verifyOptionsHierarchyAndTransientDrawer(page, {
+    await verifyOptionsHierarchyAndSessionDraft(page, {
       countryName,
       categoryName,
       serviceName
@@ -256,7 +256,7 @@ async function main() {
   }
 
   console.log(
-    '[V2901 browser acceptance] PASSED: 订单草稿选择性保留、普通页面临时状态卸载、刷新清空与浏览器存储边界均符合要求'
+    '[V2901 browser acceptance] PASSED: 订单草稿选择性保留、普通页面卸载后恢复会话输入、刷新清空与浏览器存储边界均符合要求'
   );
 }
 
@@ -392,7 +392,7 @@ async function assertOrderDraftCleared(page) {
   assert.equal(await formItem(page, '备注').locator('textarea').inputValue(), '');
 }
 
-async function verifyOptionsHierarchyAndTransientDrawer(page, fixture) {
+async function verifyOptionsHierarchyAndSessionDraft(page, fixture) {
   await navigateWithinV2(page, '/v2/options');
 
   await page.getByText('业务分类', { exact: true }).first().click();
@@ -401,14 +401,14 @@ async function verifyOptionsHierarchyAndTransientDrawer(page, fixture) {
   let drawer = page.locator('.el-drawer:visible');
   await drawer.waitFor({ state: 'visible' });
   assert.equal(await drawer.getByText('上级国家', { exact: true }).count(), 0);
-  await drawer.getByRole('button', { name: '取消', exact: true }).click();
+  await drawer.getByRole('button', { name: /^(取消|关闭)$/, exact: true }).click();
 
   await page.getByText('国家', { exact: true }).first().click();
   await waitForPageReady(page);
   await page.getByRole('button', { name: '新增国家', exact: true }).click();
   drawer = page.locator('.el-drawer:visible');
   await drawer.getByText('默认货币', { exact: true }).waitFor();
-  await drawer.getByRole('button', { name: '取消', exact: true }).click();
+  await drawer.getByRole('button', { name: /^(取消|关闭)$/, exact: true }).click();
 
   await page.getByText('开通业务', { exact: true }).first().click();
   await waitForPageReady(page);
@@ -430,6 +430,15 @@ async function verifyOptionsHierarchyAndTransientDrawer(page, fixture) {
     0,
     '选项抽屉仍被 KeepAlive 意外恢复'
   );
+  await page.getByRole('button', { name: '新增开通业务', exact: true }).click();
+  assert.equal(
+    await formItem(page, '选项名称').locator('input').inputValue(),
+    `草稿 ${fixture.serviceName}`
+  );
+  await page
+    .locator('.el-drawer:visible')
+    .getByRole('button', { name: /^(取消|关闭)$/, exact: true })
+    .click();
 }
 
 async function readStorageKeys(page) {
