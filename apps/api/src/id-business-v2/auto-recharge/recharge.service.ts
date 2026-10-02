@@ -435,7 +435,7 @@ export class RechargeService {
             !job.accountKey ||
             job.accountKey !== accountKey ||
             typeof input.fileKey !== 'string' ||
-            !/^(?:payments\/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json$/.test(input.fileKey) ||
+            !/^(?:payments\/)?[a-f0-9]{64}(?:-pro-(?:5x|20x|500))?\.json$/.test(input.fileKey) ||
             !Number.isSafeInteger(input.revision) ||
             Number(input.revision) < 0
           )

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from contextlib import nullcontext
 from decimal import Decimal, InvalidOperation
 import json
@@ -59,6 +60,8 @@ def retryable_page_load_error(error):
     """Only retry transport failures before any official write is armed."""
     report = error.report if isinstance(error, Stop) else {}
     if report.get("reason") in {"session_load_timeout", "session_network_error"}:
+        return True
+    if type(error).__name__ == "TimeoutError":
         return True
     return bool(re.search(
         r"net::ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT|CONNECTION_RESET|CONNECTION_CLOSED|"
@@ -215,16 +218,16 @@ async def restore_session_with_refresh(page, target, wait_seconds, budget):
         try:
             if load_attempt == 0:
                 operation = lambda: page.goto(
-                    ORIGIN + "/", wait_until="domcontentloaded", timeout=0
+                    ORIGIN + "/", wait_until="commit", timeout=0
                 )
                 step = "page_load"
             elif page.url == "about:blank":
                 operation = lambda: page.goto(
-                    ORIGIN + "/", wait_until="domcontentloaded", timeout=0
+                    ORIGIN + "/", wait_until="commit", timeout=0
                 )
                 step = "page_refresh"
             else:
-                operation = lambda: page.reload(wait_until="domcontentloaded", timeout=0)
+                operation = lambda: page.reload(wait_until="commit", timeout=0)
                 step = "page_refresh"
             await budget.run(operation, step)
             return await check_session(page, target, wait_seconds, budget)
@@ -598,6 +601,36 @@ async def check_session(page, target, wait_seconds=0, budget=None):
     raise Stop("verification_required")
 
 
+async def observe_page_network(page, budget=None):
+    """读取当前官网窗口出口；取消和网络错误不能伪装成已核实。"""
+    async def read_trace():
+        return await page.evaluate("""async timeoutMs => {
+            const control = new AbortController();
+            const timer = setTimeout(() => control.abort(), timeoutMs);
+            try {
+                const r = await fetch('/cdn-cgi/trace', {cache:'no-store', signal:control.signal});
+                if (!r.ok) return '';
+                return (await r.text()).slice(0,4096);
+            } finally { clearTimeout(timer); }
+        }""", min(10000, budget.remaining_ms()) if budget else 10000)
+    try:
+        trace = await budget.run(read_trace, "account_read") if budget else await read_trace()
+        values = dict(line.split("=", 1) for line in trace.splitlines() if "=" in line)
+        ip = str(ipaddress.ip_address(values.get("ip", "")))
+        country = values.get("loc", "")
+        if not re.fullmatch(r"[A-Z]{2}", country):
+            raise ValueError()
+        return {"ip": ip, "country": country,
+                "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    except Stop:
+        raise
+    except Exception as exc:
+        from browser_session import session_failure
+        failure = session_failure(exc)
+        raise Stop("proxy_network_unconfirmed", error_type=failure["error_type"],
+                   browser_error_code=failure.get("browser_error_code")) from None
+
+
 async def select_plan(page, target_plan):
     from plan_selection import select_plan as select_official_plan
     return await select_official_plan(page, target_plan, progress)
@@ -656,27 +689,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             _, identity = await check_session(page, target, wait_seconds, session_budget)
         guard.account_verified = True
         if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
-            try:
-                async def read_trace():
-                    return await page.evaluate("""async timeoutMs => {
-                        const control = new AbortController();
-                        const timer = setTimeout(() => control.abort(), timeoutMs);
-                        try {
-                            const r = await fetch('/cdn-cgi/trace', {cache:'no-store', signal:control.signal});
-                            if (!r.ok) return '';
-                            return (await r.text()).slice(0,4096);
-                        } finally { clearTimeout(timer); }
-                    }""", min(10000, session_budget.remaining_ms()) if session_budget else 10000)
-                trace = await session_budget.run(read_trace, "account_read") if session_budget else await read_trace()
-                import ipaddress
-                values = dict(line.split("=", 1) for line in trace.splitlines() if "=" in line)
-                ip = str(ipaddress.ip_address(values.get("ip", "")))
-                country = values.get("loc", "")
-                if not re.fullmatch(r"[A-Z]{2}", country):
-                    raise ValueError()
-                identity["network"] = {"ip": ip, "country": country, "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-            except Exception:
-                identity["network"] = {"ip": None, "country": None, "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            identity["network"] = await observe_page_network(page, session_budget)
         progress("session_verified", **identity)
         if ledger is None and existing is None:
             return {"status": "session_verified", **identity, "checkout_status": "not_attempted", **guard.summary()}
@@ -687,9 +700,16 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             progress(stage)
             button = await select_plan(page, target_plan)
             # 验证完成后/点击 Plus 前再次核对官网身份，防止切换账号。
-            _, identity = await check_session(page, target, wait_seconds)
+            previous_network = identity.get("network")
+            recheck_budget = session_budget.restart() if session_budget else None
+            _, identity = await check_session(page, target, wait_seconds, recheck_budget)
             if identity["current_plan"] != "free":
                 raise Stop("incompatible_existing_subscription")
+            if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
+                identity["network"] = await observe_page_network(page, recheck_budget)
+                if (not previous_network or any(identity["network"][key] != previous_network[key]
+                                                for key in ("ip", "country"))):
+                    raise Stop("proxy_ip_changed_during_login")
             await verify_selected_plan(page, target_plan)
             stage = "checkout_create"
             progress(stage)

@@ -23,16 +23,27 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('服务器付款前各阶段显示明确中文位置', () => {
+    expect(statusLabel('proxy_resolving')).toContain('提取');
+    expect(statusLabel('proxy_verifying')).toContain('核实');
+    expect(statusLabel('original_state_restore')).toContain('原订单');
+    expect(statusLabel('login_network_verifying')).toContain('登录后');
+  });
   it('代理出口国家错误只提示所选代理国家，不将账单国家视为冲突', () => {
     expect(failureReasonLabel('proxy_country_mismatch')).toBe(
       '代理实际出口国家与所选代理国家不一致，已限制登录'
     );
   });
-  it('500 美元档订阅类型与结果使用中文标签', () => {
-    expect(statusLabel('promax')).toBe('Pro（500 美元／月档）');
-    expect(
-      subscriptionLabel(job({ plan: 'pro-500', result: { subscription_status: 'pro-500' } }))
-    ).toBe('Pro（500 美元／月档）');
+  it('历史订阅标识按三种 Pro 使用额度显示，未核验的普通 Pro 不猜档位', () => {
+    expect(statusLabel('promax')).toBe('Pro（最高使用额度）');
+    expect(statusLabel('pro')).toBe('Pro（档位待核验）');
+    for (const [plan, label] of [
+      ['pro-5x', 'Pro（标准）'],
+      ['pro-20x', 'Pro（更多使用额度）'],
+      ['pro-500', 'Pro（最高使用额度）']
+    ] as const) {
+      expect(subscriptionLabel(job({ plan, result: { subscription_status: plan } }))).toBe(label);
+    }
   });
   it('加载重试与底层错误显示中文，不显示内部异常原文', () => {
     expect(statusLabel('session_load_timeout')).toContain('等待时间');

@@ -79,6 +79,46 @@ RETRYABLE_NETWORK_CODES = {
 }
 
 
+def session_failure(error):
+    """仅返回异常类别和固定网络码，不回传异常正文或 URL。"""
+    name = type(error).__name__
+    details = {"error_type": name if name in {
+        "TimeoutError", "AssertionError", "Error", "TargetClosedError"
+    } else "UnexpectedError"}
+    code = next((code for code in RETRYABLE_NETWORK_CODES if code in str(error)), None)
+    if code:
+        details["browser_error_code"] = code
+    reason = ("session_load_timeout" if name == "TimeoutError" else
+              "session_network_error" if code else "browser_operation_failed")
+    return {"status": "blocked", "reason": reason, **details}
+
+
+async def load_session_page(page, url, budget):
+    """同一登录窗口最多两次只读导航；页面响应与账号核实使用同一预算。"""
+    for attempt in range(2):
+        step = "page_refresh" if attempt else "page_load"
+        budget.report(session_step=step, session_refresh_count=attempt,
+                      session_elapsed_seconds=int(budget.elapsed),
+                      session_wait_seconds=budget.seconds)
+        try:
+            response = await budget.run(lambda: page.goto(
+                url, wait_until="commit", timeout=0), step)
+            status = getattr(response, "status", None)
+            if type(status) is int and status >= 400:
+                raise Stop("verification_required" if status == 403 else "http_error",
+                           http_status=status, user_action_required=status == 403)
+            return
+        except Stop:
+            raise
+        except Exception as error:
+            result = session_failure(error)
+            if attempt or result["reason"] not in {"session_load_timeout", "session_network_error"}:
+                raise Stop(result.pop("reason"), **result) from None
+            # 只有首页 GET 的明确超时/传输失败才再尝试；从不重放登录提交或付款。
+            budget.remaining_ms()
+    raise Stop("session_load_timeout", error_type="TimeoutError")
+
+
 def retryable_session_result(result):
     """只重试付款前的页面加载失败，永不重放建单或付款写入。"""
     if (result.get("payment_attempted") is True

@@ -7,14 +7,16 @@ from checkout_core import Stop
 
 PLANS = {
     "plus": {"label": "Plus", "family": "plus", "tier": None, "official_name": "chatgptplusplan"},
-    "pro-5x": {"label": "Pro 5×", "family": "pro", "tier": 5, "official_name": "chatgptprolite"},
-    "pro-20x": {"label": "Pro 20×", "family": "pro", "tier": 20, "official_name": "chatgptpro"},
-    "pro-500": {"label": "Pro（500 美元/月档）", "family": "promax", "tier": None, "official_name": "chatgptpromax"},
+    "pro-5x": {"label": "Pro（标准）", "family": "pro", "tier": 5, "official_name": "chatgptprolite"},
+    "pro-20x": {"label": "Pro（更多使用额度）", "family": "pro", "tier": 20, "official_name": "chatgptpro"},
+    "pro-500": {"label": "Pro（最高使用额度）", "family": "promax", "tier": None, "official_name": "chatgptpromax"},
 }
 
 # 官网公开定价组件将 Pro 100/200/500 分别映射为 prolite/pro/promax；不推算使用倍数。
 PRO_PRICE_PLANS = {100: "pro-5x", 200: "pro-20x", 500: "pro-500"}
 PRO_GROUP = re.compile(r"^\s*(?:Choose Pro plan tier|选择\s*Pro\s*套餐档位|(?:ChatGPT\s*)?Pro(?:\s*plan|\s*套餐)?)\s*$", re.I)
+PRO_USAGE_LABELS = {"pro-5x": r"Standard|标准", "pro-20x": r"More usage|更多使用额度",
+                    "pro-500": r"Max usage|最高使用额度"}
 
 
 def selection_spec(plan):

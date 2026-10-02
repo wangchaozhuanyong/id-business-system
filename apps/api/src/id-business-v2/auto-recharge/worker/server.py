@@ -27,14 +27,16 @@ from payment_form import PaymentDetails, validate_details
 from payment_recovery import recheck_in_context, recheck_payment
 from plans import PLANS
 from plan_selection import safe_diagnostics
+from browser_session import SessionBudget, load_session_page, session_failure
 
 MAX_BODY = 96000
 TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
 API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
-RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json$")
+RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x|500))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
+PUBLIC_KEYS.update("error_type session_step session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())
 
 
 class PersistentBrowserRuntime:
@@ -280,6 +282,7 @@ class Job:
         self.cancelled = False
         self.done = False
         self.preflight_network = None
+        self.stage = None
 
     def persist(self, path, document):
         name = str(path.relative_to(self.root))
@@ -293,6 +296,7 @@ class Job:
     def progress(self, stage, **details):
         if self.cancelled:
             raise Stop("operation_cancelled")
+        self.stage = stage
         if self.payload.get("action") == "server" and stage in {"login_verified", "session_verified"}:
             network = details.get("network")
             if (not isinstance(network, dict) or self.preflight_network is None or
@@ -443,9 +447,19 @@ class Job:
             raise Stop("expected_email_required")
         await context.add_cookies(session_cookies(target))
         page = await context.new_page()
+        budget = SessionBudget(60, cancelled=lambda: self.cancelled,
+                               report=lambda **details: self.progress("session_restore", **details))
+        async def block_payment(route):
+            request = route.request
+            if browser_password_login.login_payment_write(request.method, request.url):
+                await route.abort("blockedbyclient")
+            else:
+                await route.fallback()
+        await context.route("**/*", block_payment)
         try:
-            await page.goto(browser_checkout.ORIGIN, wait_until="domcontentloaded", timeout=45000)
-            observed = await browser_password_login.official_identity(page, expected_email)
+            await load_session_page(page, browser_checkout.ORIGIN, budget)
+            observed = await browser_password_login.official_identity(
+                page, expected_email, budget=budget, strict=True)
             if not observed:
                 raise Stop("official_session_not_verified", account_matched=False)
             official_target, identity = observed
@@ -454,6 +468,7 @@ class Job:
                 raise Stop("official_account_mismatch", account_matched=False)
             return identity
         finally:
+            await context.unroute("**/*", block_payment)
             await page.close()
 
     async def execute(self, browser=None):
@@ -463,10 +478,12 @@ class Job:
             login = self.payload.pop("login", None)
             raw = self.payload.pop("sessionJson", None)
             try:
+                self.progress("proxy_resolving")
                 proxy = await asyncio.to_thread(server_proxy.resolve_proxy, proxy_config)
                 context = await browser.new_context(proxy=proxy, service_workers="block",
                                                     accept_downloads=False)
                 try:
+                    self.progress("proxy_verifying")
                     self.preflight_network = await server_proxy.observe_exit(context)
                     expected_country = self.payload.get("expectedCountry")
                     if self.preflight_network["country"] != expected_country:
@@ -474,6 +491,7 @@ class Job:
                     previous_ip = self.payload.get("previousLoginIp")
                     if previous_ip and self.preflight_network["ip"] == previous_ip and not self.payload.get("recheckOnly"):
                         raise Stop("proxy_ip_not_rotated")
+                    self.progress("session_restore")
                     if login is not None:
                         target, identity = await self.login_target(context, login)
                     else:
@@ -487,7 +505,9 @@ class Job:
                                 not hmac.compare_digest(hashlib.sha256(
                                     target.account_id.encode()).hexdigest(), expected_key)):
                             raise Stop("original_account_mismatch", account_matched=False)
+                    self.progress("original_state_restore")
                     self.restore_target(target)
+                    self.progress("login_network_verifying")
                     observed_after_login = await server_proxy.observe_exit(context)
                     if observed_after_login != self.preflight_network:
                         raise Stop("proxy_ip_changed_during_login")
@@ -504,6 +524,9 @@ class Job:
                     return await pay.run_flow(target, self.root, plan, details_reader=self.details,
                                               confirmer=self.confirm, wait_seconds=120,
                                               browser_context=context,
+                                              session_budget=SessionBudget(
+                                                  60, cancelled=lambda: self.cancelled,
+                                                  report=lambda **details: self.progress("session_restore", **details)),
                                               expected_country=self.payload.get("expectedCountry"))
                 finally:
                     await context.close()
@@ -566,9 +589,11 @@ class Job:
                     # 独立单测与本地导入保留原调用方式；生产入口会预热常驻运行时。
                     result = asyncio.run(self.execute())
         except Stop as exc:
-            result = exc.report
-        except Exception:
-            result = {"status": "blocked", "reason": "worker_operation_failed"}
+            result = dict(exc.report)
+        except Exception as exc:
+            result = session_failure(exc)
+            if self.stage != "session_restore":
+                result["reason"] = "worker_operation_failed"
         finally:
             attempt_ledger.atomic_json = payment_state.atomic_json = original_atomic
             browser_checkout.progress = pay.progress = payment_network.progress = original_progress
@@ -583,6 +608,8 @@ class Job:
             self.done = True
             watchdog.cancel()
         oom_kills_after = read_cgroup_oom_kill()
+        if result.get("status") in {"blocked", "interrupted"} and self.stage:
+            result.setdefault("stage", self.stage)
         if (BROWSER_RUNTIME.started and oom_kills_before is not None and oom_kills_after is not None
                 and oom_kills_after > oom_kills_before):
             BROWSER_RUNTIME.discard()

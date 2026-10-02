@@ -5,7 +5,7 @@ import time
 
 from playwright.async_api import expect
 from checkout_core import Stop
-from plans import PRO_GROUP, PRO_PRICE_PLANS, selection_spec
+from plans import PRO_GROUP, PRO_PRICE_PLANS, PRO_USAGE_LABELS, selection_spec
 
 STEP_SECONDS = 30
 SELECTION_SECONDS = 90
@@ -63,6 +63,12 @@ async def pro_control(scope, target_plan):
     if count > 1:
         raise Stop('official_plan_region_ambiguous')
     if count == 1:
+        # 本地币种页面以标准/更多/最高额度选档，金额不能用于推断套餐。
+        named = groups.get_by_role('radio', name=re.compile(
+            rf'(?:^|\s)(?:{"|".join(PRO_USAGE_LABELS.values())})\s*$', re.I)).filter(visible=True)
+        if await named.count():
+            return groups.get_by_role('radio', name=re.compile(
+                rf'(?:^|\s)(?:{PRO_USAGE_LABELS[target_plan]})\s*$', re.I)).filter(visible=True)
         # 官网当前控件的可访问名称是裸数字 100/200/500，必须限制在明确的 Pro 档位组内。
         numeric = groups.get_by_role('radio', name=re.compile(r'^\s*(?:100|200|500)\s*$'))
         if await numeric.filter(visible=True).count():

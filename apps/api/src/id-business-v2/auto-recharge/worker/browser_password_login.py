@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from browser_checkout import ORIGIN, browser_read, check_session
 from checkout_core import BrowserCredential, Stop, parse_credential
+from browser_session import SessionBudget, load_session_page
 
 
 LOGIN_URL = ORIGIN + "/auth/login"
@@ -66,11 +67,12 @@ async def wait_for_input(page, selector, seconds):
     return None
 
 
-async def official_identity(page, expected_email):
+async def official_identity(page, expected_email, *, budget=None, strict=False):
     if urlsplit(page.url).hostname != "chatgpt.com":
         return None
     try:
-        data = await browser_read(page, "/api/auth/session")
+        operation = lambda: browser_read(page, "/api/auth/session", budget=budget)
+        data = await budget.run(operation, "session_read") if budget else await operation()
         user = data.get("user") if isinstance(data, dict) else None
         email = user.get("email") if isinstance(user, dict) else None
         uid = user.get("id") if isinstance(user, dict) else None
@@ -80,10 +82,10 @@ async def official_identity(page, expected_email):
             raise Stop("official_login_email_mismatch", account_matched=False)
         credential = parse_credential(json.dumps(data).encode())
         target = BrowserCredential("", credential.account_id, uid)
-        _, identity = await check_session(page, target)
+        _, identity = await check_session(page, target, budget=budget)
         return target, identity
     except Stop as exc:
-        if exc.report.get("reason") in {"official_login_email_mismatch",
+        if strict or exc.report.get("reason") in {"official_login_email_mismatch",
                                          "official_user_mismatch", "official_account_mismatch"}:
             raise
         return None
@@ -99,7 +101,8 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
             raise Stop("official_login_not_verified", account_matched=False)
         return current
 
-    await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
+    budget = SessionBudget(60, report=lambda **details: progress("session_restore", **details))
+    await load_session_page(page, LOGIN_URL, budget)
     if not official_login_page(page.url):
         return await manual_completion()
     current = await official_identity(page, email)
