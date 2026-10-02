@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref, watch } from 'vue';
+import { computed, onScopeDispose, reactive, ref, toRefs, watch } from 'vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import type {
   V2RechargeAddress,
@@ -15,7 +15,7 @@ import type {
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
@@ -44,10 +44,9 @@ function isAlreadyResolved(
   return 'alreadyResolved' in value && value.alreadyResolved === true;
 }
 
-const emptyDetails = (): V2RechargeDetails => ({
+const emptyDetails = (): Omit<V2RechargeDetails, 'cvc'> => ({
   number: '',
   expiry: '',
-  cvc: '',
   name: '',
   email: '',
   country: '',
@@ -117,8 +116,38 @@ async function loadCountryProxies(countryCode: string, signal?: AbortSignal) {
 }
 
 export function useAutoRecharge() {
+  const execution = useV2SessionDraft('auto-recharge-execution', () => ({
+    currentId: ref(''),
+    paymentJobId: ref(''),
+    completePaymentSave: null as (() => boolean) | null,
+    totpRevision: 0
+  }));
+  const { currentId, paymentJobId } = execution;
+  const formDraft = useV2FormDraft('auto-recharge-form', () => ({
+    operationMode: 'server_payment' as 'server_payment' | 'payment' | 'open_browser',
+    loginMethod: 'json' as 'json' | 'password' | 'saved',
+    selectedBankAccountId: '',
+    selectedPaymentCardId: '',
+    selectedCardBillingAddressId: '',
+    manualAddressSelectionRevision: 0,
+    selectedBankAccountEmail: '',
+    loginEmail: '',
+    loginPassword: '',
+    jsonInput: '',
+    sessionJson: '',
+    jsonError: '',
+    plan: 'plus' as V2RechargePlan,
+    selectedAddressId: '',
+    addressSource: 'library' as 'library' | 'manual',
+    windowName: '',
+    lockedCurrency: 'PHP',
+    selectedProxyCountryCode: '',
+    selectedProxyId: '',
+    maxAmount: '30.00',
+    details: emptyDetails()
+  }));
+  formDraft.open('new');
   const {
-    currentId,
     operationMode,
     loginMethod,
     selectedBankAccountId,
@@ -138,32 +167,13 @@ export function useAutoRecharge() {
     lockedCurrency,
     selectedProxyCountryCode,
     selectedProxyId,
-    maxAmount,
-    details
-  } = useV2SessionDraft('auto-recharge-form', () => ({
-    currentId: ref(''),
-    operationMode: ref<'server_payment' | 'payment' | 'open_browser'>('server_payment'),
-    loginMethod: ref<'json' | 'password' | 'saved'>('json'),
-    selectedBankAccountId: ref(''),
-    selectedPaymentCardId: ref(''),
-    selectedCardBillingAddressId: ref(''),
-    manualAddressSelectionRevision: ref(0),
-    selectedBankAccountEmail: ref(''),
-    loginEmail: ref(''),
-    loginPassword: ref(''),
-    jsonInput: ref(''),
-    sessionJson: ref(''),
-    jsonError: ref(''),
-    plan: ref<V2RechargePlan>('plus'),
-    selectedAddressId: ref(''),
-    addressSource: ref<'library' | 'manual'>('library'),
-    windowName: ref(''),
-    lockedCurrency: ref('PHP'),
-    selectedProxyCountryCode: ref(''),
-    selectedProxyId: ref(''),
-    maxAmount: ref('30.00'),
-    details: ref<V2RechargeDetails>(emptyDetails())
-  }));
+    maxAmount
+  } = toRefs(formDraft.form);
+  const paymentDetails = reactive({ ...toRefs(formDraft.form.details), cvc: ref('') });
+  const details = computed<V2RechargeDetails>({
+    get: () => paymentDetails,
+    set: (value) => Object.assign(paymentDetails, value)
+  });
   const loginCode = ref('');
   const authorizeSinglePayment = ref(false);
   const busy = ref(false);
@@ -172,7 +182,6 @@ export function useAutoRecharge() {
   const connectorStatus = ref<ConnectorStatus>('unknown');
   const connectorMessage = ref('尚未检测本机连接器');
   const localAccess = ref<{ connectorUrl: string; connectorToken: string } | null>(null);
-  const paymentJobId = ref('');
   let disposed = false;
   let importGeneration = 0;
 
@@ -257,6 +266,11 @@ export function useAutoRecharge() {
     else browserSettings.setSettingsOpen(true);
   }
   const totp = useRechargeTotp(loginMethod);
+  watch(
+    [totp.source, totp.secretInput, totp.savedAccountId, () => details.value.cvc],
+    () => execution.totpRevision++,
+    { flush: 'sync' }
+  );
 
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() =>
@@ -453,7 +467,25 @@ export function useAutoRecharge() {
           operationMode.value === 'payment' && Boolean(selectedProxyId.value)
         )
   );
-  const formLocked = computed(() => busy.value || active.value);
+  const formLocked = computed(
+    () =>
+      busy.value ||
+      active.value ||
+      Boolean(paymentJobId.value && !jobs.value.some((job) => job.id === paymentJobId.value))
+  );
+  const paymentRetryBlocked = computed(() => {
+    const job = selected.value;
+    return Boolean(
+      job &&
+      job.result.mode !== 'open_browser' &&
+      (job.state === 'unknown' ||
+        ((job.result.payment_attempted === true ||
+          Number(job.result.payment_requests_sent ?? 0) > 0) &&
+          job.result.status !== 'subscription_activated' &&
+          job.result.payment_status !== 'declined' &&
+          job.result.operator_resolution !== 'confirmed_no_bank_request'))
+    );
+  });
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
       ? Boolean(sessionJson.value)
@@ -497,6 +529,7 @@ export function useAutoRecharge() {
         currentSettingsReady.value
       ) &&
       !formLocked.value &&
+      !paymentRetryBlocked.value &&
       query.phase.value === 'ready'
   );
   const canStartOpen = computed(
@@ -611,7 +644,10 @@ export function useAutoRecharge() {
       if (job.result.mode === 'open_browser') {
         return '账号登录成功，比特浏览器窗口已打开，可进行手动操作。';
       }
-      return '本次流程已结束，请查看官网回传结果。';
+      if (job.result.status === 'subscription_activated') return '充值成功，订阅已开通。';
+      return paymentRetryBlocked.value
+        ? '本次付款已有提交记录，请只读复查原订单；填写资料已保留。'
+        : '本次充值未成功，填写资料已保留；修正原因后可再次执行。';
     }
     if (!currentSettingsReady.value)
       return operationMode.value === 'server_payment'
@@ -713,19 +749,47 @@ export function useAutoRecharge() {
   );
 
   watch(
-    () => [
-      paymentJobId.value,
-      jobs.value.find((job) => job.id === paymentJobId.value)?.result.payment_attempted
-    ],
+    () => [paymentJobId.value, jobs.value.find((job) => job.id === paymentJobId.value)],
     async () => {
       const paymentJob = jobs.value.find((job) => job.id === paymentJobId.value);
-      if (!paymentJob?.result.payment_attempted) return;
-      clearCard();
+      if (
+        paymentJob?.state !== 'finished' ||
+        paymentJob.result.status !== 'subscription_activated' ||
+        paymentJob.result.payment_status !== 'paid'
+      )
+        return;
+      if (execution.completePaymentSave?.()) {
+        clearCard();
+        details.value.name = '';
+        details.value.email = '';
+        sessionJson.value = '';
+        jsonInput.value = '';
+        jsonError.value = '';
+        loginEmail.value = '';
+        loginPassword.value = '';
+        selectedPaymentCardId.value = '';
+        selectedBankAccountId.value = '';
+        selectedBankAccountEmail.value = '';
+        authorizeSinglePayment.value = false;
+        totp.clearSecret();
+        // 清理已提交快照后，为下一笔输入重新登记同一表单。
+        formDraft.open('new', { ...formDraft.form });
+      }
+      execution.completePaymentSave = null;
       paymentJobId.value = '';
       await addressQuery.refresh();
     },
-    { flush: 'post' }
+    { deep: true, immediate: true, flush: 'post' }
   );
+
+  function beginPaymentSave(id: string) {
+    const complete = formDraft.beginSave();
+    const totpRevision = execution.totpRevision;
+    return () => {
+      paymentJobId.value = id;
+      execution.completePaymentSave = () => execution.totpRevision === totpRevision && complete();
+    };
+  }
 
   function clearCard() {
     details.value.number = '';
@@ -825,6 +889,7 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
+    const rememberPaymentSave = beginPaymentSave(id);
     let launch: V2RechargeBitBrowserLaunch | null = null;
     try {
       await nameMatch.ensureReady();
@@ -860,7 +925,7 @@ export function useAutoRecharge() {
         authorizeSinglePayment: true
       });
       currentId.value = id;
-      paymentJobId.value = id;
+      rememberPaymentSave();
       localAccess.value = {
         connectorUrl: launch.connectorUrl,
         connectorToken: launch.connectorToken
@@ -888,7 +953,6 @@ export function useAutoRecharge() {
       });
       connectorStatus.value = 'online';
       connectorMessage.value = '本机连接器已接收任务';
-      if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       if (launch) {
         try {
@@ -922,6 +986,9 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
+    const rememberPaymentSave = beginPaymentSave(id);
+    const previousId = currentId.value;
+    let accepted = false;
     currentId.value = id;
     try {
       await nameMatch.ensureReady();
@@ -955,15 +1022,20 @@ export function useAutoRecharge() {
           ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
           : {})
       });
-      clearCard();
-      sessionJson.value = '';
-      jsonInput.value = '';
-      loginPassword.value = '';
-      totp.clearSecret();
+      accepted = true;
+      rememberPaymentSave();
     } catch (cause) {
       error.value = getApiErrorMessage(cause);
     } finally {
       await refresh();
+      if (
+        !accepted &&
+        currentId.value === id &&
+        query.phase.value === 'ready' &&
+        !query.error.value &&
+        !jobs.value.some((job) => job.id === id)
+      )
+        currentId.value = previousId;
       busy.value = false;
     }
   }
@@ -1043,6 +1115,7 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
+    const rememberPaymentSave = beginPaymentSave(id);
     let launch: V2RechargeBitBrowserRecheckLaunch | null = null;
     try {
       if (source.action === 'server') {
@@ -1066,9 +1139,7 @@ export function useAutoRecharge() {
                 })
         });
         currentId.value = id;
-        sessionJson.value = '';
-        loginPassword.value = '';
-        totp.clearSecret();
+        rememberPaymentSave();
         return;
       }
       await browserSettings.checkSavedConnection();
@@ -1080,6 +1151,7 @@ export function useAutoRecharge() {
         windowName: windowName.value.trim()
       });
       currentId.value = id;
+      rememberPaymentSave();
       localAccess.value = {
         connectorUrl: launch.connectorUrl,
         connectorToken: launch.connectorToken
@@ -1096,7 +1168,6 @@ export function useAutoRecharge() {
       });
       connectorStatus.value = 'online';
       connectorMessage.value = '本机连接器已接收只读复查';
-      if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       error.value = launch
         ? '本机连接器接收结果不明确，不会新建订单或重复付款。'
@@ -1262,7 +1333,6 @@ export function useAutoRecharge() {
         code
       );
       autoCodeSubmittedJobId.value = jobId;
-      totp.clearSecret();
       await refresh();
     } catch (cause) {
       if (
@@ -1304,13 +1374,6 @@ export function useAutoRecharge() {
     { flush: 'post' }
   );
 
-  watch(
-    () => selected.value?.state,
-    (state) => {
-      if (state && !activeStates.has(state)) totp.clearSecret();
-    }
-  );
-
   async function cancel() {
     if (!canCancel.value || busy.value || !selected.value) return;
     busy.value = true;
@@ -1319,7 +1382,6 @@ export function useAutoRecharge() {
     try {
       if (selected.value.action === 'server') {
         await rechargeApi.cancelServer(id);
-        clearCard();
         return;
       }
       const current = await access();
@@ -1328,12 +1390,10 @@ export function useAutoRecharge() {
       } catch (cause) {
         if (!(cause instanceof RechargeConnectorError) || cause.code !== 'missing') throw cause;
         await rechargeApi.abandonUnreceivedBitBrowser(id);
-        clearCard();
         if (paymentJobId.value === id) paymentJobId.value = '';
         return;
       }
       await rechargeApi.cancelBitBrowser(id);
-      clearCard();
       if (paymentJobId.value === id) paymentJobId.value = '';
     } catch (cause) {
       error.value = getApiErrorMessage(cause);
