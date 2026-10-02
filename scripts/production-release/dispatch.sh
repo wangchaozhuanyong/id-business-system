@@ -65,6 +65,9 @@ for attempt in $(seq 1 360); do
       aws ssm get-command-invocation --region "$AWS_REGION" \
         --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" \
         --query StandardOutputContent --output text
+      aws ssm get-command-invocation --region "$AWS_REGION" \
+        --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
+        | python3 scripts/production-release/remote-deploy.py --summarize-command-result
       echo "Production command ended: $status" >&2
       exit 1 ;;
   esac

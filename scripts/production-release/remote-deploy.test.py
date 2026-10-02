@@ -48,6 +48,30 @@ class ReleaseScopeTests(unittest.TestCase):
                 deployment.wait_healthy(None, 'admin')
 
 
+class CommandFailureSummaryTests(unittest.TestCase):
+    def test_failure_reports_controlled_reason_and_source_line(self):
+        result = deployment.command_failure_summary({
+            'Status': 'Failed', 'ResponseCode': 1,
+            'StandardErrorContent': '  File "/opt/example/remote-deploy.py", line 329\n'
+                                    'RuntimeError: Active recharge jobs prevent release\n'})
+        self.assertEqual(result['sourceLine'], 329)
+        self.assertEqual(result['reason'], 'Active recharge jobs prevent release')
+
+    def test_unknown_error_never_exposes_raw_secret_or_stdout(self):
+        result = deployment.command_failure_summary({
+            'Status': 'Failed', 'ResponseCode': 1,
+            'StandardErrorContent': 'RuntimeError: fixture-sensitive-password',
+            'StandardOutputContent': 'fixture-sensitive-cookie'})
+        self.assertNotIn('fixture-sensitive', json.dumps(result))
+        self.assertEqual(result['reason'], 'raw error suppressed')
+
+    def test_untrusted_status_and_response_fields_are_filtered(self):
+        result = deployment.command_failure_summary({
+            'Status': 'fixture-sensitive-token', 'ResponseCode': 'fixture-sensitive-token'})
+        self.assertEqual(result['status'], 'Unknown')
+        self.assertIsNone(result['responseCode'])
+
+
 class ReusableImageTests(unittest.TestCase):
     def setUp(self):
         self.run = {'event': 'workflow_dispatch', 'path': '.github/workflows/production-release.yml',
