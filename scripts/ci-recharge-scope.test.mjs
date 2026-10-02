@@ -345,3 +345,15 @@ test('keeps shared layout changes in the admin release and runs both layout regr
   );
   assert.ok(commands.some((command) => command.includes('scripts/acceptance-v2-page-layout.mjs')));
 });
+
+test('registration capacity recovery runs only release-control checks', () => {
+  const paths = [
+    '.github/workflows/production-release.yml',
+    'deploy/aws/cache-cleanup-auto-registration-20261002.json',
+    'docs/AUTO_REGISTRATION_CACHE_RECOVERY_20261002.md',
+    'scripts/production-release/cleanup-reviewed-cache.py',
+    'scripts/production-release/remote-deploy.py'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts('ci-only', paths, schema, schema), ['guards']);
+});

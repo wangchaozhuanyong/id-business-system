@@ -35,6 +35,8 @@ REUSE_CONTROL_FILES = frozenset({
     'scripts/production-release/reuse-images.py',
     'deploy/aws/cache-cleanup-recharge-names-20261002.json',
     'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
+    'deploy/aws/cache-cleanup-auto-registration-20261002.json',
+    'docs/AUTO_REGISTRATION_CACHE_RECOVERY_20261002.md',
     'docs/PRODUCTION_RELEASE_OIDC.md',
     'docs/RECHARGE_NAMES_CACHE_RECOVERY_20261002.md',
     'docs/RECHARGE_EXECUTION_CACHE_RECOVERY_20261002.md',

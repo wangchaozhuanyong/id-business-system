@@ -235,5 +235,18 @@ class RechargeExecutionCacheTests(RechargeNamesCacheTests):
         self.assertEqual(self.removals(), [])
 
 
+class RegistrationCacheTests(RechargeNamesCacheTests):
+    plan_name = 'cache-cleanup-auto-registration-20261002.json'
+
+    def test_new_candidate_cannot_be_removed(self):
+        self.plan['protectedCandidateImageIds'][0] = self.plan['items'][0]['imageId']
+        self.digest = hashlib.sha256(json.dumps(self.plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        with patch.dict(cleanup.REVIEWED_PLANS, {self.digest: ('4c811392268c19aae803131166b6070344549d1d-36993584579-1-',)}), \
+                patch.dict(cleanup.REVIEWED_PLAN_COUNTS, {self.digest: 5}):
+            with self.assertRaisesRegex(RuntimeError, 'protected release'):
+                self.invoke(True)
+        self.assertEqual(self.removals(), [])
+
+
 if __name__ == '__main__':
     unittest.main()
