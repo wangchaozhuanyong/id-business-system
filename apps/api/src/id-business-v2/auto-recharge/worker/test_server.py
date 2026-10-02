@@ -15,11 +15,14 @@ class ServerTests(unittest.TestCase):
     def test_json_target_requires_matching_official_email_and_account(self):
         async def exercise(observed):
             job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
+            job.progress = MagicMock()
             target = type('Target', (), {
                 'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
             })()
             context = MagicMock()
             context.add_cookies = AsyncMock()
+            context.route = AsyncMock()
+            context.unroute = AsyncMock()
             page = MagicMock()
             page.goto = AsyncMock()
             page.close = AsyncMock()
@@ -37,6 +40,87 @@ class ServerTests(unittest.TestCase):
         mismatched = type('Official', (), {'account_id': 'account-2', 'user_id': 'user-1'})()
         with self.assertRaises(Stop):
             asyncio.run(exercise((mismatched, {'current_plan': 'free'})))
+
+    def test_json_navigation_recovers_once_in_the_same_context_before_identity(self):
+        async def exercise():
+            job = server.Job('test', {'plan': 'pro-500'})
+            job.progress = MagicMock()
+            target = type('Target', (), {
+                'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
+            })()
+            page = MagicMock(url='https://chatgpt.com/')
+            page.goto = AsyncMock(side_effect=[TimeoutError('private URL'), type('Response', (), {'status': 200})()])
+            page.close = AsyncMock()
+            context = MagicMock(new_page=AsyncMock(return_value=page), add_cookies=AsyncMock(),
+                                route=AsyncMock(), unroute=AsyncMock())
+            with patch.object(server.browser_password_login, 'official_identity',
+                              new=AsyncMock(return_value=(target, {'current_plan': 'free'}))) as identity:
+                result = await job.verify_json_target(context, target, 'test@example.invalid')
+            self.assertEqual(result, {'current_plan': 'free'})
+            self.assertEqual(page.goto.await_count, 2)
+            self.assertTrue(all(call.kwargs['wait_until'] == 'commit' for call in page.goto.await_args_list))
+            self.assertTrue(all(call.kwargs['timeout'] == 0 for call in page.goto.await_args_list))
+            identity.assert_awaited_once()
+            self.assertTrue(identity.await_args.kwargs['strict'])
+            self.assertEqual(identity.await_args.kwargs['budget'].seconds, 60)
+            context.add_cookies.assert_awaited_once()
+            blocker = context.route.await_args.args[1]
+            route = MagicMock(request=MagicMock(method='POST', url='https://api.stripe.com/v1/payment_pages/cs_test/confirm'),
+                              abort=AsyncMock(), fallback=AsyncMock())
+            await blocker(route)
+            route.abort.assert_awaited_once()
+            route.fallback.assert_not_awaited()
+            context.unroute.assert_awaited_once_with('**/*', blocker)
+            page.close.assert_awaited_once()
+        asyncio.run(exercise())
+
+    def test_json_navigation_stops_on_403_or_after_two_timeouts(self):
+        async def exercise(blocked):
+            job = server.Job('test', {'plan': 'pro-500'})
+            job.progress = MagicMock()
+            target = type('Target', (), {
+                'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
+            })()
+            page = MagicMock(goto=AsyncMock(), close=AsyncMock())
+            if blocked:
+                page.goto.return_value = type('Response', (), {'status': 403})()
+            else:
+                page.goto.side_effect = TimeoutError('sessionToken=private')
+            context = MagicMock(new_page=AsyncMock(return_value=page), add_cookies=AsyncMock(),
+                                route=AsyncMock(), unroute=AsyncMock())
+            with patch.object(server.browser_password_login, 'official_identity', new=AsyncMock()) as identity:
+                with self.assertRaises(Stop) as stopped:
+                    await job.verify_json_target(context, target, 'test@example.invalid')
+            self.assertEqual(stopped.exception.report['reason'],
+                             'verification_required' if blocked else 'session_load_timeout')
+            self.assertEqual(page.goto.await_count, 1 if blocked else 2)
+            identity.assert_not_awaited()
+            self.assertNotIn('private', json.dumps(stopped.exception.report))
+            context.unroute.assert_awaited_once()
+            page.close.assert_awaited_once()
+        for blocked in (True, False):
+            with self.subTest(blocked=blocked):
+                asyncio.run(exercise(blocked))
+
+    def test_job_failure_keeps_last_stage_and_controlled_error_without_retry(self):
+        for stage in ('session_restore', 'payment_request_sending'):
+            with self.subTest(stage=stage):
+                job = server.Job('test', {})
+                calls = []
+                async def execute():
+                    job.progress(stage)
+                    raise TimeoutError('sessionToken=private https://private.invalid')
+                with (patch.object(job, 'execute', new=AsyncMock(side_effect=execute)) as operation,
+                      patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body))):
+                    job.run()
+                operation.assert_awaited_once()
+                result = calls[-1]['result']
+                self.assertEqual(result['stage'], stage)
+                self.assertEqual(result['error_type'], 'TimeoutError')
+                self.assertEqual(result['reason'], 'session_load_timeout'
+                                 if stage == 'session_restore' else 'worker_operation_failed')
+                self.assertNotIn('private', json.dumps(calls))
+                self.assertNotIn('payment_attempted', result)
 
     def test_server_recheck_uses_read_only_original_payment_flow(self):
         async def exercise():
@@ -459,6 +543,34 @@ class ServerTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 job.persist(Path('/tmp/credentials.json'), {})
             callback.assert_not_called()
+
+    def test_all_current_plan_records_persist_and_restore_including_max_usage(self):
+        from attempt_ledger import checkout_record_path
+        account = 'account-1'
+        with tempfile.TemporaryDirectory() as folder:
+            job = server.Job('test', {})
+            job.root = Path(folder)
+            job.account_key = server.hashlib.sha256(account.encode()).hexdigest()
+            records = []
+            for plan in server.PLANS:
+                path = checkout_record_path(job.root, account, plan)
+                for record_path in (path, job.root / 'payments' / path.name):
+                    with patch.object(server, 'callback', return_value={'revision': 1}) as callback:
+                        job.persist(record_path, {'target_plan': plan})
+                    records.append({'fileKey': str(record_path.relative_to(job.root)),
+                                    'document': {'target_plan': plan}, 'revision': 1})
+                    self.assertEqual(callback.call_args.args[1]['fileKey'], records[-1]['fileKey'])
+            with patch.object(server, 'callback', return_value={'records': records}):
+                job.restore_target(type('Target', (), {'account_id': account})())
+            self.assertEqual(len(job.revisions), 8)
+            for record in records:
+                self.assertEqual(json.loads((job.root / record['fileKey']).read_text()), record['document'])
+            for invalid in ('../' + path.name, 'payments/../' + path.name,
+                            'a' * 64 + '-pro-500x.json', 'a' * 64 + '-pro-1000.json'):
+                with self.subTest(invalid=invalid), patch.object(server, 'callback') as callback:
+                    with self.assertRaises(Stop):
+                        job.persist(job.root / invalid, {})
+                    callback.assert_not_called()
 
     def test_invalid_json_reports_failure_without_saving_input(self):
         job = server.Job('test', {'sessionJson': 'not-json', 'action': 'check', 'plan': 'plus'})

@@ -3,9 +3,9 @@ import type { BankRechargeOrderStatus } from './bank-recharge-api';
 
 export const planLabels = {
   plus: 'ChatGPT Plus',
-  'pro-5x': 'ChatGPT Pro 5×',
-  'pro-20x': 'ChatGPT Pro 20×',
-  'pro-500': 'ChatGPT Pro（500 美元／月档）'
+  'pro-5x': 'ChatGPT Pro（标准）',
+  'pro-20x': 'ChatGPT Pro（更多使用额度）',
+  'pro-500': 'ChatGPT Pro（最高使用额度）'
 };
 
 export const currencyOptions = [
@@ -42,10 +42,13 @@ export const currencyOptions = [
 
 const labels: Record<string, string> = {
   free: '免费版',
+  go: 'Go',
   plus: 'Plus',
   pro: 'Pro（档位待核验）',
-  promax: 'Pro（500 美元／月档）',
-  'pro-500': 'Pro（500 美元／月档）',
+  'pro-5x': planLabels['pro-5x'].replace(/^ChatGPT /, ''),
+  'pro-20x': planLabels['pro-20x'].replace(/^ChatGPT /, ''),
+  promax: planLabels['pro-500'].replace(/^ChatGPT /, ''),
+  'pro-500': planLabels['pro-500'].replace(/^ChatGPT /, ''),
   running: '正在执行',
   awaiting_human_verification: '等待本人验证',
   awaiting_details: '等待填写付款资料',
@@ -61,6 +64,10 @@ const labels: Record<string, string> = {
   open_browser: '仅登录窗口',
   session_ready: '账号已登录，窗口已就绪',
   session_restore: '正在加载官网并核对账号',
+  proxy_resolving: '正在提取本次代理 IP',
+  proxy_verifying: '正在核实代理出口 IP 和国家',
+  original_state_restore: '正在恢复原订单与付款记录',
+  login_network_verifying: '正在复核登录后的代理出口',
   login_email: '正在填写官网登录邮箱',
   login_password: '正在填写官网登录密码',
   login_code_required: '等待输入官网登录验证码',

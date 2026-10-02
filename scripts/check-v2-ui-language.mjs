@@ -266,6 +266,7 @@ function findInternalIdentifier(value) {
 
 function isApprovedTechnicalText(value) {
   if (approvedTerms.has(value)) return true;
+  if (/^ChatGPT (?:Go|Plus|Pro)$/.test(value)) return true;
   if (/^(?:https?:\/\/|\/)[^\s]+$/.test(value)) return true;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return true;
   if (/^#[0-9a-f]{3,8}$/i.test(value)) return true;
@@ -323,6 +324,11 @@ function runSelfTests() {
     ['orderNo', false],
     ['创建时间 createdAt', false],
     ['Apple ID', true],
+    ['ChatGPT Go', true],
+    ['ChatGPT Plus', true],
+    ['ChatGPT Pro', true],
+    ['ChatGPT Go orderNo', false],
+    ['Go back', false],
     ['CNY / MYR', true],
     ['WhatsApp', true],
     ['经营控制台', true]

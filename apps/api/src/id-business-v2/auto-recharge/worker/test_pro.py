@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlsplit
 
 from playwright.async_api import async_playwright
@@ -112,7 +112,10 @@ class ProStateTests(unittest.TestCase):
 
     def test_scoped_checkout_keeps_legacy_tiers_and_rejects_conflicts(self):
         for label, plan in (("相比 Plus 多 5 倍使用额度", "pro-5x"), ("20×", "pro-20x"),
-                            ("USD 500.00\nMax usage", "pro-500")):
+                            ("USD 500.00\nMax usage", "pro-500"),
+                            ("MYR 420\n标准", "pro-5x"),
+                            ("MYR 999.90\n更多使用额度", "pro-20x"),
+                            ("MYR 2,100\n最高使用额度", "pro-500")):
             self.assertEqual(checkout_option_plan(label), plan)
         for label in ("Pro 500\n20x", "5x\n20x", "USD 500.00"):
             self.assertIsNone(checkout_option_plan(label))
@@ -191,12 +194,16 @@ class ProStateTests(unittest.TestCase):
         self.assertEqual(outcome("unknown", "pro", target_plan="pro-20x", current_tier=20), "payment_result_unknown")
 
     def test_native_plan_choice_selects_exact_tier_and_cancel_never_defaults(self):
-        with patch("pay.sys.stdin.isatty", return_value=True), patch("pay.focus_input_terminal"), contextlib.redirect_stdout(io.StringIO()):
+        output = io.StringIO()
+        with patch("pay.sys.stdin.isatty", return_value=True), patch("pay.focus_input_terminal"), contextlib.redirect_stdout(output):
             for value, expected in (("1", "plus"), ("2", "pro-5x"), ("3", "pro-20x"), ("4", "pro-500")):
                 with patch("builtins.input", return_value=value):
                     self.assertEqual(choose_plan(), expected)
             with patch("builtins.input", return_value=""), self.assertRaises(Stop):
                 choose_plan()
+        for number, label in ((1, "Plus"), (2, "Pro（标准）"), (3, "Pro（更多使用额度）"), (4, "Pro（最高使用额度）")):
+            self.assertIn(f"{number}. {label}", output.getvalue())
+        self.assertNotIn("美元", output.getvalue())
 
 
 class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
@@ -220,7 +227,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.missing_500 = False
         self.duplicate_500 = False
         self.numeric_controls = False
+        self.usage_controls = False
+        self.usage_english = False
         self.subscription_plan = None
+        self.trace_ips = ['8.8.8.8']
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -236,6 +246,9 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.fulfill(json=json.loads(fixture()))
         elif path.startswith("/backend-api/accounts/"):
             await route.fulfill(json=account((self.subscription_plan or ("promax" if self.plan == "pro-500" else "pro")) if self.payments else "free"))
+        elif path == '/cdn-cgi/trace':
+            ip = self.trace_ips.pop(0) if len(self.trace_ips) > 1 else self.trace_ips[0]
+            await route.fulfill(body=f'ip={ip}\nloc=US\n')
         elif path == CHECKOUT_PATH:
             self.creates.append(request.post_data_json)
             self.assertTrue(list(self.root.glob("*.json")))
@@ -309,6 +322,13 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 html = html.replace('>$100/month</button>', '>100</button>').replace('>Pro 200</button>', '>200</button>').replace('>$500/month</button>', '>500</button>')
                 html = html.replace('<button id="five"', '<div role="radiogroup" aria-label="选择 Pro 套餐档位"><button id="five"')
                 html = html.replace('<p id="usage">', '</div><button role="radio">500</button><p id="usage">')
+            if self.usage_controls:
+                labels = ('Standard', 'More usage', 'Max usage') if self.usage_english else ('标准', '更多使用额度', '最高使用额度')
+                for old, amount, label in zip(('>$100/month</button>', '>Pro 200</button>', '>$500/month</button>'),
+                                              ('MYR 420', 'MYR 999.90', 'MYR 2,100'), labels):
+                    html = html.replace(old, f'>{amount}<br>{label}</button>')
+                html = html.replace('<button id="five"', '<div role="radiogroup" aria-label="Pro 套餐"><button id="five"')
+                html = html.replace('<p id="usage">', '</div><button role="radio">MYR 2,100 最高使用额度</button><p id="usage">')
             await route.fulfill(content_type="text/html; charset=utf-8", body=html)
         else:
             await route.abort()
@@ -330,6 +350,113 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "checkout_quote_verified", result)
         self.assertEqual(result["quote"]["plan"], "pro-20x")
         self.assertEqual(self.creates[0]["plan_name"], "chatgptpro")
+        self.assertEqual(self.payments, 0)
+
+    async def test_current_named_usage_tiers_select_by_name_not_local_currency(self):
+        self.price_controls, self.usage_controls = True, True
+        for english in (False, True):
+            self.usage_english = english
+            for plan in ('pro-5x', 'pro-20x', 'pro-500'):
+                with self.subTest(plan=plan, english=english):
+                    self.plan = plan
+                    self.root = Path(self.temp.name) / f'{english}-{plan}'
+                    result = await self.create()
+                    self.assertEqual(result['status'], 'checkout_quote_verified', result)
+                    self.assertEqual(result['quote']['plan'], plan)
+                    self.assertEqual(self.creates[-1]['plan_name'], plan_spec(plan)['official_name'])
+                    self.assertEqual(self.payments, 0)
+
+    async def test_missing_named_max_usage_does_not_fall_back_to_price_or_other_plan(self):
+        self.price_controls, self.usage_controls, self.missing_500 = True, True, True
+        page = await self.context.new_page()
+        await page.goto('https://chatgpt.com/')
+        with patch('plan_selection.STEP_SECONDS', .2), patch('plan_selection.SELECTION_SECONDS', 1):
+            with self.assertRaises(Stop) as blocked:
+                await select_plan(page, 'pro-500', lambda *_args, **_kwargs: None)
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_tier_not_found')
+        self.assertFalse(self.creates)
+        self.assertEqual(self.payments, 0)
+
+    async def test_identity_can_be_verified_while_a_nonessential_script_is_still_loading(self):
+        from browser_session import SessionBudget, load_session_page
+        from browser_password_login import official_identity
+        page = await self.context.new_page()
+        release = asyncio.Event()
+        async def delayed_script(route):
+            await release.wait()
+            await route.fulfill(content_type='application/javascript', body='')
+        await page.route('**/late.js', delayed_script)
+        await page.route('**/slow-session', lambda route: route.fulfill(
+            content_type='text/html', body='<title>ChatGPT</title><script src="/late.js"></script>'))
+        try:
+            budget = SessionBudget(60)
+            await load_session_page(page, 'https://chatgpt.com/slow-session', budget)
+            verified = await official_identity(page, 'test@example.invalid', budget=budget, strict=True)
+            self.assertEqual(verified[0].account_id, self.target.account_id)
+            self.assertNotEqual(await page.evaluate('document.readyState'), 'complete')
+            self.assertFalse(self.creates)
+            self.assertEqual(self.payments, 0)
+        finally:
+            release.set()
+            await page.close()
+
+    async def test_server_max_usage_executes_with_durable_callback_before_each_write(self):
+        import dataclasses
+        import server
+        import attempt_ledger
+        import payment_state
+        self.plan, self.price_controls, self.usage_controls = 'pro-500', True, True
+        job = server.Job('11111111-1111-4111-8111-111111111111', {
+            'action': 'server', 'plan': self.plan, 'sessionJson': fixture().decode(),
+            'expectedEmail': 'test@example.invalid', 'expectedCountry': 'US',
+            'proxy': {'mode': 'static'}, 'details': dataclasses.asdict(details()),
+            'safety': {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 42000}
+        })
+        job.root = self.root
+        records, events = {}, []
+        def callback(_id, body):
+            events.append(body)
+            if body['type'] == 'restore':
+                return {'records': []}
+            if body['type'] == 'ledger':
+                key = body['fileKey']
+                if not key.startswith('payments/'):
+                    self.assertIn('-pro-500.json', key)
+                self.assertIsNotNone(server.RECORD_PATH.fullmatch(key))
+                self.assertEqual(body['revision'], records.get(key, {}).get('revision', 0))
+                records[key] = {'revision': body['revision'] + 1, 'document': body['document']}
+                return {'revision': records[key]['revision']}
+            return {'ok': True}
+        original = attempt_ledger.atomic_json
+        def durable(path, document):
+            job.persist(path, document)
+            original(path, document)
+        browser = MagicMock(new_context=AsyncMock(return_value=self.context))
+        with (patch.object(server, 'callback', side_effect=callback),
+              patch.object(server.server_proxy, 'resolve_proxy', return_value={'server': 'http://synthetic.invalid'}),
+              patch.object(server.server_proxy, 'observe_exit', new=AsyncMock(return_value={'ip': '8.8.8.8', 'country': 'US'})),
+              patch.object(attempt_ledger, 'atomic_json', side_effect=durable),
+              patch.object(payment_state, 'atomic_json', side_effect=durable),
+              patch.object(server.browser_checkout, 'progress', job.progress),
+              patch.object(server.pay, 'progress', job.progress),
+              patch.object(server.payment_network, 'progress', job.progress),
+              patch.dict(os.environ, {'AUTO_RECHARGE_CALLBACK_URL': 'http://synthetic.invalid'})):
+            result = await job.execute(browser=browser)
+        self.assertEqual(result['status'], 'subscription_activated', result)
+        self.assertEqual(result['subscription_status'], 'pro-500')
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 1)  # 仅拦截夹具计数，真实付款为 0。
+        self.assertEqual(len(records), 2)
+        self.assertTrue(any(e.get('result', {}).get('stage') == 'login_verified' for e in events))
+        self.assertTrue(any(key.startswith('payments/') for key in records))
+        self.assertNotIn('details', job.payload)
+
+    async def test_exit_change_during_plan_selection_stops_before_checkout_and_payment(self):
+        self.trace_ips = ['8.8.8.8', '1.1.1.1']
+        with patch.dict(os.environ, {'AUTO_RECHARGE_CALLBACK_URL': 'http://synthetic.invalid'}):
+            result = await self.create()
+        self.assertEqual(result['reason'], 'proxy_ip_changed_during_login')
+        self.assertFalse(self.creates)
         self.assertEqual(self.payments, 0)
 
     async def test_current_pro200_price_control_keeps_existing_request_binding(self):
@@ -426,6 +553,20 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await quote_from_page(page))["plan"], "pro")
                 await page.set_content(base + group + group)
                 self.assertEqual((await quote_from_page(page))["plan"], "pro")
+
+        # 同一币种下按选中的额度档位识别，不将当地价格当成美元档位。
+        tiers = (("MYR 420", "标准", "pro-5x"),
+                 ("MYR 999.90", "更多使用额度", "pro-20x"),
+                 ("MYR 2,100", "最高使用额度", "pro-500"))
+        for amount, _label, plan in tiers:
+            options = ''.join(
+                f'<button role="radio" aria-checked="{str(key == plan).lower()}">{price}<br>{label}</button>'
+                for price, label, key in tiers)
+            await page.set_content(f'<h1>Pro 套餐</h1><p>Total due today</p><p>{amount}</p>'
+                                   f'<div role="radiogroup" aria-label="Pro 套餐">{options}</div>')
+            quote = await quote_from_page(page)
+            self.assertEqual(quote["plan"], plan)
+            self.assertEqual(quote["today"]["currency"], "MYR")
 
     async def test_numeric_pro_controls_require_unique_selection_before_creation(self):
         self.price_controls = self.numeric_controls = True

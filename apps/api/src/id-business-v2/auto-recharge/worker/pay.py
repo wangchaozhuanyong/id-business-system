@@ -131,10 +131,12 @@ async def current_quote(page, guard, minimum_binding_version=0, *, wait_seconds=
 
 
 async def verify_identity_again(page, target):
+    from browser_session import SessionBudget, load_session_page
     check_page = await page.context.new_page()
     try:
-        await check_page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=45000)
-        _, identity = await check_session(check_page, target, 0)
+        budget = SessionBudget(60, report=lambda **details: progress("account_read", **details))
+        await load_session_page(check_page, ORIGIN + "/", budget)
+        _, identity = await check_session(check_page, target, 0, budget)
         return identity
     finally:
         await check_page.close()

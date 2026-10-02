@@ -24,6 +24,14 @@ class Clock:
 
 
 class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exit_observation_does_not_swallow_cancellation(self):
+        page = MagicMock(evaluate=AsyncMock())
+        budget = SessionBudget(60, cancelled=lambda: True)
+        with self.assertRaises(Stop) as cancelled:
+            await browser_checkout.observe_page_network(page, budget)
+        self.assertEqual(cancelled.exception.report['reason'], 'operation_cancelled')
+        page.evaluate.assert_not_awaited()
+
     async def test_page_and_both_reads_share_120_seconds_not_45_or_25(self):
         clock, report = Clock(), MagicMock()
         budget = SessionBudget(120, clock=clock, report=report)
@@ -32,6 +40,7 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
 
         async def goto(*args, **kwargs):
             self.assertEqual(kwargs['timeout'], 0)
+            self.assertEqual(kwargs['wait_until'], 'commit')
             await clock.advance(50)
 
         page.goto.side_effect = goto
@@ -83,7 +92,7 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
                 context, SimpleNamespace(), session_budget=budget
             )
         page.goto.assert_awaited_once()
-        page.reload.assert_awaited_once_with(wait_until='domcontentloaded', timeout=0)
+        page.reload.assert_awaited_once_with(wait_until='commit', timeout=0)
         self.assertEqual(result['status'], 'session_verified')
         self.assertTrue(any(
             call.args == ('session_page_refreshing',)
@@ -109,7 +118,7 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restarted.remaining_ms(), 120000)
         self.assertIs(restarted.report, report)
 
-    async def test_optional_network_observation_is_bounded_after_identity_success(self):
+    async def test_network_observation_deadline_blocks_before_checkout(self):
         clock = Clock()
         budget = SessionBudget(120, clock=clock)
         page = MagicMock()
@@ -129,9 +138,9 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(browser_checkout, 'progress'), \
                 patch.dict('os.environ', {'AUTO_RECHARGE_CALLBACK_URL': 'fixture'}):
             result = await browser_checkout.workflow(context, SimpleNamespace(), session_budget=budget)
-        self.assertEqual(result['status'], 'session_verified')
+        self.assertEqual(result['status'], 'blocked')
+        self.assertEqual(result['reason'], 'session_load_timeout')
         self.assertTrue(result['account_matched'])
-        self.assertIsNone(result['network']['ip'])
         self.assertEqual(result['checkout_requests_sent'], 0)
 
     async def test_human_verification_time_is_excluded(self):

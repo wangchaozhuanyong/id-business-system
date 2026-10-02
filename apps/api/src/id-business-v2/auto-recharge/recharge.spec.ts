@@ -464,6 +464,63 @@ describe('single worker dispatch and confirmation', () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
+  it.each(
+    ['plus', 'pro-5x', 'pro-20x', 'pro-500'].flatMap((plan) =>
+      ['', 'payments/'].map((prefix) => ({ plan, prefix }))
+    )
+  )('当前档位的建单和付款记录都能通过持久化回调：$plan / $prefix', async ({ plan, prefix }) => {
+    const accountKey = 'a'.repeat(64);
+    const fileKey = `${prefix}${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      accountKey,
+      plan,
+      action: 'server',
+      state: 'confirming',
+      result: {}
+    } as never);
+    const save = vi.spyOn(repository, 'saveRecord').mockResolvedValueOnce({ revision: 1 } as never);
+    await expect(
+      service.callback(id, {
+        type: 'ledger',
+        accountKey,
+        fileKey,
+        revision: 0,
+        document: { target_plan: plan }
+      })
+    ).resolves.toEqual({ revision: 1 });
+    expect(save).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ fileKey, accountKey, revision: 0 })
+    );
+  });
+  it.each(['../', 'payments/../', '/payments/'])(
+    '最高档回调继续拒绝越界路径：%s',
+    async (prefix) => {
+      const accountKey = 'a'.repeat(64);
+      active.mockResolvedValue({
+        id,
+        ownerId: operator.id,
+        accountKey,
+        plan: 'pro-500',
+        action: 'server',
+        state: 'confirming',
+        result: {}
+      } as never);
+      const save = vi.spyOn(repository, 'saveRecord');
+      await expect(
+        service.callback(id, {
+          type: 'ledger',
+          accountKey,
+          fileKey: `${prefix}${accountKey}-pro-500.json`,
+          revision: 0,
+          document: {}
+        })
+      ).rejects.toThrow('原订单记录无效');
+      expect(save).not.toHaveBeenCalled();
+    }
+  );
 
   it('会话等待进度续期，结束事件不续期', async () => {
     const now = Date.now();
