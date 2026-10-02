@@ -37,6 +37,7 @@ on:
           - unified_recovery_20261002
           - recharge_names_20261002
           - recharge_execution_20261002
+          - storage_20261002
       reuse_image_run:
         description: Optional completed build run to reuse after a release-control-only repair
         required: false
@@ -136,6 +137,7 @@ jobs:
               'unified_recovery_20261002': 'deploy/aws/cache-cleanup-unified-recovery-20261002.json',
               'recharge_names_20261002': 'deploy/aws/cache-cleanup-recharge-names-20261002.json',
               'recharge_execution_20261002': 'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
+              'storage_20261002': 'deploy/aws/cache-cleanup-storage-20261002.json',
           }
           plan = Path(plans[os.environ['CLEANUP_PLAN']]).read_text()
           parsed_plan = json.loads(plan)
