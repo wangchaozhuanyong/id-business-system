@@ -75,6 +75,7 @@ export class BankRechargeController {
       pageSize?: string;
       keyword?: string;
       subscriptionState?: string;
+      offerStatus?: string;
     }
   ) {
     return this.accounts.listAccounts(query);

@@ -30,6 +30,7 @@ import type {
 } from './dto/id-business-v2-vendure-mailbox.dto';
 import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
 import { ensureVendureAccountAliases } from './id-business-v2-vendure-account-import';
+import { registrationMail } from './registration-mail';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIMARY_STATUSES = new Set(['ACTIVE', 'DISABLED', 'AUTH_ERROR', 'SYNCING']);
@@ -58,6 +59,37 @@ export class IdBusinessV2VendureMailboxService {
         message: error instanceof Error ? error.message : 'Vendure 邮箱服务暂时不可用，请稍后重试'
       };
     }
+  }
+
+  async registrationMailbox(aliasId: string, operator: AuthenticatedUser) {
+    this.requireAdmin(operator);
+    const aliases = await this.client.virtualEmails();
+    const alias = aliases.find((item) => item.id === aliasId);
+    if (
+      !alias ||
+      alias.status !== 'ACTIVE' ||
+      !alias.buyerQueryCode ||
+      (alias.codeExpiresAt && Date.parse(alias.codeExpiresAt) <= Date.now())
+    )
+      throw new ConflictException('所选邮箱未启用或查询授权已失效');
+    const primary = (await this.client.primaryAccounts()).find(
+      (item) => item.id === alias.primaryAccountId
+    );
+    if (!primary || primary.status !== 'ACTIVE')
+      throw new ConflictException('所属主邮箱当前不可用');
+    return { email: alias.aliasEmail, queryCode: alias.buyerQueryCode };
+  }
+
+  async registrationCode(
+    aliasId: string,
+    since: Date,
+    previousId: string | null,
+    operator: AuthenticatedUser
+  ) {
+    const mailbox = await this.registrationMailbox(aliasId, operator);
+    const result = await this.client.publicQuery(mailbox.queryCode);
+    if (!result.success) throw new ServiceUnavailableException('邮件查询暂时不可用，请重试');
+    return registrationMail(result.items, mailbox.email, since, previousId);
   }
 
   async listPrimary(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {

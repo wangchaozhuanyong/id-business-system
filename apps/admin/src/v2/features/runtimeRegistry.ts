@@ -7,6 +7,26 @@ import {
 
 export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
+    key: 'auto-registration',
+    title: '自动注册 GPT',
+    group: '自动注册',
+    route: '/v2/auto-registration/gpt',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-registration/V2AutoRegistrationView.vue')
+  }),
+  defineV2RuntimeFeature({
+    key: 'registration-names',
+    title: '名字数据表',
+    group: '自动注册',
+    route: '/v2/auto-registration/names',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-registration/V2RegistrationNamesView.vue')
+  }),
+  defineV2RuntimeFeature({
     key: 'auto-recharge',
     title: '自动充值',
     group: '自动充值',
@@ -355,6 +375,7 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
     items: navigationItems('总览')
   },
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
+  { key: 'auto-registration', title: '自动注册', items: navigationItems('自动注册') },
   { key: 'auto-recharge', title: '自动充值', items: navigationItems('自动充值') },
   {
     key: 'business',

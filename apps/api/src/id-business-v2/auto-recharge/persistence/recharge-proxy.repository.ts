@@ -61,10 +61,13 @@ export class RechargeProxyRepository {
     return tx.idBusinessV2RechargeProxy.delete({ where: { id } });
   }
 
-  hasJobs(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2RechargeJob.findFirst({
-      where: { proxyId: id },
-      select: { id: true }
-    });
+  async hasJobs(tx: V2CommandTransaction, id: string) {
+    return (
+      (await tx.idBusinessV2RechargeJob.findFirst({
+        where: { proxyId: id },
+        select: { id: true }
+      })) ??
+      tx.idBusinessV2RegistrationJob.findFirst({ where: { proxyId: id }, select: { id: true } })
+    );
   }
 }

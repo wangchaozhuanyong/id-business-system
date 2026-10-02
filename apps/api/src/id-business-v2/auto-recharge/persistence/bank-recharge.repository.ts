@@ -163,7 +163,7 @@ export class BankRechargeRepository {
     return tx.idBusinessV2ChatgptAccount.update(args);
   }
   async accountHasReferences(tx: V2CommandTransaction, id: string) {
-    const [job, order, subscription] = await Promise.all([
+    const [job, order, subscription, registration] = await Promise.all([
       tx.idBusinessV2RechargeJob.findFirst({
         where: { chatgptAccountId: id },
         select: { id: true }
@@ -175,9 +175,10 @@ export class BankRechargeRepository {
       tx.idBusinessV2BankRechargeSubscription.findUnique({
         where: { accountId: id },
         select: { id: true }
-      })
+      }),
+      tx.idBusinessV2RegistrationJob.findFirst({ where: { accountId: id }, select: { id: true } })
     ]);
-    return Boolean(job || order || subscription);
+    return Boolean(job || order || subscription || registration);
   }
   deleteAccount(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2ChatgptAccount.delete({ where: { id } });

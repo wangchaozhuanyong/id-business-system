@@ -11,12 +11,15 @@ import {
 } from './persistence/bank-recharge.repository';
 import { loginNetworkSummary } from './recharge-login-network';
 import { readBankRechargeCardSummary } from './bank-recharge-card-summary';
+import { V2_ACCOUNT_OFFERS, type V2AccountOffer } from '@apple-business/shared';
+import { BadRequestException } from '@nestjs/common';
 
 export type ChatgptAccountListQuery = {
   page?: string;
   pageSize?: string;
   keyword?: string;
   subscriptionState?: string;
+  offerStatus?: string;
 };
 
 export async function listChatgptAccounts(
@@ -30,13 +33,24 @@ export async function listChatgptAccounts(
   const subscriptionState = parseAccountSubscriptionState(query.subscriptionState);
   const now = Date.now();
   const warningBoundary = now + (await repository.renewalWarningDays()) * 24 * 60 * 60 * 1000;
-  const where = bankRechargeAccountFilter(
-    keyword,
-    keyword.includes('@') ? encryption.hash(keyword.toLowerCase()) : null,
-    subscriptionState,
-    new Date(now),
-    new Date(warningBoundary)
-  );
+  if (
+    query.offerStatus &&
+    query.offerStatus !== 'all' &&
+    !V2_ACCOUNT_OFFERS.includes(query.offerStatus as V2AccountOffer)
+  )
+    throw new BadRequestException('优惠筛选无效');
+  const where = {
+    ...bankRechargeAccountFilter(
+      keyword,
+      keyword.includes('@') ? encryption.hash(keyword.toLowerCase()) : null,
+      subscriptionState,
+      new Date(now),
+      new Date(warningBoundary)
+    ),
+    ...(query.offerStatus && query.offerStatus !== 'all'
+      ? { offerStatus: query.offerStatus as V2AccountOffer }
+      : {})
+  };
   const items = await repository.listAccounts({
     where,
     ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
