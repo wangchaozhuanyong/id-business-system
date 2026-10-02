@@ -14,6 +14,8 @@ on:
           - cleanup_cache
           - verify_unused_cache
           - cleanup_unused_cache
+          - verify_unused_legacy_cache
+          - cleanup_unused_legacy_cache
           - verify_backups
           - cleanup_backups
           - diagnose_storage
@@ -378,7 +380,7 @@ jobs:
         run: bash scripts/production-release/dispatch.sh
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'release'
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'release'
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -395,7 +397,14 @@ jobs:
           expected = os.environ['RELEASE_COMMIT'] if operation == 'release' else os.environ['EXPECTED_CURRENT']
           command = 'python3 -c ' + shlex.quote(Path('scripts/production-release/maintain-image-cache.py').read_text())
           command += ' --expected-current ' + shlex.quote(expected)
-          if operation == 'cleanup_unused_cache':
+          if operation in ('verify_unused_legacy_cache', 'cleanup_unused_legacy_cache'):
+              command += ' --legacy-plan-json ' + shlex.quote(Path('deploy/aws/cache-cleanup-unused-legacy-20261003.json').read_text())
+              if operation == 'cleanup_unused_legacy_cache':
+                  digest = os.environ['CACHE_PLAN_SHA256']
+                  if not re.fullmatch(r'[0-9a-f]{64}', digest):
+                      raise SystemExit('Exact verified obsolete cache plan digest required')
+                  command += ' --apply --approved-policy reviewed-obsolete-project-cache-20261003 --approved-plan-sha256 ' + digest
+          elif operation == 'cleanup_unused_cache':
               digest = os.environ['CACHE_PLAN_SHA256']
               if not re.fullmatch(r'[0-9a-f]{64}', digest):
                   raise SystemExit('Exact verified unused cache plan digest required')

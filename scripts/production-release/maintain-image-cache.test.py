@@ -15,6 +15,109 @@ cache = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cache)
 
 
+class ObsoleteCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.payload = Path('deploy/aws/cache-cleanup-unused-legacy-20261003.json').read_text()
+        self.plan = cache.legacy_plan(self.payload)
+        self.live = {'commit': self.plan['expectedCurrent'], 'images': {}, 'rollback': {'images': {}}}
+        self.previous = {'commit': self.plan['expectedPrevious'], 'images': {}}
+        self.args = SimpleNamespace(expected_current=self.plan['expectedCurrent'],
+            legacy_plan_json=self.payload, apply=False, deployment_run=None,
+            approved_policy=cache.LEGACY_POLICY, approved_plan_sha256=cache.LEGACY_PLAN_SHA256)
+        self.tags = {item['id']: list(item['repoTags']) for item in self.plan['items']}
+        self.commands = []
+
+    def command(self, *args):
+        self.commands.append(args)
+        if args[:3] == ('docker', 'image', 'inspect'):
+            item = next(item for item in self.plan['items'] if item['id'] == args[-1])
+            return json.dumps({key: self.tags[item['id']] if key == 'repoTags' else item[key]
+                for key in ('id', 'repoTags', 'repoDigests', 'sourceCommit', 'composeProject')})
+        if args[:3] == ('docker', 'image', 'rm'):
+            for item in self.plan['items']:
+                if args[-1] in self.tags[item['id']]:
+                    self.tags[item['id']].remove(args[-1])
+                    return ''
+            self.assertIn(args[-1], self.tags)
+            return ''
+        raise AssertionError(args)
+
+    def run_plan(self, active=None, current=None, command=None):
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory, \
+                patch.object(cache, 'BASE', Path(directory)), \
+                patch.object(cache, 'current', side_effect=current or (lambda _: (self.live, self.previous))), \
+                patch.object(cache, 'active_images', side_effect=active or (lambda: set())), \
+                patch.object(cache, 'read', side_effect=command or self.command), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            cache.maintain_legacy(self.args)
+            return json.loads(output.getvalue().splitlines()[-1])
+
+    def removals(self):
+        return [command for command in self.commands if command[:3] == ('docker', 'image', 'rm')]
+
+    def test_modified_plan_is_rejected_before_docker_access(self):
+        self.plan['items'][0]['repoTags'] = ['foreign/project:latest']
+        with patch.object(cache, 'read') as command, self.assertRaisesRegex(RuntimeError, 'reviewed digest'):
+            cache.legacy_plan(json.dumps(self.plan))
+        command.assert_not_called()
+
+    def test_read_only_mode_never_removes_images(self):
+        result = self.run_plan()
+        self.assertEqual(result['mode'], 'PLAN_ONLY')
+        self.assertEqual(result['candidateCount'], 17)
+        self.assertEqual(self.removals(), [])
+
+    def test_current_previous_rollback_and_stopped_container_protection_precedes_all_deletion(self):
+        image = self.plan['items'][0]['id']
+        self.args.apply = True
+        for location in ('current', 'previous', 'rollback', 'stopped'):
+            self.live['images'] = {'admin': {'digest': image}} if location == 'current' else {}
+            self.previous['images'] = {'admin': {'digest': image}} if location == 'previous' else {}
+            self.live['rollback']['images'] = {'admin': image} if location == 'rollback' else {}
+            with self.assertRaisesRegex(RuntimeError, 'used or protected'):
+                self.run_plan(active=lambda: {image} if location == 'stopped' else set())
+        self.assertEqual(self.removals(), [])
+
+    def test_all_aliases_and_untagged_exact_ids_are_removed_without_prune_or_force(self):
+        self.args.apply = True
+        result = self.run_plan()
+        expected = [reference for item in self.plan['items'] for reference in item['repoTags'] or [item['id']]]
+        self.assertEqual(result['removed'], expected)
+        self.assertEqual(result['status'], 'COMPLETE')
+        self.assertEqual(self.removals(), [('docker', 'image', 'rm', '--no-prune', ref) for ref in expected])
+
+    def test_changed_ownership_or_extra_alias_stops_before_any_removal(self):
+        self.args.apply = True
+        self.tags[self.plan['items'][-1]['id']].append('foreign/project:latest')
+        with self.assertRaisesRegex(RuntimeError, 'identity or ownership changed'):
+            self.run_plan()
+        self.assertEqual(self.removals(), [])
+
+    def test_new_container_and_changed_rollback_stop_the_apply(self):
+        self.args.apply = True
+        calls = 0
+        def active():
+            nonlocal calls
+            calls += 1
+            return {self.plan['items'][0]['id']} if calls > 17 else set()
+        with self.assertRaisesRegex(RuntimeError, 'used or protected'):
+            self.run_plan(active=active)
+        self.previous['commit'] = 'f' * 40
+        with self.assertRaisesRegex(RuntimeError, 'rollback baseline changed'):
+            self.run_plan()
+        self.assertEqual(self.removals(), [])
+
+    def test_missing_exact_approval_and_automatic_deployment_are_rejected(self):
+        self.args.apply = True
+        self.args.approved_plan_sha256 = None
+        with self.assertRaisesRegex(RuntimeError, 'approval required'):
+            self.run_plan()
+        self.args.deployment_run = 'github-actions-123-1'
+        with self.assertRaisesRegex(RuntimeError, 'cannot run automatically'):
+            self.run_plan()
+        self.assertEqual(self.removals(), [])
+
+
 class RetentionTests(unittest.TestCase):
     def setUp(self):
         self.expected = 'a' * 40

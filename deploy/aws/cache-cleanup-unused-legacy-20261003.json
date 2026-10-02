@@ -1,0 +1,345 @@
+{
+  "policy": "reviewed-obsolete-project-cache-20261003",
+  "expectedCurrent": "c7c7cd5fab7138f445c715118b5dd75d0df4ac2f",
+  "expectedPrevious": "220c6f45d9cbca8f4a95f275a24168c41d387a17",
+  "ownershipEvidence": "historical-release-manifests-and-compose-project-20260821t095106z",
+  "recovery": "obsolete-build-caches; current-and-previous-release-images-retained",
+  "items": [
+    {
+      "id": "sha256:010b34433d12ae5f63361e642efb3fb991d2481bd5b07c4020718f7e15b69006",
+      "repoTags": [
+        "id-business-v2-admin:27ef09783f373b384cafef5b4b24d46c37d4c9e6",
+        "id-business-v2-admin:986af00022d31b58b73e2b69c3882317249a9039"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 51026885,
+      "sourceCommit": "986af00022d31b58b73e2b69c3882317249a9039",
+      "parent": "",
+      "created": "2026-09-13T12:07:31.448334209Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:12ea526ee9c350654691f76648c2a14f45db7a67b7b2b9f0dea87f15bb932c14",
+      "repoTags": ["20260821t095106z-auto-recharge:latest"],
+      "repoDigests": [],
+      "sizeBytes": 1263253822,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-12T12:16:02.527320577Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:45363e610d95c66e7ab002b7cadead4f6950198bc47ebb39336e249b75850b5f",
+      "repoTags": [],
+      "repoDigests": [],
+      "sizeBytes": 376217624,
+      "sourceCommit": "3f218ea75f3e4fafde66d44d4c0b8d6d58c237a5",
+      "parent": "",
+      "created": "2026-09-09T19:21:11.648471744Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:4f927076c0ee192000a87d1a6d330f94d6ca485d432df36cab49617f9504444a",
+      "repoTags": [
+        "id-business-v2-api:5501cd20d8d5390566225acad50e0318222dc408",
+        "id-business-v2-api:fd0c67c4c1582b4be80054cd18fe0100f3a56b45"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 377677378,
+      "sourceCommit": "fd0c67c4c1582b4be80054cd18fe0100f3a56b45",
+      "parent": "",
+      "created": "2026-09-27T08:21:33.794166543Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:57d112d52a15d97bc698441ca10f27aaafdeab1f68ee9f9a535af7940c49db68",
+      "repoTags": [],
+      "repoDigests": [],
+      "sizeBytes": 50982785,
+      "sourceCommit": "3f218ea75f3e4fafde66d44d4c0b8d6d58c237a5",
+      "parent": "",
+      "created": "2026-09-09T19:21:40.342731822Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:5edec269e50f8b6f2340fe2ba446c403de0757ff00ed606457b77aaed7f04866",
+      "repoTags": [
+        "id-business-v2-release-media-resolver:294c67d5bca430dfd5d37f08826b1df615d53ae7"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 921330543,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-07T11:44:28.80280879Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:7c9a432c12d06353e53754762688620a008154b26045bb98fcccac90aaeb5e13",
+      "repoTags": ["20260821t095106z-admin:latest"],
+      "repoDigests": [],
+      "sizeBytes": 50995678,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-12T16:54:17.243068243Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:93e80378be27f9a60cec9b6c45476f45a10dabac98fa8ecfa7fe05cb8d3efc53",
+      "repoTags": [
+        "id-business-v2-admin:851a5050624cf6f8b8953165ffced321db5cea3d",
+        "id-business-v2-admin:8b0f2f137a9572a9700ece1663e2904cbefa288a"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 51229417,
+      "sourceCommit": "851a5050624cf6f8b8953165ffced321db5cea3d",
+      "parent": "",
+      "created": "2026-09-27T09:24:41.93605588Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:ab1eaf5f6d1f2aaa0292c4f9496bbed08c11700a9b7b984a436bd2ee45005255",
+      "repoTags": [],
+      "repoDigests": [],
+      "sizeBytes": 50994544,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-12T12:46:01.031354119Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:b09b84d5d60baa18b6901efcddd51d367e8c908b8316c021951ec9cf1352b9ad",
+      "repoTags": [
+        "id-business-v2-auto-recharge:27ef09783f373b384cafef5b4b24d46c37d4c9e6",
+        "id-business-v2-auto-recharge:986af00022d31b58b73e2b69c3882317249a9039"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 1274006610,
+      "sourceCommit": "986af00022d31b58b73e2b69c3882317249a9039",
+      "parent": "",
+      "created": "2026-09-13T12:06:28.731897691Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "repoTags": ["id-business-v2-auto-recharge:e8f1fc94924bf58c0aa769ae06ceac045dfd637c"],
+      "repoDigests": [],
+      "sizeBytes": 1274069621,
+      "sourceCommit": "e8f1fc94924bf58c0aa769ae06ceac045dfd637c",
+      "parent": "",
+      "created": "2026-09-23T18:02:23.780311479Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:bde0f570df607a911119cbfa60f115844c286dffe6ffca72073c927abb35bf13",
+      "repoTags": [
+        "id-business-v2-api:27ef09783f373b384cafef5b4b24d46c37d4c9e6",
+        "id-business-v2-api:986af00022d31b58b73e2b69c3882317249a9039"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 376447662,
+      "sourceCommit": "986af00022d31b58b73e2b69c3882317249a9039",
+      "parent": "",
+      "created": "2026-09-13T12:07:17.719020384Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:caaa82dc0b963abfbd339050842c341bc9873f7fbb64c21f3138cb51282e546b",
+      "repoTags": [],
+      "repoDigests": [],
+      "sizeBytes": 1263217567,
+      "sourceCommit": "3f218ea75f3e4fafde66d44d4c0b8d6d58c237a5",
+      "parent": "",
+      "created": "2026-09-09T19:21:42.765051012Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:cbc04ddd555de92162c5d85dde1311da503287cd1030ed98fa438fef79274aaa",
+      "repoTags": [
+        "id-business-v2-admin:5501cd20d8d5390566225acad50e0318222dc408",
+        "id-business-v2-admin:fd0c67c4c1582b4be80054cd18fe0100f3a56b45"
+      ],
+      "repoDigests": [],
+      "sizeBytes": 51220038,
+      "sourceCommit": "fd0c67c4c1582b4be80054cd18fe0100f3a56b45",
+      "parent": "",
+      "created": "2026-09-27T08:21:06.929796753Z",
+      "composeProject": null
+    },
+    {
+      "id": "sha256:ce28bcdd5a28c67b4ebdc97f1a2065881c5bcba8839e883c0cce95e826666289",
+      "repoTags": ["20260821t095106z-api:latest"],
+      "repoDigests": [],
+      "sizeBytes": 376381435,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-12T12:17:15.140191792Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:fdb2412647329c586837fea0b82d819d6b1ce5b45c726566445142cbf8a138e0",
+      "repoTags": ["20260821t095106z-migrate:latest"],
+      "repoDigests": [],
+      "sizeBytes": 756476185,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-12T12:17:21.682258543Z",
+      "composeProject": "20260821t095106z"
+    },
+    {
+      "id": "sha256:ff4b494a48f21e92f0dbd549042296c10cd8ab8c32108f534d562d597a5095fb",
+      "repoTags": [],
+      "repoDigests": [],
+      "sizeBytes": 50994498,
+      "sourceCommit": null,
+      "parent": "",
+      "created": "2026-09-12T12:16:02.56555252Z",
+      "composeProject": "20260821t095106z"
+    }
+  ],
+  "releaseEvidence": [
+    {
+      "imageId": "sha256:5edec269e50f8b6f2340fe2ba446c403de0757ff00ed606457b77aaed7f04866",
+      "service": "mediaResolver",
+      "commit": "294c67d5bca430dfd5d37f08826b1df615d53ae7",
+      "releaseTag": "v2-production-20260907T114213Z"
+    },
+    {
+      "imageId": "sha256:45363e610d95c66e7ab002b7cadead4f6950198bc47ebb39336e249b75850b5f",
+      "service": "api",
+      "commit": "3f218ea75f3e4fafde66d44d4c0b8d6d58c237a5",
+      "releaseTag": "v2-production-20260909T191838Z-3f218ea75f3e"
+    },
+    {
+      "imageId": "sha256:57d112d52a15d97bc698441ca10f27aaafdeab1f68ee9f9a535af7940c49db68",
+      "service": "admin",
+      "commit": "3f218ea75f3e4fafde66d44d4c0b8d6d58c237a5",
+      "releaseTag": "v2-production-20260909T191838Z-3f218ea75f3e"
+    },
+    {
+      "imageId": "sha256:caaa82dc0b963abfbd339050842c341bc9873f7fbb64c21f3138cb51282e546b",
+      "service": "recharge",
+      "commit": "3f218ea75f3e4fafde66d44d4c0b8d6d58c237a5",
+      "releaseTag": "v2-production-20260909T191838Z-3f218ea75f3e"
+    },
+    {
+      "imageId": "sha256:12ea526ee9c350654691f76648c2a14f45db7a67b7b2b9f0dea87f15bb932c14",
+      "service": "recharge",
+      "commit": "48c7f9d69a4de936c06c93bcb427676e50db8f36",
+      "releaseTag": "v2-production-20260912T110750Z"
+    },
+    {
+      "imageId": "sha256:ce28bcdd5a28c67b4ebdc97f1a2065881c5bcba8839e883c0cce95e826666289",
+      "service": "api",
+      "commit": "48c7f9d69a4de936c06c93bcb427676e50db8f36",
+      "releaseTag": "v2-production-20260912T110750Z"
+    },
+    {
+      "imageId": "sha256:ff4b494a48f21e92f0dbd549042296c10cd8ab8c32108f534d562d597a5095fb",
+      "service": "admin",
+      "commit": "48c7f9d69a4de936c06c93bcb427676e50db8f36",
+      "releaseTag": "v2-production-20260912T110750Z"
+    },
+    {
+      "imageId": "sha256:ab1eaf5f6d1f2aaa0292c4f9496bbed08c11700a9b7b984a436bd2ee45005255",
+      "service": "admin",
+      "commit": "b302b0ab526880464e2ed10cdb8c2cb8ba6e7381",
+      "releaseTag": "v2-production-20260912T124415Z"
+    },
+    {
+      "imageId": "sha256:7c9a432c12d06353e53754762688620a008154b26045bb98fcccac90aaeb5e13",
+      "service": "admin",
+      "commit": "e390b26fc00d5f8b3cc5ebbac77d9a1001d646c7",
+      "releaseTag": "v2-production-20260912T165204Z"
+    },
+    {
+      "imageId": "sha256:010b34433d12ae5f63361e642efb3fb991d2481bd5b07c4020718f7e15b69006",
+      "service": "admin",
+      "commit": "27ef09783f373b384cafef5b4b24d46c37d4c9e6",
+      "releaseTag": "v2-production-20260913T121253Z"
+    },
+    {
+      "imageId": "sha256:bde0f570df607a911119cbfa60f115844c286dffe6ffca72073c927abb35bf13",
+      "service": "api",
+      "commit": "27ef09783f373b384cafef5b4b24d46c37d4c9e6",
+      "releaseTag": "v2-production-20260913T121253Z"
+    },
+    {
+      "imageId": "sha256:b09b84d5d60baa18b6901efcddd51d367e8c908b8316c021951ec9cf1352b9ad",
+      "service": "auto-recharge",
+      "commit": "27ef09783f373b384cafef5b4b24d46c37d4c9e6",
+      "releaseTag": "v2-production-20260913T121253Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a",
+      "releaseTag": "v2-production-20260923T190357Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "903dacdc8f7ee27d4a0d71c77cd8e2a1accbe96f",
+      "releaseTag": "v2-production-20260925T020317Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "48dfb1b4f3a239edd0ab8effa370dcad48fd798f",
+      "releaseTag": "v2-production-20260925T123748Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "5e626c62960dc51ac2238c6d3b1b4b7a9de3204b",
+      "releaseTag": "v2-production-20260925T150436Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "90e5050afb9480c22f427faab366633cb21abc77",
+      "releaseTag": "v2-production-20260927T052856Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "d04a20275d655500c703ab4ae8d491336a7f89d7",
+      "releaseTag": "v2-production-20260927T060659Z"
+    },
+    {
+      "imageId": "sha256:cbc04ddd555de92162c5d85dde1311da503287cd1030ed98fa438fef79274aaa",
+      "service": "admin",
+      "commit": "5501cd20d8d5390566225acad50e0318222dc408",
+      "releaseTag": "v2-production-20260927T082803Z"
+    },
+    {
+      "imageId": "sha256:4f927076c0ee192000a87d1a6d330f94d6ca485d432df36cab49617f9504444a",
+      "service": "api",
+      "commit": "5501cd20d8d5390566225acad50e0318222dc408",
+      "releaseTag": "v2-production-20260927T082803Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "5501cd20d8d5390566225acad50e0318222dc408",
+      "releaseTag": "v2-production-20260927T082803Z"
+    },
+    {
+      "imageId": "sha256:93e80378be27f9a60cec9b6c45476f45a10dabac98fa8ecfa7fe05cb8d3efc53",
+      "service": "admin",
+      "commit": "8b0f2f137a9572a9700ece1663e2904cbefa288a",
+      "releaseTag": "v2-production-20260927T093211Z"
+    },
+    {
+      "imageId": "sha256:4f927076c0ee192000a87d1a6d330f94d6ca485d432df36cab49617f9504444a",
+      "service": "api",
+      "commit": "8b0f2f137a9572a9700ece1663e2904cbefa288a",
+      "releaseTag": "v2-production-20260927T093211Z"
+    },
+    {
+      "imageId": "sha256:b3f7e76d9c1d0b996eef869f23ef4ac966fd4e9c6f5332b960d15004eb656759",
+      "service": "auto-recharge",
+      "commit": "8b0f2f137a9572a9700ece1663e2904cbefa288a",
+      "releaseTag": "v2-production-20260927T093211Z"
+    }
+  ]
+}
