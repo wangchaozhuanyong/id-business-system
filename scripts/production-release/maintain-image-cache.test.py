@@ -15,6 +15,100 @@ cache = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cache)
 
 
+class BuilderCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.expected = 'c7c7cd5fab7138f445c715118b5dd75d0df4ac2f'
+        self.previous = {'commit': '220c6f45d9cbca8f4a95f275a24168c41d387a17'}
+        self.usage = {'Type': 'Build Cache', 'Active': '0', 'TotalCount': '52',
+                      'Size': '1.827GB', 'Reclaimable': '1.827GB'}
+        self.args = SimpleNamespace(expected_current=self.expected, deployment_run=None,
+            apply=False, approved_policy=cache.BUILDER_POLICY, approved_plan_sha256=None)
+
+    def command(self, *args):
+        if args[:3] == ('docker', 'ps', '-a'):
+            return '20260821t095106z\n20260821t095106z'
+        if args[:3] == ('docker', 'system', 'df'):
+            return json.dumps(self.usage)
+        raise AssertionError(args)
+
+    def test_readonly_binds_baseline_container_ids_and_legacy_count(self):
+        with patch.object(cache, 'current', return_value=({}, self.previous)), \
+                patch.object(cache, 'active_images', return_value={'container-image'}), \
+                patch.object(cache, 'read', side_effect=self.command), patch.object(cache, 'prune_builder') as prune:
+            plan = cache.builder_plan(self.expected)
+        self.assertEqual(plan['expectedPrevious'], self.previous['commit'])
+        self.assertEqual(plan['protectedContainerImageIds'], ['container-image'])
+        self.assertEqual(plan['builderUsage']['TotalCount'], '52')
+        prune.assert_not_called()
+
+    def test_active_cache_or_other_project_is_rejected(self):
+        with patch.object(cache, 'current', return_value=({}, self.previous)), \
+                patch.object(cache, 'read', side_effect=self.command):
+            self.usage['Active'] = '1'
+            with self.assertRaisesRegex(RuntimeError, 'Active or unavailable'):
+                cache.builder_plan(self.expected)
+        with patch.object(cache, 'current', return_value=({}, self.previous)), \
+                patch.object(cache, 'read', return_value='other-project'):
+            with self.assertRaisesRegex(RuntimeError, 'dedicated project host'):
+                cache.builder_plan(self.expected)
+
+    def test_cache_count_change_is_rejected(self):
+        self.usage['TotalCount'] = '53'
+        with patch.object(cache, 'current', return_value=({}, self.previous)), \
+                patch.object(cache, 'read', side_effect=self.command):
+            with self.assertRaisesRegex(RuntimeError, 'count changed'):
+                cache.builder_plan(self.expected)
+
+    def test_missing_approval_and_changed_plan_prevent_prune(self):
+        plan = {'expectedPrevious': self.previous['commit'], 'protectedContainerImageIds': []}
+        self.args.apply = True
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory, \
+                patch.object(cache, 'BASE', Path(directory)), \
+                patch.object(cache, 'builder_plan', return_value=plan), patch.object(cache, 'prune_builder') as prune:
+            with self.assertRaisesRegex(RuntimeError, 'approval required'):
+                cache.maintain_builder(self.args)
+        self.args.approved_plan_sha256 = cache.plan_digest(plan)
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory, \
+                patch.object(cache, 'BASE', Path(directory)), \
+                patch.object(cache, 'builder_plan', side_effect=[plan, {**plan, 'changed': True}]), \
+                patch.object(cache, 'prune_builder') as prune:
+            with self.assertRaisesRegex(RuntimeError, 'plan changed'):
+                cache.maintain_builder(self.args)
+            prune.assert_not_called()
+
+    def test_only_builder_cache_command_is_used_and_raw_output_is_suppressed(self):
+        with patch.object(cache.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout='Total reclaimed space: 1.827GB\n')) as command:
+            self.assertEqual(cache.prune_builder(), '1.827GB')
+        self.assertEqual(command.call_args.args, (['docker', 'builder', 'prune', '--all'],))
+        self.assertEqual(command.call_args.kwargs['input'], 'y\n')
+
+    def test_other_baseline_and_automatic_invocation_stop_before_docker(self):
+        for expected, deployment in (('f' * 40, None), (self.expected, 'github-actions-1-1')):
+            self.args.expected_current = expected
+            self.args.deployment_run = deployment
+            with patch.object(cache, 'builder_plan') as plan:
+                with self.assertRaisesRegex(RuntimeError, 'manual production baseline'):
+                    cache.maintain_builder(self.args)
+                plan.assert_not_called()
+
+    def test_success_receipt_requires_same_containers_and_empty_build_cache(self):
+        self.args.apply = True
+        plan = {'expectedPrevious': self.previous['commit'], 'protectedContainerImageIds': ['kept']}
+        self.args.approved_plan_sha256 = cache.plan_digest(plan)
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory, \
+                patch.object(cache, 'BASE', Path(directory)), patch.object(cache, 'builder_plan', return_value=plan), \
+                patch.object(cache, 'prune_builder', return_value='1.827GB'), \
+                patch.object(cache, 'current', return_value=({}, self.previous)), \
+                patch.object(cache, 'active_images', return_value={'kept'}), \
+                patch.object(cache, 'read', return_value=json.dumps({**self.usage, 'TotalCount': '0'})), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            cache.maintain_builder(self.args)
+            receipt = json.loads(output.getvalue())
+        self.assertEqual(receipt['status'], 'COMPLETE')
+        self.assertEqual(receipt['builderUsageAfter']['TotalCount'], '0')
+
+
 class ObsoleteCacheTests(unittest.TestCase):
     def setUp(self):
         self.payload = Path('deploy/aws/cache-cleanup-unused-legacy-20261003.json').read_text()

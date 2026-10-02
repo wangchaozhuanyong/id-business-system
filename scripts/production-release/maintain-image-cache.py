@@ -15,6 +15,7 @@ POLICY = 'current-previous-ecr-cache-v1'
 TAG = re.compile(r'[0-9a-f]{40}-[1-9][0-9]*-[1-9][0-9]*-(?:admin|api|migrate|media-resolver|auto-recharge)')
 LEGACY_POLICY = 'reviewed-obsolete-project-cache-20261003'
 LEGACY_PLAN_SHA256 = '0596af43c4fbf904c3b784ebadb2f444aee3747dc6d8d38a6f9f09a845c6e1c9'
+BUILDER_POLICY = 'unused-builder-cache-20261003'
 
 
 def require(condition, reason):
@@ -232,6 +233,63 @@ def maintain(args):
     print(json.dumps({key: value for key, value in result.items() if key != 'plan' or not args.apply}))
 
 
+def builder_plan(expected):
+    live, previous = current(expected)
+    projects = read('docker', 'ps', '-a', '--format', '{{.Label "com.docker.compose.project"}}').splitlines()
+    require(projects and set(projects) == {'20260821t095106z'},
+            'Builder cleanup requires the dedicated project host')
+    usage = [json.loads(line) for line in read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()]
+    builders = [item for item in usage if item['Type'] == 'Build Cache']
+    require(len(builders) == 1 and builders[0]['Active'] == '0', 'Active or unavailable build cache')
+    require(builders[0]['TotalCount'] == '52', 'Reviewed legacy build cache count changed')
+    return {'policy': BUILDER_POLICY, 'expectedCurrent': expected,
+            'expectedPrevious': previous['commit'],
+            'protectedContainerImageIds': sorted(active_images()), 'builderUsage': builders[0]}
+
+
+def prune_builder():
+    # This command affects build cache only. Docker protects referenced images and active builds.
+    result = subprocess.run(['docker', 'builder', 'prune', '--all'], input='y\n',
+                            capture_output=True, text=True, timeout=600)
+    require(result.returncode == 0, 'Builder cleanup failed; raw output suppressed')
+    total = re.search(r'Total(?: reclaimed space)?:\s*([0-9.]+\s*[kMGT]?B)', result.stdout)
+    require(total is not None, 'Builder cleanup total is unavailable')
+    return total[1]
+
+
+def maintain_builder(args):
+    require(not args.deployment_run and args.expected_current == 'c7c7cd5fab7138f445c715118b5dd75d0df4ac2f',
+            'Builder cleanup is limited to the reviewed manual production baseline')
+    plan = builder_plan(args.expected_current)
+    require(plan['expectedPrevious'] == '220c6f45d9cbca8f4a95f275a24168c41d387a17',
+            'Builder cleanup rollback baseline changed')
+    digest = plan_digest(plan)
+    result = {'mode': 'APPLIED' if args.apply else 'PLAN_ONLY', 'policy': BUILDER_POLICY,
+              'planSha256': digest, 'plan': plan, 'freeBytesBefore': shutil.disk_usage(BASE).free}
+    if args.apply:
+        require(args.approved_policy == BUILDER_POLICY and args.approved_plan_sha256 == digest,
+                'Exact builder cache approval required')
+        directory = BASE / 'maintenance/docker-cache-retention'
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / ('builder-' + str(time.time_ns()) + '.receipt.json')
+        result['status'] = 'IN_PROGRESS'
+        path.write_text(json.dumps(result, indent=2))
+        path.chmod(0o600)
+        require(builder_plan(args.expected_current) == plan, 'Builder cache plan changed before cleanup')
+        result['dockerReportedRemovedCache'] = prune_builder()
+        live, previous = current(args.expected_current)
+        require(previous['commit'] == plan['expectedPrevious'], 'Builder cleanup rollback changed')
+        require(active_images() == set(plan['protectedContainerImageIds']), 'Container images changed during cleanup')
+        after = [json.loads(line) for line in read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()]
+        result['builderUsageAfter'] = next(item for item in after if item['Type'] == 'Build Cache')
+        require(result['builderUsageAfter']['TotalCount'] == '0', 'Unused build cache remains')
+        result['status'] = 'COMPLETE'
+    result['freeBytesAfter'] = shutil.disk_usage(BASE).free
+    if args.apply:
+        path.write_text(json.dumps(result, indent=2))
+    print(json.dumps(result))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--expected-current', required=True)
@@ -240,11 +298,15 @@ def main():
     parser.add_argument('--approved-plan-sha256')
     parser.add_argument('--deployment-run')
     parser.add_argument('--legacy-plan-json')
+    parser.add_argument('--legacy-builder-cache', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid production baseline')
     with (BASE / '.deploy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if args.legacy_plan_json:
+        require(not (args.legacy_builder_cache and args.legacy_plan_json), 'Conflicting manual cache scopes')
+        if args.legacy_builder_cache:
+            maintain_builder(args)
+        elif args.legacy_plan_json:
             maintain_legacy(args)
         else:
             maintain(args)
