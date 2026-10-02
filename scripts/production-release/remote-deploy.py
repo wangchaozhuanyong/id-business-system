@@ -30,6 +30,8 @@ REUSE_CONTROL_FILES = frozenset({
     'scripts/ci-recharge-release.test.mjs',
     'scripts/production-release/cleanup-reviewed-cache.py',
     'scripts/production-release/cleanup-reviewed-cache.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/maintain-image-cache.test.py',
     'scripts/production-release/dispatch.sh',
     'scripts/production-release/remote-deploy.py',
     'scripts/production-release/remote-deploy.test.py',

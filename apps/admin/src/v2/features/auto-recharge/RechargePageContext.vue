@@ -10,7 +10,9 @@
   >
     <template #status>
       <span class="recharge-connector-status" :data-status="connectorStatus">{{
-        connectorMessage
+        directMode && connectorStatus === 'unknown'
+          ? '尚未检测比特浏览器本地接口'
+          : connectorMessage
       }}</span>
     </template>
     <template #actions>
