@@ -64,4 +64,3 @@ ALTER TABLE `id_business_v2_registration_jobs` ADD CONSTRAINT `id_business_v2_re
 
 -- AddForeignKey
 ALTER TABLE `id_business_v2_registration_jobs` ADD CONSTRAINT `id_business_v2_registration_jobs_account_id_fkey` FOREIGN KEY (`account_id`) REFERENCES `id_business_v2_chatgpt_accounts`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
