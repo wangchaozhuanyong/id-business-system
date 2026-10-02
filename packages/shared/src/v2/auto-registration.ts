@@ -73,6 +73,17 @@ export interface V2RegistrationPage<T> {
   pageSize: number;
 }
 
+export interface V2RegistrationMailbox {
+  id: string;
+  email: string;
+  primaryEmail: string | null;
+  status: 'ACTIVE' | 'DISABLED';
+  registered: boolean;
+  accountId: string | null;
+  note: string | null;
+  updatedAt: string;
+}
+
 export const V2_REGISTRATION_STEP_LABELS: Record<V2RegistrationStep, string> = {
   queued: '准备注册',
   email: '填写邮箱',

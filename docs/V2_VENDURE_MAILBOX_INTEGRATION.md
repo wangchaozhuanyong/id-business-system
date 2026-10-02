@@ -40,17 +40,17 @@ API Key 只授予 Vendure 的 `CreateIcloudRelay`、`ReadIcloudRelay`、`UpdateI
 
 生产环境需要把 ID API 到 Vendure 的固定私网代理跳数写入 Vendure `VENDURE_TRUST_PROXY`，避免所有买家查询被识别为同一个 ID API 地址；不得使用允许任意来源伪造转发头的宽泛配置。
 
-## ChatGPT 隐藏邮箱导入关联（2026-10-01 本地代码）
+## ChatGPT 账号导入与邮箱管理边界（2026-10-02 更正）
 
-ChatGPT 账号批量导入整批选择现有正常主邮箱，账号列填写隐藏邮箱。ID API 通过既有 Vendure 列表和批量新增接口复用已有关联，只增加缺失的虚拟邮箱；已有查询码、备注及归属不被改写。与其他主邮箱冲突、重复关联或停用记录会停止整批账号导入，要求先人工核对。
+ChatGPT 账号批量导入是独立的账号资料导入功能，按所选格式保存邮箱、可空密码、2FA 和备注，不选择主邮箱，也不自动添加或关联邮件验证码查询中的虚拟邮箱。邮箱管理仍使用自己的新增与批量导入入口。
 
-两套系统没有跨库事务。ID 先完整校验资料和本地重复账号，确认远端隐藏邮箱全部读回后，再用本地事务保存全部账号。如果远端仅添加部分邮箱，账号不会入库，重试只补缺失邮箱；远端成功后本地保存失败时，保留已添加邮箱供重试，不删除远端记录。并发创建同一账号时仍受本地唯一约束保护；不得将这两步描述为跨系统原子事务。
+ID 完整校验资料和本地重复账号后，用本地事务保存整批账号；并发创建同一账号仍受本地唯一约束保护。导入成功或失败均不读取、添加、修改或删除 Vendure 邮箱记录。此次更正不清理历史邮箱资料。
 
 账号「复制」只读现有有效 BUY 码，不查询真实收件、不重置查询码。复制后缀设置在虚拟邮箱工具栏，按当前 ID 管理员保存；它是 ID 账号交付偏好，不是 Vendure 邮箱资料。
 
-新增 ID API：`GET /id-business-v2/bank-recharge/account-copy-settings`、`PUT /id-business-v2/bank-recharge/account-copy-settings`、`POST /id-business-v2/bank-recharge/accounts/:id/copy`。既有账号导入请求新增可选 `primaryAccountId`，新界面必须选定它。无新增数据库表、列、migration、依赖或环境变量。
+账号复制使用既有 ID API：`GET /id-business-v2/bank-recharge/account-copy-settings`、`PUT /id-business-v2/bank-recharge/account-copy-settings`、`POST /id-business-v2/bank-recharge/accounts/:id/copy`。账号导入请求只提交 `accounts`；旧请求携带的 `primaryAccountId` 被忽略。此次更正无新增接口、数据库表、列、migration、依赖或环境变量。
 
-当前仅完成本地模拟与单元测试，没有对真实 Vendure 记录执行添加或复制，也未提交、推送或部署。证据见 `.runtime/chatgpt-account-delivery-20261001/RESULT.md`。
+2026-10-01 的复制及后缀历史证据见 `.runtime/chatgpt-account-delivery-20261001/RESULT.md`，其中导入关联行为已由此次更正取代。此次导入更正的检查与浏览器证据归属 `.runtime/chatgpt-account-import-20261002/`；本地结果不代表生产发布。
 
 ## 发布验收
 

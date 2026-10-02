@@ -3,6 +3,7 @@ import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
   V2RegistrationName,
   V2RegistrationJob,
+  V2RegistrationMailbox,
   V2RegistrationStart,
   V2RegistrationPage
 } from './contracts';
@@ -23,6 +24,22 @@ export interface RegistrationLaunch extends Record<string, unknown> {
   connectorToken: string;
 }
 export const registrationApi = {
+  mailboxes(
+    query: { page: number; pageSize: number; keyword?: string },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2RegistrationPage<V2RegistrationMailbox>>(
+      http.get(`${base}/mailboxes`, { params: query, signal: options.signal })
+    );
+  },
+  markRegistered(id: string, expectedUpdatedAt: string) {
+    return withV2QueryInvalidation(
+      request<{ accountId: string; created: boolean }>(
+        http.post(`${base}/mailboxes/${id}/registered`, { expectedUpdatedAt })
+      ),
+      'auto-recharge'
+    );
+  },
   connection() {
     return request<{ connectorUrl: string; connectorToken: string }>(
       http.get(`${base}/connection`)

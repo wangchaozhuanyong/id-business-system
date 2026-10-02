@@ -3,14 +3,29 @@ import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { RegistrationJobsService } from './registration-jobs.service';
 import { RegistrationNamesService } from './registration-names.service';
+import { RegistrationMailboxesService } from './registration-mailboxes.service';
 
 @Controller('id-business-v2/auto-registration')
 @RequireRoles('admin')
 export class RegistrationController {
   constructor(
     private readonly jobs: RegistrationJobsService,
-    private readonly names: RegistrationNamesService
+    private readonly names: RegistrationNamesService,
+    private readonly mailboxes: RegistrationMailboxesService
   ) {}
+  @Get('mailboxes') @Header('Cache-Control', 'no-store') listMailboxes(
+    @Query() query: { page?: string; pageSize?: string; keyword?: string },
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.mailboxes.list(query, operator);
+  }
+  @Post('mailboxes/:id/registered') @Header('Cache-Control', 'no-store') markRegistered(
+    @Param('id') aliasId: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.mailboxes.markRegistered(aliasId, value, operator);
+  }
   @Get('connection') @Header('Cache-Control', 'no-store') connection(
     @CurrentUser() operator: AuthenticatedUser
   ) {

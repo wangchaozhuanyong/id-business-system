@@ -21,64 +21,46 @@ function setup() {
     hash: vi.fn((value: string) => `hash:${value}`),
     decrypt: vi.fn((value: string) => value.replace(/^encrypted:/, ''))
   };
-  const mailboxes = { ensureAccountAliases: vi.fn().mockResolvedValue(undefined) };
   const service = new BankRechargeAccountService(
     repository as never,
     transactions as never,
     audit as never,
-    encryption as never,
-    mailboxes as never
+    encryption as never
   );
   const operator = { id: 'operator-id' } as never;
-  return { service, repository, transactions, audit, operator, mailboxes };
+  return { service, repository, transactions, audit, operator };
 }
 
 describe('ChatGPT 账号批量导入和删除', () => {
-  it('选定主邮箱时先确保隐藏邮箱关联，再加密保存无密码账号', async () => {
-    const { service, repository, mailboxes, operator } = setup();
+  it('无需主邮箱或邮箱服务，直接加密导入无密码账号', async () => {
+    const { service, repository, operator } = setup();
     await service.importAccounts(
       {
-        primaryAccountId: 'primary-1',
         accounts: [{ email: 'FIRST@example.com', totpSecret: 'JBSWY3DPEHPK3PXP' }]
       },
       operator
     );
-    expect(mailboxes.ensureAccountAliases).toHaveBeenCalledWith(
-      'primary-1',
-      ['first@example.com'],
-      operator
-    );
-    expect(mailboxes.ensureAccountAliases.mock.invocationCallOrder[0]).toBeLessThan(
-      repository.createAccount.mock.invocationCallOrder[0]!
-    );
+    expect(repository.hasAccountEmailHashes).toHaveBeenCalledWith(['hash:first@example.com']);
+    expect(repository.createAccount).toHaveBeenCalledTimes(1);
     expect(repository.createAccount.mock.calls[0]?.[1].data.passwordEncrypted).toBeNull();
   });
 
-  it('本地账号重复或资料错误时不触碰邮箱服务', async () => {
-    const { service, repository, mailboxes, transactions, operator } = setup();
+  it('本地账号重复或资料错误时整批不写入', async () => {
+    const { service, repository, transactions, operator } = setup();
     repository.hasAccountEmailHashes.mockResolvedValue(true);
     await expect(
-      service.importAccounts(
-        { primaryAccountId: 'primary-1', accounts: [{ email: 'first@example.com' }] },
-        operator
-      )
+      service.importAccounts({ accounts: [{ email: 'first@example.com' }] }, operator)
     ).rejects.toThrow('已保存');
     await expect(
-      service.importAccounts(
-        { primaryAccountId: 'primary-1', accounts: [{ email: 'bad' }] },
-        operator
-      )
+      service.importAccounts({ accounts: [{ email: 'bad' }] }, operator)
     ).rejects.toThrow('第 1 行');
-    expect(mailboxes.ensureAccountAliases).not.toHaveBeenCalled();
+    expect(repository.createAccount).not.toHaveBeenCalled();
     expect(transactions.execute).not.toHaveBeenCalled();
   });
 
-  it('邮箱关联失败时不入库，重试成功后才创建账号', async () => {
-    const { service, repository, mailboxes, operator } = setup();
-    mailboxes.ensureAccountAliases.mockRejectedValueOnce(new Error('部分隐藏邮箱未添加'));
+  it('旧请求携带主邮箱字段也只导入账号，不依赖邮箱查询服务', async () => {
+    const { service, repository, operator } = setup();
     const input = { primaryAccountId: 'primary-1', accounts: [{ email: 'first@example.com' }] };
-    await expect(service.importAccounts(input, operator)).rejects.toThrow('部分隐藏邮箱');
-    expect(repository.createAccount).not.toHaveBeenCalled();
     await expect(service.importAccounts(input, operator)).resolves.toEqual({ imported: 1 });
     expect(repository.createAccount).toHaveBeenCalledTimes(1);
   });
