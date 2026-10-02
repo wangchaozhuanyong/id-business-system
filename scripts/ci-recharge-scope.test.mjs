@@ -64,6 +64,7 @@ test('release workflow diagnostics retain control checks and do not hide applica
     'deploy/aws/cache-cleanup-20261001.json',
     'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
     'deploy/aws/cache-cleanup-unified-20261002.json',
+    'deploy/aws/cache-cleanup-unified-recovery-20261002.json',
     'docs/PRODUCTION_RELEASE_OIDC.md'
   ];
   assert.equal(checkMode(paths, schema, schema), 'ci-only');

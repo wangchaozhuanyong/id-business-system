@@ -24,10 +24,23 @@ REVIEWED_PLANS = {
         'ddbcc8b5c117638e6f4fed668285ab4fadd1968a-36853839850-1-',
         'f3558f30d09f1eebf62c171b23e1b497e22993e2-36899703841-1-',
     ),
+    'd48439d92ca91f2ddf5b30bef5da7b3f0d2fdf90644b64196c3a72f0b1c2c0cc': (
+        '7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-',
+        'd1ed460eff55df7167a806dd3e1f7abdef5ef24d-36907590117-1-',
+    ),
 }
 
-REVIEWED_PLAN_COUNTS = {'66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': 12}
-POST_RELEASE_PLANS = {'66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d'}
+REVIEWED_PLAN_COUNTS = {
+    '66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': 12,
+    'd48439d92ca91f2ddf5b30bef5da7b3f0d2fdf90644b64196c3a72f0b1c2c0cc': 6,
+}
+POST_RELEASE_PLANS = set(REVIEWED_PLAN_COUNTS)
+PRE_RELEASE_BASELINES = {
+    '66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': (
+        '3b7e40d2dcf6fff43d3fd4f23dfbbd9f8f1cb31e',
+        'd1ed460eff55df7167a806dd3e1f7abdef5ef24d',
+    ),
+}
 
 def require(condition, label):
     if not condition:
@@ -86,13 +99,17 @@ def main():
     previous_path = Path(manifest['previousRelease']).resolve()
     require(previous_path.parent == BASE / 'releases', 'Unexpected previous release path')
     previous = json.loads((previous_path / 'release-manifest.json').read_text())
-    require(previous['commit'] == plan['expectedPrevious'], 'Previous rollback version changed')
+    expected_previous = plan['expectedPrevious']
+    recovery_baseline = PRE_RELEASE_BASELINES.get(digest)
+    if recovery_baseline and expected_current == recovery_baseline[0]:
+        expected_previous = recovery_baseline[1]
+    require(previous['commit'] == expected_previous, 'Previous rollback version changed')
     protected = active_images() | protected_images(manifest) | protected_images(previous, include_rollback=False)
     approved = []
     services = {(prefix, service) for prefix in prefixes for service in
                 ('admin', 'api', 'migrate', 'media-resolver', 'auto-recharge')}
     if digest in POST_RELEASE_PLANS:
-        # This exact reviewed digest contains two complete old releases and two admin-only caches.
+        # Mixed service sets are allowed only for these exact reviewed digests.
         services = {(prefix, item['tag'][len(prefix):]) for prefix in prefixes
                     for item in plan['items'] if item['tag'].startswith(prefix)}
     for item in plan['items']:
