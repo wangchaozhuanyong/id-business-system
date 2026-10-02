@@ -2557,6 +2557,7 @@ model IdBusinessV2ChatgptAccount {
   emailEncrypted      String                           @map("email_encrypted") @db.Text
   emailHash           String                           @unique @map("email_hash") @db.Char(64)
   emailMasked         String                           @map("email_masked") @db.VarChar(255)
+  registrationCountryCode String?                      @map("registration_country_code") @db.Char(2)
   officialAccountKey  String?                          @unique @map("official_account_key") @db.Char(64)
   passwordEncrypted   String?                          @map("password_encrypted") @db.Text
   totpSecretEncrypted String?                          @map("totp_secret_encrypted") @db.Text
@@ -2645,6 +2646,7 @@ model IdBusinessV2RegistrationJob {
   state                IdBusinessV2RegistrationState @default(queued)
   step                 IdBusinessV2RegistrationStep  @default(queued)
   registered           Boolean                       @default(false)
+  registrationCountryCode String?                    @map("registration_country_code") @db.Char(2)
   passwordVerified     Boolean                       @default(false) @map("password_verified")
   mfaVerified          Boolean                       @default(false) @map("mfa_verified")
   offerStatus          IdBusinessV2AccountOffer      @default(unknown) @map("offer_status")

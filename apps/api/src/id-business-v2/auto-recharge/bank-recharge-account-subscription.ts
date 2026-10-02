@@ -37,6 +37,7 @@ export function accountListItem(
   return {
     id: item.id,
     emailMasked: item.emailMasked,
+    registrationCountryCode: item.registrationCountryCode,
     status: item.status,
     offerStatus: item.offerStatus ?? 'unknown',
     offerSource: item.offerSource ?? null,

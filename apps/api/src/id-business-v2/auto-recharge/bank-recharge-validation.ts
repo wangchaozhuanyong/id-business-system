@@ -6,6 +6,15 @@ export const bankRechargeUuid =
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const moneyPattern = /^(?:0|[1-9]\d{0,12})(?:\.\d{1,4})?$/;
 const ratePattern = /^(?:0|[1-9]\d{0,2})(?:\.\d{1,4})?$/;
+const countryNames = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' });
+
+export function bankRechargeCountryCode(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  const code = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (!/^[A-Z]{2}$/.test(code) || ['XA', 'XB', 'ZZ'].includes(code) || !countryNames.of(code))
+    throw new BadRequestException('国家代码无效');
+  return code;
+}
 
 export function bankRechargeObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

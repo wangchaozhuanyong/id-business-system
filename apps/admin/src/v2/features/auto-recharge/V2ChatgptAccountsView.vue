@@ -65,26 +65,34 @@
             prop="emailMasked"
             show-overflow-tooltip
           />
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[1]">
+          <V2TableColumn
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[1]"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{
+              chatgptCountryLabel(row.registrationCountryCode)
+            }}</template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[2]">
             <template #default="{ row }">
               <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{
                 row.status === 'active' ? '启用' : '停用'
               }}</el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[2]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[3]">
             <template #default="{ row }">{{
               V2_ACCOUNT_OFFER_LABELS[(row.offerStatus ?? 'unknown') as V2AccountOffer]
             }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[3]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[4]">
             <template #default="{ row }">{{ row.hasPassword ? '已保存' : '未保存' }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[4]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[5]">
             <template #default="{ row }">{{ row.hasTotp ? '已保存' : '未保存' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[5]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[6]"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -99,7 +107,7 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[6]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[7]"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -114,37 +122,37 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[7]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[8]"
             prop="remark"
             show-overflow-tooltip
           />
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[9]">
             <template #default="{ row }">
               <span title="首次录入系统的时间">{{ formatV2DateTime(row.createdAt) }}</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[9]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[10]">
             <template #default="{ row }">
               <span title="从首次录入起，每满 24 小时增加 1 天；不足一天为 0 天">{{
                 registeredDaysLabel(row.createdAt)
               }}</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[10]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[11]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[11]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[12]"
             show-overflow-tooltip
           >
             <template #default="{ row }">{{ row.openingCard?.numberSummary || '未记录' }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[12]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[13]">
             <template #default="{ row }">{{
               row.openingCard?.deleted ? '已删除' : row.openingCard?.id ? '尚未删除' : '未记录'
             }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[13]">
+          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[14]">
             <template #default="{ row }">
               <ChatgptAccountCopyButton
                 :id="row.id"
@@ -224,59 +232,7 @@
         require-asterisk-position="right"
         autocomplete="off"
       >
-        <el-form-item v-if="!editing" label="ChatGPT 邮箱" prop="email" required>
-          <el-input
-            v-model="form.email"
-            name="chatgpt-account-create-email"
-            type="email"
-            maxlength="250"
-            autocomplete="off"
-            placeholder="输入 ChatGPT 登录邮箱"
-          />
-        </el-form-item>
-        <el-form-item v-else label="新邮箱" prop="email">
-          <el-input
-            v-model="form.email"
-            name="chatgpt-account-edit-email"
-            type="email"
-            maxlength="250"
-            autocomplete="off"
-            :placeholder="`当前 ${editing.emailMasked}；留空保留`"
-          />
-        </el-form-item>
-        <el-form-item v-if="editing" label="优惠状况" prop="offerStatus">
-          <ChatgptAccountOfferSelect
-            :model-value="form.offerStatus"
-            @update:model-value="setEditorOffer"
-          />
-        </el-form-item>
-        <el-form-item label="登录密码">
-          <el-input
-            v-model="form.password"
-            name="chatgpt-account-password"
-            type="password"
-            show-password
-            maxlength="1024"
-            autocomplete="new-password"
-            :placeholder="editing ? '留空表示保留原密码' : '选填；未设置密码可留空'"
-          />
-        </el-form-item>
-        <el-form-item label="2FA 密钥">
-          <el-input
-            v-model="form.totpSecret"
-            type="password"
-            show-password
-            maxlength="2048"
-            autocomplete="off"
-            placeholder="Base32 密钥或 otpauth 链接；可稍后补充"
-          />
-        </el-form-item>
-        <el-form-item v-if="editing" label="账号状态">
-          <el-switch v-model="form.active" active-text="启用" inactive-text="停用" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="form.remark" maxlength="500" placeholder="选填" />
-        </el-form-item>
+        <ChatgptAccountEditorFields :form="form" :editing="editing" />
       </el-form>
       <p v-if="saveError" class="bank-recharge-error" role="alert">{{ saveError }}</p>
     </V2FormDrawer>
@@ -285,7 +241,7 @@
 
 <script setup lang="ts">
 import { useChatgptAccountDeletion } from './useChatgptAccountDeletion';
-import ChatgptAccountOfferSelect from './ChatgptAccountOfferSelect.vue';
+import ChatgptAccountEditorFields from './ChatgptAccountEditorFields.vue';
 import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -313,6 +269,7 @@ import ChatgptOpeningCardDeleteButton from './ChatgptOpeningCardDeleteButton.vue
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
 import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
+import { chatgptCountryLabel } from './chatgpt-country';
 import { V2_ACCOUNT_OFFER_LABELS, type V2AccountOffer } from '@apple-business/shared';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
@@ -388,6 +345,7 @@ const saveError = ref('');
 const formRef = ref<FormInstance>();
 const editorDraft = useV2FormDraft('chatgpt-accounts-editor', () => ({
   email: '',
+  registrationCountryCode: '',
   password: '',
   totpSecret: '',
   remark: '',
@@ -423,6 +381,7 @@ function openEdit(account: BankChatgptAccount) {
   editorDraft.open(
     account.id,
     {
+      registrationCountryCode: account.registrationCountryCode ?? '',
       remark: account.remark ?? '',
       active: account.status === 'active',
       offerStatus: account.offerStatus ?? 'unknown'
@@ -430,9 +389,6 @@ function openEdit(account: BankChatgptAccount) {
     account.updatedAt
   );
   drawerOpen.value = true;
-}
-function setEditorOffer(value: V2AccountOffer | 'all') {
-  if (value !== 'all') form.offerStatus = value;
 }
 async function save() {
   if (!(await validateV2Form(formRef.value))) return;
@@ -446,6 +402,8 @@ async function save() {
         status: form.active ? 'active' : 'disabled',
         expectedUpdatedAt: editorDraft.version.value
       };
+      if (form.registrationCountryCode !== (editing.value.registrationCountryCode ?? ''))
+        payload.registrationCountryCode = form.registrationCountryCode || null;
       if (form.offerStatus !== (editing.value.offerStatus ?? 'unknown'))
         payload.offerStatus = form.offerStatus;
       if (form.password) payload.password = form.password;
@@ -455,6 +413,7 @@ async function save() {
     } else {
       await bankRechargeApi.createAccount({
         email: form.email.trim(),
+        registrationCountryCode: form.registrationCountryCode || null,
         password: form.password,
         totpSecret: form.totpSecret,
         remark: form.remark

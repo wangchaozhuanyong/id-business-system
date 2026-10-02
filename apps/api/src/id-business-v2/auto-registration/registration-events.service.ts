@@ -10,6 +10,7 @@ import type { IdBusinessV2RegistrationJob } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
+import { bankRechargeCountryCode } from '../auto-recharge/public-api';
 import { RegistrationRepository } from './persistence/registration.repository';
 import { registrationSummary, registrationTokenHash } from './registration-jobs.service';
 import { id, offer, record, step, text } from './registration-validation';
@@ -35,6 +36,7 @@ export class RegistrationEventsService {
             'attempt',
             'step',
             'email',
+            'registrationCountryCode',
             'browserProfileId',
             'totpSecret',
             'offerStatus',
@@ -63,6 +65,9 @@ export class RegistrationEventsService {
       ].includes(type)
     )
       throw new BadRequestException('任务回执类型无效');
+    if (input.registrationCountryCode !== undefined && type !== 'registered')
+      throw new BadRequestException('仅注册完成回执可记录注册国家');
+    const registrationCountryCode = bankRechargeCountryCode(input.registrationCountryCode);
     return this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
@@ -146,6 +151,8 @@ export class RegistrationEventsService {
             throw new ConflictException('官网登录邮箱与任务不一致');
           patch.registered = true;
           patch.step = 'registered';
+          // Freeze the first confirmed registration snapshot, including unknown countries.
+          if (!row.registered) patch.registrationCountryCode = registrationCountryCode;
         }
         if (type === 'password_verified') {
           this.registered(row);
@@ -208,6 +215,7 @@ export class RegistrationEventsService {
             state: row.state,
             step: row.step,
             registered: row.registered,
+            registrationCountryCode: row.registrationCountryCode,
             passwordVerified: row.passwordVerified,
             mfaVerified: row.mfaVerified,
             offerStatus: row.offerStatus

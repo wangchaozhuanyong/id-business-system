@@ -76,6 +76,7 @@ export const v2TableSchemas = {
           widthPreset: 'wide',
           pin: 'start'
         },
+        { key: 'registrationCountryCode', label: '国家', kind: 'text', widthPreset: 'standard' },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
         { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
         { key: 'hasPassword', label: '登录密码', kind: 'status', widthPreset: 'compact' },
