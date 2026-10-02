@@ -37,6 +37,7 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
     RechargeProxyController,
     RechargeNameController
   ],
+  exports: [RechargeSettingsService, RechargeProxyService],
   providers: [
     RechargeNameService,
     RechargeNameRepository,
