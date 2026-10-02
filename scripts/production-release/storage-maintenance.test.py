@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,37 @@ BACKUP = {'name': 'id-business-v2-20261002T120000Z.sql.gz', 's3Verified': True}
 
 
 class StorageSafetyTests(unittest.TestCase):
+    def test_legacy_cache_recovery_sources_remain_in_main_with_build_recipes(self):
+        plan = storage.legacy_cache_plan(Path('deploy/aws/cache-cleanup-legacy-20261002.json').read_text())
+        for source in plan['sources']:
+            subprocess.run(['git', 'merge-base', '--is-ancestor', source['commit'], 'HEAD'], check=True)
+            for path in [source['lockFile'], *source['dockerfiles']]:
+                subprocess.run(['git', 'cat-file', '-e', source['commit'] + ':' + path], check=True)
+
+    def test_legacy_cache_modified_plan_is_rejected_before_docker_access(self):
+        plan = json.loads(Path('deploy/aws/cache-cleanup-legacy-20261002.json').read_text())
+        plan['items'][0]['references'] = ['mysql:8.4']
+        with self.assertRaisesRegex(RuntimeError, 'reviewed digest'):
+            storage.legacy_cache_plan(json.dumps(plan))
+
+    def test_legacy_cache_protects_exited_containers_before_any_removal(self):
+        text = Path('deploy/aws/cache-cleanup-legacy-20261002.json').read_text()
+        plan = json.loads(text)
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory:
+            root = Path(directory)
+            (root / 'current').mkdir()
+            (root / 'previous').mkdir()
+            (root / 'current/release-manifest.json').write_text(json.dumps(
+                {'previousRelease': str((root / 'previous').resolve()), 'images': {}}))
+            (root / 'previous/release-manifest.json').write_text(json.dumps(
+                {'commit': plan['expectedPrevious'], 'images': {}}))
+            with patch.object(storage, 'BASE', root), patch.object(storage, 'baseline'), \
+                    patch.object(storage, 'container_images', return_value={plan['items'][0]['imageId']}), \
+                    patch.object(storage, 'read') as command:
+                with self.assertRaisesRegex(RuntimeError, 'used by a container'):
+                    storage.cleanup_legacy_cache(plan['expectedCurrent'], text, apply=True)
+                command.assert_not_called()
+
     def test_archive_config_identity_is_verified_without_extracting_secrets(self):
         payload = b'{"Env":["PRIVATE=never-output"]}'
         digest = hashlib.sha256(payload).hexdigest()
