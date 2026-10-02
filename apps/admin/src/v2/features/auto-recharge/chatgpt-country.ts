@@ -14,5 +14,10 @@ export const chatgptCountries = Array.from({ length: 26 * 26 }, (_, index) => {
   const code = String.fromCharCode(65 + Math.floor(index / 26), 65 + (index % 26));
   return [code, chatgptCountryLabel(code)] as const;
 })
-  .filter(([code, label]) => !['XA', 'XB', 'ZZ'].includes(code) && label !== '未知国家')
+  .filter(
+    ([code, label]) =>
+      !['EU', 'UN', 'QO', 'XA', 'XB', 'ZZ'].includes(code) &&
+      label !== '未知国家' &&
+      new Intl.Locale(`und-${code}`).region === code
+  )
   .sort((a, b) => a[1].localeCompare(b[1], 'zh-Hans'));
