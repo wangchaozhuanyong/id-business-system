@@ -23,7 +23,7 @@ export const v2TableSchemas = {
     main: table({
       id: 'auto-registration.main',
       feature: 'auto-registration',
-      role: 'primary',
+      role: 'secondary',
       mobileMode: 'scroll',
       rowKey: { kind: 'path', value: 'id' },
       columns: [
@@ -40,6 +40,24 @@ export const v2TableSchemas = {
         { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    })
+  },
+  registrationMailboxes: {
+    main: table({
+      id: 'auto-registration.mailboxes',
+      feature: 'auto-registration',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: 'email', label: '隐藏邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
+        { key: 'primaryEmail', label: '所属主邮箱', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'status', label: '邮箱状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'registered', label: '注册状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'note', label: '备注', kind: 'text', widthPreset: 'wide' },
+        { key: 'updatedAt', label: '邮箱更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     })
   },
@@ -1425,7 +1443,10 @@ export const v2TableSchemas = {
 } as const;
 
 export const v2TablesByFeature = {
-  'auto-registration': [v2TableSchemas.registrationJobs.main],
+  'auto-registration': [
+    v2TableSchemas.registrationMailboxes.main,
+    v2TableSchemas.registrationJobs.main
+  ],
   'registration-names': [v2TableSchemas.registrationNames.main],
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],

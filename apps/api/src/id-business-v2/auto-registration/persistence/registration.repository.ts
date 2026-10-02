@@ -79,6 +79,27 @@ export class RegistrationRepository {
   account(tx: V2CommandTransaction, emailHash: string) {
     return tx.idBusinessV2ChatgptAccount.findUnique({ where: { emailHash } });
   }
+  accountsByEmailHashes(emailHashes: string[]) {
+    return this.prisma.idBusinessV2ChatgptAccount.findMany({
+      where: { emailHash: { in: emailHashes } },
+      select: { id: true, emailHash: true }
+    });
+  }
+  activeEmail(tx: V2CommandTransaction, emailHash: string) {
+    return tx.idBusinessV2RegistrationJob.findFirst({
+      where: {
+        emailHash,
+        state: { in: ['queued', 'running', 'awaiting_email', 'awaiting_user', 'partial'] },
+        OR: [{ leaseUntil: null }, { leaseUntil: { gt: new Date() } }]
+      }
+    });
+  }
+  createManualAccount(
+    tx: V2CommandTransaction,
+    data: Prisma.IdBusinessV2ChatgptAccountUncheckedCreateInput
+  ) {
+    return tx.idBusinessV2ChatgptAccount.create({ data });
+  }
   create(tx: V2CommandTransaction, data: Prisma.IdBusinessV2RegistrationJobUncheckedCreateInput) {
     return tx.idBusinessV2RegistrationJob.create({ data });
   }

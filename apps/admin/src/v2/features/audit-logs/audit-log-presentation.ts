@@ -234,6 +234,7 @@ const ACTION_SEGMENT_LABELS: Record<string, string> = {
   payment_resolution: '核对付款结果',
   payment_cap: '付款限额',
   metadata_update: '修改资料',
+  mark_registered: '标记已注册',
   preview_created: '提交恢复或清理申请',
   approval_decided: '审批申请',
   batch_completed: '执行完成',

@@ -9,6 +9,7 @@ import { RegistrationCallbackController } from './registration-callback.controll
 import { RegistrationNamesService } from './registration-names.service';
 import { RegistrationJobsService } from './registration-jobs.service';
 import { RegistrationEventsService } from './registration-events.service';
+import { RegistrationMailboxesService } from './registration-mailboxes.service';
 
 @Module({
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2WorkspaceModule, RechargeModule],
@@ -18,6 +19,7 @@ import { RegistrationEventsService } from './registration-events.service';
     RegistrationNamesService,
     RegistrationJobsService,
     RegistrationEventsService,
+    RegistrationMailboxesService,
     FieldEncryptionService
   ]
 })

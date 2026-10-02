@@ -3,18 +3,14 @@
     v-model="open"
     retain-draft
     title="批量导入 ChatGPT 账号"
-    description="选择隐藏邮箱所属主邮箱；缺失的虚拟邮箱会自动添加。邮箱必填，密码选填，整批校验后保存。"
+    description="按所选资料格式粘贴 ChatGPT 账号。邮箱必填，密码选填，整批校验后保存。"
     confirm-text="导入账号"
     size="min(680px, 96vw)"
     :confirm-loading="importing"
     :dirty="Boolean(importText.trim())"
     @confirm="importAccounts"
   >
-    <ChatgptAccountImportFields
-      v-model="importText"
-      v-model:format="importFormat"
-      v-model:primary-account-id="primaryAccountId"
-    />
+    <ChatgptAccountImportFields v-model="importText" v-model:format="importFormat" />
     <p v-if="error" class="bank-recharge-error" role="alert">{{ error }}</p>
   </V2FormDrawer>
 </template>
@@ -34,12 +30,11 @@ import ChatgptAccountImportFields from './ChatgptAccountImportFields.vue';
 
 const open = defineModel<boolean>({ required: true });
 const emit = defineEmits<{ imported: [] }>();
-const { importText, importFormat, primaryAccountId, importing } = useV2SessionDraft(
+const { importText, importFormat, importing } = useV2SessionDraft(
   'chatgpt-accounts-import',
   () => ({
     importText: ref(''),
     importFormat: ref<ChatgptAccountImportFormat>('without_password'),
-    primaryAccountId: ref(''),
     importing: ref(false)
   })
 );
@@ -50,12 +45,11 @@ async function importAccounts() {
   try {
     const submittedText = importText.value;
     const rows = parseChatgptAccountImport(submittedText, importFormat.value);
-    if (!primaryAccountId.value) throw new Error('请选择隐藏邮箱所属主邮箱');
     importing.value = true;
-    const result = await bankRechargeApi.importAccounts(rows, primaryAccountId.value);
+    const result = await bankRechargeApi.importAccounts(rows);
     if (importText.value === submittedText) importText.value = '';
     open.value = false;
-    ElMessage.success(`已导入 ${result.imported} 个 ChatGPT 账号，隐藏邮箱已关联邮件验证码查询`);
+    ElMessage.success(`已导入 ${result.imported} 个 ChatGPT 账号`);
     emit('imported');
   } catch (reason) {
     error.value = getApiErrorMessage(reason);

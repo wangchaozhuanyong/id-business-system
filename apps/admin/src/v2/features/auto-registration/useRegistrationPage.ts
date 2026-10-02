@@ -13,7 +13,10 @@ import {
 import { registrationApi } from './api';
 import type { V2RegistrationJob } from './contracts';
 
-export function useRegistrationPage(config: { moduleKey: 'auto-registration' }) {
+export function useRegistrationPage(config: {
+  moduleKey: 'auto-registration';
+  enabled?: () => boolean;
+}) {
   const filters = useV2SessionDraft('auto-registration:filters', () =>
     reactive({
       page: 1,
@@ -28,6 +31,7 @@ export function useRegistrationPage(config: { moduleKey: 'auto-registration' }) 
   const query = useV2ModuleQuery({
     moduleKey: config.moduleKey,
     scope: 'auto-recharge',
+    enabled: config.enabled,
     key: () =>
       createV2QueryKey({
         page: filters.page,
