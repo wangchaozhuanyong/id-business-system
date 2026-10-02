@@ -209,6 +209,7 @@ jobs:
           command += ' --expected-current ' + shlex.quote(os.environ['EXPECTED_CURRENT'])
           if operation == 'cleanup-audit':
               command += ' --approved-scope audit-routine-20261002T110000Z'
+              command += ' --retention-migration-sql ' + shlex.quote(Path('apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql').read_text())
           if operation.endswith('legacy-cache'):
               command += ' --legacy-plan-json ' + shlex.quote(Path('deploy/aws/cache-cleanup-legacy-20261002.json').read_text())
           Path('.deploy/production-release/storage-maintenance.json').write_text(json.dumps({'commands': [command], 'executionTimeout': ['600']}))

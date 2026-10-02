@@ -24,6 +24,8 @@ APPROVED_SCOPE = 'audit-routine-20261002T110000Z'
 CUTOFF = '2026-10-02 11:00:00'
 MAX_APPROVED_COUNT = 19848
 LEGACY_PLAN_SHA256 = 'fd03e4c0590d803b8f2f2722bf88f89bb0b1a900c74d9107b651192589b6a3a8'
+RETENTION_MIGRATION = '20261002123500_routine_audit_retention_exception'
+RETENTION_MIGRATION_SHA256 = 'e00ead9e611e506a877848f96390c00078f600ed8df628dedb99573ceb5b31b3'
 ROUTINE_ACTIONS = (
     'id_business_v2.website_visit.collect',
     'id_business_v2.exchange_rate.schedule.claim',
@@ -286,6 +288,7 @@ def deletion_sql(preview, backup):
         'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; START TRANSACTION; '
         "SELECT COUNT(*),SHA2(GROUP_CONCAT(a.id ORDER BY a.id SEPARATOR ','),256) "
         'INTO @candidate_count,@candidate_hash FROM audit_logs a WHERE ' + where + '; '
+        "SET @idv2_routine_audit_cleanup_scope='" + APPROVED_SCOPE + "'; "
         'DELETE a FROM audit_logs a WHERE ' + where
         + f" AND @candidate_count={count} AND @candidate_hash='{digest}'; "
         'SET @deleted=ROW_COUNT(); '
@@ -294,13 +297,51 @@ def deletion_sql(preview, backup):
         f"JSON_OBJECT('count',{count},'idsSha256','{digest}'),"
         f"JSON_OBJECT('deleted',@deleted,'cutoffUtc','2026-10-02T11:00:00Z','backup','{backup['name']}'),"
         "'用户已批准清理自动采集审计，其他业务及恢复记录保留',UTC_TIMESTAMP(6) "
-        f'WHERE @deleted={count}; COMMIT; '
+        f'WHERE @deleted={count}; SET @idv2_routine_audit_cleanup_scope=NULL; COMMIT; '
         "SELECT JSON_OBJECT('deleted',@deleted,'candidateCount',@candidate_count,"
         "'candidateHash',@candidate_hash,'totalAfter',(SELECT COUNT(*) FROM audit_logs));"
     )
 
 
-def cleanup_audit(expected, approved_scope):
+def retention_migration(sql):
+    require(isinstance(sql, str) and hashlib.sha256(sql.encode()).hexdigest() == RETENTION_MIGRATION_SHA256,
+            'Retention migration differs from approved digest')
+    return sql
+
+
+def prepare_retention(directory, container, sql, deployment):
+    sql = retention_migration(sql)
+    root = BASE / 'maintenance/storage-cleanup-20261002/prisma-mysql'
+    source = directory / 'apps/api/prisma-mysql'
+    if not root.exists():
+        shutil.copytree(source, root)
+    require(root.is_dir() and not root.is_symlink(), 'Unexpected retention migration directory')
+    original = {str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in source.rglob('*') if path.is_file()}
+    copied = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in root.rglob('*') if path.is_file()
+              and str(path.relative_to(root)) != 'migrations/' + RETENTION_MIGRATION + '/migration.sql'}
+    require(original == copied, 'Existing Prisma migration inputs changed')
+    target = root / 'migrations' / RETENTION_MIGRATION / 'migration.sql'
+    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if target.exists():
+        require(target.read_text() == sql, 'Retention migration candidate changed')
+    else:
+        target.write_text(sql)
+        target.chmod(0o644)
+    deployment.compose(directory, 'run', '--rm', '--no-deps', '-v',
+                       str(root) + ':/app/apps/api/prisma-mysql:ro', 'migrate', timeout=240)
+    rows = mysql(container, "SELECT JSON_OBJECT('name',migration_name,'checksum',checksum,"
+                 "'finished',finished_at IS NOT NULL,'rolledBack',rolled_back_at IS NOT NULL) "
+                 "FROM _prisma_migrations WHERE migration_name='" + RETENTION_MIGRATION + "'").splitlines()
+    require(len(rows) == 1, 'Expected one retention migration record')
+    receipt = json.loads(rows[0])
+    require(receipt['checksum'] == RETENTION_MIGRATION_SHA256 and receipt['finished'] == 1
+            and receipt['rolledBack'] == 0, 'Retention migration completion not verified')
+    return receipt
+
+
+def cleanup_audit(expected, approved_scope, migration_sql=None):
     require(approved_scope == APPROVED_SCOPE, 'Explicit fixed-scope approval required')
     with (BASE / '.deploy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -319,6 +360,8 @@ def cleanup_audit(expected, approved_scope):
         before = deployment.audit(directory, receipt_dir / 'audit-before.json')
         print('STORAGE_STAGE verified_backup', flush=True)
         backup = fresh_backup(directory)
+        print('STORAGE_STAGE approved_retention_migration', flush=True)
+        migration = prepare_retention(directory, container, migration_sql, deployment)
         baseline(expected)
         refreshed = preview_audit(container)
         require(all(refreshed[key] == preview[key] for key in ('count', 'idsSha256', 'references')),
@@ -326,7 +369,7 @@ def cleanup_audit(expected, approved_scope):
         print('STORAGE_STAGE guarded_delete', flush=True)
         receipt = json.loads(mysql(container, deletion_sql(preview, backup), read_only=False))
         receipt.update({'mode': 'APPLIED', 'preview': preview, 'backup': backup,
-                        'dataAuditBefore': before})
+                        'dataAuditBefore': before, 'retentionMigration': migration})
         (receipt_dir / 'audit-cleanup-receipt.json').write_text(json.dumps(receipt, indent=2))
         (receipt_dir / 'audit-cleanup-receipt.json').chmod(0o600)
         require(receipt['deleted'] == preview['count'], 'Candidate guard prevented deletion')
@@ -417,12 +460,13 @@ def main():
     parser.add_argument('--expected-current', required=True)
     parser.add_argument('--approved-scope')
     parser.add_argument('--legacy-plan-json')
+    parser.add_argument('--retention-migration-sql')
     args = parser.parse_args()
     baseline(args.expected_current)
     if args.operation == 'diagnose':
         result = diagnose(args.expected_current)
     elif args.operation == 'cleanup-audit':
-        result = cleanup_audit(args.expected_current, args.approved_scope)
+        result = cleanup_audit(args.expected_current, args.approved_scope, args.retention_migration_sql)
     else:
         result = cleanup_legacy_cache(args.expected_current, args.legacy_plan_json,
                                       apply=args.operation == 'cleanup-legacy-cache')

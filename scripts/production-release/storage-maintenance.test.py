@@ -128,7 +128,8 @@ class StorageSafetyTests(unittest.TestCase):
         self.assertIn('ISOLATION LEVEL SERIALIZABLE; START TRANSACTION', sql)
         self.assertIn('@candidate_count=12', sql)
         self.assertIn("@candidate_hash='" + 'a' * 64 + "'", sql)
-        self.assertIn('WHERE @deleted=12; COMMIT', sql)
+        self.assertIn('WHERE @deleted=12; SET @idv2_routine_audit_cleanup_scope=NULL; COMMIT', sql)
+        self.assertIn("SET @idv2_routine_audit_cleanup_scope='" + storage.APPROVED_SCOPE + "'", sql)
         self.assertIn('maintenance.audit_log.cleanup', sql)
         for prohibited in ('TRUNCATE', 'FOREIGN_KEY_CHECKS', 'OPTIMIZE', 'DROP TABLE'):
             self.assertNotIn(prohibited, sql)
@@ -142,6 +143,12 @@ class StorageSafetyTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as failure:
                 storage.read('diagnostic')
         self.assertNotIn('PRIVATE', str(failure.exception))
+
+    def test_retention_migration_cannot_expand_the_approved_exception(self):
+        sql = Path('apps/api/prisma-mysql/migrations/' + storage.RETENTION_MIGRATION + '/migration.sql').read_text()
+        self.assertEqual(storage.retention_migration(sql), sql)
+        with self.assertRaisesRegex(RuntimeError, 'approved digest'):
+            storage.retention_migration(sql.replace("= 'root'", "<> 'root'"))
 
     def test_readonly_mysql_wraps_query_without_embedding_password(self):
         with patch.object(storage, 'read', return_value='1') as command:

@@ -36,6 +36,7 @@ REUSE_CONTROL_FILES = frozenset({
     'scripts/production-release/reuse-images.py',
     'scripts/production-release/storage-maintenance.py',
     'scripts/production-release/storage-maintenance.test.py',
+    'scripts/production-release/audit-retention-mysql.test.py',
     'deploy/aws/cache-cleanup-recharge-names-20261002.json',
     'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
     'deploy/aws/cache-cleanup-storage-20261002.json',

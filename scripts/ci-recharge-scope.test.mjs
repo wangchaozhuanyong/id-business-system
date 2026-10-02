@@ -33,6 +33,23 @@ test('documentation and CI selectors do not start business or database checks', 
   ])
     assert.equal(checkMode([path], schema, schema), 'full');
 });
+test('approved audit trigger migration runs isolated MySQL guards without hiding other changes', () => {
+  const migration =
+    'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
+  assert.equal(
+    checkMode(
+      [migration, 'scripts/production-release/audit-retention-mysql.test.py'],
+      schema,
+      schema
+    ),
+    'audit-retention'
+  );
+  assert.equal(checkMode([migration, 'apps/api/src/auth/auth.service.ts'], schema, schema), 'full');
+  assert.equal(
+    checkMode(['apps/api/prisma-mysql/migrations/other/migration.sql'], schema, schema),
+    'full'
+  );
+});
 test('ordinary admin modules use frontend checks instead of backend and financial suites', () => {
   const paths = ['apps/admin/src/v2/features/orders/Orders.vue', 'docs/V2_TASKS.md'];
   assert.equal(checkMode(paths, schema, schema), 'admin');
