@@ -830,11 +830,14 @@ try {
     assert.equal(connectorStarts, 0);
 
     await page.getByRole('textbox', { name: '窗口名称' }).fill('申请gpt-验收');
-    await page.getByLabel('银行卡号').fill('5555555555554444');
-    await page.getByLabel('持卡人姓名').fill('Fixture Person');
-    await page.getByLabel('有效期').fill('1230');
-    await page.getByLabel('安全码').fill('123');
-    assert.equal(await page.getByLabel('有效期').inputValue(), '12/30');
+    await page.locator('.recharge-billing').getByLabel('银行卡号').fill('5555555555554444');
+    await page.locator('.recharge-entry-panel').getByLabel('持卡人姓名').fill('Fixture Person');
+    await page.locator('.recharge-entry-panel').getByLabel('有效期').fill('1230');
+    await page.locator('.recharge-entry-panel').getByLabel('安全码').fill('123');
+    assert.equal(
+      await page.locator('.recharge-entry-panel').getByLabel('有效期').inputValue(),
+      '12/30'
+    );
     assert.equal(
       (await billingEmail.locator('.recharge-account-email').innerText()).trim(),
       'fixture@example.test'
@@ -849,18 +852,24 @@ try {
     await page.locator('.recharge-error').filter({ hasText: '网页无法访问本机连接器' }).waitFor();
     assert.equal(apiStarts, 0);
     assert.equal(connectorStarts, 0);
-    assert.equal(await page.getByLabel('银行卡号').inputValue(), '5555555555554444');
+    assert.equal(
+      await page.locator('.recharge-billing').getByLabel('银行卡号').inputValue(),
+      '5555555555554444'
+    );
     blockHealth = false;
     await startButton.click();
 
     await page.getByRole('button', { name: '我已完成验证，继续原任务' }).waitFor();
     assert.equal(apiStarts, 1);
     assert.equal(connectorStarts, 1);
-    assert.equal(await page.getByLabel('银行卡号').inputValue(), '5555555555554444');
+    assert.equal(
+      await page.locator('.recharge-billing').getByLabel('银行卡号').inputValue(),
+      '5555555555554444'
+    );
     await page.getByRole('button', { name: '我已完成验证，继续原任务' }).click();
     await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
     assert.equal(connectorResumes, 1);
-    assert.equal(await page.getByLabel('银行卡号').inputValue(), '');
+    assert.equal(await page.locator('.recharge-billing').getByLabel('银行卡号').inputValue(), '');
     assert.equal(serverStartBody.id, connectorStartBody.id);
     assert.equal(connectorStartBody.authorizeSinglePayment, true);
 
@@ -870,21 +879,34 @@ try {
     assert.equal(await page.getByRole('radio', { name: '账号密码' }).isChecked(), true);
     assert.equal(await page.getByRole('radio', { name: '本机充值' }).isChecked(), false);
     assert.equal(await page.getByRole('radio', { name: '授权 JSON' }).isChecked(), false);
-    await page.getByLabel('ChatGPT 账号').fill('fixture@example.test');
-    await page.getByLabel('登录密码').fill('local-password');
-    await page.getByLabel('2FA 密钥').fill('JBSWY3DPEHPK3PXP');
+    await page
+      .locator('.recharge-entry-panel')
+      .getByLabel('ChatGPT 账号')
+      .fill('fixture@example.test');
+    await page.locator('.recharge-entry-panel').getByLabel('登录密码').fill('local-password');
+    await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').fill('JBSWY3DPEHPK3PXP');
     await page.getByRole('button', { name: '打开比特浏览器并登录' }).click();
     await page
       .locator('.recharge-status')
       .filter({ hasText: '账号已登录，窗口已就绪' })
       .waitFor({ timeout: 20000 });
     assert.equal(loginCodeSubmissions, 1);
-    assert.equal(await page.getByLabel('2FA 密钥').inputValue(), '');
-    assert.equal(await page.getByLabel('登录密码').inputValue(), '');
+    assert.equal(
+      await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').inputValue(),
+      ''
+    );
+    assert.equal(
+      await page.locator('.recharge-entry-panel').getByLabel('登录密码').inputValue(),
+      ''
+    );
     assert.equal(apiStarts, 1);
 
-    await page.getByLabel('2FA 方式').getByText('已保存账号', { exact: true }).click();
-    await page.getByLabel('登录密码').fill('local-password');
+    await page
+      .locator('.recharge-entry-panel')
+      .getByLabel('2FA 方式')
+      .getByText('已保存账号', { exact: true })
+      .click();
+    await page.locator('.recharge-entry-panel').getByLabel('登录密码').fill('local-password');
     await page.getByRole('combobox', { name: '选择已保存的 2FA 账号' }).click();
     await page
       .locator('.el-select-dropdown:visible')
