@@ -63,7 +63,11 @@ function fixture() {
     audit as never,
     accounts as never,
     repository as never,
-    new BankRechargeFeesService({} as never, {} as never)
+    new BankRechargeFeesService({} as never, {} as never),
+    {
+      decrypt: (value: string | null) => value,
+      encrypt: (value: string) => `encrypted:${value}`
+    } as never
   );
   const job = {
     id: 'job-1',
@@ -77,6 +81,27 @@ function fixture() {
 }
 
 describe('银充付款入单', () => {
+  it('开通核验成功时仅在订单保存加密的首位与末八位摘要', async () => {
+    const { service, tx, job, repository, audit } = fixture();
+    repository.findCardsByTail.mockResolvedValue([
+      { id: 'used-card', label: '验收卡', last4: '1111', numberEncrypted: '4111111111111111' }
+    ] as never);
+    await service.recordVerifiedSuccess(tx as never, { ...job, cardId: 'used-card' } as never, {
+      ...verified,
+      card_last4: '1111'
+    });
+    expect(repository.createOrder).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cardId: 'used-card',
+          cardNumberSummaryEncrypted: 'encrypted:4*******11111111',
+          cardDeletedAt: null
+        })
+      })
+    );
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('4111111111111111');
+  });
   it('1000 的 2.5% 客户手续费为 25，代付币种精度受控', () => {
     expect(
       bankRechargeFee(

@@ -17,6 +17,7 @@ import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
+import { RechargeNameService } from './recharge-name.service';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
@@ -44,7 +45,8 @@ export class RechargeLocalService {
     private readonly audit: V2TransactionalAuditService,
     @Optional() private readonly bankAccounts?: BankRechargeAccountService,
     @Optional() private readonly encryption?: FieldEncryptionService,
-    @Optional() private readonly proxies?: RechargeProxyService
+    @Optional() private readonly proxies?: RechargeProxyService,
+    @Optional() private readonly names?: RechargeNameService
   ) {}
 
   async start(value: unknown, operator: AuthenticatedUser) {
@@ -95,7 +97,13 @@ export class RechargeLocalService {
         ) {
           throw new ConflictException('所选 ChatGPT 账号与本次登录邮箱不一致');
         }
+        const card =
+          input.cardId && this.names
+            ? await this.names.localCard(tx, input.cardId, input.billingName!, input.lockedCurrency)
+            : null;
         const job = await this.repository.createJob(tx, {
+          cardId: card?.id ?? null,
+          billingNameEncrypted: card ? this.encryption?.encrypt(input.billingName) : null,
           id: input.id,
           ownerId: operator.id,
           proxyId: selectedProxy?.id ?? null,

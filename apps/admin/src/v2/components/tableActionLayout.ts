@@ -3,6 +3,7 @@ export const V2_TABLE_ACTION_COLUMN_WIDTH = {
   single: 126,
   double: 180,
   triple: 260,
+  quadruple: 340,
   wide: 272
 } as const;
 

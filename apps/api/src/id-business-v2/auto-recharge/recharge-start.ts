@@ -14,6 +14,7 @@ import {
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import type { RechargeNameService } from './recharge-name.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
@@ -34,6 +35,7 @@ export interface RechargeStartDependencies {
   audit: V2TransactionalAuditService;
   bankAccounts?: BankRechargeAccountService;
   bankCards?: BankRechargeCardService;
+  names?: RechargeNameService;
   settings?: RechargeSettingsService;
   proxies?: RechargeProxyService;
   totpAccounts?: IdBusinessV2TotpAccountService;
@@ -159,11 +161,22 @@ export async function startRechargeJob(
               input.proxyCountryCode!
             )
           : null;
-      if (input.action === 'server' && input.cardId) {
+      const resolvedCard =
+        input.action === 'server' && deps.names
+          ? await deps.names.prepareCard(
+              tx,
+              { ...input.details!, currencyCode: input.lockedCurrency! },
+              operator
+            )
+          : null;
+      if (resolvedCard && input.cardId && resolvedCard.id !== input.cardId)
+        throw new ConflictException('所选银行卡与输入卡号不一致');
+      const paymentCardId = resolvedCard?.id ?? input.cardId;
+      if (input.action === 'server' && paymentCardId) {
         if (!deps.bankCards) throw new ServiceUnavailableException('银行卡服务不可用');
         await deps.bankCards.assertRechargeCard(
           tx,
-          input.cardId,
+          paymentCardId,
           input.details!.number,
           input.lockedCurrency!,
           input.details!.name,
@@ -206,14 +219,14 @@ export async function startRechargeJob(
         id: input.id,
         ownerId: operator.id,
         proxyId: selectedProxy?.id ?? null,
-        cardId: input.cardId ?? null,
+        cardId: paymentCardId ?? null,
         chatgptAccountId: input.chatgptAccountId ?? null,
         expectedEmailEncrypted:
           input.action === 'server'
             ? deps.bankAccounts?.encryptExpectedEmail(input.details!.email)
             : null,
         billingNameEncrypted:
-          input.action === 'server' && input.cardId
+          input.action === 'server' && paymentCardId
             ? deps.bankCards?.encryptBillingName(input.details!.name)
             : null,
         plan: input.plan,

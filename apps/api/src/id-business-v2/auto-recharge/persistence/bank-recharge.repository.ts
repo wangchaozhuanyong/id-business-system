@@ -79,6 +79,25 @@ export class BankRechargeRepository {
     });
   }
 
+  openingCardsForAccounts(ids: string[]) {
+    return this.prisma.idBusinessV2BankRechargeOrder.findMany({
+      where: {
+        accountId: { in: ids },
+        OR: [{ verifiedAt: { not: null } }, { status: { in: ['completed', 'refunded'] } }]
+      },
+      select: {
+        accountId: true,
+        cardId: true,
+        cardLabelSnapshot: true,
+        cardNumberSummaryEncrypted: true,
+        cardDeletedAt: true,
+        cardLast4: true,
+        card: { select: { id: true, label: true, last4: true, numberEncrypted: true } }
+      },
+      orderBy: [{ openedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }]
+    });
+  }
+
   subscriptionsForAccounts(ids: string[]) {
     return this.prisma.idBusinessV2BankRechargeSubscription.findMany({
       where: { accountId: { in: ids } },

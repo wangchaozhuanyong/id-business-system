@@ -69,7 +69,7 @@
 ### 2.1 表格操作列
 
 - 桌面表格操作列统一使用 `V2TableActionColumn`，由 table schema 的 `layout`
-  选择 `icon | single | double | triple | wide` 宽度档位；页面只允许绑定对应的
+  选择 `icon | single | double | triple | quadruple | wide` 宽度档位；页面只允许绑定对应的
   `schema.columns[index]`，禁止自行维护宽度或固定位置。
 - manifest 只引用当前功能的 table schema，不得复制列契约或宽度数值。
 - 操作按钮不得被裁切、遮挡、挤出单元格或静默隐藏；桌面端保持单行，移动卡片允许自然换行。

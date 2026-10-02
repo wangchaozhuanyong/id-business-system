@@ -103,7 +103,13 @@
           <V2TableColumn :definition="v2TableSchemas.bankRechargeCards.main.columns[8]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.bankRechargeCards.main.columns[9]">
+          <V2TableColumn
+            :definition="v2TableSchemas.bankRechargeCards.main.columns[9]"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{ row.billingName || '未设定' }}</template>
+          </V2TableColumn>
+          <V2TableActionColumn :definition="v2TableSchemas.bankRechargeCards.main.columns[10]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="detailId = row.id">详细</AppButton>
               <el-dropdown trigger="click">
@@ -147,48 +153,15 @@
       :confirm-loading="saving"
       @confirm="save"
     >
-      <el-form
+      <V2BankCardFields
         ref="formRef"
-        :model="form"
+        :form="form"
         :rules="rules"
-        label-position="left"
-        label-width="110px"
-        require-asterisk-position="right"
-        autocomplete="off"
-      >
-        <el-form-item label="银行卡名称" prop="label"
-          ><el-input v-model="form.label" maxlength="80" placeholder="选填，默认使用卡尾号"
-        /></el-form-item>
-        <el-form-item label="银行卡卡号" prop="number" :required="!editing">
-          <el-input
-            v-model="form.number"
-            type="text"
-            inputmode="numeric"
-            maxlength="25"
-            autocomplete="off"
-            :placeholder="editing ? `当前尾号 ${editing.last4}；留空保留` : '输入完整卡号'"
-          />
-        </el-form-item>
-        <el-form-item label="有效期" prop="expiry" :required="!editing">
-          <el-input v-model="form.expiry" maxlength="5" placeholder="MM/YY" />
-        </el-form-item>
-        <V2BankCardCurrencySelect
-          v-model="form.currencyCode"
-          prop="currencyCode"
-          select-label="银行卡付款币种"
-          :currencies="activeCurrencies"
-          :loading="currencyQuery.phase.value === 'initial-loading'"
-        />
-        <el-form-item v-if="editing" label="状态"
-          ><el-switch v-model="form.active" active-text="启用" inactive-text="停用"
-        /></el-form-item>
-        <el-form-item label="备注1"
-          ><el-input v-model="form.remark1" maxlength="500"
-        /></el-form-item>
-        <el-form-item label="备注2"
-          ><el-input v-model="form.remark2" maxlength="500"
-        /></el-form-item>
-      </el-form>
+        :editing="editing"
+        :active-currencies="activeCurrencies"
+        :loading="currencyQuery.phase.value === 'initial-loading'"
+        @update:form="Object.assign(form, $event)"
+      />
       <p v-if="currencyQuery.error.value" class="bank-recharge-error" role="alert">
         {{ getApiErrorMessage(currencyQuery.error.value) }}
         <AppButton size="small" @click="currencyQuery.refresh">重试</AppButton>
@@ -255,7 +228,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { FormInstance, FormRules } from 'element-plus';
+import type { FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -271,10 +244,10 @@ import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query'
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
-import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type ManagedBankRechargeCard } from './bank-recharge-api';
 import { parseBankCardImport } from './bank-card-import';
+import V2BankCardFields from './V2BankCardFields.vue';
 import V2BankCardDetailDrawer from './V2BankCardDetailDrawer.vue';
 import V2BankCardCurrencySelect from './V2BankCardCurrencySelect.vue';
 import '@/v2/styles/records.css';
@@ -322,13 +295,14 @@ const activeCurrencies = computed(() =>
 const cards = computed(() => query.data.value?.items ?? []);
 const formOpen = ref(false);
 const editing = ref<ManagedBankRechargeCard | null>(null);
-const formRef = ref<FormInstance>();
+const formRef = ref<InstanceType<typeof V2BankCardFields>>();
 const {
   form,
   open: openDraft,
   beginSave: beginDraftSave
 } = useV2FormDraft('bank-cards-editor', () => ({
   label: '',
+  billingName: '',
   number: '',
   expiry: '',
   currencyCode: '',
@@ -375,6 +349,7 @@ function openCreate() {
   editing.value = null;
   openDraft('create', {
     label: '',
+    billingName: '',
     number: '',
     expiry: '',
     currencyCode: activeCurrencies.value[0]?.code ?? '',
@@ -388,6 +363,7 @@ function openEdit(card: ManagedBankRechargeCard) {
   editing.value = card;
   openDraft(card.id, {
     label: card.label,
+    billingName: card.billingName ?? '',
     number: '',
     expiry: card.expiry ?? '',
     currencyCode: card.currencyCode,
@@ -398,7 +374,7 @@ function openEdit(card: ManagedBankRechargeCard) {
   formOpen.value = true;
 }
 async function save() {
-  if (saving.value || !(await validateV2Form(formRef.value))) return;
+  if (saving.value || !(await formRef.value?.validate())) return;
   saving.value = true;
   const completeDraft = beginDraftSave();
   formError.value = '';
@@ -406,6 +382,7 @@ async function save() {
     if (editing.value) {
       await bankRechargeApi.updateManagedCard(editing.value.id, {
         label: form.label.trim() || editing.value.label,
+        ...(form.billingName.trim() ? { billingName: form.billingName.trim() } : {}),
         ...(form.number ? { number: form.number } : {}),
         ...(form.expiry ? { expiry: form.expiry } : {}),
         currencyCode: form.currencyCode,
@@ -416,6 +393,7 @@ async function save() {
     } else {
       await bankRechargeApi.createManagedCard({
         label: form.label.trim(),
+        billingName: form.billingName.trim(),
         number: form.number,
         expiry: form.expiry,
         currencyCode: form.currencyCode,

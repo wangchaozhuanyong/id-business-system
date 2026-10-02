@@ -1,5 +1,10 @@
 import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { Module } from '@nestjs/common';
+import { RechargeNameService } from './recharge-name.service';
+import { RechargeNameRepository } from './persistence/recharge-name.repository';
+import { RechargeNameController } from './recharge-name.controller';
+import { RechargeCardRemovalService } from './recharge-card-removal.service';
+import { RechargeCardRemovalRepository } from './persistence/recharge-card-removal.repository';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
@@ -26,8 +31,17 @@ import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 @Module({
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
-  controllers: [RechargeController, BankRechargeController, RechargeProxyController],
+  controllers: [
+    RechargeController,
+    BankRechargeController,
+    RechargeProxyController,
+    RechargeNameController
+  ],
   providers: [
+    RechargeNameService,
+    RechargeNameRepository,
+    RechargeCardRemovalService,
+    RechargeCardRemovalRepository,
     BankRechargeFeesService,
     FieldEncryptionService,
     BankRechargeAccountService,

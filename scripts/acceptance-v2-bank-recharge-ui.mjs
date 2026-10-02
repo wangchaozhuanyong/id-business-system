@@ -718,7 +718,7 @@ try {
           pageOverflow: document.documentElement.scrollWidth - window.innerWidth
         };
       });
-    assert.equal(actionLayout.buttons, 3, `${width}px ChatGPT 操作按钮数量不符`);
+    assert.equal(actionLayout.buttons, 4, `${width}px ChatGPT 操作按钮数量不符`);
     assert.ok(actionLayout.visible, `${width}px ChatGPT 操作按钮被裁切`);
     assert.ok(actionLayout.pageOverflow <= 1, `${width}px ChatGPT 页面横向溢出`);
     if (width === 2307 || width === 390) {

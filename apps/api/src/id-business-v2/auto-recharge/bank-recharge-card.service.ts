@@ -78,6 +78,7 @@ export class BankRechargeCardService {
         currencyCode: card.currencyCode,
         status: card.active ? 'active' : 'disabled',
         hasNumber: Boolean(card.numberEncrypted),
+        billingName: this.encryption.decrypt(card.billingNameEncrypted),
         remark1: card.remark1,
         remark2: card.remark2,
         accountCount: counts.get(card.id) ?? 0,
@@ -140,6 +141,10 @@ export class BankRechargeCardService {
     const card = await this.repository.findByNumberHash(this.encryption.hash(number)!);
     if (card && !card.active) throw new ConflictException('该银行卡已停用，不能用于充值');
     return { available: true };
+  }
+
+  billingIdentity(tx: V2CommandTransaction, id: string) {
+    return this.repository.findInTransaction(tx, id);
   }
 
   encryptBillingName(value: string) {
@@ -232,6 +237,7 @@ export class BankRechargeCardService {
       currency: { connect: { code: card.currencyCode } },
       numberEncrypted: this.encryption.encrypt(card.number),
       numberHash: this.encryption.hash(card.number),
+      billingNameEncrypted: card.billingName ? this.encryption.encrypt(card.billingName) : null,
       expiry: card.expiry,
       remark1: card.remark1 || null,
       remark2: card.remark2 || null,
@@ -305,9 +311,16 @@ export class BankRechargeCardService {
       !Object.keys(input).length ||
       Object.keys(input).some(
         (key) =>
-          !['number', 'expiry', 'label', 'currencyCode', 'remark1', 'remark2', 'status'].includes(
-            key
-          )
+          ![
+            'number',
+            'expiry',
+            'label',
+            'currencyCode',
+            'remark1',
+            'remark2',
+            'status',
+            'billingName'
+          ].includes(key)
       )
     )
       throw new BadRequestException('银行卡资料包含不支持的字段；安全码不能保存');
@@ -344,6 +357,17 @@ export class BankRechargeCardService {
         if ((numberChanged || currencyChanged) && (await this.repository.hasOrders(tx, id))) {
           throw new ConflictException('银行卡已有订单，不能更换卡号或币种；请新增银行卡');
         }
+        const billingName =
+          input.billingName === undefined || input.billingName === ''
+            ? undefined
+            : bankRechargeText(input.billingName, '持卡人姓名', 120);
+        if (
+          billingName &&
+          previous.billingNameEncrypted &&
+          this.encryption.decrypt(previous.billingNameEncrypted) !== billingName &&
+          (await this.repository.hasOrders(tx, id))
+        )
+          throw new ConflictException('已有付款记录的银行卡不能更换绑定姓名');
         if (currencyChanged) await this.accounts.requireCurrency(tx, currencyCode!);
         const item = await this.repository.update(tx, id, {
           ...(numberChanged
@@ -352,6 +376,10 @@ export class BankRechargeCardService {
                 numberHash: this.encryption.hash(number),
                 last4: number!.slice(-4)
               }
+            : {}),
+          ...(billingName ? { billingNameEncrypted: this.encryption.encrypt(billingName) } : {}),
+          ...(numberChanged && !billingName
+            ? { billingNameEncrypted: null, billingAddressId: null }
             : {}),
           ...(expiry ? { expiry } : {}),
           ...(label ? { label } : {}),

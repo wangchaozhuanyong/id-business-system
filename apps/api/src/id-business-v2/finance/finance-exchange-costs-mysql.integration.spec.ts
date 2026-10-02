@@ -82,7 +82,14 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       audit,
       new FieldEncryptionService({ get: () => 'isolated-fx-test-key' } as never)
     );
-    orders = new BankRechargeOrderService(tx, audit, bankAccounts, bank, fees);
+    orders = new BankRechargeOrderService(
+      tx,
+      audit,
+      bankAccounts,
+      bank,
+      fees,
+      new FieldEncryptionService({ get: () => 'isolated-fx-test-key' } as never)
+    );
     finance = new BankRechargeFinanceService(bank, tx, audit, posting, fees);
     corrections = new BankRechargeCorrectionService(bank, tx, audit, posting, orders, finance);
     for (const currency of V2_FINANCE_CURRENCIES) {

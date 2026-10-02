@@ -50,6 +50,8 @@ import {
 import { mergeRechargeCallbackResult } from './recharge-bank-callback';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
+import { RechargeNameService } from './recharge-name.service';
+import { finalizeRechargeCardBilling } from './recharge-card-billing';
 import { startRechargeJob } from './recharge-start';
 import { startServerRecheck } from './recharge-server-recheck';
 import { listRechargeJobs } from './recharge-job-list';
@@ -66,7 +68,8 @@ export class RechargeService {
     @Optional() private readonly settings?: RechargeSettingsService,
     @Optional() private readonly bankCards?: BankRechargeCardService,
     @Optional() private readonly proxies?: RechargeProxyService,
-    @Optional() private readonly totpAccounts?: IdBusinessV2TotpAccountService
+    @Optional() private readonly totpAccounts?: IdBusinessV2TotpAccountService,
+    @Optional() private readonly names?: RechargeNameService
   ) {}
 
   async listAddresses(value: unknown, operator: AuthenticatedUser) {
@@ -169,6 +172,7 @@ export class RechargeService {
       audit: this.audit,
       bankAccounts: this.bankAccounts,
       bankCards: this.bankCards,
+      names: this.names,
       totpAccounts: this.totpAccounts,
       settings: this.settings,
       proxies: this.proxies,
@@ -557,24 +561,7 @@ export class RechargeService {
           });
           await completeCancellation(tx, job, report, this.repository, this.audit);
           const verifiedOrder = await recordVerifiedBankRecharge(tx, job, report, this.bankOrders);
-          if (
-            verifiedOrder?.cardId === job.cardId &&
-            job.cardId &&
-            job.billingNameEncrypted &&
-            this.bankCards
-          ) {
-            const addressId = object(job.result).addressId;
-            if (typeof addressId === 'string') {
-              await this.bankCards.bindVerifiedBilling(
-                tx,
-                job.cardId,
-                job.billingNameEncrypted,
-                addressId,
-                job.ownerId,
-                job.id
-              );
-            }
-          }
+          await finalizeRechargeCardBilling(tx, job, verifiedOrder, this.bankCards, this.names);
           state = 'finished';
           nonceHash = null;
         }

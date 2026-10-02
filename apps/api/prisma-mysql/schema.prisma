@@ -2506,7 +2506,7 @@ model IdBusinessV2RechargeJob {
 
   chatgptAccount IdBusinessV2ChatgptAccount? @relation(fields: [chatgptAccountId], references: [id], onDelete: Restrict)
   proxy IdBusinessV2RechargeProxy? @relation(fields: [proxyId], references: [id], onDelete: Restrict)
-  card IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  card IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
   bankRechargeOrder IdBusinessV2BankRechargeOrder?
   addressUse IdBusinessV2RechargeAddressUse?
 
@@ -2665,6 +2665,9 @@ model IdBusinessV2BankRechargeOrder {
   accountId              String?                            @map("account_id") @db.Char(36)
   customerId             String?                            @map("customer_id") @db.Char(36)
   cardId                 String?                            @map("card_id") @db.Char(36)
+  cardLabelSnapshot      String?                            @map("card_label_snapshot") @db.VarChar(80)
+  cardNumberSummaryEncrypted String?                        @map("card_number_summary_encrypted") @db.Text
+  cardDeletedAt          DateTime?                          @map("card_deleted_at") @db.DateTime(6)
   cardLast4              String?                            @map("card_last4") @db.Char(4)
   plan                   String                             @db.VarChar(16)
   chargeAmount           Decimal                            @map("charge_amount") @db.Decimal(18, 4)
@@ -2710,7 +2713,7 @@ model IdBusinessV2BankRechargeOrder {
   rechargeJob        IdBusinessV2RechargeJob? @relation(fields: [rechargeJobId], references: [id], onDelete: Restrict)
   account            IdBusinessV2ChatgptAccount? @relation(fields: [accountId], references: [id], onDelete: Restrict)
   customer           IdBusinessV2Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  card               IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  card               IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: SetNull)
   renewedFrom        IdBusinessV2BankRechargeOrder? @relation("BankRechargeRenewalChain", fields: [renewedFromOrderId], references: [id], onDelete: Restrict)
   renewedBy          IdBusinessV2BankRechargeOrder? @relation("BankRechargeRenewalChain")
   activeSubscription IdBusinessV2BankRechargeSubscription?
@@ -2846,4 +2849,33 @@ model IdBusinessV2RechargeProxy {
 
   @@index([countryCode, active, kind])
   @@map("id_business_v2_recharge_proxies")
+}
+
+// 姓名库只保存管理员录入资料，按录入顺序循环匹配。
+model IdBusinessV2RechargeName {
+  id String @id @default(uuid()) @db.Char(36)
+  sequence Int @unique @default(autoincrement())
+  nameEncrypted String @map("name_encrypted") @db.Text
+  nameHash String @unique @map("name_hash") @db.Char(64)
+  active Boolean @default(true)
+  matchCount Int @default(0) @map("match_count")
+  lastMatchedAt DateTime? @map("last_matched_at") @db.DateTime(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+  bindings IdBusinessV2RechargeCardName[]
+  @@index([active, matchCount, sequence], map: "id_business_v2_recharge_names_rotation_idx")
+  @@map("id_business_v2_recharge_names")
+}
+
+// 完整卡号的盲索引对应稳定的姓名；不保存完整卡号或安全码。
+model IdBusinessV2RechargeCardName {
+  numberHash String @id @map("number_hash") @db.Char(64)
+  nameId String? @map("name_id") @db.Char(36)
+  nameEncrypted String @map("name_encrypted") @db.Text
+  confirmed Boolean @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+  name IdBusinessV2RechargeName? @relation(fields: [nameId], references: [id], onDelete: SetNull, map: "recharge_card_names_name_id_fkey")
+  @@index([nameId], map: "recharge_card_names_name_id_idx")
+  @@map("id_business_v2_recharge_card_names")
 }

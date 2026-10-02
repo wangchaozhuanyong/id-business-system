@@ -30,7 +30,7 @@ const validPresets = new Set([
   'longText',
   'inlineContent'
 ]);
-const validActionLayouts = new Set(['icon', 'single', 'double', 'triple', 'wide']);
+const validActionLayouts = new Set(['icon', 'single', 'double', 'triple', 'quadruple', 'wide']);
 const positionalKeyPattern = /^(?:text|identifier|index|numeric|date|status|control)-\d+$/;
 const issues = [];
 
@@ -477,6 +477,7 @@ function validateSharedImplementation() {
     single: 126,
     double: 180,
     triple: 260,
+    quadruple: 340,
     wide: 272
   })) {
     if (

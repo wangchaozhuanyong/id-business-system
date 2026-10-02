@@ -26,6 +26,8 @@ const mock = vi.hoisted(() => ({
   proxyCountriesQuery: {} as Record<string, unknown>,
   proxiesQuery: {} as Record<string, unknown>,
   checkCardAvailability: vi.fn(),
+  matchCardName: vi.fn(),
+  preparePaymentCard: vi.fn(),
   managedCardDetail: vi.fn(),
   accountIdentity: vi.fn(),
   queryIndex: 0,
@@ -123,6 +125,8 @@ vi.mock('@/api/client', () => ({ getApiErrorMessage: (cause: Error) => cause.mes
 vi.mock('./bank-recharge-api', () => ({
   bankRechargeApi: {
     checkCardAvailability: mock.checkCardAvailability,
+    matchCardName: mock.matchCardName,
+    preparePaymentCard: mock.preparePaymentCard,
     listCards: vi.fn(),
     listAccounts: vi.fn(),
     listCurrencies: vi.fn(),
@@ -282,6 +286,13 @@ beforeEach(() => {
     ...queryResult(ref({ items: [], total: 0 })),
     ensureFresh: vi.fn().mockResolvedValue(undefined)
   };
+  mock.preparePaymentCard.mockResolvedValue({ cardId: '55555555-5555-4555-8555-555555555555' });
+  mock.matchCardName.mockResolvedValue({
+    name: 'Test User',
+    confirmed: false,
+    cardId: null,
+    billingAddressId: null
+  });
   mock.checkCardAvailability.mockResolvedValue({ available: true });
   mock.managedCardDetail.mockReset().mockResolvedValue({
     id: 'card-a',
@@ -499,6 +510,12 @@ describe('充值地址自动选择', () => {
   });
 
   it('银行卡核实地址不可用时保持空选择，不能静默换成其他地址', async () => {
+    mock.matchCardName.mockResolvedValue({
+      name: 'Test User',
+      confirmed: true,
+      cardId: 'card-a',
+      billingAddressId: address.id
+    });
     addresses.value.items = [{ ...address, status: 'disabled' }, secondAddress];
     await flow.selectSavedCard('card-a');
     expect(flow.selectedAddressId.value).toBe('');

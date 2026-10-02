@@ -6,6 +6,7 @@ import {
 } from './bank-recharge-validation';
 
 export type ManagedCardInput = {
+  billingName?: string;
   number: string;
   last4: string;
   expiry: string;
@@ -44,7 +45,16 @@ export function parseManagedCard(value: unknown, currency?: string): ManagedCard
   const input = bankRechargeObject(value);
   if (
     Object.keys(input).some(
-      (key) => !['number', 'expiry', 'label', 'currencyCode', 'remark1', 'remark2'].includes(key)
+      (key) =>
+        ![
+          'number',
+          'expiry',
+          'label',
+          'currencyCode',
+          'remark1',
+          'remark2',
+          'billingName'
+        ].includes(key)
     )
   )
     throw new BadRequestException('银行卡资料包含不支持的字段；安全码不能导入或保存');
@@ -55,6 +65,7 @@ export function parseManagedCard(value: unknown, currency?: string): ManagedCard
     throw new BadRequestException('不能把安全码填入备注；安全码仅在单笔充值时临时输入');
   }
   return {
+    billingName: bankRechargeText(input.billingName, '持卡人姓名', 120, false),
     number,
     last4: number.slice(-4),
     expiry: cardExpiry(input.expiry),

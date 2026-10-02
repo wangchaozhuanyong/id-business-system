@@ -50,6 +50,8 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     'lockedCurrency',
     'maxAmount',
     'authorizeSinglePayment',
+    'cardId',
+    'billingName',
     'chatgptAccountId',
     'useSavedCredentials',
     'expectedEmail',
@@ -67,6 +69,15 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   ) {
     throw new BadRequestException('请选择套餐、未使用地址并明确授权单次付款');
   }
+  if (
+    (input.cardId !== undefined || input.billingName !== undefined) &&
+    (typeof input.cardId !== 'string' ||
+      !uuidPattern.test(input.cardId) ||
+      typeof input.billingName !== 'string' ||
+      !input.billingName.trim() ||
+      input.billingName.length > 120)
+  )
+    throw new BadRequestException('银行卡或持卡人姓名格式无效');
   const windowName = String(input.windowName ?? '').trim();
   if (!windowName || windowName.length > 80 || hasControlCharacter(windowName)) {
     throw new BadRequestException('比特浏览器窗口名称格式无效');
@@ -108,6 +119,8 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     throw new BadRequestException('请选择有效的代理国家和代理 IP');
   }
   return {
+    cardId: input.cardId as string | undefined,
+    billingName: input.billingName as string | undefined,
     id: input.id,
     plan: input.plan,
     addressId: input.addressId,

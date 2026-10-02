@@ -3,7 +3,25 @@ import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 
 const base = '/id-business-v2/bank-recharge';
 
+export interface OpeningCardDeletion {
+  cardId: string;
+  orderId: string;
+  label: string;
+  last4: string;
+  numberSummary: string | null;
+  linkedAccountCount: number;
+  orderCount: number;
+  expectedUpdatedAt: string;
+}
+
 export interface BankChatgptAccount {
+  openingCard?: {
+    id: string | null;
+    label: string | null;
+    last4: string | null;
+    numberSummary: string | null;
+    deleted: boolean;
+  } | null;
   id: string;
   emailMasked: string;
   status: 'active' | 'disabled';
@@ -37,6 +55,7 @@ export interface BankRechargeCard {
 }
 
 export interface ManagedBankRechargeCard {
+  billingName: string | null;
   id: string;
   label: string;
   last4: string;
@@ -284,6 +303,43 @@ export const bankRechargeApi = {
       ),
       'auto-recharge'
     );
+  },
+  openingCardDeletion(id: string) {
+    return request<OpeningCardDeletion>(http.get(`${base}/accounts/${id}/opening-card-deletion`));
+  },
+  deleteOpeningCard(id: string, input: OpeningCardDeletion) {
+    return withV2QueryInvalidation(
+      request<{ deleted: true }>(
+        http.delete(`${base}/accounts/${id}/opening-card`, {
+          data: {
+            cardId: input.cardId,
+            orderId: input.orderId,
+            expectedUpdatedAt: input.expectedUpdatedAt,
+            linkedAccountCount: input.linkedAccountCount,
+            orderCount: input.orderCount
+          }
+        })
+      ),
+      'auto-recharge'
+    );
+  },
+  preparePaymentCard(input: {
+    number: string;
+    expiry: string;
+    name: string;
+    currencyCode: string;
+  }) {
+    return request<{ cardId: string }>(
+      http.post('/id-business-v2/auto-recharge/names/payment-card', input)
+    );
+  },
+  matchCardName(number: string) {
+    return request<{
+      name: string;
+      confirmed: boolean;
+      cardId: string | null;
+      billingAddressId: string | null;
+    }>(http.post('/id-business-v2/auto-recharge/names/match', { number }));
   },
   checkCardAvailability(number: string) {
     return request<{ available: true }>(
