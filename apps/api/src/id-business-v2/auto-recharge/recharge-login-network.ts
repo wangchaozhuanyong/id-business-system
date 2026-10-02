@@ -110,7 +110,8 @@ export async function recordVerifiedLoginNetwork(
       ? 'id_business_v2.auto_recharge.login_network.update'
       : 'id_business_v2.auto_recharge.login_network.create',
     objectType: 'recharge_login_network',
-    objectId: emailHash,
+    // 审计对象编号仅容纳任务 UUID；完整邮箱哈希保留在登录出口表。
+    objectId: input.jobId,
     afterData: { countryCode: input.countryCode, jobId: input.jobId },
     remark: previous ? '记录本次已核验的代理出口' : '锁定账号首次登录代理国家和出口'
   });
