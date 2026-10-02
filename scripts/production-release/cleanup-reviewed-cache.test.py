@@ -222,5 +222,18 @@ class RechargeNamesCacheTests(ReviewedCacheTests):
         self.assertEqual(self.removals(), [])
 
 
+class RechargeExecutionCacheTests(RechargeNamesCacheTests):
+    plan_name = 'cache-cleanup-recharge-execution-20261002.json'
+
+    def test_release_candidate_is_blocked_even_if_not_in_live_manifests(self):
+        self.plan['protectedCandidateImageIds'][0] = self.plan['items'][0]['imageId']
+        self.digest = hashlib.sha256(json.dumps(self.plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        with patch.dict(cleanup.REVIEWED_PLANS, {self.digest: ('c59861de03df8b71d5dc3442951d82ee859d4d97-36965061061-1-',)}), \
+                patch.dict(cleanup.REVIEWED_PLAN_COUNTS, {self.digest: 5}):
+            with self.assertRaisesRegex(RuntimeError, 'protected release'):
+                self.invoke(True)
+        self.assertEqual(self.removals(), [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -50,3 +50,5 @@ gh workflow run production-release.yml --ref main \
 发布后仍要核对 GitHub Actions 运行结果、服务器 `release-manifest.json` 的 SHA、公开健康接口和实际登录后的页面操作。工作流的健康检查不能替代人工浏览器验收。
 
 生产基线到目标 main 的差异满足现有管理端范围规则时，仅构建、推送和更新 admin，沿用当前其他服务的镜像及来源记录；服务器仍验证备份、财务只读巡检和公共健康，且核验未更新服务完全保持原状态。此范围不得包含 migration、API、共享包、依赖或认证改动；否则使用原完整发布流程。纯管理端发布不启动迁移容器。
+
+服务器充值执行链容量恢复使用 `cleanup_plan=recharge_execution_20261002`，精确清单和恢复记录见 `docs/RECHARGE_EXECUTION_CACHE_RECOVERY_20261002.md`。先执行只读 `verify_cache`；只有用户单独批准该清单后才能执行 `cleanup_cache`。绑定生产 `63e7c3b9...`、上一版 `a9530728...` 和五个 `c59861de...-36965061061-1` 历史本机引用，保留当前／上一版、候选和全部远端镜像。恢复发布指定 `reuse_image_run=36993584579`，不重复构建已验证且应用源码未改变的镜像。
