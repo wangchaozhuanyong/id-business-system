@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { recordServerLoginNetwork } from './recharge-bank-callback';
@@ -12,7 +13,7 @@ function setup() {
   const encryption = {
     encrypt: vi.fn((value: string) => `encrypted:${value}`),
     decrypt: vi.fn((value: string) => value.replace(/^encrypted:/, '')),
-    hash: vi.fn((value: string) => `hash:${value}`)
+    hash: vi.fn((value: string) => createHash('sha256').update(value).digest('hex'))
   };
   const service = new BankRechargeAccountService(
     repository as never,
@@ -20,7 +21,7 @@ function setup() {
     audit as never,
     encryption as never
   );
-  return { service, repository, audit };
+  return { service, repository, audit, encryption };
 }
 
 const login = {
@@ -35,13 +36,13 @@ const login = {
 
 describe('服务器代理首次登录国家锁定', () => {
   it('首次核验后加密记录出口，后续仅更新最近出口，并拒绝跨国家', async () => {
-    const { service, repository, audit } = setup();
+    const { service, repository, audit, encryption } = setup();
     await service.recordVerifiedLoginNetwork({} as never, login);
     expect(repository.createLoginNetwork).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         data: expect.objectContaining({
-          emailHash: 'hash:test@example.com',
+          emailHash: encryption.hash('test@example.com'),
           firstIpEncrypted: 'encrypted:8.8.8.8',
           firstCountryCode: 'US'
         })
@@ -81,6 +82,38 @@ describe('服务器代理首次登录国家锁定', () => {
       })
     ).rejects.toThrow('已限制登录');
   });
+
+  it.each(['create', 'update'] as const)(
+    '%s 审计使用本次任务编号，不把 64 位邮箱哈希写入 36 位对象编号',
+    async (operation) => {
+      const { service, repository, audit, encryption } = setup();
+      const emailHash = encryption.hash('test@example.com');
+      expect(emailHash).toHaveLength(64);
+      if (operation === 'update') {
+        repository.loginNetwork.mockResolvedValue({
+          firstCountryCode: 'US',
+          officialAccountKey: login.accountKey,
+          lastJobId: '22222222-2222-4222-8222-222222222222'
+        });
+      }
+
+      await service.recordVerifiedLoginNetwork({} as never, login);
+
+      expect(audit.append).toHaveBeenCalledOnce();
+      expect(audit.append).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: `id_business_v2.auto_recharge.login_network.${operation}`,
+          objectId: login.jobId,
+          afterData: { countryCode: 'US', jobId: login.jobId }
+        })
+      );
+      const serializedAudit = JSON.stringify(audit.append.mock.calls);
+      expect(serializedAudit).not.toContain(emailHash);
+      expect(serializedAudit).not.toContain(login.email);
+      expect(serializedAudit).not.toContain(login.ip);
+    }
+  );
 
   it('官网身份核验回执缺少真实出口时不建立登录记录', async () => {
     const account = {
