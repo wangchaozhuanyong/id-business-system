@@ -76,6 +76,8 @@ test('release workflow diagnostics retain control checks and do not hide applica
     '.github/workflows/production-release.yml',
     'scripts/production-release/cleanup-reviewed-cache.py',
     'scripts/production-release/cleanup-reviewed-cache.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/maintain-image-cache.test.py',
     'scripts/production-release/cleanup-verified-backups.py',
     'scripts/production-release/cleanup-verified-backups.test.py',
     'scripts/production-release/storage-maintenance.py',
