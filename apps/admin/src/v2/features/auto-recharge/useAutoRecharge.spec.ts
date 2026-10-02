@@ -56,8 +56,26 @@ const mock = vi.hoisted(() => ({
   connectorCancel: vi.fn(),
   connectorHealth: vi.fn(),
   connectorCatalog: vi.fn(),
+  directCatalog: vi.fn(),
+  directStart: vi.fn(),
+  directOwns: vi.fn(),
+  directSubmitCode: vi.fn(),
+  directCancel: vi.fn(),
   callbackUrl: vi.fn((id: string) => `https://admin.example/api/local/${id}`),
   confirmResolution: vi.fn()
+}));
+
+vi.mock('./bitbrowser-direct-api', async (original) => ({
+  ...(await original<typeof import('./bitbrowser-direct-api')>()),
+  directBrowserCatalog: mock.directCatalog
+}));
+vi.mock('./useBitBrowserDirectOpen', () => ({
+  useBitBrowserDirectOpen: () => ({
+    start: mock.directStart,
+    owns: mock.directOwns,
+    submitCode: mock.directSubmitCode,
+    cancel: mock.directCancel
+  })
 }));
 
 vi.mock('element-plus/es/components/message-box/index.mjs', () => ({
@@ -139,7 +157,8 @@ vi.mock('./recharge-proxy-api', () => ({
 }));
 vi.mock('./useRechargeBrowserCatalog', () => ({
   useRechargeBrowserCatalog: () => ({ selectionError: ref('') }),
-  readBrowserCatalog: mock.connectorCatalog
+  readBrowserCatalog: (form: unknown, signal: AbortSignal, directMode = false) =>
+    directMode ? mock.directCatalog(form, signal) : mock.connectorCatalog(form, signal)
 }));
 
 const address: V2RechargeAddress = {
@@ -242,6 +261,12 @@ const queryResult = (data: unknown) => ({
   refresh: vi.fn().mockResolvedValue(undefined)
 });
 const sessionJson = (email = 'registered@example.com') => JSON.stringify({ user: { email } });
+const directSessionJson = (email = 'registered@example.com') =>
+  JSON.stringify({
+    user: { email, id: 'user-1' },
+    account: { id: 'account-1' },
+    sessionToken: 'fixture-session'
+  });
 
 function fillForm() {
   flow.updateJsonInput(sessionJson());
@@ -353,6 +378,13 @@ beforeEach(() => {
     groups: [{ id: 'g', name: settings.groupName }],
     tags: [{ id: 't', name: settings.tagName }]
   });
+  mock.directCatalog.mockResolvedValue({
+    groups: [{ id: 'group-direct', name: settings.groupName }],
+    tags: [{ id: 'tag-direct', name: settings.tagName }]
+  });
+  mock.directStart.mockResolvedValue(undefined);
+  mock.directOwns.mockReturnValue(false);
+
   mock.cancelBitBrowser.mockResolvedValue({ id: launch.id });
   mock.abandonUnreceivedBitBrowser.mockResolvedValue({ id: launch.id });
   mock.bitBrowserAccess.mockResolvedValue({
@@ -907,7 +939,7 @@ describe('本机比特浏览器自动充值', () => {
     flow.operationMode.value = 'open_browser';
     expect(flow.canStartOpen.value).toBe(false);
 
-    flow.updateJsonInput(sessionJson('user123@example.com'));
+    flow.updateJsonInput(directSessionJson('user123@example.com'));
     expect(flow.sessionJson.value).toBeTruthy();
     expect(flow.windowName.value).toBe('ChatGPT-user123');
     expect(flow.canStartOpen.value).toBe(true);
@@ -919,23 +951,36 @@ describe('本机比特浏览器自动充值', () => {
     expect(mock.startBitBrowserOpen).toHaveBeenCalledTimes(1);
     const serverInput = mock.startBitBrowserOpen.mock.calls[0]![0];
     expect(serverInput).toMatchObject({
-      windowName: 'ChatGPT-user123'
+      windowName: 'ChatGPT-user123',
+      directMode: true
     });
     expect(serverInput).not.toHaveProperty('plan');
     expect(serverInput).not.toHaveProperty('addressId');
     expect(serverInput).not.toHaveProperty('maxAmount');
 
-    expect(mock.connectorStart).toHaveBeenCalledTimes(1);
-    const connectorInput = mock.connectorStart.mock.calls[0]![2];
-    expect(connectorInput).toMatchObject({
-      mode: 'open_browser',
-      windowName: 'ChatGPT-user123',
-      sessionJson: sessionJson('user123@example.com')
-    });
-    expect(connectorInput).not.toHaveProperty('details');
-    expect(connectorInput).not.toHaveProperty('address');
-    expect(connectorInput).not.toHaveProperty('safety');
-    expect(connectorInput).not.toHaveProperty('authorizeSinglePayment');
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.connectorHealth).not.toHaveBeenCalled();
+    expect(mock.directStart).toHaveBeenCalledOnce();
+    const credential = mock.directStart.mock.calls[0]![1];
+    expect(credential).toEqual({ sessionJson: directSessionJson('user123@example.com') });
+    expect(serverInput).not.toHaveProperty('sessionJson');
+    expect(serverInput).not.toHaveProperty('details');
+  });
+
+  it('仅登录窗口不要求连接器密钥，直连检测失败保留资料且不建立任务', async () => {
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(directSessionJson());
+    (mock.settingsQuery.data as ReturnType<typeof ref>).value = {
+      ...settings,
+      connectorTokenConfigured: false
+    };
+    expect(flow.canStartOpen.value).toBe(true);
+    mock.directCatalog.mockRejectedValueOnce(new Error('当前电脑比特接口不可达'));
+    await flow.startOpen();
+    expect(flow.error.value).toBe('当前电脑比特接口不可达');
+    expect(mock.startBitBrowserOpen).not.toHaveBeenCalled();
+    expect(mock.directStart).not.toHaveBeenCalled();
+    expect(flow.sessionJson.value).toBe(directSessionJson());
   });
 
   it('仅登录窗口模式执行完成后 workflowMessage 提示窗口已就绪可手动操作', () => {
@@ -949,6 +994,7 @@ describe('本机比特浏览器自动充值', () => {
           mode: 'open_browser',
           status: 'session_ready',
           stage: 'session_ready',
+          account_matched: true,
           window_name: 'ChatGPT-user123'
         },
         createdAt: '2026-03-16T12:00:00Z',
@@ -957,6 +1003,54 @@ describe('本机比特浏览器自动充值', () => {
     ];
     flow.selectJob('99999999-9999-4999-8999-999999999999');
     expect(flow.workflowMessage.value).toBe('账号登录成功，比特浏览器窗口已打开，可进行手动操作。');
+  });
+
+  it.each(['blocked', 'cancelled', 'session_ready'])(
+    '仅登录窗口未核实成功时不显示成功提示：%s',
+    (status) => {
+      const id = '99999999-9999-4999-8999-999999999999';
+      jobs.value.items = [
+        {
+          id,
+          plan: 'plus',
+          action: 'bitbrowser',
+          state: 'finished',
+          result: { mode: 'open_browser', status, account_matched: false },
+          createdAt: '',
+          updatedAt: ''
+        }
+      ];
+      flow.selectJob(id);
+      expect(flow.workflowMessage.value).toContain('登录已停止');
+      expect(flow.workflowMessage.value).not.toContain('登录成功');
+    }
+  );
+
+  it('另一网页查看直连任务时提示回到原页面，不改用连接器重复操作', async () => {
+    const id = '99999999-9999-4999-8999-999999999999';
+    jobs.value.items = [
+      {
+        id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'awaiting_human_verification',
+        result: {
+          mode: 'open_browser',
+          transport: 'web_direct',
+          stage: 'verification_required',
+          payment_requests_sent: 0
+        },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    flow.selectJob(id);
+    expect(flow.workflowMessage.value).toContain('原网页直连');
+    await flow.resume();
+    expect(flow.error.value).toContain('原网页直连');
+    expect(mock.bitBrowserAccess).not.toHaveBeenCalled();
+    expect(mock.connectorResume).not.toHaveBeenCalled();
+    expect(mock.connectorStatus).not.toHaveBeenCalled();
   });
 
   it('核价失败和付款结果未确认时保留卡资料', async () => {

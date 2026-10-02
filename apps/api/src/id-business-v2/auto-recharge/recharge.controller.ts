@@ -58,8 +58,8 @@ export class RechargeController {
   }
   @Post('bitbrowser-catalog-access')
   @Header('Cache-Control', 'no-store')
-  bitBrowserCatalogAccess(@CurrentUser() operator: AuthenticatedUser) {
-    return this.settings.catalogAccess(operator);
+  bitBrowserCatalogAccess(@CurrentUser() operator: AuthenticatedUser, @Body() input: unknown = {}) {
+    return this.settings.catalogAccess(operator, input);
   }
   @Get('jobs')
   @Header('Cache-Control', 'no-store')
@@ -97,6 +97,7 @@ export class RechargeController {
     return this.local.start(input, operator);
   }
   @Post('jobs/bitbrowser-open')
+  @Header('Cache-Control', 'no-store')
   startBitBrowserOpen(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.startOpen(input, operator);
   }

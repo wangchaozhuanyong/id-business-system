@@ -6,6 +6,7 @@ import { validateBrowserOptions, validateStaticCredentials } from './recharge-br
 const proxyTypes = ['http', 'https', 'socks5'] as const;
 const allowedKeys = new Set([
   'serverMode',
+  'directMode',
   'connectorUrl',
   'localApiUrl',
   'localApiToken',
@@ -99,6 +100,9 @@ export function validateRechargeBitBrowserSettings(
   if (input.serverMode !== undefined && typeof input.serverMode !== 'boolean') {
     throw new BadRequestException('服务器代理设置模式无效');
   }
+  if (input.directMode !== undefined && typeof input.directMode !== 'boolean') {
+    throw new BadRequestException('比特浏览器直连模式无效');
+  }
   if (!proxyTypes.includes(input.proxyType as (typeof proxyTypes)[number])) {
     throw new BadRequestException('代理协议无效');
   }
@@ -113,6 +117,7 @@ export function validateRechargeBitBrowserSettings(
   }
   return {
     serverMode: input.serverMode as boolean | undefined,
+    directMode: input.directMode as boolean | undefined,
     connectorUrl: localUrl(input.connectorUrl, '本机连接器地址'),
     localApiUrl: localUrl(input.localApiUrl, '比特浏览器 Local API 地址'),
     localApiToken: secret(input.localApiToken, 'Local API Token', 1000),

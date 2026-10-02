@@ -210,7 +210,7 @@ export class RechargeLocalService {
 
   async startOpen(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserOpenStart(value);
-    const runtime = await this.settings.runtime(operator.id);
+    const runtime = await this.settings.runtime(operator.id, false, input.directMode === true);
     const agentToken = randomBytes(32).toString('hex');
     await this.transactions.execute(
       async (tx) => {
@@ -231,6 +231,7 @@ export class RechargeLocalService {
             status: 'waiting_local_connector',
             stage: 'connector_dispatch',
             mode: 'open_browser',
+            ...(input.directMode ? { transport: 'web_direct' } : {}),
             window_name: input.windowName,
             payment_requests_sent: 0
           })

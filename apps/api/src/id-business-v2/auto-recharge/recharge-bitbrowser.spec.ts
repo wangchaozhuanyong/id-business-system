@@ -507,6 +507,12 @@ describe('本机任务持久化边界', () => {
     expect(() =>
       validateRechargeBitBrowserOpenStart({ id, windowName: '测试', addressId })
     ).toThrow();
+    expect(() =>
+      validateRechargeBitBrowserOpenStart({ id, windowName: '测试', directMode: 'true' })
+    ).toThrow();
+    expect(
+      validateRechargeBitBrowserOpenStart({ id, windowName: '测试', directMode: true })
+    ).toEqual({ id, windowName: '测试', directMode: true });
 
     const tx = Symbol('tx');
     const repository = {
@@ -537,6 +543,7 @@ describe('本机任务持久化边界', () => {
     );
 
     const launch = await service.startOpen({ id, windowName: 'ChatGPT登录-01' }, operator);
+    expect(settings.runtime).toHaveBeenCalledWith(operator.id, false, false);
     expect(launch).toMatchObject({
       id,
       mode: 'open_browser',
@@ -558,6 +565,20 @@ describe('本机任务持久化边界', () => {
       expect.objectContaining({
         action: 'id_business_v2.auto_recharge.bitbrowser.open_window',
         objectId: id
+      })
+    );
+    settings.runtime.mockResolvedValue({ ...runtime, connectorToken: '' });
+    const directLaunch = await service.startOpen(
+      { id, windowName: 'ChatGPT登录-01', directMode: true },
+      operator
+    );
+    expect(settings.runtime).toHaveBeenLastCalledWith(operator.id, false, true);
+    expect(directLaunch.connectorToken).toBe('');
+    expect(repository.createJob).toHaveBeenLastCalledWith(
+      tx,
+      expect.objectContaining({
+        ownerId: operator.id,
+        result: expect.objectContaining({ payment_requests_sent: 0 })
       })
     );
   });

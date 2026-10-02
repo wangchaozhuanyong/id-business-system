@@ -170,11 +170,12 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
 
 export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeBitBrowserOpenStart {
   const input = object(value);
-  const allowedKeys = new Set(['id', 'windowName']);
+  const allowedKeys = new Set(['id', 'windowName', 'directMode']);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
     typeof input.id !== 'string' ||
-    !uuidPattern.test(input.id)
+    !uuidPattern.test(input.id) ||
+    (input.directMode !== undefined && typeof input.directMode !== 'boolean')
   ) {
     throw new BadRequestException('开启浏览器请求参数无效');
   }
@@ -184,7 +185,8 @@ export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeB
   }
   return {
     id: input.id,
-    windowName
+    windowName,
+    ...(input.directMode !== undefined ? { directMode: input.directMode as boolean } : {})
   };
 }
 

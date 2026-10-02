@@ -263,6 +263,7 @@ export interface V2RechargeBrowserCatalogAccess {
 
 export interface UpdateV2RechargeBitBrowserSettingsInput {
   serverMode?: boolean;
+  directMode?: boolean;
   connectorUrl: string;
   localApiUrl: string;
   localApiToken?: string;
@@ -329,6 +330,7 @@ export interface V2RechargeBitBrowserLaunch {
 export interface V2RechargeBitBrowserOpenStart {
   id: string;
   windowName: string;
+  directMode?: boolean;
 }
 
 export interface V2RechargeBitBrowserOpenLaunch {

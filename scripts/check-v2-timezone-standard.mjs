@@ -52,7 +52,13 @@ function checkDateTimeFormatTimeZones(source, relativePath) {
   let index = source.indexOf(marker);
   while (index >= 0) {
     const expression = source.slice(index, index + 800);
-    if (!/timeZone\s*:\s*(?:V2_BUSINESS_TIME_ZONE|'Asia\/Shanghai')/.test(expression)) {
+    const browserFingerprint =
+      relativePath === 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts' &&
+      /timeZone\s*:\s*V2_BROWSER_FINGERPRINT_TIME_ZONE\b/.test(expression);
+    if (
+      !browserFingerprint &&
+      !/timeZone\s*:\s*(?:V2_BUSINESS_TIME_ZONE|'Asia\/Shanghai')/.test(expression)
+    ) {
       failures.push(
         `${relativePath}:${lineAt(source, index)} Intl.DateTimeFormat 必须显式指定 Asia/Shanghai`
       );

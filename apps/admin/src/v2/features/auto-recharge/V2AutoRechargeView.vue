@@ -2,6 +2,7 @@
   <section class="v2-page-layout recharge-page">
     <RechargePageContext
       :server-mode="operationMode === 'server_payment'"
+      :direct-mode="operationMode === 'open_browser'"
       :connector-status="operationMode === 'server_payment' ? 'unknown' : connectorStatus"
       :connector-message="
         operationMode === 'server_payment' ? '服务器代理与执行器在提交时检查' : connectorMessage
