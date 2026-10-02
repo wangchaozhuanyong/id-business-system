@@ -8,6 +8,7 @@ export type V2ModuleKey =
   | 'recharge-proxies'
   | 'bank-recharge-orders'
   | 'auto-recharge-addresses'
+  | 'auto-recharge-names'
   | 'vendure-mailbox'
   | 'renewal-workbench'
   | 'order-entry'

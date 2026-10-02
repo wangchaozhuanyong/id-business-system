@@ -30,7 +30,14 @@ export const v2TableSchemas = {
         { key: 'lastLoginNetwork', label: '最近登录 IP / 国家', kind: 'text', widthPreset: 'wide' },
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+        { key: 'openingCard', label: '银行卡信息', kind: 'identifier', widthPreset: 'wide' },
+        {
+          key: 'cardDeletionStatus',
+          label: '银行卡删除状态',
+          kind: 'status',
+          widthPreset: 'standard'
+        },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'quadruple', pin: 'end' }
       ]
     })
   },
@@ -51,6 +58,7 @@ export const v2TableSchemas = {
         { key: 'remark1', label: '备注1', kind: 'text', widthPreset: 'longText' },
         { key: 'remark2', label: '备注2', kind: 'text', widthPreset: 'longText' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'billingName', label: '持卡人姓名', kind: 'text', widthPreset: 'wide' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })
@@ -190,6 +198,23 @@ export const v2TableSchemas = {
         { key: 'fromAddress', label: '发件人', kind: 'identifier', widthPreset: 'longText' },
         { key: 'subject', label: '主题', kind: 'text', widthPreset: 'longText' },
         { key: 'extractedCode', label: '验证码', kind: 'identifier', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+      ]
+    })
+  },
+  autoRechargeNames: {
+    main: table({
+      id: 'auto-recharge-names.main',
+      feature: 'auto-recharge-names',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: 'sequence', label: '顺序', kind: 'numeric', widthPreset: 'compact', pin: 'start' },
+        { key: 'name', label: '姓名', kind: 'text', widthPreset: 'wide', pin: 'start' },
+        { key: 'active', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'matchCount', label: '匹配次数', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'lastMatchedAt', label: '最近匹配', kind: 'date', widthPreset: 'dateTime' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })
@@ -1369,6 +1394,7 @@ export const v2TablesByFeature = {
     v2TableSchemas.vendureMailbox.aliases,
     v2TableSchemas.vendureMailbox.mails
   ],
+  'auto-recharge-names': [v2TableSchemas.autoRechargeNames.main],
   'auto-recharge-addresses': [v2TableSchemas.autoRechargeAddresses.main],
   'renewal-workbench': [v2TableSchemas.renewals.main],
   'order-entry': [],

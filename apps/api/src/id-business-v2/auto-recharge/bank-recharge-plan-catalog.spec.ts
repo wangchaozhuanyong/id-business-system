@@ -31,7 +31,8 @@ function fixture() {
     audit as never,
     accounts as never,
     repository as never,
-    new BankRechargeFeesService({} as never, {} as never)
+    new BankRechargeFeesService({} as never, {} as never),
+    { decrypt: () => null } as never
   );
   return { service, transactions, audit, repository };
 }

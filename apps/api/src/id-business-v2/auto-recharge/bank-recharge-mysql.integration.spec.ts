@@ -68,7 +68,8 @@ suite('bank recharge real MySQL lifecycle', () => {
       audit,
       accounts,
       repository,
-      new BankRechargeFeesService(repository, audit)
+      new BankRechargeFeesService(repository, audit),
+      encryption
     );
     finance = new BankRechargeFinanceService(
       repository,

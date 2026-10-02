@@ -14,6 +14,7 @@ import { BankRechargeAccountDeliveryService } from './bank-recharge-account-deli
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { RechargeCardRemovalService } from './recharge-card-removal.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
@@ -30,8 +31,23 @@ export class BankRechargeController {
     private readonly queries: BankRechargeQueryRepository,
     private readonly finance: BankRechargeFinanceService,
     private readonly delivery: BankRechargeAccountDeliveryService,
-    private readonly corrections: BankRechargeCorrectionService
+    private readonly corrections: BankRechargeCorrectionService,
+    private readonly cardRemoval: RechargeCardRemovalService
   ) {}
+
+  @Get('accounts/:id/opening-card-deletion')
+  @Header('Cache-Control', 'no-store')
+  openingCardDeletion(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.cardRemoval.preview(id, operator);
+  }
+  @Delete('accounts/:id/opening-card')
+  deleteOpeningCard(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.cardRemoval.remove(id, value, operator);
+  }
 
   @Get('account-copy-settings')
   @Header('Cache-Control', 'no-store')

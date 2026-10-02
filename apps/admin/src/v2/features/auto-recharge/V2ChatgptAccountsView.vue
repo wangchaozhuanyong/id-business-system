@@ -45,7 +45,7 @@
       loading-title="正在加载 ChatGPT 账号"
       @retry="query.refresh"
     >
-      <section class="v2-records-list">
+      <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
         <header>
           <V2SectionHeading title="账号清单">
             <template #actions>
@@ -124,7 +124,18 @@
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[7]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
+          <V2TableColumn
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[8]"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{ row.openingCard?.numberSummary || '未记录' }}</template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[9]">
+            <template #default="{ row }">{{
+              row.openingCard?.deleted ? '已删除' : row.openingCard?.id ? '尚未删除' : '未记录'
+            }}</template>
+          </V2TableColumn>
+          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[10]">
             <template #default="{ row }">
               <ChatgptAccountCopyButton
                 :id="row.id"
@@ -132,6 +143,11 @@
                 @error="operationError = $event"
               />
               <AppButton size="small" variant="ghost" @click="openEdit(row)">编辑</AppButton>
+              <ChatgptOpeningCardDeleteButton
+                :account="row"
+                :disabled="working"
+                @deleted="query.refresh"
+              />
               <el-dropdown trigger="click">
                 <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
                 <template #dropdown>
@@ -264,6 +280,7 @@ import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
@@ -271,6 +288,7 @@ import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
+import ChatgptOpeningCardDeleteButton from './ChatgptOpeningCardDeleteButton.vue';
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
 import '@/v2/styles/records.css';
@@ -337,6 +355,10 @@ function changePageSize(value: number) {
   page.value = 1;
 }
 const accounts = computed(() => query.data.value?.items ?? []);
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => accounts.value,
+  pageSize: () => pageSize.value
+});
 const importOpen = ref(false);
 const operationError = ref('');
 const working = ref(false);

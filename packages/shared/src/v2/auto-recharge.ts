@@ -277,6 +277,8 @@ export interface UpdateV2RechargeBitBrowserSettingsInput {
 }
 
 export interface V2RechargeBitBrowserStart {
+  cardId?: string;
+  billingName?: string;
   id: string;
   plan: V2RechargePlan;
   addressId: string;

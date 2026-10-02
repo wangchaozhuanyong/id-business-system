@@ -24,14 +24,35 @@
         :maxlength="field.max"
         :placeholder="field.placeholder"
         autocomplete="off"
+        :readonly="field.key === 'name' && nameConfirmed"
       />
+      <template v-if="field.key === 'name'">
+        <p v-if="nameLoading" role="status">正在匹配姓名…</p>
+        <p v-else-if="nameError" class="recharge-error" role="alert">
+          {{ nameError }} <AppButton size="small" @click="nameMatch?.retry()">重试</AppButton>
+        </p>
+        <p v-else-if="nameConfirmed" class="recharge-note">已回填这张银行卡的绑定姓名</p>
+      </template>
     </el-form-item>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed, type Ref } from 'vue';
+import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RechargeDetails } from './contracts';
 import { formatRechargeExpiry, rechargePaymentFields } from './recharge-form';
 
+const props = defineProps<{
+  nameMatch?: {
+    loading: Ref<boolean>;
+    error: Ref<string>;
+    confirmed: Ref<boolean>;
+    retry: () => Promise<void>;
+  };
+}>();
+const nameLoading = computed(() => props.nameMatch?.loading.value ?? false);
+const nameError = computed(() => props.nameMatch?.error.value ?? '');
+const nameConfirmed = computed(() => props.nameMatch?.confirmed.value ?? false);
 const details = defineModel<V2RechargeDetails>({ required: true });
 </script>

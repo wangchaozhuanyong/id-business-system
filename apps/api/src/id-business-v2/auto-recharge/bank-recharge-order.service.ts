@@ -19,6 +19,8 @@ import {
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import { bankRechargeCardSnapshot } from './bank-recharge-card-summary';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import { resolveBankRechargeSource } from './bank-recharge-recheck';
 import {
@@ -74,7 +76,8 @@ export class BankRechargeOrderService {
     private readonly audit: V2TransactionalAuditService,
     private readonly accounts: BankRechargeAccountService,
     private readonly repository: BankRechargeRepository,
-    private readonly fees: BankRechargeFeesService
+    private readonly fees: BankRechargeFeesService,
+    private readonly encryption: FieldEncryptionService
   ) {}
 
   async createManual(value: unknown, operator: AuthenticatedUser) {
@@ -105,6 +108,7 @@ export class BankRechargeOrderService {
             customerId,
             cardId,
             cardLast4: card?.last4 ?? null,
+            ...bankRechargeCardSnapshot(this.encryption, card),
             plan,
             chargeAmount: charge.toString(),
             chargeCurrencyCode: currencyCode,
@@ -347,6 +351,7 @@ export class BankRechargeOrderService {
         customerId,
         cardId,
         cardLast4: card?.last4 ?? previous.cardLast4,
+        ...(cardId !== previous.cardId ? bankRechargeCardSnapshot(this.encryption, card) : {}),
         plan: input.plan === undefined ? previous.plan : this.plan(input.plan),
         chargeAmount: charge.toString(),
         chargeCurrencyCode: currencyCode,
@@ -479,6 +484,7 @@ export class BankRechargeOrderService {
         accountId,
         customerId: existingSubscription?.customerId ?? null,
         cardId: card?.id ?? null,
+        ...bankRechargeCardSnapshot(this.encryption, card),
         cardLast4,
         plan: job.plan,
         chargeAmount: charge.toString(),

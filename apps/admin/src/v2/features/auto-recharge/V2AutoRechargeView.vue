@@ -262,7 +262,7 @@
                   @select="selectSavedCard"
                   @retry="paymentCardsQuery.refresh"
                 />
-                <V2RechargePaymentFields v-model="details" />
+                <V2RechargePaymentFields v-model="details" :name-match="nameMatch" />
                 <V2RechargeBillingAddressFields
                   v-model="details"
                   v-model:source="addressSource"
@@ -459,6 +459,7 @@ const {
   error,
   importing,
   formLocked,
+  nameMatch,
   operationMode,
   canStart,
   canStartOpen,

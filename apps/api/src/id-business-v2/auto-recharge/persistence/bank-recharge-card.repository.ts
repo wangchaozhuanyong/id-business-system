@@ -20,6 +20,7 @@ export class BankRechargeCardRepository {
         remark1: true,
         remark2: true,
         numberEncrypted: true,
+        billingNameEncrypted: true,
         createdAt: true,
         updatedAt: true
       },

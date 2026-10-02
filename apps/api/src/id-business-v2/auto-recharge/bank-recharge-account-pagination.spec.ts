@@ -17,6 +17,7 @@ describe('银充资料查询完整性', () => {
       ),
       countAccounts: vi.fn().mockResolvedValue(501),
       subscriptionsForAccounts: vi.fn().mockResolvedValue([]),
+      openingCardsForAccounts: vi.fn().mockResolvedValue([]),
       loginNetworksByEmailHashes: vi.fn().mockResolvedValue([]),
       renewalWarningDays: vi.fn().mockResolvedValue(3)
     };

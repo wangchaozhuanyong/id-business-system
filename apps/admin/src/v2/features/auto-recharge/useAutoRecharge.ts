@@ -21,6 +21,7 @@ import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 import { useRechargeServerProxySettings } from './useRechargeServerProxySettings';
+import { useRechargeNameMatch } from './useRechargeNameMatch';
 import { useRechargeTotp } from './useRechargeTotp';
 import { bankRechargeApi } from './bank-recharge-api';
 import { currencyOptions } from './recharge-presentation';
@@ -499,6 +500,14 @@ export function useAutoRecharge() {
       ? Boolean(selectedBankAccount.value?.hasTotp)
       : totp.ready.value && totp.source.value !== 'manual'
   );
+  const nameMatch = useRechargeNameMatch(
+    details,
+    selectedPaymentCardId,
+    formLocked,
+    (addressId) => {
+      selectedCardBillingAddressId.value = addressId ?? '';
+    }
+  );
   const canStart = computed(
     () =>
       Boolean(
@@ -514,6 +523,7 @@ export function useAutoRecharge() {
         (operationMode.value === 'server_payment'
           ? Boolean(paymentCap.value)
           : /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value)) &&
+        !nameMatch.error.value &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
         currentSettingsReady.value
@@ -882,8 +892,16 @@ export function useAutoRecharge() {
     const rememberPaymentSave = beginPaymentSave(id);
     let launch: V2RechargeBitBrowserLaunch | null = null;
     try {
+      await nameMatch.ensureReady();
       await bankRechargeApi.checkCardAvailability(details.value.number);
       await browserSettings.checkSavedConnection();
+      if (disposed) return;
+      const paymentCard = await bankRechargeApi.preparePaymentCard({
+        number: details.value.number,
+        expiry: details.value.expiry,
+        name: details.value.name,
+        currencyCode: lockedCurrency.value
+      });
       if (disposed) return;
       launch = await rechargeApi.startBitBrowser({
         id,
@@ -895,6 +913,8 @@ export function useAutoRecharge() {
           ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
           : {}),
         maxAmount: maxAmount.value,
+        cardId: paymentCard.cardId,
+        billingName: details.value.name,
         expectedEmail: details.value.email,
         ...(loginMethod.value === 'saved'
           ? {
@@ -971,6 +991,7 @@ export function useAutoRecharge() {
     let accepted = false;
     currentId.value = id;
     try {
+      await nameMatch.ensureReady();
       await rechargeApi.startServer({
         id,
         action: 'server',
@@ -1415,6 +1436,7 @@ export function useAutoRecharge() {
     savedPaymentCards,
     paymentCardsQuery,
     selectSavedCard,
+    nameMatch,
     bankCurrenciesQuery,
     availableCurrencyOptions,
     paymentCapsQuery,

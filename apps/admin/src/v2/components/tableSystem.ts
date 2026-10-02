@@ -25,7 +25,7 @@ export interface V2TableActionColumnDefinition {
   readonly key: string;
   readonly label: '操作';
   readonly kind: 'actions';
-  readonly layout: 'icon' | 'single' | 'double' | 'triple' | 'wide';
+  readonly layout: 'icon' | 'single' | 'double' | 'triple' | 'quadruple' | 'wide';
   readonly pin: 'end';
 }
 

@@ -10,6 +10,7 @@ import {
   bankRechargeAccountFilter
 } from './persistence/bank-recharge.repository';
 import { loginNetworkSummary } from './recharge-login-network';
+import { readBankRechargeCardSummary } from './bank-recharge-card-summary';
 
 export type ChatgptAccountListQuery = {
   page?: string;
@@ -40,12 +41,37 @@ export async function listChatgptAccounts(
     where,
     ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
   });
-  const [subscriptions, networks] = await Promise.all([
+  const [subscriptions, networks, openingCards] = await Promise.all([
     repository.subscriptionsForAccounts(items.map((item) => item.id)),
-    repository.loginNetworksByEmailHashes(items.map((item) => item.emailHash))
+    repository.loginNetworksByEmailHashes(items.map((item) => item.emailHash)),
+    repository.openingCardsForAccounts(items.map((item) => item.id))
   ]);
   const subscriptionsByAccount = new Map(subscriptions.map((item) => [item.accountId, item]));
   const networksByEmail = new Map(networks.map((item) => [item.emailHash, item]));
+  const openingByAccount = new Map<
+    string,
+    {
+      id: string | null;
+      label: string | null;
+      last4: string | null;
+      numberSummary: string | null;
+      deleted: boolean;
+    }
+  >();
+  for (const order of openingCards) {
+    if (!order.accountId || openingByAccount.has(order.accountId)) continue;
+    openingByAccount.set(order.accountId, {
+      id: order.card?.id ?? null,
+      label: order.card?.label ?? order.cardLabelSnapshot,
+      last4: order.card?.last4 ?? order.cardLast4,
+      numberSummary: readBankRechargeCardSummary(
+        encryption,
+        order.cardNumberSummaryEncrypted,
+        order.card?.numberEncrypted
+      ),
+      deleted: Boolean(order.cardDeletedAt) || (!order.card && Boolean(order.cardLabelSnapshot))
+    });
+  }
   const total = pagination ? await repository.countAccounts(where) : items.length;
   return {
     total,
@@ -53,7 +79,8 @@ export async function listChatgptAccounts(
     pageSize: pagination?.pageSize ?? total,
     items: items.map((item) => ({
       ...accountListItem(item, subscriptionsByAccount.get(item.id), now, warningBoundary),
-      ...loginNetworkSummary(networksByEmail.get(item.emailHash), encryption)
+      ...loginNetworkSummary(networksByEmail.get(item.emailHash), encryption),
+      openingCard: openingByAccount.get(item.id) ?? null
     }))
   };
 }

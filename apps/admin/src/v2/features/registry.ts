@@ -1,3 +1,4 @@
+import { autoRechargeNamesFeature } from '@/v2/features/auto-recharge/names-manifest';
 import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
 import { chatgptAccountsFeature } from '@/v2/features/auto-recharge/chatgpt-accounts-manifest';
 import { bankRechargeCardsFeature } from '@/v2/features/auto-recharge/bank-cards-manifest';
@@ -39,6 +40,7 @@ export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   bankRechargeOrdersFeature,
   vendureMailboxFeature,
   autoRechargeAddressesFeature,
+  autoRechargeNamesFeature,
   renewalWorkbenchFeature,
   orderEntryFeature,
   topupWorkbenchFeature,
