@@ -326,6 +326,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     group: '系统管理',
     route: '/v2/system/audit-logs',
     permission: 'audit_log.view',
+    requiredRoles: ['admin'],
     kind: 'list',
     freshnessPolicy: 'event-with-deadline',
     loadView: () => import('./audit-logs/V2AuditLogsView.vue')

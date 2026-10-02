@@ -4,12 +4,14 @@
     <V2EmployeesToolbar :page="page" />
     <V2EmployeesList :page="page" />
     <V2EmployeeDrawer :page="page" />
+    <V2EmployeeAccountDialogs :actions="page.accountActions" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { reactive } from 'vue';
 import V2EmployeeDrawer from './components/V2EmployeeDrawer.vue';
+import V2EmployeeAccountDialogs from './components/V2EmployeeAccountDialogs.vue';
 import V2EmployeesList from './components/V2EmployeesList.vue';
 import V2EmployeesOverview from './components/V2EmployeesOverview.vue';
 import V2EmployeesToolbar from './components/V2EmployeesToolbar.vue';

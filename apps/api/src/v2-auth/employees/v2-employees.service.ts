@@ -16,6 +16,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { V2ChangeEventPublisher } from '../../common/prisma/v2-change-event.publisher';
 import { SecurityService } from '../../security/security.service';
 import { V2IdentityService } from '../v2-identity.service';
+import {
+  getSystemSuperAdminUserId,
+  requireSystemSuperAdmin,
+  SYSTEM_SUPER_ADMIN_ROLE
+} from '../system-super-admin';
 import type {
   CreateV2EmployeeDto,
   ListV2EmployeesQuery,
@@ -80,6 +85,7 @@ export class V2EmployeesService {
   ) {}
 
   async list(query: ListV2EmployeesQuery) {
+    const superAdminId = await getSystemSuperAdminUserId(this.prisma);
     const pagination = getPagination(query);
     const keyword = this.normalizeOptionalText(query.keyword, '搜索关键词', 100);
     const status = this.parseStatus(query.status, false);
@@ -125,7 +131,7 @@ export class V2EmployeesService {
     ]);
 
     return {
-      items: items.map((employee) => this.toResponse(employee)),
+      items: items.map((employee) => this.toResponse(employee, superAdminId)),
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
@@ -147,12 +153,15 @@ export class V2EmployeesService {
     ]);
     return {
       list,
-      roles,
+      roles: roles
+        .filter((role) => role.code !== SYSTEM_SUPER_ADMIN_ROLE)
+        .map((role) => ({ ...role, name: role.code === 'admin' ? '普通管理员' : role.name })),
       generatedAt: new Date().toISOString()
     };
   }
 
   async create(dto: CreateV2EmployeeDto, operator: AuthenticatedUser) {
+    await requireSystemSuperAdmin(this.prisma, operator.id);
     const username = this.normalizeUsername(dto.username);
     const displayName = this.normalizeRequiredText(dto.displayName, '员工姓名', 100);
     const initialPassword = dto.initialPassword ?? '';
@@ -166,6 +175,7 @@ export class V2EmployeesService {
 
     try {
       const employee = await this.prisma.$transaction(async (transaction) => {
+        await requireSystemSuperAdmin(transaction, operator.id);
         await this.assertAdminMfaReady(authUserId, roles, operator, transaction);
         const created = await transaction.user.create({
           data: {
@@ -217,7 +227,11 @@ export class V2EmployeesService {
   }
 
   async update(idInput: string, dto: UpdateV2EmployeeDto, operator: AuthenticatedUser) {
+    const superAdminId = await requireSystemSuperAdmin(this.prisma, operator.id);
     const id = this.normalizeUuid(idInput, '员工');
+    if (id === superAdminId && (dto.status !== undefined || dto.roleIds !== undefined)) {
+      throw new ForbiddenException('系统超级管理员受保护，不能修改其角色或状态。');
+    }
     const existing = await this.findEmployeeOrThrow(id);
     const expectedUpdatedAt = this.normalizeExpectedUpdatedAt(dto.expectedUpdatedAt);
     if (existing.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
@@ -246,6 +260,7 @@ export class V2EmployeesService {
     let employee: EmployeeRecord;
     try {
       employee = await this.prisma.$transaction(async (transaction) => {
+        await requireSystemSuperAdmin(transaction, operator.id);
         if ((status ?? existing.status) === 'active') {
           await this.assertAdminMfaReady(
             existing.id,
@@ -346,7 +361,7 @@ export class V2EmployeesService {
     this.changeEventPublisher.publishCommittedChangeBestEffort(['employees', 'security']);
     this.identityService.invalidateAuthenticatedUser(existing.id);
     this.securityService.invalidateActiveSessionCache();
-    return this.toResponse(employee);
+    return this.toResponse(employee, superAdminId);
   }
 
   private async findEmployeeOrThrow(id: string) {
@@ -427,6 +442,9 @@ export class V2EmployeesService {
     if (roles.length !== roleIds.length) {
       throw new BadRequestException('所选角色不存在，请刷新后重试。');
     }
+    if (roles.some((role) => role.code === SYSTEM_SUPER_ADMIN_ROLE)) {
+      throw new ForbiddenException('系统超级管理员身份不能通过角色分配。');
+    }
     return roles;
   }
 
@@ -502,7 +520,7 @@ export class V2EmployeesService {
     return [{ [sortField]: sortOrder }, { createdAt: 'desc' }];
   }
 
-  private toResponse(employee: EmployeeRecord) {
+  private toResponse(employee: EmployeeRecord, superAdminId: string | null = null) {
     return {
       id: employee.id,
       username: employee.username,
@@ -512,7 +530,18 @@ export class V2EmployeesService {
       createdAt: employee.createdAt.toISOString(),
       updatedAt: employee.updatedAt.toISOString(),
       createdBy: employee.createdBy,
-      roles: employee.userRoles.map(({ role }) => role),
+      isSystemSuperAdmin: employee.id === superAdminId,
+      roles: employee.userRoles
+        .filter(({ role }) => role.code !== SYSTEM_SUPER_ADMIN_ROLE)
+        .map(({ role }) => ({
+          ...role,
+          name:
+            role.code === 'admin'
+              ? employee.id === superAdminId
+                ? '超级管理员'
+                : '普通管理员'
+              : role.name
+        })),
       mustResetPassword: employee.v2AuthIdentity?.mustResetPassword ?? false,
       lastAuthenticatedAt: employee.v2AuthIdentity?.lastAuthenticatedAt?.toISOString() ?? null,
       activeSessionCount: employee._count?.activeSessions ?? 0

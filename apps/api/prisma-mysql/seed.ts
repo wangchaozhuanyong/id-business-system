@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { V2_DATA_SCOPES } from '@apple-business/shared';
 import { hashPassword } from '../src/auth/password-hasher';
+import { ensureSystemSuperAdmin } from '../src/v2-auth/system-super-admin';
 
 const prisma = new PrismaClient();
 
@@ -153,6 +154,19 @@ async function main() {
       roleId: adminRole.id
     }
   });
+  await prisma.v2AuthIdentity.upsert({
+    where: { userId: adminUser.id },
+    create: {
+      userId: adminUser.id,
+      authUserId: adminUser.id,
+      usernameNormalized: adminUser.username.toLowerCase(),
+      authEmail: `${adminUser.id}@local.invalid`,
+      enabled: true,
+      mustResetPassword: false
+    },
+    update: { enabled: true }
+  });
+  await ensureSystemSuperAdmin(prisma);
 }
 
 main()

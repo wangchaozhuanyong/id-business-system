@@ -37,7 +37,9 @@
             <span>{{
               page.activeFilterCount ? '当前筛选条件下没有数据' : '可创建第一个业务角色并分配权限'
             }}</span>
-            <AppButton variant="primary" @click="page.openCreate">新建角色</AppButton>
+            <AppButton v-if="page.canManageRoles" variant="primary" @click="page.openCreate"
+              >新建角色</AppButton
+            >
           </div>
         </template>
         <V2TableColumn
@@ -77,7 +79,7 @@
           <template #default="{ row }">
             <AppButton size="small" variant="ghost" @click="page.openEdit(row)">
               <el-icon><View v-if="row.isSystemRole" /><Edit v-else /></el-icon>
-              {{ row.isSystemRole ? '查看' : '编辑' }}
+              {{ !page.canManageRoles || row.isSystemRole ? '查看' : '编辑' }}
             </AppButton>
           </template>
         </V2TableActionColumn>
@@ -118,7 +120,7 @@
             <span />
             <AppButton size="small" variant="ghost" @click="page.openEdit(item)">
               <el-icon><View v-if="item.isSystemRole" /><Edit v-else /></el-icon>
-              {{ item.isSystemRole ? '查看' : '编辑' }}
+              {{ !page.canManageRoles || item.isSystemRole ? '查看' : '编辑' }}
             </AppButton>
           </footer>
         </article>
@@ -127,7 +129,9 @@
           <span>{{
             page.activeFilterCount ? '当前筛选条件下没有数据' : '可创建第一个业务角色并分配权限'
           }}</span>
-          <AppButton variant="primary" @click="page.openCreate">新建角色</AppButton>
+          <AppButton v-if="page.canManageRoles" variant="primary" @click="page.openCreate"
+            >新建角色</AppButton
+          >
         </div>
       </div>
 

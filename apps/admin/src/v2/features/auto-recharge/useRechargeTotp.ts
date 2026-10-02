@@ -11,6 +11,7 @@ export interface SavedAccountOption {
   id: string;
   name: string;
   issuer: string | null;
+  sourceAccount?: string;
 }
 
 const CODE_MIN_REMAINING_MS = 8_000;

@@ -71,11 +71,13 @@ export function buildAuditRestoreReason(
 ) {
   const parts = [
     request.sourceAuditId
-      ? `从操作审计 ${request.sourceAuditId} 发起恢复。`
-      : '从操作审计发起恢复。',
+      ? `从操作记录申请恢复（原日志编号：${request.sourceAuditId}）。`
+      : '从操作记录申请恢复。',
     request.sourceAuditAction ? `原动作：${request.sourceAuditAction}。` : '',
-    `目标：${recycleEntityLabels[request.entity]} ${item.label || request.id}（${request.id}）。`,
-    request.sourceAuditAt ? `原操作时间：${request.sourceAuditAt}。` : '',
+    `要恢复的资料：${recycleEntityLabels[request.entity]} ${item.label || request.id}。`,
+    request.sourceAuditAt && Number.isFinite(Date.parse(request.sourceAuditAt))
+      ? `原操作时间：${new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium', hour12: false }).format(new Date(request.sourceAuditAt))}。`
+      : '',
     request.sourceAuditOperator ? `原操作人：${request.sourceAuditOperator}。` : '',
     '请补充误删原因、核对结果和恢复目的。'
   ];

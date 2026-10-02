@@ -4,11 +4,13 @@ import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
+export const auditRetentionMigration =
+  'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
 export function isCiOnly(paths) {
   return (
     paths.length > 0 &&
     paths.every((p) =>
-      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|storage-20261002|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|storage-20261002|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
         p
       )
     )
@@ -43,6 +45,11 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (
+    paths.includes(auditRetentionMigration) &&
+    paths.every((path) => path === auditRetentionMigration || isCiOnly([path]))
+  )
+    return 'audit-retention';
   if (isCiOnly(paths)) return 'ci-only';
   if (isMailboxOnly(paths)) return 'mailbox';
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
@@ -301,7 +308,7 @@ async function main() {
     }
   }
   const checkParts =
-    mode === 'ci-only'
+    mode === 'ci-only' || mode === 'audit-retention'
       ? ['guards']
       : mode === 'admin'
         ? ['guards', 'admin']

@@ -4,8 +4,9 @@
       <div>
         <strong id="v2-saved-totp-title">
           已保存账号
-          <span>{{ items.length }} / {{ V2_SAVED_TOTP_ACCOUNT_LIMITS.count }}</span>
+          <span>{{ ownAccountCount }} / {{ V2_SAVED_TOTP_ACCOUNT_LIMITS.count }}</span>
         </strong>
+        <span v-if="inheritedAccountCount">另有接管账号 {{ inheritedAccountCount }} 条。</span>
         <span>密钥加密保存在服务器，同一账号换电脑仍可使用。</span>
       </div>
       <AppButton
@@ -67,6 +68,7 @@
             <div class="v2-saved-totp-card__identity">
               <strong>{{ item.name }}</strong>
               <span>{{ accountMeta(item) }}</span>
+              <span v-if="item.sourceAccount">接管自 {{ item.sourceAccount }}</span>
             </div>
             <span
               class="v2-saved-totp-card__countdown"
@@ -320,11 +322,15 @@ const accountsQuery = useV2ModuleQuery<V2SavedTotpAccountList>({
   }
 });
 const items = computed(() => accountsQuery.data.value?.items ?? []);
+const ownAccountCount = computed(() => items.value.filter((item) => !item.sourceAccount).length);
+const inheritedAccountCount = computed(() => items.value.length - ownAccountCount.value);
 const filteredItems = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase('zh-CN');
   if (!query) return items.value;
   return items.value.filter((item) =>
-    [item.name, item.issuer ?? ''].some((value) => value.toLocaleLowerCase('zh-CN').includes(query))
+    [item.name, item.issuer ?? '', item.sourceAccount ?? ''].some((value) =>
+      value.toLocaleLowerCase('zh-CN').includes(query)
+    )
   );
 });
 const paginatedItems = computed(() => {
@@ -335,7 +341,7 @@ const listError = computed(() =>
   accountsQuery.error.value ? getApiErrorMessage(accountsQuery.error.value) : ''
 );
 const accountLimitReached = computed(
-  () => items.value.length >= V2_SAVED_TOTP_ACCOUNT_LIMITS.count
+  () => ownAccountCount.value >= V2_SAVED_TOTP_ACCOUNT_LIMITS.count
 );
 const editorDirty = computed(
   () => editorVisible.value && JSON.stringify(form) !== editorSnapshot.value

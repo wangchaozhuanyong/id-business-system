@@ -9,13 +9,16 @@
       :selected-operation="page.selectedOperation"
       :selected-sensitive-access="page.selectedSensitiveAccess"
       @restore="page.openRestoreFromOperationAudit"
+      @restore-fields="page.openFieldRestore"
     />
+    <V2AuditRestoreDrawer :recovery="page.fieldRecovery" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { reactive } from 'vue';
 import V2AuditLogDetailDrawer from './components/V2AuditLogDetailDrawer.vue';
+import V2AuditRestoreDrawer from './components/V2AuditRestoreDrawer.vue';
 import V2AuditLogsList from './components/V2AuditLogsList.vue';
 import V2AuditLogsNavigation from './components/V2AuditLogsNavigation.vue';
 import V2AuditLogsOverview from './components/V2AuditLogsOverview.vue';

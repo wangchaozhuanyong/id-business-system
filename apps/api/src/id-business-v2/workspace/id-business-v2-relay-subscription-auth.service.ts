@@ -1,12 +1,9 @@
 import {
   BadRequestException,
-  ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
 import type {
   StartV2RelaySubscriptionAuthorizationResult,
   V2RelayJob
@@ -22,6 +19,7 @@ import type { CompleteIdBusinessV2RelaySubscriptionAuthorizationDto } from './dt
 import { IdBusinessV2RelayScriptService } from './id-business-v2-relay-script.service';
 import {
   idBusinessV2RelayCompletedSteps,
+  idBusinessV2RelayOperatorId,
   toIdBusinessV2RelayJob
 } from './id-business-v2-relay-script.support';
 import { IdBusinessV2RelayScriptRepository } from './persistence/id-business-v2-relay-script.repository';
@@ -29,7 +27,6 @@ import type { IdBusinessV2RelayJsonInput } from './persistence/id-business-v2-re
 import { IdBusinessV2RelayCloudBridgeClient } from './providers/id-business-v2-relay-cloudbridge.client';
 
 const AUTHORIZATION_TTL_MS = 15 * 60 * 1000;
-const JOB_LEASE_MS = 3 * 60 * 1000;
 
 interface PendingAuthorization {
   expiresAt: string;
@@ -54,52 +51,56 @@ export class IdBusinessV2RelaySubscriptionAuthService {
     operator?: AuthenticatedUser,
     requestId = 'workspace-relay-subscription-auth-start'
   ): Promise<StartV2RelaySubscriptionAuthorizationResult> {
-    const userId = this.requireAdmin(operator);
-    const job = await this.requireSubscriptionJob(jobId, userId);
-    if (job.status === 'completed') throw new BadRequestException('该订阅号部署已完成');
-    const connection = await this.relay.requireCloudBridgeConnection(userId);
-    const value = await this.relay.withCloudBridgeSession(connection, (accessToken) =>
-      this.cloudBridge.generateAntigravityAuthUrl(job.proxyId, accessToken)
-    );
-    const authorizationUrl = this.authorizationUrl(value.auth_url);
-    const sessionId = this.string(value.session_id, '中转站没有返回授权会话', 4096);
-    const state = this.string(value.state, '中转站没有返回授权状态', 4096);
-    const expiresAt = new Date(Date.now() + AUTHORIZATION_TTL_MS);
-    const stateHash = this.encryption.hash(state);
-    if (!stateHash) throw new ServiceUnavailableException('订阅号授权状态加密失败');
-    const pending: PendingAuthorization = {
-      expiresAt: expiresAt.toISOString(),
-      sessionId,
-      state,
-      stateHash
-    };
-    const encrypted = this.encryption.encrypt(JSON.stringify(pending));
-    if (!encrypted) throw new ServiceUnavailableException('订阅号授权状态加密失败');
-    await this.transactionManager.execute(
-      async (tx) => {
-        await this.repository.updateJob(
-          job.id,
-          {
-            lastErrorCode: null,
-            lastErrorMessage: null,
-            modeSecretEncrypted: encrypted,
-            status: 'action_required'
-          },
-          tx
-        );
-        await this.audit.append(tx, {
-          userId,
-          module: 'id_business_v2',
-          action: 'id_business_v2.workspace_relay.subscription_authorization_start',
-          objectType: 'id_business_v2_relay_job',
-          objectId: job.id,
-          afterData: toV2JsonDocument({ deploymentKey: job.deploymentKey, expiresAt }),
-          remark: `已启动订阅号授权：${job.deploymentKey}`
-        });
-      },
-      { changedScopes: ['workspace'], operator, requestId, retryMode: 'none' }
-    );
-    return { authorizationUrl, expiresAt: expiresAt.toISOString() };
+    const userId = idBusinessV2RelayOperatorId(operator);
+    const initialJob = await this.requireSubscriptionJob(jobId, userId);
+    return this.repository.withJobLease(initialJob.id, userId, async (leaseId) => {
+      const job = await this.requireSubscriptionJob(jobId, userId);
+      if (job.status === 'completed') throw new BadRequestException('该订阅号部署已完成');
+      const connection = await this.relay.requireCloudBridgeConnection(userId);
+      const value = await this.relay.withCloudBridgeSession(connection, (accessToken) =>
+        this.cloudBridge.generateAntigravityAuthUrl(job.proxyId, accessToken)
+      );
+      const authorizationUrl = this.authorizationUrl(value.auth_url);
+      const sessionId = this.string(value.session_id, '中转站没有返回授权会话', 4096);
+      const state = this.string(value.state, '中转站没有返回授权状态', 4096);
+      const expiresAt = new Date(Date.now() + AUTHORIZATION_TTL_MS);
+      const stateHash = this.encryption.hash(state);
+      if (!stateHash) throw new ServiceUnavailableException('订阅号授权状态加密失败');
+      const pending: PendingAuthorization = {
+        expiresAt: expiresAt.toISOString(),
+        sessionId,
+        state,
+        stateHash
+      };
+      const encrypted = this.encryption.encrypt(JSON.stringify(pending));
+      if (!encrypted) throw new ServiceUnavailableException('订阅号授权状态加密失败');
+      await this.transactionManager.execute(
+        async (tx) => {
+          await this.repository.updateLeasedJob(
+            job.id,
+            leaseId,
+            {
+              lastErrorCode: null,
+              lastErrorMessage: null,
+              modeSecretEncrypted: encrypted,
+              status: 'action_required'
+            },
+            tx
+          );
+          await this.audit.append(tx, {
+            userId,
+            module: 'id_business_v2',
+            action: 'id_business_v2.workspace_relay.subscription_authorization_start',
+            objectType: 'id_business_v2_relay_job',
+            objectId: job.id,
+            afterData: toV2JsonDocument({ deploymentKey: job.deploymentKey, expiresAt }),
+            remark: `已启动订阅号授权：${job.deploymentKey}`
+          });
+        },
+        { changedScopes: ['workspace'], operator, requestId, retryMode: 'none' }
+      );
+      return { authorizationUrl, expiresAt: expiresAt.toISOString() };
+    });
   }
 
   async complete(
@@ -108,19 +109,9 @@ export class IdBusinessV2RelaySubscriptionAuthService {
     operator?: AuthenticatedUser,
     requestId = 'workspace-relay-subscription-auth-complete'
   ): Promise<V2RelayJob> {
-    const userId = this.requireAdmin(operator);
+    const userId = idBusinessV2RelayOperatorId(operator);
     const initialJob = await this.requireSubscriptionJob(jobId, userId);
-    const leaseId = randomUUID();
-    const now = new Date();
-    const acquired = await this.repository.acquireJobLease(
-      initialJob.id,
-      userId,
-      leaseId,
-      now,
-      new Date(now.getTime() + JOB_LEASE_MS)
-    );
-    if (!acquired) throw new ConflictException('该部署任务正在执行，请勿重复提交');
-    try {
+    return this.repository.withJobLease(initialJob.id, userId, async (leaseId) => {
       const job = await this.requireSubscriptionJob(jobId, userId);
       if (!job.modeSecretEncrypted) throw new BadRequestException('请先启动订阅号授权');
       const pending = this.pending(job.modeSecretEncrypted);
@@ -165,8 +156,9 @@ export class IdBusinessV2RelaySubscriptionAuthService {
           const completedSteps = Array.from(
             new Set([...idBusinessV2RelayCompletedSteps(job.completedSteps), 'authorize_account'])
           );
-          const updated = await this.repository.updateJob(
+          const updated = await this.repository.updateLeasedJob(
             job.id,
+            leaseId,
             {
               cloudBridgeAccountId: accountId,
               completedSteps: completedSteps as IdBusinessV2RelayJsonInput,
@@ -190,9 +182,7 @@ export class IdBusinessV2RelaySubscriptionAuthService {
         },
         { changedScopes: ['workspace'], operator, requestId, retryMode: 'none' }
       );
-    } finally {
-      await this.repository.releaseJobLease(jobId, leaseId);
-    }
+    });
   }
 
   private async requireSubscriptionJob(id: string, userId: string) {
@@ -263,12 +253,5 @@ export class IdBusinessV2RelaySubscriptionAuthService {
     if (typeof value !== 'string' || !value.trim() || value.trim().length > max)
       throw new BadRequestException(message);
     return value.trim();
-  }
-
-  private requireAdmin(operator?: AuthenticatedUser) {
-    if (!operator?.id) throw new BadRequestException('无法识别当前操作人');
-    if (!operator.roles.includes('admin'))
-      throw new ForbiddenException('只有管理员可以使用中转脚本');
-    return operator.id;
   }
 }

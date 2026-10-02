@@ -406,6 +406,9 @@ describe('recharge input and durable evidence', () => {
 
 describe('single worker dispatch and confirmation', () => {
   const tx = {
+    $executeRaw: vi.fn(),
+    $queryRaw: vi.fn(),
+    user: { findUnique: vi.fn() },
     idBusinessV2RechargeJob: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
@@ -434,6 +437,9 @@ describe('single worker dispatch and confirmation', () => {
     vi.stubEnv('AUTO_RECHARGE_WORKER_TOKEN', 'x'.repeat(64));
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     transaction.execute.mockImplementation(async (callback) => callback(tx));
+    tx.$executeRaw.mockResolvedValue(1);
+    tx.$queryRaw.mockResolvedValue([]);
+    tx.user.findUnique.mockResolvedValue({ status: 'active', deletedAt: null });
     tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue(null);
     tx.idBusinessV2RechargeJob.findFirst.mockResolvedValue(null);
     tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([]);
@@ -633,6 +639,13 @@ describe('single worker dispatch and confirmation', () => {
       action: 'check'
     });
     await expect(service.start(input(), operator)).resolves.toEqual({ id });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('rejects a deleted employee before creating or dispatching a recharge job', async () => {
+    tx.user.findUnique.mockResolvedValueOnce({ status: 'disabled', deletedAt: new Date() });
+    await expect(service.start(input(), operator)).rejects.toThrow('员工账号已停用或删除');
+    expect(tx.idBusinessV2RechargeJob.create).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
   it('does not dispatch while another job is running or after a database failure', async () => {

@@ -51,6 +51,22 @@ test('restore verification downloads S3 data into an isolated MySQL 8.4 containe
   assert.match(source, /trap cleanup EXIT INT TERM/);
 });
 
+test('restore drill paths are explicit and never use a shared temporary directory', () => {
+  const source = readProjectFile('scripts/verify-aws-mysql-backup.sh');
+  assert.match(source, /--deployment-directory=/);
+  assert.match(source, /--work-directory=/);
+  assert.match(source, /work_directory.*\/opt\/id-business-v2\/backups\/mysql\/restore-drills/);
+  assert.match(source, /mktemp -d "\$\{work_directory\}\/restore\.XXXXXX"/);
+  assert.doesNotMatch(source, /mktemp -d \/tmp/);
+  const result = spawnSync(
+    'bash',
+    [resolve(projectRoot, 'scripts/verify-aws-mysql-backup.sh'), '--deployment-directory=relative'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /必须是绝对路径/);
+});
+
 test('restore normalizer fixes MySQL trigger terminators without rewriting normal SQL', () => {
   const fixture = [
     'CREATE TABLE `untouched` (`id` int); */;;',

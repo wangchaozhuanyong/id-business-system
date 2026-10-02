@@ -5,11 +5,22 @@ import type {
   V2AuditLogListQuery,
   V2AuditLogListResult,
   V2AuditLogRecord,
+  V2AuditRestoreInput,
+  V2AuditRestorePreview,
+  V2AuditRestoreResult,
   V2SensitiveAccessLogListQuery,
   V2SensitiveAccessLogRecord
 } from './contracts';
 
 export const v2AuditLogsApi = {
+  restorePreview(id: string, options: ApiRequestOptions = {}) {
+    return request<V2AuditRestorePreview>(
+      http.get(`/audit-logs/${id}/restore-preview`, { signal: options.signal })
+    );
+  },
+  restoreFields(id: string, input: V2AuditRestoreInput) {
+    return request<V2AuditRestoreResult>(http.post(`/audit-logs/${id}/restore`, input));
+  },
   listOperations(query: V2AuditLogListQuery, options: ApiRequestOptions = {}) {
     return request<V2AuditLogListResult<V2AuditLogRecord>>(
       http.get('/audit-logs', { params: query, signal: options.signal })

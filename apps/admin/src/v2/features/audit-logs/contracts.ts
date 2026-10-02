@@ -1,6 +1,38 @@
 export type V2AuditLogTab = 'operations' | 'sensitive_access';
 export type V2AuditSortOrder = 'asc' | 'desc';
 
+export type V2AuditRestoreField = 'name' | 'remark' | 'sortOrder';
+
+export interface V2AuditRestorePreview {
+  auditId: string;
+  objectId: string;
+  objectLabel: string;
+  canRestore: boolean;
+  blockers: string[];
+  previewFingerprint: string;
+  fields: Array<{
+    key: V2AuditRestoreField;
+    label: string;
+    currentValue: string | number | null;
+    restoreValue: string | number | null;
+    blockedReason?: string;
+  }>;
+}
+
+export interface V2AuditRestoreInput {
+  previewFingerprint: string;
+  fields: V2AuditRestoreField[];
+  reason: string;
+}
+
+export interface V2AuditRestoreResult {
+  auditId: string;
+  sourceAuditId: string;
+  objectId: string;
+  restoredFields: V2AuditRestoreField[];
+  message: string;
+}
+
 export interface V2AuditUser {
   id: string;
   username: string;
@@ -39,6 +71,7 @@ export interface V2SensitiveAccessLogRecord {
 }
 
 export interface V2AuditLogListQuery {
+  activity?: 'all' | 'staff' | 'system' | 'deletions';
   page?: number;
   pageSize?: number;
   module?: string;
@@ -73,6 +106,7 @@ export interface V2AuditLogListResult<TItem> {
 }
 
 export interface V2AuditLogExportInput {
+  activity?: V2AuditLogListQuery['activity'];
   kind: V2AuditLogTab;
   module?: string;
   action?: string;

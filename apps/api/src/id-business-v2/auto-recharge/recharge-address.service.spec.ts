@@ -10,6 +10,15 @@ const operator = {
   permissions: []
 };
 
+function authorizationClient() {
+  return {
+    $executeRaw: vi.fn().mockResolvedValue(1),
+    $queryRaw: vi.fn().mockResolvedValue([{ locked: 1 }]),
+    securitySetting: { findUnique: vi.fn().mockResolvedValue(null) },
+    user: { findUnique: vi.fn().mockResolvedValue({ status: 'active', deletedAt: null }) }
+  };
+}
+
 describe('auto recharge address service', () => {
   it('imports only normalized unique streets and audits aggregate counts', async () => {
     const addressRepository = {
@@ -46,6 +55,7 @@ describe('auto recharge address service', () => {
   it('does not allow a used address to become reusable', async () => {
     const repository = new RechargeAddressRepository({} as never);
     const tx = {
+      ...authorizationClient(),
       idBusinessV2RechargeAddress: {
         findFirst: vi.fn().mockResolvedValue({ id: 'address', status: 'used' }),
         update: vi.fn()
@@ -61,6 +71,7 @@ describe('auto recharge address service', () => {
     const repository = new RechargeAddressRepository({} as never);
     const address = { id: 'address', ownerId: operator.id, status: 'unused' };
     const tx = {
+      ...authorizationClient(),
       idBusinessV2RechargeAddress: {
         findFirst: vi.fn().mockResolvedValue(address)
       }
@@ -80,6 +91,7 @@ describe('auto recharge address service', () => {
   it('marks an address used after successful activation and keeps the operation idempotent', async () => {
     const repository = new RechargeAddressRepository({} as never);
     const tx = {
+      ...authorizationClient(),
       idBusinessV2RechargeAddress: {
         findFirst: vi
           .fn()
@@ -103,6 +115,7 @@ describe('auto recharge address service', () => {
     const repository = new RechargeAddressRepository({} as never);
     const uses = new Map<string, { addressId: string; ownerId: string }>();
     const tx = {
+      ...authorizationClient(),
       idBusinessV2RechargeAddress: {
         findFirst: vi.fn().mockResolvedValue({ id: 'address', status: 'used' }),
         update: vi.fn().mockResolvedValue({ id: 'address', status: 'used', usedAt: new Date() })

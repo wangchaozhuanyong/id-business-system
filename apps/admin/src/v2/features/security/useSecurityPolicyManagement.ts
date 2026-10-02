@@ -4,6 +4,7 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
+import { useAuthStore } from '@/stores/auth';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { v2SecurityApi } from './api';
@@ -33,6 +34,9 @@ const EMPTY_WHITELIST_FORM: WhitelistFormModel = {
 };
 
 export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
+  const authStore = useAuthStore();
+  const canManageSecurity = computed(() => authStore.user?.roles.includes('super_admin') ?? false);
+  const canResetUserMfa = (id: string) => canManageSecurity.value && id !== authStore.user?.id;
   const policyDrawerVisible = ref(false);
   const policySaving = ref(false);
   const policyMutationError = ref('');
@@ -107,6 +111,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   function openPolicySettings(settings: V2MfaSettings | null) {
+    if (!canManageSecurity.value) return;
     policyMutationError.value = '';
     setPolicyForm({
       enabled: Boolean(settings?.value.enabled),
@@ -122,6 +127,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   async function submitPolicy(formInstance?: FormInstance) {
+    if (!canManageSecurity.value) return;
     if (!(await validateV2Form(formInstance))) return;
     if (policyForm.requiredForAdmins) {
       try {
@@ -249,6 +255,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   async function resetUserMfa(item: V2MfaUserRecord) {
+    if (!canResetUserMfa(item.id)) return;
     try {
       await ElMessageBox.confirm(
         `确认重置 ${item.displayName}（${item.username}）的 MFA 吗？该用户现有密钥和恢复码会立即失效。`,
@@ -294,6 +301,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   function openCreateWhitelist() {
+    if (!canManageSecurity.value) return;
     editingWhitelist.value = null;
     whitelistMutationError.value = '';
     setWhitelistForm({ ...EMPTY_WHITELIST_FORM });
@@ -301,6 +309,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   function openEditWhitelist(item: V2IpWhitelistRecord) {
+    if (!canManageSecurity.value) return;
     editingWhitelist.value = item;
     whitelistMutationError.value = '';
     setWhitelistForm({
@@ -313,6 +322,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   async function submitWhitelist(formInstance?: FormInstance) {
+    if (!canManageSecurity.value) return;
     if (!(await validateV2Form(formInstance))) return;
     if (whitelistForm.enabled) {
       try {
@@ -360,6 +370,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   async function removeWhitelist(item: V2IpWhitelistRecord) {
+    if (!canManageSecurity.value) return;
     try {
       await ElMessageBox.confirm(
         `确认删除 ${item.ipOrCidr} 吗？系统会先确认剩余规则仍包含当前请求 IP。`,
@@ -394,6 +405,8 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   });
 
   return {
+    canManageSecurity,
+    canResetUserMfa,
     policyDrawerVisible,
     policySaving,
     policyMutationError,

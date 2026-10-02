@@ -44,6 +44,7 @@ interface SavedTotpRow {
   period: number;
   createdAt: Date;
   updatedAt: Date;
+  user?: { username: string };
 }
 
 @Injectable()
@@ -59,7 +60,7 @@ export class IdBusinessV2TotpAccountService {
     const userId = this.requireUserId(operator);
     const rows = await this.repository.listByUser(userId);
     const timestamp = Date.now();
-    return { items: rows.map((row) => this.toResponse(row, timestamp)) };
+    return { items: rows.map((row) => this.toResponse(row, timestamp, userId)) };
   }
 
   async forExecution(
@@ -98,6 +99,7 @@ export class IdBusinessV2TotpAccountService {
 
     const row = await this.transactionManager.execute(
       async (tx) => {
+        await this.repository.assertWriter(tx, userId);
         if ((await this.repository.countByUser(userId, tx)) >= V2_SAVED_TOTP_ACCOUNT_LIMITS.count) {
           throw new BadRequestException(
             `每位用户最多保存 ${V2_SAVED_TOTP_ACCOUNT_LIMITS.count} 个 2FA 账号`
@@ -133,7 +135,7 @@ export class IdBusinessV2TotpAccountService {
       { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
-    return this.toResponse(row, Date.now());
+    return this.toResponse(row, Date.now(), userId);
   }
 
   async update(
@@ -157,15 +159,16 @@ export class IdBusinessV2TotpAccountService {
 
     const row = await this.transactionManager.execute(
       async (tx) => {
+        await this.repository.assertWriter(tx, userId);
         const before = await this.repository.findByIdAndUser(accountId, userId, tx);
         if (!before) throw new NotFoundException('2FA 账号不存在');
-        const duplicateName = await this.repository.findByUserAndName(userId, name, tx);
+        const duplicateName = await this.repository.findByUserAndName(before.userId, name, tx);
         if (duplicateName && duplicateName.id !== before.id) {
           throw new ConflictException('该账号名称已经存在');
         }
         if (secretHash) {
           const duplicateSecret = await this.repository.findByUserAndSecretHash(
-            userId,
+            before.userId,
             secretHash,
             tx
           );
@@ -205,7 +208,7 @@ export class IdBusinessV2TotpAccountService {
       { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
-    return this.toResponse(row, Date.now());
+    return this.toResponse(row, Date.now(), userId);
   }
 
   async remove(
@@ -218,6 +221,7 @@ export class IdBusinessV2TotpAccountService {
 
     return this.transactionManager.execute(
       async (tx) => {
+        await this.repository.assertWriter(tx, userId);
         const before = await this.repository.findByIdAndUser(accountId, userId, tx);
         if (!before) throw new NotFoundException('2FA 账号不存在');
         await this.repository.remove(tx, before.id);
@@ -303,11 +307,15 @@ export class IdBusinessV2TotpAccountService {
     return { algorithm: row.algorithm, digits: row.digits, period: row.period, secret };
   }
 
-  private toResponse(row: SavedTotpRow, timestamp: number): V2SavedTotpAccount {
+  private toResponse(row: SavedTotpRow, timestamp: number, operatorId: string): V2SavedTotpAccount {
     const generated = generateIdBusinessV2TotpCode(this.toConfiguration(row), timestamp);
     return {
       id: row.id,
       name: row.name,
+      sourceAccount:
+        row.userId !== operatorId
+          ? (row.user?.username ?? `尾号 ${row.userId.slice(-8)}`)
+          : undefined,
       issuer: row.issuer,
       algorithm: row.algorithm.toUpperCase() as V2TotpAlgorithm,
       digits: row.digits,

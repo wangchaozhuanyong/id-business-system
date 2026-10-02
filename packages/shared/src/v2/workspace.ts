@@ -199,6 +199,7 @@ export interface ReorderV2WorkspaceShortcutsInput {
 export interface V2SavedTotpAccount {
   id: string;
   name: string;
+  sourceAccount?: string;
   issuer: string | null;
   algorithm: V2TotpAlgorithm;
   digits: number;

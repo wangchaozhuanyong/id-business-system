@@ -36,7 +36,7 @@ describe('data governance scheme 3 redesign contract', () => {
     expect(pageState).toContain("trackRouteData: () => activeTab.value === 'recycle'");
     expect(pageState).toContain("trackRouteData: () => activeTab.value === 'jobs'");
     expect(pageState).toContain('enabled: () => Boolean(detailId.value)');
-    expect(drawers).toContain('必须由另一名管理员审批');
+    expect(drawers).toContain('由另一名管理员审批通过后执行恢复');
     expect(drawers).toContain('ref="restoreFormRef"');
     expect(drawers).toContain('page.submitRestore(restoreFormRef)');
     expect(drawers).toContain('page.submitCleanup(cleanupFormRef)');

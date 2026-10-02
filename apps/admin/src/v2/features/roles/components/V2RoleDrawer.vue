@@ -7,7 +7,13 @@
     :confirm-text="page.editingItem ? '保存修改' : '确认创建'"
     :confirm-loading="page.saving"
     :confirm-disabled="page.isSystemRole"
-    :confirm-disabled-reason="page.isSystemRole ? '系统管理员角色为只读角色' : ''"
+    :confirm-disabled-reason="
+      page.isSystemRole
+        ? page.canManageRoles
+          ? '系统管理员角色为只读角色'
+          : '仅超级管理员可以修改角色权限'
+        : ''
+    "
     :dirty="page.drawerDirty"
     size="min(880px, 96vw)"
     @confirm="page.submitRole(formRef)"
@@ -24,7 +30,11 @@
       v-if="page.isSystemRole"
       class="v2-role-drawer__alert"
       type="info"
-      title="系统管理员角色拥有全部系统权限，不允许修改"
+      :title="
+        page.canManageRoles
+          ? '系统管理员角色拥有全部系统权限，不允许修改'
+          : '普通管理员可以查看角色详情，角色授权由超级管理员管理'
+      "
       show-icon
       :closable="false"
     />

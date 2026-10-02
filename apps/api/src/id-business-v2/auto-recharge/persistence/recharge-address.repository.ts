@@ -1,5 +1,9 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import {
+  assertEmployeeBusinessWriter,
+  getEmployeeBusinessOwnerIds
+} from '../../../v2-auth/system-super-admin';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import type { V2RechargeAddressListQuery, V2RechargeAddressStatus } from '@apple-business/shared';
@@ -9,9 +13,17 @@ import { RECHARGE_ADDRESS_LOCATION } from '../recharge-address-validation';
 export class RechargeAddressRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async ownerScope(
+    client: Pick<Prisma.TransactionClient, 'securitySetting'>,
+    ownerId: string
+  ) {
+    const owners = await getEmployeeBusinessOwnerIds(client, ownerId);
+    return owners.length === 1 ? ownerId : { in: owners };
+  }
+
   async requireUnused(tx: V2CommandTransaction, ownerId: string, id: string) {
     const address = await tx.idBusinessV2RechargeAddress.findFirst({
-      where: { id, ownerId, status: 'unused' }
+      where: { id, ownerId: await this.ownerScope(tx, ownerId), status: 'unused' }
     });
     if (!address) throw new ConflictException('所选地址已使用、已停用或不存在，请重新选择');
     return address;
@@ -19,7 +31,7 @@ export class RechargeAddressRepository {
 
   async requireAvailable(tx: V2CommandTransaction, ownerId: string, id: string) {
     const address = await tx.idBusinessV2RechargeAddress.findFirst({
-      where: { id, ownerId, status: { in: ['unused', 'used'] } }
+      where: { id, ownerId: await this.ownerScope(tx, ownerId), status: { in: ['unused', 'used'] } }
     });
     if (!address) throw new ConflictException('所选账单地址已停用或不存在');
     return address;
@@ -69,7 +81,9 @@ export class RechargeAddressRepository {
   }
 
   async markUsed(tx: V2CommandTransaction, ownerId: string, id: string, jobId?: string) {
-    const address = await tx.idBusinessV2RechargeAddress.findFirst({ where: { id, ownerId } });
+    const address = await tx.idBusinessV2RechargeAddress.findFirst({
+      where: { id, ownerId: await this.ownerScope(tx, ownerId) }
+    });
     if (!address) throw new NotFoundException('找不到本次充值使用的地址');
     if (address.status === 'disabled') throw new ConflictException('账单地址已停用');
     if (jobId) {
@@ -93,8 +107,9 @@ export class RechargeAddressRepository {
   }
 
   async list(ownerId: string, query: Required<V2RechargeAddressListQuery>) {
+    const ownerScope = await this.ownerScope(this.prisma, ownerId);
     const where: Prisma.IdBusinessV2RechargeAddressWhereInput = {
-      ownerId,
+      ownerId: ownerScope,
       ...(query.status === 'all' ? {} : { status: query.status }),
       ...(query.keyword ? { line1: { contains: query.keyword } } : {})
     };
@@ -106,14 +121,21 @@ export class RechargeAddressRepository {
         take: query.pageSize
       }),
       this.prisma.idBusinessV2RechargeAddress.count({ where }),
-      this.prisma.idBusinessV2RechargeAddress.count({ where: { ownerId, status: 'unused' } }),
-      this.prisma.idBusinessV2RechargeAddress.count({ where: { ownerId, status: 'used' } }),
-      this.prisma.idBusinessV2RechargeAddress.count({ where: { ownerId, status: 'disabled' } })
+      this.prisma.idBusinessV2RechargeAddress.count({
+        where: { ownerId: ownerScope, status: 'unused' }
+      }),
+      this.prisma.idBusinessV2RechargeAddress.count({
+        where: { ownerId: ownerScope, status: 'used' }
+      }),
+      this.prisma.idBusinessV2RechargeAddress.count({
+        where: { ownerId: ownerScope, status: 'disabled' }
+      })
     ]);
     return { items, total, totals: { unused, used, disabled } };
   }
 
-  createMany(tx: V2CommandTransaction, ownerId: string, streets: string[]) {
+  async createMany(tx: V2CommandTransaction, ownerId: string, streets: string[]) {
+    await assertEmployeeBusinessWriter(tx, ownerId);
     const now = new Date();
     return tx.idBusinessV2RechargeAddress.createMany({
       data: streets.map((line1) => ({
@@ -133,7 +155,10 @@ export class RechargeAddressRepository {
     id: string,
     status: V2RechargeAddressStatus
   ) {
-    const address = await tx.idBusinessV2RechargeAddress.findFirst({ where: { id, ownerId } });
+    await assertEmployeeBusinessWriter(tx, ownerId);
+    const address = await tx.idBusinessV2RechargeAddress.findFirst({
+      where: { id, ownerId: await this.ownerScope(tx, ownerId) }
+    });
     if (!address) throw new NotFoundException('找不到该地址');
     if (address.status === 'used' && status !== 'used') {
       throw new ConflictException('已使用地址不能恢复为可用状态');

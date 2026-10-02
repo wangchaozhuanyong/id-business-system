@@ -6,6 +6,7 @@ import type {
   V2EmployeeListQuery,
   V2EmployeesBootstrap
 } from './contracts';
+import type { V2EmployeeDeletePreview } from './contracts';
 
 export const v2EmployeesApi = {
   bootstrap(params: V2EmployeeListQuery, options: ApiRequestOptions = {}) {
@@ -21,5 +22,16 @@ export const v2EmployeesApi = {
   },
   update(id: string, input: UpdateV2EmployeeInput) {
     return request<V2Employee>(http.patch(`/v2/employees/${id}`, input));
+  },
+  resetPassword(id: string, input: { expectedUpdatedAt: string; newPassword: string }) {
+    return request<{ reset: boolean }>(http.post(`/v2/employees/${id}/reset-password`, input));
+  },
+  deletePreview(id: string, options: ApiRequestOptions = {}) {
+    return request<V2EmployeeDeletePreview>(
+      http.get(`/v2/employees/${id}/delete-preview`, { signal: options.signal })
+    );
+  },
+  remove(id: string, input: { expectedUpdatedAt: string; previewHash: string }) {
+    return request<{ deleted: boolean }>(http.post(`/v2/employees/${id}/delete`, input));
   }
 };

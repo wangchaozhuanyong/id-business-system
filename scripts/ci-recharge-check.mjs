@@ -1,6 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { adminCheckCommands, adminUiGuardChecks } from './ci-recharge-scope.mjs';
+import {
+  adminCheckCommands,
+  adminUiGuardChecks,
+  auditRetentionMigration
+} from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
 const mode = process.env.CHECK_MODE || 'recharge';
@@ -39,10 +43,15 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
     run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
+  if (
+    changed.includes(auditRetentionMigration) ||
+    changed.includes('scripts/production-release/audit-retention-mysql.test.py')
+  )
+    run('python3', ['-B', 'scripts/production-release/audit-retention-mysql.test.py']);
   const uiChecks = adminUiGuardChecks(mode, changed);
   if (uiChecks.length) {
     for (const name of uiChecks) npm('run', name);
-  } else if (mode !== 'ci-only') {
+  } else if (mode !== 'ci-only' && mode !== 'audit-retention') {
     npm(
       'run',
       'check:v2-decimal-standard',

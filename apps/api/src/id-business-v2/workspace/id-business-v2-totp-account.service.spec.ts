@@ -33,6 +33,7 @@ function account(overrides: Record<string, unknown> = {}) {
 describe('IdBusinessV2TotpAccountService', () => {
   const tx = {};
   const repository = {
+    assertWriter: vi.fn().mockResolvedValue(undefined),
     listByUser: vi.fn(),
     countByUser: vi.fn(),
     findByIdAndUser: vi.fn(),

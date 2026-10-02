@@ -9,6 +9,7 @@ import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query'
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { v2EmployeesApi } from './api';
+import { useEmployeeAccountActions } from './useEmployeeAccountActions';
 import type {
   CreateV2EmployeeInput,
   UpdateV2EmployeeInput,
@@ -37,6 +38,7 @@ function emptyForm(): EmployeeFormModel {
 
 export function useEmployeesPage() {
   const authStore = useAuthStore();
+  const canManageEmployees = computed(() => authStore.user?.roles.includes('super_admin') ?? false);
   const query = useV2SessionDraft('employees-filters', () =>
     reactive({
       page: 1,
@@ -83,6 +85,10 @@ export function useEmployeesPage() {
     () => employeesQuery.data.value?.list.pageSize ?? query.pageSize
   );
   const roleOptions = computed(() => employeesQuery.data.value?.roles ?? []);
+  const accountActions = useEmployeeAccountActions(
+    () => canManageEmployees.value,
+    employeesQuery.refresh
+  );
   const activeFilterCount = computed(
     () => [query.keyword.trim(), query.status, query.roleId].filter(Boolean).length
   );
@@ -195,6 +201,7 @@ export function useEmployeesPage() {
   }
 
   function openCreate() {
+    if (!canManageEmployees.value) return;
     editingItem.value = null;
     mutationError.value = '';
     setForm(emptyForm());
@@ -202,6 +209,7 @@ export function useEmployeesPage() {
   }
 
   function openEdit(item: V2Employee) {
+    if (!canManageEmployees.value) return;
     editingItem.value = item;
     mutationError.value = '';
     setForm({
@@ -215,6 +223,7 @@ export function useEmployeesPage() {
   }
 
   async function submitEmployee(formInstance?: FormInstance) {
+    if (!canManageEmployees.value) return;
     if (!(await validateV2Form(formInstance))) return;
     mutationError.value = '';
     const current = editingItem.value;
@@ -287,6 +296,8 @@ export function useEmployeesPage() {
   }
 
   return {
+    canManageEmployees,
+    accountActions,
     query,
     items,
     total,
