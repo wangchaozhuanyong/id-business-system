@@ -235,6 +235,18 @@ class RechargeExecutionCacheTests(RechargeNamesCacheTests):
         self.assertEqual(self.removals(), [])
 
 
+class BitbrowserDirectCacheTests(RechargeNamesCacheTests):
+    plan_name = 'cache-cleanup-bitbrowser-direct-20261003.json'
+
+    def test_targets_one_superseded_build_and_preserves_the_direct_release(self):
+        self.assertTrue(all(item['tag'].startswith(
+            '3577c978a08b91b61ce124e3225c93601633a37d-37002199068-1-')
+            for item in self.plan['items']))
+        self.assertEqual(len(self.plan['items']), 5)
+        self.assertEqual(self.plan['expectedCurrent'], '96926b111952bd12ccd4003f404a5f67d1657c7e')
+        self.assertEqual(self.plan['expectedPrevious'], 'c73517933a4df9b39b6ab7d7d78287b097c39037')
+
+
 class StorageCacheTests(RechargeNamesCacheTests):
     plan_name = 'cache-cleanup-storage-20261002.json'
 
