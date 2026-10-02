@@ -34,6 +34,10 @@ gh workflow run production-release.yml --ref main \
 
 `cleanup_plan` 默认选择原 `initial_20261001` 计划，已有记录和摘要保留。换汇发布容量恢复使用 `fx_subscription_20261002`，对应 `deploy/aws/cache-cleanup-fx-subscription-20261002.json` 中两个未上线候选版本的十个引用，具体保护和恢复边界见 `docs/FX_RELEASE_CACHE_RECOVERY_20261002.md`。这份新计划先运行 `verify_cache`；只有取得用户对其清单的单独批准后才能运行 `cleanup_cache`。业务发布授权本身不替代这份新清单的批准。
 
+姓名库发布容量恢复使用 `recharge_names_20261002`，精确清单和保护边界见 `docs/RECHARGE_NAMES_CACHE_RECOVERY_20261002.md`。这份计划仍须先只读核验，再取得用户单独批准；未批准不得执行删除。
+
+发布控制修复后，可设置可选的 `reuse_image_run` 复用一次已完成的构建。仅当该次 main 发布的源码验证、构建和不可变镜像推送步骤全部成功，且镜像源码至当前发布源码仅有明确列出的发布控制文件变化时允许复用。服务器再次比较两份源码中所有其他文件的内容和执行权限，并核验镜像架构、原始提交标签；依赖、业务代码、数据库迁移或运行配置有任何变化都会阻止复用。发布清单分别记录当前 main SHA、真实部署运行和原镜像构建运行；备份、磁盘阈值、迁移、财务巡检、健康和回滚检查均保留。
+
 ```bash
 gh workflow run production-release.yml --ref main \
   -f operation=release \

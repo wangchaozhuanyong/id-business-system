@@ -110,3 +110,33 @@ test('full push mode retains all five images and rejects an unknown scope flag',
     );
   });
 });
+
+test('recovery dispatch keeps deployment run and reused image run separate', () => {
+  fixture(({ root, env }) => {
+    writeFileSync(
+      join(root, 'bin', 'aws'),
+      '#!/bin/sh\ncase "$*" in\n*send-command*) printf "fixture-command\\n" ;;\n*--query\\ Status*) printf "Success\\n" ;;\n*StandardOutputContent*) printf "fixture-receipt\\n" ;;\nesac\n',
+      { mode: 0o755 }
+    );
+    execFileSync('bash', [join(process.cwd(), 'scripts/production-release/dispatch.sh')], {
+      cwd: root,
+      env: {
+        ...env,
+        SOURCE_TREE: 'c'.repeat(40),
+        QUALITY_RUN_ID: '111',
+        PRODUCTION_INSTANCE_ID: 'i-test-fixture-only',
+        REUSE_IMAGE_COMMIT: 'd'.repeat(40),
+        REUSE_IMAGE_RUN_ID: '222',
+        REUSE_IMAGE_RUN_ATTEMPT: '1'
+      }
+    });
+    const parameters = JSON.parse(
+      readFileSync(join(root, '.deploy/production-release/ssm-999999.json'), 'utf8')
+    );
+    const command = parameters.commands.at(-1);
+    assert.ok(command.includes(`--commit ${'b'.repeat(40)}`));
+    assert.ok(command.includes('--run-id 999999'));
+    assert.ok(command.includes(`--image-commit ${'d'.repeat(40)}`));
+    assert.ok(command.includes('--image-run-id 222 --image-run-attempt 1'));
+  });
+});

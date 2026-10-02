@@ -208,5 +208,19 @@ class UnifiedRecoveryCacheTests(ReviewedCacheTests):
         self.assertEqual(self.removals(), [])
 
 
+class RechargeNamesCacheTests(ReviewedCacheTests):
+    plan_name = 'cache-cleanup-recharge-names-20261002.json'
+
+    def test_candidate_images_are_explicitly_protected(self):
+        self.assertEqual(len(self.plan['protectedCandidateImageIds']), 5)
+        self.assertTrue(set(self.plan['protectedCandidateImageIds']).isdisjoint(
+            item['imageId'] for item in self.plan['items']))
+
+    def test_running_baseline_cannot_be_overridden(self):
+        with self.assertRaisesRegex(RuntimeError, 'does not allow a post-release baseline'):
+            self.invoke(True, expected_current='b' * 40)
+        self.assertEqual(self.removals(), [])
+
+
 if __name__ == '__main__':
     unittest.main()

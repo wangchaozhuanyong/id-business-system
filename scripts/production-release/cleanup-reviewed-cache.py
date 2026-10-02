@@ -28,13 +28,21 @@ REVIEWED_PLANS = {
         '7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-',
         'd1ed460eff55df7167a806dd3e1f7abdef5ef24d-36907590117-1-',
     ),
+    '21c05c434dc5e676f6060dcfa90db91ac2c18f196e9f3e033f518ce164182ad5': (
+        '3b7e40d2dcf6fff43d3fd4f23dfbbd9f8f1cb31e-36912718145-1-',
+        'f3558f30d09f1eebf62c171b23e1b497e22993e2-36899703841-1-',
+    ),
 }
 
 REVIEWED_PLAN_COUNTS = {
     '66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': 12,
     'd48439d92ca91f2ddf5b30bef5da7b3f0d2fdf90644b64196c3a72f0b1c2c0cc': 6,
+    '21c05c434dc5e676f6060dcfa90db91ac2c18f196e9f3e033f518ce164182ad5': 5,
 }
-POST_RELEASE_PLANS = set(REVIEWED_PLAN_COUNTS)
+POST_RELEASE_PLANS = {
+    '66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d',
+    'd48439d92ca91f2ddf5b30bef5da7b3f0d2fdf90644b64196c3a72f0b1c2c0cc',
+}
 PRE_RELEASE_BASELINES = {
     '66f6dad653306691466fa4b5955cff6f331eebb7d3de899e0efef8755edecb7d': (
         '3b7e40d2dcf6fff43d3fd4f23dfbbd9f8f1cb31e',
@@ -105,10 +113,11 @@ def main():
         expected_previous = recovery_baseline[1]
     require(previous['commit'] == expected_previous, 'Previous rollback version changed')
     protected = active_images() | protected_images(manifest) | protected_images(previous, include_rollback=False)
+    protected.update(plan.get('protectedCandidateImageIds', []))
     approved = []
     services = {(prefix, service) for prefix in prefixes for service in
                 ('admin', 'api', 'migrate', 'media-resolver', 'auto-recharge')}
-    if digest in POST_RELEASE_PLANS:
+    if digest in REVIEWED_PLAN_COUNTS:
         # Mixed service sets are allowed only for these exact reviewed digests.
         services = {(prefix, item['tag'][len(prefix):]) for prefix in prefixes
                     for item in plan['items'] if item['tag'].startswith(prefix)}
