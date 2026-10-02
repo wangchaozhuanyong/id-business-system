@@ -73,6 +73,8 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 
 ## 检查与交付
 
+- 2026-10-02 本轮统一发布由“评估超级管理员账号规划”窗口（`01a0fb2c-2348-78a2-b96f-249031977556`）负责。其他同项目窗口交接已完成内容和证据，不独立推送、合并、部署或执行生产清理；本轮范围和状态以 `docs/CENTRAL_RELEASE_20261002.md` 为准。后续用户明确改变发布安排时按最新授权执行。
+
 - 新增或修改 V2 界面必须运行 `check:admin-ui`、`check:v2-ui-language`、`check:v2-color-contrast`、`check:v2-table-standard`、`check:v2-loading-standard`、`check:v2-module-architecture` 和 `check:v2-isolation`；加载检查包含输入保留检查。前端精简 CI 也必须执行这些规则，不得因模块分类而漏跑皮肤、加载或草稿检查。
 - 静态检查不能代替页面验收：按 `docs/UI_DESIGN.md` 第 7.1 节复核深浅主题、响应式、真实文字对齐及加载／草稿生命周期。修改共享规则须回归使用该规则的页面；仅修改规则文档或 CI 选择器时运行受影响的控制检查，不启动无关业务套件。
 - 发布检查按 `scripts/ci-recharge-scope.mjs` 的范围执行；文档/CI 修复只跑控制检查，普通 V2 前端改动不启动 API、MySQL、财务全套或无关浏览器验收。
