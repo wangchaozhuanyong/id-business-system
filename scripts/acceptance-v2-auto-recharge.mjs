@@ -893,7 +893,7 @@ try {
     assert.equal(loginCodeSubmissions, 1);
     assert.equal(
       await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').inputValue(),
-      ''
+      'JBSWY3DPEHPK3PXP'
     );
     assert.equal(
       await page.locator('.recharge-entry-panel').getByLabel('登录密码').inputValue(),
@@ -974,8 +974,9 @@ try {
             'local-secrets-only',
             'human-verification-resume',
             'single-payment-attempt',
-            'clear-card-after-attempt',
+            'clear-card-after-paid-and-activated',
             'password-login-local-only',
+            'retain-totp-until-payment-success',
             'automatic-totp-code-local-only',
             'saved-totp-code-local-only'
           ],
