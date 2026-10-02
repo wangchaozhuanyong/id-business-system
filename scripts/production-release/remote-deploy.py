@@ -54,6 +54,32 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def command_failure_summary(data):
+    error = data.get('StandardErrorContent', '')
+    errors = re.findall(r'(?m)^([A-Za-z]+Error):', error)
+    lines = re.findall(r'File "[^"\n]*remote-deploy\.py", line ([0-9]+)', error)
+    reasons = (
+        'Production baseline changed', 'Active recharge jobs prevent release',
+        'A production service is not running', 'A production service is not healthy',
+        'Invalid current release path', 'Insufficient free disk after pull',
+        'Resource temporarily unavailable', 'No space left on device',
+        'Permission denied', 'invalid syntax',
+    )
+    status = data.get('Status')
+    return {
+        'status': status if status in ('Success', 'Failed', 'Cancelled', 'TimedOut',
+                                       'InProgress', 'Pending', 'Cancelling') else 'Unknown',
+        'responseCode': data.get('ResponseCode') if isinstance(data.get('ResponseCode'), int) else None,
+        'errorType': errors[-1] if errors and errors[-1] in (
+            'SyntaxError', 'RuntimeError', 'BlockingIOError', 'FileNotFoundError',
+            'PermissionError', 'OSError', 'TypeError', 'ValueError', 'AssertionError',
+            'ConnectionError', 'UnicodeDecodeError', 'ModuleNotFoundError', 'NameError'
+        ) else 'Unclassified',
+        'sourceLine': int(lines[-1]) if lines else None,
+        'reason': next((reason for reason in reasons if reason in error), 'raw error suppressed'),
+    }
+
+
 def require_reusable_paths(paths):
     require(set(paths) <= REUSE_CONTROL_FILES, 'Application or build source changed since image build')
 
@@ -496,4 +522,7 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    if sys.argv[1:] == ['--summarize-command-result']:
+        print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_failure_summary(json.load(sys.stdin))))
+    else:
+        sys.exit(main())

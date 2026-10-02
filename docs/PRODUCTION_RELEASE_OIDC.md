@@ -54,3 +54,5 @@ gh workflow run production-release.yml --ref main \
 服务器充值执行链容量恢复使用 `cleanup_plan=recharge_execution_20261002`，精确清单和恢复记录见 `docs/RECHARGE_EXECUTION_CACHE_RECOVERY_20261002.md`。先执行只读 `verify_cache`；只有用户单独批准该清单后才能执行 `cleanup_cache`。绑定生产 `63e7c3b9...`、上一版 `a9530728...` 和五个 `c59861de...-36965061061-1` 历史本机引用，保留当前／上一版、候选和全部远端镜像。恢复发布指定 `reuse_image_run=36993584579`，不重复构建已验证且应用源码未改变的镜像。
 
 生产网关 `deploy/caddy/Caddyfile.aws` 变化时，完整发布先校验新配置，再切换 Caddy 并核对公网响应的安全策略；失败时和业务服务一起恢复旧配置。仅管理端发布禁止携带网关配置变更。比特网页直连仅放行本机 HTTP 与 WebSocket，仍禁止任意远程连接和不可信脚本。
+
+发布命令失败时回传受控错误类型、脚本行号及固定失败原因，不输出任意原始错误或业务内容。需要补查某次发布失败时，`verify_access` 可填写该次工作流已显示的 `diagnostic_command_id`；只读取指定实例和命令的执行结果，不重新发布。
