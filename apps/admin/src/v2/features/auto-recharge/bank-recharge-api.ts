@@ -205,13 +205,10 @@ export const bankRechargeApi = {
     return request<{ id: string }>(http.post(`${base}/accounts`, input));
   },
   importAccounts(
-    accounts: Array<{ email: string; password?: string; totpSecret?: string; remark?: string }>,
-    primaryAccountId?: string
+    accounts: Array<{ email: string; password?: string; totpSecret?: string; remark?: string }>
   ) {
     return withV2QueryInvalidation(
-      request<{ imported: number }>(
-        http.post(`${base}/accounts/import`, { accounts, primaryAccountId })
-      ),
+      request<{ imported: number }>(http.post(`${base}/accounts/import`, { accounts })),
       'auto-recharge'
     );
   },

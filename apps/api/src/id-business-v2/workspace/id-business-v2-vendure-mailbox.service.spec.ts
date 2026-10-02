@@ -11,6 +11,35 @@ const operator = {
 };
 
 describe('IdBusinessV2VendureMailboxService', () => {
+  it('人工标记只读取真实别名地址，不要求查询码仍有效；无权限或邮箱移除时拒绝', async () => {
+    const client = {
+      virtualEmails: vi.fn().mockResolvedValue([
+        {
+          id: 'alias-1',
+          aliasEmail: 'HIDDEN@example.invalid',
+          updatedAt: '2026-10-02T12:00:00Z',
+          status: 'DISABLED',
+          buyerQueryCode: '',
+          codeExpiresAt: '2000-01-01T00:00:00Z'
+        }
+      ])
+    };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    await expect(service.aliasAddress('alias-1', operator)).resolves.toEqual({
+      email: 'hidden@example.invalid',
+      updatedAt: '2026-10-02T12:00:00Z'
+    });
+    await expect(service.aliasAddress('removed', operator)).rejects.toThrow('隐藏邮箱不存在');
+    const reads = client.virtualEmails.mock.calls.length;
+    await expect(
+      service.aliasAddress('alias-1', { ...operator, roles: ['staff'] })
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(client.virtualEmails).toHaveBeenCalledTimes(reads);
+  });
   it('账号复制只读取现有有效查询码，缺失、重复、停用或过期时拒绝', async () => {
     const alias = {
       id: 'alias-1',

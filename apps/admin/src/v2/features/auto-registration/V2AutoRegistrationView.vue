@@ -1,23 +1,24 @@
 <template>
   <section class="v2-page-layout v2-records-page">
     <V2PageContext
-      description="使用已授权邮箱完成注册、安全配置和优惠检查；每次执行一个账号，保留原窗口继续。"
+      description="显示邮件验证码查询中的全部隐藏邮箱；确认已注册后加入 ChatGPT 账号，也可查看自动注册任务。"
     >
       <template #filters
         ><el-form
           inline
           label-position="left"
           require-asterisk-position="right"
-          @submit.prevent="page.search"
+          @submit.prevent="search"
         >
           <el-form-item label="邮箱搜索"
             ><el-input
-              v-model="page.filters.keyword"
-              placeholder="脱敏邮箱"
+              v-model="keyword"
+              :placeholder="activeTab === 'mailboxes' ? '隐藏邮箱、主邮箱或备注' : '脱敏邮箱'"
+              maxlength="120"
               clearable
-              @keyup.enter="page.search"
+              @keyup.enter="search"
           /></el-form-item>
-          <el-form-item><AppButton @click="page.search">查询</AppButton></el-form-item>
+          <el-form-item><AppButton @click="search">查询</AppButton></el-form-item>
         </el-form></template
       >
       <template #actions
@@ -25,6 +26,10 @@
         ><AppButton variant="primary" @click="page.openStart">开始注册</AppButton></template
       >
     </V2PageContext>
+    <el-tabs v-model="activeTab" aria-label="注册资料分类">
+      <el-tab-pane label="隐藏邮箱" name="mailboxes" />
+      <el-tab-pane label="注册任务" name="jobs" />
+    </el-tabs>
     <p v-if="page.error.value" role="alert">{{ page.error.value }}</p>
     <p v-if="page.message.value" role="status">{{ page.message.value }}</p>
     <V2AsyncRegion
@@ -73,7 +78,9 @@
         </el-form>
       </section>
     </V2AsyncRegion>
+    <RegistrationMailboxList v-show="activeTab === 'mailboxes'" :page="mailboxes" />
     <V2AsyncRegion
+      v-if="activeTab === 'jobs'"
       skeleton="table"
       loading-title="正在加载列表"
       :phase="page.query.phase.value"
@@ -263,6 +270,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { computed, ref } from 'vue';
 import '@/v2/styles/records.css';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
@@ -281,7 +289,28 @@ import { RechargeBrowserSettings } from '../auto-recharge/public-api';
 import { V2_ACCOUNT_OFFER_LABELS, type V2RegistrationJob } from './contracts';
 import { stateLabels, stepLabels, registrationReasons } from './presentation';
 import { useRegistrationPage } from './useRegistrationPage';
-const page = useRegistrationPage({ moduleKey: 'auto-registration' });
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { useRegistrationMailboxes } from './useRegistrationMailboxes';
+import RegistrationMailboxList from './RegistrationMailboxList.vue';
+const activeTab = useV2SessionDraft('auto-registration:tab', () =>
+  ref<'mailboxes' | 'jobs'>('mailboxes')
+);
+const page = useRegistrationPage({
+  moduleKey: 'auto-registration',
+  enabled: () => activeTab.value === 'jobs'
+});
+const mailboxes = useRegistrationMailboxes(() => activeTab.value === 'mailboxes');
+const keyword = computed({
+  get: () => (activeTab.value === 'mailboxes' ? mailboxes.filters.keyword : page.filters.keyword),
+  set: (value: string) => {
+    if (activeTab.value === 'mailboxes') mailboxes.filters.keyword = value;
+    else page.filters.keyword = value;
+  }
+});
+function search() {
+  if (activeTab.value === 'mailboxes') mailboxes.search();
+  else page.search();
+}
 const { listRef, listFrameStyle } = useV2StableListFrame({
   items: () => page.query.data.value?.items ?? [],
   pageSize: () => page.filters.pageSize

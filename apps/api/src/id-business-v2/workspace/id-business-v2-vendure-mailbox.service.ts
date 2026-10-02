@@ -80,6 +80,14 @@ export class IdBusinessV2VendureMailboxService {
     return { email: alias.aliasEmail, queryCode: alias.buyerQueryCode };
   }
 
+  async aliasAddress(aliasId: string, operator: AuthenticatedUser) {
+    this.requireAdmin(operator);
+    const id = this.id(aliasId);
+    const alias = (await this.client.virtualEmails()).find((item) => item.id === id);
+    if (!alias) throw new ConflictException('隐藏邮箱不存在或已移除，请刷新列表');
+    return { email: this.email(alias.aliasEmail), updatedAt: alias.updatedAt };
+  }
+
   async registrationCode(
     aliasId: string,
     since: Date,
