@@ -36,12 +36,15 @@ class RetentionMysqlTests(unittest.TestCase):
     @classmethod
     def execute(cls, sql, user='root', expected_error=None):
         result = cls.command('docker', 'exec', cls.container, 'sh', '-c',
-            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --host=127.0.0.1 '
+            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --host=127.0.0.1 --protocol="$3" '
             '--database=storage_retention_test --default-character-set=utf8mb4 '
-            '--batch --skip-column-names --user="$1" --execute="$2"', 'sh', user, sql)
+            '--batch --skip-column-names --user="$1" --execute="$2"', 'sh', user, sql,
+            'TCP' if user == 'root' else 'SOCKET')
         if expected_error:
             if result.returncode == 0 or not re.search(r'ERROR ' + str(expected_error) + r' \(', result.stderr):
-                raise AssertionError('Expected protected MySQL operation was not rejected')
+                code = re.search(r'ERROR (\d+) \(([A-Z0-9]+)\)', result.stderr)
+                raise AssertionError('Expected MySQL error ' + str(expected_error) + '; observed '
+                                     + (code[1] if code else 'no error code'))
         elif result.returncode:
             raise AssertionError('MySQL fixture operation failed; private output suppressed')
         return result.stdout.strip()
