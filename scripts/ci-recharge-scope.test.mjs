@@ -355,5 +355,5 @@ test('registration capacity recovery runs only release-control checks', () => {
     'scripts/production-release/remote-deploy.py'
   ];
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
-  assert.deepEqual(selectedParts('ci-only', paths, schema, schema), ['guards']);
+  assert.deepEqual(selectedParts(paths), ['guards']);
 });
