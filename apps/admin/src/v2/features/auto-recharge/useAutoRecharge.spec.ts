@@ -683,7 +683,7 @@ describe('本机比特浏览器自动充值', () => {
     });
     expect(localBody).not.toHaveProperty('sessionJson');
     expect(JSON.stringify(localBody)).not.toContain('JBSWY3DPEHPK3PXP');
-    expect(flow.loginPassword.value).toBe('');
+    expect(flow.loginPassword.value).toBe('local-password');
   });
 
   it('选择已保存 2FA 账号后，官网索取验证码时自动获取并仅向本机提交一次', async () => {
@@ -942,7 +942,7 @@ describe('本机比特浏览器自动充值', () => {
     expect(flow.workflowMessage.value).toBe('账号登录成功，比特浏览器窗口已打开，可进行手动操作。');
   });
 
-  it('核价失败保留卡资料，观察到付款请求后才清除', async () => {
+  it('核价失败和付款结果未确认时保留卡资料', async () => {
     fillForm();
     await flow.start();
     const startedId = mock.startBitBrowser.mock.calls[0]![0].id;
@@ -967,9 +967,9 @@ describe('本机比特浏览器自动充值', () => {
     };
     addresses.value.items = [];
     await nextTick();
-    expect(flow.details.value.number).toBe('');
-    expect(flow.details.value.expiry).toBe('');
-    expect(flow.details.value.cvc).toBe('');
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.details.value.expiry).toBe('12/30');
+    expect(flow.details.value.cvc).toBe('123');
     expect(flow.selectedAddressId.value).toBe('');
   });
 
@@ -1328,6 +1328,202 @@ describe('服务器自动充值', () => {
     flow.selectedProxyId.value = proxyId;
   }
 
+  async function startServerFixture() {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    await flow.start();
+    const job: V2RechargeJob = {
+      id: mock.startServer.mock.calls[0]![0].id,
+      plan: 'plus',
+      action: 'server',
+      state: 'running',
+      result: { status: 'running', payment_attempted: false, payment_requests_sent: 0 },
+      createdAt: '',
+      updatedAt: ''
+    };
+    jobs.value.items = [job];
+    await nextTick();
+    return jobs.value.items[0]!;
+  }
+
+  it('代理核验失败后保留全部输入，直接点击可创建新的任务', async () => {
+    const job = await startServerFixture();
+    expect(flow.canStart.value).toBe(false);
+    job.state = 'finished';
+    job.result = {
+      status: 'blocked',
+      reason: 'proxy_network_unconfirmed',
+      payment_attempted: false,
+      payment_requests_sent: 0
+    };
+    await nextTick();
+    expect(flow.sessionJson.value).toBe(sessionJson());
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+    expect(flow.totp.secretInput.value).toBe('JBSWY3DPEHPK3PXP');
+    expect(flow.details.value).toMatchObject({
+      number: '5555555555554444',
+      expiry: '12/30',
+      cvc: '123',
+      name: 'Test User',
+      email: 'registered@example.com',
+      country: 'US',
+      line1: address.line1
+    });
+    expect(flow.authorizeSinglePayment.value).toBe(true);
+    expect(flow.workflowMessage.value).toContain('可再次执行');
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledTimes(2);
+    expect(mock.startServer.mock.calls[1]![0].id).not.toBe(job.id);
+  });
+
+  it.each(['unknown', 'finished'] as const)(
+    '付款结果不明且状态为 %s 时保留输入并禁止再次付款',
+    async (state) => {
+      const job = await startServerFixture();
+      job.state = state;
+      job.result = {
+        status: 'payment_result_unknown',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        payment_requests_sent: 1
+      };
+      await nextTick();
+      expect(flow.canStart.value).toBe(false);
+      expect(flow.canRecheck.value).toBe(true);
+      expect(flow.details.value.cvc).toBe('123');
+      expect(flow.loginPassword.value).toBe('synthetic-password');
+      await flow.start();
+      expect(mock.startServer).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('官网明确拒付后保留输入，允许再次执行', async () => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = {
+      status: 'payment_failed',
+      payment_status: 'declined',
+      payment_attempted: true,
+      payment_requests_sent: 1
+    };
+    await nextTick();
+    expect(flow.canStart.value).toBe(true);
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.totp.secretInput.value).toBe('JBSWY3DPEHPK3PXP');
+  });
+
+  it('已付款待开通仍保留输入，确认充值成功后才清空', async () => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = {
+      status: 'paid_pending_activation',
+      payment_status: 'paid',
+      payment_attempted: true,
+      payment_requests_sent: 1
+    };
+    await nextTick();
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.canStart.value).toBe(false);
+    job.result.status = 'subscription_activated';
+    await nextTick();
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.loginEmail.value).toBe('');
+    expect(flow.loginPassword.value).toBe('');
+    expect(flow.totp.secretInput.value).toBe('');
+    expect(flow.details.value).toMatchObject({
+      number: '',
+      expiry: '',
+      cvc: '',
+      name: '',
+      email: ''
+    });
+    expect(flow.authorizeSinglePayment.value).toBe(false);
+    expect(flow.workflowMessage.value).toBe('充值成功，订阅已开通。');
+    fillForm();
+    flow.loginMethod.value = 'json';
+    await nextTick();
+    expect(flow.canStart.value).toBe(true);
+  });
+
+  it('前一笔成功结果迟到时，不清空用户已修正的输入', async () => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = { status: 'blocked', payment_requests_sent: 0 };
+    await nextTick();
+    flow.details.value.name = 'Later Edit';
+    job.result = { status: 'subscription_activated', payment_status: 'paid' };
+    await nextTick();
+    expect(flow.details.value.name).toBe('Later Edit');
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+  });
+
+  it('离页返回后恢复失败任务的资料，重新输入安全码并授权即可重试', async () => {
+    const job = await startServerFixture();
+    scope.stop();
+    job.state = 'finished';
+    job.result = {
+      status: 'blocked',
+      reason: 'proxy_network_unconfirmed',
+      payment_requests_sent: 0
+    };
+    mock.queryIndex = 0;
+    scope = effectScope();
+    flow = scope.run(useAutoRecharge)!;
+    await nextTick();
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+    expect(flow.totp.secretInput.value).toBe('JBSWY3DPEHPK3PXP');
+    expect(flow.details.value.cvc).toBe('');
+    expect(flow.authorizeSinglePayment.value).toBe(false);
+    flow.details.value.cvc = '123';
+    flow.authorizeSinglePayment.value = true;
+    expect(flow.canStart.value).toBe(true);
+  });
+
+  it('停止未付款的服务器任务也保留输入', async () => {
+    await startServerFixture();
+    expect(flow.canCancel.value).toBe(true);
+    await flow.cancel();
+    expect(mock.cancelServer).toHaveBeenCalledOnce();
+    expect(flow.details.value.cvc).toBe('123');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+  });
+
+  it('启动接口失败且确认没有创建记录时，不继续轮询不存在的任务', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    mock.startServer.mockRejectedValueOnce(new Error('服务器暂时不可用'));
+    await flow.start();
+    expect(flow.error.value).toBe('服务器暂时不可用');
+    expect(mock.jobOptions!.getRevalidateAt!(jobs.value)).toBeNull();
+    expect(flow.canStart.value).toBe(true);
+  });
+
+  it('只有开通状态但尚未确认已付款时，不清空资料', async () => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = { status: 'subscription_activated' };
+    await nextTick();
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+  });
+
+  it('成功结果迟到时，不清空之后修改的安全码', async () => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = { status: 'blocked', payment_requests_sent: 0 };
+    await nextTick();
+    flow.details.value.cvc = '456';
+    job.result = { status: 'subscription_activated', payment_status: 'paid' };
+    await nextTick();
+    expect(flow.details.value.cvc).toBe('456');
+    expect(flow.details.value.number).toBe('5555555555554444');
+  });
+
   it.each([
     ['PH', 'library'],
     ['PH', 'manual'],
@@ -1375,7 +1571,7 @@ describe('服务器自动充值', () => {
     expect(submitted.login).not.toHaveProperty('token');
     expect(mock.listTotpAccounts).not.toHaveBeenCalled();
     expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
-    expect(flow.loginPassword.value).toBe('');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
     expect(flow.totp.savedAccountId.value).toBe(savedTotp.value.items[0]!.id);
   });
 
@@ -1486,7 +1682,7 @@ describe('服务器自动充值', () => {
     expect(flow.loginCountryRestriction.value).toBe('');
   });
 
-  it('只需授权 JSON、卡资料和付款上限，提交后清除敏感输入', async () => {
+  it('服务器接收任务后保留授权和卡资料，等待官网成功结果', async () => {
     flow.operationMode.value = 'server_payment';
     fillForm();
     const proxyId = '33333333-3333-4333-8333-333333333333';
@@ -1512,8 +1708,12 @@ describe('服务器自动充值', () => {
     );
     expect(mock.startServer.mock.calls[0]![0]).not.toHaveProperty('maxAmount');
     expect(mock.connectorStart).not.toHaveBeenCalled();
-    expect(flow.sessionJson.value).toBe('');
-    expect(flow.details.value.number).toBe('');
+    expect(flow.sessionJson.value).toBe(sessionJson());
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.details.value.cvc).toBe('123');
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledTimes(1);
   });
 
   it('结果不明时只向服务器提交原任务授权，不传卡资料或付款上限', async () => {
@@ -1547,6 +1747,6 @@ describe('服务器自动充值', () => {
     expect(input).not.toHaveProperty('details');
     expect(input).not.toHaveProperty('maxAmount');
     expect(mock.recheckBitBrowser).not.toHaveBeenCalled();
-    expect(flow.sessionJson.value).toBe('');
+    expect(flow.sessionJson.value).toBe(sessionJson());
   });
 });
