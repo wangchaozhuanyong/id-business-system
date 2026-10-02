@@ -1,3 +1,4 @@
+import { parseNewChatgptAccount, type NewChatgptAccount } from './bank-recharge-account-input';
 import { accountOfferUpdate, assertAccountEditVersion } from './bank-recharge-account-offers';
 import {
   BadRequestException,
@@ -19,6 +20,7 @@ import {
 import { generateIdBusinessV2TotpCode, parseIdBusinessV2TotpSecret } from '../workspace/public-api';
 import {
   bankRechargeCurrency,
+  bankRechargeCountryCode,
   bankRechargeEmail,
   bankRechargeId,
   bankRechargeMaskedEmail,
@@ -34,13 +36,6 @@ import {
   type VerifiedLoginNetworkInput
 } from './recharge-login-network';
 
-type NewChatgptAccount = {
-  email: string;
-  password: string;
-  totp: ReturnType<typeof parseIdBusinessV2TotpSecret> | null;
-  remark: string;
-};
-
 @Injectable()
 export class BankRechargeAccountService {
   constructor(
@@ -54,37 +49,18 @@ export class BankRechargeAccountService {
     return listChatgptAccounts(query, this.repository, this.encryption);
   }
 
-  private parseNewAccount(value: unknown): NewChatgptAccount {
-    const input = bankRechargeObject(value);
-    const email = bankRechargeEmail(input.email);
-    const password =
-      input.password === undefined || input.password === ''
-        ? ''
-        : bankRechargePassword(input.password);
-    const totpInput = bankRechargeText(input.totpSecret, '2FA 密钥', 2048, false);
-    let totp: ReturnType<typeof parseIdBusinessV2TotpSecret> | null = null;
-    if (totpInput) {
-      try {
-        totp = parseIdBusinessV2TotpSecret(totpInput);
-      } catch {
-        throw new BadRequestException('2FA 密钥格式无效');
-      }
-    }
-    const remark = bankRechargeText(input.remark, '备注', 500, false);
-    return { email, password, totp, remark };
-  }
-
   private async insertAccount(
     tx: V2CommandTransaction,
     account: NewChatgptAccount,
     operator: AuthenticatedUser
   ) {
-    const { email, password, totp, remark } = account;
+    const { email, registrationCountryCode, password, totp, remark } = account;
     const item = await this.repository.createAccount(tx, {
       data: {
         emailEncrypted: this.encryption.encrypt(email)!,
         emailHash: this.encryption.hash(email)!,
         emailMasked: bankRechargeMaskedEmail(email),
+        registrationCountryCode,
         passwordEncrypted: this.encryption.encrypt(password),
         totpSecretEncrypted: this.encryption.encrypt(totp?.secret),
         totpAlgorithm: totp?.algorithm ?? 'sha1',
@@ -103,6 +79,7 @@ export class BankRechargeAccountService {
       objectId: item.id,
       afterData: {
         emailMasked: item.emailMasked,
+        registrationCountryCode,
         hasPassword: Boolean(password),
         hasTotp: Boolean(totp)
       },
@@ -112,7 +89,7 @@ export class BankRechargeAccountService {
   }
 
   async createAccount(value: unknown, operator: AuthenticatedUser) {
-    const account = this.parseNewAccount(value);
+    const account = parseNewChatgptAccount(value);
     return this.transactions.execute((tx) => this.insertAccount(tx, account, operator), {
       changedScopes: ['auto-recharge'],
       requestId: randomUUID(),
@@ -133,7 +110,7 @@ export class BankRechargeAccountService {
     }
     const accounts = input.accounts.map((row: unknown, index: number) => {
       try {
-        return this.parseNewAccount(row);
+        return parseNewChatgptAccount(row);
       } catch {
         throw new BadRequestException(
           `第 ${index + 1} 行账号资料格式无效，请检查邮箱、密码、2FA 和备注`
@@ -170,6 +147,7 @@ export class BankRechargeAccountService {
         (key) =>
           ![
             'email',
+            'registrationCountryCode',
             'password',
             'totpSecret',
             'status',
@@ -182,6 +160,10 @@ export class BankRechargeAccountService {
       throw new BadRequestException('账号资料包含未知字段');
     }
     const email = input.email === undefined ? undefined : bankRechargeEmail(input.email);
+    const registrationCountryCode =
+      input.registrationCountryCode === undefined
+        ? undefined
+        : bankRechargeCountryCode(input.registrationCountryCode);
     const offerPatch = accountOfferUpdate(input.offerStatus);
     const password =
       input.password === undefined ? undefined : bankRechargePassword(input.password);
@@ -218,6 +200,7 @@ export class BankRechargeAccountService {
           where: { id },
           data: {
             ...offerPatch,
+            ...(registrationCountryCode !== undefined ? { registrationCountryCode } : {}),
             ...(email
               ? {
                   emailEncrypted: this.encryption.encrypt(email)!,
@@ -250,12 +233,14 @@ export class BankRechargeAccountService {
           beforeData: {
             emailMasked: before.emailMasked,
             status: before.status,
-            offerStatus: before.offerStatus
+            offerStatus: before.offerStatus,
+            registrationCountryCode: before.registrationCountryCode
           },
           afterData: {
             emailMasked: updated.emailMasked,
             status: updated.status,
             offerStatus: updated.offerStatus,
+            registrationCountryCode: updated.registrationCountryCode,
             passwordChanged: password !== undefined,
             totpChanged: totpInput !== undefined
           },

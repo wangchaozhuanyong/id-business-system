@@ -125,6 +125,7 @@ export class RegistrationRepository {
           emailHash: job.emailHash,
           emailEncrypted: job.emailEncrypted,
           emailMasked: job.emailMasked,
+          registrationCountryCode: job.registrationCountryCode,
           createdByUserId: job.ownerId,
           updatedByUserId: job.ownerId,
           passwordEncrypted: job.passwordVerified ? job.passwordEncrypted : null,

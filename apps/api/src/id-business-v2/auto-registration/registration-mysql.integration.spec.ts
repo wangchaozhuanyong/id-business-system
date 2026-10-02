@@ -125,6 +125,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
       }
     });
     expect(existing.offerStatus).toBe('unknown');
+    expect(existing.registrationCountryCode).toBeNull();
   });
   it('并发启动只创建一个任务，回执限定邮箱、原窗口、时效和尝试', async () => {
     const input = {
@@ -164,7 +165,24 @@ suite('自动注册 MySQL 事务和恢复', () => {
     expect((await repository.find(job.id))?.lastMailId).toBeNull();
     await emit('mail_accepted', { mailId: mailboxCandidate.mailId });
     expect((await repository.find(job.id))?.lastMailId).toBe(mailboxCandidate.mailId);
-    await emit('registered', { email });
+    await expect(emit('registered', { email, registrationCountryCode: 'ZZ' })).rejects.toThrow(
+      '国家代码无效'
+    );
+    await expect(emit('progress', { registrationCountryCode: 'US' })).rejects.toThrow('仅注册完成');
+    await emit('registered', { email, registrationCountryCode: 'PH' });
+    const registeredJob = (await repository.find(job.id))!;
+    expect(registeredJob.registrationCountryCode).toBe('PH');
+    const registeredAccount = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: registeredJob.accountId! }
+    });
+    expect(registeredAccount.registrationCountryCode).toBe('PH');
+    // A replay must not replace the first snapshot or an administrator's edit.
+    await prisma.idBusinessV2ChatgptAccount.update({
+      where: { id: registeredAccount.id },
+      data: { registrationCountryCode: 'MY' }
+    });
+    await emit('registered', { email, registrationCountryCode: 'US' });
+    expect((await repository.find(job.id))!.registrationCountryCode).toBe('PH');
     await expect(emit('complete')).rejects.toThrow('尚未完成');
     await emit('partial', { reason: 'password_unverified' });
     restart();
@@ -210,6 +228,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
     });
     expect(account.offerStatus).toBe('half_price');
     expect(account.passwordEncrypted).toBe(manualPassword);
+    expect(account.registrationCountryCode).toBe('MY');
     const stored = await repository.find(job.id);
     expect(JSON.stringify(stored)).not.toContain(launch.password);
     expect(JSON.stringify(stored)).not.toContain('JBSWY3DPEHPK3PXP');
@@ -240,5 +259,42 @@ suite('自动注册 MySQL 事务和恢复', () => {
       events.event(row.id, token, { type: 'registered', attempt: 1, email: 'expired@example.test' })
     ).rejects.toThrow('授权');
     expect((await repository.find(row.id))?.registered).toBe(false);
+  });
+  it('旧连接器省略国家时留空，重复回执不补写后来的出口国家', async () => {
+    const token = randomBytes(32).toString('hex');
+    const legacyEmail = 'legacy-worker@example.test';
+    const row = await prisma.idBusinessV2RegistrationJob.create({
+      data: {
+        ownerId: operator.id,
+        mailboxAliasId: 'legacy-worker',
+        proxyId,
+        nameId: (await prisma.idBusinessV2RegistrationName.findFirstOrThrow()).id,
+        displayName: '测试',
+        emailEncrypted: encryption.encrypt(legacyEmail)!,
+        emailHash: encryption.hash(legacyEmail)!,
+        emailMasked: 'le***@example.test',
+        birthDateEncrypted: 'encrypted',
+        passwordEncrypted: 'encrypted',
+        nonceHash: registrationTokenHash(token),
+        attempt: 1,
+        leaseUntil: new Date(Date.now() + 60_000)
+      }
+    });
+    await events.event(row.id, token, { type: 'registered', attempt: 1, email: legacyEmail });
+    await events.event(row.id, token, {
+      type: 'registered',
+      attempt: 1,
+      email: legacyEmail,
+      registrationCountryCode: 'US'
+    });
+    const stored = (await repository.find(row.id))!;
+    expect(stored.registrationCountryCode).toBeNull();
+    expect(
+      (
+        await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+          where: { id: stored.accountId! }
+        })
+      ).registrationCountryCode
+    ).toBeNull();
   });
 });

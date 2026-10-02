@@ -25,6 +25,7 @@ export interface BankChatgptAccount {
   } | null;
   id: string;
   emailMasked: string;
+  registrationCountryCode?: string | null;
   status: 'active' | 'disabled';
   subscriptionState: 'never_subscribed' | 'active' | 'due_soon' | 'expired' | 'unknown';
   dueAt: string | null;
@@ -201,7 +202,13 @@ export const bankRechargeApi = {
       http.get(`${base}/accounts`, { params: query, signal: options.signal })
     );
   },
-  createAccount(input: { email: string; password?: string; totpSecret?: string; remark?: string }) {
+  createAccount(input: {
+    email: string;
+    password?: string;
+    totpSecret?: string;
+    remark?: string;
+    registrationCountryCode?: string | null;
+  }) {
     return request<{ id: string }>(http.post(`${base}/accounts`, input));
   },
   importAccounts(

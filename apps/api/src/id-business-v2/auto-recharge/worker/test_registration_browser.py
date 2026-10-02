@@ -2,7 +2,8 @@
 import asyncio
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from checkout_core import Stop
 from registration_security import totp
 from registration_browser import RegistrationBrowser
 
@@ -12,7 +13,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_local_registration_flow(self):
         from playwright.async_api import async_playwright
         state = {'registered': False, 'password': None, 'mfa': False}
-        events = []; expected = 'owner@example.test'; key = 'JBSWY3DPEHPK3PXP'
+        events = []; receipts = []; expected = 'owner@example.test'; key = 'JBSWY3DPEHPK3PXP'
         class Job:
             def __init__(self):
                 self.payload = dict(email=expected, password='synthetic-only-password', displayName='李华', birthDate='1996-01-01', registered=False, passwordVerified=False, mfaVerified=False, totpSecret=None)
@@ -21,6 +22,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 pass
             def event(self, event_type, **data):
                 events.append(event_type); self.step = data.get('step', self.step)
+                receipts.append((event_type, data))
             def prepare_mail(self, step):
                 self.step = step; self.awaiting_code = True
             async def wait_code(self):
@@ -55,7 +57,12 @@ root.innerHTML='<form><input type="email" name="email"><button>Continue</button>
                 context = await original_context(); original_page = context.new_page
                 async def fixture_page():
                     page = await original_page(); await page.expose_binding('fixture', binding)
-                    await page.route('**/*', lambda route: route.fulfill(content_type='text/html', body=html))
+                    async def route_fixture(route):
+                        if route.request.url.endswith('/cdn-cgi/trace'):
+                            await route.fulfill(content_type='text/plain', body='ip=192.0.2.1\nloc=PH\n')
+                        else:
+                            await route.fulfill(content_type='text/html', body=html)
+                    await page.route('**/*', route_fixture)
                     return page
                 context.new_page = fixture_page
                 return context
@@ -71,8 +78,41 @@ root.innerHTML='<form><input type="email" name="email"><button>Continue</button>
                 for stage in ['registered', 'password_verified', 'totp_pending', 'mfa_verified', 'offer', 'complete']:
                     self.assertIn(stage, events)
                 self.assertTrue(job.payload['passwordVerified']); self.assertTrue(job.payload['mfaVerified'])
+                registered = [data for event_type, data in receipts if event_type == 'registered']
+                self.assertEqual(len(registered), 1)
+                self.assertEqual(registered[0]['registrationCountryCode'], 'PH')
+                self.assertNotIn('ip', registered[0])
             finally:
                 await browser.close()
+
+
+class CountryTests(unittest.IsolatedAsyncioTestCase):
+    def flow(self):
+        class Job:
+            payload = {}
+            def check(self):
+                pass
+        flow = RegistrationBrowser(Job(), None)
+        flow.page = type('Page', (), {'url': 'https://chatgpt.com/'})()
+        return flow
+
+    async def test_country_is_observed_from_registration_page_only(self):
+        flow = self.flow()
+        with patch('registration_browser.observe_page_network', AsyncMock(return_value={'ip': '192.0.2.1', 'country': 'PH'})) as probe:
+            self.assertEqual(await flow.registration_country(), 'PH')
+            probe.assert_awaited_once_with(flow.page)
+
+    async def test_unknown_trace_keeps_country_empty(self):
+        with patch('registration_browser.observe_page_network', AsyncMock(side_effect=Stop('proxy_network_unconfirmed'))):
+            self.assertIsNone(await self.flow().registration_country())
+        with patch('registration_browser.observe_page_network', AsyncMock(return_value={'country': 'ZZ'})):
+            self.assertIsNone(await self.flow().registration_country())
+
+    async def test_cancelled_probe_is_not_treated_as_success(self):
+        with patch('registration_browser.observe_page_network', AsyncMock(side_effect=Stop('cancelled'))):
+            with self.assertRaises(Stop) as failure:
+                await self.flow().registration_country()
+            self.assertEqual(failure.exception.report['reason'], 'cancelled')
 
 
 if __name__ == '__main__':

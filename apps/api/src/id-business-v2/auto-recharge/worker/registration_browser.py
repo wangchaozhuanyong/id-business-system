@@ -8,6 +8,7 @@ from browser_password_login import (EMAIL_INPUT, PASSWORD_INPUT, CODE_INPUT,
                                     official_identity, official_login_page,
                                     login_payment_write, unique_visible, clear_visible_secrets)
 from checkout_core import Stop
+from browser_checkout import observe_page_network
 from registration_security import verification_link, totp, totp_key, offer_from_text
 
 
@@ -77,7 +78,9 @@ class RegistrationBrowser:
             await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
         for _ in range(12):
             if await self.identity():
-                self.job.event('registered', email=self.data['email'], step='registered')
+                country = await self.registration_country()
+                self.job.event('registered', email=self.data['email'], step='registered',
+                               registrationCountryCode=country)
                 self.data['registered'] = True
                 return
             email = await self.field(self.page, EMAIL_INPUT)
@@ -119,6 +122,21 @@ class RegistrationBrowser:
                 continue
             await self.job.manual('form_unrecognized')
         raise Stop('official_login_not_verified')
+
+    async def registration_country(self):
+        self.official(self.page)
+        try:
+            network = await observe_page_network(self.page)
+        except Stop as exc:
+            if exc.report['reason'] != 'proxy_network_unconfirmed':
+                raise
+            country = None
+        else:
+            country = network['country']
+            if country in {'XA', 'XB', 'ZZ'}:
+                country = None
+        self.job.check()
+        return country
 
     async def settings(self):
         if not await self.identity():
