@@ -64,6 +64,50 @@ class ServerProxyTests(unittest.TestCase):
 
 
 class ServerProxyExitTests(unittest.IsolatedAsyncioTestCase):
+    def probe(self, text='ip=8.8.8.8\nloc=PH\n', **overrides):
+        response = type('Response', (), {
+            'status': 200, 'url': 'https://chatgpt.com/cdn-cgi/trace',
+            'text': AsyncMock(return_value=text), **overrides
+        })()
+        page = type('Page', (), {
+            'goto': AsyncMock(return_value=response), 'close': AsyncMock()
+        })()
+        context = type('Context', (), {'new_page': AsyncMock(return_value=page)})()
+        return context, page
+
+    async def test_transient_probe_failure_retries_same_browser_context(self):
+        context, page = self.probe()
+        response = page.goto.return_value
+        page.goto.side_effect = [TimeoutError('synthetic timeout'), response]
+        self.assertEqual(await server_proxy.observe_exit(context), {'ip': '8.8.8.8', 'country': 'PH'})
+        self.assertEqual(page.goto.await_count, 2)
+        context.new_page.assert_awaited_once()
+        page.close.assert_awaited_once()
+
+    async def test_persistent_probe_failure_is_bounded_and_redacted(self):
+        context, page = self.probe()
+        page.goto.side_effect = RuntimeError('synthetic credential must not be returned')
+        with self.assertRaises(Stop) as stopped:
+            await server_proxy.observe_exit(context)
+        self.assertEqual(stopped.exception.report['reason'], 'proxy_network_unconfirmed')
+        self.assertEqual(page.goto.await_count, 2)
+        page.close.assert_awaited_once()
+
+    async def test_invalid_probe_responses_never_allow_login(self):
+        for options in [
+            {'text': 'ip=127.0.0.1\nloc=PH\n'},
+            {'text': 'ip=8.8.8.8\nloc=unknown\n'},
+            {'text': 'x' * 4097},
+            {'status': 403},
+            {'url': 'https://example.invalid/cdn-cgi/trace'},
+            {'url': 'http://chatgpt.com/cdn-cgi/trace'}
+        ]:
+            context, page = self.probe(**options)
+            with self.assertRaises(Stop):
+                await server_proxy.observe_exit(context)
+            self.assertEqual(page.goto.await_count, 2)
+            page.close.assert_awaited_once()
+
     async def test_philippines_exit_keeps_us_billing_address_independent(self):
         context = type('Context', (), {'close': AsyncMock()})()
         browser = type('Browser', (), {'new_context': AsyncMock(return_value=context)})()
