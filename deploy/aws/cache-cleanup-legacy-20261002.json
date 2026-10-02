@@ -1,0 +1,550 @@
+{
+  "scope": "legacy-project-cache-20261002",
+  "recovery": "rebuild_from_retained_git_commits_and_lockfiles",
+  "expectedCurrent": "cecc14b530fd32d595fe5ae14612fbde68ae9175",
+  "expectedPrevious": "63e7c3b9fdb462517373b48f338626dafaf856ca",
+  "sources": [
+    {
+      "commit": "10a29b1de43f3a727a218147c24ebaf8b777cd0a",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "1d4d79ec23b313c72a89728f4e5f3eb60edc3198",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "24dd6e24c93075f65a45fd20e2887d1921eb0701",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "37939b575d9ce6314481b629cb22041fd4916002",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "3add58f366478d8bd06808d63bc1d62b74c75fef",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "45357f620ed49517393ba7bb6c4c663531f29f0a",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "48dfb1b4f3a239edd0ab8effa370dcad48fd798f",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "54df0dac4f5f5e1171eddda1e9bd86e62dc0de41",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "5e626c62960dc51ac2238c6d3b1b4b7a9de3204b",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "6f1190f14d263d3de872f6ed2f3918729c8de9be",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "7026df6628565a55ed785e3f4f76c5c3ba9ca1fb",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "795e2edc42ed49139a985e4fd10131761e98e6d0",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "82ebeb5848331ec337c759f1b87108ebc7d089f6",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "84ef7a9c5d6b7335e25e69a95ecfd61fc73216dc",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "903dacdc8f7ee27d4a0d71c77cd8e2a1accbe96f",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "90e5050afb9480c22f427faab366633cb21abc77",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "9f07a1404c475df17fe6cdf22ab7bcb978fc5b50",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "c681b783dc4dc537dc6ecc0dfcd162df5f31d443",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "d04a20275d655500c703ab4ae8d491336a7f89d7",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    },
+    {
+      "commit": "e617a595553ed611989b9b8980bc3c115061d93e",
+      "lockFile": "package-lock.json",
+      "dockerfiles": [
+        "apps/admin/Dockerfile",
+        "apps/api/Dockerfile",
+        "apps/api/Dockerfile.mysql",
+        "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile",
+        "apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile"
+      ],
+      "retainedIn": "origin/main"
+    }
+  ],
+  "items": [
+    {
+      "imageId": "sha256:477fb77ff5cdfdc836e99900ab67e843828b9c59948bf75ed2a939b7a8827efb",
+      "references": ["id-business-v2-media-resolver:d04a20275d655500c703ab4ae8d491336a7f89d7"],
+      "sizeBytes": 916346302,
+      "sourceCommit": "d04a20275d655500c703ab4ae8d491336a7f89d7"
+    },
+    {
+      "imageId": "sha256:9e9bcbeea79d16d9bd6598059502d103f11913888a777866d896303ad52427ef",
+      "references": ["id-business-v2-admin:90e5050afb9480c22f427faab366633cb21abc77"],
+      "sizeBytes": 51213541,
+      "sourceCommit": "90e5050afb9480c22f427faab366633cb21abc77"
+    },
+    {
+      "imageId": "sha256:a3f542ea36b9b0b8a946b757022bdce9df57e15696ff239c73552a3725894912",
+      "references": [
+        "id-business-v2-media-resolver:90e5050afb9480c22f427faab366633cb21abc77",
+        "id-business-v2-media-resolver:f03793259352752a51ec5cf47f914c045ea09d01"
+      ],
+      "sizeBytes": 916317102,
+      "sourceCommit": "90e5050afb9480c22f427faab366633cb21abc77"
+    },
+    {
+      "imageId": "sha256:6365dc894388dcade90cfcd8536af4aae09dfab4356b095fc329ba21d8fc180f",
+      "references": ["id-business-v2-api:90e5050afb9480c22f427faab366633cb21abc77"],
+      "sizeBytes": 377615008,
+      "sourceCommit": "90e5050afb9480c22f427faab366633cb21abc77"
+    },
+    {
+      "imageId": "sha256:3ca31527399e12bc3923f76c65d0ae3f6a2b2f70a384e78c030c8a2f0f6e07c1",
+      "references": ["id-business-v2-admin:5e626c62960dc51ac2238c6d3b1b4b7a9de3204b"],
+      "sizeBytes": 51206816,
+      "sourceCommit": "5e626c62960dc51ac2238c6d3b1b4b7a9de3204b"
+    },
+    {
+      "imageId": "sha256:247220c80f65eafd553e1282136e2fd3666285154688db1238cbce7afd480076",
+      "references": ["id-business-v2-admin:48dfb1b4f3a239edd0ab8effa370dcad48fd798f"],
+      "sizeBytes": 51179696,
+      "sourceCommit": "48dfb1b4f3a239edd0ab8effa370dcad48fd798f"
+    },
+    {
+      "imageId": "sha256:69c0acde7de19435fc87c89d653539bd4a4b523f076e1871c9cdf58decf4a167",
+      "references": ["id-business-v2-admin:903dacdc8f7ee27d4a0d71c77cd8e2a1accbe96f"],
+      "sizeBytes": 51179597,
+      "sourceCommit": "903dacdc8f7ee27d4a0d71c77cd8e2a1accbe96f"
+    },
+    {
+      "imageId": "sha256:068081ca91510e5926e8694fcfcc9f64678882f1ae266c3e585a0cc889a677f2",
+      "references": ["id-business-v2-migrate:6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a"],
+      "sizeBytes": 757298932,
+      "sourceCommit": "6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a"
+    },
+    {
+      "imageId": "sha256:566ad39c5b569b6df4cae7141553a6d0bb3d1e8d48c50e694e9a28b746c2d7c5",
+      "references": ["id-business-v2-admin:6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a"],
+      "sizeBytes": 51179253,
+      "sourceCommit": "6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a"
+    },
+    {
+      "imageId": "sha256:0ef675c3b72d6feeef02d1afd626c97c870b4621ed6dd7f5396cedc3533c94e5",
+      "references": ["id-business-v2-api:6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a"],
+      "sizeBytes": 377613551,
+      "sourceCommit": "6ddcd5f3fe065f67ff26bfaccfbb9549ce432e6a"
+    },
+    {
+      "imageId": "sha256:7f0c673d7f23390f28b1b8ecab5dc5610d56043ab95a6944f774ed716f961795",
+      "references": ["id-business-v2-api:e617a595553ed611989b9b8980bc3c115061d93e"],
+      "sizeBytes": 376605844,
+      "sourceCommit": "e617a595553ed611989b9b8980bc3c115061d93e"
+    },
+    {
+      "imageId": "sha256:dd46c012b87dd45f6503f065802dd449364f4b5f078d777dd20129596bf84503",
+      "references": ["id-business-v2-admin:e617a595553ed611989b9b8980bc3c115061d93e"],
+      "sizeBytes": 51116319,
+      "sourceCommit": "e617a595553ed611989b9b8980bc3c115061d93e"
+    },
+    {
+      "imageId": "sha256:8cd564fd28f5b53514ccbd4b5e138cae0a04ee62c53cd900f17537b7835a8479",
+      "references": ["id-business-v2-api:37939b575d9ce6314481b629cb22041fd4916002"],
+      "sizeBytes": 376605581,
+      "sourceCommit": "37939b575d9ce6314481b629cb22041fd4916002"
+    },
+    {
+      "imageId": "sha256:e6571dfb299e3a0e35548eb36137a1647376608a74bdebe581cc7df593ff81cf",
+      "references": ["id-business-v2-admin:37939b575d9ce6314481b629cb22041fd4916002"],
+      "sizeBytes": 51130360,
+      "sourceCommit": "37939b575d9ce6314481b629cb22041fd4916002"
+    },
+    {
+      "imageId": "sha256:0621acd1236d6e8b8ad3a2ce2c4cf44eb911f609fa3148914e969f4a7bcb3f39",
+      "references": ["id-business-v2-admin:1d4d79ec23b313c72a89728f4e5f3eb60edc3198"],
+      "sizeBytes": 51101321,
+      "sourceCommit": "1d4d79ec23b313c72a89728f4e5f3eb60edc3198"
+    },
+    {
+      "imageId": "sha256:3194024e2ff05db0a7eb7faac9feb8f4e6c9d933d948e54fce4f6050bfce76a1",
+      "references": ["id-business-v2-admin:795e2edc42ed49139a985e4fd10131761e98e6d0"],
+      "sizeBytes": 51101164,
+      "sourceCommit": "795e2edc42ed49139a985e4fd10131761e98e6d0"
+    },
+    {
+      "imageId": "sha256:92d0b774fec1e94bc7161e7305133b32f5e5dc5b8f831f8518ee3e0015424dfc",
+      "references": ["id-business-v2-api:795e2edc42ed49139a985e4fd10131761e98e6d0"],
+      "sizeBytes": 376595853,
+      "sourceCommit": "795e2edc42ed49139a985e4fd10131761e98e6d0"
+    },
+    {
+      "imageId": "sha256:b92206f5018e2d7442c2fcbb41d34275196d87e719d58c3c67f9eb0d365d01d5",
+      "references": ["id-business-v2-admin:84ef7a9c5d6b7335e25e69a95ecfd61fc73216dc"],
+      "sizeBytes": 51078385,
+      "sourceCommit": "84ef7a9c5d6b7335e25e69a95ecfd61fc73216dc"
+    },
+    {
+      "imageId": "sha256:fd5c9fcd2eba216b8b5876994223841433de4c8fd4fcc82581ea350b133e4db0",
+      "references": ["id-business-v2-api:84ef7a9c5d6b7335e25e69a95ecfd61fc73216dc"],
+      "sizeBytes": 376585185,
+      "sourceCommit": "84ef7a9c5d6b7335e25e69a95ecfd61fc73216dc"
+    },
+    {
+      "imageId": "sha256:586adbff9aadd500a42803db3652349201323f30b733fa433d20001e33c98b93",
+      "references": ["id-business-v2-admin:10a29b1de43f3a727a218147c24ebaf8b777cd0a"],
+      "sizeBytes": 51045211,
+      "sourceCommit": "10a29b1de43f3a727a218147c24ebaf8b777cd0a"
+    },
+    {
+      "imageId": "sha256:8abb8cfbec594266715777c27948fc41998ad1ce5fa1374c9929bb60e9af2e66",
+      "references": ["id-business-v2-api:10a29b1de43f3a727a218147c24ebaf8b777cd0a"],
+      "sizeBytes": 376494787,
+      "sourceCommit": "10a29b1de43f3a727a218147c24ebaf8b777cd0a"
+    },
+    {
+      "imageId": "sha256:8bd428e93d80aab8a8884823ddbfbff78ddd3b08d3054f4e3c0b66e027365dcb",
+      "references": [
+        "id-business-v2-auto-recharge:10a29b1de43f3a727a218147c24ebaf8b777cd0a",
+        "id-business-v2-auto-recharge:decbe120c89cd2e6f5af3eff048f4f385cc4c534"
+      ],
+      "sizeBytes": 1274047404,
+      "sourceCommit": "10a29b1de43f3a727a218147c24ebaf8b777cd0a"
+    },
+    {
+      "imageId": "sha256:b48142a9d80c56c7251291541f26226b928f33ec1b4848209bc6e0e08a00b944",
+      "references": ["id-business-v2-admin:4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8"],
+      "sizeBytes": 51042868,
+      "sourceCommit": "4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8"
+    },
+    {
+      "imageId": "sha256:9d2c0f808313fd94f2c0a153142d5f628e58a7f11973ac498f00ac696d12ac64",
+      "references": ["id-business-v2-api:4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8"],
+      "sizeBytes": 376483523,
+      "sourceCommit": "4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8"
+    },
+    {
+      "imageId": "sha256:44e7fbbe3c9c64a5eb9b8f4cc33b80d02a2405fb4df1ada6dddd4992cb647fd6",
+      "references": [
+        "id-business-v2-auto-recharge:4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8",
+        "id-business-v2-auto-recharge:fdc2bd788e9ec90d6ddfd19ff2fd25c48bd901b3"
+      ],
+      "sizeBytes": 1274024085,
+      "sourceCommit": "4c01ec1ad67d788de06f9ca1a9fcfa2ead9297a8"
+    },
+    {
+      "imageId": "sha256:8cd7890b5c4b245d77a441d146e19fd155f62c56574791334196eba7ff854114",
+      "references": ["id-business-v2-admin:3add58f366478d8bd06808d63bc1d62b74c75fef"],
+      "sizeBytes": 51030975,
+      "sourceCommit": "3add58f366478d8bd06808d63bc1d62b74c75fef"
+    },
+    {
+      "imageId": "sha256:be77a41d7ddf435300daab2bfb5b7ac2f7aea3c521bbd3df54eb1ecae70a2492",
+      "references": ["id-business-v2-admin:54df0dac4f5f5e1171eddda1e9bd86e62dc0de41"],
+      "sizeBytes": 51030906,
+      "sourceCommit": "54df0dac4f5f5e1171eddda1e9bd86e62dc0de41"
+    },
+    {
+      "imageId": "sha256:aa3ecdd98e1c2a10f7a48ef403b870c968780322fae75c33d10c99441ddf0061",
+      "references": ["id-business-v2-api:54df0dac4f5f5e1171eddda1e9bd86e62dc0de41"],
+      "sizeBytes": 376482479,
+      "sourceCommit": "54df0dac4f5f5e1171eddda1e9bd86e62dc0de41"
+    },
+    {
+      "imageId": "sha256:01547ffd83c6f9d638990440f7af9356fd247a137cccc666c43b0fa92eff6f60",
+      "references": ["id-business-v2-admin:45357f620ed49517393ba7bb6c4c663531f29f0a"],
+      "sizeBytes": 51030699,
+      "sourceCommit": "45357f620ed49517393ba7bb6c4c663531f29f0a"
+    },
+    {
+      "imageId": "sha256:a58d288a76e868051b5db4de69e705e20c9835731579759eccbac66b3120ffa3",
+      "references": ["id-business-v2-api:24dd6e24c93075f65a45fd20e2887d1921eb0701"],
+      "sizeBytes": 376482116,
+      "sourceCommit": "24dd6e24c93075f65a45fd20e2887d1921eb0701"
+    },
+    {
+      "imageId": "sha256:e5691ca88b06e7cc6f17e1bd4a4cb39151fb3eacf34896debd2d814a6563b89d",
+      "references": ["id-business-v2-admin:6f1190f14d263d3de872f6ed2f3918729c8de9be"],
+      "sizeBytes": 51030590,
+      "sourceCommit": "6f1190f14d263d3de872f6ed2f3918729c8de9be"
+    },
+    {
+      "imageId": "sha256:e5ba36340c3665cdefc228cc81a5aa656e7af5920a474650b9faa52d7708ba56",
+      "references": ["id-business-v2-api:6f1190f14d263d3de872f6ed2f3918729c8de9be"],
+      "sizeBytes": 376481743,
+      "sourceCommit": "6f1190f14d263d3de872f6ed2f3918729c8de9be"
+    },
+    {
+      "imageId": "sha256:2fa8f1e86670a13fe0d33db83168de8f512f6d1a7362e30d0a8619cb5db65cff",
+      "references": [
+        "id-business-v2-auto-recharge:6f1190f14d263d3de872f6ed2f3918729c8de9be",
+        "id-business-v2-auto-recharge:b6ae29639cecb7870de45521025f1250b6ec4a95"
+      ],
+      "sizeBytes": 1274017194,
+      "sourceCommit": "6f1190f14d263d3de872f6ed2f3918729c8de9be"
+    },
+    {
+      "imageId": "sha256:5f8faed03afe57dfefac18b7fcca58bbdd5139e44e14650eddb7453324949ca8",
+      "references": [
+        "id-business-v2-auto-recharge:757ae4c5903baa34846e35f762f6a0be34c0427e",
+        "id-business-v2-auto-recharge:c681b783dc4dc537dc6ecc0dfcd162df5f31d443"
+      ],
+      "sizeBytes": 1273995528,
+      "sourceCommit": "c681b783dc4dc537dc6ecc0dfcd162df5f31d443"
+    },
+    {
+      "imageId": "sha256:d7f037dc1ee4c2999e3ff23e14f730d91f5774260d236039c7609f39c3ec20aa",
+      "references": [
+        "id-business-v2-admin:82ebeb5848331ec337c759f1b87108ebc7d089f6",
+        "id-business-v2-admin:c681b783dc4dc537dc6ecc0dfcd162df5f31d443"
+      ],
+      "sizeBytes": 51026611,
+      "sourceCommit": "82ebeb5848331ec337c759f1b87108ebc7d089f6"
+    },
+    {
+      "imageId": "sha256:6465bbff51052cc5cfd4b56bdb894ac0d9ed5966e783ee9c846c531925414167",
+      "references": [
+        "id-business-v2-api:82ebeb5848331ec337c759f1b87108ebc7d089f6",
+        "id-business-v2-api:c681b783dc4dc537dc6ecc0dfcd162df5f31d443"
+      ],
+      "sizeBytes": 376438898,
+      "sourceCommit": "82ebeb5848331ec337c759f1b87108ebc7d089f6"
+    },
+    {
+      "imageId": "sha256:2412f18bb0d6251affc7980668abe723cdf37e9dff67add4f1e8f43a2ad264e8",
+      "references": [
+        "id-business-v2-media-resolver:c681b783dc4dc537dc6ecc0dfcd162df5f31d443",
+        "id-business-v2-media-resolver:f7aebdcc0b055d6d454fa860c110e1bc544c8050"
+      ],
+      "sizeBytes": 916298175,
+      "sourceCommit": "c681b783dc4dc537dc6ecc0dfcd162df5f31d443"
+    },
+    {
+      "imageId": "sha256:35bdcc193d8830f84280c23fbf223b6fc8fb5205ec5caf12626ea14011a1ad46",
+      "references": ["id-business-v2-migrate:9f07a1404c475df17fe6cdf22ab7bcb978fc5b50"],
+      "sizeBytes": 756498551,
+      "sourceCommit": "9f07a1404c475df17fe6cdf22ab7bcb978fc5b50"
+    },
+    {
+      "imageId": "sha256:41c2763e7725093b1cbf30be8ed8785f62cb1b2418396199ccdc56f103e06389",
+      "references": ["id-business-v2-admin:9f07a1404c475df17fe6cdf22ab7bcb978fc5b50"],
+      "sizeBytes": 51022496,
+      "sourceCommit": "9f07a1404c475df17fe6cdf22ab7bcb978fc5b50"
+    },
+    {
+      "imageId": "sha256:ca426edc3138768ce582662978ed15caf1f180e1a4030c653473d0241bda079e",
+      "references": ["id-business-v2-api:9f07a1404c475df17fe6cdf22ab7bcb978fc5b50"],
+      "sizeBytes": 376432963,
+      "sourceCommit": "9f07a1404c475df17fe6cdf22ab7bcb978fc5b50"
+    },
+    {
+      "imageId": "sha256:e0342c949664bf05e4486acefbad194061c7b62934bd2d371b3c61872cfeec87",
+      "references": ["id-business-v2-admin:7026df6628565a55ed785e3f4f76c5c3ba9ca1fb"],
+      "sizeBytes": 50996124,
+      "sourceCommit": "7026df6628565a55ed785e3f4f76c5c3ba9ca1fb"
+    },
+    {
+      "imageId": "sha256:978f7a4be40381dcdcb552bf0ba40768df56a84c9f58d1e877cc7a9f1c94b17f",
+      "references": ["id-business-v2-api:7026df6628565a55ed785e3f4f76c5c3ba9ca1fb"],
+      "sizeBytes": 376405887,
+      "sourceCommit": "7026df6628565a55ed785e3f4f76c5c3ba9ca1fb"
+    }
+  ]
+}

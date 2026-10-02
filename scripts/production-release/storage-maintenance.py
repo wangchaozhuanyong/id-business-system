@@ -23,6 +23,7 @@ REVIEWED_BASELINES = {
 APPROVED_SCOPE = 'audit-routine-20261002T110000Z'
 CUTOFF = '2026-10-02 11:00:00'
 MAX_APPROVED_COUNT = 19848
+LEGACY_PLAN_SHA256 = 'fd03e4c0590d803b8f2f2722bf88f89bb0b1a900c74d9107b651192589b6a3a8'
 ROUTINE_ACTIONS = (
     'id_business_v2.website_visit.collect',
     'id_business_v2.exchange_rate.schedule.claim',
@@ -35,6 +36,9 @@ ROUTINE_ACTIONS = (
 def read(*args):
     result = subprocess.run(args, capture_output=True, text=True, timeout=120)
     if result.returncode:
+        mysql_error = re.search(r'ERROR (\d+) \(([A-Z0-9]+)\)', result.stderr)
+        if mysql_error:
+            raise RuntimeError('Diagnostic MySQL error ' + mysql_error[1] + ' (' + mysql_error[2] + ')')
         raise RuntimeError('Diagnostic command failed; details suppressed')
     return result.stdout.strip()
 
@@ -164,6 +168,13 @@ def diagnose(expected=EXPECTED):
         'candidateCutoffUtc': '2026-10-02T11:00:00Z',
         'archiveInventory': archive_inventory(),
     }
+    receipt_dir = BASE / 'maintenance/storage-cleanup-20261002'
+    for name in ('audit-cleanup-receipt.json', 'audit-before.json', 'audit-after.json'):
+        path = receipt_dir / name
+        if path.is_file() and not path.is_symlink():
+            result.setdefault('maintenanceReceipts', {})[name] = json.loads(path.read_text())
+    backups = sorted((BASE / 'backups/mysql').glob('id-business-v2-*.sql.gz'))
+    result['latestLocalBackupName'] = backups[-1].name if backups else None
     if json.loads((BASE / 'current/release-manifest.json').read_text())['commit'] != expected:
         raise RuntimeError('Production baseline changed during diagnostics')
     return result
@@ -293,8 +304,10 @@ def cleanup_audit(expected, approved_scope):
     require(approved_scope == APPROVED_SCOPE, 'Explicit fixed-scope approval required')
     with (BASE / '.deploy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        print('STORAGE_STAGE baseline', flush=True)
         directory = baseline(expected)
         container = project_mysql()
+        print('STORAGE_STAGE audit_preview', flush=True)
         preview = preview_audit(container)
         if preview['count'] == 0:
             return {'mode': 'ALREADY_CLEAN', 'deleted': 0, 'preview': preview}
@@ -302,18 +315,22 @@ def cleanup_audit(expected, approved_scope):
         receipt_dir.mkdir(parents=True, exist_ok=True)
         receipt_dir.chmod(0o700)
         deployment = helper('remote-deploy')
+        print('STORAGE_STAGE financial_before', flush=True)
         before = deployment.audit(directory, receipt_dir / 'audit-before.json')
+        print('STORAGE_STAGE verified_backup', flush=True)
         backup = fresh_backup(directory)
         baseline(expected)
         refreshed = preview_audit(container)
         require(all(refreshed[key] == preview[key] for key in ('count', 'idsSha256', 'references')),
                 'Audit candidate set changed before deletion')
+        print('STORAGE_STAGE guarded_delete', flush=True)
         receipt = json.loads(mysql(container, deletion_sql(preview, backup), read_only=False))
         receipt.update({'mode': 'APPLIED', 'preview': preview, 'backup': backup,
                         'dataAuditBefore': before})
         (receipt_dir / 'audit-cleanup-receipt.json').write_text(json.dumps(receipt, indent=2))
         (receipt_dir / 'audit-cleanup-receipt.json').chmod(0o600)
         require(receipt['deleted'] == preview['count'], 'Candidate guard prevented deletion')
+        print('STORAGE_STAGE financial_after', flush=True)
         receipt['dataAuditAfter'] = deployment.audit(directory, receipt_dir / 'audit-after.json')
         require(preview_audit(container)['count'] == 0, 'Approved audit candidates remain')
         baseline(expected)
@@ -321,15 +338,94 @@ def cleanup_audit(expected, approved_scope):
         return receipt
 
 
+def legacy_cache_plan(plan_json):
+    plan = json.loads(plan_json)
+    digest = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    require(digest == LEGACY_PLAN_SHA256, 'Legacy cache plan differs from reviewed digest')
+    require(len(plan['items']) == 42 and sum(len(item['references']) for item in plan['items']) == 50,
+            'Legacy cache reviewed count changed')
+    sources = {source['commit'] for source in plan['sources'] if source['retainedIn'] == 'origin/main'}
+    for item in plan['items']:
+        require(item['sourceCommit'] in sources and any(
+            ref.endswith(':' + item['sourceCommit']) for ref in item['references']),
+            'Retained source recovery proof missing')
+        require(all(re.fullmatch(r'id-business-v2-(?:admin|api|migrate|auto-recharge|media-resolver):[a-f0-9]{40}', ref)
+                    for ref in item['references']), 'Reference is outside legacy project cache')
+    return plan
+
+
+def container_images():
+    return {read('docker', 'inspect', '--format', '{{.Image}}', item)
+            for item in read('docker', 'ps', '-a', '-q').splitlines()}
+
+
+def legacy_image_identity(item):
+    metadata = json.loads(read('docker', 'image', 'inspect', '--format',
+        '{"id":{{json .Id}},"repoTags":{{json .RepoTags}}}', item['imageId']))
+    require(metadata['id'] == item['imageId'] and sorted(metadata['repoTags'] or []) == item['references'],
+            'Legacy image identity or references changed')
+
+
+def cleanup_legacy_cache(expected, plan_json, apply=False):
+    plan = legacy_cache_plan(plan_json)
+    require(expected == plan['expectedCurrent'], 'Legacy cache production baseline differs')
+    with (BASE / '.deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        baseline(expected)
+        manifest = json.loads((BASE / 'current/release-manifest.json').read_text())
+        previous = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
+        require(previous['commit'] == plan['expectedPrevious'], 'Legacy cache rollback changed')
+        protected = container_images()
+        for release in (manifest, previous):
+            protected.update(image['digest'] for image in release.get('images', {}).values())
+            protected.update(release.get('rollback', {}).get('images', {}).values())
+        for item in plan['items']:
+            require(item['imageId'] not in protected, 'Legacy image is used by a container or protected release')
+            legacy_image_identity(item)
+        before = shutil.disk_usage(BASE).free
+        removed = []
+        receipt = {'mode': 'APPLIED' if apply else 'PLAN_ONLY', 'removed': removed,
+                   'approvedImageCount': 42, 'approvedReferenceCount': 50,
+                   'recovery': plan['recovery'], 'planSha256': LEGACY_PLAN_SHA256,
+                   'freeBytesBefore': before}
+        receipt_dir = BASE / 'maintenance/storage-cleanup-20261002'
+        if apply:
+            receipt_dir.mkdir(parents=True, exist_ok=True)
+            receipt_dir.chmod(0o700)
+            for item in plan['items']:
+                baseline(expected)
+                require(item['imageId'] not in container_images(), 'Legacy image became used by a container')
+                legacy_image_identity(item)
+                for reference in item['references']:
+                    require(item['imageId'] not in container_images(), 'Legacy image became used by a container')
+                    read('docker', 'image', 'rm', '--no-prune', reference)
+                    removed.append(reference)
+                    path = receipt_dir / 'legacy-cache-cleanup-receipt.json'
+                    path.write_text(json.dumps(receipt, indent=2))
+                    path.chmod(0o600)
+        baseline(expected)
+        receipt['freeBytesAfter'] = shutil.disk_usage(BASE).free
+        if apply:
+            path.write_text(json.dumps(receipt, indent=2))
+        return receipt
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--operation', choices=('diagnose', 'cleanup-audit'), required=True)
+    parser.add_argument('--operation', choices=('diagnose', 'cleanup-audit', 'verify-legacy-cache',
+                                               'cleanup-legacy-cache'), required=True)
     parser.add_argument('--expected-current', required=True)
     parser.add_argument('--approved-scope')
+    parser.add_argument('--legacy-plan-json')
     args = parser.parse_args()
     baseline(args.expected_current)
-    result = diagnose(args.expected_current) if args.operation == 'diagnose' else cleanup_audit(
-        args.expected_current, args.approved_scope)
+    if args.operation == 'diagnose':
+        result = diagnose(args.expected_current)
+    elif args.operation == 'cleanup-audit':
+        result = cleanup_audit(args.expected_current, args.approved_scope)
+    else:
+        result = cleanup_legacy_cache(args.expected_current, args.legacy_plan_json,
+                                      apply=args.operation == 'cleanup-legacy-cache')
     encoded = base64.b64encode(gzip.compress(json.dumps(result).encode())).decode()
     print('STORAGE_MAINTENANCE ' + json.dumps({'encoding': 'gzip+base64', 'payload': encoded}))
 
