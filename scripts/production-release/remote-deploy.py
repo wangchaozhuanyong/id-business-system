@@ -44,6 +44,7 @@ REUSE_CONTROL_FILES = frozenset({
     'deploy/aws/cache-cleanup-storage-20261002.json',
     'deploy/aws/cache-cleanup-bitbrowser-direct-20261003.json',
     'deploy/aws/cache-cleanup-legacy-20261002.json',
+    'deploy/aws/cache-cleanup-unused-legacy-20261003.json',
     'docs/PRODUCTION_RELEASE_OIDC.md',
     'docs/RECHARGE_NAMES_CACHE_RECOVERY_20261002.md',
     'docs/RECHARGE_EXECUTION_CACHE_RECOVERY_20261002.md',

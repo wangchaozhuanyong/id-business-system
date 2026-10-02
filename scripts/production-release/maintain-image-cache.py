@@ -13,6 +13,8 @@ BASE = Path('/opt/id-business-v2')
 REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 POLICY = 'current-previous-ecr-cache-v1'
 TAG = re.compile(r'[0-9a-f]{40}-[1-9][0-9]*-[1-9][0-9]*-(?:admin|api|migrate|media-resolver|auto-recharge)')
+LEGACY_POLICY = 'reviewed-obsolete-project-cache-20261003'
+LEGACY_PLAN_SHA256 = '0596af43c4fbf904c3b784ebadb2f444aee3747dc6d8d38a6f9f09a845c6e1c9'
 
 
 def require(condition, reason):
@@ -116,6 +118,79 @@ def apply_plan(plan):
     return removed
 
 
+def legacy_plan(payload):
+    plan = json.loads(payload)
+    require(plan_digest(plan) == LEGACY_PLAN_SHA256, 'Obsolete cache plan differs from reviewed digest')
+    require(plan['policy'] == LEGACY_POLICY and len(plan['items']) == 17,
+            'Obsolete cache scope changed')
+    require(len({item['id'] for item in plan['items']}) == 17, 'Duplicate obsolete cache image')
+    return plan
+
+
+def legacy_identity(item, remaining_tags=None):
+    image_format = ('{"id":{{json .Id}},"repoTags":{{json .RepoTags}},'
+                    '"repoDigests":{{json .RepoDigests}},'
+                    '"sourceCommit":{{json (index .Config.Labels "org.opencontainers.image.revision")}},'
+                    '"composeProject":{{json (index .Config.Labels "com.docker.compose.project")}}}')
+    actual = json.loads(read('docker', 'image', 'inspect', '--format', image_format, item['id']))
+    require(actual['id'] == item['id']
+            and sorted(actual['repoTags'] or []) == sorted(item['repoTags'] if remaining_tags is None else remaining_tags)
+            and sorted(actual['repoDigests'] or []) == sorted(item['repoDigests'])
+            and actual['sourceCommit'] == item['sourceCommit']
+            and actual['composeProject'] == item['composeProject'],
+            'Obsolete cache identity or ownership changed')
+
+
+def verify_legacy_item(plan, item, remaining_tags=None):
+    live, previous = current(plan['expectedCurrent'])
+    require(previous['commit'] == plan['expectedPrevious'], 'Obsolete cache rollback baseline changed')
+    require(item['id'] not in protected_images(live, previous, active_images()),
+            'Obsolete cache is now used or protected')
+    legacy_identity(item, remaining_tags)
+
+
+def maintain_legacy(args):
+    plan = legacy_plan(args.legacy_plan_json)
+    require(args.expected_current == plan['expectedCurrent'], 'Obsolete cache production baseline differs')
+    require(not args.deployment_run, 'Obsolete cache cleanup cannot run automatically after deployment')
+    for item in plan['items']:
+        verify_legacy_item(plan, item)
+    before = shutil.disk_usage(BASE).free
+    result = {'mode': 'APPLIED' if args.apply else 'PLAN_ONLY', 'policy': LEGACY_POLICY,
+              'status': 'IN_PROGRESS' if args.apply else 'COMPLETE',
+              'currentCommit': args.expected_current, 'planSha256': LEGACY_PLAN_SHA256,
+              'candidateCount': len(plan['items']), 'removed': [], 'freeBytesBefore': before}
+    if args.apply:
+        require(args.approved_policy == LEGACY_POLICY and args.approved_plan_sha256 == LEGACY_PLAN_SHA256,
+                'Exact obsolete cache approval required')
+        directory = BASE / 'maintenance/docker-cache-retention'
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        name = 'obsolete-' + str(time.time_ns())
+        plan_path = directory / (name + '.plan.json')
+        plan_path.write_text(json.dumps(plan, indent=2))
+        plan_path.chmod(0o600)
+        receipt = directory / (name + '.receipt.json')
+        receipt.write_text(json.dumps(result, indent=2))
+        receipt.chmod(0o600)
+        for item in plan['items']:
+            tags = list(item['repoTags'])
+            for reference in list(tags) or [item['id']]:
+                verify_legacy_item(plan, item, tags)
+                read('docker', 'image', 'rm', '--no-prune', reference)
+                if reference in tags:
+                    tags.remove(reference)
+                result['removed'].append(reference)
+                receipt.write_text(json.dumps(result, indent=2))
+                print('OBSOLETE_CACHE_REMOVED ' + reference, flush=True)
+    live, previous = current(args.expected_current)
+    require(previous['commit'] == plan['expectedPrevious'], 'Obsolete cache rollback baseline changed')
+    result['freeBytesAfter'] = shutil.disk_usage(BASE).free
+    result['status'] = 'COMPLETE'
+    if args.apply:
+        receipt.write_text(json.dumps(result, indent=2))
+    print(json.dumps(result))
+
+
 def maintain(args):
     manifest, previous = current(args.expected_current)
     protected = protected_images(manifest, previous, active_images())
@@ -164,11 +239,15 @@ def main():
     parser.add_argument('--approved-policy')
     parser.add_argument('--approved-plan-sha256')
     parser.add_argument('--deployment-run')
+    parser.add_argument('--legacy-plan-json')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid production baseline')
     with (BASE / '.deploy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        maintain(args)
+        if args.legacy_plan_json:
+            maintain_legacy(args)
+        else:
+            maintain(args)
 
 
 if __name__ == '__main__':
