@@ -159,7 +159,7 @@ export class IdBusinessV2DashboardService {
       balances: has('apple.balance.view'),
       exchangeRates: has('apple.exchange_rate.view'),
       finance: has('data.analytics.view') || has('finance.view'),
-      audit: has('audit_log.view')
+      audit: admin
     };
   }
 

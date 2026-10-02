@@ -147,7 +147,7 @@
           <AppButton
             size="small"
             variant="danger"
-            :disabled="row.isCurrent || Boolean(row.revokedAt)"
+            :disabled="!page.canManageSecurity || row.isCurrent || Boolean(row.revokedAt)"
             :loading="page.revokingSessionId === row.id"
             :title="row.isCurrent ? '当前会话不能在此处强制下线' : '强制下线这个会话'"
             @click="page.revokeSession(row)"
@@ -249,6 +249,7 @@
             size="small"
             variant="danger"
             :loading="page.revokingSessionId === item.id"
+            :disabled="!page.canManageSecurity"
             @click="page.revokeSession(item)"
           >
             强制下线

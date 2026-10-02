@@ -35,7 +35,11 @@
       <el-option
         v-for="item in savedAccounts"
         :key="item.id"
-        :label="item.issuer ? `${item.name} · ${item.issuer}` : item.name"
+        :label="
+          [item.name, item.issuer, item.sourceAccount ? `接管自 ${item.sourceAccount}` : '']
+            .filter(Boolean)
+            .join(' · ')
+        "
         :value="item.id"
       />
     </el-select>

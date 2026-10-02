@@ -13,6 +13,7 @@ import { PermissionsGuard } from '../auth/permissions.guard';
 import { V2AuthController } from './v2-auth.controller';
 import { V2EmployeesController } from './employees/v2-employees.controller';
 import { V2EmployeesService } from './employees/v2-employees.service';
+import { V2EmployeeAccountActionsService } from './employees/v2-employee-account-actions.service';
 import { V2IdentityService } from './v2-identity.service';
 import { V2ProfileController } from './profile/v2-profile.controller';
 import { V2ProfileService } from './profile/v2-profile.service';
@@ -54,6 +55,7 @@ import { V2SecurityController } from './security/v2-security.controller';
     SecurityService,
     V2IdentityService,
     V2EmployeesService,
+    V2EmployeeAccountActionsService,
     V2ProfileService,
     V2RolesService,
     AuthService,

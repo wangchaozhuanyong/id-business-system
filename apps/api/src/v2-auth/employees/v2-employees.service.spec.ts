@@ -46,7 +46,11 @@ function createEmployee(overrides: Record<string, unknown> = {}) {
 
 function createService() {
   const transaction = {
+    securitySetting: {
+      findUnique: jest.fn().mockResolvedValue({ value: { userId: operator.id } })
+    },
     user: {
+      findUnique: jest.fn().mockResolvedValue({ status: 'active', deletedAt: null }),
       create: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 })
@@ -66,7 +70,9 @@ function createService() {
     }
   };
   const prisma = {
+    securitySetting: transaction.securitySetting,
     user: {
+      findUnique: jest.fn().mockResolvedValue({ status: 'active', deletedAt: null }),
       findFirst: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn()

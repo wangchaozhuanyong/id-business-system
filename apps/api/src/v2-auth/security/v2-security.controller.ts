@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Query
+} from '@nestjs/common';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { TrustedClientIp } from '../../common/http/trusted-client-ip';
@@ -97,6 +108,7 @@ export class V2SecurityController {
   }
 
   @Post('sessions/:id/revoke')
+  @RequireRoles('super_admin')
   revokeSession(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.securityService.revokeSession(id, operator);
   }
@@ -107,6 +119,7 @@ export class V2SecurityController {
   }
 
   @Patch('mfa/settings')
+  @RequireRoles('super_admin')
   updateMfaSettings(
     @Body() dto: UpdateMfaSettingsInput,
     @CurrentUser() operator: AuthenticatedUser
@@ -152,7 +165,10 @@ export class V2SecurityController {
   }
 
   @Post('mfa/users/:id/reset')
+  @RequireRoles('super_admin')
   resetUserMfa(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    if (id === operator.id)
+      throw new ForbiddenException('系统超级管理员受保护，请在“我的账户”管理自己的 MFA。');
     return this.securityService.resetUserMfaSafely(id, operator);
   }
 
@@ -178,6 +194,7 @@ export class V2SecurityController {
   }
 
   @Post('ip-whitelists')
+  @RequireRoles('super_admin')
   createIpWhitelist(
     @Body() dto: SaveIpWhitelistInput,
     @CurrentUser() operator: AuthenticatedUser,
@@ -187,6 +204,7 @@ export class V2SecurityController {
   }
 
   @Patch('ip-whitelists/:id')
+  @RequireRoles('super_admin')
   updateIpWhitelist(
     @Param('id') id: string,
     @Body() dto: SaveIpWhitelistInput,
@@ -197,6 +215,7 @@ export class V2SecurityController {
   }
 
   @Delete('ip-whitelists/:id')
+  @RequireRoles('super_admin')
   removeIpWhitelist(
     @Param('id') id: string,
     @CurrentUser() operator: AuthenticatedUser,

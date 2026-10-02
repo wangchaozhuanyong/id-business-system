@@ -4,6 +4,7 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
+import { useAuthStore } from '@/stores/auth';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
@@ -56,6 +57,8 @@ function emptyForm(): RoleFormModel {
 }
 
 export function useRolesPage() {
+  const authStore = useAuthStore();
+  const canManageRoles = computed(() => authStore.user?.roles.includes('super_admin') ?? false);
   const query = useV2SessionDraft('roles-filters', () =>
     reactive({
       page: 1,
@@ -139,7 +142,9 @@ export function useRolesPage() {
     rolesQuery.error.value ? getApiErrorMessage(rolesQuery.error.value) : ''
   );
   const drawerDirty = computed(() => JSON.stringify(form) !== formBaseline.value);
-  const isSystemRole = computed(() => editingItem.value?.isSystemRole ?? false);
+  const isSystemRole = computed(
+    () => !canManageRoles.value || (editingItem.value?.isSystemRole ?? false)
+  );
   const selectedPermissionCount = computed(() => form.permissionIds.length);
   const selectedSensitivePermissions = computed(() =>
     permissions.value.filter(
@@ -302,6 +307,7 @@ export function useRolesPage() {
   }
 
   function openCreate() {
+    if (!canManageRoles.value) return;
     detailRequest.cancel();
     editingItem.value = null;
     members.value = [];
@@ -526,6 +532,7 @@ export function useRolesPage() {
   });
 
   return {
+    canManageRoles,
     query,
     items,
     total,

@@ -29,6 +29,8 @@
           <AppButton
             size="small"
             variant="ghost"
+            :disabled="!page.canManageSecurity"
+            title="仅超级管理员可以修改系统安全配置"
             @click="page.openPolicySettings(page.mfaSettings)"
           >
             编辑策略
@@ -100,7 +102,13 @@
             <span>本页 {{ page.whitelistItems.length }} 条</span>
             <span aria-hidden="true">·</span>
             <strong>共 {{ page.total }} 条</strong>
-            <AppButton size="small" variant="primary" @click="page.openCreateWhitelist">
+            <AppButton
+              size="small"
+              variant="primary"
+              :disabled="!page.canManageSecurity"
+              title="仅超级管理员可以修改系统安全配置"
+              @click="page.openCreateWhitelist"
+            >
               新增白名单
             </AppButton>
           </template>
@@ -164,13 +172,21 @@
         </V2TableColumn>
         <V2TableActionColumn :definition="v2TableSchemas.security.whitelist.columns[6]">
           <template #default="{ row }">
-            <AppButton size="small" variant="ghost" @click="page.openEditWhitelist(row)">
+            <AppButton
+              size="small"
+              variant="ghost"
+              :disabled="!page.canManageSecurity"
+              title="仅超级管理员可以修改系统安全配置"
+              @click="page.openEditWhitelist(row)"
+            >
               编辑
             </AppButton>
             <AppButton
               size="small"
               variant="danger"
               :loading="page.removingWhitelistId === row.id"
+              :disabled="!page.canManageSecurity"
+              title="仅超级管理员可以修改系统安全配置"
               @click="page.removeWhitelist(row)"
             >
               删除
@@ -216,13 +232,21 @@
             </div>
           </dl>
           <footer class="v2-records-mobile-item__actions">
-            <AppButton size="small" variant="ghost" @click="page.openEditWhitelist(item)">
+            <AppButton
+              size="small"
+              variant="ghost"
+              :disabled="!page.canManageSecurity"
+              title="仅超级管理员可以修改系统安全配置"
+              @click="page.openEditWhitelist(item)"
+            >
               编辑
             </AppButton>
             <AppButton
               size="small"
               variant="danger"
               :loading="page.removingWhitelistId === item.id"
+              :disabled="!page.canManageSecurity"
+              title="仅超级管理员可以修改系统安全配置"
               @click="page.removeWhitelist(item)"
             >
               删除

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { markV2RoutePrefetch } from '@/runtime/performance';
+import { hasUserFeatureAccess } from '@/utils/permissions';
+import { v2ModuleDefinitions } from '@/v2/config/modules';
+import type { CurrentUser } from '@/types/system';
 import {
   prefetchV2Route,
   resetV2RouteNavigationState,
@@ -14,6 +17,22 @@ vi.mock('@/v2/layouts/V2AdminLayout.vue', () => ({ default: {} }));
 vi.mock('@/v2/features/options/V2OptionsView.vue', () => ({ default: {} }));
 
 describe('V2 route navigation state', () => {
+  it('limits the actual audit navigation and recovery routes to administrators', () => {
+    const employee: CurrentUser = {
+      id: 'user-1',
+      username: 'employee',
+      displayName: '员工',
+      mustResetPassword: false,
+      roles: ['employee'],
+      permissions: ['audit_log.view']
+    };
+    const admin: CurrentUser = { ...employee, roles: ['admin'], permissions: [] };
+    for (const key of ['audit-logs', 'data-governance']) {
+      const feature = v2ModuleDefinitions.find((module) => module.key === key)!;
+      expect(hasUserFeatureAccess(employee, feature)).toBe(false);
+      expect(hasUserFeatureAccess(admin, feature)).toBe(true);
+    }
+  });
   beforeEach(() => {
     vi.mocked(markV2RoutePrefetch).mockClear();
     resetV2RouteNavigationState();

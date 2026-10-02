@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { sanitizeAuditJsonValue } from '../../../audit-logs/audit-log-sanitizer';
 import type { V2CommandTransaction } from '../id-business-v2-command-transaction.service';
 
 export type V2JsonPrimitive = string | number | boolean | null;
@@ -8,28 +9,6 @@ export type V2JsonDocument = Exclude<V2JsonValue, null>;
 export function toV2JsonDocument(value: unknown): V2JsonDocument {
   return JSON.parse(JSON.stringify(value)) as V2JsonDocument;
 }
-
-const SENSITIVE_AUDIT_KEYS = new Set([
-  'password',
-  'passwordhash',
-  'currentpassword',
-  'newpassword',
-  'securityinfo',
-  'securityanswers',
-  'phone',
-  'phonenumber',
-  'phoneencrypted',
-  'cardnumber',
-  'giftcardnumber',
-  'token',
-  'tokenhash',
-  'accesstoken',
-  'refreshtoken',
-  'jwt',
-  'secret',
-  'secretencrypted',
-  'recoverycodes'
-]);
 
 export interface V2TransactionalAuditInput {
   userId?: string;
@@ -66,19 +45,5 @@ export class V2TransactionalAuditService {
 
 function sanitizeAuditDocument(value: V2JsonDocument | undefined): V2JsonDocument | undefined {
   if (value === undefined) return undefined;
-  return sanitizeAuditValue(value) as V2JsonDocument;
-}
-
-function sanitizeAuditValue(value: V2JsonValue): V2JsonValue {
-  if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeAuditValue(item));
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      SENSITIVE_AUDIT_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : sanitizeAuditValue(item)
-    ])
-  );
+  return sanitizeAuditJsonValue(value) as V2JsonDocument;
 }

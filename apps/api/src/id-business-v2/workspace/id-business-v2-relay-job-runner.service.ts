@@ -1,15 +1,7 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-  ServiceUnavailableException
-} from '@nestjs/common';
+import { Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import type { IdBusinessV2RelayJob } from '@prisma/client';
 import type { V2RelayJob, V2RelayJobStatus, V2RelayJobStep } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { randomUUID } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import {
   V2CommandTransactionManager,
@@ -22,6 +14,8 @@ import {
   type IdBusinessV2RelayProgress,
   idBusinessV2RelayCompletedSteps,
   idBusinessV2RelayJobSteps,
+  idBusinessV2RelayJobId,
+  idBusinessV2RelayOperatorId,
   idBusinessV2RelayModelMapping,
   idBusinessV2RelayProgress,
   idBusinessV2RelayProjectNumber,
@@ -39,8 +33,6 @@ import { IdBusinessV2RelayCloudBridgeClient } from './providers/id-business-v2-r
 import { IdBusinessV2RelayGoogleCloudClient } from './providers/id-business-v2-relay-google-cloud.client';
 import { IdBusinessV2RelayRemoteError } from './providers/id-business-v2-relay-http';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const JOB_LEASE_MS = 3 * 60 * 1000;
 @Injectable()
 export class IdBusinessV2RelayJobRunnerService {
   constructor(
@@ -59,23 +51,16 @@ export class IdBusinessV2RelayJobRunnerService {
     operator?: AuthenticatedUser,
     requestId = 'workspace-relay-job-run'
   ): Promise<V2RelayJob> {
-    const userId = this.requireAdmin(operator);
-    const jobId = this.normalizeId(jobIdInput);
-    let job = await this.repository.findJobByIdAndUser(jobId, userId);
-    if (!job) throw new NotFoundException('中转脚本任务不存在');
-    if (job.status === 'completed') return toIdBusinessV2RelayJob(job);
-    const leaseId = randomUUID();
-    const now = new Date();
-    const acquired = await this.repository.acquireJobLease(
-      job.id,
-      userId,
-      leaseId,
-      now,
-      new Date(now.getTime() + JOB_LEASE_MS)
-    );
-    if (!acquired) throw new ConflictException('该部署任务正在执行，请勿重复提交');
-    try {
-      job = (await this.repository.findJobByIdAndUser(jobId, userId)) ?? job;
+    const userId = idBusinessV2RelayOperatorId(operator);
+    const jobId = idBusinessV2RelayJobId(jobIdInput);
+    const initialJob = await this.repository.findJobByIdAndUser(jobId, userId);
+    if (!initialJob) throw new NotFoundException('中转脚本任务不存在');
+    if (initialJob.status === 'completed') return toIdBusinessV2RelayJob(initialJob);
+    return this.repository.withJobLease(initialJob.id, userId, async (leaseId) => {
+      await this.repository.assertJobLease(jobId, leaseId);
+      const loaded = await this.repository.findJobByIdAndUser(jobId, userId);
+      if (!loaded) throw new NotFoundException('中转脚本任务不存在');
+      let job: IdBusinessV2RelayJob = { ...loaded, runLeaseId: leaseId };
       const connection =
         job.mode === 'vertex'
           ? await this.relay.requireVertexConnection(userId)
@@ -89,6 +74,8 @@ export class IdBusinessV2RelayJobRunnerService {
         job = await this.executeStep(job, connection, step, operator, requestId);
         return toIdBusinessV2RelayJob(job);
       } catch (error) {
+        // 旧执行者不得关闭新执行者的外部账号，也不能覆盖其进度。
+        await this.repository.assertJobLease(jobId, leaseId);
         const cloudBridgeAccountId = job.cloudBridgeAccountId;
         if (cloudBridgeAccountId) {
           await this.relay
@@ -99,9 +86,7 @@ export class IdBusinessV2RelayJobRunnerService {
         }
         return this.markFailed(job, step, error, operator, requestId);
       }
-    } finally {
-      await this.repository.releaseJobLease(jobId, leaseId);
-    }
+    });
   }
 
   private async executeStep(
@@ -434,8 +419,13 @@ export class IdBusinessV2RelayJobRunnerService {
   ) {
     const updated = await this.transactionManager.execute(
       async (tx) => {
-        const result = await this.repository.updateJob(job.id, { status: 'completed' }, tx);
-        await this.appendAudit(result, 'job_complete', null, '中转脚本任务已完成', tx);
+        const result = await this.repository.updateLeasedJob(
+          job.id,
+          job.runLeaseId!,
+          { status: 'completed' },
+          tx
+        );
+        await this.appendAudit(result, 'job_complete', null, '中转脚本任务已完成', tx, operator);
         return result;
       },
       { changedScopes: ['workspace'], operator, requestId, retryMode: 'none' }
@@ -454,8 +444,9 @@ export class IdBusinessV2RelayJobRunnerService {
     const message = idBusinessV2RelaySafeErrorMessage(error);
     const failed = await this.transactionManager.execute(
       async (tx) => {
-        const updated = await this.repository.updateJob(
+        const updated = await this.repository.updateLeasedJob(
           job.id,
+          job.runLeaseId!,
           {
             lastErrorCode: code,
             lastErrorMessage: message,
@@ -463,7 +454,15 @@ export class IdBusinessV2RelayJobRunnerService {
           },
           tx
         );
-        await this.appendAudit(updated, 'job_step_failed', step, '中转脚本步骤执行失败', tx, code);
+        await this.appendAudit(
+          updated,
+          'job_step_failed',
+          step,
+          '中转脚本步骤执行失败',
+          tx,
+          operator,
+          code
+        );
         return updated;
       },
       {
@@ -489,8 +488,9 @@ export class IdBusinessV2RelayJobRunnerService {
     );
     return this.transactionManager.execute(
       async (tx) => {
-        const updated = await this.repository.updateJob(
+        const updated = await this.repository.updateLeasedJob(
           job.id,
+          job.runLeaseId!,
           {
             ...extra,
             completedSteps: completedSteps as IdBusinessV2RelayJsonInput,
@@ -501,7 +501,14 @@ export class IdBusinessV2RelayJobRunnerService {
           },
           tx
         );
-        await this.appendAudit(updated, 'job_step_complete', step, '中转脚本已完成步骤', tx);
+        await this.appendAudit(
+          updated,
+          'job_step_complete',
+          step,
+          '中转脚本已完成步骤',
+          tx,
+          operator
+        );
         return updated;
       },
       {
@@ -523,8 +530,9 @@ export class IdBusinessV2RelayJobRunnerService {
   ) {
     return this.transactionManager.execute(
       async (tx) => {
-        const updated = await this.repository.updateJob(
+        const updated = await this.repository.updateLeasedJob(
           job.id,
+          job.runLeaseId!,
           {
             lastErrorCode: null,
             lastErrorMessage: null,
@@ -533,7 +541,7 @@ export class IdBusinessV2RelayJobRunnerService {
           },
           tx
         );
-        await this.appendAudit(updated, 'job_progress', step, '中转脚本正在执行步骤', tx);
+        await this.appendAudit(updated, 'job_progress', step, '中转脚本正在执行步骤', tx, operator);
         return updated;
       },
       {
@@ -551,10 +559,11 @@ export class IdBusinessV2RelayJobRunnerService {
     step: V2RelayJobStep | null,
     remark: string,
     tx: Parameters<V2TransactionalAuditService['append']>[0],
+    operator: AuthenticatedUser | undefined,
     code?: string
   ) {
     return this.audit.append(tx, {
-      userId: job.userId,
+      userId: idBusinessV2RelayOperatorId(operator),
       module: 'id_business_v2',
       action: `id_business_v2.workspace_relay.${action}`,
       objectType: 'id_business_v2_relay_job',
@@ -578,18 +587,5 @@ export class IdBusinessV2RelayJobRunnerService {
     } catch {
       throw new ServiceUnavailableException(`${field}暂时无法解密`);
     }
-  }
-
-  private requireAdmin(operator?: AuthenticatedUser) {
-    if (!operator?.id) throw new BadRequestException('无法识别当前操作人');
-    if (!operator.roles.includes('admin'))
-      throw new ForbiddenException('只有管理员可以使用中转脚本');
-    return operator.id;
-  }
-
-  private normalizeId(value: unknown) {
-    if (typeof value !== 'string' || !UUID_PATTERN.test(value))
-      throw new BadRequestException('任务标识无效');
-    return value;
   }
 }

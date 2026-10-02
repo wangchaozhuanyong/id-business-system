@@ -7,11 +7,19 @@ import type {
   UpdateV2EmployeeDto
 } from './v2-employees.dto';
 import { V2EmployeesService } from './v2-employees.service';
+import {
+  V2EmployeeAccountActionsService,
+  type DeleteV2EmployeeDto,
+  type ResetV2EmployeePasswordDto
+} from './v2-employee-account-actions.service';
 
 @Controller('v2/employees')
 @RequireRoles('admin')
 export class V2EmployeesController {
-  constructor(private readonly employeesService: V2EmployeesService) {}
+  constructor(
+    private readonly employeesService: V2EmployeesService,
+    private readonly accountActions: V2EmployeeAccountActionsService
+  ) {}
 
   @Get()
   list(
@@ -57,16 +65,44 @@ export class V2EmployeesController {
   }
 
   @Post()
+  @RequireRoles('super_admin')
   create(@Body() dto: CreateV2EmployeeDto, @CurrentUser() operator: AuthenticatedUser) {
     return this.employeesService.create(dto, operator);
   }
 
   @Patch(':id')
+  @RequireRoles('super_admin')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateV2EmployeeDto,
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.employeesService.update(id, dto, operator);
+  }
+
+  @Post(':id/reset-password')
+  @RequireRoles('super_admin')
+  resetPassword(
+    @Param('id') id: string,
+    @Body() dto: ResetV2EmployeePasswordDto,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.accountActions.resetPassword(id, dto, operator);
+  }
+
+  @Get(':id/delete-preview')
+  @RequireRoles('super_admin')
+  deletePreview(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.accountActions.deletePreview(id, operator);
+  }
+
+  @Post(':id/delete')
+  @RequireRoles('super_admin')
+  remove(
+    @Param('id') id: string,
+    @Body() dto: DeleteV2EmployeeDto,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.accountActions.remove(id, dto, operator);
   }
 }

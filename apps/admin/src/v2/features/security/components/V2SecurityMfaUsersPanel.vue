@@ -72,7 +72,7 @@
           <AppButton
             size="small"
             variant="danger"
-            :disabled="!row.configured"
+            :disabled="!row.configured || !page.canResetUserMfa?.(row.id)"
             :loading="page.resettingMfaUserId === row.id"
             :title="row.configured ? '重置该用户 MFA' : '该用户尚未配置 MFA'"
             @click="page.resetUserMfa(row)"
@@ -126,7 +126,7 @@
           <AppButton
             size="small"
             variant="danger"
-            :disabled="!item.configured"
+            :disabled="!item.configured || !page.canResetUserMfa?.(item.id)"
             :loading="page.resettingMfaUserId === item.id"
             @click="page.resetUserMfa(item)"
           >

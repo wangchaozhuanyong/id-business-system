@@ -15,6 +15,7 @@ export interface CreateAuditLogInput {
 }
 
 export interface ListAuditLogsQuery extends PaginationQuery {
+  activity?: string;
   module?: string;
   action?: string;
   operator?: string;
@@ -40,6 +41,7 @@ export interface ListSensitiveAccessLogsQuery extends PaginationQuery {
 export type AuditLogExportKind = 'operations' | 'sensitive_access';
 
 export interface ExportAuditLogsInput {
+  activity?: string;
   kind?: AuditLogExportKind;
   module?: string;
   action?: string;
