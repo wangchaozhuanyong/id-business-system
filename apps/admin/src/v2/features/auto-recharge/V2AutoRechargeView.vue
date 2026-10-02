@@ -25,6 +25,8 @@
             <span>{{ operationModeLabels[operationMode] }}</span>
           </div>
           <el-form
+            name="chatgpt-auto-recharge"
+            autocomplete="off"
             :model="details"
             :rules="rechargeRules"
             label-position="left"
@@ -116,25 +118,17 @@
                 </p>
               </template>
               <template v-else>
-                <el-form-item label="ChatGPT 账号" required>
-                  <el-input
-                    v-model="loginEmail"
-                    type="email"
-                    autocomplete="off"
-                    maxlength="250"
-                    placeholder="输入账号邮箱"
-                  />
-                </el-form-item>
-                <el-form-item label="登录密码" required>
-                  <el-input
-                    v-model="loginPassword"
-                    type="password"
-                    show-password
-                    autocomplete="off"
-                    maxlength="1024"
-                    placeholder="仅用于本次官网登录"
-                  />
-                </el-form-item>
+                <RechargePasswordLoginFields
+                  v-model:email="loginEmail"
+                  v-model:password="loginPassword"
+                  v-model:account-id="selectedBankAccountId"
+                  v-model:login-method="loginMethod"
+                  :accounts="savedBankAccounts"
+                  :loading="bankAccountsQuery.phase.value === 'initial-loading'"
+                  :disabled="formLocked"
+                  :error="bankAccountsQuery.error.value"
+                  @retry="bankAccountsQuery.refresh"
+                />
                 <RechargeTotpFields
                   v-model:source="totpSource"
                   v-model:secret-input="totpSecretInput"
@@ -387,6 +381,7 @@ import { defineAsyncComponent, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import RechargeTotpFields from './RechargeTotpFields.vue';
+import RechargePasswordLoginFields from './RechargePasswordLoginFields.vue';
 import RechargeSubmission from './RechargeSubmission.vue';
 import { rechargeRules } from './recharge-form';
 import RechargePageContext from './RechargePageContext.vue';

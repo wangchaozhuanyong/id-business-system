@@ -70,7 +70,7 @@ describe('ChatGPT 账号资料交付复制', () => {
   it('按完整邮箱、密码、2FA 密钥、当前查询码和多行后缀输出，审计不含明文', async () => {
     const { service, mailboxes, audit } = fixture();
     await expect(service.copyAccount('account-1', operator)).resolves.toEqual({
-      text: `${email}-${password}-${secret}-${code}\n查询入口\n说明`
+      text: `${email}----${password}----${secret}----${code}\n查询入口\n说明`
     });
     expect(mailboxes.accountBuyerCode).toHaveBeenCalledWith(email, operator);
     const log = JSON.stringify(audit.append.mock.calls);
@@ -91,7 +91,7 @@ describe('ChatGPT 账号资料交付复制', () => {
     account.totpSecretEncrypted = null as never;
     await service.updateCopySettings({ suffix: '' }, operator);
     await expect(service.copyAccount('account-1', operator)).resolves.toEqual({
-      text: `${email}---${code}`
+      text: `${email}------------${code}`
     });
   });
 

@@ -10,6 +10,11 @@
       </template>
     </V2PageContext>
 
+    <el-tabs v-model="expiry" aria-label="银充订单分类">
+      <el-tab-pane label="全部订单" name="all" />
+      <el-tab-pane label="已到期订单" name="expired" />
+    </el-tabs>
+
     <section class="bank-recharge-toolbar" aria-label="银充订单筛选">
       <el-input
         v-model="keywordInput"
@@ -52,15 +57,15 @@
         <V2Table
           :schema="v2TableSchemas.bankRechargeOrders.main"
           :show-column-settings="false"
-          :view-key="`${page}:${pageSize}:${keyword}:${status}`"
+          :view-key="`${page}:${pageSize}:${keyword}:${status}:${expiry}`"
           :data="data?.items ?? []"
           class="v2-records-table bank-recharge-nowrap"
         >
           <template #empty>
             <div class="v2-records-empty">
-              <strong>暂无银充订单</strong>
+              <strong>{{ expiry === 'expired' ? '暂无已到期订单' : '暂无银充订单' }}</strong>
               <span>{{
-                keyword || status
+                expiry === 'expired' || keyword || status
                   ? '当前筛选条件下没有数据'
                   : '官网付款成功后会自动建立，或使用右上角手工录入'
               }}</span>
@@ -81,23 +86,18 @@
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[1]"
             ><template #default="{ row }">{{
-              formatV2DateTime(row.createdAt)
+              row.customer?.name ?? '待设客户'
             }}</template></V2TableColumn
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[2]"
             ><template #default="{ row }">{{
-              row.customer?.name ?? '待设客户'
-            }}</template></V2TableColumn
-          >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[3]"
-            ><template #default="{ row }">{{
               row.account?.emailMasked ?? '待关联账号'
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[4]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[3]"
             ><template #default="{ row }">{{ planLabel(row.plan) }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[5]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[4]"
             ><template #default="{ row }">{{
               row.card
                 ? `${row.card.label} ····${row.card.last4}`
@@ -106,27 +106,32 @@
                   : '待设银行卡'
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[6]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[5]"
             ><template #default="{ row }"
               >{{ row.chargeAmount }} {{ row.chargeCurrencyCode }}</template
             ></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[7]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[6]"
             ><template #default="{ row }">{{ feeLabel(row, 'usdtFee') }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[8]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[7]"
             ><template #default="{ row }">{{
               feeLabel(row, 'shoppingFee')
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[9]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[8]"
             ><template #default="{ row }">{{
               row.receivedAmount ? `${row.receivedAmount} ${row.receivedCurrencyCode}` : '待设'
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[10]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[9]"
             ><template #default="{ row }">{{
               row.profitAmountCny ?? '待入账'
+            }}</template></V2TableColumn
+          >
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[10]"
+            ><template #default="{ row }">{{
+              row.openedAt ? formatV2DateTime(row.openedAt) : formatV2DateTime(row.createdAt)
             }}</template></V2TableColumn
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[11]"
@@ -250,6 +255,7 @@ function feeLabel(row: BankRechargeOrder, prefix: 'usdtFee' | 'shoppingFee') {
 }
 const drawerState = useBankRechargeOrdersPage();
 const {
+  expiry,
   page,
   pageSize,
   keywordInput,

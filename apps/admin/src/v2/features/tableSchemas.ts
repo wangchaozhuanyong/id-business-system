@@ -88,6 +88,8 @@ export const v2TableSchemas = {
         },
         { key: 'lastLoginNetwork', label: '最近登录 IP / 国家', kind: 'text', widthPreset: 'wide' },
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: 'createdAt', label: '注册时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'registeredDays', label: '已注册天数', kind: 'numeric', widthPreset: 'standard' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'openingCard', label: '银行卡信息', kind: 'identifier', widthPreset: 'wide' },
         {
@@ -163,7 +165,6 @@ export const v2TableSchemas = {
           widthPreset: 'wide',
           pin: 'start'
         },
-        { key: 'createdAt', label: '创建时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'customer', label: '客户', kind: 'text', widthPreset: 'standard' },
         { key: 'account', label: 'ChatGPT 账号', kind: 'identifier', widthPreset: 'wide' },
         { key: 'plan', label: '套餐', kind: 'text', widthPreset: 'standard' },
@@ -178,6 +179,7 @@ export const v2TableSchemas = {
         },
         { key: 'receivedAmount', label: '客户实收', kind: 'numeric', widthPreset: 'standard' },
         { key: 'profitAmountCny', label: '利润(CNY)', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'paymentResult', label: '充值结果', kind: 'status', widthPreset: 'standard' },
         { key: 'usageStatus', label: '使用状态', kind: 'status', widthPreset: 'standard' },

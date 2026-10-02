@@ -377,12 +377,18 @@ export const bankRechargeApi = {
       keyword?: string;
       status?: string;
       accountId?: string;
+      expiry?: 'all' | 'expired';
     },
     options: ApiRequestOptions = {}
   ) {
-    return request<{ items: BankRechargeOrder[]; total: number; page: number; pageSize: number }>(
-      http.get(`${base}/orders`, { params: query, signal: options.signal })
-    );
+    return request<{
+      items: BankRechargeOrder[];
+      total: number;
+      page: number;
+      pageSize: number;
+      evaluatedAt: string;
+      revalidateAt: string;
+    }>(http.get(`${base}/orders`, { params: query, signal: options.signal }));
   },
   orderOptions(options: ApiRequestOptions = {}) {
     return request<BankRechargeOrderOptions>(

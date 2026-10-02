@@ -1,5 +1,15 @@
 <script lang="ts">
-import { defineComponent, h, nextTick, onMounted, provide, ref, watch, type PropType } from 'vue';
+import {
+  defineComponent,
+  h,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  ref,
+  watch,
+  type PropType
+} from 'vue';
 import { ElTable } from 'element-plus/es/components/table/index.mjs';
 import 'element-plus/es/components/table/style/css';
 import { useAuthStore } from '@/stores/auth';
@@ -50,8 +60,16 @@ export default defineComponent({
   setup(props, { attrs, expose, slots }) {
     const authStore = useAuthStore();
     const tableRef = ref<ElementTableExpose>();
+    const mobileColumns = window.matchMedia('(max-width: 900px)');
+    const isMobile = ref(mobileColumns.matches);
+    const syncViewport = () => {
+      isMobile.value = mobileColumns.matches;
+    };
+    onMounted(() => mobileColumns.addEventListener('change', syncViewport));
+    onBeforeUnmount(() => mobileColumns.removeEventListener('change', syncViewport));
 
     provide(V2_TABLE_VISIBILITY_CONTEXT, {
+      fixedColumnsEnabled: () => !isMobile.value,
       isColumnVisible: (columnKey) =>
         isV2TableColumnVisible(
           props.schema.id,

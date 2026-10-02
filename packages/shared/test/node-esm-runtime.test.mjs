@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+test('银充含开通日共 30 天，跨月与跨年都使用同一周期', async () => {
+  const { bankRechargeDefaultDueAt } = await import('../dist/index.js');
+  for (const [openedAt, dueAt] of [
+    ['2026-01-01T10:15:00+08:00', '2026-01-30T02:15:00.000Z'],
+    ['2026-02-01T10:15:00+08:00', '2026-03-02T02:15:00.000Z'],
+    ['2028-02-01T10:15:00+08:00', '2028-03-01T02:15:00.000Z'],
+    ['2026-12-20T10:15:00+08:00', '2027-01-18T02:15:00.000Z']
+  ])
+    assert.equal(bankRechargeDefaultDueAt(openedAt).toISOString(), dueAt);
+  assert.throws(() => bankRechargeDefaultDueAt('invalid'), /开通时间无效/);
+});
+
 test('loads the compiled shared package with standard Node ESM resolution', async () => {
   const shared = await import('../dist/index.js');
 

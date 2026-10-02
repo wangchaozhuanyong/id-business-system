@@ -57,11 +57,13 @@ export default defineComponent({
           label: props.definition.label,
           columnKey: props.definition.key,
           fixed:
-            props.definition.pin === 'start'
-              ? 'left'
-              : props.definition.pin === 'end'
-                ? 'right'
-                : undefined,
+            visibility?.fixedColumnsEnabled() === false
+              ? false
+              : props.definition.pin === 'start'
+                ? 'left'
+                : props.definition.pin === 'end'
+                  ? 'right'
+                  : undefined,
           align: V2_TABLE_COLUMN_ALIGNMENT[props.definition.kind],
           headerAlign: V2_TABLE_COLUMN_ALIGNMENT[props.definition.kind],
           className: [existingClassName, semanticClass].filter(Boolean).join(' '),

@@ -3,7 +3,9 @@ import { copyChatgptAccount } from './copy-chatgpt-account';
 
 describe('账号资料复制', () => {
   it('只在请求成功后复制完整内容，并清空临时响应', async () => {
-    const details = { text: 'fixture@example.invalid--fixture-2fa-BUY-TEST\n后缀\n第二行' };
+    const details = {
+      text: 'fixture@example.invalid--------fixture-2fa----BUY-TEST\n后缀\n第二行'
+    };
     const expected = details.text;
     const write = vi.fn().mockResolvedValue(undefined);
     await copyChatgptAccount(async () => details, write);

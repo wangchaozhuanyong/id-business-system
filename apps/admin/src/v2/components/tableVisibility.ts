@@ -2,6 +2,7 @@ import type { InjectionKey } from 'vue';
 
 export interface V2TableVisibilityContext {
   isColumnVisible: (columnKey: string) => boolean;
+  fixedColumnsEnabled: () => boolean;
 }
 
 export const V2_TABLE_VISIBILITY_CONTEXT: InjectionKey<V2TableVisibilityContext> = Symbol(

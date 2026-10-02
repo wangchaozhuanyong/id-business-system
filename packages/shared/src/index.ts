@@ -242,6 +242,7 @@ export type {
 } from './v2/website-visits.js';
 
 export * from './v2/auto-recharge.js';
+export * from './v2/bank-recharge-period.js';
 export * from './v2/vendure-mailbox.js';
 
 export * from './v2/finance-exchange.js';

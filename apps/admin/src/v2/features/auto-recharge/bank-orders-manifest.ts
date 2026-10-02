@@ -9,7 +9,7 @@ export const bankRechargeOrdersFeature = defineV2Feature({
   sourceSheet: '银充订单',
   requiredRoles: ['admin'],
   kind: 'list',
-  freshnessPolicy: 'event-driven',
+  freshnessPolicy: 'event-with-deadline',
   filters: [
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '订单号、客户或账号' },
     { key: 'status', label: '状态', kind: 'select', options: ['待补全', '已完成', '已退款'] }

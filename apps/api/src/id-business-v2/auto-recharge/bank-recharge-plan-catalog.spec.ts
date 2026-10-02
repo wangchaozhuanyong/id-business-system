@@ -38,6 +38,33 @@ function fixture() {
 }
 
 describe('手工套餐记录不扩大自动充值权限', () => {
+  it('手工建单未另填时间时以建单时刻开通并默认含当天 30 天', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:15:00+08:00'));
+    try {
+      const { service, repository } = fixture();
+      await service.createManual(
+        {
+          plan: 'plus',
+          chargeCurrencyCode: 'PHP',
+          chargeAmount: '100',
+          manualEvidenceRef: 'synthetic-evidence'
+        },
+        { id: 'operator-fixture' } as never
+      );
+      expect(repository.createOrder).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            openedAt: new Date('2026-01-01T10:15:00+08:00'),
+            dueAt: new Date('2026-01-30T10:15:00+08:00')
+          })
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('500 美元档可进入本机执行器，仍要求单次授权、币种和真实上限', () => {
     const input = {
       id: accountId,

@@ -5,7 +5,13 @@
     :label="definition.label"
     :column-key="definition.key"
     :width="definition.width"
-    :fixed="definition.pin === 'start' ? 'left' : undefined"
+    :fixed="
+      visibility?.fixedColumnsEnabled() === false
+        ? false
+        : definition.pin === 'start'
+          ? 'left'
+          : undefined
+    "
     align="center"
     header-align="center"
     class-name="v2-table-column v2-table-column--control"
@@ -21,7 +27,13 @@
     :label="definition.label"
     :column-key="definition.key"
     :width="definition.width"
-    :fixed="definition.pin === 'start' ? 'left' : undefined"
+    :fixed="
+      visibility?.fixedColumnsEnabled() === false
+        ? false
+        : definition.pin === 'start'
+          ? 'left'
+          : undefined
+    "
     :selectable="selectionDisabled ? () => false : undefined"
     align="center"
     header-align="center"
@@ -31,7 +43,11 @@
 </template>
 
 <script setup lang="ts">
+import { inject } from 'vue';
 import type { V2TableControlColumnDefinition } from './tableSystem';
+import { V2_TABLE_VISIBILITY_CONTEXT } from './tableVisibility';
+
+const visibility = inject(V2_TABLE_VISIBILITY_CONTEXT, null);
 
 defineProps<{
   definition: V2TableControlColumnDefinition;

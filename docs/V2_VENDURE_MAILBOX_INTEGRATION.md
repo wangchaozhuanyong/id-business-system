@@ -46,7 +46,7 @@ ChatGPT 账号批量导入是独立的账号资料导入功能，按所选格式
 
 ID 完整校验资料和本地重复账号后，用本地事务保存整批账号；并发创建同一账号仍受本地唯一约束保护。导入成功或失败均不读取、添加、修改或删除 Vendure 邮箱记录。此次更正不清理历史邮箱资料。
 
-账号「复制」只读现有有效 BUY 码，不查询真实收件、不重置查询码。复制后缀设置在虚拟邮箱工具栏，按当前 ID 管理员保存；它是 ID 账号交付偏好，不是 Vendure 邮箱资料。
+账号「复制」只读现有有效 BUY 码，不查询真实收件、不重置查询码。复制后缀设置在「ChatGPT 账号」页顶部操作区，位于「批量导入」左侧，按当前 ID 管理员保存；它是 ID 账号交付偏好，不是 Vendure 邮箱资料。
 
 账号复制使用既有 ID API：`GET /id-business-v2/bank-recharge/account-copy-settings`、`PUT /id-business-v2/bank-recharge/account-copy-settings`、`POST /id-business-v2/bank-recharge/accounts/:id/copy`。账号导入请求只提交 `accounts`；旧请求携带的 `primaryAccountId` 被忽略。此次更正无新增接口、数据库表、列、migration、依赖或环境变量。
 
