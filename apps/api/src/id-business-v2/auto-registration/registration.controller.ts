@@ -1,0 +1,86 @@
+import { Body, Controller, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
+import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { RegistrationJobsService } from './registration-jobs.service';
+import { RegistrationNamesService } from './registration-names.service';
+
+@Controller('id-business-v2/auto-registration')
+@RequireRoles('admin')
+export class RegistrationController {
+  constructor(
+    private readonly jobs: RegistrationJobsService,
+    private readonly names: RegistrationNamesService
+  ) {}
+  @Get('connection') @Header('Cache-Control', 'no-store') connection(
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.connection(operator);
+  }
+  @Get('options') @Header('Cache-Control', 'no-store') options(
+    @Query() query: { q?: string; page?: string },
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.options(query, operator);
+  }
+  @Get('names') listNames(
+    @Query() query: { page?: string; pageSize?: string; keyword?: string; status?: string }
+  ) {
+    return this.names.list(query);
+  }
+  @Post('names') createName(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.names.write(null, value, operator);
+  }
+  @Patch('names/:id') updateName(
+    @Param('id') nameId: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.names.write(nameId, value, operator);
+  }
+  @Post('names/import') importNames(
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.names.import(value, operator);
+  }
+  @Get('jobs') @Header('Cache-Control', 'no-store') list(
+    @Query() query: { page?: string; pageSize?: string; keyword?: string },
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.list(query, operator);
+  }
+  @Get('jobs/:id') @Header('Cache-Control', 'no-store') get(
+    @Param('id') jobId: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.get(jobId, operator);
+  }
+  @Post('jobs') create(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.jobs.create(value, operator);
+  }
+  @Post('jobs/:id/launch') @Header('Cache-Control', 'no-store') launch(
+    @Param('id') jobId: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.launch(jobId, operator);
+  }
+  @Post('jobs/:id/code') @Header('Cache-Control', 'no-store') code(
+    @Param('id') jobId: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.code(jobId, operator);
+  }
+  @Post('jobs/:id/cancel') cancel(
+    @Param('id') jobId: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.cancel(jobId, operator);
+  }
+
+  @Post('jobs/:id/resume-credentials') @Header('Cache-Control', 'no-store') resumeCredentials(
+    @Param('id') jobId: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.resumeCredentials(jobId, operator);
+  }
+}

@@ -572,6 +572,7 @@ model User {
   idBusinessV2GovernanceJobsRequested  IdBusinessV2GovernanceJob[]          @relation("IdBusinessV2GovernanceJobRequestedBy")
   idBusinessV2GovernanceJobsExecuted   IdBusinessV2GovernanceJob[]          @relation("IdBusinessV2GovernanceJobExecutedBy")
   idBusinessV2GovernanceApprovals      IdBusinessV2GovernanceApproval[]     @relation("IdBusinessV2GovernanceApprovalApprover")
+  registrationJobs                     IdBusinessV2RegistrationJob[]
 
   @@index([status])
   @@index([createdByUserId])
@@ -2564,17 +2565,105 @@ model IdBusinessV2ChatgptAccount {
   totpPeriod          Int                              @default(30) @map("totp_period")
   status              IdBusinessV2ChatgptAccountStatus @default(active)
   remark              String?                          @db.VarChar(500)
+  offerStatus         IdBusinessV2AccountOffer         @default(unknown) @map("offer_status")
+  offerSource         IdBusinessV2OfferSource?         @map("offer_source")
+  offerObservedAt     DateTime?                        @map("offer_observed_at") @db.DateTime(6)
   createdByUserId     String?                          @map("created_by_user_id") @db.Char(36)
   updatedByUserId     String?                          @map("updated_by_user_id") @db.Char(36)
   createdAt           DateTime                         @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt           DateTime                         @updatedAt @map("updated_at") @db.DateTime(6)
 
-  jobs         IdBusinessV2RechargeJob[]
-  orders       IdBusinessV2BankRechargeOrder[]
-  subscription IdBusinessV2BankRechargeSubscription?
+  jobs             IdBusinessV2RechargeJob[]
+  orders           IdBusinessV2BankRechargeOrder[]
+  subscription     IdBusinessV2BankRechargeSubscription?
+  registrationJobs IdBusinessV2RegistrationJob[]
 
   @@index([status, updatedAt])
   @@map("id_business_v2_chatgpt_accounts")
+}
+
+enum IdBusinessV2AccountOffer {
+  unknown
+  free_trial
+  half_price
+  full_price
+  other
+}
+
+enum IdBusinessV2RegistrationState {
+  queued
+  running
+  awaiting_email
+  awaiting_user
+  partial
+  completed
+  cancelled
+}
+
+enum IdBusinessV2RegistrationStep {
+  queued
+  email
+  email_code
+  profile
+  registered
+  password
+  password_verified
+  mfa
+  mfa_verified
+  offer
+  completed
+}
+
+model IdBusinessV2RegistrationName {
+  id          String                        @id @default(uuid()) @db.Char(36)
+  displayName String                        @unique @map("display_name") @db.VarChar(120)
+  active      Boolean                       @default(true)
+  usageCount  Int                           @default(0) @map("usage_count")
+  createdAt   DateTime                      @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt   DateTime                      @updatedAt @map("updated_at") @db.DateTime(6)
+  jobs        IdBusinessV2RegistrationJob[]
+
+  @@map("id_business_v2_registration_names")
+}
+
+model IdBusinessV2RegistrationJob {
+  id                   String                        @id @default(uuid()) @db.Char(36)
+  ownerId              String                        @map("owner_id") @db.Char(36)
+  mailboxAliasId       String                        @map("mailbox_alias_id") @db.VarChar(191)
+  proxyId              String                        @map("proxy_id") @db.Char(36)
+  nameId               String                        @map("name_id") @db.Char(36)
+  displayName          String                        @map("display_name") @db.VarChar(120)
+  emailEncrypted       String                        @map("email_encrypted") @db.Text
+  emailHash            String                        @map("email_hash") @db.Char(64)
+  emailMasked          String                        @map("email_masked") @db.VarChar(255)
+  birthDateEncrypted   String                        @map("birth_date_encrypted") @db.Text
+  passwordEncrypted    String                        @map("password_encrypted") @db.Text
+  pendingTotpEncrypted String?                       @map("pending_totp_encrypted") @db.Text
+  nonceHash            String?                       @map("nonce_hash") @db.Char(64)
+  leaseUntil           DateTime?                     @map("lease_until") @db.DateTime(6)
+  attempt              Int                           @default(0)
+  state                IdBusinessV2RegistrationState @default(queued)
+  step                 IdBusinessV2RegistrationStep  @default(queued)
+  registered           Boolean                       @default(false)
+  passwordVerified     Boolean                       @default(false) @map("password_verified")
+  mfaVerified          Boolean                       @default(false) @map("mfa_verified")
+  offerStatus          IdBusinessV2AccountOffer      @default(unknown) @map("offer_status")
+  offerSummary         String?                       @map("offer_summary") @db.VarChar(500)
+  reason               String?                       @db.VarChar(80)
+  browserProfileId     String?                       @map("browser_profile_id") @db.VarChar(100)
+  accountId            String?                       @map("account_id") @db.Char(36)
+  codeRequestedAt      DateTime?                     @map("code_requested_at") @db.DateTime(6)
+  lastMailId           String?                       @map("last_mail_id") @db.VarChar(191)
+  createdAt            DateTime                      @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt            DateTime                      @updatedAt @map("updated_at") @db.DateTime(6)
+  owner                User                          @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  name                 IdBusinessV2RegistrationName  @relation(fields: [nameId], references: [id], onDelete: Restrict)
+  proxy                IdBusinessV2RechargeProxy     @relation(fields: [proxyId], references: [id], onDelete: Restrict)
+  account              IdBusinessV2ChatgptAccount?   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([ownerId, state, createdAt])
+  @@index([emailHash, state])
+  @@map("id_business_v2_registration_jobs")
 }
 
 // 每个登录邮箱的首次及最近一次服务器代理出口；IP 加密保存，国家用于登录前校验。
@@ -2828,22 +2917,28 @@ enum IdBusinessV2RechargeProxyConnectionMode {
 
 // 代理链接可能含提取令牌或代理凭据，仅加密保存；任务只记录所选代理 ID。
 model IdBusinessV2RechargeProxy {
-  id              String                                 @id @default(uuid()) @db.Char(36)
-  countryCode     String                                 @map("country_code") @db.Char(2)
+  id              String                                  @id @default(uuid()) @db.Char(36)
+  countryCode     String                                  @map("country_code") @db.Char(2)
   kind            IdBusinessV2RechargeProxyKind
   connectionMode  IdBusinessV2RechargeProxyConnectionMode @map("connection_mode")
-  protocol        String                                 @db.VarChar(8)
-  urlEncrypted    String                                 @map("url_encrypted") @db.Text
-  urlHash         String                                 @unique @map("url_hash") @db.Char(64)
-  active          Boolean                                @default(true)
-  remark1         String?                                @db.VarChar(500)
-  remark2         String?                                @db.VarChar(500)
-  createdByUserId String?                                @map("created_by_user_id") @db.Char(36)
-  createdAt       DateTime                               @default(now()) @map("created_at") @db.DateTime(6)
-  updatedAt       DateTime                               @updatedAt @map("updated_at") @db.DateTime(6)
+  protocol        String                                  @db.VarChar(8)
+  urlEncrypted    String                                  @map("url_encrypted") @db.Text
+  urlHash         String                                  @unique @map("url_hash") @db.Char(64)
+  active          Boolean                                 @default(true)
+  remark1         String?                                 @db.VarChar(500)
+  remark2         String?                                 @db.VarChar(500)
+  createdByUserId String?                                 @map("created_by_user_id") @db.Char(36)
+  createdAt       DateTime                                @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt       DateTime                                @updatedAt @map("updated_at") @db.DateTime(6)
 
-  jobs IdBusinessV2RechargeJob[]
+  jobs             IdBusinessV2RechargeJob[]
+  registrationJobs IdBusinessV2RegistrationJob[]
 
   @@index([countryCode, active, kind])
   @@map("id_business_v2_recharge_proxies")
+}
+
+enum IdBusinessV2OfferSource {
+  automatic
+  manual
 }

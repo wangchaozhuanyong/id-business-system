@@ -61,7 +61,7 @@ describe('data governance route helpers', () => {
       label: '删除 V2 ID：ap***@example.com',
       restoreReadiness: 'review_required'
     });
-    expect(reason).toContain('操作审计 audit-2');
+    expect(reason).toContain('原日志编号：audit-2');
     expect(reason).toContain('id_business_v2.account.delete');
     expect(reason).toContain('ID 资料 删除 V2 ID');
     expect(reason).toContain('operator02');

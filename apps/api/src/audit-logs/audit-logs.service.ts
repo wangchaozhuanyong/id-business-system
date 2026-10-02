@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
-import { TimedMemoryCache } from '../common/cache/timed-memory-cache';
+import { sanitizeAuditJsonValue } from './audit-log-sanitizer';
 import { getPagination } from '../common/pagination';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type {
@@ -29,32 +29,9 @@ const SENSITIVE_ACCESS_SORT_FIELDS: Record<
   objectType: 'objectType',
   approved: 'approved'
 };
-const AUDIT_LIST_CACHE_TTL_MS = 120_000;
 const AUDIT_EXPORT_LIMIT = 1_000;
 const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1_000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1_000;
-const REDACTED_VALUE = '[REDACTED]';
-const SENSITIVE_AUDIT_KEYS = new Set([
-  'password',
-  'passwordhash',
-  'currentpassword',
-  'newpassword',
-  'securityinfo',
-  'securityanswers',
-  'phone',
-  'phonenumber',
-  'phoneencrypted',
-  'cardnumber',
-  'giftcardnumber',
-  'token',
-  'tokenhash',
-  'accesstoken',
-  'refreshtoken',
-  'jwt',
-  'secret',
-  'secretencrypted',
-  'recoverycodes'
-]);
 const AUDIT_USER_INCLUDE = {
   user: {
     select: {
@@ -76,8 +53,6 @@ const SENSITIVE_ACCESS_USER_INCLUDE = {
 
 @Injectable()
 export class AuditLogsService {
-  private readonly listCache = new TimedMemoryCache();
-
   constructor(private readonly prisma: PrismaService) {}
 
   async create(input: CreateAuditLogInput, client: AuditLogClient = this.prisma) {
@@ -95,64 +70,53 @@ export class AuditLogsService {
         remark: input.remark
       }
     });
-    this.listCache.clear();
     return log;
   }
 
   async list(query: ListAuditLogsQuery) {
-    return this.listCache.getOrSet(
-      this.getListCacheKey('operations', query),
-      AUDIT_LIST_CACHE_TTL_MS,
-      async () => {
-        const pagination = getPagination(query);
-        const where = this.buildAuditLogWhere(query);
-        const [items, total] = await Promise.all([
-          this.prisma.auditLog.findMany({
-            where,
-            skip: pagination.skip,
-            take: pagination.take,
-            orderBy: this.buildAuditLogOrderBy(query),
-            include: AUDIT_USER_INCLUDE
-          }),
-          this.prisma.auditLog.count({ where })
-        ]);
+    // 日志必须反映最新已提交操作；不同写入路径和实例均直接读取数据库。
+    const pagination = getPagination(query);
+    const where = this.buildAuditLogWhere(query);
+    const [items, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: this.buildAuditLogOrderBy(query),
+        include: AUDIT_USER_INCLUDE
+      }),
+      this.prisma.auditLog.count({ where })
+    ]);
 
-        return {
-          items: items.map((item) => this.toAuditLogResponse(item)),
-          total,
-          page: pagination.page,
-          pageSize: pagination.pageSize
-        };
-      }
-    );
+    return {
+      items: items.map((item) => this.toAuditLogResponse(item)),
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize
+    };
   }
 
   async listSensitiveAccess(query: ListSensitiveAccessLogsQuery) {
-    return this.listCache.getOrSet(
-      this.getListCacheKey('sensitive-access', query),
-      AUDIT_LIST_CACHE_TTL_MS,
-      async () => {
-        const pagination = getPagination(query);
-        const where = this.buildSensitiveAccessWhere(query);
-        const [items, total] = await Promise.all([
-          this.prisma.sensitiveAccessLog.findMany({
-            where,
-            skip: pagination.skip,
-            take: pagination.take,
-            orderBy: this.buildSensitiveAccessOrderBy(query),
-            include: SENSITIVE_ACCESS_USER_INCLUDE
-          }),
-          this.prisma.sensitiveAccessLog.count({ where })
-        ]);
+    // 日志必须反映最新已提交操作；不同写入路径和实例均直接读取数据库。
+    const pagination = getPagination(query);
+    const where = this.buildSensitiveAccessWhere(query);
+    const [items, total] = await Promise.all([
+      this.prisma.sensitiveAccessLog.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: this.buildSensitiveAccessOrderBy(query),
+        include: SENSITIVE_ACCESS_USER_INCLUDE
+      }),
+      this.prisma.sensitiveAccessLog.count({ where })
+    ]);
 
-        return {
-          items,
-          total,
-          page: pagination.page,
-          pageSize: pagination.pageSize
-        };
-      }
-    );
+    return {
+      items,
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize
+    };
   }
 
   async export(input: ExportAuditLogsInput, operator?: AuthenticatedUser) {
@@ -215,7 +179,12 @@ export class AuditLogsService {
     const module = query.module?.trim();
     const action = query.action?.trim();
     return {
-      module: module ? { contains: module } : undefined,
+      AND: [
+        ...(module
+          ? [{ OR: [{ module: { contains: module } }, { action: { contains: module } }] }]
+          : []),
+        ...this.buildActivityWhere(query.activity)
+      ],
       action: action ? { contains: action } : undefined,
       createdAt: this.buildCreatedAtRange(query.createdFrom, query.createdTo),
       user: operator
@@ -231,6 +200,19 @@ export class AuditLogsService {
             { action: { contains: keyword } },
             { remark: { contains: keyword } },
             { objectType: { contains: keyword } },
+            { objectId: { contains: keyword } },
+            ...[
+              'name',
+              'displayName',
+              'username',
+              'orderNo',
+              'appleId',
+              'title',
+              'currency'
+            ].flatMap((field): Prisma.AuditLogWhereInput[] => [
+              { beforeData: { path: `$.${field}`, string_contains: keyword } },
+              { afterData: { path: `$.${field}`, string_contains: keyword } }
+            ]),
             {
               user: {
                 is: {
@@ -251,7 +233,9 @@ export class AuditLogsService {
     const module = query.module?.trim();
     const fieldName = query.fieldName?.trim();
     return {
-      module: module ? { contains: module } : undefined,
+      AND: module
+        ? [{ OR: [{ module: { contains: module } }, { objectType: { contains: module } }] }]
+        : undefined,
       fieldName: fieldName ? { contains: fieldName } : undefined,
       approved: this.parseApproved(query.approved),
       createdAt: this.buildCreatedAtRange(query.createdFrom, query.createdTo),
@@ -278,6 +262,14 @@ export class AuditLogsService {
           ]
         : undefined
     };
+  }
+
+  private buildActivityWhere(activity?: string): Prisma.AuditLogWhereInput[] {
+    if (!activity || activity === 'all') return [];
+    if (activity === 'staff') return [{ userId: { not: null } }];
+    if (activity === 'system') return [{ userId: null }];
+    if (activity === 'deletions') return [{ action: { endsWith: '.delete' } }];
+    throw new BadRequestException('记录范围无效');
   }
 
   private buildAuditLogOrderBy(
@@ -346,39 +338,14 @@ export class AuditLogsService {
   >(item: T) {
     return {
       ...item,
-      beforeData: this.sanitizeAuditJsonValue(item.beforeData),
-      afterData: this.sanitizeAuditJsonValue(item.afterData)
+      beforeData: sanitizeAuditJsonValue(item.beforeData),
+      afterData: sanitizeAuditJsonValue(item.afterData)
     };
   }
 
   private sanitizeAuditJsonInput(value: unknown): Prisma.InputJsonValue | undefined {
     if (value === undefined || value === null) return undefined;
-    return this.sanitizeAuditJsonValue(value) as Prisma.InputJsonValue;
-  }
-
-  private sanitizeAuditJsonValue(value: unknown): Prisma.JsonValue {
-    if (
-      value === null ||
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value.map((item) => this.sanitizeAuditJsonValue(item));
-    }
-    if (typeof value === 'object') {
-      const sanitized: Record<string, Prisma.JsonValue> = {};
-      for (const [key, item] of Object.entries(value)) {
-        const normalizedKey = key.toLowerCase().replace(/[_-]/g, '');
-        sanitized[key] = SENSITIVE_AUDIT_KEYS.has(normalizedKey)
-          ? REDACTED_VALUE
-          : this.sanitizeAuditJsonValue(item);
-      }
-      return sanitized;
-    }
-    return String(value);
+    return sanitizeAuditJsonValue(value) as Prisma.InputJsonValue;
   }
 
   private recordExport(
@@ -400,12 +367,5 @@ export class AuditLogsService {
       },
       remark: `导出${kind === 'operations' ? '操作审计' : '敏感访问'}记录 ${exportedCount} 条`
     });
-  }
-
-  private getListCacheKey(prefix: string, query: object) {
-    const params = Object.entries(query)
-      .filter(([, value]) => value !== undefined && value !== null && value !== '')
-      .sort(([left], [right]) => left.localeCompare(right));
-    return `audit:${prefix}:${JSON.stringify(params)}`;
   }
 }

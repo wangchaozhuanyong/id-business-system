@@ -144,6 +144,15 @@ const page = reactive({
     sortOrder: 'desc'
   },
   items: [] as V2Employee[],
+  canManageEmployees: true,
+  accountActions: {
+    openReset: (item: V2Employee) => {
+      notice.value = `预览操作：重置 ${item.displayName} 的密码。`;
+    },
+    openDelete: (item: V2Employee) => {
+      notice.value = `预览操作：删除 ${item.displayName} 并移交业务。`;
+    }
+  },
   total: 0,
   roleOptions,
   activeFilterCount: 0,

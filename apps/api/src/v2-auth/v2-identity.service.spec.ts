@@ -5,6 +5,11 @@ import { V2IdentityService } from './v2-identity.service';
 describe('V2IdentityService', () => {
   it('returns deduplicated roles and permissions for an active V2 operator', async () => {
     const prisma = {
+      securitySetting: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ value: { userId: '11111111-1111-4111-8111-111111111111' } })
+      },
       idBusinessV2ScopeVersion: {
         findUnique: vi.fn().mockResolvedValue({ version: 1n })
       },
@@ -42,6 +47,11 @@ describe('V2IdentityService', () => {
 
   it('rejects missing or disabled operators', async () => {
     const prisma = {
+      securitySetting: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ value: { userId: '11111111-1111-4111-8111-111111111111' } })
+      },
       idBusinessV2ScopeVersion: {
         findUnique: vi.fn().mockResolvedValue({ version: 1n })
       },
@@ -101,6 +111,11 @@ describe('V2IdentityService', () => {
         ]
       });
     const prisma = {
+      securitySetting: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ value: { userId: '11111111-1111-4111-8111-111111111111' } })
+      },
       idBusinessV2ScopeVersion: { findUnique: versionQuery },
       user: { findFirst: userQuery }
     } as unknown as PrismaService;

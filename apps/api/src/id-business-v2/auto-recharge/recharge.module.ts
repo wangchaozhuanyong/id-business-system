@@ -27,6 +27,7 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
 @Module({
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
   controllers: [RechargeController, BankRechargeController, RechargeProxyController],
+  exports: [RechargeSettingsService, RechargeProxyService],
   providers: [
     BankRechargeFeesService,
     FieldEncryptionService,

@@ -27,7 +27,7 @@ describe('employees scheme 3 redesign contract', () => {
     expect(toolbar).toContain('v-model="page.query.status"');
     expect(toolbar).toContain('v-model="page.query.roleId"');
     expect(list).toContain('v2TableSchemas.employees.main.columns[9]');
-    expect(list).toContain('page.openEdit(row)');
+    expect(list).toContain('<V2EmployeeActions :employee="row" :page="page" />');
     expect(overview).toContain('page.openCreate');
     expect(pageState).toContain('activeFilterCount');
     expect(pageState).toContain('keepPreviousData: true');
@@ -38,7 +38,8 @@ describe('employees scheme 3 redesign contract', () => {
     expect(api).toContain("http.get('/v2/employees/bootstrap'");
     expect(api).toContain("http.post('/v2/employees', input)");
     expect(api).toContain('http.patch(`/v2/employees/${id}`, input)');
-    expect(drawer).toContain('当前登录账号不能修改自己的角色或状态');
+    expect(drawer).toContain('系统超级管理员受保护，不能修改自己的管理身份或停用账号');
+    expect(drawer).toContain(':disabled="page.isEditingSelf"');
     expect(pageState).toContain('所有在线会话会立即失效');
     expect(pageState).toContain('确认修改员工权限');
     expect(pageState).toContain('重新登录后新权限才会生效');

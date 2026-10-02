@@ -50,11 +50,13 @@ export class V2RolesController {
   }
 
   @Post()
+  @RequireRoles('super_admin')
   create(@Body() dto: CreateV2RoleDto, @CurrentUser() operator: AuthenticatedUser) {
     return this.rolesService.create(dto, operator);
   }
 
   @Patch(':id')
+  @RequireRoles('super_admin')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateV2RoleDto,

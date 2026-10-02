@@ -1,8 +1,61 @@
 import { BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AuditLogsService } from './audit-logs.service';
+import { V2TransactionalAuditService } from '../id-business-v2/runtime/public-api';
 
 describe('AuditLogsService', () => {
+  it('reads committed transactional logs on every refresh across service instances', async () => {
+    const records: unknown[] = [];
+    const prisma = {
+      auditLog: {
+        create: vi.fn(async ({ data }) => {
+          const row = { id: 'fresh', beforeData: null, afterData: null, ...data };
+          records.push(row);
+          return row;
+        }),
+        findMany: vi.fn(async () => [...records]),
+        count: vi.fn(async () => records.length)
+      }
+    };
+    const first = new AuditLogsService(prisma as never);
+    const second = new AuditLogsService(prisma as never);
+    const query = { activity: 'staff' };
+    expect((await first.list(query)).total).toBe(0);
+    expect((await second.list(query)).total).toBe(0);
+    await new V2TransactionalAuditService().append(prisma as never, {
+      userId: 'operator',
+      module: 'id_business_v2_customers',
+      action: 'id_business_v2.customer.update',
+      afterData: { name: '更新名称' }
+    });
+    expect((await first.list(query)).total).toBe(1);
+    expect((await second.list(query)).items).toHaveLength(1);
+    expect(prisma.auditLog.findMany).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not let an older in-flight query replace a later refreshed result', async () => {
+    let release!: (value: unknown[]) => void;
+    const prisma = {
+      auditLog: {
+        findMany: vi
+          .fn()
+          .mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                release = resolve;
+              })
+          )
+          .mockResolvedValue([{ id: 'fresh', beforeData: null, afterData: null }]),
+        count: vi.fn().mockResolvedValue(1)
+      }
+    };
+    const service = new AuditLogsService(prisma as never);
+    const old = service.list({});
+    expect((await service.list({})).items[0].id).toBe('fresh');
+    release([]);
+    await old;
+    expect((await service.list({})).items[0].id).toBe('fresh');
+  });
   function createService() {
     const auditRecord = {
       id: 'audit-1',
@@ -113,7 +166,9 @@ describe('AuditLogsService', () => {
         skip: 20,
         take: 20,
         where: expect.objectContaining({
-          module: { contains: 'business' },
+          AND: [
+            { OR: [{ module: { contains: 'business' } }, { action: { contains: 'business' } }] }
+          ],
           createdAt: {
             gte: new Date('2026-07-29T16:00:00.000Z'),
             lt: new Date('2026-07-31T16:00:00.000Z')
@@ -121,6 +176,14 @@ describe('AuditLogsService', () => {
         })
       })
     );
+  });
+
+  it('searches recorded business names without searching secrets', async () => {
+    const { service, auditLog } = createService();
+    await service.list({ keyword: '订单' });
+    const where = auditLog.findMany.mock.calls[0]![0].where;
+    expect(where.OR).toContainEqual({ afterData: { path: '$.name', string_contains: '订单' } });
+    expect(JSON.stringify(where)).not.toContain('$.password');
   });
 
   it('lists sensitive access logs with approval and field filters', async () => {
@@ -193,5 +256,60 @@ describe('AuditLogsService', () => {
     await expect(service.listSensitiveAccess({ approved: 'yes' })).rejects.toThrow(
       new BadRequestException('approved is invalid')
     );
+  });
+
+  it('filters activity on the server before pagination and applies it to exports', async () => {
+    const { service, auditLog } = createService();
+    await service.list({ activity: 'staff', module: 'exchange_rate' });
+    expect(auditLog.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: [
+            {
+              OR: [
+                { module: { contains: 'exchange_rate' } },
+                { action: { contains: 'exchange_rate' } }
+              ]
+            },
+            { userId: { not: null } }
+          ]
+        })
+      })
+    );
+    await service.export({ activity: 'deletions' });
+    expect(auditLog.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ AND: [{ action: { endsWith: '.delete' } }] })
+      })
+    );
+    await service.list({ activity: 'system' });
+    expect(auditLog.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ AND: [{ userId: null }] }) })
+    );
+    await expect(service.list({ activity: 'invalid' })).rejects.toThrow('记录范围无效');
+  });
+
+  it('preserves Date snapshots and hides credential aliases in historical responses', async () => {
+    const { service, auditLog } = createService();
+    await service.create({
+      module: 'test',
+      action: 'test',
+      afterData: { deletedAt: new Date('2026-10-02T06:00:00.000Z') as unknown as string }
+    });
+    expect(auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ afterData: { deletedAt: '2026-10-02T06:00:00.000Z' } })
+    });
+    auditLog.findMany.mockResolvedValueOnce([
+      {
+        beforeData: {
+          totp_secret: 'private-test',
+          recoveryCode: 'private-test',
+          passwordEncrypted: 'private-test'
+        },
+        afterData: null
+      }
+    ] as never);
+    const result = await service.list({});
+    expect(JSON.stringify(result)).not.toContain('private-test');
   });
 });

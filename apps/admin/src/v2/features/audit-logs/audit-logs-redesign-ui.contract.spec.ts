@@ -39,7 +39,8 @@ describe('audit logs scheme 3 redesign contract', () => {
     expect(api).toContain("http.get('/audit-logs/sensitive-access'");
     expect(api).toContain("http.post('/audit-logs/export', input)");
     expect(drawer).toContain('getOperationAuditRestoreCandidate');
-    expect(drawer).toContain('发起后只生成数据治理恢复预览');
+    expect(drawer).toContain('另一名管理员审批通过后才能恢复');
+    expect(manifest).toContain("requiredRoles: ['admin']");
     expect(pageState).toContain("path: '/v2/data/governance'");
   });
 

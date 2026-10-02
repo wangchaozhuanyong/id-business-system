@@ -31,6 +31,9 @@
               <el-option label="到期待核实" value="unknown" />
             </el-select>
           </el-form-item>
+          <el-form-item label="优惠状况">
+            <ChatgptAccountOfferSelect v-model="offerStatus" all />
+          </el-form-item>
           <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
         </el-form>
       </template>
@@ -81,13 +84,18 @@
             </template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[2]">
-            <template #default="{ row }">{{ row.hasPassword ? '已保存' : '未保存' }}</template>
+            <template #default="{ row }">{{
+              V2_ACCOUNT_OFFER_LABELS[(row.offerStatus ?? 'unknown') as V2AccountOffer]
+            }}</template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[3]">
+            <template #default="{ row }">{{ row.hasPassword ? '已保存' : '未保存' }}</template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[4]">
             <template #default="{ row }">{{ row.hasTotp ? '已保存' : '未保存' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[4]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[5]"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -102,7 +110,7 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[5]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[6]"
             show-overflow-tooltip
           >
             <template #default="{ row }">
@@ -117,14 +125,14 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[6]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[7]"
             prop="remark"
             show-overflow-tooltip
           />
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[7]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
+          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[9]">
             <template #default="{ row }">
               <ChatgptAccountCopyButton
                 :id="row.id"
@@ -217,6 +225,12 @@
             :placeholder="`当前 ${editing.emailMasked}；留空保留`"
           />
         </el-form-item>
+        <el-form-item v-if="editing" label="优惠状况" prop="offerStatus">
+          <ChatgptAccountOfferSelect
+            :model-value="form.offerStatus"
+            @update:model-value="setEditorOffer"
+          />
+        </el-form-item>
         <el-form-item label="登录密码">
           <el-input
             v-model="form.password"
@@ -250,6 +264,7 @@
 </template>
 
 <script setup lang="ts">
+import ChatgptAccountOfferSelect from './ChatgptAccountOfferSelect.vue';
 import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -273,6 +288,7 @@ import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
+import { V2_ACCOUNT_OFFER_LABELS, type V2AccountOffer } from '@apple-business/shared';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 
@@ -297,6 +313,9 @@ const subscriptionState = useV2SessionDraft(
   'auto-recharge/V2ChatgptAccountsView:subscriptionState',
   () => ref('all')
 );
+const offerStatus = useV2SessionDraft('chatgpt-accounts:offer-filter', () =>
+  ref<V2AccountOffer | 'all'>('all')
+);
 const query = useV2ModuleQuery({
   moduleKey: 'chatgpt-accounts',
   scope: 'auto-recharge',
@@ -305,7 +324,8 @@ const query = useV2ModuleQuery({
       page: page.value,
       pageSize: pageSize.value,
       keyword: keyword.value,
-      subscriptionState: subscriptionState.value
+      subscriptionState: subscriptionState.value,
+      offerStatus: offerStatus.value
     }),
   keepPreviousData: true,
   query: ({ signal }) =>
@@ -315,14 +335,15 @@ const query = useV2ModuleQuery({
         page: page.value,
         pageSize: pageSize.value,
         keyword: keyword.value,
-        subscriptionState: subscriptionState.value
+        subscriptionState: subscriptionState.value,
+        offerStatus: offerStatus.value
       }
     )
 });
-watch([page, pageSize, keyword, subscriptionState], () => {
+watch([page, pageSize, keyword, subscriptionState, offerStatus], () => {
   void query.ensureFresh();
 });
-watch(subscriptionState, () => {
+watch([subscriptionState, offerStatus], () => {
   page.value = 1;
 });
 function search() {
@@ -353,7 +374,8 @@ const editorDraft = useV2FormDraft('chatgpt-accounts-editor', () => ({
   password: '',
   totpSecret: '',
   remark: '',
-  active: true
+  active: true,
+  offerStatus: 'unknown' as V2AccountOffer
 }));
 const { form } = editorDraft;
 const rules = computed<FormRules>(() => ({
@@ -366,7 +388,6 @@ const rules = computed<FormRules>(() => ({
     }
   ]
 }));
-
 function openCreate() {
   editing.value = null;
   editorDraft.open('create');
@@ -385,11 +406,19 @@ function onAccountsImported() {
 }
 function openEdit(account: BankChatgptAccount) {
   editing.value = account;
-  editorDraft.open(account.id, {
-    remark: account.remark ?? '',
-    active: account.status === 'active'
-  });
+  editorDraft.open(
+    account.id,
+    {
+      remark: account.remark ?? '',
+      active: account.status === 'active',
+      offerStatus: account.offerStatus ?? 'unknown'
+    },
+    account.updatedAt
+  );
   drawerOpen.value = true;
+}
+function setEditorOffer(value: V2AccountOffer | 'all') {
+  if (value !== 'all') form.offerStatus = value;
 }
 async function save() {
   if (!(await validateV2Form(formRef.value))) return;
@@ -400,8 +429,11 @@ async function save() {
     if (editing.value) {
       const payload: Record<string, unknown> = {
         remark: form.remark,
-        status: form.active ? 'active' : 'disabled'
+        status: form.active ? 'active' : 'disabled',
+        expectedUpdatedAt: editorDraft.version.value
       };
+      if (form.offerStatus !== (editing.value.offerStatus ?? 'unknown'))
+        payload.offerStatus = form.offerStatus;
       if (form.password) payload.password = form.password;
       if (form.totpSecret) payload.totpSecret = form.totpSecret;
       if (form.email.trim()) payload.email = form.email.trim();

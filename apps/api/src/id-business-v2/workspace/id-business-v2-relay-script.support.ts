@@ -1,5 +1,6 @@
 import type { IdBusinessV2RelayJob } from '@prisma/client';
-import { HttpStatus } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpStatus } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import { ApiHttpException } from '../../common/errors/api-http.exception';
 import { IdBusinessV2RelayRemoteError } from './providers/id-business-v2-relay-http';
 import {
@@ -18,6 +19,21 @@ export interface IdBusinessV2RelayProgress {
   serviceAccountEmail?: string;
   serviceOperation?: string;
   testedModels?: string[];
+}
+
+export function idBusinessV2RelayJobId(value: unknown) {
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
+    throw new BadRequestException('任务标识无效');
+  return value;
+}
+
+export function idBusinessV2RelayOperatorId(operator?: AuthenticatedUser) {
+  if (!operator?.id) throw new BadRequestException('无法识别当前操作人');
+  if (!operator.roles.includes('admin')) throw new ForbiddenException('只有管理员可以使用中转脚本');
+  return operator.id;
 }
 
 export function idBusinessV2RelayOptionsError(error: IdBusinessV2RelayRemoteError) {

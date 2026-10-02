@@ -1,7 +1,7 @@
 <template>
   <el-drawer
     v-model="page.restoreDrawerVisible"
-    title="生成回收站恢复预览"
+    title="申请恢复删除资料"
     size="min(620px, 94vw)"
     destroy-on-close
     :before-close="beforeRestoreClose"
@@ -9,7 +9,7 @@
     <div class="v2-governance-drawer">
       <el-alert
         type="warning"
-        title="此步骤只冻结影响预览，不会立即恢复；必须由另一名管理员审批。"
+        title="先核对要恢复的资料并提交申请，由另一名管理员审批通过后执行恢复。"
         :closable="false"
         show-icon
       />
@@ -47,14 +47,14 @@
             placeholder="说明误删除原因、核对结果和恢复目的"
           />
         </el-form-item>
-        <el-form-item label="备份证据" prop="backupEvidence">
+        <el-form-item label="备份核对记录" prop="backupEvidence">
           <el-input
             v-model="page.restoreForm.backupEvidence"
             type="textarea"
             :rows="4"
             maxlength="2000"
             show-word-limit
-            placeholder="填写备份编号、时间、环境和可恢复性核对记录"
+            placeholder="填写已核对的备份编号和时间，以及资料可以恢复的核对结果"
           />
         </el-form-item>
       </el-form>
@@ -79,7 +79,7 @@
         :loading="page.mutationBusy === 'restore'"
         @click="page.submitRestore(restoreFormRef)"
       >
-        生成不可变预览
+        提交恢复申请
       </AppButton>
     </template>
   </el-drawer>

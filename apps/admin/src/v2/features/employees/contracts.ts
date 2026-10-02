@@ -26,6 +26,27 @@ export interface V2Employee {
   createdBy: V2EmployeeOperator | null;
   createdAt: string;
   updatedAt: string;
+  isSystemSuperAdmin?: boolean;
+}
+
+export interface V2EmployeeDeletePreview {
+  employee: Pick<V2Employee, 'id' | 'username' | 'displayName'>;
+  target: Pick<V2Employee, 'id' | 'username' | 'displayName'>;
+  counts: {
+    addresses: number;
+    rechargeJobs: number;
+    rechargeRecords: number;
+    customers: number;
+    orders: number;
+    accounts: number;
+    giftCards: number;
+    businessTotpAccounts: number;
+    relayJobs: number;
+  };
+  blockers: string[];
+  canDelete: boolean;
+  expectedUpdatedAt: string;
+  previewHash: string;
 }
 
 export interface V2EmployeeListQuery {

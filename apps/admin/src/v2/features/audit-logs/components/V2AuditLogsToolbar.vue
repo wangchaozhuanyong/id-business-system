@@ -3,19 +3,23 @@
     <el-input
       v-model="page.query.keyword"
       clearable
-      placeholder="对象、说明、员工"
+      placeholder="资料名称、说明、员工"
       aria-label="搜索审计日志"
       @keyup.enter="page.handleSearch"
       @clear="page.handleSearch"
     />
-    <el-input
+    <el-select
       v-model="page.query.module"
       clearable
-      placeholder="模块"
-      aria-label="筛选审计模块"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
-    />
+      placeholder="全部业务分类"
+      aria-label="筛选业务分类"
+      @change="page.handleSearch"
+      ><el-option
+        v-for="option in page.auditModuleOptions"
+        :key="option.value"
+        :label="option.label"
+        :value="option.value"
+    /></el-select>
     <el-input
       v-model="page.query.operator"
       clearable
@@ -24,24 +28,41 @@
       @keyup.enter="page.handleSearch"
       @clear="page.handleSearch"
     />
-    <el-input
+    <el-select
       v-if="page.activeTab === 'operations'"
       v-model="page.query.action"
       clearable
-      placeholder="动作"
-      aria-label="筛选审计动作"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
-    />
-    <el-input
+      placeholder="全部操作类型"
+      aria-label="筛选操作类型"
+      @change="page.handleSearch"
+      ><el-option
+        v-for="option in page.auditActionOptions"
+        :key="option.value"
+        :label="option.label"
+        :value="option.value"
+    /></el-select>
+    <el-select
       v-else
       v-model="page.query.fieldName"
       clearable
-      placeholder="敏感字段"
-      aria-label="筛选敏感字段"
-      @keyup.enter="page.handleSearch"
-      @clear="page.handleSearch"
-    />
+      placeholder="全部查看内容"
+      aria-label="筛选查看内容"
+      @change="page.handleSearch"
+      ><el-option
+        v-for="option in page.auditSensitiveFieldOptions"
+        :key="option.value"
+        :label="option.label"
+        :value="option.value"
+    /></el-select>
+    <el-select
+      v-if="page.activeTab === 'operations'"
+      v-model="page.query.activity"
+      aria-label="筛选记录范围"
+      @change="page.handleSearch"
+    >
+      <el-option label="员工操作" value="staff" /><el-option label="系统自动记录" value="system" />
+      <el-option label="全部记录" value="all" /><el-option label="删除记录" value="deletions" />
+    </el-select>
     <V2FilterDisclosure>
       <el-select
         v-if="page.activeTab === 'sensitive_access'"
@@ -77,7 +98,7 @@
     >
     <template #meta>
       <span>{{
-        page.activeFilterCount ? `已启用 ${page.activeFilterCount} 项筛选` : '全部记录'
+        page.activeFilterCount ? `已启用 ${page.activeFilterCount} 项筛选` : '未设置其他筛选'
       }}</span>
     </template>
   </V2ListToolbar>

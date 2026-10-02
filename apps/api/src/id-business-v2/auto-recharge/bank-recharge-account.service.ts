@@ -1,3 +1,4 @@
+import { accountOfferUpdate, assertAccountEditVersion } from './bank-recharge-account-offers';
 import {
   BadRequestException,
   ConflictException,
@@ -174,12 +175,22 @@ export class BankRechargeAccountService {
     if (!Object.keys(input).length) throw new BadRequestException('没有要修改的账号资料');
     if (
       Object.keys(input).some(
-        (key) => !['email', 'password', 'totpSecret', 'status', 'remark'].includes(key)
+        (key) =>
+          ![
+            'email',
+            'password',
+            'totpSecret',
+            'status',
+            'remark',
+            'offerStatus',
+            'expectedUpdatedAt'
+          ].includes(key)
       )
     ) {
       throw new BadRequestException('账号资料包含未知字段');
     }
     const email = input.email === undefined ? undefined : bankRechargeEmail(input.email);
+    const offerPatch = accountOfferUpdate(input.offerStatus);
     const password =
       input.password === undefined ? undefined : bankRechargePassword(input.password);
     const totpInput =
@@ -203,6 +214,7 @@ export class BankRechargeAccountService {
       async (tx) => {
         const before = await this.repository.findAccount(tx, id);
         if (!before) throw new NotFoundException('ChatGPT 账号不存在');
+        assertAccountEditVersion(input.expectedUpdatedAt, before.updatedAt);
         if (
           email &&
           email !== this.encryption.decrypt(before.emailEncrypted) &&
@@ -213,6 +225,7 @@ export class BankRechargeAccountService {
         const updated = await this.repository.updateAccount(tx, {
           where: { id },
           data: {
+            ...offerPatch,
             ...(email
               ? {
                   emailEncrypted: this.encryption.encrypt(email)!,
@@ -242,10 +255,15 @@ export class BankRechargeAccountService {
           action: 'id_business_v2.auto_recharge.chatgpt_account.update',
           objectType: 'chatgpt_account',
           objectId: id,
-          beforeData: { emailMasked: before.emailMasked, status: before.status },
+          beforeData: {
+            emailMasked: before.emailMasked,
+            status: before.status,
+            offerStatus: before.offerStatus
+          },
           afterData: {
             emailMasked: updated.emailMasked,
             status: updated.status,
+            offerStatus: updated.offerStatus,
             passwordChanged: password !== undefined,
             totpChanged: totpInput !== undefined
           },

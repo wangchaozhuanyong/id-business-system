@@ -37,7 +37,9 @@
             <span>{{
               page.activeFilterCount ? '当前筛选条件下没有数据' : '可开通第一个内部员工账号'
             }}</span>
-            <AppButton variant="primary" @click="page.openCreate">开通员工</AppButton>
+            <AppButton v-if="page.canManageEmployees" variant="primary" @click="page.openCreate"
+              >开通员工</AppButton
+            >
           </div>
         </template>
 
@@ -100,10 +102,7 @@
         </V2TableColumn>
         <V2TableActionColumn :definition="v2TableSchemas.employees.main.columns[9]">
           <template #default="{ row }">
-            <AppButton size="small" variant="ghost" @click="page.openEdit(row)">
-              <el-icon><Edit /></el-icon>
-              编辑
-            </AppButton>
+            <V2EmployeeActions :employee="row" :page="page" />
           </template>
         </V2TableActionColumn>
       </V2Table>
@@ -156,10 +155,7 @@
           </dl>
           <footer>
             <span />
-            <AppButton size="small" variant="ghost" @click="page.openEdit(item)">
-              <el-icon><Edit /></el-icon>
-              编辑
-            </AppButton>
+            <V2EmployeeActions :employee="item" :page="page" />
           </footer>
         </article>
         <div v-if="!page.items.length" class="v2-records-empty">
@@ -167,7 +163,9 @@
           <span>{{
             page.activeFilterCount ? '当前筛选条件下没有数据' : '可开通第一个内部员工账号'
           }}</span>
-          <AppButton variant="primary" @click="page.openCreate">开通员工</AppButton>
+          <AppButton v-if="page.canManageEmployees" variant="primary" @click="page.openCreate"
+            >开通员工</AppButton
+          >
         </div>
       </div>
 
@@ -192,7 +190,7 @@
 
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
-import { Edit } from '@element-plus/icons-vue';
+import V2EmployeeActions from './V2EmployeeActions.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';

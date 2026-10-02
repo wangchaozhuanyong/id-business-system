@@ -14,9 +14,9 @@ import {
 
 describe('audit log presentation', () => {
   it('renders an explicit system actor when a user no longer exists', () => {
-    expect(auditUserLabel(null)).toBe('系统或未知员工');
+    expect(auditUserLabel(null)).toBe('系统自动执行');
     expect(auditUserLabel({ id: 'user-1', username: 'operator01', displayName: '运营一号' })).toBe(
-      'operator01'
+      '运营一号（operator01）'
     );
   });
 
@@ -35,7 +35,7 @@ describe('audit log presentation', () => {
         objectId: 'order-1',
         createdAt: '2026-07-30T00:00:00.000Z'
       })
-    ).toBe('订单 / order-1');
+    ).toBe('订单（记录尾号 order-1）');
   });
 
   it('maps internal audit values to Chinese presentation labels', () => {
@@ -80,14 +80,14 @@ describe('audit log presentation', () => {
     expect(getOperationAuditRestoreCandidate(deleteRow)).toEqual({
       entity: 'customer',
       id: 'customer-1',
-      label: '删除 V2 客户：测试客户'
+      label: '客户 · 测试客户'
     });
     expect(buildOperationAuditRestoreRouteQuery(deleteRow)).toMatchObject({
       tab: 'recycle',
       restoreEntity: 'customer',
       restoreId: 'customer-1',
       sourceAuditId: 'audit-delete-1',
-      sourceAuditOperator: 'operator01'
+      sourceAuditOperator: '运营一号（operator01）'
     });
     expect(
       getOperationAuditRestoreCandidate({

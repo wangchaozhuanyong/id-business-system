@@ -357,6 +357,7 @@ export function useSecurityPage() {
   }
 
   async function revokeSession(item: V2ActiveSessionRecord) {
+    if (!policyManagement.canManageSecurity.value) return;
     if (item.isCurrent || item.revokedAt) return;
     try {
       await ElMessageBox.confirm(

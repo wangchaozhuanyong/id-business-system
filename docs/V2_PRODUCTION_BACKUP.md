@@ -85,6 +85,20 @@ sudo /opt/id-business-v2/current/scripts/verify-aws-mysql-backup.sh \
 容器中完成导入，检查核心表、Prisma migration，并对全部业务表执行 `CHECK TABLE`；结束后自动删除
 临时容器及下载文件。
 
+本地隔离演练可以显式指定当前项目和项目内工作目录，复用相同的恢复校验脚本：
+
+```bash
+bash scripts/verify-aws-mysql-backup.sh \
+  --archive=/absolute/project/backups/synthetic.sql.gz \
+  --deployment-directory=/absolute/project \
+  --work-directory=/absolute/project/backups/restore-drills
+```
+
+导入明确使用 UTF-8 字符集。合成测试库的演练只证明当前脚本能够导入备份并读取指定资料，不能作为最新生产
+S3 备份已验证的证据。生产备份状态仍需要真实对象的 SHA-256、隔离恢复、数据完整性与运行时间记录。
+历史日志没有旧值时，只有备份在合适时点留有对应资料才可辅助找回；先在隔离库提取指定资料并人工核对，
+禁止为了找回一条旧资料覆盖整个当前库。
+
 ## 2026-08-28 生产恢复证据
 
 - 最新已验证对象：`mysql/daily/id-business-v2-20260828T071922Z.sql.gz`。

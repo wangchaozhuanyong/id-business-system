@@ -579,6 +579,28 @@ html[data-v2-theme] .el-form-item__content {
   min-height: var(--el-component-size);
 }
 
+/* Consent text wraps while its first line stays aligned with the form label. */
+html[data-v2-theme] .el-form-item__content > .el-checkbox {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--el-component-size);
+  align-items: flex-start;
+  margin-right: 0;
+  white-space: normal;
+}
+
+html[data-v2-theme] .el-form-item__content > .el-checkbox .el-checkbox__input {
+  margin-top: calc((var(--el-component-size) - var(--el-checkbox-input-height, 14px)) / 2);
+}
+
+html[data-v2-theme] .el-form-item__content > .el-checkbox .el-checkbox__label {
+  min-width: 0;
+  padding-block: calc((var(--el-component-size) - 20px) / 2);
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 html[data-v2-theme] .el-textarea__inner:focus,
 html[data-v2-theme] .el-input__wrapper.is-focus,
 html[data-v2-theme] .el-select__wrapper.is-focused,

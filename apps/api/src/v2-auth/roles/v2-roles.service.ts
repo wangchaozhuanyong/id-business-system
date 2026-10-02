@@ -554,8 +554,8 @@ export class V2RolesService {
         '角色编码需为 3 至 100 位，以小写字母开头，可包含数字、点、下划线或短横线。'
       );
     }
-    if (code === 'admin') {
-      throw new BadRequestException('admin 为系统保留角色编码。');
+    if (code === 'admin' || code === 'super_admin') {
+      throw new BadRequestException('管理员身份为系统保留角色编码。');
     }
     return code;
   }

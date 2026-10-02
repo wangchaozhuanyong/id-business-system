@@ -12,6 +12,10 @@ import {
   auditModuleLabel,
   auditRemarkLabel,
   auditUserLabel,
+  auditModuleOptions,
+  auditActionOptions,
+  auditSensitiveFieldOptions,
+  getOperationAuditRestoreCandidate,
   buildOperationAuditRestoreRouteQuery,
   exportOperationAuditRows,
   exportSensitiveAuditRows,
@@ -21,6 +25,7 @@ import {
   sensitiveObjectLabel
 } from './audit-log-presentation';
 import { v2AuditLogsApi } from './api';
+import { useAuditFieldRestore } from './useAuditFieldRestore';
 import type {
   V2AuditLogExportInput,
   V2AuditLogListQuery,
@@ -51,6 +56,7 @@ export function useAuditLogsPage() {
       module: '',
       operator: '',
       action: '',
+      activity: 'staff' as NonNullable<V2AuditLogListQuery['activity']>,
       fieldName: '',
       approved: '' as '' | 'true' | 'false',
       sortBy: 'createdAt',
@@ -79,6 +85,7 @@ export function useAuditLogsPage() {
     const allowedSort = ['createdAt', 'module', 'action', 'objectType'] as const;
     return {
       ...commonFilters(),
+      activity: query.activity,
       action: query.action.trim() || undefined,
       sortBy: allowedSort.includes(query.sortBy as (typeof allowedSort)[number])
         ? (query.sortBy as V2AuditLogListQuery['sortBy'])
@@ -129,6 +136,11 @@ export function useAuditLogsPage() {
   const operationItems = computed(() =>
     auditQuery.data.value?.kind === 'operations' ? auditQuery.data.value.result.items : []
   );
+  const fieldRecovery = useAuditFieldRestore(() => auditQuery.refresh());
+
+  function openFieldRestore(item: V2AuditLogRecord) {
+    if (fieldRecovery.open(item)) detailDrawerVisible.value = false;
+  }
   const sensitiveItems = computed(() =>
     auditQuery.data.value?.kind === 'sensitive_access' ? auditQuery.data.value.result.items : []
   );
@@ -152,6 +164,7 @@ export function useAuditLogsPage() {
         query.keyword.trim(),
         query.module.trim(),
         query.operator.trim(),
+        activeTab.value === 'operations' && query.activity !== 'staff' ? 'activity' : '',
         activeTab.value === 'operations' ? query.action.trim() : query.fieldName.trim(),
         activeTab.value === 'sensitive_access' ? query.approved : '',
         createdRange.value.length ? 'date' : ''
@@ -188,6 +201,7 @@ export function useAuditLogsPage() {
     query.module = '';
     query.operator = '';
     query.action = '';
+    query.activity = 'staff';
     query.fieldName = '';
     query.approved = '';
     query.sortBy = 'createdAt';
@@ -232,17 +246,17 @@ export function useAuditLogsPage() {
     detailDrawerVisible.value = true;
   }
 
-  function openRestoreFromOperationAudit(item: V2AuditLogRecord) {
+  async function openRestoreFromOperationAudit(item: V2AuditLogRecord) {
     const query = buildOperationAuditRestoreRouteQuery(item);
     if (!query) {
       ElMessage.warning('只有 ID、客户、业务选项和订单的软删除审计可以发起恢复。');
       return;
     }
-    detailDrawerVisible.value = false;
-    void navigateSafely(router, {
+    const navigated = await navigateSafely(router, {
       path: '/v2/data/governance',
       query
     });
+    if (navigated) detailDrawerVisible.value = false;
   }
 
   function exportInput(): V2AuditLogExportInput {
@@ -256,6 +270,7 @@ export function useAuditLogsPage() {
           createdFrom: base.createdFrom,
           createdTo: base.createdTo,
           action: query.action.trim() || undefined,
+          activity: query.activity,
           sortBy: operationListQuery().sortBy,
           sortOrder: query.sortOrder
         }
@@ -331,6 +346,8 @@ export function useAuditLogsPage() {
     openOperationDetails,
     openSensitiveDetails,
     openRestoreFromOperationAudit,
+    openFieldRestore,
+    fieldRecovery,
     exportCurrent,
     auditAccessReasonLabel,
     auditActionLabel,
@@ -338,6 +355,10 @@ export function useAuditLogsPage() {
     auditModuleLabel,
     auditRemarkLabel,
     auditUserLabel,
+    auditModuleOptions,
+    auditActionOptions,
+    auditSensitiveFieldOptions,
+    getOperationAuditRestoreCandidate,
     formatAuditDate,
     formatAuditJson,
     operationObjectLabel,

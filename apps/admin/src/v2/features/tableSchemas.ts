@@ -3,6 +3,46 @@ import { defineV2TableSchema } from '@/v2/components/tableSystem';
 const table = defineV2TableSchema;
 
 export const v2TableSchemas = {
+  registrationNames: {
+    main: table({
+      id: 'registration-names.main',
+      feature: 'registration-names',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: 'displayName', label: '名字', kind: 'text', widthPreset: 'wide', pin: 'start' },
+        { key: 'active', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'usageCount', label: '使用次数', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ]
+    })
+  },
+  registrationJobs: {
+    main: table({
+      id: 'auto-registration.main',
+      feature: 'auto-registration',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'emailMasked',
+          label: '注册邮箱',
+          kind: 'identifier',
+          widthPreset: 'wide',
+          pin: 'start'
+        },
+        { key: 'displayName', label: '名字', kind: 'text', widthPreset: 'standard' },
+        { key: 'state', label: '任务状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'step', label: '当前步骤', kind: 'text', widthPreset: 'wide' },
+        { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    })
+  },
   chatgptAccounts: {
     main: table({
       id: 'chatgpt-accounts.main',
@@ -19,6 +59,7 @@ export const v2TableSchemas = {
           pin: 'start'
         },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
         { key: 'hasPassword', label: '登录密码', kind: 'status', widthPreset: 'compact' },
         { key: 'hasTotp', label: '双重验证', kind: 'status', widthPreset: 'compact' },
         {
@@ -316,9 +357,9 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'wide', pin: 'start' },
-        { key: 'module', label: '模块', kind: 'text', widthPreset: 'standard' },
-        { key: 'action', label: '动作', kind: 'identifier', widthPreset: 'identifier' },
-        { key: '对象', label: '对象', kind: 'identifier', widthPreset: 'longText' },
+        { key: 'module', label: '业务分类', kind: 'text', widthPreset: 'standard' },
+        { key: 'action', label: '操作类型', kind: 'identifier', widthPreset: 'identifier' },
+        { key: '对象', label: '涉及资料', kind: 'identifier', widthPreset: 'longText' },
         { key: 'remark', label: '说明', kind: 'text', widthPreset: 'longText' },
         { key: 'createdAt', label: '时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
@@ -332,9 +373,9 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         { key: '访问人', label: '访问人', kind: 'text', widthPreset: 'wide', pin: 'start' },
-        { key: 'module', label: '模块', kind: 'text', widthPreset: 'standard' },
-        { key: 'fieldName', label: '敏感字段', kind: 'identifier', widthPreset: 'identifier' },
-        { key: '对象', label: '对象', kind: 'identifier', widthPreset: 'longText' },
+        { key: 'module', label: '业务分类', kind: 'text', widthPreset: 'standard' },
+        { key: 'fieldName', label: '查看内容', kind: 'identifier', widthPreset: 'identifier' },
+        { key: '对象', label: '涉及资料', kind: 'identifier', widthPreset: 'longText' },
         { key: 'approved', label: '审批', kind: 'status', widthPreset: 'compact' },
         { key: 'accessReason', label: '访问原因', kind: 'text', widthPreset: 'longText' },
         { key: 'createdAt', label: '时间', kind: 'date', widthPreset: 'dateTime' },
@@ -1359,6 +1400,8 @@ export const v2TableSchemas = {
 } as const;
 
 export const v2TablesByFeature = {
+  'auto-registration': [v2TableSchemas.registrationJobs.main],
+  'registration-names': [v2TableSchemas.registrationNames.main],
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],

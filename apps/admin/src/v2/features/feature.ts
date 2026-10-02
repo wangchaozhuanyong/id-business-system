@@ -2,6 +2,8 @@ import type { Component } from 'vue';
 import type { V2TableSchema } from '@/v2/components/tableSystem';
 
 export type V2ModuleKey =
+  | 'auto-registration'
+  | 'registration-names'
   | 'auto-recharge'
   | 'chatgpt-accounts'
   | 'bank-recharge-cards'

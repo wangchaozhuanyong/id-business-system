@@ -191,9 +191,11 @@ describe('IdBusinessV2DashboardService', () => {
   it('selects only audit summary fields for the team activity feed', async () => {
     const prisma = createPrismaMock();
     prisma.auditLog.findMany.mockResolvedValue([]);
+    prisma.idBusinessV2Order.findMany.mockResolvedValue([]);
+    prisma.idBusinessV2Activation.findMany.mockResolvedValue([]);
     const service = createService(prisma);
 
-    await service.overview(user(['audit_log.view']), new Date('2026-07-31T00:00:00.000Z'));
+    await service.overview({ ...user(), roles: ['admin'] }, new Date('2026-07-31T00:00:00.000Z'));
 
     expect(prisma.auditLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -207,5 +209,13 @@ describe('IdBusinessV2DashboardService', () => {
         }
       })
     );
+  });
+
+  it('does not leak audit summaries to an employee with the old log permission', async () => {
+    const prisma = createPrismaMock();
+    const result = await createService(prisma).overview(user(['audit_log.view']));
+    expect(result.access.audit).toBe(false);
+    expect(result.recentAudits).toEqual([]);
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
   });
 });

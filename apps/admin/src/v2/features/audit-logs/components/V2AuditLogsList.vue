@@ -4,7 +4,7 @@
     :phase="page.queryPhase"
     :previous-data="page.isParameterTransition"
     :error="page.listError"
-    :loading-title="page.activeTab === 'operations' ? '正在加载操作审计' : '正在加载敏感访问记录'"
+    :loading-title="page.activeTab === 'operations' ? '正在加载操作' : '正在加载敏感资料查看记录'"
     refreshing-title="正在更新审计日志"
     error-title="审计日志加载失败"
     @retry="page.refresh"
@@ -12,7 +12,7 @@
     <section ref="listRef" class="v2-records-list v2-audit-list" :style="listFrameStyle">
       <header class="v2-audit-list__heading">
         <V2SectionHeading
-          :title="page.activeTab === 'operations' ? '操作审计记录' : '敏感访问记录'"
+          :title="page.activeTab === 'operations' ? '操作记录' : '敏感资料查看记录'"
         >
           <template #actions>
             <V2TableColumnSettings
@@ -45,7 +45,7 @@
       >
         <template #empty>
           <div class="v2-records-empty">
-            <strong>暂无操作审计记录</strong>
+            <strong>暂无操作记录</strong>
             <span>{{
               page.activeFilterCount
                 ? '当前筛选条件下没有数据'
@@ -54,14 +54,16 @@
           </div>
         </template>
         <V2TableColumn :definition="v2TableSchemas.auditLogs.operations.columns[0]">
-          <template #default="{ row }">{{ page.auditUserLabel(row.user) }}</template>
+          <template #default="{ row }">{{ page.auditUserLabel(row.user, row.userId) }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.operations.columns[1]"
           prop="module"
           sortable="custom"
         >
-          <template #default="{ row }">{{ page.auditModuleLabel(row.module) }}</template>
+          <template #default="{ row }">{{
+            page.auditModuleLabel(row.module, 'action' in row ? row.action : undefined)
+          }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.operations.columns[2]"
@@ -109,7 +111,7 @@
       >
         <template #empty>
           <div class="v2-records-empty">
-            <strong>暂无敏感访问记录</strong>
+            <strong>暂无敏感资料查看记录</strong>
             <span>{{
               page.activeFilterCount
                 ? '当前筛选条件下没有数据'
@@ -118,14 +120,16 @@
           </div>
         </template>
         <V2TableColumn :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[0]">
-          <template #default="{ row }">{{ page.auditUserLabel(row.user) }}</template>
+          <template #default="{ row }">{{ page.auditUserLabel(row.user, row.userId) }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[1]"
           prop="module"
           sortable="custom"
         >
-          <template #default="{ row }">{{ page.auditModuleLabel(row.module) }}</template>
+          <template #default="{ row }">{{
+            page.auditModuleLabel(row.module, 'action' in row ? row.action : undefined)
+          }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[2]"
@@ -182,8 +186,10 @@
         <article v-for="item in page.currentItems" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
-              <strong>{{ page.auditUserLabel(item.user) }}</strong>
-              <span>{{ page.auditModuleLabel(item.module) }}</span>
+              <strong>{{ page.auditUserLabel(item.user, item.userId) }}</strong>
+              <span>{{
+                page.auditModuleLabel(item.module, 'action' in item ? item.action : undefined)
+              }}</span>
               <span>{{ page.formatAuditDate(item.createdAt) }}</span>
             </div>
             <el-tag
@@ -194,15 +200,15 @@
             >
               {{ item.approved ? '已批准' : '未批准' }}
             </el-tag>
-            <el-tag v-else effect="plain">操作审计</el-tag>
+            <el-tag v-else effect="plain">操作</el-tag>
           </header>
           <dl v-if="'action' in item">
             <div v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, 'action']">
-              <dt>动作</dt>
+              <dt>操作类型</dt>
               <dd>{{ page.auditActionLabel(item.action) }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, '对象']">
-              <dt>对象</dt>
+              <dt>涉及资料</dt>
               <dd>{{ page.operationObjectLabel(item) }}</dd>
             </div>
             <div
@@ -217,11 +223,11 @@
             <div
               v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, 'fieldName']"
             >
-              <dt>敏感字段</dt>
+              <dt>查看内容</dt>
               <dd>{{ page.auditFieldLabel(item.fieldName) }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, '对象']">
-              <dt>对象</dt>
+              <dt>涉及资料</dt>
               <dd>{{ page.sensitiveObjectLabel(item) }}</dd>
             </div>
             <div

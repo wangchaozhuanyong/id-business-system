@@ -1,11 +1,11 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
-import { CurrentUser, RequirePermissions } from '../auth/auth.decorators';
+import { CurrentUser, RequireRoles } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { AuditLogsService } from './audit-logs.service';
 import type { ExportAuditLogsInput } from './audit-logs.types';
 
 @Controller('audit-logs')
-@RequirePermissions('audit_log.view')
+@RequireRoles('admin')
 export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}
 
@@ -20,7 +20,8 @@ export class AuditLogsController {
     @Query('createdFrom') createdFrom?: string,
     @Query('createdTo') createdTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @Query('activity') activity?: string
   ) {
     return this.auditLogsService.list({
       page,
@@ -32,7 +33,8 @@ export class AuditLogsController {
       createdFrom,
       createdTo,
       sortBy,
-      sortOrder
+      sortOrder,
+      activity
     });
   }
 

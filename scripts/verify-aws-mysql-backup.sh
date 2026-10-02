@@ -5,7 +5,7 @@ umask 077
 
 deployment_directory="/opt/id-business-v2/current"
 environment_file="${deployment_directory}/.env.aws.production"
-normalizer_script="${deployment_directory}/scripts/mysql-dump-restore-normalizer.sed"
+work_directory="/opt/id-business-v2/backups/mysql/restore-drills"
 mysql_image="mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb"
 restore_database="id_business_v2_restore"
 archive_file=""
@@ -14,12 +14,14 @@ temporary_directory=""
 container_name="id-business-v2-restore-drill-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 usage() {
-  echo "Usage: $0 [--archive=/absolute/path/to/backup.sql.gz]" >&2
+  echo "Usage: $0 [--archive=/absolute/path/to/backup.sql.gz] [--deployment-directory=/absolute/project/path] [--work-directory=/absolute/project/backup/path]" >&2
 }
 
 for argument in "$@"; do
   case "${argument}" in
     --archive=*) archive_file="${argument#--archive=}" ;;
+    --deployment-directory=*) deployment_directory="${argument#--deployment-directory=}" ;;
+    --work-directory=*) work_directory="${argument#--work-directory=}" ;;
     --help)
       usage
       exit 0
@@ -30,6 +32,13 @@ for argument in "$@"; do
       ;;
   esac
 done
+
+if [[ "${deployment_directory}" != /* || "${work_directory}" != /* ]]; then
+  echo "部署目录和恢复工作目录必须是绝对路径" >&2
+  exit 1
+fi
+environment_file="${deployment_directory}/.env.aws.production"
+normalizer_script="${deployment_directory}/scripts/mysql-dump-restore-normalizer.sed"
 
 read_environment_value() {
   local key="$1"
@@ -96,7 +105,9 @@ else
     exit 1
   fi
 
-  temporary_directory="$(mktemp -d /tmp/id-business-v2-mysql-restore.XXXXXX)"
+  mkdir -p "${work_directory}"
+  chmod 700 "${work_directory}"
+  temporary_directory="$(mktemp -d "${work_directory}/restore.XXXXXX")"
   downloaded_object_key="$(
     aws s3api list-objects-v2 \
       --region "${s3_region}" \
@@ -181,7 +192,7 @@ normalize_mysql_dump_stream() {
 }
 
 gzip -dc "${archive_file}" | normalize_mysql_dump_stream | docker exec -i "${container_name}" sh -c \
-  'exec mysql --host=127.0.0.1 --user=root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+  'exec mysql --default-character-set=utf8mb4 --host=127.0.0.1 --user=root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 
 read -r table_count required_table_count migration_count <<<"$(
   docker exec -i "${container_name}" sh -c \

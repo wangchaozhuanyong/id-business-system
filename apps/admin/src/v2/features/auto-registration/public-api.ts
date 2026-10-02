@@ -1,0 +1,1 @@
+export { autoRegistrationFeature } from './manifest';

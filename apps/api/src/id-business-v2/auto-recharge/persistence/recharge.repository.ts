@@ -3,6 +3,7 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/public-api';
 import type { Prisma } from '@prisma/client';
+import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
 
 @Injectable()
 export class RechargeRepository {
@@ -60,7 +61,11 @@ export class RechargeRepository {
     });
   }
 
-  createJob(tx: V2CommandTransaction, data: Prisma.IdBusinessV2RechargeJobUncheckedCreateInput) {
+  async createJob(
+    tx: V2CommandTransaction,
+    data: Prisma.IdBusinessV2RechargeJobUncheckedCreateInput
+  ) {
+    await assertEmployeeBusinessWriter(tx, data.ownerId);
     return tx.idBusinessV2RechargeJob.create({ data });
   }
 

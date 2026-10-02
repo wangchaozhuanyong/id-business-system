@@ -18,7 +18,7 @@
         <el-icon><Refresh /></el-icon>
         刷新
       </AppButton>
-      <AppButton variant="primary" @click="page.openCreate">
+      <AppButton v-if="page.canManageEmployees" variant="primary" @click="page.openCreate">
         <el-icon><Plus /></el-icon>
         开通员工
       </AppButton>

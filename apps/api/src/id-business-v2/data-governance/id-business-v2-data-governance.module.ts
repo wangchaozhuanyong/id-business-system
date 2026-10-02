@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
+import { IdBusinessV2AuditRestoreController } from './id-business-v2-audit-restore.controller';
+import { IdBusinessV2AuditRestoreService } from './id-business-v2-audit-restore.service';
+import { IdBusinessV2AuditRestoreRepository } from './persistence/id-business-v2-audit-restore.repository';
 import { IdBusinessV2DataGovernanceApprovalService } from './id-business-v2-data-governance-approval.service';
 import { IdBusinessV2DataGovernanceController } from './id-business-v2-data-governance.controller';
 import { IdBusinessV2DataGovernanceExecutionService } from './id-business-v2-data-governance-execution.service';
@@ -12,8 +15,10 @@ import { IdBusinessV2DataGovernanceQueryRepository } from './persistence/id-busi
 
 @Module({
   imports: [IdBusinessV2RuntimeModule],
-  controllers: [IdBusinessV2DataGovernanceController],
+  controllers: [IdBusinessV2DataGovernanceController, IdBusinessV2AuditRestoreController],
   providers: [
+    IdBusinessV2AuditRestoreService,
+    IdBusinessV2AuditRestoreRepository,
     IdBusinessV2DataGovernanceService,
     IdBusinessV2DataGovernanceRepository,
     IdBusinessV2DataGovernanceQueryRepository,

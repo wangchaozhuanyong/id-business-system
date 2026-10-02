@@ -3,6 +3,7 @@ import { authHttpError } from '../common/errors/api-http.exception';
 import { TimedMemoryCache } from '../common/cache/timed-memory-cache';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { ensureSystemSuperAdmin, SYSTEM_SUPER_ADMIN_ROLE } from './system-super-admin';
 
 const AUTHENTICATED_USER_CACHE_TTL_MS = 15_000;
 
@@ -65,11 +66,16 @@ export class V2IdentityService {
           );
         }
 
+        const superAdminId = await ensureSystemSuperAdmin(this.prisma);
+        const roles = user.userRoles
+          .map((assignment) => assignment.role.code)
+          .filter((code) => code !== SYSTEM_SUPER_ADMIN_ROLE);
+        if (superAdminId === user.id) roles.push('admin', SYSTEM_SUPER_ADMIN_ROLE);
         return {
           id: user.id,
           username: user.username,
           displayName: user.displayName,
-          roles: [...new Set(user.userRoles.map((assignment) => assignment.role.code))],
+          roles: [...new Set(roles)],
           permissions: [
             ...new Set(
               user.userRoles.flatMap((assignment) =>

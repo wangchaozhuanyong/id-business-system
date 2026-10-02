@@ -63,7 +63,13 @@
       </V2PanelSection>
       <V2PanelSection heading-id="employee-access-scope" title="角色与状态" step="02">
         <el-form-item label="角色" prop="roleIds">
+          <el-input
+            v-if="page.editingItem?.isSystemSuperAdmin"
+            model-value="系统超级管理员"
+            disabled
+          />
           <el-select
+            v-else
             v-model="page.form.roleIds"
             multiple
             collapse-tags
@@ -75,7 +81,7 @@
             <el-option
               v-for="role in page.roleOptions"
               :key="role.id"
-              :label="`${role.name}（${role.code}）`"
+              :label="role.name"
               :value="role.id"
             />
           </el-select>
@@ -94,7 +100,7 @@
           v-if="page.isEditingSelf"
           class="v2-employee-drawer__inline-alert"
           type="warning"
-          title="当前登录账号不能修改自己的角色或状态"
+          title="系统超级管理员受保护，不能修改自己的管理身份或停用账号"
           show-icon
           :closable="false"
         />
