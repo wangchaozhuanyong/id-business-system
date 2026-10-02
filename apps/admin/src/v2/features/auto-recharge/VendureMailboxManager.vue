@@ -125,7 +125,6 @@
                 >新增主邮箱</AppButton
               >
               <template v-else-if="activeTab === 'aliases'">
-                <ChatgptAccountCopySettings />
                 <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
                 <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
               </template>
@@ -1296,7 +1295,6 @@
 <script setup lang="ts">
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 
-import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import type {
   V2VendureMailboxAlias,
   V2VendureMailboxMail,

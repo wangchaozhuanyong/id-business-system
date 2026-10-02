@@ -1,9 +1,10 @@
 <template>
   <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
-      description="保存自动充值使用的 ChatGPT 账号。密码与 2FA 加密存储，列表仅显示脱敏邮箱和配置状态。"
+      description="管理待用 ChatGPT 账号；开通成功后从本页隐藏，可在银充订单中追溯。密码与 2FA 加密存储。"
     >
       <template #actions>
+        <ChatgptAccountCopySettings />
         <AppButton @click="importOpen = true">批量导入</AppButton>
         <AppButton variant="primary" @click="openCreate">新增账号</AppButton>
       </template>
@@ -21,16 +22,6 @@
               clearable
               @keyup.enter="search"
           /></el-form-item>
-          <el-form-item label="会员状态">
-            <el-select v-model="subscriptionState" aria-label="按会员状态筛选">
-              <el-option label="全部" value="all" />
-              <el-option label="未记录开通" value="never_subscribed" />
-              <el-option label="使用中" value="active" />
-              <el-option label="即将到期" value="due_soon" />
-              <el-option label="已到期" value="expired" />
-              <el-option label="到期待核实" value="unknown" />
-            </el-select>
-          </el-form-item>
           <el-form-item label="优惠状况">
             <ChatgptAccountOfferSelect v-model="offerStatus" all />
           </el-form-item>
@@ -79,8 +70,6 @@
               <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{
                 row.status === 'active' ? '启用' : '停用'
               }}</el-tag>
-              <span> · {{ subscriptionLabel(row) }}</span>
-              <span v-if="row.dueAt"> · {{ formatV2DateTime(row.dueAt) }}</span>
             </template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[2]">
@@ -130,20 +119,32 @@
             show-overflow-tooltip
           />
           <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
+            <template #default="{ row }">
+              <span title="首次录入系统的时间">{{ formatV2DateTime(row.createdAt) }}</span>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[9]">
+            <template #default="{ row }">
+              <span title="从首次录入起，每满 24 小时增加 1 天；不足一天为 0 天">{{
+                registeredDaysLabel(row.createdAt)
+              }}</span>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[10]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.chatgptAccounts.main.columns[9]"
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[11]"
             show-overflow-tooltip
           >
             <template #default="{ row }">{{ row.openingCard?.numberSummary || '未记录' }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[10]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[12]">
             <template #default="{ row }">{{
               row.openingCard?.deleted ? '已删除' : row.openingCard?.id ? '尚未删除' : '未记录'
             }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[11]">
+          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[13]">
             <template #default="{ row }">
               <ChatgptAccountCopyButton
                 :id="row.id"
@@ -226,6 +227,7 @@
         <el-form-item v-if="!editing" label="ChatGPT 邮箱" prop="email" required>
           <el-input
             v-model="form.email"
+            name="chatgpt-account-create-email"
             type="email"
             maxlength="250"
             autocomplete="off"
@@ -235,6 +237,7 @@
         <el-form-item v-else label="新邮箱" prop="email">
           <el-input
             v-model="form.email"
+            name="chatgpt-account-edit-email"
             type="email"
             maxlength="250"
             autocomplete="off"
@@ -250,6 +253,7 @@
         <el-form-item label="登录密码">
           <el-input
             v-model="form.password"
+            name="chatgpt-account-password"
             type="password"
             show-password
             maxlength="1024"
@@ -300,37 +304,25 @@ import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
+import { useChatgptAccountAge } from './useChatgptAccountAge';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
 import ChatgptOpeningCardDeleteButton from './ChatgptOpeningCardDeleteButton.vue';
 import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
+import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
 import { V2_ACCOUNT_OFFER_LABELS, type V2AccountOffer } from '@apple-business/shared';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 
-function subscriptionLabel(account: BankChatgptAccount) {
-  const labels = {
-    never_subscribed: '未记录开通',
-    active: '使用中',
-    due_soon: '即将到期',
-    expired: '已到期',
-    unknown: '到期待核实'
-  } as const;
-  return labels[account.subscriptionState];
-}
-
+const { registeredDaysLabel } = useChatgptAccountAge();
 const page = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:page', () => ref(1));
 const pageSize = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:pageSize', () => ref(20));
 const keyword = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:keyword', () => ref(''));
 const keywordInput = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:keywordInput', () =>
   ref('')
-);
-const subscriptionState = useV2SessionDraft(
-  'auto-recharge/V2ChatgptAccountsView:subscriptionState',
-  () => ref('all')
 );
 const offerStatus = useV2SessionDraft('chatgpt-accounts:offer-filter', () =>
   ref<V2AccountOffer | 'all'>('all')
@@ -343,7 +335,7 @@ const query = useV2ModuleQuery({
       page: page.value,
       pageSize: pageSize.value,
       keyword: keyword.value,
-      subscriptionState: subscriptionState.value,
+      subscriptionState: 'never_subscribed',
       offerStatus: offerStatus.value
     }),
   keepPreviousData: true,
@@ -354,15 +346,15 @@ const query = useV2ModuleQuery({
         page: page.value,
         pageSize: pageSize.value,
         keyword: keyword.value,
-        subscriptionState: subscriptionState.value,
+        subscriptionState: 'never_subscribed',
         offerStatus: offerStatus.value
       }
     )
 });
-watch([page, pageSize, keyword, subscriptionState, offerStatus], () => {
+watch([page, pageSize, keyword, offerStatus], () => {
   void query.ensureFresh();
 });
-watch([subscriptionState, offerStatus], () => {
+watch(offerStatus, () => {
   page.value = 1;
 });
 function search() {

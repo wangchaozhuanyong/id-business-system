@@ -1,4 +1,4 @@
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
 import {
@@ -10,7 +10,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
-import { ensureV2BusinessNowMs, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
+import { useBankRechargeOrderTiming } from './useBankRechargeOrderTiming';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankRechargeOrder } from './bank-recharge-api';
@@ -27,20 +27,6 @@ export function useBankRechargeOrdersPage() {
   const linkedOrderNo = computed(() =>
     typeof route.query.orderNo === 'string' && accountIdFilter.value ? route.query.orderNo : ''
   );
-  const businessNow = ref<number | null>(getV2BusinessNowMs());
-  let disposed = false;
-  let clockTimer: ReturnType<typeof setInterval> | undefined;
-  onMounted(async () => {
-    businessNow.value = await ensureV2BusinessNowMs();
-    if (disposed) return;
-    clockTimer = setInterval(() => {
-      businessNow.value = getV2BusinessNowMs();
-    }, 1000);
-  });
-  onUnmounted(() => {
-    disposed = true;
-    if (clockTimer) clearInterval(clockTimer);
-  });
   const financeCurrencies = ['CNY', 'MYR', 'USD', 'USDT'];
   const page = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:page', () => ref(1));
   const pageSize = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:pageSize', () =>
@@ -57,6 +43,8 @@ export function useBankRechargeOrdersPage() {
     ref(linkedOrderNo.value)
   );
   const status = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:status', () => ref(''));
+  const expiry = useV2SessionDraft('bank-orders:expiry', () => ref<'all' | 'expired'>('all'));
+  watch(expiry, () => (page.value = 1));
   const drawerOpen = ref(false);
   const quickCustomerOpen = ref(false);
   const cardOpen = ref(false);
@@ -87,6 +75,7 @@ export function useBankRechargeOrdersPage() {
     open: openFormDraft,
     beginSave: beginFormSave
   } = useV2FormDraft('bank-orders-editor', emptyForm);
+  const { usageLabel, usageTagType, initializeDates } = useBankRechargeOrderTiming(form);
   const correctionReasons = useV2SessionDraft(
     'bank-orders-correction-reasons',
     () => new Map<string, string>()
@@ -111,7 +100,7 @@ export function useBankRechargeOrdersPage() {
     manualEvidenceRef: [{ required: true, message: '请填写付款凭据编号', trigger: 'blur' }]
   };
 
-  const ordersQuery = useV2ModuleQuery({
+  const ordersQuery = useV2ModuleQuery<Awaited<ReturnType<typeof bankRechargeApi.listOrders>>>({
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
     key: () =>
@@ -120,9 +109,12 @@ export function useBankRechargeOrdersPage() {
         pageSize: pageSize.value,
         keyword: keyword.value,
         status: status.value,
+        expiry: expiry.value,
         accountId: accountIdFilter.value
       }),
     keepPreviousData: true,
+    getRevalidateAt: (result) =>
+      Date.now() + Math.max(1000, Date.parse(result.revalidateAt) - Date.parse(result.evaluatedAt)),
     query: ({ signal }) =>
       bankRechargeApi.listOrders(
         {
@@ -130,12 +122,13 @@ export function useBankRechargeOrdersPage() {
           pageSize: pageSize.value,
           keyword: keyword.value,
           status: status.value,
+          expiry: expiry.value,
           accountId: accountIdFilter.value
         },
         { signal }
       )
   });
-  watch([page, pageSize, keyword, status, accountIdFilter], () => {
+  watch([page, pageSize, keyword, status, expiry, accountIdFilter], () => {
     void ordersQuery.ensureFresh();
   });
   watch([accountIdFilter, linkedOrderNo], () => {
@@ -231,17 +224,6 @@ export function useBankRechargeOrdersPage() {
     }
   });
 
-  function usageLabel(row: BankRechargeOrder) {
-    if (row.activeSubscription?.status !== 'active') {
-      return row.accountId ? '非当前使用' : '待关联账号';
-    }
-    if (businessNow.value === null) return '时间同步中';
-    return row.dueAt && Date.parse(row.dueAt) <= businessNow.value ? '已到期' : '使用中';
-  }
-  function usageTagType(row: BankRechargeOrder) {
-    const label = usageLabel(row);
-    return label === '使用中' ? 'success' : label === '已到期' ? 'warning' : 'info';
-  }
   function applyFilters() {
     keyword.value = keywordInput.value.trim();
     status.value = statusInput.value;
@@ -264,6 +246,7 @@ export function useBankRechargeOrdersPage() {
     selected.value = null;
     saveError.value = '';
     openFormDraft('create');
+    initializeDates();
     customers.value = [...(optionsQuery.data.value?.customers ?? [])];
     drawerOpen.value = true;
   }
@@ -344,7 +327,9 @@ export function useBankRechargeOrdersPage() {
           chargeAmount: form.chargeAmount,
           manualEvidenceRef: form.manualEvidenceRef,
           accountId: form.accountId || null,
-          customerId: form.customerId || null
+          customerId: form.customerId || null,
+          openedAt: form.openedAt ? v2DateTimeInputToIso(form.openedAt) : null,
+          dueAt: form.dueAt ? v2DateTimeInputToIso(form.dueAt) : null
         });
         completeFormDraft();
         if (selected.value) correctionReasons.delete(selected.value.id);
@@ -530,6 +515,7 @@ export function useBankRechargeOrdersPage() {
   }
 
   return {
+    expiry,
     financeCurrencies,
     page,
     pageSize,

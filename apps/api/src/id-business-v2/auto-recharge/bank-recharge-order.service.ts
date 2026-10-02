@@ -7,7 +7,7 @@ import {
   NotFoundException
 } from '@nestjs/common';
 import type { IdBusinessV2RechargeJob } from '@prisma/client';
-import { V2_BANK_RECHARGE_PLANS } from '@apple-business/shared';
+import { V2_BANK_RECHARGE_PLANS, bankRechargeDefaultDueAt } from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
@@ -96,8 +96,10 @@ export class BankRechargeOrderService {
         if (accountId) await this.accounts.requireActive(tx, accountId);
         if (customerId) await this.requireCustomer(tx, customerId);
         const card = cardId ? await this.requireCard(tx, cardId, currencyCode) : null;
-        const openedAt = input.openedAt ? bankRechargeDate(input.openedAt, '开通时间') : null;
-        const dueAt = input.dueAt ? bankRechargeDate(input.dueAt, '到期时间') : null;
+        const openedAt = input.openedAt ? bankRechargeDate(input.openedAt, '开通时间') : new Date();
+        const dueAt = input.dueAt
+          ? bankRechargeDate(input.dueAt, '到期时间')
+          : bankRechargeDefaultDueAt(openedAt);
         this.assertDates(openedAt, dueAt);
         const item = await this.repository.createOrder(tx, {
           data: {
@@ -283,9 +285,11 @@ export class BankRechargeOrderService {
           : bankRechargeDate(input.openedAt, '开通时间');
     const dueAt =
       input.dueAt === undefined
-        ? previous.dueAt
+        ? (previous.dueAt ?? (openedAt ? bankRechargeDefaultDueAt(openedAt) : null))
         : input.dueAt === null
-          ? null
+          ? openedAt
+            ? bankRechargeDefaultDueAt(openedAt)
+            : null
           : bankRechargeDate(input.dueAt, '到期时间');
     this.assertDates(openedAt, dueAt);
     const bankFeeCurrencyCode =
@@ -494,6 +498,7 @@ export class BankRechargeOrderService {
         customerFeeAmount: '0',
         openedAt,
         verifiedAt: openedAt,
+        dueAt: bankRechargeDefaultDueAt(openedAt),
         renewedFromOrderId: existingSubscription?.currentOrderId ?? null,
         createdByUserId: job.ownerId,
         updatedByUserId: job.ownerId

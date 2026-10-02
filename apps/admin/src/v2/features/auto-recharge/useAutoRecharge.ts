@@ -215,7 +215,8 @@ export function useAutoRecharge() {
     moduleKey: 'chatgpt-accounts',
     scope: 'auto-recharge',
     key: 'auto-recharge-bank-accounts',
-    query: ({ signal }) => bankRechargeApi.listAccounts({ signal })
+    query: ({ signal }) =>
+      bankRechargeApi.listAccounts({ signal }, { subscriptionState: 'never_subscribed' })
   });
   const bankCurrenciesQuery = useV2ModuleQuery({
     moduleKey: 'bank-recharge-orders',
@@ -299,8 +300,7 @@ export function useAutoRecharge() {
   );
   const savedBankAccounts = computed(() =>
     (bankAccountsQuery.data.value?.items ?? []).filter(
-      (item) =>
-        item.status === 'active' && ['never_subscribed', 'expired'].includes(item.subscriptionState)
+      (item) => item.status === 'active' && item.subscriptionState === 'never_subscribed'
     )
   );
   const savedPaymentCards = computed(() =>

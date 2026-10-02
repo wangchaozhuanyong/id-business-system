@@ -57,7 +57,7 @@ const { suffix, original, initialized, saving } = useV2SessionDraft(
   })
 );
 const query = useV2ModuleQuery({
-  moduleKey: 'vendure-mailbox',
+  moduleKey: 'chatgpt-accounts',
   scope: 'auto-recharge',
   key: 'chatgpt-account-copy-settings',
   trackRouteData: false,

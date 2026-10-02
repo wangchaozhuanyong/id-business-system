@@ -267,6 +267,14 @@ async function verifyLayoutFixture(browserInstance) {
       const measurements = await measureActionGroups(page, '[data-layout-fixture]');
       assert.equal(measurements.length, 5, `宽度 ${width}px 未渲染全部五种操作列档位`);
       assertActionGroupsFit(measurements, `布局夹具 ${width}px`);
+      const pinnedColumns = await page
+        .locator(
+          '.el-table__header-wrapper .el-table-fixed-column--left, .el-table__header-wrapper .el-table-fixed-column--right'
+        )
+        .count();
+      if (width <= mobileBreakpoint)
+        assert.equal(pinnedColumns, 0, `${width}px 仍有固定列遮挡数据区`);
+      else assert.ok(pinnedColumns > 0, `${width}px 未恢复桌面固定列`);
       assertSemanticColumnLayout(await measureSemanticColumnLayout(page), `语义列夹具 ${width}px`);
       assertNarrowContainerLayout(
         await measureSemanticColumnLayout(page, '[data-narrow-container]'),
@@ -1015,6 +1023,7 @@ async function measureActionGroups(page, containerSelector) {
           cellRect && tableRect
             ? cellRect.left < tableRect.left - 1 || cellRect.right > tableRect.right + 1
             : true,
+        pinned: cell?.classList.contains('el-table-fixed-column--right') ?? false,
         groupOutsideCell:
           cellRect == null ||
           groupRect.left < cellRect.left - 1 ||
@@ -1033,11 +1042,13 @@ function assertActionGroupsFit(measurements, label) {
     assert.equal(measurement.overflow, 0, `${label} 第 ${index + 1} 行操作组内部溢出`);
     assert.equal(measurement.outsideCell, 0, `${label} 第 ${index + 1} 行按钮超出操作单元格`);
     assert.ok(measurement.wrappedRows <= 1, `${label} 第 ${index + 1} 行操作按钮发生换行`);
-    assert.equal(
-      measurement.fixedOutsideTable,
-      false,
-      `${label} 第 ${index + 1} 行固定操作列超出表格`
-    );
+    if (measurement.pinned) {
+      assert.equal(
+        measurement.fixedOutsideTable,
+        false,
+        `${label} 第 ${index + 1} 行固定操作列超出表格`
+      );
+    }
     assert.equal(
       measurement.groupOutsideCell,
       false,

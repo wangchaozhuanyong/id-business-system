@@ -356,6 +356,8 @@ function validateSharedImplementation() {
     [/showOverflowTooltip:\s*true/, 'V2Table 必须统一溢出提示'],
     [/V2TableColumnSettings/, 'V2Table 必须统一提供列显示设置入口'],
     [/V2_TABLE_VISIBILITY_CONTEXT/, 'V2Table 必须提供共享列可见性上下文'],
+    [/matchMedia\('\(max-width: 900px\)'\)/, '共享表格必须统一使用 900px 窄屏断点'],
+    [/fixedColumnsEnabled:\s*\(\) => !isMobile\.value/, '窄屏固定列必须在共享表格层统一解除'],
     [
       /props\.schema\.rowKey\?\.kind === 'path'[\s\S]*?delete tableAttrs\['row-key'\][\s\S]*?tableAttrs\.rowKey = props\.schema\.rowKey\.value/,
       'path rowKey 必须由 schema 强制注入'
@@ -366,6 +368,15 @@ function validateSharedImplementation() {
   }
   if (!/columnKey:\s*props\.definition\.key/.test(columnSource)) {
     issues.push(`${tableColumnPath}: 数据列必须传递 schema columnKey`);
+  }
+  for (const [source, projectPath] of [
+    [columnSource, tableColumnPath],
+    [controlSource, controlColumnPath],
+    [actionSource, actionColumnPath]
+  ]) {
+    if (!source.includes('visibility?.fixedColumnsEnabled() === false')) {
+      issues.push(`${projectPath}: 列固定位置必须遵守共享窄屏规则`);
+    }
   }
   if (!/visibility\.isColumnVisible\(props\.definition\.key\)/.test(columnSource)) {
     issues.push(`${tableColumnPath}: 数据列必须遵守共享列可见性设置`);

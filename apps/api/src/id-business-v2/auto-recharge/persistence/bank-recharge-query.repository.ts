@@ -88,6 +88,9 @@ export class BankRechargeQueryRepository {
     const pageSize = this.pageNumber(query.pageSize, 20, 100);
     const keyword = bankRechargeText(query.keyword, '搜索词', 160, false);
     const status = bankRechargeText(query.status, '订单状态', 40, false);
+    const expiry = bankRechargeText(query.expiry, '到期筛选', 20, false) || 'all';
+    if (!['all', 'expired'].includes(expiry)) throw new BadRequestException('到期筛选无效');
+    const now = new Date();
     const accountId = query.accountId ? bankRechargeId(query.accountId, 'ChatGPT 账号') : null;
     if (
       status &&
@@ -103,6 +106,7 @@ export class BankRechargeQueryRepository {
       throw new BadRequestException('订单状态无效');
     }
     const where: Prisma.IdBusinessV2BankRechargeOrderWhereInput = {
+      ...(expiry === 'expired' ? { dueAt: { lte: now } } : {}),
       ...(accountId ? { accountId } : {}),
       ...(status
         ? { status: status as Prisma.EnumIdBusinessV2BankRechargeOrderStatusFilter['equals'] }
@@ -133,7 +137,14 @@ export class BankRechargeQueryRepository {
       }),
       this.prisma.idBusinessV2BankRechargeOrder.count({ where })
     ]);
-    return { items, total, page, pageSize };
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      evaluatedAt: now,
+      revalidateAt: new Date(now.getTime() + 60_000)
+    };
   }
 
   async options() {

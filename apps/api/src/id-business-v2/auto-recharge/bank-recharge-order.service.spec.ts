@@ -81,6 +81,25 @@ function fixture() {
 }
 
 describe('银充付款入单', () => {
+  it('官网核验成功建单时将开通时间和含当天 30 天的到期时间一并保存', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:15:00+08:00'));
+    try {
+      const { service, tx, job, repository } = fixture();
+      await service.recordVerifiedSuccess(tx as never, job as never, verified);
+      expect(repository.createOrder).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({
+          data: expect.objectContaining({
+            openedAt: new Date('2026-01-01T10:15:00+08:00'),
+            dueAt: new Date('2026-01-30T10:15:00+08:00')
+          })
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('开通核验成功时仅在订单保存加密的首位与末八位摘要', async () => {
     const { service, tx, job, repository, audit } = fixture();
     repository.findCardsByTail.mockResolvedValue([

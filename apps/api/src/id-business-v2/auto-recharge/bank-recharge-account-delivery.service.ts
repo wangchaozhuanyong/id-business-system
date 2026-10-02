@@ -103,7 +103,7 @@ export class BankRechargeAccountDeliveryService {
         });
         const suffix = accountCopySuffix(row?.browserOptions);
         return {
-          text: `${identity.email}-${this.encryption.decrypt(account.passwordEncrypted) ?? ''}-${this.encryption.decrypt(account.totpSecretEncrypted) ?? ''}-${alias.buyerQueryCode}${suffix ? `\n${suffix}` : ''}`
+          text: `${identity.email}----${this.encryption.decrypt(account.passwordEncrypted) ?? ''}----${this.encryption.decrypt(account.totpSecretEncrypted) ?? ''}----${alias.buyerQueryCode}${suffix ? `\n${suffix}` : ''}`
         };
       },
       { changedScopes: ['audit-logs'], requestId: randomUUID(), operator, retryMode: 'none' }

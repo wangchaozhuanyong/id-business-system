@@ -242,22 +242,6 @@
                 :label="item.name"
                 :value="item.id" /></el-select
           ></el-form-item>
-          <el-form-item label="开通时间"
-            ><el-date-picker
-              v-model="form.openedAt"
-              type="datetime"
-              value-format="YYYY-MM-DDTHH:mm"
-              placeholder="选择开通时间"
-              :disabled="readonly"
-          /></el-form-item>
-          <el-form-item label="到期时间"
-            ><el-date-picker
-              v-model="form.dueAt"
-              type="datetime"
-              value-format="YYYY-MM-DDTHH:mm"
-              placeholder="选择到期时间"
-              :disabled="readonly"
-          /></el-form-item>
           <el-form-item label="备注"
             ><el-input
               v-model="form.remark"
@@ -271,6 +255,25 @@
             手续费与购物网手续费，系统同时入财务日记并连接到期提醒。
           </p>
         </template>
+        <el-form-item label="开通时间"
+          ><el-date-picker
+            v-model="form.openedAt"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm"
+            placeholder="选择开通时间"
+            :disabled="readonly"
+        /></el-form-item>
+        <el-form-item label="到期时间"
+          ><el-date-picker
+            v-model="form.dueAt"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm"
+            placeholder="选择到期时间"
+            :disabled="readonly"
+        /></el-form-item>
+        <p class="bank-recharge-form-note">
+          默认含开通当天共 30 天；1 月 1 日开通，1 月 30 日同一时刻到期。
+        </p>
       </el-form>
       <p v-if="saveError" class="bank-recharge-error" role="alert">{{ saveError }}</p>
     </V2FormDrawer>

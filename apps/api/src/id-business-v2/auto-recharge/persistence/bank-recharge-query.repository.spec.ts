@@ -15,6 +15,35 @@ function subscription(dueAt: string) {
 }
 
 describe('BankRechargeQueryRepository renewal warnings', () => {
+  it('已到期筛选使用服务器时间且列表、总数及分页应用同一条件', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const orders = {
+        findMany: vi.fn().mockResolvedValue([{ id: 'expired-order' }]),
+        count: vi.fn().mockResolvedValue(21)
+      };
+      const result = await new BankRechargeQueryRepository({
+        idBusinessV2BankRechargeOrder: orders
+      } as never).list({ expiry: 'expired', page: 2, pageSize: 20, keyword: 'BC' });
+      const where = orders.findMany.mock.calls[0][0].where;
+      expect(where.dueAt).toEqual({ lte: now });
+      expect(orders.count).toHaveBeenCalledWith({ where });
+      expect(orders.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 20, take: 20 }));
+      expect(result).toMatchObject({
+        total: 21,
+        page: 2,
+        pageSize: 20,
+        items: [{ id: 'expired-order' }]
+      });
+      expect(result.revalidateAt).toEqual(new Date(now.getTime() + 60_000));
+      await expect(
+        new BankRechargeQueryRepository({} as never).list({ expiry: 'unexpected' })
+      ).rejects.toThrow('到期筛选无效');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('uses the existing global warning days and returns active due subscriptions only', async () => {
     const prisma = {
       idBusinessV2RenewalWarningSetting: {
