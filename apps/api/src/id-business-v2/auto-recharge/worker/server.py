@@ -478,8 +478,13 @@ class Job:
     async def verify_json_target(self, context, target, expected_email, *, initial_page=None):
         if not isinstance(expected_email, str) or not expected_email:
             raise Stop("expected_email_required")
+        refresh_count = 0
+        def report_session(**details):
+            nonlocal refresh_count
+            refresh_count = max(refresh_count, details.get("session_refresh_count", 0))
+            self.progress("session_restore", **{**details, "session_refresh_count": refresh_count})
         budget = SessionBudget(60, cancelled=lambda: self.cancelled,
-                               report=lambda **details: self.progress("session_restore", **details))
+                               report=report_session)
         page, routed, verified = initial_page, False, False
         async def block_payment(route):
             request = route.request
@@ -495,8 +500,27 @@ class Job:
             routed = True
             if initial_page is None:
                 await load_session_page(page, browser_checkout.ORIGIN, budget)
-            observed = await browser_password_login.official_identity(
-                page, expected_email, budget=budget, strict=True)
+            while True:
+                try:
+                    observed = await browser_password_login.official_identity(
+                        page, expected_email, budget=budget, strict=True)
+                    break
+                except Exception as error:
+                    retryable = (error.report.get("reason") in {"session_load_timeout", "session_network_error"}
+                                 and not error.report.get("user_action_required")
+                                 and error.report.get("http_status") is None) if isinstance(error, Stop) else (
+                                     browser_checkout.retryable_page_load_error(error))
+                    if refresh_count or not retryable:
+                        raise
+                    budget.remaining_ms()
+                    refresh_count = 1
+                    # 固定官网首页 GET，只恢复同一窗口；不重放登录、建单或付款。
+                    response = await budget.run(lambda: page.goto(
+                        browser_checkout.ORIGIN + "/", wait_until="commit", timeout=0), "page_refresh")
+                    status = getattr(response, "status", None)
+                    if type(status) is int and status >= 400:
+                        raise Stop("verification_required" if status == 403 else "http_error",
+                                   http_status=status, user_action_required=status == 403)
             if not observed:
                 raise Stop("official_session_not_verified", account_matched=False)
             official_target, identity = observed
@@ -505,6 +529,13 @@ class Job:
                 raise Stop("official_account_mismatch", account_matched=False)
             verified = True
             return identity
+        except Exception as error:
+            if not isinstance(error, Stop):
+                details = session_failure(error)
+                error = Stop(details.pop("reason"), **details)
+            error.report.update(session_step=budget.step, session_elapsed_seconds=int(budget.elapsed),
+                                session_wait_seconds=budget.seconds, session_refresh_count=refresh_count)
+            raise error from None
         finally:
             cleaned = True
             if routed:
