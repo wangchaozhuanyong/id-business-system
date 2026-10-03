@@ -45,6 +45,9 @@ export interface V2RechargeResult {
   browser_error_code?: string;
   payment_failure_reason?: string;
   last_reason?: string;
+  proxy_attempt?: number;
+  proxy_attempt_limit?: 1 | 10;
+  proxy_wait_seconds?: 20;
   session_attempt?: number;
   session_attempt_limit?: number;
   session_elapsed_seconds?: number;
@@ -233,6 +236,7 @@ export interface V2RechargeServerProxySettings {
 }
 
 export interface V2RechargeBitBrowserSettings {
+  proxyId?: string | null;
   connectorUrl: string;
   localApiUrl: string;
   localApiTokenConfigured: boolean;
@@ -262,6 +266,7 @@ export interface V2RechargeBrowserCatalogAccess {
 }
 
 export interface UpdateV2RechargeBitBrowserSettingsInput {
+  proxyId?: string | null;
   serverMode?: boolean;
   directMode?: boolean;
   connectorUrl: string;

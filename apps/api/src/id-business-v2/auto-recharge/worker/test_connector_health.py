@@ -24,7 +24,7 @@ class ConnectorHealthTests(unittest.TestCase):
                     'browser-catalog', 'browser-options', 'session-load-retry',
                     'same-window-page-refresh', 'payment-unknown-resolution',
                     'prepayment-page-recovery', 'stale-owned-profile-cleanup',
-                    'password-login', 'login-code'
+                    'password-login', 'login-code', 'account-registration'
                 ], 'originAllowed': True, 'busy': False
             })
             start.assert_not_called()

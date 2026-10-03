@@ -21,16 +21,17 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class RegistrationJob:
-    def __init__(self, payload, origin, client_type):
+    def __init__(self, payload, origin, client_type, *, builtin=False):
         allowed = {'id', 'mode', 'attempt', 'agentToken', 'callbackUrl', 'windowName', 'email',
                    'password', 'displayName', 'birthDate', 'totpSecret', 'browserProfileId',
-                   'registered', 'passwordVerified', 'mfaVerified', 'step', 'bitBrowser'}
+                   'registered', 'passwordVerified', 'mfaVerified', 'step',
+                   'proxy' if builtin else 'bitBrowser'}
         if not isinstance(payload, dict) or set(payload) != allowed or payload.get('mode') != 'registration':
             raise Stop('invalid_registration_payload')
         parsed = urlsplit(payload['callbackUrl'])
         callback_origin = f'{parsed.scheme}://{parsed.netloc}'
         if (callback_origin != origin or parsed.scheme not in {'https', 'http'}
-                or (parsed.scheme == 'http' and parsed.hostname not in {'localhost', '127.0.0.1'})
+                or (not builtin and parsed.scheme == 'http' and parsed.hostname not in {'localhost', '127.0.0.1'})
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
                 or parsed.path != f"/api/id-business-v2/auto-registration/local/{payload['id']}"):
             raise Stop('invalid_registration_callback')
@@ -47,8 +48,13 @@ class RegistrationJob:
         validate_birthdate(payload['birthDate'])
         if payload['totpSecret']:
             totp_key(payload['totpSecret'])
-        options = bitbrowser_options.validate_browser_settings(payload['bitBrowser'])
-        self.settings = {**payload['bitBrowser'], 'browserOptions': options}
+        if builtin:
+            if not isinstance(payload['proxy'], dict):
+                raise Stop('server_proxy_invalid')
+            self.settings = dict(payload['proxy'])
+        else:
+            options = bitbrowser_options.validate_browser_settings(payload['bitBrowser'])
+            self.settings = {**payload['bitBrowser'], 'browserOptions': options}
         self.payload = dict(payload)
         self.id, self.attempt = payload['id'], payload['attempt']
         self.step = payload['step']

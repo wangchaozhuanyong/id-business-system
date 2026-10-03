@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
   connection: vi.fn(),
   code: vi.fn(),
   cancel: vi.fn(),
-  resumeCredentials: vi.fn(),
+  resume: vi.fn(),
   queries: [] as unknown[],
   index: 0
 }));
@@ -23,11 +23,6 @@ vi.mock('@/api/client', () => ({
   http: { defaults: { baseURL: '/api' } },
   getApiErrorMessage: (cause: Error) => cause.message
 }));
-vi.mock('../auto-recharge/public-api', () => ({
-  connectorRequest: mock.connector,
-  RechargeConnectorError: class extends Error {},
-  useRechargeBrowserSettings: () => ({ settingsOpen: ref(false) })
-}));
 vi.mock('./api', () => ({
   registrationApi: {
     create: mock.create,
@@ -35,7 +30,7 @@ vi.mock('./api', () => ({
     connection: mock.connection,
     code: mock.code,
     cancel: mock.cancel,
-    resumeCredentials: mock.resumeCredentials
+    resume: mock.resume
   }
 }));
 const id = '11111111-1111-4111-8111-111111111111';
@@ -73,26 +68,10 @@ beforeEach(() => {
     { data: ref({}), phase: ref('ready'), ensureFresh: vi.fn(), refresh: vi.fn() },
     { data: activeRow, phase: ref('ready'), ensureFresh: vi.fn(), refresh: vi.fn() }
   ];
-  mock.connection.mockResolvedValue({
-    connectorUrl: 'http://127.0.0.1:55321',
-    connectorToken: 'synthetic-only'
-  });
-  mock.launch.mockResolvedValue({
-    id,
-    mode: 'registration',
-    attempt: 1,
-    connectorUrl: 'http://127.0.0.1:55321',
-    connectorToken: 'synthetic-only',
-    password: 'synthetic-only-staged'
-  });
-  mock.connector.mockResolvedValue({
-    service: 'id-business-v2-auto-recharge-connector',
-    capabilities: ['account-registration'],
-    busy: false,
-    originAllowed: true
-  });
+  mock.launch.mockResolvedValue({ id, attempt: 1, delivery: 'accepted' });
+  mock.resume.mockResolvedValue({ id, attempt: 1, delivery: 'accepted' });
   mock.create.mockResolvedValue(baseJob);
-  mock.code.mockResolvedValue({ code: null });
+  mock.code.mockResolvedValue({ id, attempt: 1, delivery: 'accepted' });
   scope = effectScope();
   page = scope.run(() => useRegistrationPage({ moduleKey: 'auto-registration' }))!;
   page.formRef.value = { validate: async () => true } as never;
@@ -104,15 +83,30 @@ afterEach(() => {
   clearV2SessionDrafts();
 });
 describe('注册表单和邮件生命周期', () => {
-  it('不支持注册的连接器不会创建数据库任务，失败保留输入', async () => {
+  it('条件不变时查询仍刷新列表和当前任务，避免关闭重试操作停留在旧状态', () => {
+    page.filters.activeJobId = id;
+    page.search();
+    expect(page.query.refresh).toHaveBeenCalledOnce();
+    expect(page.activeQuery.refresh).toHaveBeenCalledOnce();
+  });
+  it('空白注册表单带入共用默认代理，已有手动选择不被覆盖', () => {
+    page.options.data.value = { defaultProxyId: 'default-proxy' } as never;
+    page.openStart();
+    expect(page.draft.form.proxyId).toBe('default-proxy');
+    page.draft.form.proxyId = 'manual-proxy';
+    page.formOpen.value = false;
+    page.openStart();
+    expect(page.draft.form.proxyId).toBe('manual-proxy');
+  });
+  it('执行器不可用时创建失败并保留草稿', async () => {
     page.openStart();
     page.draft.form.mailboxAliasId = 'mail-1';
-    mock.connector.mockResolvedValueOnce({ service: 'old' });
+    mock.create.mockRejectedValueOnce(new Error('内置浏览器尚未就绪'));
     await page.start();
-    expect(mock.create).not.toHaveBeenCalled();
+    expect(mock.launch).not.toHaveBeenCalled();
     expect(page.draft.form.mailboxAliasId).toBe('mail-1');
   });
-  it('本机确认接收后才清除提交快照，密码不进入会话草稿', async () => {
+  it('后端确认接收后才清除提交快照，密码不进入会话草稿', async () => {
     page.openStart();
     Object.assign(page.draft.form, {
       mailboxAliasId: 'mail-1',
@@ -122,9 +116,8 @@ describe('注册表单和邮件生命周期', () => {
     });
     await page.start();
     expect(mock.create).toHaveBeenCalledOnce();
-    expect(mock.connector.mock.calls[1]?.[2].body.callbackUrl).toBe(
-      `https://manager.example.test/api/id-business-v2/auto-registration/local/${id}`
-    );
+    expect(mock.launch).toHaveBeenCalledWith(id);
+    expect(mock.connector).not.toHaveBeenCalled();
     expect(page.formOpen.value).toBe(false);
     page.openStart();
     expect(page.draft.form.mailboxAliasId).toBe('');
@@ -133,43 +126,32 @@ describe('注册表单和邮件生命周期', () => {
   it('提交失败保留输入及任务编号，不标记成功', async () => {
     page.openStart();
     page.draft.form.mailboxAliasId = 'mail-1';
-    mock.connector
-      .mockResolvedValueOnce({
-        service: 'id-business-v2-auto-recharge-connector',
-        capabilities: ['account-registration'],
-        busy: false,
-        originAllowed: true
-      })
-      .mockRejectedValueOnce(new Error('本机暂时失联'));
+    mock.launch.mockResolvedValueOnce({ id, attempt: 1, delivery: 'unknown' });
     await page.start();
     expect(page.formOpen.value).toBe(true);
     expect(page.draft.form.mailboxAliasId).toBe('mail-1');
     expect(page.filters.activeJobId).toBe(id);
   });
-  it('只在等待邮件时读取；连接器暂时失败不会消耗邮件，退出页面停止轮询', async () => {
+  it('页面只读取任务进度，自动取码由后端完成；退出停止进度刷新', async () => {
     page.filters.activeJobId = id;
-    rows.value.items = [{ ...baseJob, state: 'awaiting_email', step: 'email_code' }];
-    mock.code.mockResolvedValue({
-      code: '123456',
-      mailId: 'mail-current',
-      attempt: 1,
-      step: 'email_code'
-    });
-    mock.connector.mockRejectedValueOnce(new Error('本机失联'));
+    activeRow.value = { ...baseJob, state: 'awaiting_email', step: 'email_code' };
     await nextTick();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mock.code).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(8000);
-    expect(mock.code).toHaveBeenCalledTimes(2);
-    expect(mock.connector.mock.calls[1]?.[2].body).toMatchObject({
-      code: '123456',
-      mailId: 'mail-current',
-      attempt: 1,
-      step: 'email_code'
-    });
+    expect(mock.code).not.toHaveBeenCalled();
+    expect(page.activeQuery.refresh).toHaveBeenCalledOnce();
     scope.stop();
     await vi.advanceTimersByTimeAsync(16000);
-    expect(mock.code).toHaveBeenCalledTimes(2);
+    expect(page.activeQuery.refresh).toHaveBeenCalledOnce();
+  });
+  it('手动验证码绑定当前尝试和步骤，通过后端提交', async () => {
+    page.filters.activeJobId = id;
+    activeRow.value = { ...baseJob, state: 'awaiting_email', step: 'email_code' };
+    page.loginCode.value = '123456';
+    await nextTick();
+    await page.manualSubmit();
+    expect(mock.code).toHaveBeenCalledWith(id, { code: '123456', attempt: 1, step: 'email_code' });
+    expect(page.loginCode.value).toBe('');
+    expect(mock.connector).not.toHaveBeenCalled();
   });
   it('切页保留注册草稿，临时验证码不保留', () => {
     page.openStart();
@@ -183,6 +165,12 @@ describe('注册表单和邮件生命周期', () => {
     expect(page.draft.form.mailboxAliasId).toBe('mail-kept');
     expect(page.loginCode.value).toBe('');
   });
+  it('取消关闭未确认时保留明确提示，并读取撤销后的任务状态', async () => {
+    mock.cancel.mockResolvedValueOnce({ id, attempt: 1, delivery: 'unknown' });
+    await page.act(baseJob, 'cancel');
+    expect(page.error.value).toContain('浏览器关闭尚未确认');
+    expect(page.query.refresh).toHaveBeenCalled();
+  });
   it('列表翻页后仍读取当前任务，不使用其他任务的旧详情', async () => {
     page.filters.activeJobId = id;
     rows.value.items = [];
@@ -190,7 +178,7 @@ describe('注册表单和邮件生命周期', () => {
     await nextTick();
     await vi.advanceTimersByTimeAsync(0);
     expect(page.selected.value?.id).toBe(id);
-    expect(mock.code).toHaveBeenCalledWith(id, expect.any(AbortSignal));
+    expect(mock.code).not.toHaveBeenCalled();
     page.filters.activeJobId = '22222222-2222-4222-8222-222222222222';
     await nextTick();
     expect(page.selected.value).toBeUndefined();

@@ -1,5 +1,6 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
+import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import { connectorRequest, requireConnectorHealth } from './connector-transport';
 import type {
   ImportV2RechargeAddressesResult,
@@ -74,8 +75,11 @@ export const rechargeApi = {
     );
   },
   updateServerProxySettings(proxyId: string | null) {
-    return request<V2RechargeServerProxySettings>(
-      http.put('/id-business-v2/auto-recharge/server-proxy-settings', { proxyId })
+    return withV2QueryInvalidation(
+      request<V2RechargeServerProxySettings>(
+        http.put('/id-business-v2/auto-recharge/server-proxy-settings', { proxyId })
+      ),
+      'auto-recharge'
     );
   },
   browserCatalogAccess(options: ApiRequestOptions = {}, directMode = false) {
@@ -88,8 +92,11 @@ export const rechargeApi = {
     );
   },
   updateBitBrowserSettings(input: UpdateV2RechargeBitBrowserSettingsInput) {
-    return request<V2RechargeBitBrowserSettings>(
-      http.put('/id-business-v2/auto-recharge/bitbrowser-settings', input)
+    return withV2QueryInvalidation(
+      request<V2RechargeBitBrowserSettings>(
+        http.put('/id-business-v2/auto-recharge/bitbrowser-settings', input)
+      ),
+      'auto-recharge'
     );
   },
   startBitBrowser(input: V2RechargeBitBrowserStart) {

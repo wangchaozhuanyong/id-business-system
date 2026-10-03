@@ -565,12 +565,24 @@ export class RechargeService {
           state = 'finished';
           nonceHash = null;
         }
+        const previousResult = object(job.result);
+        const serverBusinessHandoff =
+          job.action === 'server' &&
+          job.state === 'running' &&
+          input.type === 'progress' &&
+          ['proxy_verifying', 'proxy_retrying'].includes(String(previousResult.stage)) &&
+          report.stage === 'session_restore' &&
+          previousResult.server_business_lease_started !== true;
+        // API 写入一次交接标记，迟到的代理进度也不能再次延长业务期限。
+        if (serverBusinessHandoff) report.server_business_lease_started = true;
         await this.repository.updateJob(tx, id, {
           state,
           nonceHash,
           ...(job.action === 'bitbrowser' && input.type === 'progress'
             ? { leaseUntil: new Date(Date.now() + 45 * 60000) }
-            : {}),
+            : serverBusinessHandoff
+              ? { leaseUntil: new Date(Date.now() + 16 * 60000) }
+              : {}),
           result: mergeRechargeCallbackResult(job, report)
         });
         return { ok: true };

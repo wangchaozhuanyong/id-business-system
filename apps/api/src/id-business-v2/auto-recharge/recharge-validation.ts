@@ -400,6 +400,8 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     };
   };
   for (const [key, min, max] of [
+    ['proxy_attempt', 1, 10],
+    ['proxy_wait_seconds', 20, 20],
     ['session_attempt', 1, 3],
     ['session_attempt_limit', 1, 3],
     ['session_elapsed_seconds', 0, 600],
@@ -413,6 +415,8 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     if (Number.isSafeInteger(input[key]) && Number(input[key]) >= min && Number(input[key]) <= max)
       result[key] = input[key];
   }
+  if (input.proxy_attempt_limit === 1 || input.proxy_attempt_limit === 10)
+    result.proxy_attempt_limit = input.proxy_attempt_limit;
   if (
     ['page_load', 'page_refresh', 'session_read', 'account_read'].includes(
       String(input.session_step)

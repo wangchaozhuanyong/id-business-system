@@ -66,6 +66,7 @@ const labels: Record<string, string> = {
   session_restore: '正在加载官网并核对账号',
   proxy_resolving: '正在提取本次代理 IP',
   proxy_verifying: '正在核实代理出口 IP 和国家',
+  proxy_retrying: '已关闭失败浏览器，正在更换代理 IP',
   original_state_restore: '正在恢复原订单与付款记录',
   login_network_verifying: '正在复核登录后的代理出口',
   login_email: '正在填写官网登录邮箱',
@@ -208,6 +209,8 @@ const labels: Record<string, string> = {
   server_proxy_invalid: '代理 IP 响应格式或出口地址无效，本次未付款',
   server_proxy_unavailable: '服务器未能提取或连接代理 IP，本次未付款',
   proxy_network_unconfirmed: '无法核实代理实际出口 IP 和国家，已限制登录',
+  proxy_retry_exhausted: '代理连接已达到尝试上限，官网仍无法加载，本次任务已停止',
+  proxy_cleanup_failed: '无法确认失败浏览器已关闭，已停止更换代理 IP',
   proxy_country_mismatch: '代理实际出口国家与所选代理国家不一致，已限制登录',
   proxy_ip_not_rotated: '代理仍是上次使用的出口 IP，请重新提取后再登录',
   proxy_ip_changed_during_login: '登录期间代理出口发生变化，已停止本次操作',
@@ -238,6 +241,8 @@ const labels: Record<string, string> = {
   billing_form_changed: '官网账单表单结构已变化，已停止付款',
   bitbrowser_api_token_invalid: '比特浏览器 Local API 密钥无效',
   browser_startup_failed: '官网浏览器启动失败',
+  fingerprint_start_timeout: '内置指纹浏览器启动超时，已停止本次任务',
+  fingerprint_cleanup_failed: '无法确认内置指纹浏览器已关闭，已停止本次任务',
   card_expired: '银行卡已过期',
   checkout_attempted: '已尝试创建官方结算',
   checkout_created: '官方结算已创建',
@@ -384,6 +389,26 @@ export function statusLabel(value: unknown) {
   return typeof value === 'string' ? (labels[value] ?? '待核验') : '未知';
 }
 
+export function proxyAttemptLabel(job: V2RechargeJob): string {
+  const {
+    stage,
+    proxy_attempt: attempt,
+    proxy_attempt_limit: limit,
+    proxy_wait_seconds: wait
+  } = job.result;
+  if (
+    job.action !== 'server' ||
+    !['proxy_resolving', 'proxy_verifying', 'proxy_retrying'].includes(String(stage)) ||
+    !Number.isSafeInteger(attempt) ||
+    (limit !== 1 && limit !== 10) ||
+    Number(attempt) < 1 ||
+    Number(attempt) > limit ||
+    wait !== 20
+  )
+    return '';
+  return `代理连接第 ${attempt} / ${limit} 次尝试，官网连接核验最多等待 ${wait} 秒。`;
+}
+
 export interface RechargeIssueFeedback {
   title: string;
   message: string;
@@ -466,6 +491,14 @@ function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: strin
     return '请先使用“只读复查原订单”；确认账号仍为免费版且银行卡没有收到请求后，再处理历史付款锁。';
   if (job.result.payment_attempted === true || Number(job.result.payment_requests_sent ?? 0) > 0)
     return '本次可能已发出付款请求，请只读复查原订单，不要重新发起付款。';
+  if (reason === 'proxy_retry_exhausted')
+    return '请检查所选代理的提取服务和官网连通性，修复后重新开始。';
+  if (reason === 'proxy_cleanup_failed')
+    return '请先核对原任务的浏览器关闭状态，确认清理完成后再开始新任务。';
+  if (reason === 'fingerprint_start_timeout')
+    return '请检查服务器内置指纹浏览器的运行状态，修复后重新开始。';
+  if (reason === 'fingerprint_cleanup_failed')
+    return '请先检查服务器中本任务的浏览器关闭状态，确认清理完成后再开始新任务。';
   return '请根据上述原因修正资料或设置后重新开始；本次未提交付款。';
 }
 

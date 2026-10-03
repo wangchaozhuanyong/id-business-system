@@ -102,6 +102,7 @@ function settingsReady(
     settings?.localApiTokenConfigured &&
     (directMode || settings.connectorTokenConfigured) &&
     (selectedProxy ||
+      settings.proxyId ||
       (settings.browserOptions?.proxyMode === 'static'
         ? Boolean(settings.browserOptions.staticHost && settings.browserOptions.staticPort)
         : settings.dynamicProxyUrlConfigured))
@@ -686,7 +687,9 @@ export function useAutoRecharge() {
     if (!credentialReady.value)
       return loginMethod.value === 'json'
         ? '粘贴授权 JSON 后会自动载入账号和注册邮箱。'
-        : '填写账号和密码后可在比特浏览器登录。';
+        : operationMode.value === 'server_payment'
+          ? '填写账号和密码后，系统将使用内置指纹浏览器登录。'
+          : '填写账号和密码后可在比特浏览器登录。';
     if (operationMode.value === 'open_browser') {
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
     }

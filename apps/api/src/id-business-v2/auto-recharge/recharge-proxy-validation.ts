@@ -25,6 +25,27 @@ export function proxyProtocol(value: unknown) {
   return value as 'http' | 'https' | 'socks5';
 }
 
+export function rechargeProxyConnection(
+  url: string,
+  connectionMode: string,
+  protocol: 'http' | 'https' | 'socks5'
+) {
+  if (connectionMode === 'extraction')
+    return { mode: 'dynamic' as const, type: protocol, extractionUrl: url };
+  const parsed = new URL(url);
+  return {
+    mode: 'static' as const,
+    type: protocol,
+    host: parsed.hostname.replace(/^\[|\]$/g, ''),
+    port: Number(
+      parsed.port ||
+        (parsed.protocol === 'http:' ? '80' : parsed.protocol === 'https:' ? '443' : '0')
+    ),
+    username: decodeURIComponent(parsed.username),
+    password: decodeURIComponent(parsed.password)
+  };
+}
+
 export function proxyLink(value: unknown, protocol?: 'http' | 'https' | 'socks5') {
   if (
     typeof value !== 'string' ||

@@ -14,7 +14,11 @@
     <template #header>
       <div class="v2-form-drawer__heading">
         <span v-if="eyebrow" class="v2-form-drawer__eyebrow">{{ eyebrow }}</span>
-        <h2>{{ title }}</h2>
+        <div v-if="$slots['header-actions']" class="v2-form-drawer__title-row">
+          <h2>{{ title }}</h2>
+          <slot name="header-actions" />
+        </div>
+        <h2 v-else>{{ title }}</h2>
         <p v-if="description">{{ description }}</p>
       </div>
     </template>

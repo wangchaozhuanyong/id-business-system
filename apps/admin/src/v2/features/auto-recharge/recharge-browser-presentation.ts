@@ -19,7 +19,9 @@ export function browserSettingsSummary(settings?: V2RechargeBitBrowserSettings) 
       ? '跟随 IP'
       : (rechargeLanguages.find((item) => item.value === value)?.label ?? '指定语言');
   return {
-    proxy: `${options.proxyMode === 'static' ? '固定代理' : '动态提取'} · ${settings?.proxyType.toUpperCase() ?? 'HTTP'} · ${options.proxyMode === 'static' ? `${options.staticHost}:${options.staticPort}` : settings?.dynamicProxyUrlMask || '尚未配置代理链接'}`,
+    proxy: settings?.proxyId
+      ? '使用代理 IP 管理中的共用默认代理，连接资料以目录为准。'
+      : `${options.proxyMode === 'static' ? '固定代理' : '动态提取'} · ${settings?.proxyType.toUpperCase() ?? 'HTTP'} · ${options.proxyMode === 'static' ? `${options.staticHost}:${options.staticPort}` : settings?.dynamicProxyUrlMask || '尚未选择代理'}`,
     languages: `浏览器：${language(options.languageFromIp, options.language)} · 界面：${language(options.displayLanguageFromIp, options.displayLanguage)}`
   };
 }

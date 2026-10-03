@@ -2,15 +2,18 @@ FROM python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright HOME=/tmp
 COPY apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt ./
+COPY apps/api/src/id-business-v2/auto-recharge/worker/install_fingerprint_browser.py ./
 COPY scripts/audit-python-dependencies.py /opt/security/audit-python-dependencies.py
 RUN pip install --no-cache-dir pip==26.2.1 \
   && pip install --no-cache-dir -r requirements.lock.txt \
   && pip check \
   && python -m playwright install --with-deps chromium \
-  && apt-get install -y --no-install-recommends xauth \
+  && python -m playwright install-deps firefox \
+  && apt-get install -y --no-install-recommends xauth unzip \
+  && python install_fingerprint_browser.py --destination /opt/camoufox --platform lin.x86_64 \
   && groupadd --gid 10001 recharge \
   && useradd --uid 10001 --gid recharge --no-create-home --shell /usr/sbin/nologin recharge \
-  && chmod -R a+rX /ms-playwright \
+  && chmod -R a+rX /ms-playwright /opt/camoufox \
   && rm -rf /var/lib/apt/lists/* /root/.cache
 COPY --chown=recharge:recharge apps/api/src/id-business-v2/auto-recharge/worker/ ./
 RUN python /opt/security/audit-python-dependencies.py --python /usr/local/bin/python \

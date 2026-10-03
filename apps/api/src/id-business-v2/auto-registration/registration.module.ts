@@ -10,6 +10,7 @@ import { RegistrationNamesService } from './registration-names.service';
 import { RegistrationJobsService } from './registration-jobs.service';
 import { RegistrationEventsService } from './registration-events.service';
 import { RegistrationMailboxesService } from './registration-mailboxes.service';
+import { V2IdentityService } from '../../v2-auth/v2-identity.service';
 
 @Module({
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2WorkspaceModule, RechargeModule],
@@ -20,6 +21,7 @@ import { RegistrationMailboxesService } from './registration-mailboxes.service';
     RegistrationJobsService,
     RegistrationEventsService,
     RegistrationMailboxesService,
+    V2IdentityService,
     FieldEncryptionService
   ]
 })

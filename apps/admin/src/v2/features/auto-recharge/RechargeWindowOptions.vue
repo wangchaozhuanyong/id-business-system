@@ -156,7 +156,13 @@
       </div>
       <div>
         <dt>初始登录资料</dt>
-        <dd>不预填账号、密码或 Cookie，随后从本次授权 JSON 恢复登录</dd>
+        <dd>
+          {{
+            registration
+              ? '使用本次选中的授权邮箱及注册资料，继续任务时保留原窗口'
+              : '不预填账号、密码或 Cookie，随后从本次授权 JSON 恢复登录'
+          }}
+        </dd>
       </div>
       <div>
         <dt>窗口创建与打开</dt>
@@ -173,6 +179,7 @@
 import type { V2RechargeBrowserOptions } from './contracts';
 import { rechargeLanguages as languages } from './recharge-browser-presentation';
 const options = defineModel<V2RechargeBrowserOptions>({ required: true });
+defineProps<{ registration?: boolean }>();
 const timezones = [
   { label: '中国 · 上海', value: 'Asia/Shanghai' },
   { label: '新加坡', value: 'Asia/Singapore' },

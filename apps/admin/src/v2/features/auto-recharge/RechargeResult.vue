@@ -90,7 +90,8 @@
       >
         已确认银行卡未收到付款请求；原付款尝试记录和确认次数已保留，历史付款锁已解除。
       </p>
-      <p v-if="job.result.quote_wait_seconds" class="recharge-note" role="status">
+      <p v-if="proxyProgress" class="recharge-note" role="status">{{ proxyProgress }}</p>
+      <p v-else-if="job.result.quote_wait_seconds" class="recharge-note" role="status">
         第 {{ job.result.session_attempt ?? 1 }} /
         {{ job.result.session_attempt_limit ?? 1 }} 次窗口尝试， 报价页已等待
         {{ job.result.quote_elapsed_seconds ?? 0 }} 秒，最多
@@ -178,6 +179,7 @@ import {
   paymentStatusLabel,
   rechargeIssueFeedback,
   statusLabel,
+  proxyAttemptLabel,
   quotePlaceholder,
   subscriptionLabel,
   selectionStepLabels
@@ -187,6 +189,7 @@ const props = defineProps<{
   mode?: 'server_payment' | 'payment' | 'open_browser';
 }>();
 const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
+const proxyProgress = computed(() => (props.job ? proxyAttemptLabel(props.job) : ''));
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {
   return value ? `${value.currency} ${value.amount}` : fallback;
 }

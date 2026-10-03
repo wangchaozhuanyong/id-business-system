@@ -12,16 +12,14 @@ export interface RegistrationOptions {
   mailboxes: Array<{ id: string; email: string }>;
   proxies: Array<{ id: string; label: string; countryCode: string }>;
   names: Array<{ id: string; displayName: string }>;
+  defaultProxyId: string | null;
   mailboxTotal: number;
   proxyTotal: number;
 }
-export interface RegistrationLaunch extends Record<string, unknown> {
+export interface RegistrationLaunch {
   id: string;
-  mode: 'registration';
   attempt: number;
-  agentToken: string;
-  connectorUrl: string;
-  connectorToken: string;
+  delivery: 'accepted' | 'not_received' | 'unknown';
 }
 export const registrationApi = {
   mailboxes(
@@ -38,11 +36,6 @@ export const registrationApi = {
         http.post(`${base}/mailboxes/${id}/registered`, { expectedUpdatedAt })
       ),
       'auto-recharge'
-    );
-  },
-  connection() {
-    return request<{ connectorUrl: string; connectorToken: string }>(
-      http.get(`${base}/connection`)
     );
   },
   names(
@@ -95,19 +88,15 @@ export const registrationApi = {
   launch(id: string) {
     return request<RegistrationLaunch>(http.post(`${base}/jobs/${id}/launch`, {}));
   },
-  code(id: string, signal: AbortSignal) {
-    return request<{ code: string | null; mailId?: string; attempt?: number; step?: string }>(
-      http.post(`${base}/jobs/${id}/code`, {}, { signal })
-    );
+  code(id: string, input: { code: string; attempt: number; step: string }) {
+    return request<RegistrationLaunch>(http.post(`${base}/jobs/${id}/code`, input));
   },
-  resumeCredentials(id: string) {
-    return request<{ attempt: number; password: string | null; totpSecret: string | null }>(
-      http.post(`${base}/jobs/${id}/resume-credentials`, {})
-    );
+  resume(id: string) {
+    return request<RegistrationLaunch>(http.post(`${base}/jobs/${id}/resume`, {}));
   },
   cancel(id: string) {
     return withV2QueryInvalidation(
-      request<{ id: string }>(http.post(`${base}/jobs/${id}/cancel`, {})),
+      request<RegistrationLaunch>(http.post(`${base}/jobs/${id}/cancel`, {})),
       'auto-recharge'
     );
   }

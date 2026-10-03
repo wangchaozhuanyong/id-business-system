@@ -1,15 +1,9 @@
 import { computed, ref, reactive, watch, onScopeDispose } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
-import { http, getApiErrorMessage } from '@/api/client';
+import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { validateV2Form } from '@/v2/utils/formValidation';
-import {
-  connectorRequest,
-  RechargeConnectorError,
-  useRechargeBrowserSettings,
-  type ConnectorStatus
-} from '../auto-recharge/public-api';
 import { registrationApi } from './api';
 import type { V2RegistrationJob } from './contracts';
 
@@ -65,11 +59,6 @@ export function useRegistrationPage(config: {
   function bindForm(value: unknown) {
     formRef.value = value as FormInstance;
   }
-  const browserSettings = useRechargeBrowserSettings(
-    ref<ConnectorStatus>('unknown'),
-    ref(''),
-    ref(false)
-  );
   const draft = useV2FormDraft('auto-registration:start', () => ({
     mailboxAliasId: '',
     proxyId: '',
@@ -105,6 +94,12 @@ export function useRegistrationPage(config: {
       if (formOpen.value) void options.ensureFresh();
     }
   );
+  watch(
+    () => options.data.value?.defaultProxyId,
+    (value) => {
+      if (formOpen.value && !draft.form.proxyId) draft.form.proxyId = value ?? '';
+    }
+  );
   const activeQuery = useV2ModuleQuery({
     moduleKey: config.moduleKey,
     scope: 'auto-recharge',
@@ -131,11 +126,15 @@ export function useRegistrationPage(config: {
     filters.pageSize = value;
   }
   function search() {
+    const changed = filters.page !== 1 || filters.appliedKeyword !== filters.keyword.trim();
     filters.page = 1;
     filters.appliedKeyword = filters.keyword.trim();
+    if (!changed) void query.refresh();
+    if (filters.activeJobId) void activeQuery.refresh();
   }
   function openStart() {
     draft.open('create');
+    if (!draft.form.proxyId) draft.form.proxyId = options.data.value?.defaultProxyId ?? '';
     error.value = '';
     formOpen.value = true;
   }
@@ -144,27 +143,16 @@ export function useRegistrationPage(config: {
     void options.refresh();
   }
   let disposed = false;
-  const lifetime = new AbortController();
+  function accepted(response: { delivery: string }) {
+    if (response.delivery !== 'accepted')
+      throw new Error(
+        response.delivery === 'not_received'
+          ? '内置浏览器未接收任务，请从原任务重试'
+          : '任务接收结果暂不明确，请等待原任务进度，避免重复注册'
+      );
+  }
   async function dispatch(id: string) {
-    const launch = await registrationApi.launch(id);
-    const { connectorUrl, connectorToken, ...payload } = launch;
-    const base = new URL(http.defaults.baseURL ?? '/api', window.location.origin).href.replace(
-      /\/$/,
-      ''
-    );
-    try {
-      await connectorRequest(connectorUrl, '/jobs', {
-        token: connectorToken,
-        signal: lifetime.signal,
-        body: {
-          ...payload,
-          callbackUrl: `${base}/id-business-v2/auto-registration/local/${id}`,
-          windowName: `注册-${id.slice(0, 8)}`
-        }
-      });
-    } finally {
-      for (const key of Object.keys(payload)) delete payload[key];
-    }
+    accepted(await registrationApi.launch(id));
   }
   async function start() {
     if (!(await validateV2Form(formRef.value))) return;
@@ -172,18 +160,6 @@ export function useRegistrationPage(config: {
     error.value = '';
     const completeSave = draft.beginSave();
     try {
-      const connection = await registrationApi.connection();
-      const health = await connectorRequest(connection.connectorUrl, '/health', {
-        signal: lifetime.signal
-      });
-      if (
-        health.service !== 'id-business-v2-auto-recharge-connector' ||
-        !Array.isArray(health.capabilities) ||
-        !health.capabilities.includes('account-registration')
-      )
-        throw new Error('请更新并启动支持自动注册的本机连接器');
-      if (health.busy !== false || health.originAllowed !== true)
-        throw new Error('本机连接器正忙或未允许当前网站来源');
       const job = await registrationApi.create({
         ...draft.form,
         nameId: draft.form.nameId || undefined
@@ -192,7 +168,7 @@ export function useRegistrationPage(config: {
       await dispatch(job.id);
       completeSave();
       formOpen.value = false;
-      message.value = '本机已接收注册任务，请保留原浏览器窗口';
+      message.value = '系统已开始注册，正在提取代理并打开独立指纹浏览器';
       await query.refresh();
     } catch (cause) {
       if (!disposed) error.value = getApiErrorMessage(cause);
@@ -205,29 +181,13 @@ export function useRegistrationPage(config: {
     error.value = '';
     filters.activeJobId = row.id;
     try {
-      if (action === 'continue' && ['partial', 'queued'].includes(row.state)) {
-        if (row.state === 'partial') await registrationApi.resumeCredentials(row.id);
-        await dispatch(row.id);
-      } else {
-        const connection = await registrationApi.connection();
-        const credentials =
-          action === 'continue' ? await registrationApi.resumeCredentials(row.id) : {};
-        try {
-          await connectorRequest(
-            connection.connectorUrl,
-            `/jobs/${row.id}/${action === 'cancel' ? 'cancel' : 'resume'}`,
-            { token: connection.connectorToken, body: credentials, signal: lifetime.signal }
-          );
-        } catch (cause) {
-          if (
-            action !== 'cancel' ||
-            !(cause instanceof RechargeConnectorError) ||
-            cause.code !== 'missing'
-          )
-            throw cause;
-        }
-        if (action === 'cancel') await registrationApi.cancel(row.id);
-      }
+      if (action === 'cancel') {
+        const receipt = await registrationApi.cancel(row.id);
+        if (receipt.delivery !== 'accepted')
+          error.value =
+            '任务授权已撤销，但浏览器关闭尚未确认；请稍候点击重试关闭，仍失败时联系管理员';
+      } else if (row.state === 'queued') await dispatch(row.id);
+      else accepted(await registrationApi.resume(row.id));
       await query.refresh();
     } catch (cause) {
       if (!disposed) error.value = getApiErrorMessage(cause);
@@ -236,13 +196,8 @@ export function useRegistrationPage(config: {
     }
   }
   const loginCode = ref('');
-  async function submitCode(row: V2RegistrationJob, code: string, mailId?: string) {
-    const connection = await registrationApi.connection();
-    await connectorRequest(connection.connectorUrl, `/jobs/${row.id}/code`, {
-      token: connection.connectorToken,
-      body: { code, attempt: row.attempt, step: row.step, ...(mailId ? { mailId } : {}) },
-      signal: lifetime.signal
-    });
+  async function submitCode(row: V2RegistrationJob, code: string) {
+    accepted(await registrationApi.code(row.id, { code, attempt: row.attempt, step: row.step }));
     loginCode.value = '';
   }
   async function manualSubmit() {
@@ -260,47 +215,27 @@ export function useRegistrationPage(config: {
       busy.value = false;
     }
   }
-  let mailTimer: ReturnType<typeof setTimeout> | undefined;
-  let mailGeneration = 0;
-  async function checkMail(generation: number, row: V2RegistrationJob) {
-    if (disposed || generation !== mailGeneration || selected.value?.state !== 'awaiting_email')
-      return;
-    try {
-      const response = await registrationApi.code(row.id, lifetime.signal);
-      if (disposed || generation !== mailGeneration) return;
-      if (response.code) {
-        await submitCode(row, response.code, response.mailId);
-        error.value = '';
-        message.value = '已提交当前步骤的邮件验证';
-        return;
+  let progressTimer: ReturnType<typeof setTimeout> | undefined;
+  async function pollProgress() {
+    if (disposed) return;
+    if (selected.value && !['completed', 'cancelled', 'partial'].includes(selected.value.state)) {
+      try {
+        await activeQuery.refresh();
+      } catch {
+        /* 区域显示错误并提供重试。 */
       }
-    } catch (cause) {
-      if (!disposed && generation === mailGeneration) error.value = getApiErrorMessage(cause);
     }
-    if (!disposed && generation === mailGeneration)
-      mailTimer = setTimeout(() => {
-        void checkMail(generation, row);
+    if (!disposed)
+      progressTimer = setTimeout(() => {
+        void pollProgress();
       }, 8000);
   }
-  watch(
-    () => [
-      selected.value?.id,
-      selected.value?.attempt,
-      selected.value?.state,
-      selected.value?.step
-    ],
-    () => {
-      const generation = ++mailGeneration;
-      if (mailTimer) clearTimeout(mailTimer);
-      if (selected.value?.state === 'awaiting_email') void checkMail(generation, selected.value);
-    },
-    { immediate: true }
-  );
+  progressTimer = setTimeout(() => {
+    void pollProgress();
+  }, 8000);
   onScopeDispose(() => {
     disposed = true;
-    lifetime.abort();
-    ++mailGeneration;
-    if (mailTimer) clearTimeout(mailTimer);
+    if (progressTimer) clearTimeout(progressTimer);
     loginCode.value = '';
   });
   return {
@@ -308,7 +243,6 @@ export function useRegistrationPage(config: {
     query,
     activeQuery,
     formOpen,
-    browserSettings,
     bindForm,
     busy,
     error,

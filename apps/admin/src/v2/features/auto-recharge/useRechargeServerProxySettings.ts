@@ -4,7 +4,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi } from './api';
-import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
+import { readActiveRechargeProxies, type RechargeProxyItem } from './recharge-proxy-api';
 
 export function useRechargeServerProxySettings() {
   const open = ref(false);
@@ -32,17 +32,7 @@ export function useRechargeServerProxySettings() {
     key: 'auto-recharge-default-proxy-catalog',
     enabled: () => open.value,
     keepPreviousData: true,
-    query: async ({ signal }) => {
-      const items: RechargeProxyItem[] = [];
-      for (let page = 1; ; page++) {
-        const result = await rechargeProxyApi.list(
-          { page, pageSize: 100, status: 'active' },
-          { signal }
-        );
-        items.push(...result.items);
-        if (items.length >= result.total || !result.items.length) return { items };
-      }
-    }
+    query: ({ signal }) => readActiveRechargeProxies(signal)
   });
   const items = computed(() => catalogQuery.data.value?.items ?? []);
   const selected = computed(() => items.value.find((item) => item.id === proxyId.value));

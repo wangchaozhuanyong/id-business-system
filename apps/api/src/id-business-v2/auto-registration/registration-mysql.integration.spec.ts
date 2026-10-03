@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
@@ -8,6 +8,19 @@ import { RegistrationRepository } from './persistence/registration.repository';
 import { RegistrationJobsService, registrationTokenHash } from './registration-jobs.service';
 import { RegistrationEventsService } from './registration-events.service';
 import { RegistrationNamesService } from './registration-names.service';
+const worker = vi.hoisted(() => ({
+  payload: {} as Record<string, unknown>,
+  command: vi.fn(),
+  delivery: 'accepted' as 'accepted' | 'not_received' | 'unknown'
+}));
+vi.mock('./registration-worker', () => ({
+  requireRegistrationWorker: async () => {},
+  registrationWorkerCommand: (...args: unknown[]) => {
+    if (args[2] === 'launch') worker.payload = args[3] as Record<string, unknown>;
+    worker.command(...args);
+    return Promise.resolve(worker.delivery);
+  }
+}));
 const url = process.env.V2_REGISTRATION_TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
 suite('自动注册 MySQL 事务和恢复', () => {
@@ -32,12 +45,17 @@ suite('自动注册 MySQL 事务和恢复', () => {
   const email = 'registration@example.test';
   let mailboxCandidate: { mailId: string; code: string } | null = null;
   const mailbox = {
-    registrationMailbox: async () => ({ email }),
+    registrationMailbox: async (id: string) => ({
+      email: id === 'dispatch-check' ? 'dispatch@example.test' : email
+    }),
     registrationCode: async () => mailboxCandidate
   };
   const proxyId = randomUUID();
   const proxies = {
     forCharge: async () => ({
+      id: proxyId,
+      countryCode: 'US',
+      kind: 'dynamic_residential',
       type: 'http',
       mode: 'dynamic',
       extractionUrl: 'https://proxy.example.test/extract'
@@ -140,7 +158,16 @@ suite('自动注册 MySQL 事务和恢复', () => {
     ]);
     expect(starts.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
     const job = (await jobs.list({}, operator)).items[0]!;
-    const launch = await jobs.launch(job.id, operator);
+    const receipt = await jobs.launch(job.id, operator);
+    expect(receipt).not.toHaveProperty('agentToken');
+    expect(receipt).not.toHaveProperty('password');
+    expect(worker.payload).toMatchObject({ expectedCountry: 'US', proxy: { countryCode: 'US' } });
+    const launch = worker.payload as {
+      agentToken: string;
+      attempt: number;
+      password: string;
+      browserProfileId: string;
+    };
     const emit = (type: string, extra: object = {}) =>
       events.event(job.id, launch.agentToken, { type, attempt: launch.attempt, ...extra });
     await expect(jobs.get(job.id, { ...operator, id: randomUUID() })).rejects.toThrow('不存在');
@@ -151,7 +178,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
       })
     ).rejects.toThrow('授权');
     await expect(emit('registered', { email: 'wrong@example.test' })).rejects.toThrow('不一致');
-    await emit('progress', { browserProfileId: 'a'.repeat(32) });
+    await emit('progress', { browserProfileId: 'reg_' + 'a'.repeat(64) });
     await expect(emit('progress', { browserProfileId: 'b'.repeat(32) })).rejects.toThrow(
       '原浏览器'
     );
@@ -186,8 +213,9 @@ suite('自动注册 MySQL 事务和恢复', () => {
     await expect(emit('complete')).rejects.toThrow('尚未完成');
     await emit('partial', { reason: 'password_unverified' });
     restart();
-    const resumed = await jobs.launch(job.id, operator);
-    expect(resumed.browserProfileId).toBe('a'.repeat(32));
+    await jobs.launch(job.id, operator);
+    const resumed = worker.payload as typeof launch;
+    expect(resumed.browserProfileId).toBe('reg_' + 'a'.repeat(64));
     expect(resumed.password).toBe(launch.password);
     await expect(emit('password_verified')).rejects.toThrow('授权');
     await events.event(job.id, resumed.agentToken, {
@@ -214,8 +242,12 @@ suite('自动注册 MySQL 事务和恢复', () => {
       type: 'waiting_user',
       attempt: resumed.attempt
     });
-    expect((await jobs.resumeCredentials(job.id, operator)).password).toBe(
-      'synthetic-manually-updated'
+    await jobs.resume(job.id, operator);
+    expect(worker.command).toHaveBeenLastCalledWith(
+      job.id,
+      resumed.attempt,
+      'resume',
+      expect.objectContaining({ password: 'synthetic-manually-updated' })
     );
     await events.event(job.id, resumed.agentToken, {
       type: 'offer',
@@ -296,5 +328,63 @@ suite('自动注册 MySQL 事务和恢复', () => {
         })
       ).registrationCountryCode
     ).toBeNull();
+    await jobs.cancel(row.id, operator);
+  });
+  it('未接收时撤销本次授权，取消关闭未确认时不伪装为已关闭', async () => {
+    const job = await jobs.create(
+      {
+        mailboxAliasId: 'dispatch-check',
+        proxyId,
+        birthDate: '1996-01-01',
+        confirmIdentity: true
+      },
+      operator
+    );
+    try {
+      worker.delivery = 'not_received';
+      const receipt = await jobs.launch(job.id, operator);
+      const launch = worker.payload as { agentToken: string; attempt: number };
+      expect(receipt.delivery).toBe('not_received');
+      expect(await repository.find(job.id)).toMatchObject({
+        state: 'partial',
+        nonceHash: null,
+        leaseUntil: null,
+        reason: 'builtin_task_not_received'
+      });
+      await expect(
+        events.event(job.id, launch.agentToken, {
+          type: 'registered',
+          attempt: launch.attempt,
+          email
+        })
+      ).rejects.toThrow('授权');
+      worker.delivery = 'unknown';
+      expect(await jobs.cancel(job.id, operator)).toMatchObject({ delivery: 'unknown' });
+      expect((await repository.find(job.id))?.state).toBe('cancelled');
+      await prisma.idBusinessV2RegistrationJob.update({
+        where: { id: job.id },
+        data: {
+          state: 'running',
+          reason: null,
+          browserProfileId: 'reg_' + 'd'.repeat(64),
+          nonceHash: registrationTokenHash('d'.repeat(64)),
+          leaseUntil: new Date(Date.now() + 60_000)
+        }
+      });
+      expect(await jobs.cancel(job.id, operator)).toMatchObject({ delivery: 'unknown' });
+      expect(await repository.find(job.id)).toMatchObject({
+        state: 'partial',
+        reason: 'builtin_cancel_unconfirmed',
+        nonceHash: null,
+        leaseUntil: null
+      });
+      await expect(jobs.resume(job.id, operator)).rejects.toThrow('重试关闭');
+      await expect(jobs.launch(job.id, operator)).rejects.toThrow('重试关闭');
+      worker.delivery = 'accepted';
+      expect(await jobs.cancel(job.id, operator)).toMatchObject({ delivery: 'accepted' });
+      expect(await repository.find(job.id)).toMatchObject({ state: 'cancelled', reason: null });
+    } finally {
+      worker.delivery = 'accepted';
+    }
   });
 });

@@ -67,6 +67,12 @@ export class RegistrationRepository {
   findInTransaction(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2RegistrationJob.findUnique({ where: { id } });
   }
+  fingerprintExists(tx: V2CommandTransaction, profileId: string, excludeId: string) {
+    return tx.idBusinessV2RegistrationJob.findFirst({
+      where: { browserProfileId: profileId, id: { not: excludeId } },
+      select: { id: true }
+    });
+  }
   active(tx: V2CommandTransaction, excludeId?: string) {
     return tx.idBusinessV2RegistrationJob.findFirst({
       where: {

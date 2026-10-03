@@ -22,6 +22,8 @@ import pay
 import payment_state
 import payment_network
 import server_proxy
+import registration_builtin
+import fingerprint_runtime
 from checkout_core import Stop, parse_browser_credential, session_cookies, unique_object, write_json
 from payment_form import PaymentDetails, validate_details
 from payment_recovery import recheck_in_context, recheck_payment
@@ -32,10 +34,11 @@ from browser_session import SessionBudget, load_session_page, session_failure
 MAX_BODY = 96000
 TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
 API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
+REGISTRATION_API = API.removesuffix("/auto-recharge/internal") + "/auto-registration/local"
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
 RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x|500))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
-PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
+PUBLIC_KEYS = set("status reason stage proxy_attempt proxy_attempt_limit proxy_wait_seconds session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 PUBLIC_KEYS.update("error_type session_step session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())
 
 
@@ -56,7 +59,7 @@ class PersistentBrowserRuntime:
         return bool(self.ready.is_set() and self.startup_error is None
                     and self.thread and self.thread.is_alive() and self.loop)
 
-    async def _new_browser(self):
+    async def _new_browser(self, *, proxy=None):
         if self.browser_factory:
             return await self.browser_factory()
         os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path(__file__).parent / ".browsers"))
@@ -65,7 +68,7 @@ class PersistentBrowserRuntime:
         if self.playwright is None:
             from playwright.async_api import async_playwright
             self.playwright = await async_playwright().start()
-        return await self.playwright.chromium.launch(headless=False)
+        return await fingerprint_runtime.launch_fingerprint_browser(self.playwright, proxy=proxy)
 
     async def _ensure_browser(self):
         if self.browser is None or not self.browser.is_connected():
@@ -80,15 +83,19 @@ class PersistentBrowserRuntime:
             if not browser.is_connected():
                 self.browser = None
 
-    async def _execute_isolated(self, operation):
-        # 单笔服务器充值不复用预热进程，也不与旧流程同时占用两份 Chromium 内存。
+    async def _execute_isolated(self, operation, *, proxy_factory=None, browser_factory=None):
+        # 单笔服务器充值不复用预热进程，也不与旧流程同时占用两份指纹浏览器内存。
         await self._discard()
-        browser = await self._new_browser()
+        if browser_factory is not None:
+            browser = await browser_factory(self)
+        else:
+            proxy = await proxy_factory() if proxy_factory else None
+            browser = await self._new_browser(proxy=proxy)
         try:
             return await operation(browser)
         finally:
             try:
-                await browser.close()
+                await fingerprint_runtime.close_fingerprint_resource(browser)
             except Exception:
                 # 浏览器崩溃后的关闭异常不能覆盖可能已经发生的付款结果。
                 pass
@@ -97,16 +104,18 @@ class PersistentBrowserRuntime:
         browser, self.browser = self.browser, None
         if browser is not None:
             try:
-                await browser.close()
+                await fingerprint_runtime.close_fingerprint_resource(browser)
             except Exception:
                 pass
 
     async def _shutdown(self):
+        if registration_builtin.PROFILES.profile:
+            await registration_builtin.PROFILES.close(registration_builtin.PROFILES.profile['job_id'])
         await self._discard()
         playwright, self.playwright = self.playwright, None
         if playwright is not None:
             try:
-                await playwright.stop()
+                await asyncio.wait_for(playwright.stop(), timeout=5)
             except Exception:
                 pass
 
@@ -146,11 +155,17 @@ class PersistentBrowserRuntime:
         future = asyncio.run_coroutine_threadsafe(self._execute(operation), self.loop)
         return future.result()
 
-    def run_isolated(self, operation):
+    def run_isolated(self, operation, *, proxy_factory=None, browser_factory=None):
         if not self.started:
             raise RuntimeError("persistent_browser_not_started")
-        future = asyncio.run_coroutine_threadsafe(self._execute_isolated(operation), self.loop)
+        future = asyncio.run_coroutine_threadsafe(self._execute_isolated(
+            operation, proxy_factory=proxy_factory, browser_factory=browser_factory), self.loop)
         return future.result()
+
+    def run_registration(self, operation):
+        if not self.started:
+            raise RuntimeError("persistent_browser_not_started")
+        return asyncio.run_coroutine_threadsafe(operation(), self.loop).result()
 
     def discard(self, timeout=30):
         if self.started:
@@ -282,6 +297,8 @@ class Job:
         self.cancelled = False
         self.done = False
         self.preflight_network = None
+        self.resolved_proxy = None
+        self.prepared_browser = None
         self.stage = None
 
     def persist(self, path, document):
@@ -410,10 +427,11 @@ class Job:
             write_json(path, record["document"], exclusive=True)
             self.revisions[name] = record["revision"]
 
-    async def login_target(self, context, login):
+    async def login_target(self, context, login, *, initial_page=None):
         if not isinstance(login, dict) or not isinstance(login.get("email"), str) or not isinstance(login.get("password"), str):
             raise Stop("invalid_login_credentials")
-        page = await context.new_page()
+        budget = SessionBudget(60, cancelled=lambda: self.cancelled)
+        page, routed, verified = initial_page, False, False
 
         async def block_payment_during_login(route):
             request = route.request
@@ -430,34 +448,53 @@ class Job:
         async def wait_for_user(reason, _):
             raise Stop(reason, user_action_required=True)
 
-        await context.route("**/*", block_payment_during_login)
         try:
+            if page is None:
+                page = await budget.run(context.new_page, "page_load")
+            await budget.run(lambda: context.route("**/*", block_payment_during_login),
+                             "page_load")
+            routed = True
             target, identity = await browser_password_login.login_with_password(
                 page, login["email"], login["password"], wait_for_code,
-                wait_for_user, self.progress)
+                wait_for_user, self.progress, initial_loaded=initial_page is not None)
+            verified = True
             return target, identity
         finally:
-            await browser_password_login.clear_visible_secrets(page)
             login.clear()
-            await context.unroute("**/*", block_payment_during_login)
-            await page.close()
+            cleaned = True
+            if page is not None:
+                cleaned = await server_proxy.finish_cleanup(
+                    lambda: browser_password_login.clear_visible_secrets(page))
+            if routed:
+                unrouted = await server_proxy.finish_cleanup(
+                    lambda: context.unroute("**/*", block_payment_during_login))
+                cleaned = cleaned and unrouted
+            if page is not None:
+                closed = await server_proxy.close_resource(page)
+                cleaned = cleaned and closed
+            if verified and not cleaned:
+                raise Stop("browser_operation_failed") from None
 
-    async def verify_json_target(self, context, target, expected_email):
+    async def verify_json_target(self, context, target, expected_email, *, initial_page=None):
         if not isinstance(expected_email, str) or not expected_email:
             raise Stop("expected_email_required")
-        await context.add_cookies(session_cookies(target))
-        page = await context.new_page()
         budget = SessionBudget(60, cancelled=lambda: self.cancelled,
                                report=lambda **details: self.progress("session_restore", **details))
+        page, routed, verified = initial_page, False, False
         async def block_payment(route):
             request = route.request
             if browser_password_login.login_payment_write(request.method, request.url):
                 await route.abort("blockedbyclient")
             else:
                 await route.fallback()
-        await context.route("**/*", block_payment)
         try:
-            await load_session_page(page, browser_checkout.ORIGIN, budget)
+            await budget.run(lambda: context.add_cookies(session_cookies(target)), "session_read")
+            if page is None:
+                page = await budget.run(context.new_page, "page_load")
+            await budget.run(lambda: context.route("**/*", block_payment), "page_load")
+            routed = True
+            if initial_page is None:
+                await load_session_page(page, browser_checkout.ORIGIN, budget)
             observed = await browser_password_login.official_identity(
                 page, expected_email, budget=budget, strict=True)
             if not observed:
@@ -466,25 +503,76 @@ class Job:
             if (official_target.account_id != target.account_id or
                     official_target.user_id != target.user_id):
                 raise Stop("official_account_mismatch", account_matched=False)
+            verified = True
             return identity
         finally:
-            await context.unroute("**/*", block_payment)
-            await page.close()
+            cleaned = True
+            if routed:
+                cleaned = await server_proxy.finish_cleanup(
+                    lambda: context.unroute("**/*", block_payment))
+            if page is not None:
+                closed = await server_proxy.close_resource(page)
+                cleaned = cleaned and closed
+            if verified and not cleaned:
+                raise Stop("browser_operation_failed") from None
+
+    async def prepare_server_browser(self, runtime):
+        """只在登录写入前轮换IP；准备成功后业务流程只调用一次。"""
+        proxy_config = self.payload.pop("proxy", None)
+        try:
+            prepared = await server_proxy.prepare_browser(
+                proxy_config, lambda proxy: runtime._new_browser(proxy=proxy),
+                expected_country=self.payload.get("expectedCountry"),
+                target_url=(browser_password_login.LOGIN_URL if self.payload.get("login") is not None
+                            else browser_checkout.ORIGIN),
+                cancelled=lambda: self.cancelled, progress=self.progress,
+                previous_ip=(None if self.payload.get("recheckOnly") else self.payload.get("previousLoginIp")),
+                allow_retry=not self.payload.get("recheckOnly"))
+            self.prepared_browser = prepared
+            self.resolved_proxy = prepared["proxy"]
+            self.preflight_network = prepared["network"]
+            return prepared["browser"]
+        finally:
+            if isinstance(proxy_config, dict):
+                proxy_config.clear()
+
+    async def prepare_server_proxy(self):
+        """持久事件循环内先提取代理，再由共享运行时启动指纹浏览器。"""
+        if self.resolved_proxy is not None:
+            return self.resolved_proxy
+        proxy_config = self.payload.pop("proxy", None)
+        try:
+            self.progress("proxy_resolving")
+            self.resolved_proxy = await server_proxy.resolve(
+                proxy_config, cancelled=lambda: self.cancelled)
+            return self.resolved_proxy
+        finally:
+            if isinstance(proxy_config, dict):
+                proxy_config.clear()
 
     async def execute(self, browser=None):
         plan, action = self.payload["plan"], self.payload["action"]
         if action == "server":
-            proxy_config = self.payload.pop("proxy", None)
             login = self.payload.pop("login", None)
             raw = self.payload.pop("sessionJson", None)
             try:
-                self.progress("proxy_resolving")
-                proxy = await asyncio.to_thread(server_proxy.resolve_proxy, proxy_config)
-                context = await browser.new_context(proxy=proxy, service_workers="block",
-                                                    accept_downloads=False)
+                proxy = await self.prepare_server_proxy()
+                self.progress("proxy_verifying")
+                budget = SessionBudget(server_proxy.EXIT_TIMEOUT_SECONDS,
+                                       cancelled=lambda: self.cancelled)
                 try:
-                    self.progress("proxy_verifying")
-                    self.preflight_network = await server_proxy.observe_exit(context)
+                    context = (self.prepared_browser["context"] if self.prepared_browser else
+                               await budget.run(lambda: browser.new_context(
+                                   proxy=proxy, service_workers="block", accept_downloads=False),
+                                   "proxy_context_create"))
+                except Stop as error:
+                    if error.report.get("reason") == "session_load_timeout":
+                        raise Stop("proxy_network_unconfirmed", error_type="TimeoutError") from None
+                    raise
+                try:
+                    if self.prepared_browser is None:
+                        self.preflight_network = await server_proxy.observe_exit(
+                            context, cancelled=lambda: self.cancelled)
                     expected_country = self.payload.get("expectedCountry")
                     if self.preflight_network["country"] != expected_country:
                         raise Stop("proxy_country_mismatch")
@@ -492,12 +580,13 @@ class Job:
                     if previous_ip and self.preflight_network["ip"] == previous_ip and not self.payload.get("recheckOnly"):
                         raise Stop("proxy_ip_not_rotated")
                     self.progress("session_restore")
+                    prepared_page = {"initial_page": self.prepared_browser["page"]} if self.prepared_browser else {}
                     if login is not None:
-                        target, identity = await self.login_target(context, login)
+                        target, identity = await self.login_target(context, login, **prepared_page)
                     else:
                         target = parse_browser_credential(raw.encode())
                         identity = await self.verify_json_target(context, target,
-                                                                 self.payload.get("expectedEmail"))
+                                                                 self.payload.get("expectedEmail"), **prepared_page)
                     raw = None
                     if self.payload.get("recheckOnly") is True:
                         expected_key = self.payload.get("sourceAccountKey")
@@ -508,7 +597,8 @@ class Job:
                     self.progress("original_state_restore")
                     self.restore_target(target)
                     self.progress("login_network_verifying")
-                    observed_after_login = await server_proxy.observe_exit(context)
+                    observed_after_login = await server_proxy.observe_exit(
+                        context, cancelled=lambda: self.cancelled)
                     if observed_after_login != self.preflight_network:
                         raise Stop("proxy_ip_changed_during_login")
                     self.progress("login_verified", account_matched=True,
@@ -529,13 +619,15 @@ class Job:
                                                   report=lambda **details: self.progress("session_restore", **details)),
                                               expected_country=self.payload.get("expectedCountry"))
                 finally:
-                    await context.close()
+                    await server_proxy.close_resource(context)
             finally:
                 raw = None
+                if self.resolved_proxy is not None:
+                    self.resolved_proxy.clear()
+                    self.resolved_proxy = None
+                self.prepared_browser = None
                 if isinstance(login, dict):
                     login.clear()
-                if isinstance(proxy_config, dict):
-                    proxy_config.clear()
         raw = self.payload.pop("sessionJson", "")
         try:
             target = parse_browser_credential(raw.encode())
@@ -563,7 +655,8 @@ class Job:
     def run(self):
         # 硬超时终止本执行器，MySQL 的原单标记保留；不会重发任务。
         oom_kills_before = read_cgroup_oom_kill()
-        watchdog = threading.Timer(900, lambda: os._exit(70))
+        watchdog = threading.Timer(1200 if self.payload.get("action") == "server" else 900,
+                                   lambda: os._exit(70))
         watchdog.daemon = True
         watchdog.start()
         original_atomic = attempt_ledger.atomic_json
@@ -580,9 +673,18 @@ class Job:
                 attempt_ledger.atomic_json = payment_state.atomic_json = durable
                 browser_checkout.progress = pay.progress = payment_network.progress = self.progress
                 if BROWSER_RUNTIME.started:
-                    operation = lambda browser: self.execute(browser=browser)
+                    async def operation(browser):
+                        nonlocal watchdog
+                        if self.payload.get("action") == "server":
+                            # 代理重试不消耗原登录/报价/付款阶段的900秒保护预算。
+                            watchdog.cancel()
+                            watchdog = threading.Timer(900, lambda: os._exit(70))
+                            watchdog.daemon = True
+                            watchdog.start()
+                        return await self.execute(browser=browser)
                     if self.payload.get("action") == "server":
-                        result = BROWSER_RUNTIME.run_isolated(operation)
+                        result = BROWSER_RUNTIME.run_isolated(
+                            operation, browser_factory=self.prepare_server_browser)
                     else:
                         result = BROWSER_RUNTIME.run(operation)
                 else:
@@ -598,6 +700,10 @@ class Job:
             attempt_ledger.atomic_json = payment_state.atomic_json = original_atomic
             browser_checkout.progress = pay.progress = payment_network.progress = original_progress
             self.payload.clear()
+            if self.resolved_proxy is not None:
+                self.resolved_proxy.clear()
+                self.resolved_proxy = None
+            self.prepared_browser = None
             if self.pending_details:
                 details = self.pending_details.get("details")
                 if isinstance(details, dict):
@@ -610,6 +716,13 @@ class Job:
         oom_kills_after = read_cgroup_oom_kill()
         if result.get("status") in {"blocked", "interrupted"} and self.stage:
             result.setdefault("stage", self.stage)
+        if self.stage in {"proxy_resolving", "proxy_verifying", "proxy_retrying"}:
+            # 此执行尚未登录或调用充值流程；只声明本次请求数，不改历史付款标记。
+            result.setdefault("checkout_requests_sent", 0)
+            result.setdefault("confirmation_requests_sent", 0)
+            result.setdefault("payment_requests_sent", 0)
+            result.setdefault("payment_attempted", False)
+            result.setdefault("payment_status", "not_attempted")
         if (BROWSER_RUNTIME.started and oom_kills_before is not None and oom_kills_after is not None
                 and oom_kills_after > oom_kills_before):
             BROWSER_RUNTIME.discard()
@@ -647,14 +760,31 @@ class Handler(BaseHTTPRequestHandler):
         if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
             self.reply(403, {"ok": False})
             return
+        if self.path == "/registration/health":
+            self.reply(200, {"ready": BROWSER_RUNTIME.started, "engine": "camoufox",
+                             "registrationBusy": (isinstance(self.job, registration_builtin.RegistrationServerJob)
+                                                  and not self.job.done),
+                             "registrationWindowRetained": registration_builtin.PROFILES.profile is not None})
+            return
         parts = self.path.strip("/").split("/")
+        if (len(parts) == 4 and parts[:2] == ["registration", "jobs"] and parts[3] == "status"):
+            job = self.job
+            if not isinstance(job, registration_builtin.RegistrationServerJob) or job.id != parts[2]:
+                self.reply(404, {"ok": False})
+                return
+            self.reply(200, {"accepted": True, "attempt": job.attempt,
+                             "cancelled": (job.cancelled.is_set() and job.done
+                                           and not (registration_builtin.PROFILES.profile
+                                                    and registration_builtin.PROFILES.profile['job_id'] == job.id)),
+                             "done": job.done})
+            return
         if (len(parts) != 3 or parts[0] != "jobs" or parts[2] != "status"
                 or not JOB_ID.fullmatch(parts[1]) or not self.job or self.job.id != parts[1]):
             self.reply(404, {"ok": False})
             return
-        self.reply(200, {"ok": True, "accepted": True, "details_received": self.job.details_received,
-                         "confirmation_received": self.job.confirmed,
-                         "cancelled": self.job.cancelled, "done": self.job.done})
+        self.reply(200, {"ok": True, "accepted": True, "details_received": getattr(self.job, "details_received", False),
+                         "confirmation_received": getattr(self.job, "confirmed", False),
+                         "cancelled": (self.job.cancelled.is_set() if isinstance(self.job, registration_builtin.RegistrationServerJob) else self.job.cancelled), "done": self.job.done})
 
     def do_POST(self):
         if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
@@ -665,12 +795,21 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= MAX_BODY:
                 raise ValueError()
             body = json.loads(self.rfile.read(length), object_pairs_hook=unique_object)
+            if self.path.startswith("/registration/"):
+                with self.lock:
+                    previous = Handler.job
+                    job = registration_builtin.handle_request(self, body, REGISTRATION_API, BROWSER_RUNTIME)
+                    if job is not previous:
+                        Handler.job = job
+                        threading.Thread(target=job.run, daemon=True).start()
+                self.reply(202, {"ok": True})
+                return
             parts = self.path.strip("/").split("/")
             if len(parts) < 2 or parts[0] != "jobs" or not JOB_ID.fullmatch(parts[1]):
                 raise ValueError()
             with self.lock:
                 if len(parts) == 2:
-                    if self.job and not self.job.done:
+                    if registration_builtin.PROFILES.profile or (self.job and not self.job.done):
                         self.reply(409, {"ok": False})
                         return
                     if body.get("plan") not in PLANS or body.get("action") not in {"check", "quote", "prepare", "recheck", "flow", "server"}:
@@ -678,7 +817,8 @@ class Handler(BaseHTTPRequestHandler):
                     Handler.job = Job(parts[1], body)
                     threading.Thread(target=Handler.job.run, daemon=True).start()
                 elif len(parts) == 3 and parts[2] in {"details", "confirm", "cancel"}:
-                    if not self.job or self.job.id != parts[1] or self.job.done:
+                    if (not self.job or self.job.id != parts[1] or self.job.done
+                            or isinstance(self.job, registration_builtin.RegistrationServerJob)):
                         raise ValueError()
                     if parts[2] == "details":
                         self.job.submit_details(body)

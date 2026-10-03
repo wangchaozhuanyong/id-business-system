@@ -106,7 +106,13 @@ if (part === 'guards') {
       'test_bitbrowser_options',
       'test_bitbrowser_connector',
       'test_connector_health',
-      'test_session_retry'
+      'test_session_retry',
+      'test_server',
+      'test_server_proxy',
+      'test_registration',
+      'test_registration_builtin',
+      'test_fingerprint_runtime',
+      'test_password_login'
     ],
     {
       cwd: 'apps/api/src/id-business-v2/auto-recharge/worker',

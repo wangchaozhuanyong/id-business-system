@@ -145,8 +145,8 @@
             v-model="importDraft.form.names"
             type="textarea"
             :rows="10"
-            maxlength="60000"
-            placeholder="每行一个名字，每次最多 500 个；重复名字会跳过"
+            maxlength="250000"
+            placeholder="每行一个名字，每次最多 2000 个；重复名字会跳过"
         /></el-form-item>
       </el-form>
     </V2FormDrawer>
@@ -279,8 +279,8 @@ async function importNames() {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
-  if (!names.length || names.length > 500 || names.some((name) => name.length > 120)) {
-    error.value = '每次导入 1 至 500 个名字，每个最多 120 个字符';
+  if (!names.length || names.length > 2000 || names.some((name) => name.length > 120)) {
+    error.value = '每次导入 1 至 2000 个名字，每个最多 120 个字符';
     return;
   }
   const completeSave = importDraft.beginSave();

@@ -75,9 +75,9 @@ export class RegistrationNamesService {
       Object.keys(input).some((key) => key !== 'names') ||
       !Array.isArray(input.names) ||
       input.names.length < 1 ||
-      input.names.length > 500
+      input.names.length > 2000
     )
-      throw new BadRequestException('每次导入 1 至 500 个名字');
+      throw new BadRequestException('每次导入 1 至 2000 个名字');
     const inputCount = input.names.length;
     const names = [...new Set(input.names.map((name) => text(name, '名字')))];
     return this.transactions.execute(

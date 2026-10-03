@@ -22,7 +22,7 @@
         </el-form></template
       >
       <template #actions
-        ><AppButton @click="page.browserSettings.setSettingsOpen(true)">本机设置</AppButton
+        ><AppButton @click="helpOpen = true">使用说明</AppButton
         ><AppButton variant="primary" @click="page.openStart">开始注册</AppButton></template
       >
     </V2PageContext>
@@ -144,7 +144,10 @@
                 >查看</AppButton
               >
               <AppButton
-                v-if="['queued', 'partial', 'awaiting_user'].includes(row.state)"
+                v-if="
+                  ['queued', 'partial', 'awaiting_user'].includes(row.state) &&
+                  row.reason !== 'builtin_cancel_unconfirmed'
+                "
                 size="small"
                 variant="ghost"
                 :disabled="page.busy.value"
@@ -157,7 +160,7 @@
                 variant="ghost"
                 :disabled="page.busy.value"
                 @click="page.act(row, 'cancel')"
-                >取消</AppButton
+                >{{ row.reason === 'builtin_cancel_unconfirmed' ? '重试关闭' : '取消' }}</AppButton
               >
             </template></V2TableActionColumn
           >
@@ -187,6 +190,7 @@
       "
       @confirm="page.start"
     >
+      <template #header-actions><AppButton @click="helpOpen = true">使用说明</AppButton></template>
       <p v-if="page.error.value" role="alert">{{ page.error.value }}</p>
       <V2AsyncRegion
         skeleton="form"
@@ -228,14 +232,28 @@
                 :label="item.email"
                 :value="item.id" /></el-select
           ></el-form-item>
-          <el-form-item label="代理" prop="proxyId"
-            ><el-select v-model="page.draft.form.proxyId" filterable placeholder="选择已启用的代理"
+          <el-form-item label="代理 IP" prop="proxyId"
+            ><el-select
+              v-model="page.draft.form.proxyId"
+              filterable
+              placeholder="选择代理 IP 管理中的启用代理"
               ><el-option
+                v-if="
+                  page.options.data.value?.defaultProxyId &&
+                  !(page.options.data.value?.proxies ?? []).some(
+                    (item) => item.id === page.options.data.value?.defaultProxyId
+                  )
+                "
+                :value="page.options.data.value.defaultProxyId"
+                label="已保存的默认代理（来自代理 IP 管理）" /><el-option
                 v-for="item in page.options.data.value?.proxies ?? []"
                 :key="item.id"
                 :label="item.label"
                 :value="item.id" /></el-select
           ></el-form-item>
+          <p class="recharge-settings-note">
+            代理与自动充值共用代理 IP 管理中的资料；本次注册以这里选中的条目为准。
+          </p>
           <el-form-item label="名字" prop="nameId"
             ><el-select
               v-model="page.draft.form.nameId"
@@ -261,12 +279,33 @@
             ></el-form-item
           >
           <p>
-            密码由系统生成并加密保存。本人验证需要在原浏览器窗口完成；本功能只检查优惠，不领取或付款。
+            密码由系统生成并加密保存。遇到本人验证时暂停等待处理；本功能只检查优惠，不领取或付款。
           </p>
         </el-form>
       </V2AsyncRegion>
     </V2FormDrawer>
-    <RechargeBrowserSettings :settings="page.browserSettings" />
+    <V2ConfirmDialog
+      v-model="helpOpen"
+      title="自动注册使用说明"
+      message="系统内置指纹浏览器与代理的执行说明"
+      cancel-text="知道了"
+      :confirm-visible="false"
+    >
+      <p>选择已授权邮箱、代理和真实出生日期后点击开始注册；名字留空时从名字数据表自动选择。</p>
+      <p>
+        代理与自动充值共用代理 IP 管理目录。动态代理在新任务开始时提取 IP，系统打开独立指纹浏览器。
+        注册提交前，代理连通与官网页面准备超过 20 秒或失败时，关闭失败窗口并重新提取
+        IP、生成新指纹， 最多尝试 10 次（含首次）；静态代理失败后停止。开始提交注册资料后不自动换
+        IP，暂停后继续原窗口和原代理。
+      </p>
+      <p>
+        系统自动读取本步骤的邮件验证码。官网身份核实后保存到 ChatGPT
+        账号数据表；密码和双重验证分别核验，未核验的状态不会显示为完成。
+      </p>
+      <p>
+        遇到本人或电话验证时暂停。当前服务器窗口需要管理员接管；浏览器执行器重启后原窗口可能丢失，此时停止并要求人工核对，避免重复注册。
+      </p>
+    </V2ConfirmDialog>
   </section>
 </template>
 <script setup lang="ts">
@@ -285,7 +324,7 @@ import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { getApiErrorMessage } from '@/api/client';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
-import { RechargeBrowserSettings } from '../auto-recharge/public-api';
+import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import { V2_ACCOUNT_OFFER_LABELS, type V2RegistrationJob } from './contracts';
 import { stateLabels, stepLabels, registrationReasons } from './presentation';
 import { useRegistrationPage } from './useRegistrationPage';
@@ -315,5 +354,6 @@ const { listRef, listFrameStyle } = useV2StableListFrame({
   items: () => page.query.data.value?.items ?? [],
   pageSize: () => page.filters.pageSize
 });
+const helpOpen = ref(false);
 const bindForm = page.bindForm;
 </script>

@@ -64,6 +64,7 @@ def command_failure_summary(data):
     lines = re.findall(r'File "[^"\n]*remote-deploy\.py", line ([0-9]+)', error)
     reasons = (
         'Production baseline changed', 'Active recharge jobs prevent release',
+        'Active registration jobs prevent release', 'Registration runtime guard unavailable',
         'A production service is not running', 'A production service is not healthy',
         'Invalid current release path', 'Insufficient free disk after pull',
         'Resource temporarily unavailable', 'No space left on device',
@@ -204,6 +205,77 @@ def assert_no_active_recharge(directory):
         "WHERE state <> 0x66696e6973686564 AND lease_until > UTC_TIMESTAMP(6)\"",
     )
     require(count == '0', 'Active recharge jobs prevent release')
+
+
+def registration_runtime_state(directory):
+    # Only the running Worker's authenticated loopback health is read. The token
+    # remains in that container; neither response bodies nor exceptions are logged.
+    probe = '''import json, os, urllib.request, urllib.error
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+request = urllib.request.Request('http://127.0.0.1:8051/registration/health',
+    headers={'X-Recharge-Worker': os.environ.get('AUTO_RECHARGE_WORKER_TOKEN', '')})
+try:
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=3) as response:
+        value = json.loads(response.read(16384))
+    if (not isinstance(value, dict) or value.get('ready') is not True
+            or value.get('engine') != 'camoufox'
+            or type(value.get('registrationBusy')) is not bool
+            or type(value.get('registrationWindowRetained')) is not bool):
+        raise ValueError()
+    print(json.dumps({'supported': True,
+        'registrationBusy': value['registrationBusy'],
+        'registrationWindowRetained': value['registrationWindowRetained']}))
+except urllib.error.HTTPError as error:
+    if error.code != 404:
+        raise SystemExit('Registration runtime guard unavailable') from None
+    print(json.dumps({'supported': False}))
+except Exception:
+    raise SystemExit('Registration runtime guard unavailable') from None
+'''
+    try:
+        value = json.loads(compose(directory, 'exec', '-T', 'auto-recharge',
+                                   'python', '-c', probe, timeout=15))
+    except Exception:
+        raise RuntimeError('Registration runtime guard unavailable') from None
+    if (isinstance(value, dict) and set(value) == {'supported'}
+            and value['supported'] is False):
+        return value
+    require(isinstance(value, dict) and set(value) == {
+        'supported', 'registrationBusy', 'registrationWindowRetained'}
+        and value['supported'] is True
+        and type(value['registrationBusy']) is bool
+        and type(value['registrationWindowRetained']) is bool,
+        'Registration runtime guard unavailable')
+    return value
+
+
+def assert_no_active_registration(directory):
+    runtime = registration_runtime_state(directory)
+    require(not runtime.get('registrationBusy')
+            and not runtime.get('registrationWindowRetained'),
+            'Active registration jobs prevent release')
+    # A new Worker also protects a dispatched attempt before its profile receipt.
+    # Legacy Workers have no built-in windows; only explicit reg_ active attempts
+    # are protected there. Historical partial rows alone cannot prove occupancy.
+    builtin_filter = '' if runtime['supported'] else (
+        ' AND LEFT(browser_profile_id, 4) = 0x7265675f')
+    count = compose(
+        directory, 'exec', '-T', 'mysql', 'sh', '-c',
+        'mysql --batch --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+        '"$MYSQL_DATABASE" -e "SELECT COUNT(*) FROM id_business_v2_registration_jobs '
+        'WHERE state IN (0x72756e6e696e67, 0x6177616974696e675f656d61696c, '
+        '0x6177616974696e675f75736572) AND lease_until > UTC_TIMESTAMP(6)'
+        + builtin_filter + '"',
+    )
+    require(count == '0', 'Active registration jobs prevent release')
+
+
+def assert_no_active_jobs(directory, *, worker_changes):
+    assert_no_active_recharge(directory)
+    if worker_changes:
+        assert_no_active_registration(directory)
 
 
 def migration_plan(previous, release):
@@ -349,7 +421,7 @@ def main():
             'A production service is not running')
     require(all(state['health'] == 'healthy' for service, state in before.items()
                 if service != 'caddy'), 'A production service is not healthy')
-    assert_no_active_recharge(previous)
+    assert_no_active_jobs(previous, worker_changes=not args.admin_only)
 
     stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     release = BASE / 'releases' / f'{stamp}-{args.commit[:12]}'
@@ -438,7 +510,7 @@ def main():
         (release / 'backup-verification.json').write_text(json.dumps(backup, indent=2) + '\n')
         (release / 'backup-verification.json').chmod(0o600)
         require((BASE / 'current').resolve() == previous, 'Production changed before switch')
-        assert_no_active_recharge(previous)
+        assert_no_active_jobs(previous, worker_changes=not args.admin_only)
 
         step = 'migration'
         if not args.admin_only:
