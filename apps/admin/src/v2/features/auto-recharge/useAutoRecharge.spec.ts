@@ -900,6 +900,77 @@ describe('本机比特浏览器自动充值', () => {
     expect(mock.connectorStart).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['缺少邮箱', { size: 2, text: async () => '{}' }],
+    ['格式损坏', { size: 1, text: async () => '{' }],
+    ['文件过大', { size: 65_001, text: async () => sessionJson() }],
+    [
+      '读取失败',
+      {
+        size: 20,
+        text: async () => {
+          throw new Error('fixture read failure');
+        }
+      }
+    ]
+  ])('替换授权文件%s时旧账号失效且不能充值', async (_reason, file) => {
+    fillForm();
+    await nextTick();
+    expect(flow.canStart.value).toBe(true);
+    await flow.importJson({
+      target: { files: [file], value: 'replacement.json' }
+    } as unknown as Event);
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.details.value.email).toBe('');
+    expect(flow.jsonError.value).not.toBe('');
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+  });
+
+  it('替换文件读取期间禁止使用旧账号，读取成功后只接受新账号', async () => {
+    fillForm();
+    await nextTick();
+    let finish!: (value: string) => void;
+    const pending = flow.importJson({
+      target: {
+        files: [{ size: 20, text: () => new Promise<string>((resolve) => (finish = resolve)) }],
+        value: 'replacement.json'
+      }
+    } as unknown as Event);
+    expect(flow.importing.value).toBe(true);
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    finish(sessionJson('replacement@example.com'));
+    await pending;
+    expect(flow.importing.value).toBe(false);
+    expect(flow.sessionJson.value).toBe(sessionJson('replacement@example.com'));
+    expect(flow.details.value.email).toBe('replacement@example.com');
+    expect(flow.canStart.value).toBe(true);
+  });
+
+  it('文件读取迟到的失败不能覆盖期间粘贴的新授权', async () => {
+    fillForm();
+    let fail!: (reason: Error) => void;
+    const pending = flow.importJson({
+      target: {
+        files: [
+          { size: 20, text: () => new Promise<string>((_resolve, reject) => (fail = reject)) }
+        ],
+        value: 'replacement.json'
+      }
+    } as unknown as Event);
+    flow.updateJsonInput(sessionJson('replacement@example.com'));
+    fail(new Error('fixture delayed failure'));
+    await pending;
+    expect(flow.sessionJson.value).toBe(sessionJson('replacement@example.com'));
+    expect(flow.jsonError.value).toBe('');
+    expect(flow.importing.value).toBe(false);
+  });
+
   it('只有补齐资料并授权单次付款后才可一键执行', async () => {
     fillForm();
     expect(flow.canStart.value).toBe(true);
@@ -1211,6 +1282,46 @@ describe('本机比特浏览器自动充值', () => {
     expect(body.authorizeSinglePayment).toBeUndefined();
   });
 
+  it('本机升级未知结果沿用服务端绑定的原升级ID，只读请求不含新付款资料', async () => {
+    const upgradeId = `upg_${'b'.repeat(32)}`;
+    const source: V2RechargeJob = {
+      id: launch.id,
+      plan: 'pro-20x',
+      action: 'bitbrowser',
+      state: 'unknown',
+      result: {
+        operation: 'subscription_upgrade',
+        upgrade_identifier: upgradeId,
+        current_plan_before: 'plus',
+        target_plan: 'pro-20x',
+        payment_attempted: true,
+        payment_status: 'unknown',
+        payment_requests_sent: 1
+      },
+      createdAt: '',
+      updatedAt: ''
+    };
+    mock.recheckBitBrowser.mockResolvedValueOnce({
+      id: '33333333-3333-4333-8333-333333333333',
+      mode: 'recheck',
+      upgradeIdentifier: upgradeId,
+      connectorUrl: settings.connectorUrl,
+      connectorToken: launch.connectorToken,
+      agentToken: launch.agentToken,
+      bitBrowser: launch.bitBrowser
+    });
+    jobs.value.items = [source];
+    flow.selectJob(source.id);
+    flow.updateJsonInput(sessionJson());
+    flow.windowName.value = '升级原单复查';
+    await nextTick();
+    await flow.recheck();
+    const body = mock.connectorStart.mock.calls[0]![2];
+    expect(body).toMatchObject({ mode: 'recheck', plan: 'pro-20x', upgradeIdentifier: upgradeId });
+    for (const key of ['details', 'address', 'safety', 'authorizeSinglePayment'])
+      expect(body).not.toHaveProperty(key);
+  });
+
   it('确认银行卡未收到请求时只发送历史状态处理任务', async () => {
     mock.resolveNoBankRequest.mockResolvedValue({ ...resolutionLaunch, alreadyResolved: false });
     const source: V2RechargeJob = {
@@ -1458,6 +1569,224 @@ describe('服务器自动充值', () => {
     return jobs.value.items[0]!;
   }
 
+  it('Go 使用独立币种上限，未配置时不能借用 Plus 上限，提交保留 Go 套餐', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    flow.plan.value = 'go';
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startServer).not.toHaveBeenCalled();
+    (mock.paymentCapsQuery.data as { value: unknown }).value = {
+      items: [{ plan: 'go', currencyCode: flow.lockedCurrency.value, maxAmount: '30.00' }]
+    };
+    await nextTick();
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledWith(
+      expect.objectContaining({ plan: 'go', authorizeSinglePayment: true })
+    );
+  });
+
+  it('保存卡详情读取期间锁住提交，完整资料到达后保留对应卡编号并重新输入安全码', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    expect(flow.canStart.value).toBe(true);
+    let finish!: (value: unknown) => void;
+    mock.managedCardDetail.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    const pending = flow.selectSavedCard('card-b');
+    expect(flow.paymentCardLoading.value).toBe(true);
+    expect(flow.details.value.cvc).toBe('');
+    expect(flow.formLocked.value).toBe(true);
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startServer).not.toHaveBeenCalled();
+    finish({
+      id: 'card-b',
+      status: 'active',
+      currencyCode: 'PHP',
+      number: '4111111111111111',
+      expiry: '11/31',
+      billingName: 'Replacement User',
+      billingAddressId: address.id
+    });
+    await pending;
+    expect(flow.paymentCardLoading.value).toBe(false);
+    expect(flow.selectedPaymentCardId.value).toBe('card-b');
+    expect(flow.details.value).toMatchObject({
+      number: '4111111111111111',
+      expiry: '11/31',
+      name: 'Replacement User',
+      cvc: ''
+    });
+    expect(flow.canStart.value).toBe(false);
+    mock.matchCardName.mockResolvedValue({
+      name: 'Replacement User',
+      confirmed: true,
+      cardId: 'card-b',
+      billingAddressId: address.id
+    });
+    flow.details.value.cvc = '456';
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cardId: 'card-b',
+        details: expect.objectContaining({ number: '4111111111111111', cvc: '456' })
+      })
+    );
+  });
+
+  it('保存卡详情读取失败后清除旧卡安全码，保持其余草稿且不能提交', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    expect(flow.canStart.value).toBe(true);
+    mock.managedCardDetail.mockRejectedValueOnce(new Error('fixture detail unavailable'));
+
+    await flow.selectSavedCard('card-b');
+
+    expect(flow.paymentCardLoading.value).toBe(false);
+    expect(flow.selectedPaymentCardId.value).toBe('');
+    expect(flow.details.value).toMatchObject({
+      number: '5555555555554444',
+      expiry: '12/30',
+      name: 'Test User',
+      cvc: ''
+    });
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startServer).not.toHaveBeenCalled();
+  });
+
+  it('保存卡编号往返相同时旧详情不能覆盖最新选择或提前解除读取锁', async () => {
+    await serverPasswordForm();
+    const finish: ((value: unknown) => void)[] = [];
+    mock.managedCardDetail.mockImplementation(() => new Promise((resolve) => finish.push(resolve)));
+    const oldA = flow.selectSavedCard('card-a');
+    const oldB = flow.selectSavedCard('card-b');
+    const latestA = flow.selectSavedCard('card-a');
+    const card = {
+      id: 'card-a',
+      status: 'active',
+      currencyCode: 'PHP',
+      number: '4111111111111111',
+      expiry: '11/31',
+      billingName: 'Latest User',
+      billingAddressId: address.id
+    };
+    finish[0]!({ ...card, billingName: 'Stale User' });
+    finish[1]!({ ...card, id: 'card-b' });
+    await Promise.all([oldA, oldB]);
+    expect(flow.paymentCardLoading.value).toBe(true);
+    expect(flow.details.value.number).toBe('5555555555554444');
+    finish[2]!(card);
+    await latestA;
+    expect(flow.paymentCardLoading.value).toBe(false);
+    expect(flow.details.value.name).toBe('Latest User');
+    expect(flow.selectedPaymentCardId.value).toBe('card-a');
+  });
+
+  it('详情读取期间出现执行中任务时不覆盖已填写资料', async () => {
+    await serverPasswordForm();
+    let finish!: (value: unknown) => void;
+    mock.managedCardDetail.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    const pending = flow.selectSavedCard('card-b');
+    jobs.value.items = [
+      {
+        id: 'other-task',
+        plan: 'plus',
+        action: 'server',
+        state: 'running',
+        result: { status: 'running' },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    finish({
+      id: 'card-b',
+      status: 'active',
+      currencyCode: 'PHP',
+      number: '4111111111111111',
+      expiry: '11/31',
+      billingName: 'Replacement User',
+      billingAddressId: address.id
+    });
+    await pending;
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.details.value.cvc).toBe('');
+    expect(flow.selectedPaymentCardId.value).toBe('');
+    expect(flow.formLocked.value).toBe(true);
+  });
+
+  it('确认未付款的终态失败掉出最近列表后保留草稿且不永久锁住或轮询', async () => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = { status: 'blocked', payment_attempted: false, payment_requests_sent: 0 };
+    await nextTick();
+    jobs.value.items = Array.from({ length: 30 }, (_, index) => ({
+      ...job,
+      id: `new-${index}`
+    }));
+    await nextTick();
+    expect(flow.formLocked.value).toBe(false);
+    expect(flow.canStart.value).toBe(true);
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.details.value.cvc).toBe('123');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+    expect(mock.jobOptions!.getRevalidateAt!(jobs.value)).toBeNull();
+  });
+
+  it('启动回执丢失且列表读取失败时继续轮询未确认的操作编号', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    mock.startServer.mockRejectedValueOnce(new Error('fixture response lost'));
+    (mock.jobsQuery.error as { value: unknown }).value = new Error('fixture list unavailable');
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledTimes(1);
+    expect(mock.jobOptions!.getRevalidateAt!(jobs.value)).toBeTypeOf('number');
+  });
+
+  it.each([
+    {
+      status: 'payment_result_unknown',
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      payment_status: 'unknown'
+    },
+    {
+      status: 'paid_pending_activation',
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      payment_status: 'paid'
+    },
+    {
+      status: 'blocked',
+      payment_attempted: false,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 1
+    },
+    { status: 'blocked' }
+  ])('缺少明确未付款证明或付款仍待核验时保留回执锁：$status', async (result) => {
+    const job = await startServerFixture();
+    job.state = 'finished';
+    job.result = result as V2RechargeJob['result'];
+    await nextTick();
+    if (Number(job.result.confirmation_requests_sent ?? 0) > 0)
+      expect(flow.canStart.value).toBe(false);
+    jobs.value.items = [];
+    await nextTick();
+    expect(flow.formLocked.value).toBe(true);
+    expect(flow.canStart.value).toBe(false);
+    expect(mock.jobOptions!.getRevalidateAt!(jobs.value)).toBeTypeOf('number');
+    expect(flow.details.value.number).toBe('5555555555554444');
+  });
+
   it('代理核验失败后保留全部输入，直接点击可创建新的任务', async () => {
     const job = await startServerFixture();
     expect(flow.canStart.value).toBe(false);
@@ -1509,6 +1838,23 @@ describe('服务器自动充值', () => {
       expect(mock.startServer).toHaveBeenCalledTimes(1);
     }
   );
+
+  it('服务器任务没有单次付款请求时禁止原单复查，也不能解除未知付款保护', async () => {
+    const job = await startServerFixture();
+    job.state = 'unknown';
+    job.result = {
+      status: 'payment_result_unknown',
+      payment_status: 'unknown',
+      payment_attempted: true,
+      payment_requests_sent: 0
+    };
+    await nextTick();
+    expect(flow.canRecheck.value).toBe(false);
+    expect(flow.canStart.value).toBe(false);
+    await flow.recheck();
+    expect(mock.recheckServer).not.toHaveBeenCalled();
+    expect(flow.canStart.value).toBe(false);
+  });
 
   it('官网明确拒付后保留输入，允许再次执行', async () => {
     const job = await startServerFixture();

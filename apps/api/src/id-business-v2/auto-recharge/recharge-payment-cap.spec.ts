@@ -35,25 +35,19 @@ function fixture() {
 }
 
 describe('server payment safety cap', () => {
-  it('blocks an unconfigured plan and currency', async () => {
+  it.each(['go', 'plus'])('blocks an unconfigured %s plan and currency', async (plan) => {
     const { service } = fixture();
-    await expect(service.requirePaymentCap({} as never, 'plus', 'PHP')).rejects.toThrow(
+    await expect(service.requirePaymentCap({} as never, plan, 'PHP')).rejects.toThrow(
       '请先在服务器设置中配置'
     );
   });
 
-  it('saves an exact decimal cap and audits the change', async () => {
+  it.each(['go', 'plus'])('saves an exact decimal %s cap and audits the change', async (plan) => {
     const { service, repository, audit } = fixture();
     await expect(
-      service.updatePaymentCap('plus', 'PHP', { maxAmount: '1500.00' }, operator)
-    ).resolves.toEqual({ plan: 'plus', currencyCode: 'PHP', maxAmount: '1500' });
-    expect(repository.upsertPaymentCap).toHaveBeenCalledWith(
-      {},
-      'plus',
-      'PHP',
-      '1500',
-      operator.id
-    );
+      service.updatePaymentCap(plan, 'PHP', { maxAmount: '1500.00' }, operator)
+    ).resolves.toEqual({ plan, currencyCode: 'PHP', maxAmount: '1500' });
+    expect(repository.upsertPaymentCap).toHaveBeenCalledWith({}, plan, 'PHP', '1500', operator.id);
     expect(audit.append).toHaveBeenCalledWith(
       {},
       expect.objectContaining({

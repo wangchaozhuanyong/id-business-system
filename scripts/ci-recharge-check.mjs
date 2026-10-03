@@ -105,6 +105,7 @@ if (part === 'guards') {
       'test_bitbrowser_catalog',
       'test_bitbrowser_options',
       'test_bitbrowser_connector',
+      'test_bitbrowser_upgrade',
       'test_connector_health',
       'test_session_retry',
       'test_server',
@@ -112,7 +113,11 @@ if (part === 'guards') {
       'test_registration',
       'test_registration_builtin',
       'test_fingerprint_runtime',
-      'test_password_login'
+      'test_password_login',
+      'test_recharge_email_code',
+      'test_payment_3ds',
+      'test_subscription_upgrade',
+      'test_go.GoStateTests'
     ],
     {
       cwd: 'apps/api/src/id-business-v2/auto-recharge/worker',

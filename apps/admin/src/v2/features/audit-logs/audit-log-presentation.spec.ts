@@ -9,10 +9,39 @@ import {
   buildOperationAuditRestoreRouteQuery,
   formatAuditJson,
   getOperationAuditRestoreCandidate,
-  operationObjectLabel
+  operationObjectLabel,
+  operationAuditChanges
 } from './audit-log-presentation';
 
 describe('audit log presentation', () => {
+  it('充值邮箱读码审计使用明确中文操作名', () => {
+    expect(auditActionLabel('id_business_v2.auto_recharge.email_code.prepare')).toBe(
+      '准备登录邮箱验证'
+    );
+    expect(auditActionLabel('id_business_v2.auto_recharge.email_code.read')).toBe(
+      '读取登录验证邮件'
+    );
+    expect(auditActionLabel('id_business_v2.auto_recharge.email_code.received')).toBe(
+      '确认登录验证邮件已接受'
+    );
+  });
+  it('注册状态修正审计显示中文操作和前后状态', () => {
+    const row = {
+      id: 'audit-1',
+      module: 'id_business_v2',
+      action: 'id_business_v2.auto_registration.mark_unregistered',
+      objectType: 'registration_mailbox',
+      objectId: 'alias-1',
+      createdAt: '2026-10-03T08:00:00Z',
+      beforeData: { registered: true },
+      afterData: { registered: false }
+    };
+    expect(auditActionLabel(row.action)).toContain('标记未注册');
+    expect(operationObjectLabel(row)).toContain('注册邮箱');
+    expect(operationAuditChanges(row)).toEqual([
+      { key: 'registered', label: '注册状态', before: '已注册', after: '未注册' }
+    ]);
+  });
   it('renders an explicit system actor when a user no longer exists', () => {
     expect(auditUserLabel(null)).toBe('系统自动执行');
     expect(auditUserLabel({ id: 'user-1', username: 'operator01', displayName: '运营一号' })).toBe(
@@ -47,6 +76,20 @@ describe('audit log presentation', () => {
     expect(auditActionLabel('unknown.action_value')).toBe('其他业务操作');
     expect(auditFieldLabel('password')).toBe('密码');
     expect(auditFieldLabel('internal_secret')).toBe('受保护字段');
+  });
+
+  it('注册创建审计展示固定年龄与中文字段名', () => {
+    expect(
+      operationAuditChanges({
+        id: 'age-audit',
+        module: 'id_business_v2',
+        action: 'id_business_v2.auto_registration.create',
+        objectType: 'registration_job',
+        objectId: 'synthetic-job',
+        createdAt: '2026-10-03T08:00:00Z',
+        afterData: { registrationAge: 21 }
+      })
+    ).toEqual([{ key: 'registrationAge', label: '注册年龄', before: '未记录', after: '21' }]);
   });
 
   it('translates known English notes and hides uncontrolled English-only values', () => {

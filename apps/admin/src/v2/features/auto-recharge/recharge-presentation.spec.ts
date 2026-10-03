@@ -24,6 +24,77 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('升级可换卡，核实失败不再误称官网要求原付款卡', () => {
+    expect(failureReasonLabel('upgrade_payment_method_unverified')).toContain('本次选择');
+    expect(failureReasonLabel('upgrade_payment_method_unverified')).not.toContain('原付款卡');
+    for (const reason of [
+      'upgrade_payment_method_ambiguous',
+      'official_upgrade_change_card_not_found',
+      'official_upgrade_payment_method_not_found',
+      'official_upgrade_add_card_not_found',
+      'official_upgrade_add_card_submit_not_found',
+      'upgrade_card_change_not_authorized',
+      'upgrade_card_setup_failed',
+      'upgrade_card_setup_unverified',
+      'upgrade_card_bank_verification_required'
+    ])
+      expect(failureReasonLabel(reason)).not.toMatch(/^[a-z_]+$/);
+    expect(statusLabel('upgrade_card_ready')).toContain('重新核价');
+    expect(failureReasonLabel('upgrade_card_bank_verification_required')).toContain(
+      '尚未提交升级付款'
+    );
+  });
+  it('新增卡认证与升级付款分开提示，服务器不指向不存在的窗口或付款原单', () => {
+    const server = job({
+      action: 'server',
+      result: {
+        reason: 'upgrade_card_bank_verification_required',
+        user_action_required: true,
+        payment_attempted: false,
+        payment_requests_sent: 0
+      }
+    });
+    expect(rechargeIssueFeedback(server)?.action).toContain('尚未提交升级付款');
+    expect(rechargeIssueFeedback(server)?.action).toContain('核对官网银行卡设置结果');
+    expect(rechargeIssueFeedback(server)?.action).not.toContain('只读复查原订单');
+    expect(rechargeIssueFeedback(job({ ...server, action: 'bitbrowser' }))?.action).toContain(
+      '原官网窗口'
+    );
+  });
+  it('服务器未核实的银行认证只建议原单复查，不指向官网窗口或声称需要本人验证码', () => {
+    const server = job({
+      action: 'server',
+      result: {
+        reason: 'three_ds_binding_unverified',
+        payment_status: 'requires_action',
+        three_ds_status: 'unsupported',
+        payment_attempted: true
+      }
+    });
+    expect(rechargeIssueFeedback(server)?.action).toContain('银行认证结果尚未确认');
+    expect(rechargeIssueFeedback(server)?.action).toContain('只读复查');
+    expect(rechargeIssueFeedback(server)?.action).not.toContain('当前官网窗口');
+    expect(rechargeIssueFeedback(server)?.action).not.toContain('银行要求本人验证');
+  });
+  it('服务器银行挑战说明可执行路径，不指向不存在的可交互窗口', () => {
+    const server = job({
+      action: 'server',
+      result: {
+        reason: 'bank_verification_required',
+        payment_status: 'requires_action',
+        three_ds_status: 'awaiting_user',
+        user_action_required: true,
+        payment_attempted: true,
+        payment_requests_sent: 1
+      }
+    });
+    expect(rechargeIssueFeedback(server)?.action).toContain('服务器模式无法操作挑战页');
+    expect(rechargeIssueFeedback(server)?.action).toContain('只读复查原订单');
+    expect(rechargeIssueFeedback(server)?.action).not.toContain('当前官网窗口');
+    expect(rechargeIssueFeedback(job({ ...server, action: 'bitbrowser' }))?.action).toContain(
+      '当前官网窗口'
+    );
+  });
   it('显示代理连接次数与20秒预算，进入登录后不残留代理重试文案', () => {
     const progress = {
       proxy_attempt: 10,
@@ -96,6 +167,7 @@ describe('recharge stage presentation', () => {
     expect(statusLabel('promax')).toBe('Pro（最高使用额度）');
     expect(statusLabel('pro')).toBe('Pro（档位待核验）');
     for (const [plan, label] of [
+      ['go', 'Go'],
       ['pro-5x', 'Pro（标准）'],
       ['pro-20x', 'Pro（更多使用额度）'],
       ['pro-500', 'Pro（最高使用额度）']
@@ -211,7 +283,7 @@ describe('recharge stage presentation', () => {
     expect(statusLabel('browser_memory_exhausted')).toBe(
       '官网浏览器内存不足，本次未创建订单或付款'
     );
-    expect(statusLabel('verification_required')).toBe('官网要求真人验证，本次已安全停止');
+    expect(statusLabel('verification_required')).toBe('官网或银行验证尚未完成');
     expect(statusLabel('quote_needs_review_or_billing')).toBe(
       '官网初始总额或预估税费未完整读取，本次未付款'
     );

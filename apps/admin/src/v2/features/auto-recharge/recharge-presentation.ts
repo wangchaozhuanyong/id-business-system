@@ -2,6 +2,7 @@ import type { V2RechargeJob } from './contracts';
 import type { BankRechargeOrderStatus } from './bank-recharge-api';
 
 export const planLabels = {
+  go: 'ChatGPT Go',
   plus: 'ChatGPT Plus',
   'pro-5x': 'ChatGPT Pro（标准）',
   'pro-20x': 'ChatGPT Pro（更多使用额度）',
@@ -73,6 +74,11 @@ const labels: Record<string, string> = {
   login_password: '正在填写官网登录密码',
   login_code_required: '等待输入官网登录验证码',
   login_code_submitted: '验证码已提交，正在核对官网会话',
+  login_email_code_required: '正在从邮箱验证码查询读取本次官网登录验证码',
+  login_email_code_submitted: '邮箱验证码已提交，正在核对官网会话',
+  recharge_email_code_unavailable: '未取得本次邮箱验证码，请检查邮箱授权与验证码查询',
+  recharge_email_code_expired: '邮箱验证码等待超时，请检查原登录状态后重试',
+  recharge_email_code_type_changed: '官网登录验证类型已改变，已停止提交邮箱验证码',
   login_manual_required: '等待本人在官网窗口完成登录验证',
   login_verified: '官网账号登录并核对通过',
   login_code_expired: '验证码等待超时，请在原窗口检查登录状态',
@@ -132,7 +138,7 @@ const labels: Record<string, string> = {
   payment_result_unknown: '付款结果待核验',
   payment_unknown_resolved: '历史付款锁已处理',
   payment_unknown_resolution: '正在处理历史付款记录',
-  verification_required: '官网要求真人验证，本次已安全停止',
+  verification_required: '官网或银行验证尚未完成',
   payment_cancelled: '已取消本次确认',
   payment_submitted_or_pending: '等待原单付款结果',
   rechecking_original_payment: '正在只读复查原订单',
@@ -165,6 +171,31 @@ const labels: Record<string, string> = {
   official_plan_browser_error: '选择套餐时官网浏览器异常',
   selected_plan_changed: '官网选中套餐发生变化，已停止建单',
   incompatible_existing_subscription: '已有不兼容订阅',
+  official_upgrade_confirmation_not_found: '未找到唯一的官网升级确认入口，本次未付款',
+  upgrade_payment_method_unverified: '未能核实官网本次选择的升级银行卡，本次未付款',
+  upgrade_payment_method_changed: '官网升级付款卡已变化，本次未付款',
+  upgrade_payment_method_ambiguous: '官网存在多张相同尾号和有效期的卡，无法确定本次指定卡',
+  official_upgrade_change_card_not_found: '官网未显示可用的更改付款方式入口，本次未付款',
+  official_upgrade_payment_method_not_found: '官网未显示本次指定银行卡的选择入口，本次未付款',
+  official_upgrade_add_card_not_found: '官网未显示可用的新增银行卡入口，本次未付款',
+  official_upgrade_add_card_submit_not_found: '官网新增银行卡表单的提交入口无法确认，本次未付款',
+  upgrade_card_change_not_authorized: '本次换卡授权已结束，请核对原任务状态',
+  upgrade_card_setup_failed: '官网未完成本次银行卡设置，尚未提交升级付款',
+  upgrade_card_setup_unverified: '本次银行卡设置结果尚未核实，尚未提交升级付款',
+  upgrade_card_bank_verification_required: '新增银行卡需要本人银行验证，尚未提交升级付款',
+  upgrade_card_selecting: '正在选择本次升级银行卡',
+  upgrade_card_adding: '正在通过官网添加本次银行卡',
+  upgrade_card_ready: '本次升级银行卡已核实，正在重新核价',
+  upgrade_quote_ready: '已取得官方升级报价',
+  upgrade_request_sending: '已发出本次唯一升级付款请求',
+  upgrade_quote_unverified: '官网升级差额报价不完整，本次未付款',
+  upgrade_renewal_unverified: '未核实官网升级后的月度续费金额，本次未付款',
+  upgrade_quote_changed: '官网升级差额已变化，本次未付款',
+  upgrade_quote_plan_mismatch: '官网升级目标套餐与选择不一致，本次未付款',
+  upgrade_payment_evidence_conflict: '官网升级付款证据存在冲突，请保留原单并核对银行流水',
+  upgrade_result_unknown: '本次升级结果待核验，请只读复查原升级订单',
+  previous_upgrade_attempt_exists: '本账号已有原升级记录，只允许复查原操作',
+  no_original_upgrade_attempt: '未找到本账号的原升级记录，请核对执行记录',
   previous_checkout_attempt_exists: '已有原结算记录，请复查原订单',
   previous_payment_attempt_exists: '该订单已尝试付款，只允许复查',
   account_has_other_payment_attempt: '该账户已有付款尝试，请选择原套餐复查',
@@ -194,6 +225,8 @@ const labels: Record<string, string> = {
   payment_amount_over_limit: '官网今日应付超过设定上限，本次未付款',
   payment_quote_incomplete: '官网最终金额不完整，本次未付款',
   bank_verification_required: '需要本人完成银行验证',
+  three_ds_binding_unverified: '银行验证未能绑定本次原订单，请只读复查',
+  three_ds_authentication_failed: '本次银行验证未通过，请核对银行提示并只读复查',
   quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',
   actual_quote_unknown: '无法明确读取今日应付',
   checkout_page_load_timeout: '报价页等待满本轮时间后仍未加载',
@@ -467,11 +500,19 @@ export function paymentFailureLabel(value: unknown): string {
 }
 
 function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
+  if (reason === 'upgrade_card_bank_verification_required')
+    return job.action === 'server'
+      ? '新卡需要本人银行验证，服务器没有可操作的挑战窗口。尚未提交升级付款，请核对官网银行卡设置结果。'
+      : '请在原官网窗口完成新增银行卡的银行验证，再核实本次银行卡设置结果。尚未提交升级付款。';
   if (
     paymentFailure === 'authentication_required' ||
     job.result.payment_status === 'requires_action'
   )
-    return '请在当前官网窗口完成银行验证，然后只读复查原订单。';
+    return job.action === 'server'
+      ? job.result.three_ds_status && job.result.three_ds_status !== 'awaiting_user'
+        ? '银行认证结果尚未确认，请保留原单并只读复查。服务器没有可操作的验证窗口，不要重新发起付款。'
+        : '银行要求本人验证，服务器模式无法操作挑战页。请核对银行验证通知并只读复查原订单，不要重新发起付款。'
+      : '请在当前官网窗口完成银行验证，然后只读复查原订单。';
   if (paymentFailure || job.result.payment_status === 'declined')
     return '请核对银行卡状态、余额、限额和银行限制；系统不会自动重复付款。';
   if (reason && credentialReasons.has(reason)) return '请重新导出并载入当前账号的授权 JSON。';
@@ -484,8 +525,17 @@ function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: strin
   }
   if (reason === 'bitbrowser_cleanup_unverified')
     return '请先在比特浏览器确认本任务的失败窗口已关闭，再重新开始。';
-  if (reason === 'verification_required' || job.result.user_action_required === true)
+  if (
+    ['verification_required', 'bank_verification_required'].includes(String(reason)) ||
+    job.result.user_action_required === true
+  ) {
+    if (job.action === 'server')
+      return job.result.payment_attempted === true ||
+        Number(job.result.payment_requests_sent ?? 0) > 0
+        ? '银行要求本人验证，服务器模式无法操作挑战页。请核对银行验证通知并只读复查原订单，不要重新发起付款。'
+        : '服务器登录要求本人验证，当前模式无法操作该验证页。请核对账号验证方式，或改用本机充值完成本人验证。';
     return '请在当前官网窗口完成真人验证，然后返回网站继续。';
+  }
   if (
     (reason && paymentUnknownReasons.has(reason)) ||
     job.state === 'unknown' ||

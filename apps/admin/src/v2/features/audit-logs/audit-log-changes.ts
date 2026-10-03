@@ -74,7 +74,10 @@ export function auditChangeValue(value: unknown, field: string): string {
   if (value === undefined) return '未记录';
   if (value === null || value === '') return '未填写';
   if (PROTECTED_FIELD.test(field) || value === '[REDACTED]') return '内容已保护，不显示原值';
-  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (typeof value === 'boolean') {
+    if (field === 'registered') return value ? '已注册' : '未注册';
+    return value ? '是' : '否';
+  }
   if (typeof value === 'number') return String(value);
   if (Array.isArray(value))
     return value.length ? value.map((item) => auditChangeValue(item, field)).join('、') : '无';

@@ -84,6 +84,9 @@ const AUDIT_MODULE_LABELS: Record<string, string> = {
 };
 
 const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'id_business_v2.auto_recharge.email_code.prepare': '准备登录邮箱验证',
+  'id_business_v2.auto_recharge.email_code.read': '读取登录验证邮件',
+  'id_business_v2.auto_recharge.email_code.received': '确认登录验证邮件已接受',
   login: '用户登录',
   logout: '用户退出',
   change_password: '修改密码',
@@ -109,7 +112,9 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
 };
 
 const AUDIT_OBJECT_LABELS: Record<string, string> = {
+  recharge_job: '自动充值任务',
   registration_job: '注册任务',
+  registration_mailbox: '注册邮箱',
   registration_name: '名字资料',
   registration_connector: '本机注册连接器',
   user: '员工账户',
@@ -236,6 +241,7 @@ const ACTION_SEGMENT_LABELS: Record<string, string> = {
   payment_cap: '付款限额',
   metadata_update: '修改资料',
   mark_registered: '标记已注册',
+  mark_unregistered: '标记未注册',
   preview_created: '提交恢复或清理申请',
   approval_decided: '审批申请',
   batch_completed: '执行完成',

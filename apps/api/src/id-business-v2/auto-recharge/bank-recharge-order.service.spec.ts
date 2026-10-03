@@ -81,7 +81,148 @@ function fixture() {
 }
 
 describe('银充付款入单', () => {
-  it('官网核验成功建单时将开通时间和含当天 30 天的到期时间一并保存', async () => {
+  it('Plus升级使用本次已绑定实际发票建单，不伪造新结算编号', async () => {
+    const { service, tx, job, repository } = fixture();
+    const upgrade = {
+      ...verified,
+      operation: 'subscription_upgrade',
+      upgrade_identifier: `upg_${'b'.repeat(32)}`,
+      current_plan_before: 'plus',
+      target_plan: 'pro-20x',
+      quote_authority: 'official_upgrade_preview',
+      upgrade_invoice_identifier: 'in_syntheticupgrade',
+      checkout_identifier: undefined,
+      quote: { ...verified.quote, plan: 'pro-20x' },
+      payment_evidence: {
+        ...verified.payment_evidence,
+        kind: 'invoice',
+        identifier: 'in_syntheticupgrade'
+      }
+    };
+    await service.recordVerifiedSuccess(tx as never, { ...job, plan: 'pro-20x' } as never, upgrade);
+    expect(repository.createOrder).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          plan: 'pro-20x',
+          checkoutIdentifier: 'in_syntheticupgrade',
+          paymentEvidenceId: 'in_syntheticupgrade'
+        })
+      })
+    );
+    repository.createOrder.mockClear();
+    await service.recordVerifiedSuccess(tx as never, { ...job, plan: 'pro-20x' } as never, {
+      ...upgrade,
+      upgrade_invoice_identifier: 'in_other'
+    });
+    expect(repository.createOrder).not.toHaveBeenCalled();
+  });
+  it('升级开通日采用本次成功时间，官网账期结束日优先于默认提醒', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-04T10:15:00+08:00'));
+    try {
+      const { service, tx, job, repository } = fixture();
+      const accountKey = 'a'.repeat(64);
+      await service.recordVerifiedSuccess(
+        tx as never,
+        { ...job, accountKey, plan: 'pro-5x' } as never,
+        {
+          ...verified,
+          operation: 'subscription_upgrade',
+          upgrade_identifier: `upg_${'c'.repeat(32)}`,
+          current_plan_before: 'plus',
+          target_plan: 'pro-5x',
+          quote_authority: 'official_upgrade_preview',
+          checkout_identifier: undefined,
+          upgrade_invoice_identifier: 'in_timingupgrade',
+          payment_evidence: {
+            ...verified.payment_evidence,
+            kind: 'invoice',
+            identifier: 'in_timingupgrade'
+          },
+          quote: { ...verified.quote, plan: 'pro-5x' },
+          subscription_period: {
+            source: 'official_subscription_response',
+            start: '2026-03-01T02:15:00.000Z',
+            end: '2026-04-01T02:15:00.000Z',
+            account_key: accountKey,
+            target_plan: 'pro-5x'
+          }
+        }
+      );
+      expect(repository.createOrder).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({
+          data: expect.objectContaining({
+            openedAt: new Date('2026-03-04T10:15:00+08:00'),
+            verifiedAt: new Date('2026-03-04T10:15:00+08:00'),
+            dueAt: new Date('2026-03-31T10:15:00+08:00')
+          })
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('其他账号的账期不能影响本次新订阅到期提醒', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-04T10:15:00+08:00'));
+    try {
+      const { service, tx, job, repository } = fixture();
+      await service.recordVerifiedSuccess(tx as never, job as never, {
+        ...verified,
+        subscription_period: {
+          source: 'official_subscription_response',
+          start: '2026-03-01T02:15:00.000Z',
+          end: '2026-04-01T02:15:00.000Z',
+          account_key: 'other-account',
+          target_plan: 'plus'
+        }
+      });
+      expect(repository.createOrder).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({
+          data: expect.objectContaining({ dueAt: new Date('2026-04-03T10:15:00+08:00') })
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each(['2026-03-04T03:15:00.000Z', '2026-03-05T02:15:00.000Z'])(
+    '官网账期 %s 减一天不晚于本次开通时保留自然月待核对提醒',
+    async (end) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-04T10:15:00+08:00'));
+      try {
+        const { service, tx, job, repository } = fixture();
+        const accountKey = 'a'.repeat(64);
+        await service.recordVerifiedSuccess(tx as never, { ...job, accountKey } as never, {
+          ...verified,
+          subscription_period: {
+            source: 'official_subscription_response',
+            start: '2026-03-01T02:15:00.000Z',
+            end,
+            account_key: accountKey,
+            target_plan: 'plus'
+          }
+        });
+        expect(repository.createOrder).toHaveBeenCalledWith(
+          tx,
+          expect.objectContaining({
+            data: expect.objectContaining({
+              openedAt: new Date('2026-03-04T10:15:00+08:00'),
+              dueAt: new Date('2026-04-03T10:15:00+08:00')
+            })
+          })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+  it('官网核验成功建单时将开通时间和自然月到期提醒一并保存', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T10:15:00+08:00'));
     try {
@@ -92,7 +233,7 @@ describe('银充付款入单', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             openedAt: new Date('2026-01-01T10:15:00+08:00'),
-            dueAt: new Date('2026-01-30T10:15:00+08:00')
+            dueAt: new Date('2026-01-31T10:15:00+08:00')
           })
         })
       );

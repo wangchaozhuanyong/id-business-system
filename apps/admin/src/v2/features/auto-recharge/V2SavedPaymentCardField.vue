@@ -1,5 +1,5 @@
 <template>
-  <el-form-item label="已保存银行卡">
+  <el-form-item label="已保存银行卡" :aria-busy="detailLoading || undefined">
     <el-select
       :model-value="value"
       clearable
@@ -15,6 +15,7 @@
         :label="`${card.label} · 尾号 ${card.last4} · ${card.currencyCode}`"
       />
     </el-select>
+    <p v-if="detailLoading" class="recharge-note" role="status">正在读取银行卡资料，请稍候。</p>
     <p v-if="error" class="recharge-error" role="alert">
       {{ getApiErrorMessage(error) }}
       <el-button link type="primary" @click="$emit('retry')">重试</el-button>
@@ -30,6 +31,7 @@ defineProps<{
   value: string;
   cards: BankRechargeCard[];
   loading: boolean;
+  detailLoading?: boolean;
   error: unknown;
 }>();
 defineEmits<{ select: [id: string]; retry: [] }>();

@@ -17,7 +17,7 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(login.login_payment_write("POST", "https://chatgpt.com/backend-api/payments/checkout"))
 
     async def test_password_and_code_are_submitted_only_on_the_official_page(self):
-        page = MagicMock(url="https://chatgpt.com/auth/login")
+        page = MagicMock(url="https://auth.openai.com/u/mfa-otp-challenge")
         page.goto = AsyncMock()
         email_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
         password_field = MagicMock(fill=AsyncMock(), press=AsyncMock())

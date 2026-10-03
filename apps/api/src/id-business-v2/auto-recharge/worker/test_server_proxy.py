@@ -35,6 +35,39 @@ class ServerProxyTests(unittest.TestCase):
                     'mode': 'static', 'type': 'http', 'host': 'localhost', 'port': 8080
                 })
 
+    def test_extracted_url_decodes_userinfo_once_and_preserves_literal_plus(self):
+        with patch.object(server_proxy, 'public_host', side_effect=lambda host: host):
+            for scheme in ('http', 'https', 'socks5'):
+                with self.subTest(scheme=scheme):
+                    result = server_proxy.parse_extracted(
+                        f'{scheme}://synthetic%40zone:synthetic%3Apass+%2540@proxy.example:8080',
+                        scheme)
+                    self.assertEqual(result['username'], 'synthetic@zone')
+                    self.assertEqual(result['password'], 'synthetic:pass+%40')
+            result = server_proxy.parse_extracted(
+                'synthetic%40zone:synthetic%3Apass@proxy.example:8080', 'http')
+            self.assertEqual(result['username'], 'synthetic@zone')
+            self.assertEqual(result['password'], 'synthetic:pass')
+
+    def test_extracted_url_rejects_decoded_controls_and_invalid_utf8(self):
+        with patch.object(server_proxy, 'public_host', side_effect=lambda host: host):
+            for userinfo in ('synthetic%0A:pass', 'synthetic:pass%00', 'synthetic:%C3%28',
+                             'synthetic:%G0', 'synthetic:pass%'):
+                with self.subTest(userinfo=userinfo):
+                    with self.assertRaises(Stop) as stopped:
+                        server_proxy.parse_extracted(f'http://{userinfo}@proxy.example:8080', 'http')
+                    self.assertEqual(stopped.exception.report['reason'], 'server_proxy_invalid')
+
+    def test_non_url_proxy_credentials_are_not_percent_decoded(self):
+        with patch.object(server_proxy, 'public_host', side_effect=lambda host: host):
+            for raw in ('proxy.example:8080:synthetic%40zone:pass%3Avalue',
+                        '{"host":"proxy.example","port":8080,"username":"synthetic%40zone",'
+                        '"password":"pass%3Avalue"}'):
+                with self.subTest(raw=raw):
+                    result = server_proxy.parse_extracted(raw, 'http')
+                    self.assertEqual(result['username'], 'synthetic%40zone')
+                    self.assertEqual(result['password'], 'pass%3Avalue')
+
     def test_server_quote_must_fit_explicit_authorization(self):
         job = server.Job('11111111-1111-4111-8111-111111111111', {
             'action': 'server', 'plan': 'plus', 'safety': {

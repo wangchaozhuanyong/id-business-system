@@ -22,6 +22,8 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
 import { hash, object, uuidPattern } from './recharge-validation';
+import { rechargeUpgradeRecheckBinding } from './recharge-upgrade-protocol';
+import { recoverRechargePaymentResult } from './recharge-payment-facts';
 import {
   validateRechargeBitBrowserOpenStart,
   validateRechargeBitBrowserRecheckStart,
@@ -290,7 +292,14 @@ export class RechargeLocalService {
           throw new ConflictException('已有一笔充值任务执行中');
         }
         const source = await this.repository.findJob(tx, input.sourceJobId);
-        const sourceResult = source ? object(source.result) : {};
+        const sourceResult = source?.accountKey
+          ? recoverRechargePaymentResult(
+              source,
+              await this.repository.records(tx, source.accountKey)
+            )
+          : source
+            ? object(source.result)
+            : {};
         const paymentAttempted =
           sourceResult.payment_attempted === true ||
           Number(sourceResult.payment_requests_sent) === 1 ||
@@ -309,6 +318,9 @@ export class RechargeLocalService {
         ) {
           throw new ConflictException('该记录不能只读复查原订单');
         }
+        const upgrade = rechargeUpgradeRecheckBinding(sourceResult, source.plan);
+        if (sourceResult.operation === 'subscription_upgrade' && !upgrade)
+          throw new ConflictException('原升级操作绑定不完整，不能复查');
         const created = await this.repository.createJob(tx, {
           id: input.id,
           ownerId: operator.id,
@@ -325,6 +337,7 @@ export class RechargeLocalService {
             window_name: input.windowName,
             recheck_only: true,
             source_job_id: source.id,
+            ...(upgrade ?? {}),
             payment_attempted: true,
             payment_status: 'unknown',
             payment_requests_sent: 0
@@ -344,7 +357,10 @@ export class RechargeLocalService {
           },
           remark: '使用本机比特浏览器只读复查原订单'
         });
-        return created;
+        return {
+          ...created,
+          upgradeIdentifier: upgrade ? String(sourceResult.upgrade_identifier) : undefined
+        };
       },
       { changedScopes: ['auto-recharge'], requestId: input.id, operator, retryMode: 'none' }
     );
@@ -352,6 +368,7 @@ export class RechargeLocalService {
     return {
       id: job.id,
       mode: 'recheck' as const,
+      ...(job.upgradeIdentifier ? { upgradeIdentifier: job.upgradeIdentifier } : {}),
       connectorUrl: runtime.connectorUrl,
       connectorToken: runtime.connectorToken,
       agentToken,

@@ -35,8 +35,8 @@ describe('ChatGPT 套餐目录与付款支持范围', () => {
       'ChatGPT Pro（最高使用额度）'
     ]);
     expect(rechargePlanOptions.find((item) => item.value === 'go')).toMatchObject({
-      disabled: true,
-      note: '暂未接入自动充值'
+      disabled: false,
+      note: ''
     });
     for (const item of rechargePlanOptions) {
       expect(`${item.label} ${item.note}`).not.toMatch(/美元|\d+\s*[×x]/);

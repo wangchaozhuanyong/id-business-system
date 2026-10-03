@@ -47,6 +47,7 @@ export interface V2RegistrationJob {
   emailMasked: string;
   displayName: string;
   state: V2RegistrationState;
+  registrationAge?: number | null;
   step: V2RegistrationStep;
   registered: boolean;
   passwordVerified: boolean;
@@ -73,6 +74,14 @@ export interface V2RegistrationPage<T> {
   pageSize: number;
 }
 
+export type V2RegistrationMailboxStatusFilter = 'all' | 'unregistered' | 'registered';
+export type V2RegistrationMailboxStartBlockedReason =
+  | 'registered'
+  | 'mailbox_disabled'
+  | 'authorization_invalid'
+  | 'primary_unavailable'
+  | 'unfinished_task';
+
 export interface V2RegistrationMailbox {
   id: string;
   email: string;
@@ -80,6 +89,10 @@ export interface V2RegistrationMailbox {
   status: 'ACTIVE' | 'DISABLED';
   registered: boolean;
   accountId: string | null;
+  accountUpdatedAt: string | null;
+  canStart: boolean;
+  startBlockedReason: V2RegistrationMailboxStartBlockedReason | null;
+  pendingJobId: string | null;
   note: string | null;
   updatedAt: string;
 }

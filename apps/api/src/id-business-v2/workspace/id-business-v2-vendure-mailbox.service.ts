@@ -31,6 +31,11 @@ import type {
 import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
 import { ensureVendureAccountAliases } from './id-business-v2-vendure-account-import';
 import { registrationMail } from './registration-mail';
+import {
+  assertRegistrationMailboxEmail,
+  registrationMailboxAuthorizationValid,
+  summarizeRegistrationMailboxes
+} from './registration-mailbox-summaries';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIMARY_STATUSES = new Set(['ACTIVE', 'DISABLED', 'AUTH_ERROR', 'SYNCING']);
@@ -65,12 +70,7 @@ export class IdBusinessV2VendureMailboxService {
     this.requireAdmin(operator);
     const aliases = await this.client.virtualEmails();
     const alias = aliases.find((item) => item.id === aliasId);
-    if (
-      !alias ||
-      alias.status !== 'ACTIVE' ||
-      !alias.buyerQueryCode ||
-      (alias.codeExpiresAt && Date.parse(alias.codeExpiresAt) <= Date.now())
-    )
+    if (!alias || alias.status !== 'ACTIVE' || !registrationMailboxAuthorizationValid(alias))
       throw new ConflictException('所选邮箱未启用或查询授权已失效');
     const primary = (await this.client.primaryAccounts()).find(
       (item) => item.id === alias.primaryAccountId
@@ -88,13 +88,24 @@ export class IdBusinessV2VendureMailboxService {
     return { email: this.email(alias.aliasEmail), updatedAt: alias.updatedAt };
   }
 
+  async registrationMailboxSummaries(operator: AuthenticatedUser) {
+    this.requireAdmin(operator);
+    const [aliases, primaries] = await Promise.all([
+      this.client.virtualEmails(),
+      this.client.primaryAccounts()
+    ]);
+    return summarizeRegistrationMailboxes(aliases, primaries);
+  }
+
   async registrationCode(
     aliasId: string,
     since: Date,
     previousId: string | null,
-    operator: AuthenticatedUser
+    operator: AuthenticatedUser,
+    expectedEmail?: string
   ) {
     const mailbox = await this.registrationMailbox(aliasId, operator);
+    assertRegistrationMailboxEmail(mailbox.email, expectedEmail);
     const result = await this.client.publicQuery(mailbox.queryCode);
     if (!result.success) throw new ServiceUnavailableException('邮件查询暂时不可用，请重试');
     return registrationMail(result.items, mailbox.email, since, previousId);

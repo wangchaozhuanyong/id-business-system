@@ -2557,6 +2557,7 @@ model IdBusinessV2ChatgptAccount {
   emailEncrypted      String                           @map("email_encrypted") @db.Text
   emailHash           String                           @unique @map("email_hash") @db.Char(64)
   emailMasked         String                           @map("email_masked") @db.VarChar(255)
+  registered          Boolean                          @default(true)
   registrationCountryCode String?                      @map("registration_country_code") @db.Char(2)
   officialAccountKey  String?                          @unique @map("official_account_key") @db.Char(64)
   passwordEncrypted   String?                          @map("password_encrypted") @db.Text
@@ -2638,6 +2639,7 @@ model IdBusinessV2RegistrationJob {
   emailHash            String                        @map("email_hash") @db.Char(64)
   emailMasked          String                        @map("email_masked") @db.VarChar(255)
   birthDateEncrypted   String                        @map("birth_date_encrypted") @db.Text
+  registrationAge      Int?                          @map("registration_age")
   passwordEncrypted    String                        @map("password_encrypted") @db.Text
   pendingTotpEncrypted String?                       @map("pending_totp_encrypted") @db.Text
   nonceHash            String?                       @map("nonce_hash") @db.Char(64)

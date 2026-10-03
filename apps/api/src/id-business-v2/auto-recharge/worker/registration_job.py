@@ -9,7 +9,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 import bitbrowser_options
 from checkout_core import Stop, unique_object
-from registration_security import validate_birthdate, verification_link, totp_key
+from registration_security import validate_birthdate, verification_link, totp_key, registration_age
 
 JOB_ID = re.compile(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}')
 STEPS = 'queued email email_code profile registered password password_verified mfa mfa_verified offer completed'.split()
@@ -26,7 +26,8 @@ class RegistrationJob:
                    'password', 'displayName', 'birthDate', 'totpSecret', 'browserProfileId',
                    'registered', 'passwordVerified', 'mfaVerified', 'step',
                    'proxy' if builtin else 'bitBrowser'}
-        if not isinstance(payload, dict) or set(payload) != allowed or payload.get('mode') != 'registration':
+        if (not isinstance(payload, dict) or set(payload) - {'registrationAge'} != allowed
+                or payload.get('mode') != 'registration'):
             raise Stop('invalid_registration_payload')
         parsed = urlsplit(payload['callbackUrl'])
         callback_origin = f'{parsed.scheme}://{parsed.netloc}'
@@ -46,6 +47,8 @@ class RegistrationJob:
                 or not isinstance(payload['windowName'], str) or len(payload['windowName']) > 100):
             raise Stop('invalid_registration_payload')
         validate_birthdate(payload['birthDate'])
+        if 'registrationAge' in payload:
+            registration_age(payload['registrationAge'], payload['birthDate'])
         if payload['totpSecret']:
             totp_key(payload['totpSecret'])
         if builtin:

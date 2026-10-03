@@ -24,6 +24,7 @@ import { useRechargeServerProxySettings } from './useRechargeServerProxySettings
 import { useRechargeNameMatch } from './useRechargeNameMatch';
 import { useRechargeTotp } from './useRechargeTotp';
 import { bankRechargeApi } from './bank-recharge-api';
+import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
@@ -126,6 +127,7 @@ export function useAutoRecharge() {
   const execution = useV2SessionDraft('auto-recharge-execution', () => ({
     currentId: ref(''),
     paymentJobId: ref(''),
+    settledJobId: '',
     completePaymentSave: null as (() => boolean) | null,
     totpRevision: 0
   }));
@@ -186,11 +188,13 @@ export function useAutoRecharge() {
   const busy = ref(false);
   const error = ref('');
   const importing = ref(false);
+  const paymentCardLoading = ref(false);
   const connectorStatus = ref<ConnectorStatus>('unknown');
   const connectorMessage = ref('尚未检测本机连接器');
   const localAccess = ref<{ connectorUrl: string; connectorToken: string } | null>(null);
   let disposed = false;
   let importGeneration = 0;
+  let paymentCardGeneration = 0;
 
   const query = useV2ModuleQuery<{ items: V2RechargeJob[]; configured: boolean }>({
     moduleKey: 'auto-recharge',
@@ -199,7 +203,12 @@ export function useAutoRecharge() {
     keepPreviousData: true,
     getRevalidateAt: (result) =>
       result.items.some(requiresPolling) ||
-      Boolean(currentId.value && !result.items.some((job) => job.id === currentId.value))
+      Boolean(paymentJobId.value && !result.items.some((job) => job.id === paymentJobId.value)) ||
+      Boolean(
+        currentId.value &&
+        currentId.value !== execution.settledJobId &&
+        !result.items.some((job) => job.id === currentId.value)
+      )
         ? Date.now() + 2000
         : null,
     query: ({ signal }) => rechargeApi.list({ signal })
@@ -216,8 +225,7 @@ export function useAutoRecharge() {
     moduleKey: 'chatgpt-accounts',
     scope: 'auto-recharge',
     key: 'auto-recharge-bank-accounts',
-    query: ({ signal }) =>
-      bankRechargeApi.listAccounts({ signal }, { subscriptionState: 'never_subscribed' })
+    query: ({ signal }) => bankRechargeApi.listAccounts({ signal }, { subscriptionState: 'all' })
   });
   const bankCurrenciesQuery = useV2ModuleQuery({
     moduleKey: 'bank-recharge-orders',
@@ -300,8 +308,8 @@ export function useAutoRecharge() {
       )
   );
   const savedBankAccounts = computed(() =>
-    (bankAccountsQuery.data.value?.items ?? []).filter(
-      (item) => item.status === 'active' && item.subscriptionState === 'never_subscribed'
+    (bankAccountsQuery.data.value?.items ?? []).filter((item) =>
+      canSelectRechargeAccount(item, plan.value)
     )
   );
   const savedPaymentCards = computed(() =>
@@ -372,14 +380,24 @@ export function useAutoRecharge() {
   );
 
   async function selectSavedCard(id: string) {
+    if (disposed || busy.value || active.value) return;
+    const generation = ++paymentCardGeneration;
     selectedPaymentCardId.value = id;
+    paymentCardLoading.value = Boolean(id);
     if (!id) return;
+    details.value.cvc = '';
     const addressRevision = manualAddressSelectionRevision.value;
     error.value = '';
     try {
       const card = await bankRechargeApi.managedCardDetail(id);
-      if (selectedPaymentCardId.value !== id || disposed) return;
+      if (generation !== paymentCardGeneration || selectedPaymentCardId.value !== id || disposed)
+        return;
+      if (busy.value || active.value) {
+        selectedPaymentCardId.value = '';
+        return;
+      }
       if (
+        card.id !== id ||
         card.status !== 'active' ||
         card.currencyCode !== lockedCurrency.value ||
         !card.number ||
@@ -391,6 +409,8 @@ export function useAutoRecharge() {
       details.value.expiry = card.expiry;
       details.value.cvc = '';
       if (card.billingName) details.value.name = card.billingName;
+      // 卡号监听会清除旧选择；完整资料写入后再登记本次卡号对应的编号。
+      selectedPaymentCardId.value = id;
       selectedCardBillingAddressId.value = card.billingAddressId ?? '';
       if (card.billingAddressId && manualAddressSelectionRevision.value === addressRevision) {
         addressSource.value = 'library';
@@ -401,10 +421,12 @@ export function useAutoRecharge() {
           : '';
       }
     } catch (cause) {
-      if (selectedPaymentCardId.value === id) {
+      if (!disposed && generation === paymentCardGeneration && selectedPaymentCardId.value === id) {
         selectedPaymentCardId.value = '';
         error.value = getApiErrorMessage(cause);
       }
+    } finally {
+      if (generation === paymentCardGeneration) paymentCardLoading.value = false;
     }
   }
   watch(selectedPaymentCardId, () => (selectedCardBillingAddressId.value = ''), { flush: 'sync' });
@@ -483,6 +505,7 @@ export function useAutoRecharge() {
     () =>
       busy.value ||
       active.value ||
+      paymentCardLoading.value ||
       Boolean(paymentJobId.value && !jobs.value.some((job) => job.id === paymentJobId.value))
   );
   const paymentRetryBlocked = computed(() => {
@@ -492,7 +515,8 @@ export function useAutoRecharge() {
       job.result.mode !== 'open_browser' &&
       (job.state === 'unknown' ||
         ((job.result.payment_attempted === true ||
-          Number(job.result.payment_requests_sent ?? 0) > 0) &&
+          Number(job.result.payment_requests_sent ?? 0) > 0 ||
+          Number(job.result.confirmation_requests_sent ?? 0) > 0) &&
           job.result.status !== 'subscription_activated' &&
           job.result.payment_status !== 'declined' &&
           job.result.operator_resolution !== 'confirmed_no_bank_request'))
@@ -500,7 +524,7 @@ export function useAutoRecharge() {
   });
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
-      ? Boolean(sessionJson.value)
+      ? Boolean(sessionJson.value && !importing.value && !jsonError.value)
       : loginMethod.value === 'saved'
         ? Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
         : emailPattern.test(loginEmail.value.trim()) &&
@@ -570,8 +594,10 @@ export function useAutoRecharge() {
     return Boolean(
       ['bitbrowser', 'server'].includes(job.action) &&
       ['finished', 'unknown'].includes(job.state) &&
-      (job.result.payment_attempted === true ||
-        Number(job.result.payment_requests_sent ?? 0) === 1) &&
+      (job.action === 'server'
+        ? Number(job.result.payment_requests_sent ?? 0) === 1
+        : job.result.payment_attempted === true ||
+          Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
       job.result.payment_status !== 'declined' &&
       job.result.operator_resolution !== 'confirmed_no_bank_request' &&
@@ -778,6 +804,28 @@ export function useAutoRecharge() {
     () => [paymentJobId.value, jobs.value.find((job) => job.id === paymentJobId.value)],
     async () => {
       const paymentJob = jobs.value.find((job) => job.id === paymentJobId.value);
+      if (paymentJob?.state === 'finished') {
+        const result = paymentJob.result;
+        const definitelyNotAttempted =
+          (result.payment_attempted === false || result.payment_requests_sent === 0) &&
+          result.payment_attempted !== true &&
+          Number(result.payment_requests_sent ?? 0) === 0 &&
+          Number(result.confirmation_requests_sent ?? 0) === 0 &&
+          !result.payment_evidence &&
+          result.payment_status !== 'paid' &&
+          !['paid_pending_activation', 'subscription_activated'].includes(result.status ?? '');
+        if (
+          definitelyNotAttempted ||
+          result.payment_status === 'declined' ||
+          result.operator_resolution === 'confirmed_no_bank_request'
+        ) {
+          // 已确认结束只释放回执追踪；失败资料和未知付款保护仍由各自状态管理。
+          execution.settledJobId = paymentJob.id;
+          execution.completePaymentSave = null;
+          paymentJobId.value = '';
+          return;
+        }
+      }
       if (
         paymentJob?.state !== 'finished' ||
         paymentJob.result.status !== 'subscription_activated' ||
@@ -802,6 +850,7 @@ export function useAutoRecharge() {
         formDraft.open('new', { ...formDraft.form });
       }
       execution.completePaymentSave = null;
+      execution.settledJobId = paymentJob.id;
       paymentJobId.value = '';
       await addressQuery.refresh();
     },
@@ -837,7 +886,10 @@ export function useAutoRecharge() {
 
   function acceptSession(reportInvalid = true) {
     importGeneration++;
+    importing.value = false;
     if (formLocked.value) return;
+    sessionJson.value = '';
+    details.value.email = '';
     if (!jsonInput.value.trim()) {
       if (reportInvalid) jsonError.value = '请粘贴完整的单账户授权 JSON';
       return;
@@ -866,6 +918,8 @@ export function useAutoRecharge() {
 
   function updateJsonInput(value: string) {
     if (formLocked.value) return;
+    importGeneration++;
+    importing.value = false;
     jsonInput.value = value;
     sessionJson.value = '';
     details.value.email = '';
@@ -881,6 +935,10 @@ export function useAutoRecharge() {
     const file = input.files?.[0];
     const generation = ++importGeneration;
     if (!file || formLocked.value) return;
+    jsonInput.value = '';
+    sessionJson.value = '';
+    details.value.email = '';
+    jsonError.value = '';
     importing.value = true;
     try {
       if (file.size > 65_000) throw new Error();
@@ -890,9 +948,10 @@ export function useAutoRecharge() {
         acceptSession();
       }
     } catch {
-      if (!disposed) jsonError.value = '文件读取失败，请选择不超过 65 KB 的 JSON 或文本文件';
+      if (!disposed && generation === importGeneration)
+        jsonError.value = '文件读取失败，请选择不超过 65 KB 的 JSON 或文本文件';
     } finally {
-      importing.value = false;
+      if (generation === importGeneration) importing.value = false;
       input.value = '';
     }
   }
@@ -1165,6 +1224,7 @@ export function useAutoRecharge() {
         id,
         mode: launch.mode,
         plan: source.plan,
+        ...(launch.upgradeIdentifier ? { upgradeIdentifier: launch.upgradeIdentifier } : {}),
         windowName: windowName.value.trim(),
         ...(await localCredential()),
         bitBrowser: launch.bitBrowser,
@@ -1432,6 +1492,7 @@ export function useAutoRecharge() {
   onScopeDispose(() => {
     disposed = true;
     importGeneration++;
+    paymentCardGeneration++;
     loginCode.value = '';
     authorizeSinglePayment.value = false;
     details.value.cvc = '';
@@ -1461,6 +1522,7 @@ export function useAutoRecharge() {
     bankAccountsQuery,
     savedPaymentCards,
     paymentCardsQuery,
+    paymentCardLoading,
     selectSavedCard,
     nameMatch,
     bankCurrenciesQuery,

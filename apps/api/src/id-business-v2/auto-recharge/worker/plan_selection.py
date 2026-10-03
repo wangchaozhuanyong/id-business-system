@@ -14,9 +14,12 @@ PRICING_URL = "https://chatgpt.com/pricing"
 UPGRADE = re.compile(r"^\s*(?:Upgrade|Upgrade plan|升级|升级套餐)\s*$", re.I)
 PERSONAL = re.compile(r"^(?:Toggle for switching to Personal plans|切换以改为个人套餐|改为个人套餐|Personal|个人)$", re.I)
 PLUS = re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)\s*$", re.I)
+GO = re.compile(r"^\s*(?:Get Go|Try Go|Upgrade to Go|Get ChatGPT Go|获取\s*Go|试用\s*Go|升级至\s*Go|升级到\s*Go|订阅\s*Go|获得\s*Go)\s*$", re.I)
 PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro(?:\s*版本)?)\s*$", re.I)
+PRO_UPGRADE = re.compile(r"^\s*(?:Upgrade to Pro|升级至\s*Pro|升级到\s*Pro)\s*$", re.I)
 PLAN_HEADINGS = re.compile(r"^\s*(?:Free|Go|Plus|Pro)\s*$", re.I)
 PLUS_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Plus\s*$", re.I)
+GO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Go\s*$", re.I)
 PRO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Pro\s*$", re.I)
 STEPS = {'open_menu', 'pricing_page', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'}
 ERROR_TYPES = {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}
@@ -40,7 +43,7 @@ def safe_diagnostics(value):
             result[key] = value[key]
     plans = value.get('available_plans')
     if isinstance(plans, list):
-        result['available_plans'] = [p for p in ('plus', *PRO_PRICE_PLANS.values()) if p in plans]
+        result['available_plans'] = [p for p in ('go', 'plus', *PRO_PRICE_PLANS.values()) if p in plans]
     return result
 
 
@@ -118,6 +121,8 @@ class Selection:
 
     async def observe(self, scope):
         plans = []
+        if await buttons(scope, GO).count():
+            plans.append('go')
         if await buttons(scope, PLUS).count():
             plans.append('plus')
         if await buttons(scope, PRO).count():
@@ -128,13 +133,13 @@ class Selection:
 
     async def wait_for_plan_scope(self):
         """先在整页等待异步弹窗控件出现，再重新确定唯一套餐区域。"""
-        cue = personal_control(self.page).or_(buttons(self.page, PLUS)).or_(buttons(self.page, PRO))
+        cue = personal_control(self.page).or_(buttons(self.page, GO)).or_(buttons(self.page, PLUS)).or_(buttons(self.page, PRO))
         try:
             await cue.first.wait_for(state='visible', timeout=self.timeout())
         except Exception:
             raise Stop('official_plan_menu_timeout') from None
         scope = await plan_scope(self.page)
-        scoped_cue = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
+        scoped_cue = personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
         if not await scoped_cue.count():
             raise Stop('official_plan_menu_timeout')
         return scope
@@ -165,7 +170,7 @@ class Selection:
         await self.page.goto(PRICING_URL, wait_until='domcontentloaded', timeout=self.timeout())
         pro = selection_spec(target_plan)['price_usd'] is not None
         heading = self.page.get_by_role(
-            'heading', name=PRO_HEADING if pro else PLUS_HEADING
+            'heading', name=GO_HEADING if target_plan == 'go' else PRO_HEADING if pro else PLUS_HEADING
         ).filter(visible=True)
         try:
             await expect(heading).to_have_count(1, timeout=self.timeout())
@@ -181,7 +186,7 @@ class Selection:
         for _ in range(8):
             card = card.locator('..')
             card_headings = card.get_by_role('heading', name=PLAN_HEADINGS).filter(visible=True)
-            candidate = card.get_by_role('link', name=PRO if pro else PLUS).filter(visible=True)
+            candidate = card.get_by_role('link', name=GO if target_plan == 'go' else PRO if pro else PLUS).filter(visible=True)
             if await card_headings.count() == 1 and await candidate.count():
                 action = candidate
                 break
@@ -198,7 +203,7 @@ class Selection:
     async def open_menu(self, target_plan):
         self.step('open_menu')
         scope = await plan_scope(self.page)
-        visible_options = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
+        visible_options = personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
         if not await visible_options.count():
             upgrade = buttons(self.page, UPGRADE)
             # 官网首页同时存在顶部和侧栏 Upgrade；两者均只打开菜单。
@@ -232,7 +237,7 @@ class Selection:
                 await expect(personal).to_have_attribute('aria-selected', 'true', timeout=self.timeout())
         return await plan_scope(self.page)
 
-    async def run(self, target_plan):
+    async def run(self, target_plan, require_upgrade=False):
         scope = await self.open_menu(target_plan)
         await self.observe(scope)
         pro = selection_spec(target_plan)['price_usd'] is not None
@@ -245,18 +250,18 @@ class Selection:
             await expect(choice).to_have_attribute('aria-checked', 'true', timeout=self.timeout())
             self.diagnostics['selected'] = True
         self.step('choose_plan')
-        button = buttons(scope, PRO if pro else PLUS)
+        button = buttons(scope, PRO_UPGRADE if require_upgrade else GO if target_plan == 'go' else PRO if pro else PLUS)
         await self.ready(button, 'official_plan_option_not_found')
         await self.observe(scope)
         self.report('plan_selection', diagnostics=safe_diagnostics(self.diagnostics))
         return button
 
 
-async def select_plan(page, target_plan, report):
+async def select_plan(page, target_plan, report, *, require_upgrade=False):
     selection_spec(target_plan)
     selection = Selection(page, report)
     try:
-        return await asyncio.wait_for(selection.run(target_plan), SELECTION_SECONDS)
+        return await asyncio.wait_for(selection.run(target_plan, require_upgrade), SELECTION_SECONDS)
     except Stop as exc:
         try:
             if re.search(r'Just a moment|Verify.*human|安全验证|请稍候', await page.title(), re.I):
@@ -278,10 +283,10 @@ async def select_plan(page, target_plan, report):
         raise Stop(reason, stage='plan_selection', diagnostics=safe_diagnostics(selection.diagnostics)) from None
 
 
-async def verify_selected_plan(page, target_plan):
+async def verify_selected_plan(page, target_plan, *, require_upgrade=False):
     scope = await plan_scope(page)
     pro = selection_spec(target_plan)['price_usd'] is not None
-    button = buttons(scope, PRO if pro else PLUS)
+    button = buttons(scope, PRO_UPGRADE if require_upgrade else GO if target_plan == 'go' else PRO if pro else PLUS)
     if await button.count() != 1 or not await button.is_enabled():
         raise Stop('selected_plan_changed', stage='plan_selection')
     if pro:
