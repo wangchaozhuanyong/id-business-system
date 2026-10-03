@@ -111,6 +111,22 @@ test('release workflow diagnostics retain control checks and do not hide applica
     'admin'
   );
 });
+test('fixed mailbox diagnostics run controls without selecting business or database suites', () => {
+  const paths = [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/mailbox-diagnostic.mjs',
+    'scripts/production-release/mailbox-diagnostic.test.mjs',
+    'scripts/production-release/mailbox-diagnostic.py',
+    'scripts/production-release/mailbox-diagnostic.test.py'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(isCiOnly(['scripts/production-release/mailbox-diagnostic-arbitrary.mjs']), false);
+  assert.notEqual(
+    checkMode([...paths, 'apps/api/src/auth/auth.service.ts'], schema, schema),
+    'ci-only'
+  );
+});
 test('every scoped V2 frontend route runs the same UI, skin, loading and draft guards', () => {
   const required = [
     'check:admin-ui',
