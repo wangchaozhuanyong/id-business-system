@@ -1,5 +1,8 @@
 """Virtual-clock and isolated client fixtures; no real profiles or payment requests."""
 import asyncio
+import json
+import shutil
+import subprocess
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +27,43 @@ class Clock:
 
 
 class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Repository Node.js runtime is required')
+    async def test_browser_read_supports_noniterable_headers_and_preserves_error_evidence(self):
+        runner = '''
+            let raw='';process.stdin.on('data',chunk=>raw+=chunk);process.stdin.on('end',async()=>{
+                const input=JSON.parse(raw);
+                global.fetch=async()=>({status:input.status,text:async()=>input.body,
+                    headers:{get:name=>input.headers[name]??null,
+                             entries:()=>{throw new TypeError('Headers iterator is not iterable');}}});
+                const result=await eval('('+input.source+')')(input.args);
+                process.stdout.write(JSON.stringify(result));
+            });
+        '''
+        for status in (200, 400, 403):
+            async def evaluate(source, args):
+                completed = subprocess.run(
+                    [shutil.which('node'), '-e', runner],
+                    input=json.dumps({'source': source, 'args': args, 'status': status,
+                                      'body': '{"ok":true}' if status == 200 else '{"error":{"code":"fixture_error"}}',
+                                      'headers': {'cf-mitigated': 'challenge' if status == 403 else None,
+                                                  'x-request-id': 'fixture-request-id', 'cf-ray': 'fixture-ray-id'}}),
+                    text=True, capture_output=True, timeout=5, check=True)
+                return json.loads(completed.stdout)
+            page = SimpleNamespace(url='https://chatgpt.com/', evaluate=evaluate)
+            with self.subTest(status=status):
+                if status == 200:
+                    self.assertEqual(await browser_checkout.browser_read(
+                        page, '/api/auth/session', budget=SessionBudget(60)), {'ok': True})
+                else:
+                    with self.assertRaises(Stop) as stopped:
+                        await browser_checkout.browser_read(page, '/api/auth/session', budget=SessionBudget(60))
+                    report = stopped.exception.report
+                    self.assertEqual(report['reason'], 'verification_required' if status == 403 else 'http_error')
+                    self.assertEqual(report['http_status'], status)
+                    self.assertEqual(report['x_request_id'], 'fixture-request-id')
+                    self.assertEqual(report['cf_ray'], 'fixture-ray-id')
+                    self.assertEqual(report['challenge_observed'], status == 403)
+
     async def test_exit_observation_does_not_swallow_cancellation(self):
         page = MagicMock(evaluate=AsyncMock())
         budget = SessionBudget(60, cancelled=lambda: True)

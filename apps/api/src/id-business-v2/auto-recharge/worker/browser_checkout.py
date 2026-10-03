@@ -547,7 +547,12 @@ async def browser_read(page, path, credential=None, budget=None):
             const r = await fetch(path, {headers, credentials: 'include', cache: 'no-store',
                                         redirect: 'error', signal: control.signal});
             const text = await r.text();
-            return {status: r.status, headers: Object.fromEntries(r.headers.entries()),
+            // 指纹内核的 Headers 迭代器可能不可迭代，只读取错误核验实际使用的响应头。
+            return {status: r.status, headers: {
+                        'cf-mitigated': r.headers.get('cf-mitigated'),
+                        'x-request-id': r.headers.get('x-request-id'),
+                        'request-id': r.headers.get('request-id'),
+                        'cf-ray': r.headers.get('cf-ray')},
                     raw: text.length > limit ? null : text};
         } catch (error) {
             if (!boundedSession) throw error;
