@@ -46,6 +46,13 @@ if (part === 'guards') {
   if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
     run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
   if (
+    changed.includes('.github/workflows/production-release.yml') ||
+    changed.some((path) => path.startsWith('scripts/production-release/mailbox-diagnostic'))
+  ) {
+    run('node', ['--test', 'scripts/production-release/mailbox-diagnostic.test.mjs']);
+    run('python3', ['-B', 'scripts/production-release/mailbox-diagnostic.test.py']);
+  }
+  if (
     changed.includes(auditRetentionMigration) ||
     changed.includes('scripts/production-release/audit-retention-mysql.test.py')
   )

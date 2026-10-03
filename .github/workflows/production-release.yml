@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Verify access, clean reviewed cache, or publish the exact commit
+        description: Verify access or mailbox, clean reviewed cache, or publish the exact commit
         required: true
         default: verify_access
         type: choice
         options:
           - verify_access
+          - verify_mailbox
           - verify_cache
           - cleanup_cache
           - verify_unused_cache
@@ -376,6 +377,51 @@ jobs:
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
             > .deploy/production-release/readonly-diagnostics-result.json
           python3 -m json.tool .deploy/production-release/readonly-diagnostics-result.json
+
+      - name: Verify fixed read-only mailbox queries in the running API
+        if: inputs.operation == 'verify_mailbox'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shlex
+          expected = os.environ['EXPECTED_CURRENT']
+          if not re.fullmatch(r'[0-9a-f]{40}', expected):
+              raise SystemExit('Invalid exact production baseline')
+          node = Path('scripts/production-release/mailbox-diagnostic.mjs').read_text()
+          wrapper = Path('scripts/production-release/mailbox-diagnostic.py').read_text()
+          program = 'MAILBOX_PROGRAM = ' + repr(node) + '\n' + wrapper
+          command = 'python3 -c ' + shlex.quote(program) + ' --expected-current ' + shlex.quote(expected)
+          parameters = {'commands': [command], 'executionTimeout': ['120']}
+          Path('.deploy/production-release/mailbox-diagnostics.json').write_text(json.dumps(parameters))
+          PY
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/mailbox-diagnostics.json \
+            --query 'Command.CommandId' --output text)"
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
+            > .deploy/production-release/mailbox-diagnostics-result.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          namespace = {'__name__': 'mailbox_receipt_filter'}
+          exec(Path('scripts/production-release/mailbox-diagnostic.py').read_text(), namespace)
+          try:
+              path = Path('.deploy/production-release/mailbox-diagnostics-result.json')
+              namespace['require'](path.stat().st_size <= 4096, 'OUTPUT_LIMIT_EXCEEDED')
+              receipt = namespace['filter_runtime_receipt'](path.read_text())
+          except BaseException:
+              raise SystemExit('Mailbox receipt unavailable; raw output suppressed') from None
+          print(json.dumps(receipt, separators=(',', ':')))
+          if receipt.get('baselineVerified') is not True:
+              raise SystemExit('Mailbox production precondition failed')
+          PY
 
       - name: Deploy through the production instance
         if: inputs.operation == 'release'
