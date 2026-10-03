@@ -112,7 +112,8 @@ if (part === 'guards') {
       'test_registration',
       'test_registration_builtin',
       'test_fingerprint_runtime',
-      'test_password_login'
+      'test_password_login',
+      'test_go.GoStateTests'
     ],
     {
       cwd: 'apps/api/src/id-business-v2/auto-recharge/worker',

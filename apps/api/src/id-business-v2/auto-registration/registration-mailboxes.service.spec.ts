@@ -7,9 +7,18 @@ function fixture() {
     lock: vi.fn().mockResolvedValue(undefined),
     account: vi.fn().mockResolvedValue(null),
     activeEmail: vi.fn().mockResolvedValue(null),
-    createManualAccount: vi
-      .fn()
-      .mockResolvedValue({ id: 'account-1', emailMasked: 'hi***@example.invalid' })
+    setAccountRegistered: vi.fn().mockResolvedValue({
+      id: 'account-1',
+      emailMasked: 'hi***@example.invalid',
+      registered: false,
+      updatedAt: new Date('2026-10-03T08:00:00Z')
+    }),
+    createManualAccount: vi.fn().mockResolvedValue({
+      id: 'account-1',
+      emailMasked: 'hi***@example.invalid',
+      registered: true,
+      updatedAt: new Date('2026-10-02T12:00:00Z')
+    })
   };
   const mailboxes = {
     listAliases: vi.fn().mockResolvedValue({ items: [], total: 0 }),
@@ -65,7 +74,12 @@ describe('隐藏邮箱注册资料', () => {
     };
     mailboxes.listAliases.mockResolvedValue({ items: [row], total: 21 });
     repository.accountsByEmailHashes.mockResolvedValue([
-      { emailHash: 'hash:hidden@example.invalid', id: 'existing-account' }
+      {
+        emailHash: 'hash:hidden@example.invalid',
+        id: 'existing-account',
+        registered: true,
+        updatedAt: new Date(row.updatedAt)
+      }
     ]);
     const result = await service.list({ page: '2', pageSize: '20', keyword: 'hidden' }, operator);
     expect(mailboxes.listAliases).toHaveBeenCalledWith(
@@ -81,6 +95,7 @@ describe('隐藏邮箱注册资料', () => {
           status: 'DISABLED',
           registered: true,
           accountId: 'existing-account',
+          accountUpdatedAt: row.updatedAt.replace('Z', '.000Z'),
           note: '普通备注',
           updatedAt: row.updatedAt
         }
@@ -138,7 +153,9 @@ describe('隐藏邮箱注册资料', () => {
       emailMasked: 'hi***@example.invalid',
       status: 'disabled',
       passwordEncrypted: 'existing-encrypted',
-      remark: '原备注'
+      remark: '原备注',
+      registered: true,
+      updatedAt: new Date('2026-10-02T12:00:00Z')
     };
     repository.account.mockResolvedValue(existing);
     await expect(service.markRegistered('alias-1', version, operator)).resolves.toEqual({
@@ -189,5 +206,168 @@ describe('隐藏邮箱注册资料', () => {
     await expect(service.markRegistered('alias-1', version, operator)).resolves.toMatchObject({
       created: true
     });
+  });
+
+  it.each([false, true])(
+    '独立状态可切换为 %s，已有账号不重建、不修改登录资料',
+    async (registered) => {
+      const { service, repository, audit, operator, tx } = fixture();
+      const before = {
+        id: 'account-1',
+        emailMasked: 'hi***@example.invalid',
+        registered: !registered,
+        updatedAt: new Date(version.expectedUpdatedAt),
+        passwordEncrypted: 'original-encrypted',
+        totpSecretEncrypted: 'original-totp',
+        remark: '保留资料',
+        status: 'disabled'
+      };
+      repository.account.mockResolvedValue(before);
+      repository.setAccountRegistered.mockResolvedValue({
+        ...before,
+        registered,
+        updatedAt: new Date('2026-10-03T08:00:00Z')
+      });
+      await expect(
+        service.markRegistered(
+          'alias-1',
+          { ...version, registered, expectedAccountUpdatedAt: version.expectedUpdatedAt },
+          operator
+        )
+      ).resolves.toMatchObject({ accountId: before.id, created: false, registered });
+      expect(repository.setAccountRegistered).toHaveBeenCalledWith(
+        tx,
+        before.id,
+        before.updatedAt,
+        registered,
+        'operator-1'
+      );
+      expect(repository.createManualAccount).not.toHaveBeenCalled();
+      expect(before).toMatchObject({
+        passwordEncrypted: 'original-encrypted',
+        totpSecretEncrypted: 'original-totp',
+        remark: '保留资料',
+        status: 'disabled'
+      });
+      expect(audit.append).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({
+          beforeData: { registered: !registered },
+          afterData: expect.objectContaining({ registered, created: false }),
+          action: `id_business_v2.auto_registration.${registered ? 'mark_registered' : 'mark_unregistered'}`
+        })
+      );
+    }
+  );
+
+  it('读取保留账号的独立未注册状态，账号存在不会再强制已注册', async () => {
+    const { service, repository, mailboxes, operator } = fixture();
+    mailboxes.listAliases.mockResolvedValue({
+      items: [
+        {
+          id: 'alias-1',
+          aliasEmail: 'hidden@example.invalid',
+          primaryAccountEmail: null,
+          status: 'ACTIVE',
+          note: null,
+          updatedAt: version.expectedUpdatedAt
+        }
+      ],
+      total: 1
+    });
+    repository.accountsByEmailHashes.mockResolvedValue([
+      {
+        id: 'account-1',
+        emailHash: 'hash:hidden@example.invalid',
+        registered: false,
+        updatedAt: new Date(version.expectedUpdatedAt)
+      }
+    ]);
+    expect((await service.list({}, operator)).items[0]).toMatchObject({
+      registered: false,
+      accountId: 'account-1',
+      accountUpdatedAt: '2026-10-02T12:00:00.000Z'
+    });
+  });
+
+  it('注册状态必须明确为布尔值并携带有效账号版本', async () => {
+    const { service, transactions, operator } = fixture();
+    for (const extra of [
+      { registered: 'false', expectedAccountUpdatedAt: null },
+      { registered: false },
+      { registered: false, expectedAccountUpdatedAt: 'bad-date' },
+      { registered: false, expectedAccountUpdatedAt: 42 }
+    ])
+      await expect(
+        service.markRegistered('alias-1', { ...version, ...extra }, operator)
+      ).rejects.toThrow();
+    expect(transactions.execute).not.toHaveBeenCalled();
+  });
+
+  it('旧账号版本、账号刚创建以及旧客户端都不能覆盖人工修正', async () => {
+    const { service, repository, audit, operator } = fixture();
+    repository.account.mockResolvedValue({
+      id: 'account-1',
+      registered: false,
+      updatedAt: new Date('2026-10-03T08:00:00Z')
+    });
+    for (const expectedAccountUpdatedAt of [version.expectedUpdatedAt, null])
+      await expect(
+        service.markRegistered(
+          'alias-1',
+          { ...version, registered: true, expectedAccountUpdatedAt },
+          operator
+        )
+      ).rejects.toThrow('资料已变化');
+    await expect(service.markRegistered('alias-1', version, operator)).rejects.toThrow(
+      '状态已修改'
+    );
+    expect(repository.setAccountRegistered).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
+  it('同邮箱任务执行中不能改回未注册，原资料和审计均不写入', async () => {
+    const { service, repository, audit, operator } = fixture();
+    repository.account.mockResolvedValue({
+      id: 'account-1',
+      registered: true,
+      updatedAt: new Date(version.expectedUpdatedAt)
+    });
+    repository.activeEmail.mockResolvedValue({ id: 'active-job' });
+    await expect(
+      service.markRegistered(
+        'alias-1',
+        { ...version, registered: false, expectedAccountUpdatedAt: version.expectedUpdatedAt },
+        operator
+      )
+    ).rejects.toThrow('结束或取消');
+    expect(repository.setAccountRegistered).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
+  it('已是目标状态时幂等处理；未注册且无账号时不创建空账号', async () => {
+    const { service, repository, operator } = fixture();
+    await expect(
+      service.markRegistered(
+        'alias-1',
+        { ...version, registered: false, expectedAccountUpdatedAt: null },
+        operator
+      )
+    ).resolves.toMatchObject({ registered: false, created: false, accountId: null });
+    repository.account.mockResolvedValue({
+      id: 'account-1',
+      emailMasked: 'hi***@example.invalid',
+      registered: true,
+      updatedAt: new Date(version.expectedUpdatedAt)
+    });
+    await expect(
+      service.markRegistered(
+        'alias-1',
+        { ...version, registered: true, expectedAccountUpdatedAt: version.expectedUpdatedAt },
+        operator
+      )
+    ).resolves.toMatchObject({ registered: true, created: false, accountId: 'account-1' });
+    expect(repository.createManualAccount).not.toHaveBeenCalled();
+    expect(repository.setAccountRegistered).not.toHaveBeenCalled();
   });
 });

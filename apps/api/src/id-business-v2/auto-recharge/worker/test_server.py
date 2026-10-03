@@ -1112,7 +1112,7 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(callback.call_args.args[1]['fileKey'], records[-1]['fileKey'])
             with patch.object(server, 'callback', return_value={'records': records}):
                 job.restore_target(type('Target', (), {'account_id': account})())
-            self.assertEqual(len(job.revisions), 8)
+            self.assertEqual(len(job.revisions), len(server.PLANS) * 2)
             for record in records:
                 self.assertEqual(json.loads((job.root / record['fileKey']).read_text()), record['document'])
             for invalid in ('../' + path.name, 'payments/../' + path.name,

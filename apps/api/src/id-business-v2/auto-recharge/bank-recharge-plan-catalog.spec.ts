@@ -65,17 +65,17 @@ describe('手工套餐记录不扩大自动充值权限', () => {
       vi.useRealTimers();
     }
   });
-  it('500 美元档可进入本机执行器，仍要求单次授权、币种和真实上限', () => {
+  it.each(['go', 'pro-500'])('%s 可进入本机执行器，仍要求单次授权、币种和真实上限', (plan) => {
     const input = {
       id: accountId,
-      plan: 'pro-500',
+      plan,
       addressId: accountId,
       windowName: '500 档测试',
       lockedCurrency: 'MYR',
       maxAmount: '2200.00',
       authorizeSinglePayment: true
     };
-    expect(validateRechargeBitBrowserStart(input)).toMatchObject({ plan: 'pro-500' });
+    expect(validateRechargeBitBrowserStart(input)).toMatchObject({ plan });
     expect(() =>
       validateRechargeBitBrowserStart({ ...input, authorizeSinglePayment: false })
     ).toThrow();

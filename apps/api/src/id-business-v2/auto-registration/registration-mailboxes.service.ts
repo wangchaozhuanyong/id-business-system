@@ -32,16 +32,17 @@ export class RegistrationMailboxesService {
       (row) => this.encryption.hash(row.aliasEmail.trim().toLowerCase())!
     );
     const accounts = hashes.length ? await this.repository.accountsByEmailHashes(hashes) : [];
-    const accountIds = new Map(accounts.map((account) => [account.emailHash, account.id]));
+    const accountsByHash = new Map(accounts.map((account) => [account.emailHash, account]));
     const items: V2RegistrationMailbox[] = page.items.map((row, index) => {
-      const accountId = accountIds.get(hashes[index]!) ?? null;
+      const account = accountsByHash.get(hashes[index]!);
       return {
         id: row.id,
         email: row.aliasEmail,
         primaryEmail: row.primaryAccountEmail,
         status: row.status,
-        registered: Boolean(accountId),
-        accountId,
+        registered: account?.registered ?? false,
+        accountId: account?.id ?? null,
+        accountUpdatedAt: account?.updatedAt.toISOString() ?? null,
         note: row.note,
         updatedAt: row.updatedAt
       };
@@ -51,8 +52,28 @@ export class RegistrationMailboxesService {
 
   async markRegistered(aliasId: string, value: unknown, operator: AuthenticatedUser) {
     const input = record(value);
-    if (Object.keys(input).some((key) => key !== 'expectedUpdatedAt'))
+    if (
+      Object.keys(input).some(
+        (key) => !['expectedUpdatedAt', 'registered', 'expectedAccountUpdatedAt'].includes(key)
+      )
+    )
       throw new BadRequestException('注册标记包含未知字段');
+    const explicitStatus = Object.hasOwn(input, 'registered');
+    if (explicitStatus && typeof input.registered !== 'boolean')
+      throw new BadRequestException('注册状态必须为已注册或未注册');
+    const registered = explicitStatus ? (input.registered as boolean) : true;
+    let expectedAccountUpdatedAt: number | null = null;
+    if (explicitStatus) {
+      if (!Object.hasOwn(input, 'expectedAccountUpdatedAt'))
+        throw new BadRequestException('缺少账号资料版本，请刷新后重新确认');
+      if (input.expectedAccountUpdatedAt !== null) {
+        expectedAccountUpdatedAt = Date.parse(
+          text(input.expectedAccountUpdatedAt, '账号资料版本', 40)
+        );
+        if (!Number.isFinite(expectedAccountUpdatedAt))
+          throw new BadRequestException('账号资料版本无效');
+      }
+    }
     const expectedUpdatedAt = Date.parse(text(input.expectedUpdatedAt, '邮箱资料版本', 40));
     if (!Number.isFinite(expectedUpdatedAt)) throw new BadRequestException('邮箱资料版本无效');
     const { email, updatedAt } = await this.mailboxes.aliasAddress(aliasId, operator);
@@ -65,10 +86,17 @@ export class RegistrationMailboxesService {
       async (tx) => {
         await this.repository.lock(tx);
         let account = await this.repository.account(tx, emailHash);
-        const created = !account;
-        if (!account) {
+        const beforeRegistered = account?.registered ?? false;
+        if (explicitStatus && (account?.updatedAt.getTime() ?? null) !== expectedAccountUpdatedAt)
+          throw new ConflictException('账号资料已变化，请刷新后重新确认');
+        if (!explicitStatus && account && !account.registered)
+          throw new ConflictException('注册状态已修改，请刷新后使用新的标记操作');
+        const created = !account && registered;
+        if (beforeRegistered !== registered) {
           if (await this.repository.activeEmail(tx, emailHash))
-            throw new ConflictException('该邮箱有注册任务正在执行，请先结束或取消任务再标记');
+            throw new ConflictException('该邮箱有注册任务正在执行，请先结束或取消任务再修改状态');
+        }
+        if (created) {
           account = await this.repository.createManualAccount(tx, {
             emailHash,
             emailEncrypted: this.encryption.encrypt(email)!,
@@ -76,17 +104,39 @@ export class RegistrationMailboxesService {
             createdByUserId: operator.id,
             updatedByUserId: operator.id
           });
+        } else if (account && beforeRegistered !== registered) {
+          account = await this.repository.setAccountRegistered(
+            tx,
+            account.id,
+            account.updatedAt,
+            registered,
+            operator.id
+          );
         }
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
-          action: 'id_business_v2.auto_registration.mark_registered',
-          objectType: 'chatgpt_account',
-          objectId: account.id,
-          afterData: { emailMasked: account.emailMasked, created },
-          remark: '管理员确认已注册，加入 ChatGPT 账号'
+          action: `id_business_v2.auto_registration.${registered ? 'mark_registered' : 'mark_unregistered'}`,
+          objectType: account ? 'chatgpt_account' : 'registration_mailbox',
+          objectId: account?.id,
+          beforeData: { registered: beforeRegistered },
+          afterData: {
+            emailMasked: account?.emailMasked ?? `${local.slice(0, 2)}***@${domain}`,
+            registered,
+            created
+          },
+          remark: registered
+            ? '管理员确认已注册，创建或复用 ChatGPT 账号'
+            : '管理员修正为未注册，保留已有账号资料'
         });
-        return { accountId: account.id, created };
+        return explicitStatus
+          ? {
+              accountId: account?.id ?? null,
+              created,
+              registered,
+              accountUpdatedAt: account?.updatedAt.toISOString() ?? null
+            }
+          : { accountId: account!.id, created };
       },
       {
         changedScopes: ['auto-recharge'],

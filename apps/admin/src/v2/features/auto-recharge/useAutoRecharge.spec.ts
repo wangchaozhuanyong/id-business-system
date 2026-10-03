@@ -1458,6 +1458,25 @@ describe('服务器自动充值', () => {
     return jobs.value.items[0]!;
   }
 
+  it('Go 使用独立币种上限，未配置时不能借用 Plus 上限，提交保留 Go 套餐', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    flow.plan.value = 'go';
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startServer).not.toHaveBeenCalled();
+    (mock.paymentCapsQuery.data as { value: unknown }).value = {
+      items: [{ plan: 'go', currencyCode: flow.lockedCurrency.value, maxAmount: '30.00' }]
+    };
+    await nextTick();
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledWith(
+      expect.objectContaining({ plan: 'go', authorizeSinglePayment: true })
+    );
+  });
+
   it('代理核验失败后保留全部输入，直接点击可创建新的任务', async () => {
     const job = await startServerFixture();
     expect(flow.canStart.value).toBe(false);

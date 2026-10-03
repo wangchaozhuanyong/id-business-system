@@ -60,14 +60,12 @@
           <V2TableActionColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[6]">
             <template #default="{ row }">
               <AppButton
-                v-if="!row.registered"
                 size="small"
                 variant="ghost"
                 :disabled="page.busy.value"
                 @click="page.openMark(row)"
-                >标记已注册</AppButton
+                >{{ row.registered ? '标记未注册' : '标记已注册' }}</AppButton
               >
-              <span v-else>已加入账号</span>
             </template>
           </V2TableActionColumn>
         </V2Table>
@@ -89,15 +87,22 @@
     <p v-if="page.message.value" role="status">{{ page.message.value }}</p>
     <V2ConfirmDialog
       :model-value="page.confirmOpen.value"
-      title="标记已注册"
+      :title="page.target.value?.registered ? '标记未注册' : '标记已注册'"
       message=""
-      confirm-text="确认已注册"
+      :confirm-text="page.target.value?.registered ? '确认未注册' : '确认已注册'"
       :confirm-loading="page.busy.value"
       @update:model-value="page.setConfirmOpen"
       @confirm="page.confirm"
     >
-      <p>确认 {{ page.target.value?.email }} 已完成 ChatGPT 注册？</p>
-      <p>确认后加入 ChatGPT 账号，密码和双重验证资料可在账号页面补充。</p>
+      <p>
+        确认将 {{ page.target.value?.email }} 标记为{{
+          page.target.value?.registered ? '未注册' : '已注册'
+        }}？
+      </p>
+      <p v-if="page.target.value?.registered">
+        已有账号、密码、安全资料、备注和关联记录会保留；此操作只修正注册状态。
+      </p>
+      <p v-else>确认后创建或复用 ChatGPT 账号，密码和双重验证资料可在账号页面补充。</p>
       <p v-if="page.error.value" role="alert">{{ page.error.value }}</p>
     </V2ConfirmDialog>
   </div>

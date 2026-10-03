@@ -17,7 +17,7 @@ from plans import PLANS
 def main(argv=None):
     parser = argparse.ArgumentParser(description="JSON 恢复官方网页会话并测试指定套餐建单，始终停在付款前")
     parser.add_argument("--json-file", type=Path, help="授权 JSON 文件；只读入内存，省略时从 stdin 读取")
-    parser.add_argument("--plan", choices=PLANS, default="plus", help="本次套餐：plus、pro-5x、pro-20x、pro-500；默认 plus")
+    parser.add_argument("--plan", choices=PLANS, default="plus", help="本次套餐：go、plus、pro-5x、pro-20x、pro-500；默认 plus")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check-session", action="store_true", help="默认：仅恢复并验证官网用户和账户，不建单")
     mode.add_argument("--create", action="store_true", help="核对官网会话后，通过官网所选套餐入口建单一次")

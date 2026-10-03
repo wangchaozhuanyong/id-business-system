@@ -96,6 +96,7 @@ describe('recharge stage presentation', () => {
     expect(statusLabel('promax')).toBe('Pro（最高使用额度）');
     expect(statusLabel('pro')).toBe('Pro（档位待核验）');
     for (const [plan, label] of [
+      ['go', 'Go'],
       ['pro-5x', 'Pro（标准）'],
       ['pro-20x', 'Pro（更多使用额度）'],
       ['pro-500', 'Pro（最高使用额度）']

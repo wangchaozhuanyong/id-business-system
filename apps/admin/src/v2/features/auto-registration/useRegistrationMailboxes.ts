@@ -66,7 +66,7 @@ export function useRegistrationMailboxes(enabled: () => boolean) {
     filters.page = 1;
   }
   function openMark(row: V2RegistrationMailbox) {
-    if (busy.value || row.registered) return;
+    if (busy.value) return;
     target.value = { ...row };
     error.value = '';
     confirmOpen.value = true;
@@ -75,16 +75,25 @@ export function useRegistrationMailboxes(enabled: () => boolean) {
     if (busy.value || !target.value) return;
     const aliasId = target.value.id;
     const expectedUpdatedAt = target.value.updatedAt;
+    const registered = !target.value.registered;
+    const expectedAccountUpdatedAt = target.value.accountUpdatedAt;
     busy.value = true;
     error.value = '';
     message.value = '';
     try {
-      const result = await registrationApi.markRegistered(aliasId, expectedUpdatedAt);
+      const result = await registrationApi.markRegistered(
+        aliasId,
+        expectedUpdatedAt,
+        registered,
+        expectedAccountUpdatedAt
+      );
       if (disposed) return;
       confirmOpen.value = false;
-      message.value = result.created
-        ? '已标记已注册，已加入 ChatGPT 账号'
-        : '已复用现有 ChatGPT 账号';
+      message.value = !registered
+        ? '已标记未注册，已有账号资料保留'
+        : result.created
+          ? '已标记已注册，已加入 ChatGPT 账号'
+          : '已标记已注册，已复用现有 ChatGPT 账号';
       try {
         await query.refresh();
       } catch {

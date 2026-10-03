@@ -274,7 +274,7 @@ describe('recharge input and durable evidence', () => {
       validateDetailsSubmission({ addressId, details: { ...paymentDetails, extra: 'private' } })
     ).toThrow();
   });
-  it.each(['plus', 'pro-500'])('%s 服务器任务必须限定单次付款与上限', (plan) => {
+  it.each(['go', 'plus', 'pro-500'])('%s 服务器任务必须限定单次付款与上限', (plan) => {
     const server = {
       ...prepareInput(),
       plan,

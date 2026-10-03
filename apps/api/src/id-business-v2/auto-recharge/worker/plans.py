@@ -6,6 +6,8 @@ import re
 from checkout_core import Stop
 
 PLANS = {
+    # 官网公开脚本 PlanName.GO（2026-10-03）；不采用合作方或免费赠送套餐标识。
+    "go": {"label": "Go", "family": "go", "tier": None, "official_name": "chatgptgoplan"},
     "plus": {"label": "Plus", "family": "plus", "tier": None, "official_name": "chatgptplusplan"},
     "pro-5x": {"label": "Pro（标准）", "family": "pro", "tier": 5, "official_name": "chatgptprolite"},
     "pro-20x": {"label": "Pro（更多使用额度）", "family": "pro", "tier": 20, "official_name": "chatgptpro"},
@@ -33,6 +35,11 @@ def plan_spec(plan):
 
 def checkout_text_plan(text):
     """只识别报价页明确标题/档位，不根据金额或用户的期望值推断倍数。"""
+    if re.search(r"^\s*(?:ChatGPT\s+)?Go\s*$", text, re.I | re.M):
+        # 同页存在其他个人套餐标题时不能确认 Go；正文中的 go 动词不是套餐标题。
+        if re.search(r"^\s*(?:ChatGPT\s+)?(?:Plus|Pro)(?:\s.*)?$", text, re.I | re.M):
+            return None
+        return "go"
     pro = bool(re.search(r"\b(?:ChatGPT\s+)?Pro\b", text, re.I))
     if pro:
         values = text_tiers(text)

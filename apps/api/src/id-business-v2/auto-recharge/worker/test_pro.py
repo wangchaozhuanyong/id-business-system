@@ -196,12 +196,12 @@ class ProStateTests(unittest.TestCase):
     def test_native_plan_choice_selects_exact_tier_and_cancel_never_defaults(self):
         output = io.StringIO()
         with patch("pay.sys.stdin.isatty", return_value=True), patch("pay.focus_input_terminal"), contextlib.redirect_stdout(output):
-            for value, expected in (("1", "plus"), ("2", "pro-5x"), ("3", "pro-20x"), ("4", "pro-500")):
+            for value, expected in (("1", "go"), ("2", "plus"), ("3", "pro-5x"), ("4", "pro-20x"), ("5", "pro-500")):
                 with patch("builtins.input", return_value=value):
                     self.assertEqual(choose_plan(), expected)
             with patch("builtins.input", return_value=""), self.assertRaises(Stop):
                 choose_plan()
-        for number, label in ((1, "Plus"), (2, "Pro（标准）"), (3, "Pro（更多使用额度）"), (4, "Pro（最高使用额度）")):
+        for number, label in ((1, "Go"), (2, "Plus"), (3, "Pro（标准）"), (4, "Pro（更多使用额度）"), (5, "Pro（最高使用额度）")):
             self.assertIn(f"{number}. {label}", output.getvalue())
         self.assertNotIn("美元", output.getvalue())
 

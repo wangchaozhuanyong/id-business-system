@@ -1,4 +1,4 @@
-export const V2_RECHARGE_PLANS = ['plus', 'pro-5x', 'pro-20x', 'pro-500'] as const;
+export const V2_RECHARGE_PLANS = ['go', 'plus', 'pro-5x', 'pro-20x', 'pro-500'] as const;
 export type V2RechargePlan = (typeof V2_RECHARGE_PLANS)[number];
 // 手工记录已发生的付款；此目录不授予执行器新的自动付款能力。
 export const V2_BANK_RECHARGE_PLANS = [

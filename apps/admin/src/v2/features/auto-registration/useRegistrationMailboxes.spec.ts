@@ -22,6 +22,7 @@ const row: V2RegistrationMailbox = {
   status: 'ACTIVE',
   registered: false,
   accountId: null,
+  accountUpdatedAt: null,
   note: null,
   updatedAt: ''
 };
@@ -53,13 +54,34 @@ describe('隐藏邮箱人工注册标记', () => {
     expect(page.message.value).toContain('已加入 ChatGPT 账号');
     expect(mock.refresh).toHaveBeenCalledOnce();
   });
-  it('已注册行不能重复打开标记，重复请求返回复用现有账号', async () => {
-    page.openMark({ ...row, registered: true });
-    expect(page.confirmOpen.value).toBe(false);
+  it('已注册行可改回未注册，携带账号版本并保留已有资料', async () => {
+    const registered = {
+      ...row,
+      registered: true,
+      accountId: 'account-1',
+      accountUpdatedAt: '2026-10-03T08:00:00Z'
+    };
+    page.openMark(registered);
+    expect(page.confirmOpen.value).toBe(true);
+    expect(mock.mark).not.toHaveBeenCalled();
+    await page.confirm();
+    expect(mock.mark).toHaveBeenCalledWith(
+      row.id,
+      row.updatedAt,
+      false,
+      registered.accountUpdatedAt
+    );
+    expect(page.message.value).toBe('已标记未注册，已有账号资料保留');
+  });
+  it('改回已注册复用原账号，未保存前取消仍保留目标', async () => {
+    page.openMark(row);
+    page.setConfirmOpen(false);
+    expect(page.target.value?.id).toBe(row.id);
     page.openMark(row);
     mock.mark.mockResolvedValueOnce({ accountId: 'account-1', created: false });
     await page.confirm();
-    expect(page.message.value).toBe('已复用现有 ChatGPT 账号');
+    expect(mock.mark).toHaveBeenCalledWith(row.id, row.updatedAt, true, null);
+    expect(page.message.value).toBe('已标记已注册，已复用现有 ChatGPT 账号');
   });
   it('提交中不能重发或切换目标，离页后的迟到响应不关闭新页面', async () => {
     let finish!: (value: { accountId: string; created: boolean }) => void;
@@ -71,6 +93,8 @@ describe('隐藏邮箱人工注册标记', () => {
     page.openMark(row);
     const save = page.confirm();
     page.openMark({ ...row, id: 'other-alias' });
+    page.setConfirmOpen(false);
+    expect(page.confirmOpen.value).toBe(true);
     await page.confirm();
     expect(page.target.value?.id).toBe(row.id);
     expect(mock.mark).toHaveBeenCalledOnce();
