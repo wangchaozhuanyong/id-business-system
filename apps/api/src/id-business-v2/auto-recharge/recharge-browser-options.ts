@@ -26,7 +26,10 @@ const booleans = [
   'syncCookies',
   'syncLocalStorage'
 ];
-export function validateBrowserOptions(value: unknown): V2RechargeBrowserOptions {
+export function validateBrowserOptions(
+  value: unknown,
+  managedProxy = false
+): V2RechargeBrowserOptions {
   const supplied = object(value);
   const defaults = V2_RECHARGE_BROWSER_DEFAULTS;
   const input: Record<string, unknown> = {
@@ -75,7 +78,7 @@ export function validateBrowserOptions(value: unknown): V2RechargeBrowserOptions
       !/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/.test(
         host
       )) ||
-    (input.proxyMode === 'static' && !host)
+    (input.proxyMode === 'static' && !host && !managedProxy)
   )
     fail('固定代理主机');
   for (const key of ['language', 'displayLanguage'] as const) {

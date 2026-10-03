@@ -167,6 +167,28 @@ describe('recharge input and durable evidence', () => {
       })
     ).toEqual({});
   });
+  it('保留独立代理重试进度，不放宽原会话预算或记录代理秘密', () => {
+    expect(
+      safeDocument({
+        proxy_attempt: 10,
+        proxy_attempt_limit: 10,
+        proxy_wait_seconds: 20,
+        session_attempt: 4,
+        session_wait_seconds: 20,
+        proxyUrl: 'private',
+        proxyPassword: 'private'
+      })
+    ).toEqual({ proxy_attempt: 10, proxy_attempt_limit: 10, proxy_wait_seconds: 20 });
+    expect(
+      safeDocument({ proxy_attempt: 1, proxy_attempt_limit: 1, proxy_wait_seconds: 20 })
+    ).toEqual({ proxy_attempt: 1, proxy_attempt_limit: 1, proxy_wait_seconds: 20 });
+    for (const value of [0, 11, 1.5, '1'])
+      expect(safeDocument({ proxy_attempt: value })).toEqual({});
+    for (const value of [0, 2, 11, '10'])
+      expect(safeDocument({ proxy_attempt_limit: value })).toEqual({});
+    for (const value of [19, 21, '20'])
+      expect(safeDocument({ proxy_wait_seconds: value })).toEqual({});
+  });
   it('只保留受控的付款失败原因', () => {
     expect(safeDocument({ payment_failure_reason: 'insufficient_funds' })).toEqual({
       payment_failure_reason: 'insufficient_funds'
@@ -467,6 +489,7 @@ describe('single worker dispatch and confirmation', () => {
     );
   });
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -529,6 +552,8 @@ describe('single worker dispatch and confirmation', () => {
   );
 
   it('会话等待进度续期，结束事件不续期', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
     const now = Date.now();
     active.mockResolvedValue({ id, action: 'bitbrowser', state: 'running', result: {} } as never);
     await service.callback(id, {
@@ -536,11 +561,100 @@ describe('single worker dispatch and confirmation', () => {
       result: { stage: 'session_restore', session_elapsed_seconds: 110 }
     });
     const changed = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
-    expect(changed.leaseUntil.getTime()).toBeGreaterThanOrEqual(now + 45 * 60000);
+    expect(changed.leaseUntil.getTime()).toBe(now + 45 * 60000);
     expect(changed.result.session_elapsed_seconds).toBe(110);
     await service.callback(id, {
       type: 'finished',
       result: { status: 'blocked', reason: 'session_retries_exhausted' }
+    });
+    expect(tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data).not.toHaveProperty(
+      'leaseUntil'
+    );
+  });
+  it.each(['proxy_verifying', 'proxy_retrying'])(
+    '服务器从 %s 进入登录只续期一次，迟到代理回执也不能重复续期',
+    async (stage) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+      const current = {
+        id,
+        action: 'server',
+        state: 'running',
+        nonceHash: null,
+        leaseUntil: new Date(Date.now() + 21 * 60000),
+        result: { stage, recheck_only: true, source_job_id: addressId } as Record<string, unknown>
+      };
+      active.mockImplementation(async () => current as never);
+      tx.idBusinessV2RechargeJob.update.mockImplementation(async ({ data }) => {
+        Object.assign(current, data);
+        return current;
+      });
+      vi.setSystemTime(new Date(Date.now() + 19 * 60000));
+      const handoffTime = Date.now();
+      await service.callback(id, {
+        type: 'progress',
+        result: { stage: 'session_restore', server_business_lease_started: false }
+      });
+      expect(current.leaseUntil.getTime()).toBe(handoffTime + 16 * 60000);
+      expect(current.result).toMatchObject({
+        stage: 'session_restore',
+        server_business_lease_started: true,
+        recheck_only: true,
+        source_job_id: addressId
+      });
+      expect(current.state).toBe('running');
+      expect(current.nonceHash).toBeNull();
+      for (const nextStage of [
+        'session_restore',
+        'login_begin',
+        'checkout_create',
+        'payment_submit',
+        stage,
+        'session_restore'
+      ]) {
+        vi.setSystemTime(new Date(Date.now() + 60000));
+        await service.callback(id, {
+          type: 'progress',
+          result: { stage: nextStage, server_business_lease_started: false }
+        });
+        const data = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
+        expect(data).not.toHaveProperty('leaseUntil');
+        expect(current.leaseUntil.getTime()).toBe(handoffTime + 16 * 60000);
+        expect(current.result.server_business_lease_started).toBe(true);
+      }
+    }
+  );
+  it('服务器已结束、已确认或结束事件均不续期，非交接阶段也不续期', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    const current = {
+      id,
+      action: 'server',
+      state: 'finished',
+      nonceHash: 'existing-confirmation',
+      result: { stage: 'proxy_verifying' }
+    };
+    active.mockResolvedValue(current as never);
+    await expect(
+      service.callback(id, { type: 'progress', result: { stage: 'session_restore' } })
+    ).rejects.toThrow('已结束');
+    await service.callback(id, { type: 'finished', result: { stage: 'session_restore' } });
+    expect(tx.idBusinessV2RechargeJob.update).not.toHaveBeenCalled();
+    current.state = 'confirming';
+    await service.callback(id, { type: 'progress', result: { stage: 'session_restore' } });
+    let data = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
+    expect(data).not.toHaveProperty('leaseUntil');
+    expect(data.state).toBe('confirming');
+    expect(data.nonceHash).toBe('existing-confirmation');
+    current.state = 'running';
+    current.result.stage = 'proxy_resolving';
+    await service.callback(id, { type: 'progress', result: { stage: 'session_restore' } });
+    data = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
+    expect(data).not.toHaveProperty('leaseUntil');
+    current.result.stage = 'proxy_verifying';
+    await service.callback(id, {
+      type: 'finished',
+      result: { stage: 'session_restore', status: 'blocked' }
     });
     expect(tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data).not.toHaveProperty(
       'leaseUntil'
@@ -674,6 +788,76 @@ describe('single worker dispatch and confirmation', () => {
       vi.mocked(fetch).mock.invocationCallOrder[0]!
     );
     expect(JSON.stringify(tx.idBusinessV2RechargeJob.create.mock.calls)).not.toContain('synthetic');
+  });
+  it.each(['check', 'prepare'])('原 %s 任务初始期限仍为 16 分钟', async (action) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    await service.start(action === 'check' ? input() : prepareInput(), operator);
+    expect(tx.idBusinessV2RechargeJob.create.mock.calls.at(-1)![0].data.leaseUntil.getTime()).toBe(
+      Date.now() + 16 * 60000
+    );
+  });
+  it('服务器新任务初始期限覆盖 20 分钟代理准备并保留一分钟回执缓冲', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    const accounts = {
+      requireCurrency: vi.fn().mockResolvedValue({ minorUnits: 2 }),
+      encryptExpectedEmail: vi.fn().mockReturnValue('fixture-encrypted-email'),
+      loginNetworkGuard: vi.fn().mockResolvedValue(null)
+    };
+    const addresses = {
+      ...addressRepository,
+      requireAvailable: vi.fn().mockResolvedValue({
+        id: addressId,
+        country: 'US',
+        line1: '1221 SW Fourth Avenue',
+        city: 'Portland',
+        state: 'OR',
+        postalCode: '97204'
+      })
+    };
+    const settings = { requirePaymentCap: vi.fn().mockResolvedValue('100.00') };
+    const proxies = {
+      forCharge: vi.fn().mockResolvedValue({
+        id,
+        mode: 'dynamic',
+        type: 'http',
+        extractionUrl: 'https://proxy.example.invalid/fixture'
+      })
+    };
+    tx.idBusinessV2RechargeJob.create.mockImplementationOnce(async ({ data }) => data);
+    const serverService = new RechargeService(
+      repository as never,
+      addresses as never,
+      transaction as never,
+      audit as never,
+      accounts as never,
+      undefined,
+      settings as never,
+      undefined,
+      proxies as never
+    );
+    await serverService.start(
+      {
+        ...prepareInput(),
+        action: 'server',
+        proxyId: id,
+        proxyCountryCode: 'US',
+        lockedCurrency: 'MYR',
+        maxAmount: '100.00',
+        authorizeSinglePayment: true
+      },
+      operator
+    );
+    const data = tx.idBusinessV2RechargeJob.create.mock.calls.at(-1)![0].data;
+    expect(data.leaseUntil.getTime()).toBe(Date.now() + 21 * 60000);
+    expect(data.result).toMatchObject({
+      locked_currency: 'MYR',
+      max_amount_minor: 10000,
+      expected_proxy_country: 'US',
+      mode: 'server'
+    });
+    expect(fetch).toHaveBeenCalledOnce();
   });
   it('repeated request id returns the original task without redispatch', async () => {
     tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue({

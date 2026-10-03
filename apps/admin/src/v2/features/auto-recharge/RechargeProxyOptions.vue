@@ -7,8 +7,52 @@
         <el-option label="固定代理" value="static" />
       </el-select>
     </el-form-item>
+    <V2AsyncRegion
+      v-if="!serverMode && catalog"
+      variant="section"
+      :phase="catalog.query.phase.value"
+      :error="catalog.query.error.value ? getApiErrorMessage(catalog.query.error.value) : ''"
+      skeleton="form"
+      loading-title="正在读取代理 IP 管理"
+      @retry="catalog.query.refresh"
+    >
+      <el-form-item label="代理 IP" prop="proxyId" required>
+        <el-select
+          v-model="form.proxyId"
+          filterable
+          aria-label="选择代理 IP"
+          placeholder="选择代理 IP 管理中的启用代理"
+          :disabled="catalog.query.phase.value !== 'ready'"
+          no-data-text="当前模式暂无启用代理，请先在代理 IP 管理添加"
+        >
+          <el-option
+            v-if="
+              form.proxyId && !catalog.matchingItems.value.some((item) => item.id === form.proxyId)
+            "
+            :value="form.proxyId"
+            label="原代理已失效或模式不符，请重新选择"
+            disabled
+          />
+          <el-option
+            v-for="item in catalog.matchingItems.value"
+            :key="item.id"
+            :value="item.id"
+            :label="`${proxyCountryLabel(item.countryCode)} · ${proxyProtocolLabel(item.protocol)} · ${proxyKindLabels[item.kind]} · ${item.remark1 || item.linkMask}`"
+          />
+        </el-select>
+      </el-form-item>
+      <p class="recharge-settings-note">
+        代理资料与自动注册、自动充值共用，链接和账号密码统一在代理 IP 管理维护。
+        <AppButton size="small" variant="ghost" @click="catalog.query.refresh"
+          >刷新代理列表</AppButton
+        >
+      </p>
+      <p v-if="form.proxyId && catalog.error.value" class="recharge-settings-error" role="alert">
+        {{ catalog.error.value }}
+      </p>
+    </V2AsyncRegion>
     <el-form-item label="代理协议" prop="proxyType" required>
-      <el-select v-model="form.proxyType">
+      <el-select v-model="form.proxyType" :disabled="!serverMode">
         <el-option label="HTTP" value="http" />
         <el-option label="HTTPS" value="https" />
         <el-option label="SOCKS5 代理" value="socks5" />
@@ -16,6 +60,7 @@
     </el-form-item>
     <template v-if="form.browserOptions.proxyMode === 'dynamic'">
       <el-form-item
+        v-if="serverMode"
         label="动态 IP 提取链接"
         prop="dynamicProxyUrl"
         :required="!stored?.dynamicProxyUrlConfigured"
@@ -38,7 +83,7 @@
           服务器任务每次都会重新提取代理 IP；提取链接须为 HTTPS。
         </p>
       </el-form-item>
-      <el-form-item v-if="!serverMode" label="动态代理服务商">
+      <el-form-item v-if="!serverMode && !registration" label="动态代理服务商">
         <el-select v-model="form.browserOptions.dynamicProvider">
           <el-option label="通用" value="common" />
           <el-option label="Rola 代理" value="rola" />
@@ -46,7 +91,7 @@
           <el-option label="Cloudam 代理" value="cloudam" />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="!serverMode" label="重新提取 IP">
+      <el-form-item v-if="!serverMode && !registration" label="重新提取 IP">
         <el-switch
           v-model="form.browserOptions.refreshIp"
           aria-label="打开窗口重新提取 IP"
@@ -54,8 +99,11 @@
           inactive-text="沿用已提取 IP"
         />
       </el-form-item>
+      <p v-if="registration" class="recharge-settings-note">
+        注册新建窗口固定重新提取 IP，按通用格式读取；继续原任务时沿用原窗口。
+      </p>
     </template>
-    <template v-else>
+    <template v-else-if="serverMode">
       <el-form-item label="固定代理主机" prop="browserOptions.staticHost" required>
         <el-input
           v-model="form.browserOptions.staticHost"
@@ -120,9 +168,19 @@
   </fieldset>
 </template>
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
+import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import { getApiErrorMessage } from '@/api/client';
+import { proxyCountryLabel, proxyProtocolLabel, proxyKindLabels } from './recharge-proxy-options';
+import type { useManagedBrowserProxy } from './useManagedBrowserProxy';
 import type { V2RechargeBitBrowserSettings } from './contracts';
 import type { BitBrowserSettingsForm } from './useRechargeBrowserSettings';
-defineProps<{ stored?: V2RechargeBitBrowserSettings; serverMode?: boolean }>();
+defineProps<{
+  stored?: V2RechargeBitBrowserSettings;
+  serverMode?: boolean;
+  registration?: boolean;
+  catalog?: ReturnType<typeof useManagedBrowserProxy>;
+}>();
 const form = defineModel<BitBrowserSettingsForm>({ required: true });
 </script>
 <style scoped src="./recharge-browser-settings.css"></style>

@@ -17,6 +17,7 @@ vi.mock('./api', () => ({
 }));
 vi.mock('@/v2/composables/useV2Query', () => ({ useV2ModuleQuery: () => mocks.query }));
 const form = (): BitBrowserSettingsForm => ({
+  proxyId: '',
   connectorUrl: 'http://127.0.0.1:55321',
   localApiUrl: 'http://127.0.0.1:54345',
   connectorToken: '',

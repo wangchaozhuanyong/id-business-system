@@ -32,6 +32,7 @@ const contentSecurityPolicy = /Content-Security-Policy: (.+)/.exec(
 )[1];
 const localApiUrl = `http://127.0.0.1:${bitPort}`;
 const accountId = '11111111-1111-4111-8111-111111111111';
+const proxyId = '22222222-2222-4222-8222-222222222222';
 const fixtureEmail = 'direct-fixture@example.com';
 const user = {
   id: 'direct-fixture-admin',
@@ -42,6 +43,7 @@ const user = {
   mustResetPassword: false
 };
 const settings = {
+  proxyId,
   connectorUrl: 'http://127.0.0.1:55321',
   localApiUrl,
   localApiTokenConfigured: true,
@@ -241,6 +243,9 @@ try {
         if (path.endsWith('/auto-recharge/bitbrowser-settings')) {
           if (request.method() === 'PUT') {
             assert.equal(request.postDataJSON().directMode, true);
+            assert.equal(request.postDataJSON().proxyId, proxyId);
+            assert.equal(request.postDataJSON().dynamicProxyUrl, undefined);
+            assert.equal(request.postDataJSON().staticProxyCredentials, undefined);
             settingsSaves++;
           }
           return success(route, settings);
@@ -254,6 +259,25 @@ try {
             localApiToken: 'fixture-only-api-key'
           });
         }
+        const proxy = {
+          id: proxyId,
+          countryCode: 'US',
+          kind: 'dynamic_residential',
+          connectionMode: 'extraction',
+          protocol: 'http',
+          status: 'active',
+          remark1: '直连验收代理',
+          remark2: null,
+          linkMask: 'https://example.invalid/…（已加密）',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        if (path.endsWith('/auto-recharge/proxies/countries'))
+          return success(route, { items: ['US'] });
+        if (path.endsWith('/auto-recharge/proxies'))
+          return success(route, { items: [proxy], total: 1, page: 1, pageSize: 100 });
+        if (path.endsWith('/auto-recharge/server-proxy-settings'))
+          return success(route, { proxyId, proxy, legacyConfigured: false });
         if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
           return success(route, { items: jobs, configured: true });
         if (path.endsWith('/bank-recharge/accounts') && request.method() === 'GET')
@@ -397,7 +421,9 @@ try {
     .waitFor();
   await page.screenshot({ path: resolve(output, 'settings-direct.png'), animations: 'disabled' });
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await waitFor(async () => settingsSaves === 1);
   assert.equal(settingsSaves, 1);
+  await page.getByRole('dialog', { name: '比特浏览器直连设置' }).waitFor({ state: 'hidden' });
   for (const width of [1440, 1024, 901, 900, 768, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const theme of ['light', 'dark']) {

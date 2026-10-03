@@ -18,12 +18,21 @@
         ? '请先完成设置读取'
         : !serverMode && !catalogReady
           ? '请先读取比特浏览器分组与标签'
-          : ''
+          : !serverMode && proxyCatalog.query.phase.value !== 'ready'
+            ? '请先读取代理 IP 管理'
+            : ''
     "
     :dirty="settingsDirty"
     @update:model-value="setSettingsOpen"
     @confirm="submit"
   >
+    <template #header-actions>
+      <RechargeBrowserSettingsHelp
+        :server-mode="serverMode"
+        :direct-mode="directMode"
+        :registration="registration"
+      />
+    </template>
     <V2AsyncRegion
       variant="section"
       :phase="settingsQuery.phase.value"
@@ -53,8 +62,14 @@
         scroll-to-error
         :disabled="settingsSaving"
       >
-        <RechargeProxyOptions v-model="settingsForm" :stored="stored" :server-mode="serverMode" />
-        <fieldset v-if="!serverMode">
+        <RechargeProxyOptions
+          v-model="settingsForm"
+          :stored="stored"
+          :server-mode="serverMode"
+          :registration="registration"
+          :catalog="proxyCatalog"
+        />
+        <fieldset v-if="!serverMode && !registration">
           <legend>慢加载与重试</legend>
           <el-form-item label="每轮等待时间" prop="browserOptions.sessionWaitMinutes" required>
             <el-input-number
@@ -67,7 +82,7 @@
             <span class="recharge-settings-hint">分钟；页面加载和账号核对共用这段时间。</span>
           </el-form-item>
           <el-form-item
-            v-if="!directMode"
+            v-if="!directMode && !registration"
             label="最多重建次数"
             prop="browserOptions.sessionRetryLimit"
             required
@@ -83,9 +98,11 @@
           </el-form-item>
           <p class="recharge-settings-note">
             {{
-              directMode
-                ? '自动步骤超过等待时间或遇到真人验证时保留当前窗口，请在官网手动处理；网页会继续核对登录结果，不自动重建窗口。'
-                : '加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。'
+              registration
+                ? '注册遇到超时、验证或未知页面时保留原窗口；请处理后继续原任务，不自动删除原窗口。'
+                : directMode
+                  ? '自动步骤超过等待时间或遇到真人验证时保留当前窗口，请在官网手动处理；网页会继续核对登录结果，不自动重建窗口。'
+                  : '加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。'
             }}
           </p>
         </fieldset>
@@ -156,7 +173,9 @@
             </p>
           </V2AsyncRegion>
           <p class="recharge-settings-note">
-            窗口名称在充值页面逐笔填写；新窗口加入所选分组并绑定所选标签，备注同步使用标签名称。
+            {{
+              registration ? '窗口名称由注册任务生成；' : '窗口名称在充值页面逐笔填写；'
+            }}新窗口加入所选分组并绑定所选标签，备注同步使用标签名称。
           </p>
         </fieldset>
         <fieldset v-if="!serverMode">
@@ -211,7 +230,11 @@
             }}</span>
           </div>
         </fieldset>
-        <RechargeWindowOptions v-if="!serverMode" v-model="settingsForm.browserOptions" />
+        <RechargeWindowOptions
+          v-if="!serverMode"
+          v-model="settingsForm.browserOptions"
+          :registration="registration"
+        />
       </el-form>
     </V2AsyncRegion>
   </V2FormDrawer>
@@ -222,6 +245,7 @@ import { computed, ref } from 'vue';
 import RechargeProxyOptions from './RechargeProxyOptions.vue';
 import RechargeWindowOptions from './RechargeWindowOptions.vue';
 import BitBrowserConnectionHelp from './BitBrowserConnectionHelp.vue';
+import RechargeBrowserSettingsHelp from './RechargeBrowserSettingsHelp.vue';
 import { browserOptionRules } from './recharge-browser-rules';
 import { browserSettingsSummary } from './recharge-browser-presentation';
 import type { FormInstance, FormRules } from 'element-plus';
@@ -233,6 +257,7 @@ import type { useRechargeBrowserSettings } from './useRechargeBrowserSettings';
 const props = defineProps<{
   settings: ReturnType<typeof useRechargeBrowserSettings>;
   serverMode?: boolean;
+  registration?: boolean;
 }>();
 const {
   settingsOpen,
@@ -251,7 +276,8 @@ const {
   tagOptions,
   catalogReady,
   refreshCatalog,
-  directMode
+  directMode,
+  proxyCatalog
 } = props.settings;
 const stored = computed(() => settingsQuery.data.value);
 const summary = computed(() => browserSettingsSummary(stored.value));
@@ -287,6 +313,16 @@ const rules = computed<FormRules>(() => ({
         }
       ],
   proxyType: [{ required: true, message: '请选择代理协议', trigger: 'change' }],
+  proxyId: props.serverMode
+    ? []
+    : [
+        {
+          required: true,
+          trigger: 'change',
+          validator: (_rule, _value, callback) =>
+            callback(proxyCatalog.error.value ? new Error(proxyCatalog.error.value) : undefined)
+        }
+      ],
   localApiToken: props.serverMode
     ? []
     : [

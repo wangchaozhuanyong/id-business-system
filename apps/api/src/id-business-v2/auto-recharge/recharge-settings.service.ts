@@ -16,6 +16,7 @@ import { bankRechargeId, bankRechargeObject, bankRechargeUuid } from './bank-rec
 import { validateRechargeBitBrowserSettings } from './recharge-settings-validation';
 import { storedBrowserOptions, validateStaticCredentials } from './recharge-browser-options';
 import { accountCopyMetadata } from './account-copy-settings';
+import { proxyProtocol, rechargeProxyConnection } from './recharge-proxy-validation';
 
 const defaults = {
   connectorUrl: 'http://127.0.0.1:55321',
@@ -231,7 +232,28 @@ export class RechargeSettingsService {
     const row = await this.transactions.execute(
       async (tx) => {
         const before = await this.repository.findInTransaction(tx, operator.id);
-        const browserOptions = input.browserOptions ?? storedBrowserOptions(before?.browserOptions);
+        let browserOptions = input.browserOptions ?? storedBrowserOptions(before?.browserOptions);
+        const proxyId =
+          input.proxyId === undefined
+            ? serverDefaultProxyId(before?.browserOptions)
+            : input.proxyId;
+        if (input.proxyId) {
+          const proxy = await this.proxies.findInTransaction(tx, input.proxyId);
+          if (!proxy || !proxy.active)
+            throw new BadRequestException('请选择代理 IP 管理中的启用代理');
+          const connection = rechargeProxyConnection(
+            this.encryption.decrypt(proxy.urlEncrypted)!,
+            proxy.connectionMode,
+            proxyProtocol(proxy.protocol)
+          );
+          if (browserOptions.proxyMode !== connection.mode || input.proxyType !== connection.type)
+            throw new BadRequestException('所选代理模式或协议已变化，请刷新代理目录后重新选择');
+          browserOptions = {
+            ...browserOptions,
+            staticHost: connection.mode === 'static' ? connection.host : '',
+            staticPort: connection.mode === 'static' ? connection.port : 8080
+          };
+        }
         const staticProxyCredentialsEncrypted = input.clearStaticProxyCredentials
           ? null
           : input.staticProxyCredentials
@@ -249,11 +271,11 @@ export class RechargeSettingsService {
         if (
           (!input.serverMode &&
             (!localApiTokenEncrypted || (!input.directMode && !connectorTokenEncrypted))) ||
-          (browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrlEncrypted)
+          (browserOptions.proxyMode === 'dynamic' && !proxyId && !dynamicProxyUrlEncrypted)
         ) {
           throw new BadRequestException('请填写连接密钥及当前代理模式所需的配置');
         }
-        if (input.serverMode && browserOptions.proxyMode === 'dynamic') {
+        if (input.serverMode && !proxyId && browserOptions.proxyMode === 'dynamic') {
           const extractionUrl = this.encryption.decrypt(dynamicProxyUrlEncrypted);
           if (!extractionUrl || new URL(extractionUrl).protocol !== 'https:')
             throw new BadRequestException('服务器动态 IP 提取链接必须使用 HTTPS');
@@ -275,9 +297,7 @@ export class RechargeSettingsService {
           browserOptions: toV2JsonDocument({
             ...browserOptions,
             ...accountCopyMetadata(before?.browserOptions),
-            ...(serverDefaultProxyId(before?.browserOptions)
-              ? { serverDefaultProxyId: serverDefaultProxyId(before?.browserOptions) }
-              : {})
+            serverDefaultProxyId: proxyId
           }),
           staticProxyCredentialsEncrypted,
           dynamicProxyUrlEncrypted,
@@ -315,28 +335,53 @@ export class RechargeSettingsService {
     const row = await this.repository.find(ownerId);
     const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
     const connectorToken = directMode ? '' : this.encryption.decrypt(row?.connectorTokenEncrypted);
-    const browserOptions = storedBrowserOptions(row?.browserOptions);
-    const dynamicProxyUrl =
-      browserOptions.proxyMode === 'dynamic'
+    let browserOptions = storedBrowserOptions(row?.browserOptions);
+    const proxyId = serverDefaultProxyId(row?.browserOptions);
+    let dynamicProxyUrl =
+      !proxyId && !selectedProxy && browserOptions.proxyMode === 'dynamic'
         ? this.encryption.decrypt(row?.dynamicProxyUrlEncrypted)
         : '';
     if (
       !row ||
       !localApiToken ||
       (!directMode && !connectorToken) ||
-      (!selectedProxy && browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrl)
+      (!selectedProxy && !proxyId && browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrl)
     ) {
       throw new ServiceUnavailableException('请先完成比特浏览器设置');
     }
     const credentials =
-      browserOptions.proxyMode === 'static'
+      !proxyId && !selectedProxy && browserOptions.proxyMode === 'static'
         ? this.encryption.decrypt(row.staticProxyCredentialsEncrypted)
         : '';
-    const staticProxyCredentials = credentials
+    let staticProxyCredentials = credentials
       ? validateStaticCredentials(JSON.parse(credentials))
       : undefined;
+    let proxyType = row.proxyType;
+    if (!selectedProxy && proxyId) {
+      const proxy = await this.proxies.find(proxyId);
+      if (!proxy || !proxy.active)
+        throw new ServiceUnavailableException('默认代理 IP 已停用或不存在，请重新选择');
+      const connection = rechargeProxyConnection(
+        this.encryption.decrypt(proxy.urlEncrypted)!,
+        proxy.connectionMode,
+        proxyProtocol(proxy.protocol)
+      );
+      proxyType = connection.type;
+      dynamicProxyUrl = connection.mode === 'dynamic' ? connection.extractionUrl : '';
+      browserOptions = {
+        ...browserOptions,
+        proxyMode: connection.mode,
+        staticHost: connection.mode === 'static' ? connection.host : '',
+        staticPort: connection.mode === 'static' ? connection.port : 8080
+      };
+      staticProxyCredentials =
+        connection.mode === 'static' && connection.username
+          ? { username: connection.username, password: connection.password }
+          : undefined;
+    }
     return {
       ...row,
+      proxyType,
       browserOptions,
       staticProxyCredentials,
       localApiToken,
@@ -372,6 +417,7 @@ export class RechargeSettingsService {
 
   private response(row: Awaited<ReturnType<RechargeSettingsRepository['find']>>) {
     return {
+      proxyId: serverDefaultProxyId(row?.browserOptions),
       connectorUrl: row?.connectorUrl ?? defaults.connectorUrl,
       localApiUrl: row?.localApiUrl ?? defaults.localApiUrl,
       localApiTokenConfigured: Boolean(row?.localApiTokenEncrypted),
@@ -402,6 +448,7 @@ export class RechargeSettingsService {
     staticProxyCredentialsEncrypted?: string | null;
   }) {
     return {
+      proxyId: serverDefaultProxyId(row.browserOptions),
       connectorUrl: row.connectorUrl,
       localApiUrl: row.localApiUrl,
       localApiTokenMask: row.localApiTokenMask,

@@ -9,9 +9,11 @@ import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi } from './api';
 import { readBrowserCatalog, useRechargeBrowserCatalog } from './useRechargeBrowserCatalog';
+import { useManagedBrowserProxy } from './useManagedBrowserProxy';
 
 export type ConnectorStatus = 'unknown' | 'checking' | 'online' | 'offline';
 export interface BitBrowserSettingsForm extends UpdateV2RechargeBitBrowserSettingsInput {
+  proxyId: string;
   localApiToken: string;
   connectorToken: string;
   dynamicProxyUrl: string;
@@ -22,6 +24,7 @@ export interface BitBrowserSettingsForm extends UpdateV2RechargeBitBrowserSettin
 }
 
 const formFromSettings = (settings?: V2RechargeBitBrowserSettings): BitBrowserSettingsForm => ({
+  proxyId: settings?.proxyId ?? '',
   connectorUrl: settings?.connectorUrl ?? 'http://127.0.0.1:55321',
   localApiUrl: settings?.localApiUrl ?? 'http://127.0.0.1:54345',
   localApiToken: '',
@@ -70,6 +73,7 @@ export function useRechargeBrowserSettings(
     computed(() => !serverMode.value),
     directMode
   );
+  const proxyCatalog = useManagedBrowserProxy(settingsForm, settingsOpen);
   let connectionCheck: AbortController | undefined;
 
   function resetSettings() {
@@ -137,6 +141,10 @@ export function useRechargeBrowserSettings(
 
   async function saveSettings(serverMode = false) {
     if (settingsSaving.value) return;
+    if (!serverMode && settingsForm.value.proxyId && proxyCatalog.error.value) {
+      settingsError.value = proxyCatalog.error.value;
+      return;
+    }
     if (!serverMode && browserCatalog.selectionError.value) {
       settingsError.value = browserCatalog.selectionError.value;
       return;
@@ -149,6 +157,7 @@ export function useRechargeBrowserSettings(
         !stored?.connectorTokenConfigured &&
         !settingsForm.value.connectorToken) ||
       (settingsForm.value.browserOptions.proxyMode === 'dynamic' &&
+        !settingsForm.value.proxyId &&
         !stored?.dynamicProxyUrlConfigured &&
         !settingsForm.value.dynamicProxyUrl)
     ) {
@@ -161,13 +170,19 @@ export function useRechargeBrowserSettings(
       const { staticProxyUsername, staticProxyPassword, ...input } = settingsForm.value;
       const updated = await rechargeApi.updateBitBrowserSettings({
         ...input,
+        proxyId: settingsForm.value.proxyId || undefined,
         serverMode,
         ...(directMode.value && !serverMode ? { directMode: true } : {}),
         localApiToken: settingsForm.value.localApiToken || undefined,
         connectorToken: settingsForm.value.connectorToken || undefined,
-        dynamicProxyUrl: settingsForm.value.dynamicProxyUrl || undefined,
+        dynamicProxyUrl: input.proxyId
+          ? undefined
+          : settingsForm.value.dynamicProxyUrl || undefined,
+        clearStaticProxyCredentials: input.proxyId ? false : input.clearStaticProxyCredentials,
         staticProxyCredentials:
-          !input.clearStaticProxyCredentials && (staticProxyUsername || staticProxyPassword)
+          !input.proxyId &&
+          !input.clearStaticProxyCredentials &&
+          (staticProxyUsername || staticProxyPassword)
             ? { username: staticProxyUsername, password: staticProxyPassword }
             : undefined
       });
@@ -187,6 +202,7 @@ export function useRechargeBrowserSettings(
 
   return {
     ...browserCatalog,
+    proxyCatalog,
     settingsQuery,
     settingsOpen,
     settingsSaving,

@@ -91,7 +91,7 @@ async def official_identity(page, expected_email, *, budget=None, strict=False):
         return None
 
 
-async def login_with_password(page, email, password, wait_for_code, wait_for_user, progress):
+async def login_with_password(page, email, password, wait_for_code, wait_for_user, progress, *, initial_loaded=False):
     """Submit one password and at most one code; uncertain challenges stay in this window."""
     async def manual_completion():
         progress("login_manual_required")
@@ -102,7 +102,8 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
         return current
 
     budget = SessionBudget(60, report=lambda **details: progress("session_restore", **details))
-    await load_session_page(page, LOGIN_URL, budget)
+    if not initial_loaded:
+        await load_session_page(page, LOGIN_URL, budget)
     if not official_login_page(page.url):
         return await manual_completion()
     current = await official_identity(page, email)

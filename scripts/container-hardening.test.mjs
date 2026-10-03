@@ -50,14 +50,30 @@ test('production base images and GitHub Actions are immutable', () => {
   assert.match(workflow, /uses:\s+actions\/setup-node@[a-f0-9]{40}\s+# v5/u);
 });
 
-test('auto-recharge worker installs only the required Chromium runtime', () => {
+test('auto-recharge worker pins its fingerprint engine and keeps legacy browser compatibility', () => {
   const dockerfile = readProjectFile('apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile');
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
   const worker = compose.split(/\n {2}auto-recharge:\n/u)[1].split(/\n {2}api:\n/u)[0];
 
   assert.doesNotMatch(dockerfile, /mcr\\.microsoft\\.com\/playwright/u);
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
+  assert.match(dockerfile, /playwright install-deps firefox/u);
+  assert.match(
+    dockerfile,
+    /install_fingerprint_browser\.py --destination \/opt\/camoufox --platform lin\.x86_64/u
+  );
+  assert.match(
+    readProjectFile('apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt'),
+    /^camoufox==0\.5\.6$/mu
+  );
+  const installer = readProjectFile(
+    'apps/api/src/id-business-v2/auto-recharge/worker/install_fingerprint_browser.py'
+  );
+  assert.match(installer, /VERSION = '152\.0\.4-beta\.30'/u);
+  assert.match(installer, /'lin\.x86_64': '[a-f0-9]{64}'/u);
+  assert.match(installer, /digest\.hexdigest\(\) != ASSETS\[platform\]/u);
   assert.match(dockerfile, /^USER recharge$/mu);
+  assert.match(worker, /init: true/u);
   assert.match(worker, /read_only: true/u);
   assert.match(worker, /no-new-privileges:true/u);
   assert.match(worker, /cap_drop:\s+- ALL/u);

@@ -81,3 +81,15 @@ export const rechargeProxyApi = {
     );
   }
 };
+
+export async function readActiveRechargeProxies(signal?: AbortSignal) {
+  const items: RechargeProxyItem[] = [];
+  for (let page = 1; ; page++) {
+    const result = await rechargeProxyApi.list(
+      { page, pageSize: 100, status: 'active' },
+      { signal }
+    );
+    items.push(...result.items);
+    if (items.length >= result.total || !result.items.length) return { items };
+  }
+}

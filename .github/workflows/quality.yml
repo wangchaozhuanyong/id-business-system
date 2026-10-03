@@ -83,6 +83,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -92,6 +94,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit
+
+      - name: Verify changed browser worker
+        env:
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+          CHECK_MODE: full
+        run: |
+          set -Eeuo pipefail
+          if [[ -n "$(git diff --name-only "$CHECK_BASE" HEAD -- apps/api/src/id-business-v2/auto-recharge/worker/)" ]]; then
+            python3 -m pip install --disable-pip-version-check -r apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt
+            node scripts/ci-recharge-check.mjs connector "$CHECK_BASE"
+          fi
 
       - name: Install Chromium for layout acceptance
         run: npx playwright install chromium

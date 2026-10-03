@@ -1,10 +1,11 @@
 import {
   ConflictException,
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IdBusinessV2RegistrationJob } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -13,7 +14,8 @@ import { V2CommandTransactionManager, V2TransactionalAuditService } from '../run
 import { RechargeProxyService, RechargeSettingsService } from '../auto-recharge/public-api';
 import { IdBusinessV2VendureMailboxService } from '../workspace/public-api';
 import { RegistrationRepository } from './persistence/registration.repository';
-import { id, startInput, text } from './registration-validation';
+import { registrationWorkerCommand, requireRegistrationWorker } from './registration-worker';
+import { id, record, startInput, text } from './registration-validation';
 
 export function registrationSummary(row: IdBusinessV2RegistrationJob) {
   return {
@@ -71,7 +73,7 @@ export class RegistrationJobsService {
   }
   async options(query: { q?: string; page?: string }, operator: AuthenticatedUser) {
     const p = getPagination({ page: query.page, pageSize: '100' });
-    const [mailboxes, proxies, names] = await Promise.all([
+    const [mailboxes, proxies, names, defaults] = await Promise.all([
       this.mailboxes.listAliases(
         { page: p.page, pageSize: p.pageSize, q: query.q, status: 'ACTIVE' },
         operator
@@ -86,7 +88,8 @@ export class RegistrationJobsService {
         { active: true, ...(query.q ? { displayName: { contains: query.q } } : {}) },
         p.skip,
         p.take
-      )
+      ),
+      this.settings.getServerProxySettings(operator)
     ]);
     return {
       mailboxes: mailboxes.items.map((item) => ({ id: item.id, email: item.aliasEmail })),
@@ -96,24 +99,36 @@ export class RegistrationJobsService {
         label: `${item.countryCode} · ${item.linkMask}`
       })),
       names: names.map((item) => ({ id: item.id, displayName: item.displayName })),
+      defaultProxyId: defaults.proxy?.status === 'active' ? defaults.proxyId : null,
       mailboxTotal: mailboxes.total,
       proxyTotal: proxies.total
     };
   }
-  async connection(operator: AuthenticatedUser) {
-    const runtime = await this.settings.runtime(operator.id, true);
-    await this.transactions.execute(
-      async (tx) => {
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_registration.connector_access',
-          objectType: 'registration_connector'
-        });
-      },
-      { changedScopes: ['audit-logs'], operator, requestId: randomUUID(), retryMode: 'none' }
-    );
-    return { connectorUrl: runtime.connectorUrl, connectorToken: runtime.connectorToken };
+  async execution(operator: AuthenticatedUser) {
+    const defaults = await this.settings.getServerProxySettings(operator);
+    return {
+      engine: 'camoufox' as const,
+      proxyId: defaults.proxy?.status === 'active' ? defaults.proxyId : null
+    };
+  }
+  async authorized(jobId: string, token: unknown, attempt: unknown) {
+    id(jobId);
+    if (typeof token !== 'string' || !/^[a-f\d]{64}$/.test(token))
+      throw new ForbiddenException('任务授权无效');
+    const row = await this.repository.find(jobId);
+    if (
+      !row?.nonceHash ||
+      !row.leaseUntil ||
+      row.leaseUntil <= new Date() ||
+      row.attempt !== attempt ||
+      ['completed', 'cancelled'].includes(row.state) ||
+      !timingSafeEqual(
+        Buffer.from(row.nonceHash, 'hex'),
+        Buffer.from(registrationTokenHash(token), 'hex')
+      )
+    )
+      throw new ForbiddenException('任务授权已失效');
+    return row;
   }
   async owned(jobId: string, operator: AuthenticatedUser) {
     id(jobId);
@@ -128,7 +143,7 @@ export class RegistrationJobsService {
     const input = startInput(value);
     const mailbox = await this.mailboxes.registrationMailbox(input.mailboxAliasId, operator);
     await this.proxies.forCharge(input.proxyId, operator);
-    await this.settings.runtime(operator.id, true);
+    await requireRegistrationWorker();
     const emailHash = this.encryption.hash(mailbox.email.toLowerCase())!;
     return this.transactions.execute(
       async (tx) => {
@@ -174,11 +189,17 @@ export class RegistrationJobsService {
   }
   async launch(jobId: string, operator: AuthenticatedUser) {
     const original = await this.owned(jobId, operator);
+    if (original.reason === 'builtin_cancel_unconfirmed')
+      throw new ConflictException('原窗口关闭尚未确认，请重试关闭后再启动任务');
     if (['completed', 'cancelled'].includes(original.state))
       throw new ConflictException('该任务已经结束');
     await this.mailboxes.registrationMailbox(original.mailboxAliasId, operator);
     const proxy = await this.proxies.forCharge(original.proxyId, operator);
-    const runtime = await this.settings.runtime(operator.id, true);
+    if (original.browserProfileId && !original.browserProfileId.startsWith('reg_'))
+      throw new ConflictException(
+        '旧任务使用比特窗口，不能转成新窗口重复注册；请核对账号并结束旧任务'
+      );
+    await requireRegistrationWorker();
     const agentToken = randomBytes(32).toString('hex');
     const job = await this.transactions.execute(
       async (tx) => {
@@ -214,13 +235,11 @@ export class RegistrationJobsService {
       },
       { changedScopes: ['auto-recharge'], operator, requestId: randomUUID(), retryMode: 'none' }
     );
-    return {
+    const delivery = await registrationWorkerCommand(job.id, job.attempt, 'launch', {
       id: job.id,
       mode: 'registration',
       attempt: job.attempt,
       agentToken,
-      connectorUrl: runtime.connectorUrl,
-      connectorToken: runtime.connectorToken,
       email: this.encryption.decrypt(job.emailEncrypted),
       password: this.encryption.decrypt(job.passwordEncrypted),
       displayName: job.displayName,
@@ -231,27 +250,38 @@ export class RegistrationJobsService {
       registered: job.registered,
       passwordVerified: job.passwordVerified,
       mfaVerified: job.mfaVerified,
-      bitBrowser: {
-        localApiUrl: runtime.localApiUrl,
-        localApiToken: runtime.localApiToken,
-        groupName: runtime.groupName,
-        tagName: runtime.tagName,
-        proxyType: proxy.type,
-        dynamicProxyUrl: proxy.mode === 'dynamic' ? proxy.extractionUrl : '',
-        browserOptions: {
-          ...runtime.browserOptions,
-          proxyMode: proxy.mode,
-          staticHost: proxy.mode === 'static' ? proxy.host : '',
-          staticPort: proxy.mode === 'static' ? proxy.port : 8080,
-          dynamicProvider: 'common',
-          refreshIp: true
+      proxy,
+      expectedCountry: proxy.countryCode
+    });
+    if (delivery === 'not_received') {
+      await this.transactions.execute(
+        async (tx) => {
+          await this.repository.lock(tx);
+          const current = await this.repository.findInTransaction(tx, job.id);
+          if (
+            current?.nonceHash === registrationTokenHash(agentToken) &&
+            current.attempt === job.attempt
+          ) {
+            await this.repository.update(tx, job.id, {
+              state: 'partial',
+              nonceHash: null,
+              leaseUntil: null,
+              reason: 'builtin_task_not_received'
+            });
+            await this.audit.append(tx, {
+              userId: operator.id,
+              module: 'id_business_v2',
+              action: 'id_business_v2.auto_registration.launch_not_received',
+              objectType: 'registration_job',
+              objectId: job.id,
+              afterData: { attempt: job.attempt }
+            });
+          }
         },
-        staticProxyCredentials:
-          proxy.mode === 'static' && proxy.username
-            ? { username: proxy.username, password: proxy.password }
-            : undefined
-      }
-    };
+        { changedScopes: ['auto-recharge'], operator, requestId: randomUUID(), retryMode: 'none' }
+      );
+    }
+    return { id: job.id, attempt: job.attempt, delivery };
   }
   async code(jobId: string, operator: AuthenticatedUser) {
     const row = await this.owned(jobId, operator);
@@ -297,16 +327,22 @@ export class RegistrationJobsService {
   }
   async cancel(jobId: string, operator: AuthenticatedUser) {
     await this.owned(jobId, operator);
-    return this.transactions.execute(
+    const result = await this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
         const job = await this.repository.findInTransaction(tx, jobId);
         if (!job || job.ownerId !== operator.id || job.state === 'completed')
           throw new ConflictException('该任务不能取消');
-        await this.repository.update(tx, jobId, {
-          state: 'cancelled',
+        const windowMayExist =
+          job.attempt > 0 &&
+          job.reason !== 'builtin_task_not_received' &&
+          (!job.browserProfileId || job.browserProfileId.startsWith('reg_'));
+        const updated = await this.repository.update(tx, jobId, {
+          state: windowMayExist ? 'partial' : 'cancelled',
           nonceHash: null,
-          leaseUntil: null
+          leaseUntil: null,
+          ...(windowMayExist ? { reason: 'builtin_cancel_unconfirmed' } : {}),
+          updatedAt: new Date(Math.max(Date.now(), job.updatedAt.getTime() + 1))
         });
         await this.audit.append(tx, {
           userId: operator.id,
@@ -314,15 +350,46 @@ export class RegistrationJobsService {
           action: 'id_business_v2.auto_registration.cancel',
           objectType: 'registration_job',
           objectId: jobId,
-          afterData: { registered: job.registered }
+          afterData: { registered: job.registered, closeConfirmed: !windowMayExist }
         });
-        return { id: jobId };
+        return { windowMayExist, version: updated.updatedAt, attempt: job.attempt };
       },
       { changedScopes: ['auto-recharge'], operator, requestId: randomUUID(), retryMode: 'none' }
     );
+    const delivery = await registrationWorkerCommand(jobId, result.attempt, 'cancel', {
+      attempt: result.attempt
+    });
+    if (result.windowMayExist && delivery !== 'unknown') {
+      await this.transactions.execute(
+        async (tx) => {
+          await this.repository.lock(tx);
+          const current = await this.repository.findInTransaction(tx, jobId);
+          if (
+            !current ||
+            current.ownerId !== operator.id ||
+            current.attempt !== result.attempt ||
+            current.state !== 'partial' ||
+            current.reason !== 'builtin_cancel_unconfirmed' ||
+            current.updatedAt.getTime() !== result.version.getTime()
+          )
+            return;
+          await this.repository.update(tx, jobId, { state: 'cancelled', reason: null });
+          await this.audit.append(tx, {
+            userId: operator.id,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_registration.cancel',
+            objectType: 'registration_job',
+            objectId: jobId,
+            afterData: { closeConfirmed: true }
+          });
+        },
+        { changedScopes: ['auto-recharge'], operator, requestId: randomUUID(), retryMode: 'none' }
+      );
+    }
+    return { id: jobId, attempt: result.attempt, delivery };
   }
 
-  async resumeCredentials(jobId: string, operator: AuthenticatedUser) {
+  private async resumeCredentials(jobId: string, operator: AuthenticatedUser) {
     await this.owned(jobId, operator);
     return this.transactions.execute(
       async (tx) => {
@@ -365,5 +432,37 @@ export class RegistrationJobsService {
       },
       { changedScopes: ['audit-logs'], operator, requestId: randomUUID(), retryMode: 'none' }
     );
+  }
+  async resume(jobId: string, operator: AuthenticatedUser) {
+    const row = await this.owned(jobId, operator);
+    if (row.reason === 'builtin_cancel_unconfirmed')
+      throw new ConflictException('原窗口关闭尚未确认，请重试关闭后再启动任务');
+    const credentials = await this.resumeCredentials(jobId, operator);
+    if (row.state === 'partial' || (row.leaseUntil && row.leaseUntil <= new Date()))
+      return this.launch(jobId, operator);
+    const delivery = await registrationWorkerCommand(jobId, row.attempt, 'resume', credentials);
+    return { id: jobId, attempt: row.attempt, delivery };
+  }
+  async submitCode(jobId: string, value: unknown, operator: AuthenticatedUser) {
+    const input = record(value);
+    if (Object.keys(input).some((key) => !['code', 'attempt', 'step'].includes(key)))
+      throw new BadRequestException('验证码包含未知字段');
+    const row = await this.owned(jobId, operator);
+    const code = text(input.code, '验证码', 8);
+    if (
+      !/^\d{6,8}$/.test(code) ||
+      row.state !== 'awaiting_email' ||
+      row.attempt !== input.attempt ||
+      row.step !== input.step ||
+      !row.leaseUntil ||
+      row.leaseUntil <= new Date()
+    )
+      throw new ConflictException('验证码或任务步骤已变化');
+    const delivery = await registrationWorkerCommand(jobId, row.attempt, 'code', {
+      code,
+      attempt: row.attempt,
+      step: row.step
+    });
+    return { id: jobId, attempt: row.attempt, delivery };
   }
 }

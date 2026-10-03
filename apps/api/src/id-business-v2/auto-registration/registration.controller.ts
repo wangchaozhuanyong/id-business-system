@@ -26,10 +26,10 @@ export class RegistrationController {
   ) {
     return this.mailboxes.markRegistered(aliasId, value, operator);
   }
-  @Get('connection') @Header('Cache-Control', 'no-store') connection(
+  @Get('execution') @Header('Cache-Control', 'no-store') execution(
     @CurrentUser() operator: AuthenticatedUser
   ) {
-    return this.jobs.connection(operator);
+    return this.jobs.execution(operator);
   }
   @Get('options') @Header('Cache-Control', 'no-store') options(
     @Query() query: { q?: string; page?: string },
@@ -81,9 +81,10 @@ export class RegistrationController {
   }
   @Post('jobs/:id/code') @Header('Cache-Control', 'no-store') code(
     @Param('id') jobId: string,
+    @Body() value: unknown,
     @CurrentUser() operator: AuthenticatedUser
   ) {
-    return this.jobs.code(jobId, operator);
+    return this.jobs.submitCode(jobId, value, operator);
   }
   @Post('jobs/:id/cancel') cancel(
     @Param('id') jobId: string,
@@ -92,10 +93,10 @@ export class RegistrationController {
     return this.jobs.cancel(jobId, operator);
   }
 
-  @Post('jobs/:id/resume-credentials') @Header('Cache-Control', 'no-store') resumeCredentials(
+  @Post('jobs/:id/resume') @Header('Cache-Control', 'no-store') resume(
     @Param('id') jobId: string,
     @CurrentUser() operator: AuthenticatedUser
   ) {
-    return this.jobs.resumeCredentials(jobId, operator);
+    return this.jobs.resume(jobId, operator);
   }
 }

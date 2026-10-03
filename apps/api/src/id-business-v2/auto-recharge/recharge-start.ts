@@ -249,7 +249,8 @@ export async function startRechargeJob(
               }
             : {}
         ),
-        leaseUntil: new Date(Date.now() + 16 * 60000)
+        // 服务器代理准备最多 1200 秒，另留 60 秒接收回执。
+        leaseUntil: new Date(Date.now() + (input.action === 'server' ? 21 : 16) * 60000)
       });
       await deps.audit.append(tx, {
         userId: operator.id,

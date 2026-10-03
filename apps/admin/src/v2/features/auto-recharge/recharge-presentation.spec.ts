@@ -8,7 +8,8 @@ import {
   rechargeIssueFeedback,
   statusLabel,
   subscriptionLabel,
-  paymentStatusLabel
+  paymentStatusLabel,
+  proxyAttemptLabel
 } from './recharge-presentation';
 import type { V2RechargeJob } from './contracts';
 
@@ -23,6 +24,63 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('显示代理连接次数与20秒预算，进入登录后不残留代理重试文案', () => {
+    const progress = {
+      proxy_attempt: 10,
+      proxy_attempt_limit: 10 as const,
+      proxy_wait_seconds: 20 as const
+    };
+    for (const stage of ['proxy_resolving', 'proxy_verifying', 'proxy_retrying'])
+      expect(
+        proxyAttemptLabel(
+          job({ action: 'server', state: 'running', result: { ...progress, stage } })
+        )
+      ).toBe('代理连接第 10 / 10 次尝试，官网连接核验最多等待 20 秒。');
+    for (const stage of [
+      'session_restore',
+      'login_email',
+      'login_network_verifying',
+      'checkout_create',
+      'payment_request_sending'
+    ])
+      expect(proxyAttemptLabel(job({ action: 'server', result: { ...progress, stage } }))).toBe('');
+    expect(
+      proxyAttemptLabel(
+        job({ action: 'bitbrowser', result: { ...progress, stage: 'proxy_verifying' } })
+      )
+    ).toBe('');
+    expect(
+      proxyAttemptLabel(
+        job({
+          action: 'server',
+          result: { ...progress, proxy_attempt_limit: 1, stage: 'proxy_verifying' }
+        })
+      )
+    ).toBe('');
+    expect(
+      proxyAttemptLabel(
+        job({ action: 'server', result: { stage: 'proxy_verifying', proxy_attempt: 1 } })
+      )
+    ).toBe('');
+  });
+  it('代理重试终止原因显示中文，历史付款保护仍优先', () => {
+    expect(statusLabel('proxy_retrying')).toContain('已关闭');
+    for (const reason of [
+      'proxy_retry_exhausted',
+      'proxy_cleanup_failed',
+      'fingerprint_start_timeout',
+      'fingerprint_cleanup_failed'
+    ]) {
+      const issue = rechargeIssueFeedback(job({ action: 'server', result: { reason } }));
+      expect(issue?.message).not.toContain(reason);
+      expect(issue?.action).not.toContain('比特');
+      expect(
+        rechargeIssueFeedback(
+          job({ action: 'server', result: { reason, payment_requests_sent: 1 } })
+        )?.action
+      ).toContain('只读复查原订单');
+    }
+  });
   it('服务器付款前各阶段显示明确中文位置', () => {
     expect(statusLabel('proxy_resolving')).toContain('提取');
     expect(statusLabel('proxy_verifying')).toContain('核实');

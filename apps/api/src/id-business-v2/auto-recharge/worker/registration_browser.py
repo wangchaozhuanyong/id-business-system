@@ -162,7 +162,9 @@ class RegistrationBrowser:
 
     async def verify_login(self, mfa=False):
         # A clean context proves the staged password works; an existing session cannot.
-        verification = await self.context.browser.new_context()
+        verification = (await self.job.new_verification_context()
+                        if hasattr(self.job, 'new_verification_context')
+                        else await self.context.browser.new_context())
         await verification.route('**/*', self.guard)
         page = await verification.new_page()
         try:

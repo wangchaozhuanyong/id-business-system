@@ -12,6 +12,222 @@ from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_registration_health_protects_running_jobs_and_retained_partial_windows(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/registration/health'
+        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
+        handler.reply = MagicMock()
+        job = object.__new__(server.registration_builtin.RegistrationServerJob)
+        for done, profile, expected in [(False, None, (True, False)),
+                                        (True, {'job_id': 'fixture-job'}, (False, True)),
+                                        (True, None, (False, False))]:
+            job.done = done
+            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                  patch.object(server.Handler, 'job', job),
+                  patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
+                handler.do_GET()
+            status, value = handler.reply.call_args.args
+            self.assertEqual(status, 200)
+            self.assertEqual((value['registrationBusy'], value['registrationWindowRetained']), expected)
+            self.assertNotIn('job_id', value)
+
+    def test_registration_cancel_receipt_requires_closed_resources(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/registration/jobs/fixture-job/status'
+        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
+        handler.reply = MagicMock()
+        job = object.__new__(server.registration_builtin.RegistrationServerJob)
+        job.id, job.attempt, job.cancelled = 'fixture-job', 1, threading.Event()
+        job.cancelled.set()
+        for done, profile, expected in [(False, None, False),
+                                        (True, {'job_id': job.id}, False),
+                                        (True, None, True)]:
+            job.done = done
+            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                  patch.object(server.Handler, 'job', job),
+                  patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
+                handler.do_GET()
+            status, value = handler.reply.call_args.args
+            self.assertEqual(status, 200)
+            self.assertEqual(value['cancelled'], expected)
+
+    def test_prepared_proxy_window_is_reused_once_and_login_failure_never_rotates_again(self):
+        async def exercise():
+            job = server.Job('test', {
+                'action': 'server', 'plan': 'plus', 'expectedCountry': 'US',
+                'proxy': {'mode': 'dynamic', 'type': 'http', 'extractionUrl': 'https://proxy.example.invalid/extract'},
+                'login': {'email': 'test@example.invalid', 'password': 'synthetic'}
+            })
+            context = MagicMock(close=AsyncMock())
+            page = MagicMock()
+            browser = MagicMock(close=AsyncMock())
+            prepared = {'browser': browser, 'context': context, 'page': page,
+                        'proxy': {'server': 'http://proxy.example.invalid:8080'},
+                        'network': {'ip': '8.8.8.8', 'country': 'US'}}
+            runtime = server.PersistentBrowserRuntime()
+            runtime._discard = AsyncMock()
+            job.progress = MagicMock()
+            job.login_target = AsyncMock(side_effect=Stop('session_network_error'))
+            with (patch.object(server.server_proxy, 'prepare_browser', AsyncMock(return_value=prepared)) as prepare,
+                  patch.object(server.server_proxy, 'observe_exit', AsyncMock()) as observe,
+                  patch.object(server.pay, 'run_flow', AsyncMock()) as payment):
+                with self.assertRaises(Stop) as stopped:
+                    await runtime._execute_isolated(lambda current: job.execute(current),
+                                                    browser_factory=job.prepare_server_browser)
+            self.assertEqual(stopped.exception.report['reason'], 'session_network_error')
+            prepare.assert_awaited_once()
+            self.assertEqual(prepare.await_args.kwargs['target_url'], 'https://chatgpt.com/auth/login')
+            job.login_target.assert_awaited_once()
+            self.assertIs(job.login_target.await_args.kwargs['initial_page'], page)
+            observe.assert_not_awaited()
+            payment.assert_not_awaited()
+            context.close.assert_awaited_once()
+            browser.close.assert_awaited_once()
+            self.assertIsNone(job.prepared_browser)
+            self.assertIsNone(job.resolved_proxy)
+        asyncio.run(exercise())
+
+    def test_preloaded_password_and_json_pages_are_not_navigated_again_before_identity(self):
+        async def exercise(mode):
+            job = server.Job('test', {'plan': 'plus'})
+            job.progress = MagicMock()
+            target = type('Target', (), {'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'})()
+            page = MagicMock(goto=AsyncMock(), close=AsyncMock())
+            context = MagicMock(new_page=AsyncMock(), add_cookies=AsyncMock(), route=AsyncMock(), unroute=AsyncMock())
+            with (patch.object(server.browser_password_login, 'login_with_password', AsyncMock(return_value=(target, {}))) as login,
+                  patch.object(server.browser_password_login, 'official_identity', AsyncMock(return_value=(target, {}))),
+                  patch.object(server.browser_password_login, 'clear_visible_secrets', AsyncMock())):
+                if mode == 'password':
+                    await job.login_target(context, {'email': 'test@example.invalid', 'password': 'synthetic'}, initial_page=page)
+                    self.assertTrue(login.await_args.kwargs['initial_loaded'])
+                else:
+                    await job.verify_json_target(context, target, 'test@example.invalid', initial_page=page)
+                    context.add_cookies.assert_awaited_once()
+            context.new_page.assert_not_awaited()
+            page.goto.assert_not_awaited()
+            page.close.assert_awaited_once()
+        for mode in ('password', 'json'): asyncio.run(exercise(mode))
+
+    def test_login_cleanup_is_bounded_and_preserves_the_original_failure(self):
+        async def never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        async def exercise(mode, waiting_at, original_failure):
+            job = server.Job('test', {'plan': 'plus'})
+            job.progress = MagicMock()
+            target = type('Target', (), {
+                'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
+            })()
+            page = MagicMock(goto=AsyncMock(), close=AsyncMock())
+            context = MagicMock(new_page=AsyncMock(return_value=page), add_cookies=AsyncMock(),
+                                route=AsyncMock(), unroute=AsyncMock())
+            clear = AsyncMock()
+            waiting = {'secrets': clear, 'unroute': context.unroute, 'close': page.close}[waiting_at]
+            waiting.side_effect = never
+            login = {'email': 'test@example.invalid', 'password': 'synthetic'}
+            observed = AsyncMock(return_value=(target, {'current_plan': 'free'}))
+            if original_failure:
+                observed.side_effect = Stop('verification_required')
+            with (patch.object(server.server_proxy, 'CLEANUP_TIMEOUT_SECONDS', 0.01),
+                  patch.object(server.browser_password_login, 'clear_visible_secrets', clear),
+                  patch.object(server.browser_password_login, 'login_with_password', observed),
+                  patch.object(server.browser_password_login, 'official_identity', observed)):
+                with self.assertRaises(Stop) as stopped:
+                    operation = (job.login_target(context, login) if mode == 'password' else
+                                 job.verify_json_target(context, target, 'test@example.invalid'))
+                    await asyncio.wait_for(operation, timeout=0.3)
+            self.assertEqual(stopped.exception.report['reason'],
+                             'verification_required' if original_failure else 'browser_operation_failed')
+            context.unroute.assert_awaited_once()
+            page.close.assert_awaited_once()
+            if mode == 'password':
+                self.assertEqual(login, {})
+                clear.assert_awaited_once()
+
+        for mode in ('password', 'json'):
+            for waiting_at in (('secrets', 'unroute', 'close') if mode == 'password' else
+                               ('unroute', 'close')):
+                for original_failure in (False, True):
+                    with self.subTest(mode=mode, waiting_at=waiting_at, original_failure=original_failure):
+                        asyncio.run(exercise(mode, waiting_at, original_failure))
+
+    def test_session_preparation_hang_stops_before_identity_read(self):
+        async def never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        async def exercise(mode):
+            job = server.Job('test', {'plan': 'plus'})
+            job.progress = MagicMock()
+            target = type('Target', (), {
+                'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
+            })()
+            context = MagicMock(new_page=AsyncMock(side_effect=never), add_cookies=AsyncMock())
+            identity = AsyncMock()
+            original_budget = server.SessionBudget
+            login = {'email': 'test@example.invalid', 'password': 'synthetic'}
+            with (patch.object(server, 'SessionBudget', side_effect=lambda _, **kwargs:
+                               original_budget(0.02, **kwargs)),
+                  patch.object(server.browser_password_login, 'login_with_password', identity),
+                  patch.object(server.browser_password_login, 'official_identity', identity)):
+                with self.assertRaises(Stop) as stopped:
+                    operation = (job.login_target(context, login) if mode == 'password' else
+                                 job.verify_json_target(context, target, 'test@example.invalid'))
+                    await asyncio.wait_for(operation, timeout=0.3)
+            self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+            identity.assert_not_awaited()
+            if mode == 'password':
+                self.assertEqual(login, {})
+        for mode in ('password', 'json'):
+            with self.subTest(mode=mode):
+                asyncio.run(exercise(mode))
+
+    def test_proxy_failure_finishes_even_when_context_cleanup_hangs(self):
+        async def never():
+            await asyncio.Event().wait()
+
+        context = MagicMock(close=AsyncMock(side_effect=never))
+        browser = MagicMock(new_context=AsyncMock(return_value=context))
+
+        class Runtime:
+            started = True
+
+            @staticmethod
+            def run_isolated(operation, *, proxy_factory=None, browser_factory=None):
+                async def run():
+                    # Exercise the direct execution compatibility path and its bounded cleanup.
+                    return await operation(browser)
+                return asyncio.run(run())
+
+        job = server.Job('11111111-1111-4111-8111-111111111111', {
+            'action': 'server', 'plan': 'plus', 'expectedCountry': 'PH',
+            'proxy': {'mode': 'static'}, 'sessionJson': '{}'
+        })
+        calls = []
+        with (patch.object(server, 'BROWSER_RUNTIME', Runtime()),
+              patch.object(server.server_proxy, 'resolve', AsyncMock(return_value={
+                  'server': 'http://proxy.example.invalid:8080'
+              })) as resolve,
+              patch.object(server.server_proxy, 'observe_exit', AsyncMock(
+                  side_effect=Stop('proxy_network_unconfirmed'))),
+              patch.object(server.server_proxy, 'CLEANUP_TIMEOUT_SECONDS', 0.02),
+              patch.object(job, 'verify_json_target', AsyncMock()) as login,
+              patch.object(server.pay, 'run_flow', AsyncMock()) as payment,
+              patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body))):
+            job.run()
+        resolve.assert_awaited_once()
+        login.assert_not_awaited()
+        payment.assert_not_awaited()
+        context.close.assert_awaited_once()
+        self.assertTrue(job.done)
+        finished = [body for body in calls if body['type'] == 'finished']
+        self.assertEqual(len(finished), 1)
+        self.assertEqual(finished[0]['result']['reason'], 'proxy_network_unconfirmed')
+        self.assertEqual(finished[0]['result']['stage'], 'proxy_verifying')
+        self.assertEqual(finished[0]['result']['payment_requests_sent'], 0)
+        self.assertFalse(finished[0]['result']['payment_attempted'])
+        self.assertEqual(job.payload, {})
+        self.assertIsNone(job.resolved_proxy)
+
     def test_json_target_requires_matching_official_email_and_account(self):
         async def exercise(observed):
             job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
@@ -419,19 +635,51 @@ class ServerTests(unittest.TestCase):
                 raise AssertionError('server job must not use the shared browser')
 
             @staticmethod
-            def run_isolated(operation):
+            def run_isolated(operation, *, proxy_factory=None, browser_factory=None):
+                self.assertIsNotNone(browser_factory)
                 return asyncio.run(operation(browser))
 
         job = server.Job('test', {'action': 'server'})
         execute = AsyncMock(return_value={'status': 'session_verified'})
         calls = []
-        with patch.object(server, 'BROWSER_RUNTIME', Runtime()), \
+        prepare_watchdog, business_watchdog = MagicMock(), MagicMock()
+        with patch.object(server, 'threading') as threads, \
+             patch.object(server, 'BROWSER_RUNTIME', Runtime()), \
              patch.object(server, 'read_cgroup_oom_kill', side_effect=[0, 0]), \
              patch.object(server.Job, 'execute', execute), \
              patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body)):
+            threads.Timer.side_effect = [prepare_watchdog, business_watchdog]
             job.run()
+        self.assertEqual([call.args[0] for call in threads.Timer.call_args_list], [1200, 900])
+        prepare_watchdog.start.assert_called_once()
+        prepare_watchdog.cancel.assert_called_once()
+        business_watchdog.start.assert_called_once()
+        business_watchdog.cancel.assert_called_once()
         execute.assert_awaited_once_with(browser=browser)
         self.assertEqual(calls[-1]['result']['status'], 'session_verified')
+
+    def test_exhausted_preflight_cancels_watchdog_without_starting_business_timer(self):
+        job = server.Job('test', {'action': 'server'})
+        job.stage = 'proxy_verifying'
+        runtime = MagicMock(started=True)
+        runtime.run_isolated.side_effect = Stop('proxy_retry_exhausted', proxy_attempt=10,
+                                               proxy_attempt_limit=10, proxy_wait_seconds=20)
+        calls, watchdog = [], MagicMock()
+        with (patch.object(server, 'BROWSER_RUNTIME', runtime),
+              patch.object(server.threading, 'Timer', return_value=watchdog) as timer,
+              patch.object(server, 'read_cgroup_oom_kill', return_value=0),
+              patch.object(server.pay, 'run_flow', AsyncMock()) as payment,
+              patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body))):
+            job.run()
+        timer.assert_called_once()
+        self.assertEqual(timer.call_args.args[0], 1200)
+        watchdog.cancel.assert_called_once()
+        payment.assert_not_awaited()
+        self.assertTrue(job.done)
+        self.assertEqual(job.payload, {})
+        self.assertEqual(calls[-1]['result']['reason'], 'proxy_retry_exhausted')
+        self.assertEqual(calls[-1]['result']['proxy_attempt'], 10)
+        self.assertEqual(calls[-1]['result']['payment_requests_sent'], 0)
 
     def test_diagnostics_survive_callback_without_free_text_or_secrets(self):
         safe = {'step': 'pricing_page', 'error_type': 'TimeoutError', 'role': 'link',

@@ -1288,6 +1288,13 @@
   gap: 3px;
 }
 
+.v2-form-drawer__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--v2-layout-control-gap);
+}
+
 .v2-form-drawer__heading h2,
 .v2-form-drawer__heading p {
   margin: 0;

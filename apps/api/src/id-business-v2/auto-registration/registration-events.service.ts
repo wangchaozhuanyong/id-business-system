@@ -127,6 +127,12 @@ export class RegistrationEventsService {
           throw new BadRequestException('浏览器窗口编号无效');
         if (row.browserProfileId && profileId !== row.browserProfileId)
           throw new ConflictException('必须继续原浏览器窗口');
+        if (
+          !row.browserProfileId &&
+          profileId?.startsWith('reg_') &&
+          (await this.repository.fingerprintExists(tx, profileId, row.id))
+        )
+          throw new ConflictException('浏览器指纹与已有任务重复，请重新生成');
         const patch: Parameters<RegistrationRepository['update']>[2] = {
           step: ['partial', 'waiting_user'].includes(type) ? row.step : nextStep,
           browserProfileId: profileId,

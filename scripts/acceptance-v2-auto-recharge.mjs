@@ -8,6 +8,8 @@ import { chromium } from 'playwright';
 const origin = 'http://127.0.0.1:5397';
 const proxySettingsOnly = process.argv.includes('--proxy-settings-only');
 const connectorOrigin = 'http://127.0.0.1:55321';
+const updatedProxyId = '77777777-7777-4777-8777-777777777777';
+const fixedProxyId = '66666666-6666-4666-8666-666666666666';
 const server = spawn(
   process.execPath,
   [
@@ -97,6 +99,25 @@ try {
     let savedDynamicProxyUrl = 'https://proxy.example/secret';
     let paymentCap = '1500.00';
     let savedStaticCredentials;
+    let catalogStaticCredentials = {
+      username: 'fixture-proxy-user',
+      password: 'fixture-proxy-password'
+    };
+    const catalogConnection = (id) =>
+      id === fixedProxyId
+        ? {
+            mode: 'static',
+            host: '203.0.113.10',
+            port: 1080,
+            credentials: catalogStaticCredentials
+          }
+        : {
+            mode: 'dynamic',
+            extractionUrl:
+              id === updatedProxyId
+                ? 'https://new-proxy.example/extract'
+                : 'https://proxy.example/secret'
+          };
     let defaultProxyId = '99999999-9999-4999-8999-999999999999';
     let defaultSaves = 0;
     const serverProxySettings = () => ({
@@ -105,12 +126,19 @@ try {
       proxy: defaultProxyId
         ? {
             id: defaultProxyId,
-            countryCode: defaultProxyId.startsWith('9999') ? 'US' : 'PH',
-            kind: 'dynamic_residential',
-            connectionMode: 'extraction',
+            countryCode: defaultProxyId.startsWith('8888') ? 'PH' : 'US',
+            kind: defaultProxyId === fixedProxyId ? 'static_residential' : 'dynamic_residential',
+            connectionMode: defaultProxyId === fixedProxyId ? 'direct' : 'extraction',
             protocol: 'http',
             status: 'active',
-            remark1: defaultProxyId.startsWith('9999') ? '美国验收代理' : '菲律宾验收代理'
+            remark1:
+              defaultProxyId === fixedProxyId
+                ? '固定目录验收代理'
+                : defaultProxyId === updatedProxyId
+                  ? '更新动态验收代理'
+                  : defaultProxyId.startsWith('9999')
+                    ? '美国验收代理'
+                    : '菲律宾验收代理'
           }
         : null
     });
@@ -205,6 +233,23 @@ try {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }));
+        if (!country || country === 'US')
+          items.push(
+            {
+              ...items.find((item) => item.countryCode === 'US'),
+              id: updatedProxyId,
+              remark1: '更新动态验收代理',
+              linkMask: 'https://new-proxy.example/…（已加密）'
+            },
+            {
+              ...items.find((item) => item.countryCode === 'US'),
+              id: fixedProxyId,
+              remark1: '固定目录验收代理',
+              kind: 'static_residential',
+              connectionMode: 'direct',
+              linkMask: 'http://203.0.113.10:1080/…（已加密）'
+            }
+          );
         return success(route, { items, total: items.length, page: 1, pageSize: 100 });
       }
       if (path.endsWith('/bank-recharge/accounts') && request.method() === 'GET')
@@ -214,7 +259,7 @@ try {
           items: [{ code: 'PHP', name: '菲律宾比索', minorUnits: 2, active: true }]
         });
       if (path.endsWith('/auto-recharge/bitbrowser-settings') && request.method() === 'GET')
-        return success(route, currentSettings);
+        return success(route, { ...currentSettings, proxyId: defaultProxyId });
       if (path.endsWith('/auto-recharge/bitbrowser-catalog-access'))
         return success(route, {
           connectorUrl: connectorOrigin,
@@ -233,18 +278,28 @@ try {
             contentType: 'application/json',
             body: JSON.stringify({ success: false, message: '模拟设置保存失败，请重试' })
           });
-        savedDynamicProxyUrl = input.dynamicProxyUrl || savedDynamicProxyUrl;
-        if (input.clearStaticProxyCredentials) savedStaticCredentials = undefined;
-        else if (input.staticProxyCredentials)
-          savedStaticCredentials = input.staticProxyCredentials;
+        assert.ok([updatedProxyId, fixedProxyId].includes(input.proxyId));
+        assert.equal(input.dynamicProxyUrl, undefined, '窗口设置只引用目录，不复制提取链接');
+        assert.equal(input.staticProxyCredentials, undefined, '窗口设置不复制目录凭据');
+        assert.equal(input.clearStaticProxyCredentials, false);
+        defaultProxyId = input.proxyId;
+        const connection = catalogConnection(input.proxyId);
+        assert.equal(input.browserOptions.proxyMode, connection.mode);
+        savedDynamicProxyUrl = connection.mode === 'dynamic' ? connection.extractionUrl : '';
+        savedStaticCredentials = connection.mode === 'static' ? connection.credentials : undefined;
         currentSettings = {
           ...currentSettings,
           groupName: input.groupName,
           tagName: input.tagName,
           proxyType: input.proxyType,
-          browserOptions: input.browserOptions,
-          staticProxyCredentialsConfigured: Boolean(savedStaticCredentials),
-          dynamicProxyUrlMask: 'https://new-proxy.example/…（已加密）'
+          proxyId: input.proxyId,
+          browserOptions: {
+            ...input.browserOptions,
+            staticHost: connection.mode === 'static' ? connection.host : '',
+            staticPort: connection.mode === 'static' ? connection.port : 8080
+          },
+          staticProxyCredentialsConfigured: false,
+          dynamicProxyUrlMask: settings.dynamicProxyUrlMask
         };
         return success(route, currentSettings);
       }
@@ -262,6 +317,10 @@ try {
         apiStarts += 1;
         serverStartBody = request.postDataJSON();
         assert.equal(serverStartBody.plan, 'plus');
+        assert.equal(serverStartBody.proxyId, width === 1440 ? updatedProxyId : fixedProxyId);
+        const executionProxy = catalogConnection(serverStartBody.proxyId);
+        savedStaticCredentials =
+          executionProxy.mode === 'static' ? executionProxy.credentials : undefined;
         assert.equal(serverStartBody.addressId, address.id);
         assert.equal(serverStartBody.lockedCurrency, 'PHP');
         assert.equal(serverStartBody.maxAmount, '30.00');
@@ -697,9 +756,9 @@ try {
     await page.getByRole('option', { name: '测试代理分组', exact: true }).click();
     await tagSelect.click();
     await page.getByRole('option', { name: '续费账号', exact: true }).click();
-    await settingsDrawer
-      .getByLabel('动态 IP 提取链接', { exact: true })
-      .fill('https://new-proxy.example/extract');
+    await settingsDrawer.getByRole('combobox', { name: '选择代理 IP', exact: true }).click();
+    await page.getByRole('option', { name: /更新动态验收代理/ }).click();
+    assert.equal(await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).count(), 0);
     await settingsDrawer
       .locator('.el-select')
       .filter({ has: page.getByRole('combobox', { name: '选择操作系统', exact: true }) })
@@ -741,9 +800,15 @@ try {
     await settingsDrawer.getByText('续费账号', { exact: true }).waitFor();
     await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
     await settingsDrawer.getByRole('alert').filter({ hasText: '模拟设置保存失败' }).waitFor();
-    assert.equal(
-      await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).inputValue(),
-      'https://new-proxy.example/extract'
+    assert.ok(
+      (
+        await settingsDrawer
+          .locator('.el-select')
+          .filter({
+            has: page.getByRole('combobox', { name: '选择代理 IP', exact: true })
+          })
+          .innerText()
+      ).includes('更新动态验收代理')
     );
     await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
     await settingsDrawer.waitFor({ state: 'hidden' });
@@ -758,10 +823,8 @@ try {
     assert.equal(currentSettings.browserOptions.syncCookies, false);
     await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
     await settingsDrawer.getByText('测试代理分组', { exact: true }).waitFor();
-    assert.equal(
-      await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).inputValue(),
-      ''
-    );
+    assert.equal(await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).count(), 0);
+    assert.equal(currentSettings.proxyId, updatedProxyId);
     assert.equal(await settingsDrawer.getByText('Windows 电脑', { exact: true }).isVisible(), true);
     if (width !== 1440) {
       await settingsDrawer
@@ -769,39 +832,32 @@ try {
         .filter({ has: page.getByRole('combobox', { name: '选择代理模式', exact: true }) })
         .click();
       await page.getByRole('option', { name: '固定代理', exact: true }).click();
-      await settingsDrawer.getByLabel('固定代理主机', { exact: true }).fill('203.0.113.10');
-      await settingsDrawer
-        .getByRole('spinbutton', { name: '固定代理端口', exact: true })
-        .fill('1080');
-      await settingsDrawer.getByLabel('代理账号', { exact: true }).fill('fixture-proxy-user');
-      await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
-      await settingsDrawer.getByText('代理账号和密码请一起填写，或一起留空').first().waitFor();
-      assert.equal(settingsSaves, 2);
-      await settingsDrawer.getByLabel('代理密码', { exact: true }).fill('fixture-proxy-password');
+      await settingsDrawer.getByRole('combobox', { name: '选择代理 IP', exact: true }).click();
+      await page.getByRole('option', { name: /固定目录验收代理/ }).click();
+      for (const label of ['固定代理主机', '代理账号', '代理密码'])
+        assert.equal(await settingsDrawer.getByLabel(label, { exact: true }).count(), 0);
       await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
       await settingsDrawer.waitFor({ state: 'hidden' });
-      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-      await settingsDrawer
-        .getByText('固定代理 · HTTP · 203.0.113.10:1080', { exact: true })
-        .waitFor();
-      await settingsDrawer
-        .getByRole('switch', { name: '清除代理凭据', exact: true })
-        .waitFor({ state: 'attached' });
-      assert.equal(await settingsDrawer.getByLabel('代理密码', { exact: true }).inputValue(), '');
+      assert.deepEqual(savedStaticCredentials, {
+        username: 'fixture-proxy-user',
+        password: 'fixture-proxy-password'
+      });
       assert.equal(
-        await settingsDrawer.getByLabel('固定代理主机', { exact: true }).inputValue(),
-        '203.0.113.10'
+        currentSettings.staticProxyCredentialsConfigured,
+        false,
+        '目录秘密没有复制到窗口设置'
       );
-      await settingsDrawer
-        .locator('.el-switch')
-        .filter({ has: page.getByRole('switch', { name: '清除代理凭据', exact: true }) })
-        .locator('.el-switch__core')
-        .click();
+      assert.equal(currentSettings.browserOptions.staticHost, '203.0.113.10');
+      assert.equal(currentSettings.browserOptions.staticPort, 1080);
+      // 模拟在代理目录清除凭据：新任务必须实时读目录，不使用窗口设置中旧秘密。
+      catalogStaticCredentials = undefined;
+      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
+      await settingsDrawer.getByRole('button', { name: '刷新代理列表', exact: true }).click();
       await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
       await settingsDrawer.waitFor({ state: 'hidden' });
-      assert.equal(currentSettings.staticProxyCredentialsConfigured, false);
+      assert.equal(savedStaticCredentials, undefined);
       await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-      await settingsDrawer.getByLabel('固定代理主机', { exact: true }).waitFor();
+      await settingsDrawer.getByRole('combobox', { name: '选择代理 IP', exact: true }).waitFor();
     }
     await settingsDrawer
       .getByRole('combobox', { name: '选择代理模式', exact: true })
@@ -810,6 +866,10 @@ try {
     await settingsDrawer.screenshot({ path: resolve(evidence, `settings-${width}.png`) });
     await settingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
     await settingsDrawer.waitFor({ state: 'hidden' });
+    await page.getByRole('combobox', { name: '选择代理 IP', exact: true }).click();
+    await page
+      .getByRole('option', { name: width === 1440 ? /更新动态验收代理/ : /固定目录验收代理/ })
+      .click();
     const billingEmail = page.locator('.el-form-item').filter({
       has: page.locator('.el-form-item__label', { hasText: '账单邮箱' })
     });
@@ -939,7 +999,7 @@ try {
             'saved-proxy-used-by-next-job',
             'existing-group-and-tag-dropdowns',
             'window-options-save-readback-and-launch',
-            'static-proxy-credential-validation-and-clear',
+            'managed-static-proxy-readback-no-secret-copy-and-live-credential-clear',
             'catalog-failure-empty-retry',
             'blocked-connection-does-not-create-job',
             'default-plus',

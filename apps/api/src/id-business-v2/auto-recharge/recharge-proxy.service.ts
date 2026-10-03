@@ -17,6 +17,7 @@ import { bankRechargeId, bankRechargeObject, bankRechargeText } from './bank-rec
 import { RechargeProxyRepository } from './persistence/recharge-proxy.repository';
 import {
   parseRechargeProxy,
+  rechargeProxyConnection,
   proxyCountry,
   proxyKind,
   proxyLink,
@@ -350,30 +351,11 @@ export class RechargeProxyService {
       { changedScopes: ['audit-logs'], requestId: randomUUID(), operator, retryMode: 'none' }
     );
     const url = this.encryption.decrypt(item.urlEncrypted)!;
-    if (item.connectionMode === 'extraction') {
-      return {
-        id: item.id,
-        countryCode: item.countryCode,
-        kind: item.kind as RechargeProxyKind,
-        mode: 'dynamic' as const,
-        type: item.protocol as 'http' | 'https' | 'socks5',
-        extractionUrl: url
-      };
-    }
-    const parsed = new URL(url);
     return {
       id: item.id,
       countryCode: item.countryCode,
       kind: item.kind as RechargeProxyKind,
-      mode: 'static' as const,
-      type: item.protocol as 'http' | 'https' | 'socks5',
-      host: parsed.hostname.replace(/^\[|\]$/g, ''),
-      port: Number(
-        parsed.port ||
-          (parsed.protocol === 'http:' ? '80' : parsed.protocol === 'https:' ? '443' : '0')
-      ),
-      username: decodeURIComponent(parsed.username),
-      password: decodeURIComponent(parsed.password)
+      ...rechargeProxyConnection(url, item.connectionMode, proxyProtocol(item.protocol))
     };
   }
 }

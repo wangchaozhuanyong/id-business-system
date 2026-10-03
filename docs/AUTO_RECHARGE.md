@@ -101,7 +101,7 @@ npm run auto-recharge:connector -- --allowed-origin=https://管理端域名
 
 ## 接口与存储
 
-- `GET/PUT /api/id-business-v2/auto-recharge/bitbrowser-settings`：读取脱敏设置或加密更新设置。
+- `GET/PUT /api/id-business-v2/auto-recharge/bitbrowser-settings`：读取脱敏设置或加密更新设置。 支持可选 `proxyId` 引用代理 IP 管理中的启用条目，与注册页和服务器默认代理共用已有配置；代理协议及连接资料取目录最新值，不复制代理秘密到窗口设置。窗口设置标题右侧“使用说明”提供功能解释，保存后使相关设置缓存失效，切页可读取最新默认选择。
 - `GET/PUT /api/id-business-v2/auto-recharge/server-proxy-settings`：管理员读取或保存目录默认代理；写入只接受 `proxyId`（或 `null` 清除），再次校验条目启用状态并写审计，不返回完整链接或代理凭据。
 - `GET/POST /api/id-business-v2/auto-recharge/proxies`、`GET /proxies/countries`、`GET/PATCH/DELETE /proxies/:id`、`POST /proxies/import`：管理员管理代理目录；完整链接仅在受审计详情中返回。充值任务提交 `proxyId` 与 `proxyCountryCode`，服务端再次检查国家和启用状态。
 - `POST /api/id-business-v2/auto-recharge/bitbrowser-catalog-access`：仅管理员获取当前用户的本机连接凭据用于读取列表，禁止缓存并记录访问审计；不读取动态代理链接。

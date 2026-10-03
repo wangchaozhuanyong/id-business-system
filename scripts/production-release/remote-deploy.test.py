@@ -6,7 +6,10 @@ import json
 import io
 import tarfile
 import copy
-from unittest.mock import patch
+import re
+import sqlite3
+from contextlib import redirect_stdout
+from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location('deployment', Path(__file__).with_name('remote-deploy.py'))
 deployment = importlib.util.module_from_spec(spec)
@@ -48,6 +51,161 @@ class ReleaseScopeTests(unittest.TestCase):
                 deployment.wait_healthy(None, 'admin')
 
 
+class RegistrationReleaseGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.database = sqlite3.connect(':memory:')
+        self.addCleanup(self.database.close)
+        self.database.execute('CREATE TABLE id_business_v2_registration_jobs '
+                              '(state TEXT, lease_until TEXT, browser_profile_id TEXT)')
+        self.database.create_function('UTC_TIMESTAMP', 1, lambda _: '2026-10-03 00:00:00')
+        self.idle = {'supported': True, 'registrationBusy': False,
+                     'registrationWindowRetained': False}
+
+    def row(self, state, lease='2026-10-03 01:00:00', profile='reg_original'):
+        self.database.execute('INSERT INTO id_business_v2_registration_jobs VALUES (?, ?, ?)',
+                              (state, lease, profile))
+
+    def mysql(self, directory, *args, **kwargs):
+        self.assertEqual(args[:5], ('exec', '-T', 'mysql', 'sh', '-c'))
+        sql = re.search(r'-e "([^"]+)"$', args[-1]).group(1)
+        # Execute the actual gate predicate with only MySQL dialect conversions.
+        sql = re.sub(r'0x([0-9a-f]+)',
+                     lambda match: "'" + bytes.fromhex(match.group(1)).decode() + "'", sql)
+        sql = sql.replace('LEFT(browser_profile_id, 4)', 'substr(browser_profile_id, 1, 4)')
+        return str(self.database.execute(sql).fetchone()[0])
+
+    def guard(self, runtime=None):
+        with patch.object(deployment, 'registration_runtime_state',
+                          return_value=self.idle if runtime is None else runtime), \
+                patch.object(deployment, 'compose', side_effect=self.mysql):
+            deployment.assert_no_active_registration(None)
+
+    def test_live_running_and_verification_attempts_block_even_before_profile_receipt(self):
+        for state in ('running', 'awaiting_email', 'awaiting_user'):
+            with self.subTest(state=state):
+                self.database.execute('DELETE FROM id_business_v2_registration_jobs')
+                self.row(state, profile=None)
+                with self.assertRaisesRegex(RuntimeError, 'Active registration jobs'):
+                    self.guard()
+
+    def test_history_completed_cancelled_queued_and_expired_rows_do_not_invent_windows(self):
+        for state in ('completed', 'cancelled', 'partial'):
+            self.row(state)
+        self.row('queued', lease=None, profile=None)
+        self.row('running', lease='2026-10-02 23:00:00')
+        self.guard()
+
+    def test_running_worker_or_retained_partial_window_blocks_without_sql_guessing(self):
+        self.row('partial', lease=None)
+        for field in ('registrationBusy', 'registrationWindowRetained'):
+            with self.subTest(field=field), \
+                    patch.object(deployment, 'registration_runtime_state',
+                                 return_value={**self.idle, field: True}), \
+                    patch.object(deployment, 'compose') as sql:
+                with self.assertRaisesRegex(RuntimeError, 'Active registration jobs'):
+                    deployment.assert_no_active_registration(None)
+                sql.assert_not_called()
+
+    def test_legacy_worker_allows_old_local_jobs_and_history_without_builtin_window(self):
+        self.row('awaiting_user', profile='bitbrowser_original')
+        self.row('running', profile=None)
+        self.row('partial')
+        self.guard({'supported': False})
+
+    def test_legacy_worker_cannot_bypass_an_explicit_live_builtin_attempt(self):
+        self.row('running')
+        with self.assertRaisesRegex(RuntimeError, 'Active registration jobs'):
+            self.guard({'supported': False})
+
+    def test_admin_only_keeps_recharge_gate_without_interrupting_registration(self):
+        with patch.object(deployment, 'assert_no_active_recharge') as recharge, \
+                patch.object(deployment, 'assert_no_active_registration') as registration:
+            deployment.assert_no_active_jobs(None, worker_changes=False)
+        recharge.assert_called_once_with(None)
+        registration.assert_not_called()
+        with patch.object(deployment, 'assert_no_active_recharge',
+                          side_effect=RuntimeError('Active recharge jobs prevent release')), \
+                patch.object(deployment, 'assert_no_active_registration') as registration:
+            with self.assertRaisesRegex(RuntimeError, 'Active recharge jobs'):
+                deployment.assert_no_active_jobs(None, worker_changes=True)
+        registration.assert_not_called()
+
+    def test_full_switch_preserves_both_independent_guards(self):
+        with patch.object(deployment, 'assert_no_active_recharge') as recharge, \
+                patch.object(deployment, 'assert_no_active_registration') as registration:
+            deployment.assert_no_active_jobs('current', worker_changes=True)
+        recharge.assert_called_once_with('current')
+        registration.assert_called_once_with('current')
+
+    def test_invalid_or_unreadable_runtime_receipt_fails_closed_without_raw_error(self):
+        values = ('not-json', '[]', '{"supported":0}',
+                  json.dumps({**self.idle, 'registrationBusy': 0}),
+                  json.dumps({**self.idle, 'unexpected': 'fixture-sensitive-value'}))
+        for value in values:
+            with self.subTest(value=value), patch.object(deployment, 'compose', return_value=value):
+                with self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
+                    deployment.registration_runtime_state(None)
+        with patch.object(deployment, 'compose',
+                          side_effect=RuntimeError('fixture-sensitive-value')):
+            with self.assertRaisesRegex(RuntimeError, '^Registration runtime guard unavailable$'):
+                deployment.registration_runtime_state(None)
+
+    def execute_probe(self, response_value=None, error=None):
+        opener = MagicMock()
+        if error is not None:
+            opener.open.side_effect = error
+        else:
+            opener.open.return_value.__enter__.return_value.read.return_value = (
+                json.dumps(response_value).encode())
+
+        def container(directory, *args, **kwargs):
+            self.assertEqual(args[:5], ('exec', '-T', 'auto-recharge', 'python', '-c'))
+            stdout = io.StringIO()
+            with patch('urllib.request.build_opener', return_value=opener), \
+                    patch.dict(deployment.os.environ, {'AUTO_RECHARGE_WORKER_TOKEN': 'fixture-token'}), \
+                    redirect_stdout(stdout):
+                try:
+                    exec(args[-1], {})
+                except SystemExit:
+                    raise RuntimeError('container probe failed') from None
+            return stdout.getvalue()
+
+        with patch.object(deployment, 'compose', side_effect=container):
+            result = deployment.registration_runtime_state(None)
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'http://127.0.0.1:8051/registration/health')
+        self.assertEqual(request.get_header('X-recharge-worker'), 'fixture-token')
+        self.assertNotIn('fixture-token', json.dumps(result))
+        return result
+
+    def test_authenticated_probe_returns_only_boolean_queue_proof(self):
+        result = self.execute_probe({'ready': True, 'engine': 'camoufox',
+                                     'registrationBusy': False, 'registrationWindowRetained': False,
+                                     'extra': 'fixture-sensitive-value'})
+        self.assertEqual(result, self.idle)
+
+    def test_only_legacy_404_is_supported_not_auth_failure_redirect_or_timeout(self):
+        from urllib.error import HTTPError
+        self.assertEqual(self.execute_probe(error=HTTPError('unused', 404, 'old', {}, None)),
+                         {'supported': False})
+        for status in (301, 401, 403, 500):
+            with self.subTest(status=status), \
+                    self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
+                self.execute_probe(error=HTTPError('unused', status, 'failure', {}, None))
+        with self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
+            self.execute_probe(error=TimeoutError('fixture-sensitive-value'))
+
+    def test_new_worker_without_boolean_proof_or_readiness_fails_closed(self):
+        for value in ({'ready': True, 'engine': 'camoufox'},
+                      {'ready': False, 'engine': 'camoufox',
+                       'registrationBusy': False, 'registrationWindowRetained': False},
+                      {'ready': True, 'engine': 'camoufox',
+                       'registrationBusy': 'false', 'registrationWindowRetained': False}):
+            with self.subTest(value=value), \
+                    self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
+                self.execute_probe(value)
+
+
 class CommandFailureSummaryTests(unittest.TestCase):
     def test_failure_reports_controlled_reason_and_source_line(self):
         result = deployment.command_failure_summary({
@@ -64,6 +222,15 @@ class CommandFailureSummaryTests(unittest.TestCase):
             'StandardOutputContent': 'fixture-sensitive-cookie'})
         self.assertNotIn('fixture-sensitive', json.dumps(result))
         self.assertEqual(result['reason'], 'raw error suppressed')
+
+    def test_registration_guard_reports_only_approved_reason(self):
+        for reason in ('Active registration jobs prevent release',
+                       'Registration runtime guard unavailable'):
+            result = deployment.command_failure_summary({
+                'Status': 'Failed', 'ResponseCode': 1,
+                'StandardErrorContent': 'RuntimeError: ' + reason + '\nfixture-sensitive-token'})
+            self.assertEqual(result['reason'], reason)
+            self.assertNotIn('fixture-sensitive', json.dumps(result))
 
     def test_untrusted_status_and_response_fields_are_filtered(self):
         result = deployment.command_failure_summary({

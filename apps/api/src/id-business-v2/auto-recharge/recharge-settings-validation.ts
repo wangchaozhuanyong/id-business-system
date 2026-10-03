@@ -2,9 +2,11 @@ import { BadRequestException } from '@nestjs/common';
 import type { UpdateV2RechargeBitBrowserSettingsInput } from '@apple-business/shared';
 import { object } from './recharge-validation';
 import { validateBrowserOptions, validateStaticCredentials } from './recharge-browser-options';
+import { bankRechargeId } from './bank-recharge-validation';
 
 const proxyTypes = ['http', 'https', 'socks5'] as const;
 const allowedKeys = new Set([
+  'proxyId',
   'serverMode',
   'directMode',
   'connectorUrl',
@@ -115,7 +117,12 @@ export function validateRechargeBitBrowserSettings(
   if (input.clearStaticProxyCredentials && input.staticProxyCredentials !== undefined) {
     throw new BadRequestException('不能同时替换和清除固定代理凭据');
   }
+  const proxyId =
+    input.proxyId === undefined || input.proxyId === null
+      ? input.proxyId
+      : bankRechargeId(input.proxyId, '代理编号');
   return {
+    proxyId,
     serverMode: input.serverMode as boolean | undefined,
     directMode: input.directMode as boolean | undefined,
     connectorUrl: localUrl(input.connectorUrl, '本机连接器地址'),
@@ -127,7 +134,9 @@ export function validateRechargeBitBrowserSettings(
     proxyType: input.proxyType as UpdateV2RechargeBitBrowserSettingsInput['proxyType'],
     dynamicProxyUrl: dynamicProxyUrl(input.dynamicProxyUrl),
     browserOptions:
-      input.browserOptions === undefined ? undefined : validateBrowserOptions(input.browserOptions),
+      input.browserOptions === undefined
+        ? undefined
+        : validateBrowserOptions(input.browserOptions, Boolean(proxyId)),
     staticProxyCredentials: validateStaticCredentials(input.staticProxyCredentials),
     clearStaticProxyCredentials: input.clearStaticProxyCredentials as boolean | undefined
   };
