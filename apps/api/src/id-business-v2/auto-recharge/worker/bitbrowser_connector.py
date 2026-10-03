@@ -446,7 +446,7 @@ class LocalJob:
 
     def persist(self, path, document):
         name = str(path.relative_to(self.root))
-        if not re.fullmatch(r"(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json", name):
+        if not re.fullmatch(r"(?:payments/)?[a-f0-9]{64}(?:-(?:go|pro-(?:5x|20x|500)))?\.json", name):
             raise Stop("unsupported_state_record")
         result = self.callback.send({
             "type": "ledger", "accountKey": self.account_key, "fileKey": name,

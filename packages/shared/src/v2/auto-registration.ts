@@ -80,6 +80,7 @@ export interface V2RegistrationMailbox {
   status: 'ACTIVE' | 'DISABLED';
   registered: boolean;
   accountId: string | null;
+  accountUpdatedAt: string | null;
   note: string | null;
   updatedAt: string;
 }

@@ -133,6 +133,9 @@ export class RegistrationEventsService {
           (await this.repository.fingerprintExists(tx, profileId, row.id))
         )
           throw new ConflictException('浏览器指纹与已有任务重复，请重新生成');
+        const replaceVerifiedCredentials =
+          (type === 'password_verified' && !row.passwordVerified) ||
+          (type === 'mfa_verified' && !row.mfaVerified);
         const patch: Parameters<RegistrationRepository['update']>[2] = {
           step: ['partial', 'waiting_user'].includes(type) ? row.step : nextStep,
           browserProfileId: profileId,
@@ -206,7 +209,12 @@ export class RegistrationEventsService {
         }
         row = await this.repository.update(tx, jobId, patch);
         if (row.registered) {
-          const account = await this.repository.saveAccount(tx, row, type);
+          const account = await this.repository.saveAccount(
+            tx,
+            row,
+            type,
+            replaceVerifiedCredentials
+          );
           if (row.accountId !== account.id)
             row = await this.repository.update(tx, jobId, { accountId: account.id });
           if (type === 'offer') await this.repository.saveOffer(tx, row);

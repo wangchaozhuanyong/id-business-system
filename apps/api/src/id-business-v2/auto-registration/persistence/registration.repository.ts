@@ -32,7 +32,7 @@ export class RegistrationRepository {
   }
   pendingEmail(tx: V2CommandTransaction, emailHash: string) {
     return tx.idBusinessV2RegistrationJob.findFirst({
-      where: { emailHash, state: { not: 'cancelled' } }
+      where: { emailHash, state: { notIn: ['cancelled', 'completed'] } }
     });
   }
   writeName(
@@ -88,8 +88,26 @@ export class RegistrationRepository {
   accountsByEmailHashes(emailHashes: string[]) {
     return this.prisma.idBusinessV2ChatgptAccount.findMany({
       where: { emailHash: { in: emailHashes } },
-      select: { id: true, emailHash: true }
+      select: { id: true, emailHash: true, registered: true, updatedAt: true }
     });
+  }
+  async setAccountRegistered(
+    tx: V2CommandTransaction,
+    id: string,
+    expectedUpdatedAt: Date,
+    registered: boolean,
+    operatorId: string
+  ) {
+    const result = await tx.idBusinessV2ChatgptAccount.updateMany({
+      where: { id, updatedAt: expectedUpdatedAt },
+      data: {
+        registered,
+        updatedByUserId: operatorId,
+        updatedAt: new Date(Math.max(Date.now(), expectedUpdatedAt.getTime() + 1))
+      }
+    });
+    if (result.count !== 1) throw new ConflictException('账号资料已变化，请刷新后重新确认');
+    return tx.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id } });
   }
   activeEmail(tx: V2CommandTransaction, emailHash: string) {
     return tx.idBusinessV2RegistrationJob.findFirst({
@@ -122,7 +140,12 @@ export class RegistrationRepository {
       data: { usageCount: { increment: 1 } }
     });
   }
-  async saveAccount(tx: V2CommandTransaction, job: IdBusinessV2RegistrationJob, event: string) {
+  async saveAccount(
+    tx: V2CommandTransaction,
+    job: IdBusinessV2RegistrationJob,
+    event: string,
+    replaceVerifiedCredentials = false
+  ) {
     if (!job.accountId) {
       if (await this.account(tx, job.emailHash))
         throw new ConflictException('该邮箱已有账号资料，请人工核对');
@@ -145,14 +168,25 @@ export class RegistrationRepository {
     const existing = await this.account(tx, job.emailHash);
     if (!existing || existing.id !== job.accountId)
       throw new ConflictException('关联账号资料已变化，请人工核对');
+    if (event === 'registered' && !existing.registered)
+      return tx.idBusinessV2ChatgptAccount.update({
+        where: { id: existing.id },
+        data: {
+          registered: true,
+          registrationCountryCode: existing.registrationCountryCode ?? job.registrationCountryCode,
+          updatedByUserId: job.ownerId
+        }
+      });
     if (!['password_verified', 'mfa_verified'].includes(event)) return existing;
     return tx.idBusinessV2ChatgptAccount.update({
       where: { id: existing.id },
       data: {
-        ...(event === 'password_verified' && !existing.passwordEncrypted
+        ...(event === 'password_verified' &&
+        (replaceVerifiedCredentials || !existing.passwordEncrypted)
           ? { passwordEncrypted: job.passwordEncrypted }
           : {}),
-        ...(event === 'mfa_verified' && !existing.totpSecretEncrypted
+        ...(event === 'mfa_verified' &&
+        (replaceVerifiedCredentials || !existing.totpSecretEncrypted)
           ? { totpSecretEncrypted: job.pendingTotpEncrypted }
           : {}),
         updatedByUserId: job.ownerId

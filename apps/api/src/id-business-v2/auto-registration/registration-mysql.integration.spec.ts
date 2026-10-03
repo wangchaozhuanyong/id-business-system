@@ -8,6 +8,7 @@ import { RegistrationRepository } from './persistence/registration.repository';
 import { RegistrationJobsService, registrationTokenHash } from './registration-jobs.service';
 import { RegistrationEventsService } from './registration-events.service';
 import { RegistrationNamesService } from './registration-names.service';
+import { RegistrationMailboxesService } from './registration-mailboxes.service';
 const worker = vi.hoisted(() => ({
   payload: {} as Record<string, unknown>,
   command: vi.fn(),
@@ -29,6 +30,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
   let jobs: RegistrationJobsService;
   let events: RegistrationEventsService;
   let names: RegistrationNamesService;
+  let mailboxes: RegistrationMailboxesService;
   const operator = {
     id: randomUUID(),
     username: 'registration-test',
@@ -43,11 +45,19 @@ suite('自动注册 MySQL 事务和恢复', () => {
     })
   );
   const email = 'registration@example.test';
+  const correctionEmail = 'correction@example.test';
+  const aliasVersion = '2026-10-03T08:00:00.000Z';
   let mailboxCandidate: { mailId: string; code: string } | null = null;
   const mailbox = {
     registrationMailbox: async (id: string) => ({
-      email: id === 'dispatch-check' ? 'dispatch@example.test' : email
+      email:
+        id === 'correction'
+          ? correctionEmail
+          : id === 'dispatch-check'
+            ? 'dispatch@example.test'
+            : email
     }),
+    aliasAddress: async () => ({ email: correctionEmail, updatedAt: aliasVersion }),
     registrationCode: async () => mailboxCandidate
   };
   const proxyId = randomUUID();
@@ -85,6 +95,13 @@ suite('自动注册 MySQL 事务和恢复', () => {
     );
     events = new RegistrationEventsService(repository, transactions, audit, encryption);
     names = new RegistrationNamesService(repository, transactions, audit);
+    mailboxes = new RegistrationMailboxesService(
+      repository,
+      mailbox as never,
+      transactions,
+      audit,
+      encryption
+    );
   }
   beforeAll(async () => {
     const parsed = new URL(url!);
@@ -144,6 +161,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
     });
     expect(existing.offerStatus).toBe('unknown');
     expect(existing.registrationCountryCode).toBeNull();
+    expect(existing.registered).toBe(true);
   });
   it('并发启动只创建一个任务，回执限定邮箱、原窗口、时效和尝试', async () => {
     const input = {
@@ -386,5 +404,195 @@ suite('自动注册 MySQL 事务和恢复', () => {
     } finally {
       worker.delivery = 'accepted';
     }
+  });
+  it('人工标记可双向修改、资料保持不变；并发旧版本仅成功一次，审计失败回滚', async () => {
+    const result = await mailboxes.markRegistered(
+      'correction',
+      { expectedUpdatedAt: aliasVersion, registered: true, expectedAccountUpdatedAt: null },
+      operator
+    );
+    const accountId = result.accountId!;
+    const original = await prisma.idBusinessV2ChatgptAccount.update({
+      where: { id: accountId },
+      data: {
+        passwordEncrypted: encryption.encrypt('synthetic-old-password')!,
+        totpSecretEncrypted: encryption.encrypt('JBSWY3DPEHPK3PXP')!,
+        remark: '保留账号资料',
+        status: 'disabled'
+      }
+    });
+    const change = {
+      expectedUpdatedAt: aliasVersion,
+      registered: false,
+      expectedAccountUpdatedAt: original.updatedAt.toISOString()
+    };
+    const outcomes = await Promise.allSettled([
+      mailboxes.markRegistered('correction', change, operator),
+      mailboxes.markRegistered('correction', change, operator)
+    ]);
+    expect(outcomes.filter((value) => value.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((value) => value.status === 'rejected')).toHaveLength(1);
+    const corrected = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: accountId }
+    });
+    expect(corrected).toMatchObject({
+      registered: false,
+      passwordEncrypted: original.passwordEncrypted,
+      totpSecretEncrypted: original.totpSecretEncrypted,
+      remark: original.remark,
+      status: 'disabled'
+    });
+    expect(
+      await prisma.idBusinessV2ChatgptAccount.count({ where: { emailHash: original.emailHash } })
+    ).toBe(1);
+    await mailboxes.markRegistered(
+      'correction',
+      { ...change, registered: true, expectedAccountUpdatedAt: corrected.updatedAt.toISOString() },
+      operator
+    );
+    const restored = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: accountId }
+    });
+    expect(restored.registered).toBe(true);
+    const failedAudit = new V2TransactionalAuditService();
+    vi.spyOn(failedAudit, 'append').mockRejectedValue(new Error('合成审计失败'));
+    const failService = new RegistrationMailboxesService(
+      repository,
+      mailbox as never,
+      new V2CommandTransactionManager(prisma),
+      failedAudit,
+      encryption
+    );
+    await expect(
+      failService.markRegistered(
+        'correction',
+        { ...change, expectedAccountUpdatedAt: restored.updatedAt.toISOString() },
+        operator
+      )
+    ).rejects.toThrow('合成审计失败');
+    expect(
+      (await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id: accountId } }))
+        .registered
+    ).toBe(true);
+    const audits = await prisma.auditLog.findMany({
+      where: { objectId: accountId, action: { endsWith: 'mark_unregistered' } }
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.beforeData).toEqual({ registered: true });
+    expect(audits[0]!.afterData).toMatchObject({ registered: false });
+    expect(JSON.stringify(audits)).not.toContain(correctionEmail);
+    expect(JSON.stringify(audits)).not.toContain('synthetic-old-password');
+  });
+
+  it('误标后重新注册复用原账号，官方核实后恢复状态；重复回执不覆盖人工密码', async () => {
+    const original = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { emailHash: encryption.hash(correctionEmail)! }
+    });
+    await mailboxes.markRegistered(
+      'correction',
+      {
+        expectedUpdatedAt: aliasVersion,
+        registered: false,
+        expectedAccountUpdatedAt: original.updatedAt.toISOString()
+      },
+      operator
+    );
+    const job = await jobs.create(
+      { mailboxAliasId: 'correction', proxyId, birthDate: '1996-01-01', confirmIdentity: true },
+      operator
+    );
+    expect(job.accountId).toBe(original.id);
+    const token = randomBytes(32).toString('hex');
+    await prisma.idBusinessV2RegistrationJob.update({
+      where: { id: job.id },
+      data: {
+        attempt: 1,
+        nonceHash: registrationTokenHash(token),
+        leaseUntil: new Date(Date.now() + 60_000)
+      }
+    });
+    const emit = (type: string, extra: object = {}) =>
+      events.event(job.id, token, { type, attempt: 1, ...extra });
+    const during = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: original.id }
+    });
+    await expect(
+      mailboxes.markRegistered(
+        'correction',
+        {
+          expectedUpdatedAt: aliasVersion,
+          registered: true,
+          expectedAccountUpdatedAt: during.updatedAt.toISOString()
+        },
+        operator
+      )
+    ).rejects.toThrow('结束或取消');
+    await emit('registered', { email: correctionEmail, registrationCountryCode: 'PH' });
+    const confirmed = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: original.id }
+    });
+    expect(confirmed).toMatchObject({
+      registered: true,
+      passwordEncrypted: original.passwordEncrypted,
+      remark: original.remark,
+      status: original.status
+    });
+    await emit('password_verified');
+    const verified = (await repository.find(job.id))!;
+    expect(
+      (await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id: original.id } }))
+        .passwordEncrypted
+    ).toBe(verified.passwordEncrypted);
+    const manualPassword = encryption.encrypt('synthetic-new-manual-password')!;
+    await prisma.idBusinessV2ChatgptAccount.update({
+      where: { id: original.id },
+      data: { passwordEncrypted: manualPassword }
+    });
+    await emit('password_verified');
+    expect(
+      (await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id: original.id } }))
+        .passwordEncrypted
+    ).toBe(manualPassword);
+    await emit('totp_pending', { totpSecret: 'JBSWY3DPEHPK3PXP', step: 'mfa' });
+    await emit('mfa_verified');
+    const manualTotp = encryption.encrypt('synthetic-new-manual-totp')!;
+    await prisma.idBusinessV2ChatgptAccount.update({
+      where: { id: original.id },
+      data: { totpSecretEncrypted: manualTotp }
+    });
+    await emit('mfa_verified');
+    expect(
+      (await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id: original.id } }))
+        .totpSecretEncrypted
+    ).toBe(manualTotp);
+    await emit('complete');
+    await expect(
+      jobs.create(
+        { mailboxAliasId: 'correction', proxyId, birthDate: '1996-01-01', confirmIdentity: true },
+        operator
+      )
+    ).rejects.toThrow('已有账号');
+    const complete = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: original.id }
+    });
+    await mailboxes.markRegistered(
+      'correction',
+      {
+        expectedUpdatedAt: aliasVersion,
+        registered: false,
+        expectedAccountUpdatedAt: complete.updatedAt.toISOString()
+      },
+      operator
+    );
+    await expect(emit('registered', { email: correctionEmail })).rejects.toThrow('授权');
+    const newJob = await jobs.create(
+      { mailboxAliasId: 'correction', proxyId, birthDate: '1996-01-01', confirmIdentity: true },
+      operator
+    );
+    expect(newJob.accountId).toBe(original.id);
+    expect(
+      await prisma.idBusinessV2ChatgptAccount.count({ where: { emailHash: original.emailHash } })
+    ).toBe(1);
+    await jobs.cancel(newJob.id, operator);
   });
 });

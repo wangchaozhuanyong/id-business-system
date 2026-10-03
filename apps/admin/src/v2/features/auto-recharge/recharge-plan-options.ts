@@ -5,7 +5,7 @@ import { planLabels } from './recharge-presentation';
 // 核对来源：https://learn.chatgpt.com/docs/pricing（2026-10-01）。
 const catalog = [
   { value: 'free', label: 'ChatGPT 免费版', note: '无需充值' },
-  { value: 'go', label: 'ChatGPT Go', note: '暂未接入自动充值' },
+  { value: 'go', label: planLabels.go, note: '' },
   { value: 'plus', label: planLabels.plus, note: '' },
   { value: 'pro-5x', label: planLabels['pro-5x'], note: '' },
   { value: 'pro-20x', label: planLabels['pro-20x'], note: '' },

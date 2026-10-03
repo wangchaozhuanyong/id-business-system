@@ -15,7 +15,7 @@ export const auditChangeFieldLabels: Record<string, string> = {
   recordStatus: '资料状态',
   state: '处理状态',
   step: '执行阶段',
-  registered: '注册已核实',
+  registered: '注册状态',
   passwordVerified: '密码已核实',
   mfaVerified: '双重验证已核实',
   offerStatus: '优惠状况',

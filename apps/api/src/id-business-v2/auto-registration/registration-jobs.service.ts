@@ -150,7 +150,8 @@ export class RegistrationJobsService {
         await this.repository.lock(tx);
         if (await this.repository.active(tx))
           throw new ConflictException('已有注册任务执行中，请处理原任务');
-        if (await this.repository.account(tx, emailHash))
+        const account = await this.repository.account(tx, emailHash);
+        if (account?.registered)
           throw new ConflictException('该邮箱已经保存为 ChatGPT 账号，请使用已有账号');
         if (await this.repository.pendingEmail(tx, emailHash))
           throw new ConflictException('该邮箱已有注册记录，请继续原任务');
@@ -165,6 +166,7 @@ export class RegistrationJobsService {
           nameId: name.id,
           displayName: name.displayName,
           emailHash,
+          accountId: account?.id ?? null,
           emailEncrypted: this.encryption.encrypt(email)!,
           emailMasked: `${local.slice(0, 2)}***@${domain}`,
           birthDateEncrypted: this.encryption.encrypt(input.birthDate)!,

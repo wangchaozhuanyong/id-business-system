@@ -2,6 +2,7 @@ import type { V2RechargeJob } from './contracts';
 import type { BankRechargeOrderStatus } from './bank-recharge-api';
 
 export const planLabels = {
+  go: 'ChatGPT Go',
   plus: 'ChatGPT Plus',
   'pro-5x': 'ChatGPT Pro（标准）',
   'pro-20x': 'ChatGPT Pro（更多使用额度）',

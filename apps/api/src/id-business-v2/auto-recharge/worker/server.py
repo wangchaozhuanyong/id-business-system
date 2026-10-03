@@ -36,7 +36,7 @@ TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
 API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
 REGISTRATION_API = API.removesuffix("/auto-recharge/internal") + "/auto-registration/local"
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
-RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x|500))?\.json$")
+RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-(?:go|pro-(?:5x|20x|500)))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage proxy_attempt proxy_attempt_limit proxy_wait_seconds session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 PUBLIC_KEYS.update("error_type session_step session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())

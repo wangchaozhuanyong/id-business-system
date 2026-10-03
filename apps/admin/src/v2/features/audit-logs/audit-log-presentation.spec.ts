@@ -9,10 +9,28 @@ import {
   buildOperationAuditRestoreRouteQuery,
   formatAuditJson,
   getOperationAuditRestoreCandidate,
-  operationObjectLabel
+  operationObjectLabel,
+  operationAuditChanges
 } from './audit-log-presentation';
 
 describe('audit log presentation', () => {
+  it('注册状态修正审计显示中文操作和前后状态', () => {
+    const row = {
+      id: 'audit-1',
+      module: 'id_business_v2',
+      action: 'id_business_v2.auto_registration.mark_unregistered',
+      objectType: 'registration_mailbox',
+      objectId: 'alias-1',
+      createdAt: '2026-10-03T08:00:00Z',
+      beforeData: { registered: true },
+      afterData: { registered: false }
+    };
+    expect(auditActionLabel(row.action)).toContain('标记未注册');
+    expect(operationObjectLabel(row)).toContain('注册邮箱');
+    expect(operationAuditChanges(row)).toEqual([
+      { key: 'registered', label: '注册状态', before: '已注册', after: '未注册' }
+    ]);
+  });
   it('renders an explicit system actor when a user no longer exists', () => {
     expect(auditUserLabel(null)).toBe('系统自动执行');
     expect(auditUserLabel({ id: 'user-1', username: 'operator01', displayName: '运营一号' })).toBe(

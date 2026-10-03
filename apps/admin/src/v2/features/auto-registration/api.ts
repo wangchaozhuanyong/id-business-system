@@ -30,10 +30,24 @@ export const registrationApi = {
       http.get(`${base}/mailboxes`, { params: query, signal: options.signal })
     );
   },
-  markRegistered(id: string, expectedUpdatedAt: string) {
+  markRegistered(
+    id: string,
+    expectedUpdatedAt: string,
+    registered: boolean,
+    expectedAccountUpdatedAt: string | null
+  ) {
     return withV2QueryInvalidation(
-      request<{ accountId: string; created: boolean }>(
-        http.post(`${base}/mailboxes/${id}/registered`, { expectedUpdatedAt })
+      request<{
+        accountId: string | null;
+        created: boolean;
+        registered: boolean;
+        accountUpdatedAt: string | null;
+      }>(
+        http.post(`${base}/mailboxes/${id}/registered`, {
+          expectedUpdatedAt,
+          registered,
+          expectedAccountUpdatedAt
+        })
       ),
       'auto-recharge'
     );
