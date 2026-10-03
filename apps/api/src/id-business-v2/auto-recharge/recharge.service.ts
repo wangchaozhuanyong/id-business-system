@@ -14,7 +14,7 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
-import { completeCancellation, canReplaceCheckout } from './recharge-cancellation';
+import { completeCancellation } from './recharge-cancellation';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { consumeRechargeAddress } from './recharge-address-consumption';
 import {
@@ -48,6 +48,7 @@ import {
   recordVerifiedBankRecharge
 } from './recharge-bank-callback';
 import { mergeRechargeCallbackResult } from './recharge-bank-callback';
+import { hasOfficialRechargeQuote } from './recharge-upgrade-protocol';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeNameService } from './recharge-name.service';
@@ -55,6 +56,7 @@ import { finalizeRechargeCardBilling } from './recharge-card-billing';
 import { startRechargeJob } from './recharge-start';
 import { startServerRecheck } from './recharge-server-recheck';
 import { listRechargeJobs } from './recharge-job-list';
+import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
 @Injectable()
 export class RechargeService {
@@ -431,57 +433,14 @@ export class RechargeService {
           return { ok: true, updated };
         }
         if (input.type === 'ledger') {
-          if (
-            !job.accountKey ||
-            job.accountKey !== accountKey ||
-            typeof input.fileKey !== 'string' ||
-            !/^(?:payments\/)?[a-f0-9]{64}(?:-pro-(?:5x|20x|500))?\.json$/.test(input.fileKey) ||
-            !Number.isSafeInteger(input.revision) ||
-            Number(input.revision) < 0
-          )
-            throw new BadRequestException('原订单记录无效');
-          const document = safeDocument(input.document);
-          if (
-            input.fileKey.startsWith('payments/') &&
-            !(
-              (['prepare', 'flow', 'server'].includes(job.action) && job.state === 'confirming') ||
-              (job.action === 'bitbrowser' &&
-                ['running', 'awaiting_human_verification'].includes(job.state)) ||
-              job.action === 'recheck'
-            )
-          ) {
-            throw new ConflictException('尚未确认报价，不能记录或提交付款');
-          }
-          const saved = await this.repository.saveRecord(tx, {
-            accountKey: job.accountKey,
-            ownerId: job.ownerId,
-            fileKey: input.fileKey,
-            revision: Number(input.revision),
-            document,
-            allowCheckoutReplacement: canReplaceCheckout(job)
-          });
-          await consumeRechargeAddress({
+          return completeRechargeLedgerCallback({
             tx,
-            rechargeJobId: id,
             job,
-            report: document,
+            callback: input,
+            repository: this.repository,
             addressRepository: this.addressRepository,
             audit: this.audit
           });
-          await this.audit.append(tx, {
-            userId: job.ownerId,
-            module: 'id_business_v2',
-            action: 'id_business_v2.auto_recharge.ledger',
-            objectType: 'recharge_job',
-            objectId: id,
-            afterData: {
-              fileKey: input.fileKey,
-              revision: saved.revision,
-              stage: String(document.stage ?? 'unknown')
-            },
-            remark: '官网请求标记或原单核验结果已持久化'
-          });
-          return saved;
         }
         if (
           !['progress', 'details_required', 'confirmation', 'finished'].includes(String(input.type))
@@ -526,7 +485,7 @@ export class RechargeService {
             const quote = object(report.quote);
             const today = object(quote.today);
             if (
-              report.quote_authority !== 'official_checkout_response' ||
+              !hasOfficialRechargeQuote(report) ||
               quote.renewal_interval !== 'monthly' ||
               today.currency !== limit.locked_currency ||
               typeof today.amount_minor !== 'number' ||

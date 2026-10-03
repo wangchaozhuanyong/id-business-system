@@ -23,6 +23,40 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
         return {'id': 'reg_' + 'a' * 64, 'job_id': job_id, 'context': MagicMock(),
                 'browser': MagicMock(), 'proxy': {'server': 'http://proxy.example.test:8080'}}
 
+    async def test_optional_age_snapshot_survives_private_payload_validation(self):
+        for age in [20, 21, 45]:
+            with self.subTest(age=age):
+                value = server_payload(); value['registrationAge'] = age
+                job = builtin.RegistrationServerJob(value['id'], value,
+                    'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+                self.assertEqual(job.payload['registrationAge'], age)
+                self.assertEqual(job.payload['birthDate'], value['birthDate'])
+
+    async def test_fixed_age_does_not_advance_when_same_task_attempt_changes(self):
+        for age in [20, 21, 45]:
+            with self.subTest(age=age):
+                value = server_payload(); value['registrationAge'] = age
+                for attempt in [1, 2, 3]:
+                    job = builtin.RegistrationServerJob(value['id'], {**value, 'attempt': attempt},
+                        'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+                    self.assertEqual(job.id, value['id'])
+                    self.assertEqual(job.payload['registrationAge'], age)
+                    self.assertEqual(job.payload['birthDate'], value['birthDate'])
+
+    async def test_profile_submission_fact_survives_new_attempt_in_retained_window(self):
+        value = server_payload()
+        state = {'profile_submitted': True}
+        profile = self.owned_profile(value['id']); profile['registration_state'] = state
+        for attempt in [1, 2]:
+            job = builtin.RegistrationServerJob(value['id'], {**value, 'attempt': attempt},
+                'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+            flow = MagicMock(run=AsyncMock(side_effect=Stop('form_unrecognized')))
+            with (patch.object(builtin.PROFILES, 'open', AsyncMock(return_value=profile)),
+                  patch('registration_browser.RegistrationBrowser', return_value=flow)):
+                with self.assertRaises(Stop): await job.execute_builtin()
+            self.assertIs(job.registration_state, state)
+            self.assertTrue(job.registration_state['profile_submitted'])
+
     async def test_unconfirmed_close_keeps_original_profile_and_blocks_another_task(self):
         profiles = builtin.BuiltinProfiles()
         profile = profiles.profile = self.owned_profile()
@@ -189,6 +223,41 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
         job.done = True
         self.assertIs(builtin.handle_request(handler, value, 'unused', MagicMock()), job)
 
+    async def test_partial_window_rejects_new_job_and_preserves_original_resume(self):
+        value = server_payload()
+        profile_id = 'reg_' + 'a' * 64
+        profiles = builtin.BuiltinProfiles()
+        profiles.profile = self.owned_profile(value['id'])
+        handler = SimpleNamespace(job=None, path='/registration/jobs/' + value['id'])
+        with patch.object(builtin, 'PROFILES', profiles):
+            with self.assertRaises(Stop) as stopped:
+                builtin.handle_request(handler, value, 'unused', MagicMock())
+            self.assertEqual(stopped.exception.report['reason'], 'builtin_original_window_pending')
+            value['browserProfileId'] = profile_id
+            resumed = builtin.handle_request(handler, value,
+                'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+            self.assertEqual(resumed.id, value['id'])
+            next_id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+            handler.path = '/registration/jobs/' + next_id
+            with self.assertRaises(Stop) as another:
+                builtin.handle_request(handler, dict(value, id=next_id), 'unused', MagicMock())
+            self.assertEqual(another.exception.report['reason'], 'builtin_original_window_pending')
+        self.assertEqual(profiles.profile['job_id'], value['id'])
+
+    async def test_lost_original_window_is_rejected_before_job_acceptance(self):
+        value = server_payload()
+        value['browserProfileId'] = 'reg_' + 'a' * 64
+        handler = SimpleNamespace(job=None, path='/registration/jobs/' + value['id'])
+        with patch.object(builtin, 'PROFILES', builtin.BuiltinProfiles()):
+            with self.assertRaises(Stop) as stopped:
+                builtin.handle_request(handler, value, 'unused', MagicMock())
+        self.assertEqual(stopped.exception.report['reason'], 'builtin_profile_missing')
+
+    async def test_dispatch_rejection_exposes_only_controlled_reason(self):
+        value = builtin.dispatch_rejection(Stop('worker_busy', sensitive='synthetic-private-details'))
+        self.assertEqual(value, {'ok': False, 'reason': 'worker_busy'})
+        self.assertIsNone(builtin.dispatch_rejection(Stop('synthetic-private-details')))
+        self.assertIsNone(builtin.dispatch_rejection(RuntimeError('synthetic-private-details')))
     async def test_missing_kernel_has_no_chromium_fallback(self):
         driver = MagicMock()
         with self.assertRaises(Stop):

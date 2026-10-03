@@ -4,9 +4,10 @@ import { RegistrationMailboxesService } from './registration-mailboxes.service';
 function fixture() {
   const repository = {
     accountsByEmailHashes: vi.fn().mockResolvedValue([]),
+    unfinishedJobsByEmailHashes: vi.fn().mockResolvedValue([]),
     lock: vi.fn().mockResolvedValue(undefined),
     account: vi.fn().mockResolvedValue(null),
-    activeEmail: vi.fn().mockResolvedValue(null),
+    pendingEmail: vi.fn().mockResolvedValue(null),
     setAccountRegistered: vi.fn().mockResolvedValue({
       id: 'account-1',
       emailMasked: 'hi***@example.invalid',
@@ -21,7 +22,7 @@ function fixture() {
     })
   };
   const mailboxes = {
-    listAliases: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    registrationMailboxSummaries: vi.fn().mockResolvedValue([]),
     aliasAddress: vi
       .fn()
       .mockResolvedValue({ email: 'hidden@example.invalid', updatedAt: '2026-10-02T12:00:00Z' })
@@ -61,18 +62,19 @@ describe('隐藏邮箱注册资料', () => {
     expect(transactions.execute).not.toHaveBeenCalled();
     expect(mailboxes.aliasAddress).toHaveBeenCalledTimes(1);
   });
-  it('按邮箱来源分页，启用与停用均显示，已有账号回显已注册且不泄露查询码', async () => {
+  it('启用与停用邮箱均显示，已有账号回显已注册且不泄露查询码', async () => {
     const { service, mailboxes, repository, operator } = fixture();
     const row = {
       id: 'alias-1',
-      aliasEmail: 'HIDDEN@example.invalid',
-      primaryAccountEmail: 'primary@example.invalid',
+      email: 'HIDDEN@example.invalid',
+      primaryEmail: 'primary@example.invalid',
       status: 'DISABLED',
       note: '普通备注',
       updatedAt: '2026-10-02T12:00:00Z',
-      buyerQueryCode: 'synthetic-private-code'
+      authorizationValid: false,
+      primaryAvailable: true
     };
-    mailboxes.listAliases.mockResolvedValue({ items: [row], total: 21 });
+    mailboxes.registrationMailboxSummaries.mockResolvedValue([row]);
     repository.accountsByEmailHashes.mockResolvedValue([
       {
         emailHash: 'hash:hidden@example.invalid',
@@ -81,37 +83,37 @@ describe('隐藏邮箱注册资料', () => {
         updatedAt: new Date(row.updatedAt)
       }
     ]);
-    const result = await service.list({ page: '2', pageSize: '20', keyword: 'hidden' }, operator);
-    expect(mailboxes.listAliases).toHaveBeenCalledWith(
-      { page: 2, pageSize: 20, q: 'hidden' },
-      operator
-    );
+    const result = await service.list({ page: '1', pageSize: '20', keyword: 'hidden' }, operator);
+    expect(mailboxes.registrationMailboxSummaries).toHaveBeenCalledWith(operator);
     expect(result).toEqual({
       items: [
         {
           id: 'alias-1',
-          email: row.aliasEmail,
-          primaryEmail: row.primaryAccountEmail,
+          email: row.email,
+          primaryEmail: row.primaryEmail,
           status: 'DISABLED',
           registered: true,
           accountId: 'existing-account',
           accountUpdatedAt: row.updatedAt.replace('Z', '.000Z'),
+          canStart: false,
+          startBlockedReason: 'registered',
+          pendingJobId: null,
           note: '普通备注',
           updatedAt: row.updatedAt
         }
       ],
-      total: 21,
-      page: 2,
+      total: 1,
+      page: 1,
       pageSize: 20
     });
-    expect(JSON.stringify(result)).not.toContain('synthetic-private-code');
+    expect(JSON.stringify(result)).not.toContain('authorizationValid');
   });
 
   it('空列表不伪造邮箱，读取失败保留错误', async () => {
     const { service, mailboxes, repository, operator } = fixture();
     await expect(service.list({}, operator)).resolves.toMatchObject({ items: [], total: 0 });
     expect(repository.accountsByEmailHashes).not.toHaveBeenCalled();
-    mailboxes.listAliases.mockRejectedValueOnce(new Error('邮箱服务不可用'));
+    mailboxes.registrationMailboxSummaries.mockRejectedValueOnce(new Error('邮箱服务不可用'));
     await expect(service.list({}, operator)).rejects.toThrow('邮箱服务不可用');
   });
 
@@ -170,11 +172,11 @@ describe('隐藏邮箱注册资料', () => {
     });
   });
 
-  it('未结束的执行任务阻止人工建账号，取消或授权过期后可重试', async () => {
+  it('未结束的注册任务阻止人工建账号，确认结束后可重试', async () => {
     const { service, repository, audit, operator } = fixture();
-    repository.activeEmail.mockResolvedValueOnce({ id: 'active-job' });
+    repository.pendingEmail.mockResolvedValueOnce({ id: 'active-job' });
     await expect(service.markRegistered('alias-1', version, operator)).rejects.toThrow(
-      '注册任务正在执行'
+      '未结束注册任务'
     );
     expect(repository.createManualAccount).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
@@ -262,19 +264,18 @@ describe('隐藏邮箱注册资料', () => {
 
   it('读取保留账号的独立未注册状态，账号存在不会再强制已注册', async () => {
     const { service, repository, mailboxes, operator } = fixture();
-    mailboxes.listAliases.mockResolvedValue({
-      items: [
-        {
-          id: 'alias-1',
-          aliasEmail: 'hidden@example.invalid',
-          primaryAccountEmail: null,
-          status: 'ACTIVE',
-          note: null,
-          updatedAt: version.expectedUpdatedAt
-        }
-      ],
-      total: 1
-    });
+    mailboxes.registrationMailboxSummaries.mockResolvedValue([
+      {
+        id: 'alias-1',
+        email: 'hidden@example.invalid',
+        primaryEmail: null,
+        status: 'ACTIVE',
+        note: null,
+        updatedAt: version.expectedUpdatedAt,
+        authorizationValid: true,
+        primaryAvailable: true
+      }
+    ]);
     repository.accountsByEmailHashes.mockResolvedValue([
       {
         id: 'account-1',
@@ -333,7 +334,7 @@ describe('隐藏邮箱注册资料', () => {
       registered: true,
       updatedAt: new Date(version.expectedUpdatedAt)
     });
-    repository.activeEmail.mockResolvedValue({ id: 'active-job' });
+    repository.pendingEmail.mockResolvedValue({ id: 'active-job' });
     await expect(
       service.markRegistered(
         'alias-1',
@@ -344,6 +345,37 @@ describe('隐藏邮箱注册资料', () => {
     expect(repository.setAccountRegistered).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
+
+  it.each(['queued', 'running', 'awaiting_email', 'awaiting_user', 'partial'])(
+    '同邮箱 %s 任务授权过期仍阻止人工修正，须先确认结束或取消',
+    async (state) => {
+      const { service, repository, audit, operator, tx } = fixture();
+      repository.account.mockResolvedValue({
+        id: 'account-1',
+        registered: true,
+        updatedAt: new Date(version.expectedUpdatedAt)
+      });
+      repository.pendingEmail.mockResolvedValue({
+        id: 'expired-job',
+        state,
+        leaseUntil: new Date(0)
+      });
+      await expect(
+        service.markRegistered(
+          'alias-1',
+          {
+            ...version,
+            registered: false,
+            expectedAccountUpdatedAt: version.expectedUpdatedAt
+          },
+          operator
+        )
+      ).rejects.toThrow('先结束或取消');
+      expect(repository.pendingEmail).toHaveBeenCalledWith(tx, 'hash:hidden@example.invalid');
+      expect(repository.setAccountRegistered).not.toHaveBeenCalled();
+      expect(audit.append).not.toHaveBeenCalled();
+    }
+  );
 
   it('已是目标状态时幂等处理；未注册且无账号时不创建空账号', async () => {
     const { service, repository, operator } = fixture();

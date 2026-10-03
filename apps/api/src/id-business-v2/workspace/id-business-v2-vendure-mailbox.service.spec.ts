@@ -11,6 +11,113 @@ const operator = {
 };
 
 describe('IdBusinessV2VendureMailboxService', () => {
+  it('任务绑定原邮箱地址，源邮箱变化后不读取新邮箱邮件', async () => {
+    const client = { publicQuery: vi.fn().mockResolvedValue({ success: true, items: [] }) };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    vi.spyOn(service, 'registrationMailbox').mockResolvedValue({
+      email: 'changed@example.invalid',
+      queryCode: 'synthetic-code'
+    });
+    await expect(
+      service.registrationCode('alias-1', new Date(), null, operator, 'original@example.invalid')
+    ).rejects.toThrow('邮箱地址已变化');
+    expect(client.publicQuery).not.toHaveBeenCalled();
+    await expect(
+      service.registrationCode('alias-1', new Date(), null, operator, 'CHANGED@example.invalid')
+    ).resolves.toBeNull();
+    expect(client.publicQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('直接注册请求同样拒绝无效到期时间、已过期或缺少邮箱授权，不依赖候选筛选', async () => {
+    const alias = {
+      id: 'alias-1',
+      aliasEmail: 'hidden@example.invalid',
+      primaryAccountId: 'primary-1',
+      status: 'ACTIVE',
+      buyerQueryCode: 'synthetic-code',
+      codeExpiresAt: null
+    };
+    const client = {
+      virtualEmails: vi.fn().mockResolvedValue([alias]),
+      primaryAccounts: vi.fn().mockResolvedValue([{ id: 'primary-1', status: 'ACTIVE' }])
+    };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    await expect(service.registrationMailbox('alias-1', operator)).resolves.toMatchObject({
+      email: 'hidden@example.invalid'
+    });
+    for (const extra of [
+      { codeExpiresAt: 'invalid' },
+      { codeExpiresAt: '2000-01-01T00:00:00Z' },
+      { buyerQueryCode: '' }
+    ]) {
+      client.virtualEmails.mockResolvedValueOnce([{ ...alias, ...extra }]);
+      await expect(service.registrationMailbox('alias-1', operator)).rejects.toThrow('授权已失效');
+    }
+    expect(client.primaryAccounts).toHaveBeenCalledTimes(1);
+  });
+
+  it('注册摘要包含全部别名和准确可用性，不返回查询码或主邮箱授权资料', async () => {
+    const base = {
+      id: 'valid',
+      aliasEmail: 'valid@example.invalid',
+      primaryAccountId: 'primary-active',
+      primaryAccountEmail: 'primary@example.invalid',
+      status: 'ACTIVE',
+      note: null,
+      updatedAt: '2026-10-03T08:00:00Z',
+      buyerQueryCode: 'synthetic-private-code',
+      codeExpiresAt: null
+    };
+    const client = {
+      virtualEmails: vi
+        .fn()
+        .mockResolvedValue([
+          base,
+          { ...base, id: 'disabled', status: 'DISABLED' },
+          { ...base, id: 'expired', codeExpiresAt: '2000-01-01T00:00:00Z' },
+          { ...base, id: 'invalid-expiry', codeExpiresAt: 'invalid' },
+          { ...base, id: 'missing-code', buyerQueryCode: '' },
+          { ...base, id: 'disabled-primary', primaryAccountId: 'primary-disabled' },
+          { ...base, id: 'missing-primary', primaryAccountId: 'removed' }
+        ]),
+      primaryAccounts: vi.fn().mockResolvedValue([
+        { id: 'primary-active', status: 'ACTIVE', masterQueryCode: 'synthetic-primary-code' },
+        { id: 'primary-disabled', status: 'DISABLED' }
+      ])
+    };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    const summaries = await service.registrationMailboxSummaries(operator);
+    expect(summaries).toHaveLength(7);
+    const byId = new Map(summaries.map((row) => [row.id, row]));
+    expect(byId.get('valid')).toMatchObject({ authorizationValid: true, primaryAvailable: true });
+    expect(byId.get('disabled')).toMatchObject({ status: 'DISABLED', authorizationValid: true });
+    for (const id of ['expired', 'invalid-expiry', 'missing-code'])
+      expect(byId.get(id)?.authorizationValid).toBe(false);
+    for (const id of ['disabled-primary', 'missing-primary'])
+      expect(byId.get(id)?.primaryAvailable).toBe(false);
+    expect(JSON.stringify(summaries)).not.toContain('synthetic-private-code');
+    expect(JSON.stringify(summaries)).not.toContain('synthetic-primary-code');
+    expect(JSON.stringify(summaries)).not.toContain('buyerQueryCode');
+    expect(JSON.stringify(summaries)).not.toContain('masterQueryCode');
+    const readCount = client.virtualEmails.mock.calls.length;
+    await expect(
+      service.registrationMailboxSummaries({ ...operator, roles: ['staff'] })
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(client.virtualEmails).toHaveBeenCalledTimes(readCount);
+  });
+
   it('人工标记只读取真实别名地址，不要求查询码仍有效；无权限或邮箱移除时拒绝', async () => {
     const client = {
       virtualEmails: vi.fn().mockResolvedValue([

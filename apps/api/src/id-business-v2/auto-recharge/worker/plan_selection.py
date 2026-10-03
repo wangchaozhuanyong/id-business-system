@@ -16,6 +16,7 @@ PERSONAL = re.compile(r"^(?:Toggle for switching to Personal plans|切换以改�
 PLUS = re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)\s*$", re.I)
 GO = re.compile(r"^\s*(?:Get Go|Try Go|Upgrade to Go|Get ChatGPT Go|获取\s*Go|试用\s*Go|升级至\s*Go|升级到\s*Go|订阅\s*Go|获得\s*Go)\s*$", re.I)
 PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro(?:\s*版本)?)\s*$", re.I)
+PRO_UPGRADE = re.compile(r"^\s*(?:Upgrade to Pro|升级至\s*Pro|升级到\s*Pro)\s*$", re.I)
 PLAN_HEADINGS = re.compile(r"^\s*(?:Free|Go|Plus|Pro)\s*$", re.I)
 PLUS_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Plus\s*$", re.I)
 GO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Go\s*$", re.I)
@@ -236,7 +237,7 @@ class Selection:
                 await expect(personal).to_have_attribute('aria-selected', 'true', timeout=self.timeout())
         return await plan_scope(self.page)
 
-    async def run(self, target_plan):
+    async def run(self, target_plan, require_upgrade=False):
         scope = await self.open_menu(target_plan)
         await self.observe(scope)
         pro = selection_spec(target_plan)['price_usd'] is not None
@@ -249,18 +250,18 @@ class Selection:
             await expect(choice).to_have_attribute('aria-checked', 'true', timeout=self.timeout())
             self.diagnostics['selected'] = True
         self.step('choose_plan')
-        button = buttons(scope, GO if target_plan == 'go' else PRO if pro else PLUS)
+        button = buttons(scope, GO if target_plan == 'go' else PRO_UPGRADE if require_upgrade and pro else PRO if pro else PLUS)
         await self.ready(button, 'official_plan_option_not_found')
         await self.observe(scope)
         self.report('plan_selection', diagnostics=safe_diagnostics(self.diagnostics))
         return button
 
 
-async def select_plan(page, target_plan, report):
+async def select_plan(page, target_plan, report, *, require_upgrade=False):
     selection_spec(target_plan)
     selection = Selection(page, report)
     try:
-        return await asyncio.wait_for(selection.run(target_plan), SELECTION_SECONDS)
+        return await asyncio.wait_for(selection.run(target_plan, require_upgrade), SELECTION_SECONDS)
     except Stop as exc:
         try:
             if re.search(r'Just a moment|Verify.*human|安全验证|请稍候', await page.title(), re.I):
@@ -282,10 +283,10 @@ async def select_plan(page, target_plan, report):
         raise Stop(reason, stage='plan_selection', diagnostics=safe_diagnostics(selection.diagnostics)) from None
 
 
-async def verify_selected_plan(page, target_plan):
+async def verify_selected_plan(page, target_plan, *, require_upgrade=False):
     scope = await plan_scope(page)
     pro = selection_spec(target_plan)['price_usd'] is not None
-    button = buttons(scope, GO if target_plan == 'go' else PRO if pro else PLUS)
+    button = buttons(scope, GO if target_plan == 'go' else PRO_UPGRADE if require_upgrade and pro else PRO if pro else PLUS)
     if await button.count() != 1 or not await button.is_enabled():
         raise Stop('selected_plan_changed', stage='plan_selection')
     if pro:

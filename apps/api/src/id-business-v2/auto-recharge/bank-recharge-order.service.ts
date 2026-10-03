@@ -23,6 +23,12 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { bankRechargeCardSnapshot } from './bank-recharge-card-summary';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import { resolveBankRechargeSource } from './bank-recharge-recheck';
+import { officialBankRechargeDueAt } from './bank-recharge-official-period';
+import {
+  hasVerifiedRechargePayment,
+  isRechargeUpgrade,
+  rechargeUpgradePaymentReference
+} from './recharge-upgrade-protocol';
 import {
   bankRechargeCurrency,
   bankRechargeDate,
@@ -407,22 +413,14 @@ export class BankRechargeOrderService {
     const verifiedSource = await resolveBankRechargeSource(tx, this.repository, job, result);
     if (!verifiedSource) return null;
     ({ job, result } = verifiedSource);
-    if (
-      !['bitbrowser', 'server'].includes(job.action) ||
-      result.payment_status !== 'paid' ||
-      result.payment_outcome !== 'subscription_activated' ||
-      result.status !== 'subscription_activated' ||
-      result.account_matched !== true ||
-      result.quote_authority !== 'official_checkout_response' ||
-      result.payment_requests_sent !== 1 ||
-      !job.accountKey
-    )
-      return null;
+    if (!hasVerifiedRechargePayment(result, job)) return null;
     const evidence = result.payment_evidence as SuccessEvidence | undefined;
     const quote = result.quote as
       | { today?: { amount?: string; amount_minor?: number; currency?: string } }
       | undefined;
-    const checkoutIdentifier = result.checkout_identifier;
+    const checkoutIdentifier = isRechargeUpgrade(result)
+      ? rechargeUpgradePaymentReference(result)
+      : result.checkout_identifier;
     if (
       !evidence ||
       !quote?.today ||
@@ -473,11 +471,15 @@ export class BankRechargeOrderService {
       : matchingCards.length === 1
         ? matchingCards[0]!
         : null;
-    const openedAt = new Date();
+    const verifiedAt = new Date();
     const accountId = await this.accounts.ensureAccountForVerifiedPayment(tx, job);
     const existingSubscription = accountId
       ? await this.repository.findSubscription(tx, accountId)
       : null;
+    // 开通记录代表本次成功订阅/升级，不能沿用旧套餐账期开始时间。
+    const openedAt = verifiedAt;
+    const dueAt =
+      officialBankRechargeDueAt(result, job, verifiedAt) ?? bankRechargeDefaultDueAt(openedAt);
     const item = await this.repository.createOrder(tx, {
       data: {
         orderNo: this.orderNo(),
@@ -497,8 +499,8 @@ export class BankRechargeOrderService {
         customerFeeRate: '0',
         customerFeeAmount: '0',
         openedAt,
-        verifiedAt: openedAt,
-        dueAt: bankRechargeDefaultDueAt(openedAt),
+        verifiedAt,
+        dueAt,
         renewedFromOrderId: existingSubscription?.currentOrderId ?? null,
         createdByUserId: job.ownerId,
         updatedByUserId: job.ownerId

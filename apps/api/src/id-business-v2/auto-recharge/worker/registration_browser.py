@@ -2,14 +2,21 @@
 import asyncio
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 from browser_password_login import (EMAIL_INPUT, PASSWORD_INPUT, CODE_INPUT,
                                     official_identity, official_login_page,
                                     login_payment_write, unique_visible, clear_visible_secrets)
 from checkout_core import Stop
-from browser_checkout import observe_page_network
-from registration_security import verification_link, totp, totp_key, offer_from_text
+from browser_checkout import observe_page_network, retryable_page_load_error
+from browser_session import SessionBudget
+from registration_security import verification_link, totp, totp_key, offer_from_text, registration_age, birth_age
+
+NAME_INPUT = 'input[name="name"], input[name="fullName"], input[autocomplete="name"]'
+BIRTH_INPUT = 'input[type="date"], input[name="birthday"], input[name="birthdate"]'
+AGE_INPUT = 'input[name="age"], input[autocomplete="age"]'
+PROFILE_SUBMIT = r'^(continue|submit|finish|next|创建账户|创建账号|继续|完成|下一步)$'
+REGISTRATION_OBSERVE_SECONDS = 15
 
 
 class RegistrationBrowser:
@@ -17,6 +24,10 @@ class RegistrationBrowser:
         self.job, self.context = job, context
         self.data = job.payload
         self.page = None
+        self.registration_state = getattr(job, 'registration_state', {})
+        self.registration_refreshed = False
+        self.recovery_readonly = None
+        self.registration_loading = False
 
     async def guard(self, route):
         request = route.request
@@ -72,55 +83,241 @@ class RegistrationBrowser:
             code = ''
         await self.settle(3)
 
+    async def challenge(self):
+        self.official(self.page)
+        title = await self.page.title()
+        text = (await self.page.locator('body').inner_text())[:12000]
+        busy = self.page.locator('[aria-busy="true"], [role="progressbar"]')
+        self.registration_loading = (bool(re.fullmatch(r'(?:loading|正在加载|请稍候)[\s.!…]*', text.strip(), re.I))
+                                     or any([await item.is_visible() for item in await busy.all()]))
+        if re.search(r'just a moment|verify.{0,40}human|human verification|人机验证|本人验证|安全验证', title + '\n' + text, re.I):
+            return True
+        challenges = self.page.locator('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .cf-turnstile')
+        if any([await item.is_visible() for item in await challenges.all()]):
+            return True
+        phone = await self.field(self.page, 'input[type="tel"], input[name="phone_number"], input[name="phone"]')
+        if phone and re.search(r'verif.{0,30}(?:phone|mobile)|(?:phone|mobile).{0,30}verif|phone number|enter.{0,30}(?:phone|mobile)|手机号|手机验证|电话验证', text, re.I):
+            return True
+        code = await self.field(self.page, CODE_INPUT)
+        return bool(code and re.search(r'authenticator|authentication app|验证器|身份验证应用|phone verification|text message|短信|手机验证码', text, re.I))
+
+    async def profile_fields(self):
+        self.official(self.page)
+        name = await unique_visible(self.page, NAME_INPUT)
+        if not name:
+            birth = await unique_visible(self.page, BIRTH_INPUT)
+            age = await unique_visible(self.page, AGE_INPUT)
+            if not age:
+                labelled = self.page.get_by_label(re.compile(r'^(age|年龄)$', re.I)).and_(self.page.locator('input'))
+                visible = [labelled.nth(i) for i in range(await labelled.count()) if await labelled.nth(i).is_visible()]
+                if len(visible) > 1:
+                    raise Stop('form_unrecognized')
+                age = visible[0] if visible else None
+            if birth or age:
+                return None, birth, age, None  # Split/delayed onboarding cannot be called complete.
+            return None
+        roots = name.locator('xpath=ancestor::*[self::form or @role="dialog"][1]')
+        if await roots.count() != 1:
+            raise Stop('form_unrecognized')
+        root = roots.first
+        birth = await unique_visible(root, BIRTH_INPUT)
+        ages = root.locator(AGE_INPUT).or_(root.get_by_label(re.compile(r'^(age|年龄)$', re.I)).and_(root.locator('input')))
+        visible_ages = [ages.nth(i) for i in range(await ages.count()) if await ages.nth(i).is_visible()]
+        if len(visible_ages) > 1 or (birth and visible_ages):
+            raise Stop('form_unrecognized')
+        age = visible_ages[0] if visible_ages else None
+        if not birth and not age:
+            return name, None, None, None  # Onboarding is still pending, even with a session.
+        candidates = root.get_by_role('button', name=re.compile(PROFILE_SUBMIT, re.I))
+        visible_buttons = [candidates.nth(i) for i in range(await candidates.count()) if await candidates.nth(i).is_visible()]
+        buttons = [button for button in visible_buttons if await button.is_enabled()]
+        if len(buttons) > 1 or (not buttons and len(visible_buttons) > 1):
+            raise Stop('form_unrecognized')
+        button = buttons[0] if buttons else visible_buttons[0] if visible_buttons else None
+        ready = button and await name.is_enabled() and await (birth or age).is_enabled()
+        return name, birth, age, button if ready else None
+
+    async def registration_view(self):
+        if await self.challenge():
+            return 'verification', None
+        code = await self.field(self.page, CODE_INPUT)
+        if code:
+            return 'code', code
+        profile = await self.profile_fields()
+        if profile:
+            return 'profile', profile
+        if self.registration_loading:
+            return 'unknown', None
+        if await self.identity():
+            return 'registered', None
+        if await self.field(self.page, PASSWORD_INPUT):
+            return 'existing', None
+        email = await self.field(self.page, EMAIL_INPUT)
+        if email:
+            return 'email', email
+        signup = await self.button(self.page, r'^(sign up|create account|注册|创建账户|创建账号)$')
+        return ('signup', signup) if signup else ('unknown', None)
+
+    async def guard_registered_onboarding(self):
+        # Older checkpoints may have saved a session before onboarding was complete.
+        async def pending():
+            try:
+                return bool(await self.profile_fields()) or self.registration_loading
+            except Stop as exc:
+                if exc.report.get('reason') not in {'form_unrecognized', 'login_form_ambiguous'}:
+                    raise
+                return True
+        if await self.challenge():
+            await self.manual_registration('verification_required')
+        if await pending():
+            await self.manual_registration('form_unrecognized')
+        if await self.challenge() or await pending():
+            raise Stop('form_unrecognized')
+
+    async def end_recovery(self):
+        if self.recovery_readonly is not None:
+            await self.context.unroute('**/*', self.recovery_readonly)
+            self.recovery_readonly = None
+
+    async def manual_registration(self, reason):
+        # An explicit administrator handoff may perform writes in the same window.
+        await self.end_recovery()
+        await self.job.manual(reason)
+
+    async def refresh_registration(self):
+        self.official(self.page)
+        url = self.page.url
+        parsed = urlsplit(url)
+        keys = {key.casefold() for key in parse_qs(parsed.query, keep_blank_values=True)}
+        unsafe = (parsed.username or parsed.password or parsed.port not in {None, 443}
+                  or verification_link(url) or re.search(r'callback|confirmation|reset|verify|payment|billing|checkout|subscription|subscribe|purchase', parsed.path, re.I)
+                  or any(re.search(r'(?:^|_)(?:code|token|ticket)(?:$|_)', key) for key in keys)
+                  or parsed.fragment)
+        if self.registration_refreshed or unsafe:
+            return False
+        self.registration_refreshed = True
+        self.job.event('progress', reason='registration_page_refreshing')
+        async def readonly(route):
+            if route.request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+                await route.abort('blockedbyclient')
+            else:
+                await route.fallback()
+        await self.context.route('**/*', readonly)
+        self.recovery_readonly = readonly
+        verification = False
+        try:
+            budget = SessionBudget(20, cancelled=self.job.cancelled.is_set)
+            # Explicit GET in this Page: reload could resubmit a previous document POST.
+            response = await budget.run(lambda: self.page.goto(url, wait_until='domcontentloaded', timeout=0), 'page_refresh')
+            self.official(self.page)
+            verification = bool(response and response.status == 403)
+            if response and response.status >= 400 and not verification:
+                raise Stop('http_error', http_status=response.status)
+        except Exception as exc:
+            if not retryable_page_load_error(exc):
+                await self.end_recovery()
+                raise
+            return False
+        if verification:
+            await self.manual_registration('verification_required')
+        return True
+
     async def register(self):
         # Resume the exact profile rather than regenerating name, birthday or credentials.
         if not official_login_page(self.page.url):
             await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
-        for _ in range(12):
-            if await self.identity():
+        email_submitted = code_submitted = signup_clicked = False
+        observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+        for _ in range(160):
+            self.job.check()
+            try:
+                budget = SessionBudget(10, cancelled=self.job.cancelled.is_set)
+                view, field = await budget.run(self.registration_view, 'registration_observe')
+            except Exception as exc:
+                if isinstance(exc, Stop) and exc.report.get('reason') in {'form_unrecognized', 'login_form_ambiguous'}:
+                    await self.manual_registration('form_unrecognized')
+                    continue
+                if not retryable_page_load_error(exc):
+                    raise
+                view, field = 'unknown', None
+            if view == 'verification':
+                await self.manual_registration('verification_required')
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                continue
+            if view == 'code':
+                if code_submitted:
+                    await self.manual_registration('form_unrecognized')
+                    code_submitted = False
+                else:
+                    if not self.job.awaiting_code:
+                        self.job.prepare_mail('email_code')
+                    code_submitted = True
+                    await self.end_recovery()
+                    await self.mail(self.page)
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                continue
+            if view == 'registered':
                 country = await self.registration_country()
                 self.job.event('registered', email=self.data['email'], step='registered',
                                registrationCountryCode=country)
                 self.data['registered'] = True
+                await self.end_recovery()
                 return
-            email = await self.field(self.page, EMAIL_INPUT)
-            if email:
-                self.job.event('progress', step='email')
-                await email.fill(self.data['email'])
-                # Timestamp the expected mail BEFORE submission triggers sending.
-                self.job.prepare_mail('email_code')
-                await email.press('Enter')
-                await self.settle(3)
-                code = await self.field(self.page, CODE_INPUT)
-                if code:
-                    await self.mail(self.page)
-                elif await self.field(self.page, PASSWORD_INPUT):
-                    # This is an existing/password account, not a proven new registration.
-                    raise Stop('existing_account_requires_review')
-            code = await self.field(self.page, CODE_INPUT)
-            if code:
-                if not self.job.awaiting_code:
-                    self.job.prepare_mail('email_code')
-                await self.mail(self.page)
-            name = await self.field(self.page, 'input[name="name"], input[name="fullName"], input[autocomplete="name"]')
-            birth = await self.field(self.page, 'input[type="date"], input[name="birthday"], input[name="birthdate"]')
-            if name and birth:
+            if view == 'profile' and field[3] and not self.registration_state.get('profile_submitted'):
+                name, birth, age, button = field
+                await self.end_recovery()
                 self.job.event('progress', step='profile')
                 await name.fill(self.data['displayName'])
-                await birth.fill(self.data['birthDate'])
-                button = await self.button(self.page, r'^(continue|submit|finish|创建账户|创建账号|继续|完成)$')
-                if button:
+                if birth:
+                    await birth.fill(self.data['birthDate'])
+                else:
+                    value = (registration_age(self.data['registrationAge'], self.data['birthDate'])
+                             if 'registrationAge' in self.data else birth_age(self.data['birthDate']))
+                    expected = str(value)
+                    current = await age.input_value()
+                    if current != expected:
+                        if current:
+                            await age.fill('')
+                            if await age.input_value():
+                                raise Stop('form_unrecognized')
+                        await age.fill(expected)
+                    if await age.input_value() != expected:
+                        raise Stop('form_unrecognized')
+                # Input validation may enable the initially disabled submit button.
+                if await button.is_enabled():
+                    self.registration_state['profile_submitted'] = True
                     await button.click()
                     await self.settle(4)
+                    observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                     continue
-            if await self.identity():
-                continue
-            signup = await self.button(self.page, r'^(sign up|create account|注册|创建账户|创建账号)$')
-            if signup:
-                await signup.click()
+            if view == 'existing':
+                raise Stop('existing_account_requires_review')
+            if view == 'email' and not email_submitted:
+                await self.end_recovery()
+                self.job.event('progress', step='email')
+                await field.fill(self.data['email'])
+                # Timestamp the expected mail BEFORE submission triggers sending.
+                self.job.prepare_mail('email_code')
+                email_submitted = True
+                await field.press('Enter')
                 await self.settle(3)
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
-            await self.job.manual('form_unrecognized')
+            if view == 'signup' and not signup_clicked:
+                await self.end_recovery()
+                signup_clicked = True
+                await field.click()
+                await self.settle(3)
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                continue
+            if time.monotonic() < observation_deadline:
+                await self.settle(.5)
+                continue
+            if await self.refresh_registration():
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                continue
+            await self.manual_registration('form_unrecognized')
+            observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
         raise Stop('official_login_not_verified')
 
     async def registration_country(self):
@@ -357,10 +554,12 @@ class RegistrationBrowser:
                 await self.page.goto('https://chatgpt.com', wait_until='domcontentloaded')
             if not self.data['registered']:
                 await self.register()
-            elif not await self.identity():
-                await self.job.manual('official_login_not_verified')
+            else:
+                await self.guard_registered_onboarding()
                 if not await self.identity():
-                    raise Stop('official_login_not_verified')
+                    await self.job.manual('official_login_not_verified')
+                    if not await self.identity():
+                        raise Stop('official_login_not_verified')
             if not self.data['passwordVerified']:
                 await self.password()
             if not self.data['mfaVerified']:
@@ -368,5 +567,6 @@ class RegistrationBrowser:
             await self.offer()
             self.job.event('complete', step='completed')
         finally:
+            await self.end_recovery()
             await clear_visible_secrets(self.page)
             await self.context.unroute('**/*', self.guard)

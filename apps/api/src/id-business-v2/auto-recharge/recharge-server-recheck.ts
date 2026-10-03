@@ -16,6 +16,12 @@ import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { object, uuidPattern } from './recharge-validation';
 import { isRechargeWorkerConfigured, sendRechargeWorkerRequest } from './recharge-worker-client';
+import { recoverRechargePaymentResult } from './recharge-payment-facts';
+import {
+  hasOfficialRechargeQuote,
+  isRechargeUpgrade,
+  rechargeOperationIdentifier
+} from './recharge-upgrade-protocol';
 
 export async function startServerRecheck(
   value: unknown,
@@ -99,10 +105,10 @@ export async function startServerRecheck(
     }
   }
   const source = await deps.repository.owned(input.sourceJobId, operator.id);
-  const sourceResult = object(source.result ?? {});
+  let sourceResult = object(source.result ?? {});
   const reviewableState =
     ['finished', 'unknown'].includes(source.state) ||
-    (source.state === 'running' && source.leaseUntil.getTime() < Date.now());
+    (['running', 'confirming'].includes(source.state) && source.leaseUntil.getTime() < Date.now());
   if (
     source.action !== 'server' ||
     !reviewableState ||
@@ -110,11 +116,8 @@ export async function startServerRecheck(
     !source.expectedEmailEncrypted ||
     !source.proxyId ||
     sourceResult.recheck_only === true ||
-    sourceResult.payment_requests_sent !== 1 ||
-    sourceResult.quote_authority !== 'official_checkout_response' ||
-    typeof sourceResult.checkout_identifier !== 'string' ||
+    !hasOfficialRechargeQuote(sourceResult) ||
     sourceResult.status === 'subscription_activated' ||
-    sourceResult.payment_status === 'declined' ||
     sourceResult.operator_resolution === 'confirmed_no_bank_request'
   ) {
     throw new ConflictException('该记录不能只读复查原订单');
@@ -157,6 +160,38 @@ export async function startServerRecheck(
         current.accountKey !== source.accountKey
       )
         throw new ConflictException('原任务状态已变化');
+      const currentResult = object(current.result ?? {});
+      sourceResult = recoverRechargePaymentResult(
+        current,
+        await deps.repository.records(tx, current.accountKey!)
+      );
+      if (
+        sourceResult.recheck_only === true ||
+        sourceResult.payment_requests_sent !== 1 ||
+        !hasOfficialRechargeQuote(sourceResult) ||
+        typeof rechargeOperationIdentifier(sourceResult) !== 'string' ||
+        sourceResult.status === 'subscription_activated' ||
+        sourceResult.payment_status === 'declined' ||
+        sourceResult.operator_resolution === 'confirmed_no_bank_request'
+      )
+        throw new ConflictException('该记录不能只读复查原订单');
+      if (JSON.stringify(sourceResult) !== JSON.stringify(currentResult)) {
+        await deps.repository.updateJob(tx, current.id, {
+          result: toV2JsonDocument(sourceResult)
+        });
+        await deps.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.server.restore_payment_facts',
+          objectType: 'recharge_job',
+          objectId: current.id,
+          afterData: {
+            checkoutIdentifier: String(rechargeOperationIdentifier(sourceResult)),
+            confirmationRequestsSent: Number(sourceResult.confirmation_requests_sent ?? 0)
+          },
+          remark: '依据原任务持久付款记录恢复只读复查资料，不重发付款'
+        });
+      }
       const account = savedAccountId
         ? await deps.accounts!.requireActive(tx, savedAccountId)
         : null;
@@ -187,6 +222,16 @@ export async function startServerRecheck(
           status: 'rechecking_original_payment',
           recheck_only: true,
           source_job_id: source.id,
+          ...(isRechargeUpgrade(sourceResult)
+            ? {
+                operation: sourceResult.operation,
+                upgrade_identifier: sourceResult.upgrade_identifier,
+                target_plan: source.plan,
+                current_plan_before: 'plus',
+                quote: sourceResult.quote,
+                quote_authority: sourceResult.quote_authority
+              }
+            : {}),
           expected_proxy_country: selectedProxy.countryCode,
           addressId: sourceResult.addressId,
           payment_attempted: true,
@@ -215,6 +260,9 @@ export async function startServerRecheck(
         plan: source.plan,
         recheckOnly: true,
         sourceAccountKey: source.accountKey,
+        ...(isRechargeUpgrade(sourceResult)
+          ? { upgradeIdentifier: sourceResult.upgrade_identifier }
+          : {}),
         expectedEmail,
         expectedCountry: selectedProxy.countryCode,
         proxy,

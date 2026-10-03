@@ -100,7 +100,7 @@
                       v-for="item in savedBankAccounts"
                       :key="item.id"
                       :value="item.id"
-                      :label="`${item.emailMasked}${item.hasPassword ? '' : ' · 未保存密码'}`"
+                      :label="rechargeAccountOptionLabel(item)"
                       :disabled="!item.hasPassword"
                     />
                   </el-select>
@@ -253,6 +253,7 @@
                   :value="selectedPaymentCardId"
                   :cards="savedPaymentCards"
                   :loading="paymentCardsQuery.phase.value === 'initial-loading'"
+                  :detail-loading="paymentCardLoading"
                   :error="paymentCardsQuery.error.value"
                   @select="selectSavedCard"
                   @retry="paymentCardsQuery.refresh"
@@ -386,6 +387,7 @@ import RechargeSubmission from './RechargeSubmission.vue';
 import { rechargeRules } from './recharge-form';
 import RechargePageContext from './RechargePageContext.vue';
 import { useAutoRecharge } from './useAutoRecharge';
+import { rechargeAccountOptionLabel } from './recharge-account-options';
 import V2SavedPaymentCardField from './V2SavedPaymentCardField.vue';
 import V2RechargePaymentFields from './V2RechargePaymentFields.vue';
 import V2RechargeProxySelect from './V2RechargeProxySelect.vue';
@@ -425,6 +427,7 @@ const {
   bankAccountsQuery,
   savedPaymentCards,
   paymentCardsQuery,
+  paymentCardLoading,
   selectSavedCard,
   bankCurrenciesQuery,
   availableCurrencyOptions,

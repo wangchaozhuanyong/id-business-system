@@ -14,7 +14,8 @@ export class RegistrationController {
     private readonly mailboxes: RegistrationMailboxesService
   ) {}
   @Get('mailboxes') @Header('Cache-Control', 'no-store') listMailboxes(
-    @Query() query: { page?: string; pageSize?: string; keyword?: string },
+    @Query()
+    query: { page?: string; pageSize?: string; keyword?: string; registrationStatus?: string },
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.mailboxes.list(query, operator);
@@ -32,7 +33,15 @@ export class RegistrationController {
     return this.jobs.execution(operator);
   }
   @Get('options') @Header('Cache-Control', 'no-store') options(
-    @Query() query: { q?: string; page?: string },
+    @Query()
+    query: {
+      q?: string;
+      page?: string;
+      proxySearch?: string;
+      proxyPage?: string;
+      nameSearch?: string;
+      namePage?: string;
+    },
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.jobs.options(query, operator);
@@ -63,6 +72,12 @@ export class RegistrationController {
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.jobs.list(query, operator);
+  }
+  @Get('jobs/pending') @Header('Cache-Control', 'no-store') pending(
+    @Query('mailboxAliasId') mailboxAliasId: string,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.jobs.pending(mailboxAliasId, operator);
   }
   @Get('jobs/:id') @Header('Cache-Control', 'no-store') get(
     @Param('id') jobId: string,

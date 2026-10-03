@@ -91,6 +91,16 @@ if (part === 'guards') {
       'src/id-business-v2/auto-recharge',
       ...(changed.some((p) => p.startsWith('apps/api/src/auth/'))
         ? ['src/auth', 'src/security']
+        : []),
+      ...(changed.some((p) =>
+        /^apps\/api\/src\/id-business-v2\/workspace\/(?:recharge-mail-code|id-business-v2-vendure-mailbox\.service|id-business-v2-workspace\.module|public-api)/.test(
+          p
+        )
+      )
+        ? [
+            'src/id-business-v2/workspace/recharge-mail-code.spec.ts',
+            'src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.spec.ts'
+          ]
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
@@ -105,14 +115,23 @@ if (part === 'guards') {
       'test_bitbrowser_catalog',
       'test_bitbrowser_options',
       'test_bitbrowser_connector',
+      'test_bitbrowser_upgrade',
       'test_connector_health',
       'test_session_retry',
       'test_server',
       'test_server_proxy',
       'test_registration',
       'test_registration_builtin',
+      'test_registration_browser',
       'test_fingerprint_runtime',
       'test_password_login',
+      'test_subscribe',
+      'test_payment.StateTests',
+      'test_recharge_email_code',
+      'test_payment_3ds',
+      'test_subscription_upgrade',
+      'test_upgrade_card_selection',
+      'test_upgrade_card_flow',
       'test_go.GoStateTests'
     ],
     {

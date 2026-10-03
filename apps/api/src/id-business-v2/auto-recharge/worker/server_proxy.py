@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import socket
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 from checkout_core import Stop
@@ -102,7 +102,11 @@ def parse_extracted(raw, scheme):
         parsed = urlsplit(candidate)
         if parsed.scheme != scheme or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
             raise ValueError()
-        return endpoint(parsed.hostname, parsed.port, scheme, parsed.username or "", parsed.password or "")
+        if re.search(r"%(?![0-9a-fA-F]{2})", (parsed.username or "") + (parsed.password or "")):
+            raise ValueError()
+        return endpoint(parsed.hostname, parsed.port, scheme,
+                        unquote(parsed.username or "", errors="strict"),
+                        unquote(parsed.password or "", errors="strict"))
     except ValueError:
         raise Stop("server_proxy_invalid") from None
 

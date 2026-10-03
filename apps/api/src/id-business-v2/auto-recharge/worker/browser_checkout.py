@@ -18,7 +18,7 @@ from attempt_ledger import AttemptLedger, existing_checkout
 from checkout_core import (ACCOUNT_PATH, CHECKOUT_PATH, MAX_BYTES, ROOT, BrowserCredential,
                            Stop, account_plan, checkout_result, parse_credential, response_json,
                            safe_text, session_cookies, verify_official_session)
-from plans import PLANS, PRO_GROUP, checkout_option_plan, checkout_text_plan, plan_spec, text_tiers
+from plans import PLANS, PRO_GROUP, checkout_option_plan, checkout_text_plan, plan_spec, text_tiers, official_subscription, subscription_transition
 
 ORIGIN = "https://chatgpt.com"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -291,31 +291,61 @@ def quote_from_text(text: str, currency_hint=None):
     labels = {"today": r"^(?:Total due today|Due today|Total today|Amount due today|今日应付(?:金额)?|今日應付(?:金額)?|今天应付|今日總計|今日总计|今天支付|今天應付)(?:\s|$|:|：)",
               "tax": r"^(?:Tax|Taxes|Estimated tax|预估税费|預估稅費|税费|税金|稅金)(?:\s|$|:|：)",
               "renewal": r"^(?:Then|Renews|Renewal|续费|續費)(?:\s|$|:|：)"}
-    fields = {}
+    fields, renewal_intervals = {}, []
+    monthly = r"/\s*(?:month|月)(?!\w)|per\s+month\b|\bmonthly\b|每月|每个月|每個月|按月|月付"
+    yearly = r"/\s*(?:year|年)(?!\w)|per\s+year\b|\b(?:annual(?:ly)?|yearly)\b|每年|按年|年付|年度|年缴|年繳"
+    standalone_interval = re.compile(
+        r"(?:/\s*(?:month|year|月|年)|per\s+(?:month|year)|monthly|yearly|annually|每月|每个月|每個月|每年)", re.I)
+    def interval(value, expected=None):
+        periods = {name for name, pattern in (("monthly", monthly), ("yearly", yearly))
+                   if re.search(pattern, value, re.I)}
+        if expected:
+            periods.add(expected)
+        return next(iter(periods)) if len(periods) == 1 else None
     for kind, pattern in labels.items():
         matches = []
         # 同一报价字段存在多种值时拒绝自动判定。
         for i, line in enumerate(lines):
             if re.search(pattern, line, re.I):
                 found = money(line, currency_hint)
+                amount_line, clause = i, line
                 if found is None and i + 1 < len(lines):
                     # 不跨越“未知/小计/税费”等下一字段，把别的金额误作今日应付。
                     value_line = lines[i + 1]
-                    if VISIBLE_MONEY_LINE.fullmatch(value_line):
+                    amount_text = (re.sub(rf"(?:{monthly}|{yearly})", "", value_line,
+                                          flags=re.I).strip() if kind == "renewal" else value_line)
+                    if VISIBLE_MONEY_LINE.fullmatch(amount_text):
                         found = money(value_line, currency_hint)
+                        amount_line, clause = i + 1, value_line
                 if found:
                     matches.append(found)
+                    if kind == "renewal":
+                        period = interval(clause)
+                        # 分行续费字段只接受紧邻金额的独立周期，不从其他价格/说明猜测。
+                        if (period is None and not re.search(rf"(?:{monthly}|{yearly})", clause, re.I)
+                                and amount_line + 1 < len(lines)
+                                and standalone_interval.fullmatch(lines[amount_line + 1])):
+                            period = interval(lines[amount_line + 1])
+                        renewal_intervals.append(period)
         if kind == "renewal":
             # 官网中文结算条款：将按 MYR 92.50/月 收费。只取明确的续费句，
             # 不把产品列表价或今日金额复制为续费金额。
-            for value in re.findall(r"将按\s+([^。\n]+?)/\s*(?:月|年)\s*收费", text):
-                found = money(value, currency_hint)
+            for matched in re.finditer(r"将按\s+([^。\n]+?)/\s*(月|年)\s*收费", text):
+                found = money(matched[1], currency_hint)
                 if found:
                     matches.append(found)
+                    # 账期修饰可能跟在“收费”后；核对同一句，不能丢掉括号内的年付说明。
+                    start = max(text.rfind("。", 0, matched.start()),
+                                text.rfind("\n", 0, matched.start())) + 1
+                    boundary = re.search(r"[。\n]", text[matched.end():])
+                    end = matched.end() + boundary.start() if boundary else len(text)
+                    renewal_intervals.append(interval(
+                        text[start:end], "monthly" if matched[2] == "月" else "yearly"))
         unique = {json.dumps(item, sort_keys=True) for item in matches}
         fields[kind] = json.loads(unique.pop()) if len(unique) == 1 else None
     fields["plan"] = checkout_text_plan(text)
-    fields["renewal_interval"] = "monthly" if re.search(r"/\s*month|per month|每月|每个月|每個月", text, re.I) else None
+    fields["renewal_interval"] = ("monthly" if renewal_intervals
+                                  and set(renewal_intervals) == {"monthly"} else None)
     fields["tax_status"] = ("estimated" if fields["tax"] and re.search(r"预估税费|預估稅費|Estimated tax", text, re.I)
                             else "displayed" if fields["tax"] else "unknown")
     fields["source"] = "official_checkout_visible_text"
@@ -592,8 +622,8 @@ async def check_session(page, target, wait_seconds=0, budget=None):
             session = await read(lambda: browser_read(page, "/api/auth/session", budget=budget), "session_read")
             refreshed = verify_official_session(session, target)
             account = await read(lambda: browser_read(page, ACCOUNT_PATH, refreshed, budget), "account_read")
-            plan = account_plan(account, target.account_id)
-            return refreshed, {"session_status": "restored", "account_matched": True, "current_plan": plan,
+            subscription = official_subscription(account, target.account_id)
+            return refreshed, {"session_status": "restored", "account_matched": True, **subscription,
                                "credential_refreshed": refreshed.token != target.old_token}
         except Stop as exc:
             if exc.report["reason"] == "verification_required" and attempt == 0:
@@ -647,7 +677,8 @@ async def verify_selected_plan(page, target_plan):
 
 
 async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=0, review_seconds=0, quote_timeout=25,
-                   quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", session_budget=None):
+                   quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", session_budget=None,
+                   session_handler=None):
     """同一临时 BrowserContext 贯穿校验、选套餐和报价。便于本地路由夹具验收。"""
     guard = guard_factory(target, ledger)
     spec = plan_spec(target_plan)
@@ -681,6 +712,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     stage = "session_restore"
     quote = None
     quote_text = ""
+    result = None
     try:
         if getattr(target, "session_token", None):
             await context.add_cookies(session_cookies(target))
@@ -696,6 +728,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
             identity["network"] = await observe_page_network(page, session_budget)
         progress("session_verified", **identity)
+        if session_handler is not None:
+            return await session_handler(page, guard, identity)
         if ledger is None and existing is None:
             return {"status": "session_verified", **identity, "checkout_status": "not_attempted", **guard.summary()}
         if identity["current_plan"] != "free":
@@ -818,6 +852,9 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                 for task in tasks:
                     task.cancel()
             await asyncio.gather(*list(tasks), return_exceptions=True)
+        if result is not None and quote_handler:
+            # 迟到的官方付款回包在清理阶段仍可能确认成功；返回快照必须包含这些证据。
+            result.update(guard.summary())
         # 同一窗口更换失效旧结算时，不能叠加上一轮的建单/付款拦截器。
         await context.unroute("**/*", guard.route)
 
@@ -825,7 +862,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
-                      browser_context=None, session_budget=None):
+                      browser_context=None, session_budget=None, session_handler=None):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -847,7 +884,7 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
             return await workflow(context, target, ledger=ledger, existing=existing,
                                   wait_seconds=wait_seconds, review_seconds=review_seconds,
                                   quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan,
-                                  session_budget=session_budget)
+                                  session_budget=session_budget, session_handler=session_handler)
         finally:
             # 服务器 Worker 关闭隔离 Context；本机比特浏览器保留原窗口与登录状态。
             if active_context is None:

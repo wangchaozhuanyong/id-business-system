@@ -50,6 +50,7 @@ import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-ven
 import { IdBusinessV2VendureMailboxController } from './id-business-v2-vendure-mailbox.controller';
 import { IdBusinessV2PublicVendureMailboxController } from './id-business-v2-public-vendure-mailbox.controller';
 import { IdBusinessV2VendureMailboxService } from './id-business-v2-vendure-mailbox.service';
+import { IdBusinessV2RechargeMailboxService } from './recharge-mail-code.service';
 
 import { IdBusinessV2WebsiteVisitController } from './id-business-v2-website-visit.controller';
 import { IdBusinessV2WebsiteVisitService } from './id-business-v2-website-visit.service';
@@ -116,8 +117,13 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2GoogleSheetsClient,
     IdBusinessV2GoogleSheetsOAuthClient,
     IdBusinessV2VendureMailboxClient,
+    IdBusinessV2RechargeMailboxService,
     IdBusinessV2VendureMailboxService
   ],
-  exports: [IdBusinessV2TotpAccountService, IdBusinessV2VendureMailboxService]
+  exports: [
+    IdBusinessV2TotpAccountService,
+    IdBusinessV2VendureMailboxService,
+    IdBusinessV2RechargeMailboxService
+  ]
 })
 export class IdBusinessV2WorkspaceModule {}

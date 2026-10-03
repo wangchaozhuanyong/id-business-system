@@ -6,6 +6,7 @@ import {
   type V2RechargeStart
 } from '@apple-business/shared';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { hasOfficialRechargeQuote } from './recharge-upgrade-protocol';
 
 export const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -258,7 +259,7 @@ export function validateWorkerConfirmation(
 ) {
   const nonce = object(result).nonce;
   const quote = object(report.quote) as unknown as V2RechargeQuote;
-  assertFinalQuote(quote, job.plan, report.quote_authority);
+  assertFinalQuote(quote, job.plan, report.quote_authority, report);
   const expected = confirmationNonce(id, quote, workerToken);
   if (
     !['prepare', 'flow', 'server'].includes(job.action) ||
@@ -286,7 +287,12 @@ export function resultWithConfirmation(
   }
 }
 
-export function assertFinalQuote(quote: V2RechargeQuote, plan: string, authority: unknown) {
+export function assertFinalQuote(
+  quote: V2RechargeQuote,
+  plan: string,
+  authority: unknown,
+  binding: Record<string, unknown> = {}
+) {
   if (
     quote.plan !== plan ||
     !quote.today ||
@@ -295,7 +301,7 @@ export function assertFinalQuote(quote: V2RechargeQuote, plan: string, authority
     quote.renewal_interval !== 'monthly' ||
     quote.today.currency !== quote.tax.currency ||
     quote.today.currency !== quote.renewal.currency ||
-    authority !== 'official_checkout_response'
+    !hasOfficialRechargeQuote({ ...binding, quote_authority: authority, quote })
   ) {
     throw new BadRequestException('官网最终报价不完整或未绑定当前订单');
   }
@@ -317,7 +323,9 @@ const paymentFailureReasons = new Set([
   'authentication_required',
   'payment_intent_binding_changed',
   'official_payment_evidence_not_observed',
-  'payment_response_not_verified'
+  'payment_response_not_verified',
+  'three_ds_binding_unverified',
+  'three_ds_authentication_failed'
 ]);
 for (const key of [
   'cancellation_confirmed',
@@ -355,6 +363,47 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     !V2_RECHARGE_PLANS.includes(result.recheck_plan as never)
   )
     delete result.recheck_plan;
+  if (
+    [
+      'not_required',
+      'authenticating',
+      'awaiting_user',
+      'completed',
+      'failed',
+      'unsupported'
+    ].includes(String(input.three_ds_status))
+  )
+    result.three_ds_status = input.three_ds_status;
+  const period =
+    input.subscription_period &&
+    typeof input.subscription_period === 'object' &&
+    !Array.isArray(input.subscription_period)
+      ? object(input.subscription_period)
+      : {};
+  const canonicalTime = (value: unknown) =>
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value;
+  if (
+    Object.keys(period).length === 5 &&
+    period.source === 'official_subscription_response' &&
+    canonicalTime(period.start) &&
+    canonicalTime(period.end) &&
+    Date.parse(period.start as string) < Date.parse(period.end as string) &&
+    Date.parse(period.end as string) - Date.parse(period.start as string) <=
+      32 * 24 * 60 * 60 * 1000 &&
+    typeof period.account_key === 'string' &&
+    /^[a-f0-9]{64}$/.test(period.account_key) &&
+    V2_RECHARGE_PLANS.includes(period.target_plan as never)
+  )
+    result.subscription_period = {
+      source: period.source,
+      start: period.start,
+      end: period.end,
+      account_key: period.account_key,
+      target_plan: period.target_plan
+    };
   const cleanQuote = (value: unknown) => {
     const quote = object(value);
     const money = (value: unknown) => {
@@ -436,8 +485,20 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     result.page_state = input.page_state;
   if (input.quote !== undefined) result.quote = cleanQuote(input.quote);
   if (input.initial_quote !== undefined) result.initial_quote = cleanQuote(input.initial_quote);
-  if (input.quote_authority === 'official_checkout_response') {
+  if (
+    ['official_checkout_response', 'official_upgrade_preview'].includes(
+      String(input.quote_authority)
+    )
+  ) {
     result.quote_authority = input.quote_authority;
+  }
+  if (input.operation === 'subscription_upgrade') result.operation = input.operation;
+  for (const [key, pattern] of [
+    ['upgrade_identifier', /^upg_[a-f0-9]{32}$/],
+    ['upgrade_invoice_identifier', /^in_[A-Za-z0-9]{1,180}$/],
+    ['upgrade_payment_intent_identifier', /^pi_[A-Za-z0-9]{1,180}$/]
+  ] as const) {
+    if (typeof input[key] === 'string' && pattern.test(input[key])) result[key] = input[key];
   }
   if (input.diagnostics !== undefined) {
     const diagnostic = object(input.diagnostics);
@@ -499,9 +560,15 @@ export function safeDocument(value: unknown): Record<string, unknown> {
   if (input.payment_evidence) {
     const evidence = object(input.payment_evidence);
     if (
-      !['checkout_session', 'payment_intent'].includes(String(evidence.kind)) ||
+      !['checkout_session', 'payment_intent', 'invoice'].includes(String(evidence.kind)) ||
       typeof evidence.identifier !== 'string' ||
-      !/^(?:cs|oaics|pi)_[A-Za-z0-9_]{1,200}$/.test(evidence.identifier) ||
+      !(
+        evidence.kind === 'invoice'
+          ? /^in_[A-Za-z0-9]{1,180}$/
+          : evidence.kind === 'payment_intent'
+            ? /^pi_[A-Za-z0-9]{1,180}$/
+            : /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/
+      ).test(evidence.identifier) ||
       !Number.isSafeInteger(evidence.amount_minor) ||
       Number(evidence.amount_minor) < 0 ||
       typeof evidence.currency !== 'string' ||

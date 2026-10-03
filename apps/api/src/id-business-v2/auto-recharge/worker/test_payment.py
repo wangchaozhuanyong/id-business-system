@@ -295,6 +295,56 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(Stop):
             assert_no_other_payment(self.root, self.target.account_id)
 
+    def test_rebuilt_checkout_paths_return_the_verified_late_payment_outcome(self):
+        from attempt_ledger import atomic_json, checkout_record_path
+        async def exercise():
+            for kind in ("cancelled", "resolved"):
+                with self.subTest(kind=kind):
+                    root = Path(self.temp.name) / kind
+                    create_marker(root, self.target)
+                    path = checkout_record_path(root, self.target.account_id)
+                    previous = json.loads(path.read_text())
+                    if kind == "cancelled":
+                        previous.update(status="cancelled", checkout_outcome="cancelled",
+                                        cancelled_before_confirmation=True, payment_attempted=False,
+                                        confirmation_requests_sent=0)
+                    else:
+                        previous.update(operator_resolution="confirmed_no_bank_request",
+                                        resolved_at="2026-09-13T13:00:00.000Z",
+                                        resolution_job_id="11111111-1111-4111-8111-111111111111",
+                                        source_job_id="22222222-2222-4222-8222-222222222222",
+                                        verification_job_id="33333333-3333-4333-8333-333333333333")
+                    atomic_json(path, previous)
+
+                    async def browser(target, **kwargs):
+                        self.assertTrue(kwargs["replace_unpaid_checkout"])
+                        with AttemptLedger(root, target.account_id, replace_unpaid_checkout=True) as checkout:
+                            checkout.begin()
+                            checkout.finish({"checkout_identifier": "cs_rebuilt", "processor_entity": "openai_ie",
+                                             "returned_currency": "MYR", "checkout_outcome": "created"})
+                            guard = PaymentGuard(target, checkout_ledger=checkout, target_plan="plus")
+                            guard.checkout_id = "cs_rebuilt"
+                            return await kwargs["quote_handler"](
+                                object(), guard, {"account_matched": True, "current_plan": "free"}, quote())
+
+                    async def payment(_page, _guard, _identity, ledger, *_args, **_kwargs):
+                        ledger.begin(quote(), confirmed_digest=quote_digest(quote()), card_last4="4242")
+                        ledger.mark_confirmation_sent()
+                        ledger.update(payment_status="paid", current_plan="plus", evidence={
+                            "kind": "checkout_session", "identifier": ledger.checkout_id,
+                            "amount_minor": 9250, "currency": "MYR"})
+                        return {"status": "payment_result_unknown", "payment_status": "unknown",
+                                "stage": "payment_result", "account_matched": True, "current_plan": "plus"}
+
+                    with patch("pay.run_browser", new=browser), patch("pay.payment_handler", new=payment):
+                        result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                                                confirmer=lambda *_: True)
+                    self.assertTrue(result["checkout_replacement_performed"])
+                    self.assertEqual(result["status"], "subscription_activated")
+                    self.assertEqual(result["payment_status"], "paid")
+                    self.assertEqual(result["payment_evidence"]["identifier"], "cs_rebuilt")
+        asyncio.run(exercise())
+
     def test_payment_success_requires_order_amount_currency_and_subscription(self):
         paid = {"id": "cs_synthetic", "object": "checkout.session", "status": "complete", "payment_status": "paid",
                 "amount_total": 9250, "currency": "myr"}
@@ -469,6 +519,19 @@ class StateTests(unittest.TestCase):
             self.assertEqual(result["status"], "paid_pending_activation")
             self.assertNotEqual(result["payment_outcome"], "subscription_activated")
 
+    def test_old_paid_evidence_does_not_promote_a_pre_payment_account_observation(self):
+        with PaymentLedger(self.root, self.target.account_id) as ledger:
+            ledger.begin(quote(), confirmed_digest=quote_digest(quote()), card_last4="4242")
+            ledger.update(payment_status="paid", current_plan="plus", evidence={
+                "kind": "checkout_session", "identifier": ledger.checkout_id,
+                "amount_minor": 9250, "currency": "MYR"})
+            for status in ("blocked", "payment_result_unknown", "subscription_activated"):
+                result = include_payment_record({"status": status, "stage": "session_restore",
+                                                 "account_matched": True, "current_plan": "plus"}, ledger)
+                self.assertEqual(result["payment_status"], "paid")
+                self.assertEqual(result["status"], "paid_pending_activation")
+                self.assertEqual(result["payment_outcome"], "paid_pending_activation")
+
     def test_observed_official_total_summary_shape_requires_paid_and_matching_due(self):
         data = {"id": "cs_synthetic", "object": "checkout.session", "status": "complete",
                 "payment_status": "paid", "currency": "myr", "total_summary": {"due": 9250, "total": 9250}}
@@ -500,6 +563,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.recovery_paid = False
         self.recovery_activated = False
         self.official_totals_shape = False
+        self.renewal_terms = "将按 每月 自动续订。将按 MYR 92.50/月 收费。"
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -602,7 +666,8 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                 const a=fetch(u,{method:'POST',body:'payment_method=pm_synthetic'});
                 fetch(u,{method:'POST',body:'payment_method=pm_synthetic'}).catch(()=>{});
                 await a;
-              }</script></body></html>''')
+              }</script></body></html>'''.replace(
+                  "将按 每月 自动续订。将按 MYR 92.50/月 收费。", self.renewal_terms))
         elif p.path == "/":
             await route.fulfill(content_type="text/html; charset=utf-8", body="<html><title>ChatGPT</title><body>ChatGPT</body></html>")
         else:
@@ -743,6 +808,90 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "subscription_activated", result)
         self.assertIsNone(result["payment_failure_reason"])
         self.assertEqual(self.confirmations, 1)
+
+    async def delayed_paid_flow(self, *, fail_subscription_read=False):
+        released = asyncio.Event()
+        original_response = PaymentGuard.response
+        from pay import payment_handler, verify_identity_again
+        observed = []
+        identity_reads = 0
+
+        async def delayed_response(guard, response):
+            if response.url.endswith("/confirm"):
+                await released.wait()
+            return await original_response(guard, response)
+
+        async def finish_handler(*args, **kwargs):
+            result = await payment_handler(*args, **kwargs)
+            observed.append(result["status"])
+            released.set()
+            return result
+
+        async def read_identity(*args, **kwargs):
+            nonlocal identity_reads
+            identity_reads += 1
+            if fail_subscription_read and identity_reads > 1:
+                raise Stop("official_account_mismatch")
+            return await verify_identity_again(*args, **kwargs)
+
+        with (patch.object(PaymentGuard, "response", delayed_response),
+              patch("pay.payment_handler", side_effect=finish_handler),
+              patch("pay.verify_identity_again", side_effect=read_identity)):
+            result = await self.flow()
+        self.assertEqual(observed, ["payment_result_unknown"])
+        self.assertEqual(self.confirmations, 1)
+        self.assertEqual(result["payment_status"], "paid")
+        self.assertIsNotNone(result["payment_evidence"])
+        with PaymentLedger(self.root, self.target.account_id) as ledger:
+            self.assertEqual(ledger.record["payment_status"], "paid")
+            with self.assertRaises(Stop):
+                ledger.assert_unattempted()
+        return result
+
+    async def test_late_paid_response_is_included_before_returning_the_final_result(self):
+        result = await self.delayed_paid_flow()
+        self.assertEqual(result["status"], "subscription_activated")
+        self.assertEqual(result["payment_outcome"], "subscription_activated")
+
+    async def test_late_paid_response_cannot_claim_activation_after_identity_read_failed(self):
+        result = await self.delayed_paid_flow(fail_subscription_read=True)
+        self.assertEqual(result["status"], "paid_pending_activation")
+        self.assertEqual(result["payment_outcome"], "paid_pending_activation")
+
+    async def test_invalid_renewal_terms_stop_the_server_payment_path_before_card_requests(self):
+        import server
+        original = current_quote
+        async def bounded_quote(*args, **kwargs):
+            kwargs["wait_seconds"] = .1
+            return await original(*args, **kwargs)
+        for clauses in ("参考月价 MYR 92.50 per month。将按 MYR 92.50/年 收费。",
+                        "将按 MYR 92.50/月 收费。将按 MYR 92.50/年 收费。",
+                        "Renews MYR 92.50\nReference price MYR 92.50 per month",
+                        "Renews MYR 92.50 per month, billed annually",
+                        "Renews MYR 92.50/month (annual plan)",
+                        "Renews MYR 92.50 yearly/monthly",
+                        "将按 MYR 92.50/月 收费（按年扣款）",
+                        "将按 MYR 92.50/月 收费 (billed annually)",
+                        "Renews MYR 92.50/month（年付套餐）",
+                        "将按 MYR 92.50/月 收费（年度计费）",
+                        "Renews MYR 92.50/month（年缴套餐）",
+                        "Renews MYR 92.50/month（年繳套餐）"):
+            with self.subTest(clauses=clauses):
+                self.renewal_terms = clauses
+                job = server.Job("11111111-1111-4111-8111-111111111111", {
+                    "action": "server", "plan": "plus",
+                    "safety": {"authorizeSinglePayment": True, "lockedCurrency": "MYR",
+                               "maxAmountMinor": 10000}})
+                with (patch("pay.current_quote", side_effect=bounded_quote),
+                      patch.object(server, "callback", return_value={"ok": True}) as callback):
+                    result = await self.flow(confirmer=job.confirm)
+                self.assertEqual(result["status"], "blocked", result)
+                self.assertEqual(result["reason"], "payment_quote_not_ready")
+                self.assertGreaterEqual(result["checkout_initializations_allowed"], 1)
+                self.assertEqual(self.confirmations + self.tokenizations, 0)
+                self.assertFalse(job.confirmed)
+                callback.assert_not_called()
+                self.assertFalse(list((self.root / "payments").glob("*.json")))
 
     async def test_observed_official_totals_shape_can_verify_payment(self):
         self.official_totals_shape = True

@@ -242,3 +242,27 @@ describe('服务器代理和账单国家独立', () => {
     expect(deps.addressRepository.requireAvailable).toHaveBeenCalledTimes(manual ? 0 : 1);
   });
 });
+
+describe('服务器已保存 Plus 升级按目标套餐核验', () => {
+  it.each(['pro-5x', 'pro-20x', 'pro-500'])(
+    '启动 %s 不能省略目标套餐或沿用 Plus 资格',
+    async (plan) => {
+      const deps = dependencies();
+      const assertRechargeEligible = vi.fn().mockResolvedValue({ id: totpAccountId });
+      const bankAccounts = {
+        ...deps.bankAccounts,
+        assertRechargeEligible,
+        savedLogin: vi
+          .fn()
+          .mockReturnValue({ email: 'test@example.invalid', password: 'synthetic-password' })
+      };
+      await startRechargeJob(
+        { ...input(), plan, login: undefined, chatgptAccountId: totpAccountId },
+        operator,
+        { ...deps, bankAccounts } as never
+      );
+      expect(assertRechargeEligible).toHaveBeenCalledWith(deps.tx, totpAccountId, plan);
+      expect(dispatched.plan).toBe(plan);
+    }
+  );
+});

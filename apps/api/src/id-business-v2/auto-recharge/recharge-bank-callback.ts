@@ -4,6 +4,7 @@ import { toV2JsonDocument, type V2CommandTransaction } from '../runtime/public-a
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { object } from './recharge-validation';
+import { mergeRechargePaymentFacts } from './recharge-payment-facts';
 
 export async function bindSavedChatgptAccount(
   tx: V2CommandTransaction,
@@ -76,9 +77,20 @@ export function mergeRechargeCallbackResult(
   report: Record<string, unknown>
 ) {
   const previous = object(job.result ?? {});
+  // 邮件读取状态只由内部读码服务维护，执行器进度回执不能覆盖或清除。
+  const loginMail = Object.fromEntries(
+    [
+      'login_mail_requested_at',
+      'login_mail_alias_id',
+      'login_mail_offered_id',
+      'login_mail_received_id'
+    ]
+      .filter((key) => Object.hasOwn(previous, key))
+      .map((key) => [key, previous[key]])
+  );
   return toV2JsonDocument({
-    ...previous,
-    ...report,
+    ...mergeRechargePaymentFacts(previous, report),
+    ...loginMail,
     ...(previous.recheck_only === true
       ? { recheck_only: true, source_job_id: previous.source_job_id }
       : {})

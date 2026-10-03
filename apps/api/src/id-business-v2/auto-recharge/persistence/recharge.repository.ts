@@ -4,6 +4,8 @@ import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transa
 import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/public-api';
 import type { Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
+import { hash } from '../recharge-validation';
+import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
 
 @Injectable()
 export class RechargeRepository {
@@ -79,6 +81,12 @@ export class RechargeRepository {
 
   records(tx: V2CommandTransaction, accountKey: string) {
     return tx.idBusinessV2RechargeRecord.findMany({ where: { accountKey } });
+  }
+
+  paymentRecords(ownerId: string, accountKeys: string[]) {
+    return this.prisma.idBusinessV2RechargeRecord.findMany({
+      where: { ownerId, accountKey: { in: accountKeys }, fileKey: { startsWith: 'payments/' } }
+    });
   }
 
   async retireCancelledCheckout(
@@ -252,6 +260,30 @@ export class RechargeRepository {
     const document = toV2JsonDocument(input.document);
     const next = input.document as Record<string, unknown>;
     const before = previous?.document as Record<string, unknown> | undefined;
+    if (next.operation === 'subscription_upgrade') {
+      if (
+        !isRechargeUpgrade(next) ||
+        input.fileKey !== `payments/${hash(String(next.upgrade_identifier))}.json`
+      )
+        throw new ConflictException('升级原单绑定无效');
+      if (
+        before &&
+        [
+          'operation',
+          'upgrade_identifier',
+          'target_plan',
+          'upgrade_invoice_identifier',
+          'upgrade_payment_intent_identifier'
+        ].some((key) => before[key] !== undefined && before[key] !== next[key])
+      )
+        throw new ConflictException('升级原单编号不可更换');
+      if (
+        before?.payment_evidence &&
+        JSON.stringify(before.payment_evidence) !== JSON.stringify(next.payment_evidence)
+      )
+        throw new ConflictException('已核实的升级付款证据不可更换');
+    } else if (before?.operation === 'subscription_upgrade')
+      throw new ConflictException('升级原单类型不可更换');
     const replacingUnpaidCheckout =
       input.allowCheckoutReplacement === true &&
       input.fileKey.endsWith('.json') &&

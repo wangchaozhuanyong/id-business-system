@@ -61,6 +61,17 @@ class BuiltinProfiles:
 
 
 PROFILES = BuiltinProfiles()
+DISPATCH_REASONS = frozenset({'worker_busy', 'builtin_original_window_pending',
+                              'builtin_profile_missing', 'invalid_registration_payload',
+                              'fingerprint_cleanup_failed'})
+
+
+def dispatch_rejection(error):
+    """只把注册受控原因传给 API，不传异常文本或执行资料。"""
+    reason = error.report.get('reason') if isinstance(error, Stop) else None
+    if reason not in DISPATCH_REASONS:
+        return None
+    return {'ok': False, 'reason': reason}
 
 
 class RegistrationServerJob(RegistrationJob):
@@ -68,7 +79,7 @@ class RegistrationServerJob(RegistrationJob):
         expected = {'id', 'mode', 'attempt', 'agentToken', 'email', 'password', 'displayName',
                     'birthDate', 'totpSecret', 'browserProfileId', 'step', 'registered',
                     'passwordVerified', 'mfaVerified', 'proxy', 'expectedCountry'}
-        if (not isinstance(body, dict) or set(body) != expected or body['id'] != job_id or
+        if (not isinstance(body, dict) or set(body) - {'registrationAge'} != expected or body['id'] != job_id or
                 not re.fullmatch('[A-Z]{2}', str(body['expectedCountry']))):
             raise Stop('invalid_registration_payload')
         self.expected_country = body['expectedCountry']
@@ -138,6 +149,8 @@ class RegistrationServerJob(RegistrationJob):
     async def execute_builtin(self):
         from registration_browser import RegistrationBrowser
         self.profile = await PROFILES.open(self.runtime, self)
+        # Only a submission fact survives attempts in the exact retained window.
+        self.registration_state = self.profile.setdefault('registration_state', {})
         flow = RegistrationBrowser(self, self.profile['context'])
         await flow.run()
         await PROFILES.close(self.id)
@@ -181,8 +194,12 @@ def handle_request(handler, body, callback_base, runtime):
             return job  # 已结束的尝试也只返回收据，不重复注册。
         if job and not job.done:
             raise Stop('worker_busy')
-        if PROFILES.profile and PROFILES.profile['job_id'] != job_id:
-            raise Stop('builtin_original_window_pending')
+        if PROFILES.profile:
+            if (PROFILES.profile['job_id'] != job_id or not PROFILES.profile['id'] or
+                    body.get('browserProfileId') != PROFILES.profile['id']):
+                raise Stop('builtin_original_window_pending')
+        elif body.get('browserProfileId'):
+            raise Stop('builtin_profile_missing')
         return RegistrationServerJob(job_id, body, callback_base, runtime)
     if not isinstance(job, RegistrationServerJob) or job.id != job_id or body.get('attempt') != job.attempt:
         raise ValueError()

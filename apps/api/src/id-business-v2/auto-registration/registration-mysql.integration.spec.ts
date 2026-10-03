@@ -19,7 +19,7 @@ vi.mock('./registration-worker', () => ({
   registrationWorkerCommand: (...args: unknown[]) => {
     if (args[2] === 'launch') worker.payload = args[3] as Record<string, unknown>;
     worker.command(...args);
-    return Promise.resolve(worker.delivery);
+    return Promise.resolve({ delivery: worker.delivery });
   }
 }));
 const url = process.env.V2_REGISTRATION_TEST_DATABASE_URL;
@@ -55,7 +55,9 @@ suite('自动注册 MySQL 事务和恢复', () => {
           ? correctionEmail
           : id === 'dispatch-check'
             ? 'dispatch@example.test'
-            : email
+            : id.startsWith('age-cycle-')
+              ? `${id}@example.test`
+              : email
     }),
     aliasAddress: async () => ({ email: correctionEmail, updatedAt: aliasVersion }),
     registrationCode: async () => mailboxCandidate
@@ -176,10 +178,16 @@ suite('自动注册 MySQL 事务和恢复', () => {
     ]);
     expect(starts.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
     const job = (await jobs.list({}, operator)).items[0]!;
+    expect(job.registrationAge).toBe(20);
     const receipt = await jobs.launch(job.id, operator);
     expect(receipt).not.toHaveProperty('agentToken');
     expect(receipt).not.toHaveProperty('password');
-    expect(worker.payload).toMatchObject({ expectedCountry: 'US', proxy: { countryCode: 'US' } });
+    expect(worker.payload).toMatchObject({
+      expectedCountry: 'US',
+      proxy: { countryCode: 'US' },
+      registrationAge: 20,
+      birthDate: '1996-01-01'
+    });
     const launch = worker.payload as {
       agentToken: string;
       attempt: number;
@@ -233,6 +241,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
     restart();
     await jobs.launch(job.id, operator);
     const resumed = worker.payload as typeof launch;
+    expect(worker.payload.registrationAge).toBe(20);
     expect(resumed.browserProfileId).toBe('reg_' + 'a'.repeat(64));
     expect(resumed.password).toBe(launch.password);
     await expect(emit('password_verified')).rejects.toThrow('授权');
@@ -309,6 +318,19 @@ suite('自动注册 MySQL 事务和恢复', () => {
       events.event(row.id, token, { type: 'registered', attempt: 1, email: 'expired@example.test' })
     ).rejects.toThrow('授权');
     expect((await repository.find(row.id))?.registered).toBe(false);
+    await expect(
+      jobs.create(
+        {
+          mailboxAliasId: 'dispatch-check',
+          proxyId,
+          birthDate: '1996-01-01',
+          confirmIdentity: true
+        },
+        operator
+      )
+    ).rejects.toThrow('已有注册任务');
+    await jobs.cancel(row.id, operator);
+    expect((await repository.find(row.id))?.state).toBe('cancelled');
   });
   it('旧连接器省略国家时留空，重复回执不补写后来的出口国家', async () => {
     const token = randomBytes(32).toString('hex');
@@ -594,5 +616,64 @@ suite('自动注册 MySQL 事务和恢复', () => {
       await prisma.idBusinessV2ChatgptAccount.count({ where: { emailHash: original.emailHash } })
     ).toBe(1);
     await jobs.cancel(newJob.id, operator);
+  });
+
+  it('完整20至45轮换在重启后继续，事务失败不消耗年龄，历史任务不参与计数', async () => {
+    const assignedBefore = await prisma.idBusinessV2RegistrationJob.count({
+      where: { registrationAge: { not: null } }
+    });
+    const ages: number[] = [];
+    const input = (index: number) => ({
+      mailboxAliasId: `age-cycle-${index}`,
+      proxyId,
+      birthDate: '1996-01-01',
+      confirmIdentity: true
+    });
+    for (let index = 0; index < 27; index += 1) {
+      if (index === 13) restart();
+      if (index === 8) {
+        const audit = new V2TransactionalAuditService();
+        vi.spyOn(audit, 'append').mockRejectedValueOnce(new Error('synthetic audit failure'));
+        const failing = new RegistrationJobsService(
+          repository,
+          new V2CommandTransactionManager(prisma),
+          audit,
+          encryption,
+          mailbox as never,
+          settings as never,
+          proxies as never
+        );
+        await expect(failing.create(input(index), operator)).rejects.toThrow(
+          'synthetic audit failure'
+        );
+        expect(
+          await prisma.idBusinessV2RegistrationJob.count({
+            where: { registrationAge: { not: null } }
+          })
+        ).toBe(assignedBefore + index);
+      }
+      const job = await jobs.create(input(index), operator);
+      const expectedAge = 20 + ((assignedBefore + index) % 26);
+      expect(job.registrationAge).toBe(expectedAge);
+      expect((await repository.find(job.id))!.registrationAge).toBe(expectedAge);
+      ages.push(job.registrationAge!);
+      await expect(jobs.create(input(index), operator)).rejects.toThrow('已有注册任务');
+      await jobs.cancel(job.id, operator);
+    }
+    expect(new Set(ages.slice(0, 26)).size).toBe(26);
+    expect(ages[26]).toBe(ages[0]);
+    expect(ages).toContain(45);
+    const wrap = ages.indexOf(45);
+    expect(ages[wrap + 1]).toBe(20);
+    const stored = await prisma.idBusinessV2RegistrationJob.findFirstOrThrow({
+      where: { mailboxAliasId: 'age-cycle-0' }
+    });
+    await expect(
+      prisma.idBusinessV2RegistrationJob.update({
+        where: { id: stored.id },
+        data: { registrationAge: 19 }
+      })
+    ).rejects.toThrow();
+    expect((await repository.find(stored.id))!.registrationAge).toBe(ages[0]);
   });
 });

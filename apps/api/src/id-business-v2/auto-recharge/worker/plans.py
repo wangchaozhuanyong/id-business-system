@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from checkout_core import Stop
+from checkout_core import Stop, account_plan
 
 PLANS = {
     # 官网公开脚本 PlanName.GO（2026-10-03）；不采用合作方或免费赠送套餐标识。
@@ -76,6 +76,33 @@ def checkout_option_plan(label):
     prices = re.findall(r'^\s*(?:ChatGPT\s+)?Pro\s+(100|200|500)\s*$', label, re.I | re.M)
     matches.extend(PRO_PRICE_PLANS[int(price)] for price in prices)
     return matches[0] if len(set(matches)) == 1 else None
+
+
+def subscription_transition(current_plan, target_plan):
+    """只允许首次开通或已核实 Plus 升级 Pro；其他已有套餐保持禁重付。"""
+    spec = plan_spec(target_plan)
+    if current_plan == "free":
+        return "new_subscription"
+    if current_plan == "plus" and spec["family"] in {"pro", "promax"}:
+        return "subscription_upgrade"
+    raise Stop("incompatible_existing_subscription", current_plan=current_plan)
+
+
+def official_subscription(data, account_id):
+    """官网明确 prolite/pro/promax 标识对应档位，不按付款金额推算。"""
+    accounts = data.get("accounts") if isinstance(data, dict) else None
+    node = accounts.get(account_id) if isinstance(accounts, dict) else None
+    account = node.get("account") if isinstance(node, dict) else None
+    raw_plan = (account.get("plan_type") or node.get("plan_type")) if isinstance(account, dict) else None
+    if raw_plan == "prolite":
+        # account_plan 继续校验同账户形状及 ID；只规范官网已确认的 Pro Lite 枚举。
+        normalized = {**data, "accounts": {**accounts, account_id: {**node,
+                      "plan_type": "pro", "account": {**account, "plan_type": "pro"}}}}
+        plan = account_plan(normalized, account_id)
+    else:
+        plan = account_plan(data, account_id)
+    return {"current_plan": plan,
+            "current_tier": 5 if raw_plan == "prolite" else 20 if raw_plan == "pro" else None}
 
 
 def subscription_match(target_plan, current_plan, current_tier=None):

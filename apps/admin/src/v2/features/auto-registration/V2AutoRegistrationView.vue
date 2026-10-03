@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout v2-records-page">
     <V2PageContext
-      description="显示邮件验证码查询中的全部隐藏邮箱；确认已注册后加入 ChatGPT 账号，也可查看自动注册任务。"
+      description="按注册状态查看隐藏邮箱，选择未注册邮箱开始注册；执行进度和历史记录在注册任务中查看。"
     >
       <template #filters
         ><el-form
@@ -13,7 +13,7 @@
           <el-form-item label="邮箱搜索"
             ><el-input
               v-model="keyword"
-              :placeholder="activeTab === 'mailboxes' ? '隐藏邮箱、主邮箱或备注' : '脱敏邮箱'"
+              :placeholder="activeTab !== 'jobs' ? '隐藏邮箱、主邮箱或备注' : '脱敏邮箱'"
               maxlength="120"
               clearable
               @keyup.enter="search"
@@ -23,13 +23,31 @@
       >
       <template #actions
         ><AppButton @click="helpOpen = true">使用说明</AppButton
-        ><AppButton variant="primary" @click="page.openStart">开始注册</AppButton></template
+        ><AppButton
+          variant="primary"
+          :disabled="
+            activeTab === 'jobs' ||
+            !mailboxes.selected.value?.canStart ||
+            page.busy.value ||
+            mailboxes.busy.value
+          "
+          :title="
+            mailboxes.selected.value?.canStart ? '' : '请先在隐藏邮箱或未注册列表选择可注册邮箱'
+          "
+          @click="page.openStart(mailboxes.selected.value)"
+          >开始注册</AppButton
+        ></template
       >
     </V2PageContext>
     <el-tabs v-model="activeTab" aria-label="注册资料分类">
       <el-tab-pane label="隐藏邮箱" name="mailboxes" />
+      <el-tab-pane label="未注册" name="unregistered" />
+      <el-tab-pane label="已注册" name="registered" />
       <el-tab-pane label="注册任务" name="jobs" />
     </el-tabs>
+    <p v-if="activeTab !== 'jobs' && mailboxes.selected.value" role="status">
+      已选择：{{ mailboxes.selected.value.email }}
+    </p>
     <p v-if="page.error.value" role="alert">{{ page.error.value }}</p>
     <p v-if="page.message.value" role="status">{{ page.message.value }}</p>
     <V2AsyncRegion
@@ -78,7 +96,12 @@
         </el-form>
       </section>
     </V2AsyncRegion>
-    <RegistrationMailboxList v-show="activeTab === 'mailboxes'" :page="mailboxes" />
+    <RegistrationMailboxList
+      v-show="activeTab !== 'jobs'"
+      :page="mailboxes"
+      :title="mailboxTitle"
+      @view-job="viewJob"
+    />
     <V2AsyncRegion
       v-if="activeTab === 'jobs'"
       skeleton="table"
@@ -169,8 +192,8 @@
           <span>共 {{ page.query.data.value?.total ?? 0 }} 条</span
           ><el-pagination
             v-pagination-label
-            :current-page="page.filters.page"
-            :page-size="page.filters.pageSize"
+            :current-page="page.query.data.value?.page ?? page.filters.page"
+            :page-size="page.query.data.value?.pageSize ?? page.filters.pageSize"
             :total="page.query.data.value?.total ?? 0"
             :page-sizes="[20, 50, 100]"
             layout="total, sizes, prev, pager, next"
@@ -183,10 +206,14 @@
     <V2FormDrawer
       v-model="page.formOpen.value"
       title="自动注册 GPT"
-      confirm-text="开始注册"
+      :confirm-text="page.startConfirmText.value"
       :confirm-loading="page.busy.value"
       :confirm-disabled-reason="
-        page.options.phase.value !== 'ready' ? '请先等待注册资料加载完成' : ''
+        page.startConfirmText.value === '核对原任务'
+          ? ''
+          : page.options.phase.value !== 'ready'
+            ? '请先等待注册资料加载完成'
+            : ''
       "
       @confirm="page.start"
     >
@@ -200,88 +227,7 @@
         :error="page.options.error.value ? getApiErrorMessage(page.options.error.value) : ''"
         @retry="page.options.refresh"
       >
-        <el-form
-          :ref="bindForm"
-          :model="page.draft.form"
-          :rules="page.rules"
-          scroll-to-error
-          label-position="left"
-          label-width="110px"
-          require-asterisk-position="right"
-        >
-          <el-form-item label="资料搜索"
-            ><el-input
-              v-model="page.filters.optionSearch"
-              clearable
-              placeholder="搜索邮箱、代理国家或名字"
-              @keyup.enter="page.searchOptions"
-          /></el-form-item>
-          <el-form-item label="选项页码"
-            ><el-input-number v-model="page.filters.optionPage" :min="1" :max="1000" /><span
-              >每页最多 100 项</span
-            ></el-form-item
-          >
-          <el-form-item label="注册邮箱" prop="mailboxAliasId"
-            ><el-select
-              v-model="page.draft.form.mailboxAliasId"
-              filterable
-              placeholder="选择已录入的授权邮箱"
-              ><el-option
-                v-for="item in page.options.data.value?.mailboxes ?? []"
-                :key="item.id"
-                :label="item.email"
-                :value="item.id" /></el-select
-          ></el-form-item>
-          <el-form-item label="代理 IP" prop="proxyId"
-            ><el-select
-              v-model="page.draft.form.proxyId"
-              filterable
-              placeholder="选择代理 IP 管理中的启用代理"
-              ><el-option
-                v-if="
-                  page.options.data.value?.defaultProxyId &&
-                  !(page.options.data.value?.proxies ?? []).some(
-                    (item) => item.id === page.options.data.value?.defaultProxyId
-                  )
-                "
-                :value="page.options.data.value.defaultProxyId"
-                label="已保存的默认代理（来自代理 IP 管理）" /><el-option
-                v-for="item in page.options.data.value?.proxies ?? []"
-                :key="item.id"
-                :label="item.label"
-                :value="item.id" /></el-select
-          ></el-form-item>
-          <p class="recharge-settings-note">
-            代理与自动充值共用代理 IP 管理中的资料；本次注册以这里选中的条目为准。
-          </p>
-          <el-form-item label="名字" prop="nameId"
-            ><el-select
-              v-model="page.draft.form.nameId"
-              clearable
-              filterable
-              placeholder="留空自动选择启用名字"
-              ><el-option
-                v-for="item in page.options.data.value?.names ?? []"
-                :key="item.id"
-                :label="item.displayName"
-                :value="item.id" /></el-select
-          ></el-form-item>
-          <el-form-item label="真实出生日期" prop="birthDate"
-            ><el-date-picker
-              v-model="page.draft.form.birthDate"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="实际年龄为 20 至 45 岁"
-          /></el-form-item>
-          <el-form-item label="资料确认" prop="confirmIdentity"
-            ><el-checkbox v-model="page.draft.form.confirmIdentity"
-              >邮箱已授权，出生日期为真实资料</el-checkbox
-            ></el-form-item
-          >
-          <p>
-            密码由系统生成并加密保存。遇到本人验证时暂停等待处理；本功能只检查优惠，不领取或付款。
-          </p>
-        </el-form>
+        <RegistrationStartForm :page="page" />
       </V2AsyncRegion>
     </V2FormDrawer>
     <V2ConfirmDialog
@@ -291,7 +237,9 @@
       cancel-text="知道了"
       :confirm-visible="false"
     >
-      <p>选择已授权邮箱、代理和真实出生日期后点击开始注册；名字留空时从名字数据表自动选择。</p>
+      <p>
+        先在隐藏邮箱或未注册列表点击选择注册，再点击开始注册。抽屉自动带入邮箱和默认代理，填写真实出生日期并确认授权；名字留空时自动分配。
+      </p>
       <p>
         代理与自动充值共用代理 IP 管理目录。动态代理在新任务开始时提取 IP，系统打开独立指纹浏览器。
         注册提交前，代理连通与官网页面准备超过 20 秒或失败时，关闭失败窗口并重新提取
@@ -331,23 +279,42 @@ import { useRegistrationPage } from './useRegistrationPage';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { useRegistrationMailboxes } from './useRegistrationMailboxes';
 import RegistrationMailboxList from './RegistrationMailboxList.vue';
+import RegistrationStartForm from './RegistrationStartForm.vue';
 const activeTab = useV2SessionDraft('auto-registration:tab', () =>
-  ref<'mailboxes' | 'jobs'>('mailboxes')
+  ref<'mailboxes' | 'unregistered' | 'registered' | 'jobs'>('mailboxes')
 );
 const page = useRegistrationPage({
   moduleKey: 'auto-registration',
-  enabled: () => activeTab.value === 'jobs'
+  enabled: () => activeTab.value === 'jobs',
+  onStarted: () => {
+    activeTab.value = 'jobs';
+  }
 });
-const mailboxes = useRegistrationMailboxes(() => activeTab.value === 'mailboxes');
+const mailboxes = useRegistrationMailboxes(
+  () => activeTab.value !== 'jobs',
+  () =>
+    activeTab.value === 'registered' || activeTab.value === 'unregistered' ? activeTab.value : 'all'
+);
+const mailboxTitle = computed(() =>
+  activeTab.value === 'registered'
+    ? '已注册邮箱'
+    : activeTab.value === 'unregistered'
+      ? '未注册邮箱'
+      : '隐藏邮箱'
+);
+function viewJob(id: string) {
+  page.filters.activeJobId = id;
+  activeTab.value = 'jobs';
+}
 const keyword = computed({
-  get: () => (activeTab.value === 'mailboxes' ? mailboxes.filters.keyword : page.filters.keyword),
+  get: () => (activeTab.value !== 'jobs' ? mailboxes.filters.keyword : page.filters.keyword),
   set: (value: string) => {
-    if (activeTab.value === 'mailboxes') mailboxes.filters.keyword = value;
+    if (activeTab.value !== 'jobs') mailboxes.filters.keyword = value;
     else page.filters.keyword = value;
   }
 });
 function search() {
-  if (activeTab.value === 'mailboxes') mailboxes.search();
+  if (activeTab.value !== 'jobs') mailboxes.search();
   else page.search();
 }
 const { listRef, listFrameStyle } = useV2StableListFrame({
@@ -355,5 +322,4 @@ const { listRef, listFrameStyle } = useV2StableListFrame({
   pageSize: () => page.filters.pageSize
 });
 const helpOpen = ref(false);
-const bindForm = page.bindForm;
 </script>

@@ -29,9 +29,13 @@ import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import { BankRechargeCorrectionService } from './bank-recharge-correction.service';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
+import { V2IdentityService } from '../../v2-auth/v2-identity.service';
+import { RechargeEmailCodeController } from './recharge-email-code.controller';
+import { RechargeEmailCodeService } from './recharge-email-code.service';
 @Module({
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
   controllers: [
+    RechargeEmailCodeController,
     RechargeController,
     BankRechargeController,
     RechargeProxyController,
@@ -39,6 +43,8 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
   ],
   exports: [RechargeSettingsService, RechargeProxyService],
   providers: [
+    RechargeEmailCodeService,
+    V2IdentityService,
     RechargeNameService,
     RechargeNameRepository,
     RechargeCardRemovalService,

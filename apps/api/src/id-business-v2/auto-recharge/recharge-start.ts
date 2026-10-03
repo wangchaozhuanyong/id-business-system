@@ -142,7 +142,7 @@ export async function startRechargeJob(
       }
       const account =
         input.action === 'server' && input.chatgptAccountId
-          ? await deps.bankAccounts?.assertRechargeEligible(tx, input.chatgptAccountId)
+          ? await deps.bankAccounts?.assertRechargeEligible(tx, input.chatgptAccountId, input.plan)
           : null;
       if (input.chatgptAccountId && !account)
         throw new ServiceUnavailableException('ChatGPT 账号服务不可用');

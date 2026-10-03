@@ -2,7 +2,7 @@
   <div>
     <V2AsyncRegion
       skeleton="table"
-      loading-title="正在加载隐藏邮箱"
+      loading-title="正在加载邮箱"
       :phase="page.query.phase.value"
       :previous-data="page.query.isParameterTransition.value"
       :error="page.query.error.value ? getApiErrorMessage(page.query.error.value) : ''"
@@ -10,7 +10,7 @@
     >
       <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
         <header>
-          <V2SectionHeading title="隐藏邮箱">
+          <V2SectionHeading :title="title">
             <template #actions>
               <V2TableColumnSettings inline :schema="v2TableSchemas.registrationMailboxes.main" />
               <span>共 {{ page.query.data.value?.total ?? 0 }} 条</span>
@@ -20,12 +20,14 @@
         <V2Table
           :schema="v2TableSchemas.registrationMailboxes.main"
           :show-column-settings="false"
+          :view-key="title"
           :data="page.query.data.value?.items ?? []"
           class="v2-records-table"
         >
           <template #empty
             ><div class="v2-records-empty">
-              <strong>暂无隐藏邮箱</strong><span>在邮件验证码查询添加隐藏邮箱后会显示在这里</span>
+              <strong>暂无{{ title }}</strong
+              ><span>可调整搜索条件，或在邮件验证码查询中管理邮箱</span>
             </div></template
           >
           <V2TableColumn
@@ -43,11 +45,22 @@
             <template #default="{ row }">{{ row.status === 'ACTIVE' ? '启用' : '停用' }}</template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[3]">
-            <template #default="{ row }"
-              ><el-tag :type="row.registered ? 'success' : 'info'">{{
-                row.registered ? '已注册' : '未注册'
-              }}</el-tag></template
-            >
+            <template #default="{ row }">
+              <el-select
+                :model-value="row.registered"
+                :aria-label="`${row.email}注册状态`"
+                :disabled="page.busy.value || row.startBlockedReason === 'unfinished_task'"
+                :title="
+                  row.startBlockedReason === 'unfinished_task'
+                    ? mailboxBlockedReasons.unfinished_task
+                    : ''
+                "
+                @change="(value: unknown) => page.openMark(row, value)"
+              >
+                <el-option label="未注册" :value="false" />
+                <el-option label="已注册" :value="true" />
+              </el-select>
+            </template>
           </V2TableColumn>
           <V2TableColumn
             :definition="v2TableSchemas.registrationMailboxes.main.columns[4]"
@@ -60,11 +73,28 @@
           <V2TableActionColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[6]">
             <template #default="{ row }">
               <AppButton
+                v-if="row.pendingJobId"
                 size="small"
                 variant="ghost"
-                :disabled="page.busy.value"
-                @click="page.openMark(row)"
-                >{{ row.registered ? '标记未注册' : '标记已注册' }}</AppButton
+                @click="$emit('view-job', row.pendingJobId)"
+                >查看任务</AppButton
+              >
+              <AppButton
+                v-else
+                size="small"
+                variant="ghost"
+                :disabled="page.busy.value || !row.canStart"
+                :title="blockedReason(row)"
+                @click="page.select(row)"
+                >{{
+                  page.selected.value?.id === row.id
+                    ? '已选择'
+                    : row.registered
+                      ? '已注册'
+                      : row.canStart
+                        ? '选择注册'
+                        : '不可注册'
+                }}</AppButton
               >
             </template>
           </V2TableActionColumn>
@@ -73,8 +103,8 @@
           <span>共 {{ page.query.data.value?.total ?? 0 }} 条</span>
           <el-pagination
             v-pagination-label
-            :current-page="page.filters.page"
-            :page-size="page.filters.pageSize"
+            :current-page="page.query.data.value?.page ?? page.filters.page"
+            :page-size="page.query.data.value?.pageSize ?? page.filters.pageSize"
             :total="page.query.data.value?.total ?? 0"
             :page-sizes="[20, 50, 100]"
             layout="total, sizes, prev, pager, next"
@@ -87,19 +117,19 @@
     <p v-if="page.message.value" role="status">{{ page.message.value }}</p>
     <V2ConfirmDialog
       :model-value="page.confirmOpen.value"
-      :title="page.target.value?.registered ? '标记未注册' : '标记已注册'"
+      :title="page.desiredRegistered.value ? '标记已注册' : '标记未注册'"
       message=""
-      :confirm-text="page.target.value?.registered ? '确认未注册' : '确认已注册'"
+      :confirm-text="page.desiredRegistered.value ? '确认已注册' : '确认未注册'"
       :confirm-loading="page.busy.value"
       @update:model-value="page.setConfirmOpen"
       @confirm="page.confirm"
     >
       <p>
         确认将 {{ page.target.value?.email }} 标记为{{
-          page.target.value?.registered ? '未注册' : '已注册'
+          page.desiredRegistered.value ? '已注册' : '未注册'
         }}？
       </p>
-      <p v-if="page.target.value?.registered">
+      <p v-if="!page.desiredRegistered.value">
         已有账号、密码、安全资料、备注和关联记录会保留；此操作只修正注册状态。
       </p>
       <p v-else>确认后创建或复用 ChatGPT 账号，密码和双重验证资料可在账号页面补充。</p>
@@ -121,9 +151,15 @@ import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { getApiErrorMessage } from '@/api/client';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
+import type { V2RegistrationMailbox } from './contracts';
 import type { useRegistrationMailboxes } from './useRegistrationMailboxes';
+import { mailboxBlockedReasons } from './presentation';
 
-const props = defineProps<{ page: ReturnType<typeof useRegistrationMailboxes> }>();
+const props = defineProps<{ page: ReturnType<typeof useRegistrationMailboxes>; title: string }>();
+defineEmits<{ 'view-job': [id: string] }>();
+function blockedReason(row: V2RegistrationMailbox) {
+  return row.startBlockedReason ? mailboxBlockedReasons[row.startBlockedReason] : '';
+}
 const { listRef, listFrameStyle } = useV2StableListFrame({
   items: () => props.page.query.data.value?.items ?? [],
   pageSize: () => props.page.filters.pageSize

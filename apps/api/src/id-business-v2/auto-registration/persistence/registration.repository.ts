@@ -77,9 +77,9 @@ export class RegistrationRepository {
     return tx.idBusinessV2RegistrationJob.findFirst({
       where: {
         ...(excludeId ? { id: { not: excludeId } } : {}),
-        state: { in: ['queued', 'running', 'awaiting_email', 'awaiting_user'] },
-        OR: [{ leaseUntil: null }, { leaseUntil: { gt: new Date() } }]
-      }
+        state: { notIn: ['cancelled', 'completed'] }
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
     });
   }
   account(tx: V2CommandTransaction, emailHash: string) {
@@ -89,6 +89,13 @@ export class RegistrationRepository {
     return this.prisma.idBusinessV2ChatgptAccount.findMany({
       where: { emailHash: { in: emailHashes } },
       select: { id: true, emailHash: true, registered: true, updatedAt: true }
+    });
+  }
+  unfinishedJobsByEmailHashes(emailHashes: string[]) {
+    return this.prisma.idBusinessV2RegistrationJob.findMany({
+      where: { emailHash: { in: emailHashes }, state: { notIn: ['cancelled', 'completed'] } },
+      select: { id: true, emailHash: true, ownerId: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
     });
   }
   async setAccountRegistered(
@@ -126,6 +133,13 @@ export class RegistrationRepository {
   }
   create(tx: V2CommandTransaction, data: Prisma.IdBusinessV2RegistrationJobUncheckedCreateInput) {
     return tx.idBusinessV2RegistrationJob.create({ data });
+  }
+  async nextRegistrationAge(tx: V2CommandTransaction) {
+    // 调用方已持有注册任务锁。只统计新任务快照，旧任务不回填、不参与轮换。
+    const assigned = await tx.idBusinessV2RegistrationJob.count({
+      where: { registrationAge: { not: null } }
+    });
+    return 20 + (assigned % 26);
   }
   update(
     tx: V2CommandTransaction,
