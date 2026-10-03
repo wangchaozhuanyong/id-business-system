@@ -157,6 +157,19 @@ describe('recharge stage presentation', () => {
       )
     ).toBe('未知');
   });
+  it('服务器网络失败只指向可用的代理管理，不要求修改不存在的等待设置', () => {
+    for (const reason of [
+      'session_network_error',
+      'session_load_timeout',
+      'checkout_page_network_error'
+    ]) {
+      const feedback = rechargeIssueFeedback(job({ action: 'server', result: { reason } }));
+      expect(feedback?.action).toContain('“代理 IP 管理”');
+      expect(feedback?.action).toContain('暂不支持在页面调整等待时间');
+      expect(feedback?.action).not.toContain('右上角设置');
+      expect(feedback?.action).not.toContain('重新开始');
+    }
+  });
   it('does not describe an attempted or unknown payment as never attempted', () => {
     expect(subscriptionLabel(job())).toBe('尚未执行开通');
     expect(subscriptionLabel(job({ state: 'confirming' }))).toBe('结果待核验');

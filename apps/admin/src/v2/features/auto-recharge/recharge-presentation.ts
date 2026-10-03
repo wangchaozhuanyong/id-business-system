@@ -477,8 +477,11 @@ function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: strin
   if (reason && credentialReasons.has(reason)) return '请重新导出并载入当前账号的授权 JSON。';
   if (reason && connectorReasons.has(reason))
     return '请打开比特浏览器和本机连接器，再到右上角设置检查连接、密钥和窗口配置。';
-  if (reason && networkReasons.has(reason))
+  if (reason && networkReasons.has(reason)) {
+    if (job.action === 'server')
+      return '请在“代理 IP 管理”检查本次选用的代理。服务器模式暂不支持在页面调整等待时间；请保留本次执行记录供管理员排查。';
     return '请在右上角设置检查代理 IP 和等待时间，确认代理可用后重新开始。';
+  }
   if (reason === 'bitbrowser_cleanup_unverified')
     return '请先在比特浏览器确认本任务的失败窗口已关闭，再重新开始。';
   if (reason === 'verification_required' || job.result.user_action_required === true)
