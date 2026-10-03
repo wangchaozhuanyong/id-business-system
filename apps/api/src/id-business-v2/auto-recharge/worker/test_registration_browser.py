@@ -7,7 +7,7 @@ import unittest
 import threading
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from checkout_core import Stop
 from registration_security import totp
 from registration_browser import RegistrationBrowser
@@ -16,9 +16,34 @@ from registration_browser import RegistrationBrowser
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_local_registration_flow(self):
+        await self.full_flow()
+
+    async def test_fresh_registration_email_only_login_sets_then_proves_password(self):
+        await self.full_flow(fresh_mail_login=True)
+
+    async def test_fresh_email_identity_without_add_password_entry_does_not_configure(self):
+        await self.full_flow(fresh_mail_login=True, entry='missing', expected_reason='verification_required')
+
+    async def test_fresh_email_identity_cannot_configure_another_original_window(self):
+        await self.full_flow(fresh_mail_login=True, wrong_original=True, expected_reason='official_login_not_verified')
+
+    async def test_fresh_email_identity_with_configured_password_evidence_does_not_configure(self):
+        for entry in ['current_password', 'change_password', 'reset_password', 'ambiguous']:
+            with self.subTest(entry=entry):
+                await self.full_flow(fresh_mail_login=True, entry=entry, expected_reason='verification_required')
+
+    async def test_fresh_email_identity_cannot_configure_while_original_has_captcha(self):
+        await self.full_flow(fresh_mail_login=True, original_captcha=True, expected_reason='verification_required')
+
+    async def test_saved_password_still_requires_strict_password_login(self):
+        await self.full_flow(fresh_mail_login=True, email_after_save=True, expected_reason='verification_required')
+
+    async def full_flow(self, *, fresh_mail_login=False, entry='add', wrong_original=False,
+                        original_captcha=False, email_after_save=False, expected_reason=None):
         from playwright.async_api import async_playwright
         state = {'registered': False, 'password': None, 'mfa': False}
         events = []; receipts = []; expected = 'owner@example.test'; key = 'JBSWY3DPEHPK3PXP'
+        operations = []; contexts = []; page_errors = []
         class Job:
             def __init__(self):
                 self.payload = dict(email=expected, password='synthetic-only-password', displayName='李华', birthDate='1996-01-01', registered=False, passwordVerified=False, mfaVerified=False, totpSecret=None)
@@ -39,22 +64,47 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
 const root=document.getElementById('app');window.accountEmail='';
 function profile(){root.innerHTML='<form><input name="name" autocomplete="name"><input type="date" name="birthdate"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();await window.fixture('profile',{name:root.querySelector('[name=name]').value,birth:root.querySelector('[name=birthdate]').value});window.accountEmail='owner@example.test';settings();};}
 function settings(){root.innerHTML='<button>Security</button><button>Add password</button><button role="switch" aria-label="Authenticator app" aria-checked="false">Authenticator app</button><aside><div aria-label="Special offer">Try 1 month free</div></aside>';const buttons=root.querySelectorAll('button');buttons[0].onclick=()=>{};buttons[1].onclick=()=>{root.innerHTML='<form><input type="password" autocomplete="new-password"><input type="password" autocomplete="new-password"><button>Save password</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();await window.fixture('password',{password:root.querySelector('input').value});settings();};};buttons[2].onclick=()=>{root.innerHTML='<div role="dialog" aria-label="Set authenticator"><span>Scan setup key</span><code>JBSWY3DPEHPK3PXP</code><form><input name="code" autocomplete="one-time-code"><button>Continue</button></form></div>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();await window.fixture('enroll',{code:root.querySelector('input').value});settings();root.querySelector('[role=switch]').setAttribute('aria-checked','true');};};}
-root.innerHTML='<form><input type="email" name="email"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const email=root.querySelector('input').value;const snapshot=await window.fixture('email',{email});if(!snapshot.registered){root.innerHTML='<form><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';root.querySelector('form').onsubmit=ev=>{ev.preventDefault();profile();};}else{root.innerHTML='<form><input type="password" autocomplete="current-password"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const check=await window.fixture('login',{password:root.querySelector('input').value});if(!check.correct){root.innerHTML='<p>Wrong password</p>';return;}if(!check.mfa){window.accountEmail=email;settings();return;}root.innerHTML='<p>Authenticator app</p><form><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();await window.fixture('challenge',{code:root.querySelector('input').value});window.accountEmail=email;settings();};};}};
+root.innerHTML='<form><input type="email" name="email"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const email=root.querySelector('input').value;const snapshot=await window.fixture('email',{email});if(!snapshot.registered){root.innerHTML='<form><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';root.querySelector('form').onsubmit=ev=>{ev.preventDefault();profile();};}else{root.innerHTML='<form><input type="password" autocomplete="current-password"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();const check=await window.fixture('login',{password:root.querySelector('input').value});if(!check.correct){root.innerHTML='<p>Wrong password</p>';return;}if(!check.mfa){window.accountEmail=email;settings();return;}root.innerHTML='<form><p>Authenticator app</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();await window.fixture('challenge',{code:root.querySelector('input').value});window.accountEmail=email;settings();};};}};
 </script></body></html>'''
+        if fresh_mail_login:
+            email_only = '''if(snapshot.password === null || __EMAIL_AFTER_SAVE__){root.innerHTML='<form><p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';root.querySelector('form').onsubmit=async ev=>{ev.preventDefault();await window.fixture('login-email',{code:root.querySelector('input').value});window.accountEmail=email;settings();};return;}'''
+            html = html.replace("}else{root.innerHTML='<form><input type=\"password\"", "}else{" + email_only.replace('__EMAIL_AFTER_SAVE__', json.dumps(email_after_save)) + "root.innerHTML='<form><input type=\"password\"")
+            html = html.replace('buttons[1].onclick=()=>{', "buttons[1].onclick=async()=>{await window.fixture('password-open',{});")
+        entry_markup = {
+            'missing': "buttons[1].style.display='none';",
+            'current_password': "root.insertAdjacentHTML('beforeend','<input type=\"password\" autocomplete=\"current-password\">');",
+            'change_password': "root.insertAdjacentHTML('beforeend','<button>Change password</button>');",
+            'reset_password': "root.insertAdjacentHTML('beforeend','<button>Reset password</button>');",
+            'ambiguous': "root.insertAdjacentHTML('beforeend','<button>Add password</button>');"
+        }
+        html = html.replace("const buttons=root.querySelectorAll('button');", "const buttons=root.querySelectorAll('button');" + entry_markup.get(entry, ''))
         html = html.replace('const root=', "window.fixture=async (operation,data)=>{const response=await fetch('/fixture/'+operation,{method:'POST',body:JSON.stringify(data)});return response.json();};const root=").replace("window.accountEmail='owner@example.test'", "window.accountEmail='owner@example.test';document.documentElement.dataset.accountEmail=window.accountEmail").replace('window.accountEmail=email', 'window.accountEmail=email;document.documentElement.dataset.accountEmail=window.accountEmail')
         async def binding(_source, operation, data):
+            operations.append(operation)
             if operation == 'email':
                 self.assertEqual(data['email'], expected); return dict(state)
             if operation == 'profile':
                 self.assertEqual(data, {'name': '李华', 'birth': '1996-01-01'}); state['registered'] = True
             if operation == 'password':
+                self.assertFalse(job.payload['passwordVerified'])
                 state['password'] = data['password']
+            if operation == 'password-open':
+                self.assertFalse(job.payload['passwordVerified'])
+                self.assertIsNone(state['password'])
+                self.assertIn('login-email', operations[:-1])
+            if operation == 'login-email':
+                self.assertEqual(data['code'], '123456')
+                self.assertFalse(job.payload['passwordVerified'])
+                if original_captcha:
+                    await flow.page.evaluate('document.body.insertAdjacentHTML("beforeend", "<div class=cf-turnstile>Verify you are human</div>")')
             if operation == 'login':
                 return {'correct': state['password'] is not None and data['password'] == state['password'], 'mfa': state['mfa']}
             if operation in {'enroll', 'challenge'}:
                 self.assertEqual(data['code'], totp(key)); state['mfa'] = True
             return dict(state)
         async def identity(page, email):
+            if wrong_original and len(contexts) > 1 and page is flow.page:
+                return None
             current = await page.evaluate('document.documentElement.dataset.accountEmail || \"\"'); self.assertIn(current, ['', expected])
             return ('synthetic-target', 'synthetic-identity') if current == email else None
         async with async_playwright() as driver:
@@ -67,8 +117,10 @@ root.innerHTML='<form><input type="email" name="email"><button>Continue</button>
             original_context = browser.new_context
             async def fixture_context():
                 context = await original_context(); original_page = context.new_page
+                contexts.append(context)
                 async def fixture_page():
                     page = await original_page()
+                    page.on('pageerror', lambda error: page_errors.append(type(error).__name__))
                     async def serve(route):
                         path = urlsplit(route.request.url).path
                         if path == '/cdn-cgi/trace':
@@ -89,7 +141,25 @@ root.innerHTML='<form><input type="email" name="email"><button>Continue</button>
             flow.settle = settle
             try:
                 with patch('registration_browser.official_identity', identity):
-                    await flow.run()
+                    if expected_reason:
+                        with self.assertRaises(Stop) as stopped: await flow.run()
+                        self.assertEqual(stopped.exception.report['reason'], expected_reason)
+                    else:
+                        await flow.run()
+                self.assertEqual(page_errors, [])
+                if expected_reason:
+                    self.assertTrue(state['registered'])
+                    self.assertFalse(job.payload['passwordVerified'])
+                    self.assertNotIn('password_verified', events)
+                    self.assertNotIn('mfa_verified', events)
+                    self.assertNotIn('complete', events)
+                    if email_after_save:
+                        self.assertIn('password', operations)
+                        self.assertEqual(operations.count('login-email'), 2)
+                    else:
+                        self.assertIsNone(state['password'])
+                        self.assertNotIn('password-open', operations)
+                    return
                 self.assertTrue(state['registered']); self.assertTrue(state['mfa']); self.assertEqual(state['password'], job.payload['password'])
                 for stage in ['registered', 'password_verified', 'totp_pending', 'mfa_verified', 'offer', 'complete']:
                     self.assertIn(stage, events)
@@ -98,8 +168,328 @@ root.innerHTML='<form><input type="email" name="email"><button>Continue</button>
                 self.assertEqual(len(registered), 1)
                 self.assertEqual(registered[0]['registrationCountryCode'], 'PH')
                 self.assertNotIn('ip', registered[0])
+                if fresh_mail_login:
+                    self.assertEqual(operations.count('password-open'), 1)
+                    self.assertEqual(operations.count('login-email'), 1)
+                    self.assertLess(operations.index('login-email'), operations.index('password-open'))
+                    self.assertLess(operations.index('password-open'), operations.index('password'))
+                    self.assertGreater(operations.count('login'), 0)
             finally:
                 await browser.close()
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class VerificationBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Clean-context login challenges; every request is fulfilled in memory."""
+    async def verify(self, stages, *, mfa=False, change_during_mail=None, mail_value='123456', delay_code=False,
+                     change_on_fill=None, offer_password_choice=False, tel_codes=False, allow_email_identity=False):
+        from playwright.async_api import async_playwright
+        expected = 'verification@example.invalid'
+        secret = 'JBSWY3DPEHPK3PXP'
+        submissions = []; contexts = []; pages = []; order = []; page_errors = []
+        index = 0
+        html = '''<!doctype html><html><head><meta charset="utf-8"></head><body><main></main><script>
+        const changeOnFill = __CHANGE_ON_FILL__;
+        const passwordChoice = __PASSWORD_CHOICE__;
+        window.render = stage => {
+          document.documentElement.dataset.stage = stage;
+          const root = document.querySelector('main');
+          if (stage === 'identity') { root.innerHTML = '<p>Welcome</p>'; return; }
+          if (stage === 'blank') { root.innerHTML = '<p>Loading...</p>'; return; }
+          if (stage === 'wrong_password') { root.innerHTML = '<p>Wrong password</p>'; return; }
+          const field = stage === 'email' ? '<input type="email" name="username" autocomplete="username">'
+            : stage === 'password' ? '<input type="password" autocomplete="current-password">'
+            : stage === 'phone' ? '<input type="tel" name="phone_number">'
+            : '<input name="code" autocomplete="one-time-code">';
+          const label = stage === 'email_code' ? 'Check your email. Email verification code'
+            : stage === 'totp_code' ? 'Authenticator app'
+            : stage === 'sms' ? 'Text message sent to your phone number'
+            : stage === 'phone' ? 'Verify your phone number'
+            : stage === 'captcha' ? 'Verify you are human. Check your email'
+            : stage === 'email_chinese' ? '安全验证：邮箱验证码'
+            : stage === 'totp_chinese' ? '安全验证：身份验证应用'
+            : stage === 'unknown' ? 'Enter verification code' : 'Continue';
+          root.innerHTML = '<form><p>' + label + '</p>' + field + '<button>Continue</button></form>'
+            + (stage === 'captcha_frame' ? '<div class="cf-turnstile">Challenge</div>' : '');
+          root.querySelector('input').oninput = event => {
+            if (event.target.value && changeOnFill[stage]) {
+              root.querySelector('p').textContent = changeOnFill[stage] === 'totp_code'
+                ? 'Authenticator app' : 'Check your email. Email verification code';
+            }
+          };
+          if (stage === 'email_code' && passwordChoice) {
+            const button = document.createElement('button'); button.textContent = 'Use password';
+            button.onclick = async () => {const response = await fetch('/fixture/use-password', {method:'POST'});
+              window.render((await response.json()).next);};
+            root.appendChild(button);
+          }
+          root.querySelector('form').onsubmit = async event => {
+            event.preventDefault();
+            const response = await fetch('/fixture/submit', {method:'POST',
+              body:JSON.stringify({stage, value:root.querySelector('input').value})});
+            const next = await response.json();
+            if (next.delay) { setTimeout(() => window.render(next.next), next.delay); }
+            else { window.render(next.next); }
+          };
+        };
+        window.render('email');
+        </script></body></html>'''
+        html = html.replace('__CHANGE_ON_FILL__', json.dumps(change_on_fill or {})).replace(
+            '__PASSWORD_CHOICE__', json.dumps(offer_password_choice))
+        if tel_codes:
+            html = html.replace('<input name="code" autocomplete="one-time-code">',
+                                '<input type="tel" name="code" autocomplete="one-time-code">')
+        async with async_playwright() as driver:
+            if os.environ.get('V2_REGISTRATION_FINGERPRINT_BINARY'):
+                from fingerprint_runtime import launch_fingerprint_browser
+                browser = await launch_fingerprint_browser(driver, headless=True,
+                    executable_path=os.environ['V2_REGISTRATION_FINGERPRINT_BINARY'])
+            else:
+                browser = await driver.chromium.launch(headless=True)
+            original = await browser.new_context()
+            async def new_context():
+                context = await browser.new_context(); contexts.append(context)
+                create_page = context.new_page
+                async def new_page():
+                    page = await create_page(); pages.append(page)
+                    page.on('pageerror', lambda error: page_errors.append(type(error).__name__))
+                    async def local(route):
+                        nonlocal index
+                        if urlsplit(route.request.url).path == '/fixture/use-password':
+                            self.assertEqual(stages[index], 'email_code')
+                            submissions.append('use_password'); index += 1
+                            await route.fulfill(content_type='application/json', body=json.dumps({'next': stages[index]}))
+                        elif urlsplit(route.request.url).path == '/fixture/submit':
+                            value = json.loads(route.request.post_data)
+                            self.assertEqual(value['stage'], stages[index])
+                            submissions.append(value['stage']); order.append(value['stage'])
+                            if value['stage'] == 'email':
+                                self.assertEqual(value['value'], expected)
+                            elif value['stage'] == 'password':
+                                self.assertEqual(value['value'], 'synthetic-only-password')
+                            elif value['stage'] in ['email_code', 'email_chinese']:
+                                self.assertEqual(value['value'], '123456')
+                            elif value['stage'] in ['totp_code', 'totp_chinese']:
+                                self.assertEqual(value['value'], totp(secret))
+                            else:
+                                self.fail('Unrecognized challenge must never be submitted')
+                            index += 1
+                            await route.fulfill(content_type='application/json',
+                                body=json.dumps({'next': stages[index], 'delay': 150 if delay_code and value['stage'] in ['email_code', 'totp_code'] else 0}))
+                        else:
+                            await route.fulfill(content_type='text/html', body=html)
+                    await page.route('**/*', local)
+                    return page
+                context.new_page = new_page
+                return context
+            def prepare(step):
+                self.assertEqual(step, 'mfa' if mfa else 'password')
+                order.append('prepared')
+            async def mail():
+                order.append('mail_read')
+                if change_during_mail == 'cancel':
+                    job.check = MagicMock(side_effect=Stop('operation_cancelled'))
+                elif change_during_mail == 'expired':
+                    raise Stop('registration_authorization_expired')
+                elif change_during_mail == 'timeout':
+                    raise asyncio.TimeoutError()
+                elif change_during_mail:
+                    labels = {'totp_code': 'Authenticator app', 'unknown': 'Enter verification code',
+                              'sms': 'Text message sent to your phone number', 'captcha': 'Verify you are human'}
+                    await pages[0].evaluate('label => {document.querySelector("main").innerHTML = "<form><p>" + label + "</p><input name=code autocomplete=one-time-code><button>Continue</button></form>";}', labels[change_during_mail])
+                return mail_value
+            job = SimpleNamespace(payload={'email': expected, 'password': 'synthetic-only-password',
+                'totpSecret': secret}, step='mfa' if mfa else 'password', check=lambda: None,
+                new_verification_context=AsyncMock(side_effect=new_context),
+                prepare_mail=MagicMock(side_effect=prepare), wait_code=AsyncMock(side_effect=mail))
+            flow = RegistrationBrowser(job, original)
+            async def settle(_seconds=2):
+                await asyncio.sleep(.025)
+            flow.settle = settle
+            async def identity(page, email):
+                self.assertEqual(email, expected)
+                return ('synthetic-target', 'synthetic-identity') if await page.evaluate(
+                    'document.documentElement.dataset.stage') == 'identity' else None
+            try:
+                with patch('registration_browser.official_identity', identity):
+                    try:
+                        verified = await flow.verify_login(mfa=mfa, allow_email_identity=allow_email_identity)
+                        result = 'verified' if verified is True else 'email_identity_only' if verified is False else 'unknown'
+                    except Stop as stopped:
+                        result = stopped.report['reason']
+                self.assertEqual(page_errors, [])
+                self.assertEqual(len(contexts), 1)
+                self.assertEqual(browser.contexts, [original])
+                self.assertEqual(job.new_verification_context.await_count, 1)
+                return result, submissions, job, order
+            finally:
+                await browser.close()
+
+    async def test_email_before_password_uses_current_step_and_request_window(self):
+        result, submissions, job, order = await self.verify(['email', 'email_code', 'password', 'identity'])
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'email_code', 'password'])
+        job.prepare_mail.assert_called_once_with('password'); job.wait_code.assert_awaited_once()
+        self.assertLess(order.index('prepared'), order.index('email'))
+
+    async def test_email_after_password_uses_the_same_verification_context(self):
+        result, submissions, job, _ = await self.verify(['email', 'password', 'email_code', 'identity'])
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'password', 'email_code'])
+        job.prepare_mail.assert_called_once_with('password'); job.wait_code.assert_awaited_once()
+
+    async def test_email_and_totp_are_verified_separately_in_both_orders(self):
+        for codes in [('email_code', 'totp_code'), ('totp_code', 'email_code')]:
+            with self.subTest(codes=codes):
+                result, submissions, job, _ = await self.verify(['email', 'password', *codes, 'identity'], mfa=True)
+                self.assertEqual(result, 'verified')
+                self.assertEqual(submissions, ['email', 'password', *codes])
+                job.prepare_mail.assert_called_once_with('mfa'); job.wait_code.assert_awaited_once()
+
+    async def test_email_before_password_then_totp_proves_both_credentials(self):
+        result, submissions, job, _ = await self.verify(['email', 'email_code', 'password', 'totp_code', 'identity'], mfa=True)
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'email_code', 'password', 'totp_code'])
+        job.wait_code.assert_awaited_once()
+
+    async def test_email_alone_cannot_prove_mfa_or_replace_password(self):
+        for stages, mfa, reason in [(['email', 'password', 'email_code', 'identity'], True, 'mfa_unverified'),
+                                   (['email', 'email_code', 'identity'], False, 'verification_required')]:
+            with self.subTest(mfa=mfa):
+                result, submissions, job, _ = await self.verify(stages, mfa=mfa)
+                self.assertEqual(result, reason)
+                self.assertEqual(submissions, stages[:-1]); job.wait_code.assert_awaited_once()
+
+    async def test_email_identity_candidate_is_private_requires_otp_and_never_proves_mfa(self):
+        result, submissions, job, _ = await self.verify(['email', 'email_code', 'identity'], allow_email_identity=True)
+        self.assertEqual(result, 'email_identity_only')
+        self.assertEqual(submissions, ['email', 'email_code']); job.wait_code.assert_awaited_once()
+        result, _, job, _ = await self.verify(['email', 'email_code', 'identity'], mfa=True, allow_email_identity=True)
+        self.assertEqual(result, 'verification_required'); job.wait_code.assert_awaited_once()
+        result, submissions, job, _ = await self.verify(['email', 'identity'], allow_email_identity=True)
+        self.assertEqual(result, 'verification_required')
+        self.assertEqual(submissions, ['email']); job.wait_code.assert_not_awaited()
+
+    async def test_unrecognized_empty_pages_never_claim_a_missing_password(self):
+        for stages in [['email', 'blank', 'identity'], ['email', 'password', 'blank', 'identity']]:
+            with self.subTest(stages=stages):
+                result, submissions, job, _ = await self.verify(stages)
+                self.assertEqual(result, 'verification_required')
+                self.assertEqual(submissions, stages[:stages.index('blank')]); job.wait_code.assert_not_awaited()
+
+    async def test_explicit_wrong_password_preserves_original_configuration_recovery(self):
+        result, submissions, job, _ = await self.verify(['email', 'password', 'wrong_password'])
+        self.assertEqual(result, 'password_unverified')
+        self.assertEqual(submissions, ['email', 'password']); job.wait_code.assert_not_awaited()
+
+    async def test_explicit_chinese_code_text_is_not_mistaken_for_captcha(self):
+        result, submissions, job, _ = await self.verify(['email', 'password', 'email_chinese', 'totp_chinese', 'identity'], mfa=True)
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'password', 'email_chinese', 'totp_chinese']); job.wait_code.assert_awaited_once()
+
+    async def test_delayed_code_transition_waits_without_resubmitting(self):
+        result, submissions, job, _ = await self.verify(['email', 'password', 'totp_code', 'email_code', 'identity'], mfa=True, delay_code=True)
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'password', 'totp_code', 'email_code']); job.wait_code.assert_awaited_once()
+
+    async def test_available_password_choice_is_used_before_email_only_login(self):
+        result, submissions, job, _ = await self.verify(['email', 'email_code', 'password', 'identity'], offer_password_choice=True)
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'use_password', 'password']); job.wait_code.assert_not_awaited()
+
+    async def test_input_event_changing_code_type_cannot_submit_to_another_challenge(self):
+        for current, changed in [('email_code', 'totp_code'), ('totp_code', 'email_code')]:
+            with self.subTest(current=current):
+                result, submissions, job, _ = await self.verify(['email', 'password', current, 'identity'], mfa=True,
+                    change_on_fill={current: changed})
+                self.assertEqual(result, 'verification_required')
+                self.assertEqual(submissions, ['email', 'password'])
+                self.assertEqual(job.wait_code.await_count, int(current == 'email_code'))
+
+    async def test_tel_input_for_explicit_email_code_is_not_a_phone_challenge(self):
+        result, submissions, job, _ = await self.verify(['email', 'password', 'email_code', 'identity'], tel_codes=True)
+        self.assertEqual(result, 'verified')
+        self.assertEqual(submissions, ['email', 'password', 'email_code']); job.wait_code.assert_awaited_once()
+
+    async def test_each_code_type_and_password_are_submitted_at_most_once(self):
+        for repeated, mfa in [('email_code', False), ('totp_code', True), ('password', False)]:
+            with self.subTest(repeated=repeated):
+                stages = ['email', 'password'] + ([] if repeated == 'password' else [repeated]) + [repeated, 'identity']
+                result, submissions, job, _ = await self.verify(stages, mfa=mfa)
+                self.assertEqual(result, 'verification_required')
+                self.assertEqual(submissions.count(repeated), 1)
+                self.assertEqual(job.wait_code.await_count, int(repeated == 'email_code'))
+
+    async def test_unknown_phone_and_captcha_challenges_never_receive_codes(self):
+        for challenge in ['unknown', 'sms', 'phone', 'captcha', 'captcha_frame']:
+            with self.subTest(challenge=challenge):
+                result, submissions, job, _ = await self.verify(['email', 'password', challenge, 'identity'], mfa=True)
+                self.assertEqual(result, 'verification_required')
+                self.assertEqual(submissions, ['email', 'password']); job.wait_code.assert_not_awaited()
+
+    async def test_challenge_change_while_reading_mail_never_receives_email_code(self):
+        for changed in ['totp_code', 'unknown', 'sms', 'captcha']:
+            with self.subTest(changed=changed):
+                result, submissions, job, _ = await self.verify(['email', 'password', 'email_code', 'identity'],
+                    mfa=True, change_during_mail=changed)
+                self.assertEqual(result, 'verification_required')
+                self.assertEqual(submissions, ['email', 'password']); job.wait_code.assert_awaited_once()
+
+    async def test_email_verification_links_or_invalid_codes_do_not_prove_login(self):
+        for value in ['https://auth.openai.com/verify?code=synthetic', 'unexpected']:
+            with self.subTest(value_type='link' if value.startswith('https:') else 'invalid'):
+                result, submissions, job, _ = await self.verify(['email', 'password', 'email_code', 'identity'], mail_value=value)
+                self.assertEqual(result, 'verification_required')
+                self.assertEqual(submissions, ['email', 'password']); job.wait_code.assert_awaited_once()
+
+
+    async def test_cancel_expiry_and_mail_timeout_never_submit_a_late_code(self):
+        for change, reason in [('cancel', 'operation_cancelled'), ('expired', 'registration_authorization_expired'),
+                               ('timeout', 'verification_required')]:
+            with self.subTest(change=change):
+                result, submissions, job, _ = await self.verify(['email', 'password', 'email_code', 'identity'],
+                    change_during_mail=change)
+                self.assertEqual(result, reason)
+                self.assertEqual(submissions, ['email', 'password']); job.wait_code.assert_awaited_once()
+
+
+class VerificationRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def flow(self):
+        job = SimpleNamespace(payload={'totpSecret': 'JBSWY3DPEHPK3PXP'}, event=MagicMock(),
+                              manual=AsyncMock())
+        flow = RegistrationBrowser(job, None)
+        flow.settings = AsyncMock(side_effect=Stop('fixture_settings_entered'))
+        return flow
+
+    async def test_unknown_challenge_and_authority_failures_never_enter_settings_recovery(self):
+        for method in ['password', 'mfa']:
+            for reason in ['verification_required', 'durable_state_unavailable',
+                           'registration_authorization_expired', 'operation_cancelled']:
+                with self.subTest(method=method, reason=reason):
+                    flow = self.flow(); flow.verify_login = AsyncMock(side_effect=Stop(reason))
+                    with self.assertRaises(Stop) as stopped: await getattr(flow, method)()
+                    self.assertEqual(stopped.exception.report['reason'], reason)
+                    flow.settings.assert_not_awaited(); flow.job.manual.assert_not_awaited()
+                    flow.verify_login.assert_awaited_once()
+
+    async def test_only_original_unverified_reasons_enter_settings_recovery(self):
+        for method, reason in [('password', 'password_unverified'), ('mfa', 'mfa_unverified')]:
+            with self.subTest(method=method):
+                flow = self.flow(); flow.verify_login = AsyncMock(side_effect=Stop(reason))
+                with self.assertRaises(Stop) as stopped: await getattr(flow, method)()
+                self.assertEqual(stopped.exception.report['reason'], 'fixture_settings_entered')
+                flow.settings.assert_awaited_once(); flow.verify_login.assert_awaited_once()
+
+    async def test_manual_password_recovery_does_not_swallow_unknown_challenge(self):
+        flow = self.flow(); flow.settings = AsyncMock()
+        flow.verify_login = AsyncMock(side_effect=[Stop('password_unverified'), Stop('verification_required')])
+        inputs = SimpleNamespace(count=AsyncMock(return_value=0))
+        flow.page = SimpleNamespace(locator=lambda _: inputs)
+        flow.button = AsyncMock(return_value=None)
+        with self.assertRaises(Stop) as stopped: await flow.password()
+        self.assertEqual(stopped.exception.report['reason'], 'verification_required')
+        flow.settings.assert_awaited_once(); flow.job.manual.assert_awaited_once_with('password_unverified')
+        self.assertEqual(flow.verify_login.await_count, 2)
 
 
 class CountryTests(unittest.IsolatedAsyncioTestCase):

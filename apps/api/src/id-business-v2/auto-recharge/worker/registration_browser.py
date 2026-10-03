@@ -6,7 +6,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from browser_password_login import (EMAIL_INPUT, PASSWORD_INPUT, CODE_INPUT,
                                     official_identity, official_login_page,
-                                    login_payment_write, unique_visible, clear_visible_secrets)
+                                    login_payment_write, login_code_type, unique_visible, clear_visible_secrets)
 from checkout_core import Stop
 from browser_checkout import observe_page_network, retryable_page_load_error
 from browser_session import SessionBudget
@@ -357,49 +357,147 @@ class RegistrationBrowser:
             await self.job.manual('form_unrecognized')
         raise Stop('form_unrecognized')
 
-    async def verify_login(self, mfa=False):
+    async def verify_login(self, mfa=False, *, allow_email_identity=False):
         # A clean context proves the staged password works; an existing session cannot.
         verification = (await self.job.new_verification_context()
                         if hasattr(self.job, 'new_verification_context')
                         else await self.context.browser.new_context())
         await verification.route('**/*', self.guard)
         page = await verification.new_page()
+        submitted_email = False
+        submitted_totp = False
+
+        async def safe_page():
+            self.official(page)
+            text = (await page.locator('body').inner_text())[:12000]
+            if re.search(r'just a moment|verify.{0,40}human|human verification|人机验证',
+                         await page.title() + '\n' + text, re.I):
+                raise Stop('verification_required')
+            challenges = page.locator('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .cf-turnstile')
+            if any([await item.is_visible() for item in await challenges.all()]):
+                raise Stop('verification_required')
+            phones = page.locator('input[type="tel"], input[name="phone_number"], input[name="phone"]')
+            if (any([await item.is_visible() for item in await phones.all()])
+                    and re.search(r'verif.{0,30}(?:phone|mobile)|(?:phone|mobile).{0,30}verif|phone number|enter.{0,30}(?:phone|mobile)|手机号|手机验证|电话验证', text, re.I)):
+                raise Stop('verification_required')
+
+        async def email_code():
+            nonlocal submitted_email
+            if submitted_email:
+                raise Stop('verification_required')
+            submitted_email = True
+            value = ''
+            try:
+                try:
+                    value = await asyncio.wait_for(self.job.wait_code(), timeout=120)
+                except asyncio.TimeoutError:
+                    raise Stop('verification_required') from None
+                await safe_page()
+                field = await self.field(page, CODE_INPUT)
+                if (not field or await login_code_type(page, field) != 'email'
+                        or not isinstance(value, str) or not re.fullmatch(r'[0-9]{6,8}', value)):
+                    raise Stop('verification_required')
+                self.official(page)
+                await field.fill(value)
+                await safe_page()
+                field = await self.field(page, CODE_INPUT)
+                if not field or await login_code_type(page, field) != 'email':
+                    raise Stop('verification_required')
+                self.official(page)
+                await field.press('Enter')
+            finally:
+                value = ''
+            await self.settle(3)
+
         try:
             await page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
             await self.settle(3)
+            await safe_page()
             email = await self.field(page, EMAIL_INPUT)
             if not email:
-                raise Stop('password_unverified')
+                raise Stop('verification_required')
             await email.fill(self.data['email'])
+            # Fence the current task's mail before either login submission can send it.
+            self.job.prepare_mail('mfa' if mfa else 'password')
+            await safe_page()
+            self.official(page)
             await email.press('Enter')
             await self.settle(3)
-            password = await self.field(page, PASSWORD_INPUT)
-            if not password:
-                choice = await self.button(page, r'^(use (?:a )?password|使用密码|使用密码登录)$')
-                if choice:
-                    await choice.click()
-                    password = await self.field(page, PASSWORD_INPUT)
-            if not password:
-                raise Stop('password_unverified')
-            await password.fill(self.data['password'])
-            await password.press('Enter')
-            code_submitted = False
+            chose_password = False
             for _ in range(60):
+                await safe_page()
                 if await self.identity(page):
-                    if mfa and not code_submitted:
-                        raise Stop('mfa_unverified')
-                    return
+                    # Inspect identity before any settings password control can
+                    # be mistaken for an unauthenticated login form.
+                    if allow_email_identity and submitted_email and not mfa:
+                        return False
+                    raise Stop('verification_required')
+                password = await self.field(page, PASSWORD_INPUT)
+                if password:
+                    break
+                if not chose_password:
+                    choice = await self.button(page, r'^(use (?:a )?password|使用密码|使用密码登录)$')
+                    if choice:
+                        await choice.click()
+                        chose_password = True
+                        await self.settle(.5)
+                        continue
                 code = await self.field(page, CODE_INPUT)
-                if code and mfa and not code_submitted:
-                    # Only a visible authenticator-specific challenge may receive TOTP.
-                    body = (await page.locator('body').inner_text())[:10000]
-                    if not re.search(r'authenticator|authentication app|验证器|身份验证应用', body, re.I):
-                        raise Stop('mfa_unverified')
-                    await code.fill(totp(self.data['totpSecret']))
-                    await code.press('Enter')
-                    code_submitted = True
+                if code:
+                    await safe_page()
+                    if await login_code_type(page, code) != 'email':
+                        raise Stop('verification_required')
+                    if not submitted_email:
+                        await email_code()
+                    else:
+                        await self.settle(.5)
+                    continue
                 await self.settle(.5)
-            raise Stop('mfa_unverified' if mfa else 'password_unverified')
+            else:
+                raise Stop('verification_required')
+            await safe_page()
+            self.official(page)
+            await password.fill(self.data['password'])
+            await safe_page()
+            self.official(page)
+            await password.press('Enter')
+            for _ in range(60):
+                await safe_page()
+                if await self.identity(page):
+                    if mfa and not submitted_totp:
+                        # Password and identity are proved; settings must still show
+                        # an unconfigured authenticator before enrollment can resume.
+                        raise Stop('mfa_unverified')
+                    return True
+                code = await self.field(page, CODE_INPUT)
+                if code:
+                    await safe_page()
+                    code_type = await login_code_type(page, code)
+                    if code_type == 'email':
+                        if not submitted_email:
+                            await email_code()
+                    elif code_type == 'totp' and mfa and not submitted_totp:
+                        submitted_totp = True
+                        value = totp(self.data['totpSecret'])
+                        try:
+                            self.official(page)
+                            await code.fill(value)
+                            await safe_page()
+                            code = await self.field(page, CODE_INPUT)
+                            if not code or await login_code_type(page, code) != 'totp':
+                                raise Stop('verification_required')
+                            self.official(page)
+                            await code.press('Enter')
+                        finally:
+                            value = ''
+                    elif code_type != 'totp' or not mfa:
+                        raise Stop('verification_required')
+                else:
+                    text = (await page.locator('body').inner_text())[:12000]
+                    if re.search(r'(?:wrong|incorrect|invalid) password|password (?:is )?(?:incorrect|invalid)|密码错误|密码不正确', text, re.I):
+                        raise Stop('password_unverified')
+                await self.settle(.5)
+            raise Stop('verification_required')
         finally:
             await clear_visible_secrets(page)
             await verification.close()
@@ -407,16 +505,35 @@ class RegistrationBrowser:
     async def password(self):
         self.job.event('progress', step='password')
         # A crash after setting the staged password is recovered by verifying it first.
+        email_identity_only = False
         try:
-            await self.verify_login()
+            verified = await self.verify_login(allow_email_identity=True)
         except Stop as exc:
             if exc.report.get('reason') != 'password_unverified':
                 raise
         else:
-            self.job.event('password_verified', step='password_verified')
-            self.data['passwordVerified'] = True
-            return
+            if verified is True:
+                self.job.event('password_verified', step='password_verified')
+                self.data['passwordVerified'] = True
+                return
+            if verified is not False:
+                raise Stop('verification_required')
+            email_identity_only = True
         await self.settings()
+        if email_identity_only:
+            # A fresh email-only account may set a password only in its already
+            # verified original window with an explicit unconfigured entry.
+            if not await self.identity() or await self.challenge():
+                raise Stop('verification_required')
+            current = self.page.locator('input[autocomplete="current-password"]')
+            configured_name = re.compile(r'^(change password|reset password|修改密码|更改密码|重置密码)$', re.I)
+            configured = self.page.get_by_role('button', name=configured_name).or_(
+                self.page.get_by_role('link', name=configured_name)).or_(
+                self.page.get_by_role('menuitem', name=configured_name))
+            if (any([await item.is_visible() for item in await current.all()])
+                    or any([await item.is_visible() for item in await configured.all()])
+                    or not await self.button(self.page, r'^(add password|set password|设置密码|添加密码)$')):
+                raise Stop('verification_required')
         for _ in range(8):
             inputs = self.page.locator('input[type="password"]')
             visible = [inputs.nth(i) for i in range(await inputs.count()) if await inputs.nth(i).is_visible()]
@@ -447,7 +564,9 @@ class RegistrationBrowser:
             # Manual setting must use the staged password visible only through permitted account editing.
             try:
                 await self.verify_login()
-            except Stop:
+            except Stop as exc:
+                if exc.report.get('reason') != 'password_unverified':
+                    raise
                 continue
             self.job.event('password_verified', step='password_verified')
             self.data['passwordVerified'] = True
@@ -459,8 +578,9 @@ class RegistrationBrowser:
         if self.data['totpSecret']:
             try:
                 await self.verify_login(mfa=True)
-            except Stop:
-                pass
+            except Stop as exc:
+                if exc.report.get('reason') != 'mfa_unverified':
+                    raise
             else:
                 self.job.event('mfa_verified', step='mfa_verified')
                 self.data['mfaVerified'] = True
