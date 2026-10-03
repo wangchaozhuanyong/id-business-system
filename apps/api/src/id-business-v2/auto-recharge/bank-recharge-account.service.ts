@@ -1,3 +1,4 @@
+import type { V2RechargePlan } from '@apple-business/shared';
 import { parseNewChatgptAccount, type NewChatgptAccount } from './bank-recharge-account-input';
 import { accountOfferUpdate, assertAccountEditVersion } from './bank-recharge-account-offers';
 import {
@@ -376,14 +377,26 @@ export class BankRechargeAccountService {
     return recordVerifiedLoginNetwork(tx, input, this.repository, this.encryption, this.audit);
   }
 
-  async assertRechargeEligible(tx: V2CommandTransaction, id: string) {
+  async assertRechargeEligible(
+    tx: V2CommandTransaction,
+    id: string,
+    targetPlan: V2RechargePlan = 'plus'
+  ) {
     const account = await this.requireActive(tx, id);
     const subscription = await this.repository.subscriptionForAccount(tx, id);
     if (
       subscription?.status === 'active' &&
       (!subscription.dueAt || subscription.dueAt.getTime() > Date.now())
     ) {
-      throw new ConflictException('该账号仍有有效订阅或到期时间待核实，不能自动再次付款');
+      const verifiedPlusUpgrade =
+        subscription.plan === 'plus' &&
+        ['pro-5x', 'pro-20x', 'pro-500'].includes(targetPlan) &&
+        Boolean(account.officialAccountKey) &&
+        Boolean(subscription.currentOrderId) &&
+        subscription.dueAt !== null &&
+        subscription.dueAt.getTime() > Date.now();
+      if (!verifiedPlusUpgrade)
+        throw new ConflictException('该账号仍有有效订阅或到期时间待核实，不能自动再次付款');
     }
     return account;
   }

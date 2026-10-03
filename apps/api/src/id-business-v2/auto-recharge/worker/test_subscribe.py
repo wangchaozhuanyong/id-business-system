@@ -69,6 +69,65 @@ class CoreTests(unittest.TestCase):
         quote = quote_from_text("ChatGPT Plus\nRenews\nMYR 90.00\n将按 MYR 92.50/月 收费。", "MYR")
         self.assertIsNone(quote["renewal"])
 
+    def test_renewal_period_is_bound_to_the_amount_clause(self):
+        for clause in ("Renews MYR 92.50 / month", "Renews\nMYR 92.50\nper month",
+                       "Renews\nMYR 92.50 / month", "将按 MYR 92.50/月 收费。"):
+            with self.subTest(clause=clause):
+                quote = quote_from_text("ChatGPT Plus\n" + clause, "MYR")
+                self.assertEqual(quote["renewal"]["amount_minor"], 9250)
+                self.assertEqual(quote["renewal_interval"], "monthly")
+
+    def test_annual_or_unknown_renewal_never_uses_an_unrelated_monthly_price(self):
+        for clause in ("Renews MYR 92.50 per year", "Renews\nMYR 92.50\nper year",
+                       "将按 MYR 92.50/年 收费。", "Renews MYR 92.50"):
+            with self.subTest(clause=clause):
+                quote = quote_from_text("ChatGPT Plus\n" + clause +
+                                        "\nReference price MYR 92.50 per month", "MYR")
+                self.assertEqual(quote["renewal"]["amount_minor"], 9250)
+                self.assertIsNone(quote["renewal_interval"])
+
+    def test_conflicting_renewal_periods_fail_closed_even_when_amounts_match(self):
+        for clauses in ("将按 MYR 92.50/月 收费。将按 MYR 92.50/年 收费。",
+                        "Renews MYR 92.50 per month or per year\nper month",
+                        "Renews MYR 92.50\n将按 MYR 92.50/月 收费。"):
+            with self.subTest(clauses=clauses):
+                quote = quote_from_text("ChatGPT Plus\n" + clauses, "MYR")
+                self.assertIsNone(quote["renewal_interval"])
+
+    def test_annual_billing_words_conflict_only_in_the_bound_renewal_clause(self):
+        for clause in ("Renews MYR 92.50 per month, billed annually",
+                       "Renews MYR 92.50/month (annual plan)",
+                       "Renews MYR 92.50 yearly/monthly",
+                       "Renews MYR 92.50 monthly with annual billing"):
+            with self.subTest(clause=clause):
+                quote = quote_from_text("ChatGPT Plus\n" + clause, "MYR")
+                self.assertEqual(quote["renewal"]["amount_minor"], 9250)
+                self.assertIsNone(quote["renewal_interval"])
+        for clause in ("Renews MYR 92.50 per month", "Renews MYR 92.50 monthly",
+                       "Renews\nMYR 92.50\nmonthly"):
+            with self.subTest(monthly_clause=clause):
+                quote = quote_from_text("ChatGPT Plus\n" + clause +
+                                        "\nOther annual plans are available", "MYR")
+                self.assertEqual(quote["renewal_interval"], "monthly")
+
+    def test_chinese_renewal_sentence_keeps_its_billing_modifiers(self):
+        for clause in ("将按 MYR 92.50/月 收费（按年扣款）",
+                       "将按 MYR 92.50/月 收费 (billed annually)",
+                       "Renews MYR 92.50/month（年付套餐）",
+                       "将按 MYR 92.50/月 收费（年度计费）",
+                       "Renews MYR 92.50/month（年缴套餐）",
+                       "Renews MYR 92.50/month（年繳套餐）"):
+            with self.subTest(conflicting_clause=clause):
+                quote = quote_from_text("ChatGPT Plus\n" + clause, "MYR")
+                self.assertEqual(quote["renewal"]["amount_minor"], 9250)
+                self.assertIsNone(quote["renewal_interval"])
+        for clause in ("将按 MYR 92.50/月 收费（按月扣款）", "将按 MYR 92.50/月收费"):
+            with self.subTest(monthly_clause=clause):
+                quote = quote_from_text("ChatGPT Plus\n" + clause +
+                                        "。其他年付套餐可供选择。\nOther annual plans are available", "MYR")
+                self.assertEqual(quote["renewal"]["amount_minor"], 9250)
+                self.assertEqual(quote["renewal_interval"], "monthly")
+
     def test_http_credential_alias_no_session_required(self):
         token = json.loads(fixture())["accessToken"]
         self.assertEqual(c.parse_credential(json.dumps({"access_token": token}).encode()).account_id, "synthetic-account")

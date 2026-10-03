@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-test('银充含开通日共 30 天，跨月与跨年都使用同一周期', async () => {
+test('银充到期按北京时间自然月，含月末、闰年、跨年和秒精度', async () => {
   const { bankRechargeDefaultDueAt } = await import('../dist/index.js');
   for (const [openedAt, dueAt] of [
-    ['2026-01-01T10:15:00+08:00', '2026-01-30T02:15:00.000Z'],
-    ['2026-02-01T10:15:00+08:00', '2026-03-02T02:15:00.000Z'],
-    ['2028-02-01T10:15:00+08:00', '2028-03-01T02:15:00.000Z'],
-    ['2026-12-20T10:15:00+08:00', '2027-01-18T02:15:00.000Z']
-  ])
+    ['2026-01-01T10:15:00+08:00', '2026-01-31T02:15:00.000Z'],
+    ['2026-02-01T10:15:00+08:00', '2026-02-28T02:15:00.000Z'],
+    ['2028-02-01T10:15:00+08:00', '2028-02-29T02:15:00.000Z'],
+    ['2026-03-04T10:15:00+08:00', '2026-04-03T02:15:00.000Z'],
+    ['2026-12-20T10:15:00+08:00', '2027-01-19T02:15:00.000Z'],
+    ['2026-01-31T00:15:13.456+08:00', '2026-02-26T16:15:13.456Z'],
+    ['2028-01-31T00:15:00+08:00', '2028-02-27T16:15:00.000Z'],
+    ['2026-12-31T00:15:00+08:00', '2027-01-29T16:15:00.000Z']
+  ]) {
     assert.equal(bankRechargeDefaultDueAt(openedAt).toISOString(), dueAt);
+    const date = new Date(openedAt);
+    const original = date.getTime();
+    assert.equal(bankRechargeDefaultDueAt(date).toISOString(), dueAt);
+    assert.equal(date.getTime(), original);
+  }
   assert.throws(() => bankRechargeDefaultDueAt('invalid'), /开通时间无效/);
 });
 

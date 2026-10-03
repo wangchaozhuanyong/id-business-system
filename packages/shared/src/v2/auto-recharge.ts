@@ -90,7 +90,26 @@ export interface V2RechargeResult {
   account_matched?: boolean;
   quote?: V2RechargeQuote;
   initial_quote?: V2RechargeQuote;
-  quote_authority?: 'official_checkout_response';
+  quote_authority?: 'official_checkout_response' | 'official_upgrade_preview';
+  operation?: 'subscription_upgrade';
+  current_plan_before?: string;
+  upgrade_identifier?: string;
+  upgrade_invoice_identifier?: string;
+  upgrade_payment_intent_identifier?: string;
+  subscription_period?: {
+    source: 'official_subscription_response';
+    start: string;
+    end: string;
+    account_key: string;
+    target_plan: V2RechargePlan;
+  };
+  three_ds_status?:
+    | 'not_required'
+    | 'authenticating'
+    | 'awaiting_user'
+    | 'completed'
+    | 'failed'
+    | 'unsupported';
   network?: { ip: string | null; country: string | null; observedAt: string };
   payment_status?: string;
   payment_outcome?: string;
@@ -350,6 +369,7 @@ export interface V2RechargeBitBrowserOpenLaunch {
 export interface V2RechargeBitBrowserRecheckLaunch {
   id: string;
   mode: 'recheck';
+  upgradeIdentifier?: string;
   connectorUrl: string;
   connectorToken: string;
   agentToken: string;

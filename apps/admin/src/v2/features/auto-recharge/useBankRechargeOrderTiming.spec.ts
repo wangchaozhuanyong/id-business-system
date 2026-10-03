@@ -27,10 +27,10 @@ describe('银充开通与到期时间', () => {
     const timing = scope.run(() => useBankRechargeOrderTiming(form))!;
     timing.initializeDates();
     await nextTick();
-    expect(form).toEqual({ openedAt: '2026-01-01T10:15', dueAt: '2026-01-30T10:15' });
+    expect(form).toEqual({ openedAt: '2026-01-01T10:15', dueAt: '2026-01-31T10:15' });
     form.openedAt = '2026-02-01T10:15';
     await nextTick();
-    expect(form.dueAt).toBe('2026-03-02T10:15');
+    expect(form.dueAt).toBe('2026-02-28T10:15');
   });
 
   it('保留手工指定的到期时间及恢复的草稿', async () => {

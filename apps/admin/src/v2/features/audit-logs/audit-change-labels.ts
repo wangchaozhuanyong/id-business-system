@@ -21,6 +21,7 @@ export const auditChangeFieldLabels: Record<string, string> = {
   offerStatus: '优惠状况',
   proxyId: '代理资料',
   nameId: '名字资料',
+  registrationAge: '注册年龄',
   imported: '导入数量',
   skipped: '跳过数量',
   attempt: '执行次数',

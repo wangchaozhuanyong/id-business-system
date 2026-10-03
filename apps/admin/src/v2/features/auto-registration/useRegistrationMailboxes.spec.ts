@@ -1,8 +1,8 @@
-import { effectScope, ref } from 'vue';
+import { effectScope, ref, nextTick } from 'vue';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 import { useRegistrationMailboxes } from './useRegistrationMailboxes';
-import type { V2RegistrationMailbox } from './contracts';
+import type { V2RegistrationMailbox, V2RegistrationMailboxStatusFilter } from './contracts';
 
 const mock = vi.hoisted(() => ({ mark: vi.fn(), refresh: vi.fn(), ensureFresh: vi.fn() }));
 vi.mock('@/api/client', () => ({ getApiErrorMessage: (error: Error) => error.message }));
@@ -24,7 +24,10 @@ const row: V2RegistrationMailbox = {
   accountId: null,
   accountUpdatedAt: null,
   note: null,
-  updatedAt: ''
+  updatedAt: '',
+  canStart: true,
+  startBlockedReason: null,
+  pendingJobId: null
 };
 let scope: ReturnType<typeof effectScope>;
 let page: ReturnType<typeof useRegistrationMailboxes>;
@@ -41,6 +44,30 @@ afterEach(() => {
   clearV2SessionDrafts();
 });
 describe('隐藏邮箱人工注册标记', () => {
+  it('不同分类保存各自分页，切回每页数量不同的分类仍恢复原页码', async () => {
+    scope.stop();
+    const status = ref<V2RegistrationMailboxStatusFilter>('all');
+    scope = effectScope();
+    page = scope.run(() =>
+      useRegistrationMailboxes(
+        () => true,
+        () => status.value
+      )
+    )!;
+    page.changePage(2);
+    status.value = 'unregistered';
+    await nextTick();
+    page.changePageSize(50);
+    page.changePage(3);
+    status.value = 'all';
+    await nextTick();
+    expect(page.filters.page).toBe(2);
+    expect(page.filters.pageSize).toBe(20);
+    status.value = 'unregistered';
+    await nextTick();
+    expect(page.filters.page).toBe(3);
+    expect(page.filters.pageSize).toBe(50);
+  });
   it('明确确认后才提交，失败保留当前目标并允许重试', async () => {
     page.openMark(row);
     expect(mock.mark).not.toHaveBeenCalled();
@@ -112,6 +139,21 @@ describe('隐藏邮箱人工注册标记', () => {
     expect(page.confirmOpen.value).toBe(false);
     expect(page.error.value).toBe('');
     expect(page.message.value).toContain('已加入 ChatGPT 账号；列表刷新失败');
+  });
+  it('下拉选择原状态不会保存，新状态取消后保留原行且无请求', () => {
+    page.openMark(row, false);
+    expect(page.confirmOpen.value).toBe(false);
+    page.openMark(row, true);
+    page.setConfirmOpen(false);
+    expect(mock.mark).not.toHaveBeenCalled();
+    expect(row.registered).toBe(false);
+  });
+  it('选择邮箱仅登记选择，不直接建立任务；不可注册邮箱不能替换选择', () => {
+    page.select(row);
+    expect(page.selected.value?.id).toBe(row.id);
+    page.select({ ...row, id: 'registered', canStart: false, registered: true });
+    expect(page.selected.value?.id).toBe(row.id);
+    expect(mock.mark).not.toHaveBeenCalled();
   });
   it('筛选输入、分页和标记目标复用会话草稿', () => {
     page.filters.keyword = 'hidden';

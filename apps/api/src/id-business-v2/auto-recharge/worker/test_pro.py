@@ -630,9 +630,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                                            wait_seconds=.3, poll_count=1, poll_interval=.01)
             return result
 
-    async def test_pro_payment_is_once_and_generic_pro_requires_tier_recheck(self):
+    async def test_pro5_payment_is_once_and_official_pro20_does_not_mark_target_activation(self):
         result = await self.pay_original()
-        self.assertEqual(result["status"], "paid_tier_pending_verification", result)
+        self.assertEqual(result["status"], "paid_pending_activation", result)
+        self.assertEqual(result["current_tier"], 20)
         self.assertEqual(result["target_plan"], "pro-5x")
         self.assertEqual(self.payments, 1)
         self.assertEqual(len(self.creates), 1)
@@ -640,7 +641,8 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_pro20_payment_uses_its_own_order(self):
         self.plan = "pro-20x"
         result = await self.pay_original()
-        self.assertEqual(result["status"], "paid_tier_pending_verification", result)
+        self.assertEqual(result["status"], "subscription_activated", result)
+        self.assertEqual(result["current_tier"], 20)
         self.assertEqual(result["target_plan"], "pro-20x")
         self.assertEqual(self.payments, 1)
 

@@ -12,16 +12,28 @@ from zoneinfo import ZoneInfo
 from checkout_core import Stop
 
 
-def validate_birthdate(value):
+def birth_age(value, today=None):
     try:
         born = date.fromisoformat(value)
-        today = datetime.now(ZoneInfo('Asia/Shanghai')).date()
+        today = today or datetime.now(ZoneInfo('Asia/Shanghai')).date()
         age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
         if born.isoformat() != value or not 20 <= age <= 45:
             raise ValueError()
-        return value
+        return age
     except (TypeError, ValueError):
         raise Stop('invalid_registration_identity') from None
+
+
+def validate_birthdate(value):
+    birth_age(value)
+    return value
+
+
+def registration_age(value, birthday):
+    # A provided sequence snapshot must be an integer; absence is handled by callers.
+    if type(value) is not int or not 20 <= value <= 45:
+        raise Stop('invalid_registration_identity')
+    return value
 
 
 def verification_link(value):

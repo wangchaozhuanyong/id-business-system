@@ -272,7 +272,8 @@
             :disabled="readonly"
         /></el-form-item>
         <p class="bank-recharge-form-note">
-          默认含开通当天共 30 天；1 月 1 日开通，1 月 30 日同一时刻到期。
+          默认按自然月计算：3 月 4 日开通，4 月 3
+          日到期；月底按下月最后一天的前一天计算。请按官网实际账期核对。
         </p>
       </el-form>
       <p v-if="saveError" class="bank-recharge-error" role="alert">{{ saveError }}</p>

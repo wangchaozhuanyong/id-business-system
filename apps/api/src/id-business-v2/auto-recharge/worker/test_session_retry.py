@@ -190,13 +190,15 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
         async def human(*args):
             await clock.advance(900)
         with patch.object(browser_checkout, 'wait_for_user', side_effect=human) as wait, \
-                patch.object(browser_checkout, 'browser_read', new=AsyncMock(return_value={})), \
-                patch.object(browser_checkout, 'verify_official_session', return_value=SimpleNamespace(token='new')), \
-                patch.object(browser_checkout, 'account_plan', return_value='free'):
+                patch.object(browser_checkout, 'browser_read', new=AsyncMock(side_effect=[{}, {
+                    'accounts': {'fixture': {'account': {'account_id': 'fixture', 'plan_type': 'free'}}}
+                }])), \
+                patch.object(browser_checkout, 'verify_official_session', return_value=SimpleNamespace(token='new')):
             _, identity = await browser_checkout.check_session(
                 page, SimpleNamespace(account_id='fixture', old_token='old'), 1800, budget)
         wait.assert_awaited_once_with('verification_required', 1800)
         self.assertTrue(identity['account_matched'])
+        self.assertEqual(identity['current_plan'], 'free')
         self.assertEqual(budget.remaining_ms(), 120000)
 
     async def test_cancel_interrupts_pending_navigation(self):

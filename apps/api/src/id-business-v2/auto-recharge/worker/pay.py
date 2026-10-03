@@ -212,12 +212,19 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
         while time.monotonic() < deadline:
             if guard.payment_state in {"paid", "declined"}:
                 break
-            if guard.payment_state == "requires_action" and not verification_announced:
+            if (guard.payment_state == "requires_action" and guard.three_ds.needs_user
+                    and not verification_announced):
                 progress("bank_verification_required", instruction="请本人完成官网或银行验证，程序只等待原单结果。")
                 verification_announced = True
+            if guard.three_ds.status in {"failed", "unsupported"}:
+                break
+            if (guard.three_ds.needs_user and os.environ.get("AUTO_RECHARGE_CALLBACK_URL")):
+                # 服务器窗口没有本人可交互入口；关闭认证写后仅复查原付款。
+                break
             if guard.payment_error and guard.payment_state != "requires_action":
                 break
             await asyncio.sleep(.5)
+        guard.finish_three_ds()
         latest_plan = identity["current_plan"]
         latest_tier = None
         for i in range(poll_count if guard.payment_state == "paid" else 1):
@@ -254,12 +261,49 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
                                      wait_seconds=wait_seconds, poll_count=poll_count,
                                      poll_interval=poll_interval, quote_wait_seconds=9)
 
-    return await run_browser(target, inspect_existing=True, quote_handler=handler,
-                             guard_factory=lambda target, _: PaymentGuard(target, ledger), target_plan=selected_plan,
-                             state_dir=ledger.root, browser=browser, browser_context=browser_context)
+    result = await run_browser(target, inspect_existing=True, quote_handler=handler,
+                               guard_factory=lambda target, _: PaymentGuard(target, ledger), target_plan=selected_plan,
+                               state_dir=ledger.root, browser=browser, browser_context=browser_context)
+    return include_payment_record(result, ledger)
 
 
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
+                   wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
+                   browser_context=None, session_budget=None, allow_checkout_replacement=True,
+                   expected_country=None):
+    from subscription_upgrade import run_upgrade_in_context
+    from plans import subscription_transition
+    if target_plan not in {"pro-5x", "pro-20x", "pro-500"}:
+        return await run_checkout_flow(target, state_dir, target_plan, details_reader=details_reader,
+            confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
+            poll_interval=poll_interval, browser=browser, browser_context=browser_context,
+            session_budget=session_budget, allow_checkout_replacement=allow_checkout_replacement,
+            expected_country=expected_country)
+
+    async def dispatch(page, guard, identity):
+        operation = subscription_transition(identity["current_plan"], target_plan)
+        # 选择实际订阅路径后，移除仅供前置只读核验的拦截器。
+        await page.context.unroute("**/*", guard.route)
+        if operation == "subscription_upgrade":
+            return await run_upgrade_in_context(
+                page, target, state_dir, target_plan, details_reader=details_reader,
+                confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
+                poll_interval=poll_interval, session_budget=session_budget,
+                expected_country=expected_country)
+        return await run_checkout_flow(
+            target, state_dir, target_plan, details_reader=details_reader,
+            confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
+            poll_interval=poll_interval, browser_context=page.context,
+            session_budget=session_budget.restart() if session_budget else None,
+            allow_checkout_replacement=allow_checkout_replacement, expected_country=expected_country)
+
+    return await run_browser(target, target_plan=target_plan, state_dir=state_dir,
+                             browser=browser, browser_context=browser_context,
+                             wait_seconds=wait_seconds, session_budget=session_budget,
+                             session_handler=dispatch)
+
+
+async def run_checkout_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
                    browser_context=None, session_budget=None, allow_checkout_replacement=True,
                    expected_country=None):
@@ -307,7 +351,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
             progress("existing_checkout_rebuilding", reason="operation_cancelled")
             result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
             result["checkout_replacement_performed"] = True
-            return result
+            return include_payment_record(result, ledger_holder.get("ledger"))
         if resolved_checkout_replacement_allowed(record):
             if not allow_checkout_replacement:
                 return {"status": "blocked", "reason": "existing_checkout_unavailable",
@@ -316,7 +360,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
             progress("existing_checkout_rebuilding", reason="confirmed_no_bank_request")
             result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
             result["checkout_replacement_performed"] = True
-            return result
+            return include_payment_record(result, ledger_holder.get("ledger"))
         result = await run_browser(target, inspect_existing=True, **browser_args)
         replaceable_reason = result.get("reason") == "existing_checkout_unavailable" or (
             result.get("reason") in {"actual_quote_unknown", "checkout_page_load_timeout"}
@@ -347,12 +391,16 @@ def include_payment_record(result, ledger):
     result["payment_status"] = "paid" if evidence else result.get("payment_status", ledger.record["payment_status"])
     if result["payment_status"] == "not_attempted":
         result["payment_status"] = ledger.record["payment_status"]
-    current_plan = result.get("current_plan") if result.get("account_matched") else None
+    subscription_observed = (result.get("account_matched") is True and
+                             result.get("stage") in {"payment_result", "original_payment_recheck"})
+    current_plan = result.get("current_plan") if subscription_observed else None
     result["target_plan"] = ledger.target_plan
     result["payment_outcome"] = outcome(result["payment_status"], current_plan, evidence,
                                         target_plan=ledger.target_plan, current_tier=result.get("current_tier"))
-    if result.get("status") in {"blocked", "interrupted"} and evidence:
-        result["status"] = outcome("paid", None, evidence, target_plan=ledger.target_plan)
+    if evidence and result.get("status") in {
+            "blocked", "interrupted", "payment_result_unknown", "payment_failed", "verification_required",
+            "paid_pending_activation", "paid_tier_pending_verification", "subscription_activated"}:
+        result["status"] = result["payment_outcome"]
     return result
 
 

@@ -4,6 +4,7 @@ import type {
   V2RegistrationName,
   V2RegistrationJob,
   V2RegistrationMailbox,
+  V2RegistrationMailboxStatusFilter,
   V2RegistrationStart,
   V2RegistrationPage
 } from './contracts';
@@ -15,15 +16,22 @@ export interface RegistrationOptions {
   defaultProxyId: string | null;
   mailboxTotal: number;
   proxyTotal: number;
+  nameTotal: number;
 }
 export interface RegistrationLaunch {
   id: string;
   attempt: number;
-  delivery: 'accepted' | 'not_received' | 'unknown';
+  delivery: 'accepted' | 'not_received' | 'unknown' | 'rejected';
+  reason?: string;
 }
 export const registrationApi = {
   mailboxes(
-    query: { page: number; pageSize: number; keyword?: string },
+    query: {
+      page: number;
+      pageSize: number;
+      keyword?: string;
+      registrationStatus?: V2RegistrationMailboxStatusFilter;
+    },
     options: ApiRequestOptions = {}
   ) {
     return request<V2RegistrationPage<V2RegistrationMailbox>>(
@@ -77,7 +85,15 @@ export const registrationApi = {
       'auto-recharge'
     );
   },
-  options(query: { q?: string; page?: number }, options: ApiRequestOptions = {}) {
+  options(
+    query: {
+      proxySearch?: string;
+      proxyPage?: number;
+      nameSearch?: string;
+      namePage?: number;
+    },
+    options: ApiRequestOptions = {}
+  ) {
     return request<RegistrationOptions>(
       http.get(`${base}/options`, { params: query, signal: options.signal })
     );
@@ -92,6 +108,11 @@ export const registrationApi = {
   },
   job(id: string, options: ApiRequestOptions = {}) {
     return request<V2RegistrationJob>(http.get(`${base}/jobs/${id}`, { signal: options.signal }));
+  },
+  pending(mailboxAliasId: string) {
+    return request<V2RegistrationJob | null>(
+      http.get(`${base}/jobs/pending`, { params: { mailboxAliasId } })
+    );
   },
   create(input: V2RegistrationStart) {
     return withV2QueryInvalidation(

@@ -21,6 +21,7 @@ import browser_checkout
 import pay
 import payment_state
 import payment_network
+import subscription_upgrade
 import server_proxy
 import registration_builtin
 import fingerprint_runtime
@@ -39,6 +40,7 @@ JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
 RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-(?:go|pro-(?:5x|20x|500)))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage proxy_attempt proxy_attempt_limit proxy_wait_seconds session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
+PUBLIC_KEYS.update("operation current_plan_before upgrade_identifier upgrade_invoice_identifier upgrade_payment_intent_identifier subscription_period three_ds_status".split())
 PUBLIC_KEYS.update("error_type session_step session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())
 
 
@@ -280,6 +282,20 @@ def callback(job_id, body):
         raise Stop("durable_state_unavailable") from None
 
 
+def email_code_request(job_id, body):
+    request = Request(API + "/" + job_id + "/email-code", data=json.dumps(body).encode(),
+                      headers={"Content-Type": "application/json", "X-Recharge-Worker": TOKEN}, method="POST")
+    try:
+        with build_opener(NoRedirect).open(request, timeout=25) as response:
+            result = json.loads(response.read(MAX_BODY), object_pairs_hook=unique_object)
+        if result.get("success") is not True or not isinstance(result.get("data"), dict):
+            raise ValueError()
+        return result["data"]
+    except Exception:
+        # 邮件内容和验证码只经此内存通道返回，不进入回执、日志或本地文件。
+        raise Stop("recharge_email_code_unavailable", user_action_required=True) from None
+
+
 class Job:
     def __init__(self, job_id, payload):
         self.id, self.payload = job_id, payload
@@ -323,6 +339,15 @@ class Job:
         callback(self.id, {"type": "progress", "result": public_result({"stage": stage, **details})})
 
     def confirm(self, quote, last4):
+        if self.cancelled or self.done:
+            raise Stop("operation_cancelled")
+        upgrade = quote.get("operation") == "subscription_upgrade"
+        operation = ({"operation": "subscription_upgrade", "upgrade_identifier": quote.get("upgrade_identifier"),
+                      "current_plan_before": "plus", "target_plan": quote["plan"]}
+                     if upgrade else {})
+        if upgrade and not subscription_upgrade.UPGRADE_ID.fullmatch(str(quote.get("upgrade_identifier", ""))):
+            raise Stop("invalid_upgrade_identifier")
+        authority = "official_upgrade_preview" if upgrade else "official_checkout_response"
         material = "|".join((
             "auto-recharge-confirm-v1", self.id, quote["plan"],
             self._money_material(quote.get("today")), self._money_material(quote.get("tax")),
@@ -342,14 +367,14 @@ class Job:
                 raise Stop("payment_quote_outside_authorization")
             callback(self.id, {"type": "confirmation", "result": {
                 "status": "confirming", "stage": "payment_ready", "quote": quote,
-                "quote_authority": "official_checkout_response",
+                "quote_authority": authority, **operation,
                 "nonce": self.nonce, "card_last4": last4}})
             self.confirmed = True
             return True
         self.waiting_confirmation = True
         callback(self.id, {"type": "confirmation", "result": {
             "status": "awaiting_confirmation", "stage": "payment_ready", "quote": quote,
-            "quote_authority": "official_checkout_response",
+            "quote_authority": authority, **operation,
             "nonce": self.nonce, "card_last4": last4}})
         self.confirm_event.wait(300)
         self.waiting_confirmation = False
@@ -432,6 +457,8 @@ class Job:
             raise Stop("invalid_login_credentials")
         budget = SessionBudget(60, cancelled=lambda: self.cancelled)
         page, routed, verified = initial_page, False, False
+        mail_prepared = False
+        offered_mail_id = None
 
         async def block_payment_during_login(route):
             request = route.request
@@ -445,6 +472,58 @@ class Job:
                 raise Stop("login_code_required", user_action_required=True)
             return await current_totp(login["totp"])
 
+        async def prepare_email_code():
+            nonlocal mail_prepared
+            if self.cancelled or self.done:
+                raise Stop("operation_cancelled")
+            try:
+                result = await asyncio.to_thread(email_code_request, self.id, {"type": "prepare"})
+                if self.cancelled or self.done:
+                    raise Stop("operation_cancelled")
+                mail_prepared = result.get("ok") is True
+            except Stop:
+                if self.cancelled or self.done:
+                    raise Stop("operation_cancelled")
+                # 没有现成邮箱授权时，仍允许密码或验证器完成登录。
+                mail_prepared = False
+
+        async def wait_for_email_code(seconds):
+            nonlocal offered_mail_id
+            if not mail_prepared:
+                raise Stop("recharge_email_code_unavailable", user_action_required=True)
+            deadline = time.monotonic() + min(seconds, 120)
+            while time.monotonic() < deadline:
+                if self.cancelled or self.done:
+                    raise Stop("operation_cancelled")
+                result = await asyncio.to_thread(email_code_request, self.id, {"type": "read"})
+                if self.cancelled or self.done:
+                    raise Stop("operation_cancelled")
+                mail = result.get("mail")
+                if isinstance(mail, dict):
+                    if (not isinstance(mail.get("mailId"), str) or not mail["mailId"]
+                            or not isinstance(mail.get("code"), str)
+                            or not re.fullmatch(r"[0-9]{6,8}", mail["code"])):
+                        mail.clear()
+                        raise Stop("recharge_email_code_unavailable", user_action_required=True)
+                    offered_mail_id = mail["mailId"]
+                    code = mail.pop("code")
+                    mail.clear()
+                    return code
+                await asyncio.sleep(2)
+            raise Stop("recharge_email_code_expired", user_action_required=True)
+
+        async def email_code_accepted():
+            nonlocal offered_mail_id
+            if self.cancelled or self.done:
+                raise Stop("operation_cancelled")
+            if offered_mail_id is None:
+                raise Stop("recharge_email_code_unavailable", user_action_required=True)
+            result = await asyncio.to_thread(email_code_request, self.id, {
+                "type": "received", "mailId": offered_mail_id})
+            if result.get("ok") is not True:
+                raise Stop("recharge_email_code_unavailable", user_action_required=True)
+            offered_mail_id = None
+
         async def wait_for_user(reason, _):
             raise Stop(reason, user_action_required=True)
 
@@ -456,10 +535,13 @@ class Job:
             routed = True
             target, identity = await browser_password_login.login_with_password(
                 page, login["email"], login["password"], wait_for_code,
-                wait_for_user, self.progress, initial_loaded=initial_page is not None)
+                wait_for_user, self.progress, initial_loaded=initial_page is not None,
+                prepare_email_code=prepare_email_code, wait_for_email_code=wait_for_email_code,
+                email_code_accepted=email_code_accepted)
             verified = True
             return target, identity
         finally:
+            offered_mail_id = None
             login.clear()
             cleaned = True
             if page is not None:
@@ -636,6 +718,9 @@ class Job:
                                   current_plan=identity.get("current_plan"),
                                   network=observed_after_login)
                     if self.payload.get("recheckOnly") is True:
+                        if self.payload.get("upgradeIdentifier"):
+                            return await subscription_upgrade.recheck_upgrade_in_context(
+                                context, target, self.root, plan, self.payload["upgradeIdentifier"])
                         with payment_state.PaymentLedger(self.root, target.account_id,
                                                          target_plan=plan) as ledger:
                             if not ledger.record:
@@ -673,6 +758,13 @@ class Job:
         if action == "flow":
             return await pay.run_flow(target, self.root, plan, details_reader=self.details,
                                       confirmer=self.confirm, wait_seconds=120, browser=browser)
+        if action == "recheck" and self.payload.get("upgradeIdentifier"):
+            async def dispatch(page, guard, identity):
+                await page.context.unroute("**/*", guard.route)
+                return await subscription_upgrade.run_upgrade_in_context(
+                    page, target, self.root, plan, upgrade_id=self.payload["upgradeIdentifier"])
+            return await browser_checkout.run_browser(target, state_dir=self.root,
+                target_plan=plan, browser=browser, session_handler=dispatch)
         with payment_state.PaymentLedger(self.root, target.account_id, target_plan=plan) as ledger:
             if action == "recheck":
                 if not ledger.record:
@@ -701,8 +793,8 @@ class Job:
         try:
             with tempfile.TemporaryDirectory(prefix="recharge-") as folder:
                 self.root = Path(folder)
-                attempt_ledger.atomic_json = payment_state.atomic_json = durable
-                browser_checkout.progress = pay.progress = payment_network.progress = self.progress
+                attempt_ledger.atomic_json = payment_state.atomic_json = subscription_upgrade.atomic_json = durable
+                browser_checkout.progress = pay.progress = payment_network.progress = subscription_upgrade.progress = self.progress
                 if BROWSER_RUNTIME.started:
                     async def operation(browser):
                         nonlocal watchdog
@@ -728,8 +820,8 @@ class Job:
             if self.stage != "session_restore":
                 result["reason"] = "worker_operation_failed"
         finally:
-            attempt_ledger.atomic_json = payment_state.atomic_json = original_atomic
-            browser_checkout.progress = pay.progress = payment_network.progress = original_progress
+            attempt_ledger.atomic_json = payment_state.atomic_json = subscription_upgrade.atomic_json = original_atomic
+            browser_checkout.progress = pay.progress = payment_network.progress = subscription_upgrade.progress = original_progress
             self.payload.clear()
             if self.resolved_proxy is not None:
                 self.resolved_proxy.clear()
@@ -858,7 +950,12 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise ValueError()
             self.reply(202, {"ok": True})
-        except Exception:
+        except Exception as error:
+            if self.path.startswith('/registration/'):
+                rejection = registration_builtin.dispatch_rejection(error)
+                if rejection:
+                    self.reply(409, rejection)
+                    return
             self.reply(400, {"ok": False})
 
 

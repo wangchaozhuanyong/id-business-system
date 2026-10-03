@@ -5,10 +5,22 @@
   --v2-layout-panel-padding: 12px 16px;
 }
 
-/* 固定工具入口占用底部 44px，页尾分页需要可滚动到入口上方。 */
+/* 固定工具入口使用滚动视口外的工具带，列表中间行也不能进入遮挡区域。 */
 .v2-shell:has(.v2-quick-actions-fab) .v2-content {
-  padding-block-end: calc(80px + env(safe-area-inset-bottom, 0px));
-  scroll-padding-block-end: calc(80px + env(safe-area-inset-bottom, 0px));
+  margin-block-end: calc(80px + env(safe-area-inset-bottom, 0px));
+  padding-block-end: 20px;
+  scroll-padding-block-end: 20px;
+}
+
+.v2-shell:has(.v2-quick-actions-fab) .v2-content__inner {
+  min-height: 100%;
+}
+
+@media (max-width: 900px) {
+  .v2-shell:has(.v2-quick-actions-fab) .v2-content {
+    padding-block-end: 14px;
+    scroll-padding-block-end: 14px;
+  }
 }
 
 .v2-page-layout,

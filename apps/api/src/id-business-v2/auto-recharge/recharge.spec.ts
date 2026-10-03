@@ -446,6 +446,7 @@ describe('single worker dispatch and confirmation', () => {
   vi.spyOn(repository, 'lock');
   const active = vi.spyOn(repository, 'active');
   const list = vi.spyOn(repository, 'list');
+  const paymentRecords = vi.spyOn(repository, 'paymentRecords');
   const transaction = { execute: vi.fn() };
   const audit = { append: vi.fn() };
   const addressRepository = {
@@ -456,6 +457,7 @@ describe('single worker dispatch and confirmation', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(repository.lock).mockResolvedValue();
+    paymentRecords.mockResolvedValue([]);
     vi.stubEnv('AUTO_RECHARGE_WORKER_TOKEN', 'x'.repeat(64));
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     transaction.execute.mockImplementation(async (callback) => callback(tx));
@@ -944,6 +946,57 @@ describe('single worker dispatch and confirmation', () => {
     );
     expect(vi.mocked(fetch).mock.calls[1]?.[1]?.method).toBeUndefined();
   });
+  it('列表纯读取恢复过期 confirming 原单，不写任务、不延长租约且不泄露标识', async () => {
+    const accountKey = 'a'.repeat(64);
+    const checkoutIdentifier = 'cs_historical_list';
+    const job = {
+      id,
+      ownerId: operator.id,
+      accountKey,
+      plan: 'plus',
+      action: 'server',
+      state: 'confirming',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      leaseUntil: new Date('2026-10-01T00:16:00Z'),
+      result: { quote, quote_authority: 'official_checkout_response', stage: 'payment_ready' }
+    };
+    list.mockResolvedValue([job] as never);
+    paymentRecords.mockResolvedValue([
+      {
+        ownerId: operator.id,
+        accountKey,
+        fileKey: `payments/${hash(checkoutIdentifier)}.json`,
+        updatedAt: new Date('2026-10-01T00:01:00Z'),
+        document: {
+          account_key: accountKey,
+          target_plan: 'plus',
+          checkout_identifier: checkoutIdentifier,
+          quote,
+          payment_attempted: true,
+          confirmation_requests_sent: 1,
+          payment_status: 'unknown',
+          created_at: Date.parse('2026-10-01T00:00:59Z') / 1000
+        }
+      }
+    ] as never);
+    const response = await service.list(operator);
+    expect(response.items[0]).toMatchObject({
+      state: 'unknown',
+      leaseUntil: job.leaseUntil,
+      result: {
+        checkout_identifier: checkoutIdentifier,
+        payment_attempted: true,
+        payment_requests_sent: 1
+      }
+    });
+    expect(response.items[0]?.accountKey).toBeUndefined();
+    expect(response.items[0]?.nonceHash).toBeUndefined();
+    expect(paymentRecords).toHaveBeenCalledWith(operator.id, [accountKey]);
+    expect(tx.idBusinessV2RechargeJob.update).not.toHaveBeenCalled();
+    expect(transaction.execute).not.toHaveBeenCalled();
+    expect(job.state).toBe('confirming');
+    expect(job.result).not.toHaveProperty('payment_requests_sent');
+  });
   it('loads the selected unused address and sends only the fixed location to the worker', async () => {
     await service.start(prepareInput(), operator);
     expect(addressRepository.requireUnused).toHaveBeenCalledWith(tx, operator.id, addressId);
@@ -1159,6 +1212,77 @@ describe('single worker dispatch and confirmation', () => {
     });
 
     expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId, id);
+  });
+
+  it('付款记录和任务事实在同一事务投影，迟到零次进度不能解除未知付款保护', async () => {
+    const accountKey = 'a'.repeat(64);
+    const checkoutIdentifier = 'cs_durable_summary';
+    const job = {
+      id,
+      ownerId: operator.id,
+      accountKey,
+      plan: 'plus',
+      action: 'server',
+      state: 'confirming',
+      result: {
+        addressId,
+        quote,
+        quote_authority: 'official_checkout_response',
+        stage: 'payment_ready'
+      }
+    };
+    active.mockResolvedValue(job as never);
+    const save = vi.spyOn(repository, 'saveRecord').mockResolvedValueOnce({ revision: 2 } as never);
+    tx.idBusinessV2RechargeJob.update.mockImplementation(async ({ data }) => {
+      Object.assign(job, data);
+      return job;
+    });
+    await service.callback(id, {
+      type: 'ledger',
+      accountKey,
+      fileKey: `payments/${hash(checkoutIdentifier)}.json`,
+      revision: 1,
+      document: {
+        account_key: accountKey,
+        target_plan: 'plus',
+        checkout_identifier: checkoutIdentifier,
+        quote,
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown'
+      }
+    });
+    expect(save).toHaveBeenCalledWith(tx, expect.objectContaining({ revision: 1 }));
+    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenLastCalledWith({
+      where: { id },
+      data: {
+        result: expect.objectContaining({
+          payment_attempted: true,
+          confirmation_requests_sent: 1,
+          payment_requests_sent: 1,
+          checkout_identifier: checkoutIdentifier,
+          stage: 'payment_ready'
+        })
+      }
+    });
+    expect(job.state).toBe('confirming');
+    await service.callback(id, {
+      type: 'progress',
+      result: {
+        stage: 'payment_submitted_or_pending',
+        payment_attempted: false,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 0,
+        payment_status: 'not_attempted'
+      }
+    });
+    expect(job.result).toMatchObject({
+      payment_attempted: true,
+      confirmation_requests_sent: 1,
+      payment_requests_sent: 1,
+      payment_status: 'unknown'
+    });
+    expect(job.state).toBe('confirming');
   });
 
   it('只读复查即使看到历史付款标记也不消耗新地址', async () => {

@@ -29,6 +29,7 @@ import pay
 import payment_network
 import payment_recovery
 import payment_state
+import subscription_upgrade
 from checkout_core import Stop, parse_browser_credential, unique_object, write_json
 from payment_form import PaymentDetails, validate_details
 from plans import PLANS
@@ -55,6 +56,8 @@ SAFE_PUBLIC_KEYS = set(
     "checkout_replacement_performed "
     "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
 )
+SAFE_PUBLIC_KEYS.update("operation current_plan_before upgrade_identifier upgrade_invoice_identifier "
+                        "upgrade_payment_intent_identifier subscription_period three_ds_status".split())
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -231,6 +234,12 @@ def validate_payload(value):
         raise Stop("invalid_connector_payload")
     allowed = (common | auth_keys | {"details", "address", "safety", "authorizeSinglePayment"}
                if mode == "payment" else common | auth_keys if mode in ("recheck", "open_browser") else set())
+    if mode == "recheck" and "upgradeIdentifier" in value:
+        allowed.add("upgradeIdentifier")
+        if (not isinstance(value["upgradeIdentifier"], str)
+                or not subscription_upgrade.UPGRADE_ID.fullmatch(value["upgradeIdentifier"])
+                or value.get("plan") not in {"pro-5x", "pro-20x", "pro-500"}):
+            raise Stop("invalid_connector_payload")
     if set(value) != allowed:
         raise Stop("invalid_connector_payload")
     job_id = value.get("id")
@@ -399,7 +408,7 @@ class LocalJob:
         if stage == "session_verified":
             self.initial_session_verified = True
         self.session_info.update({key: value for key, value in details.items() if key in self.session_info})
-        if stage == "payment_request_sending":
+        if stage in {"payment_request_sending", "upgrade_request_sending"}:
             self.payment_request_sent = True
         self.callback.send({"type": "progress", "result": public_result({
             "status": "cancelling" if _during_cancel else "running",
@@ -475,6 +484,9 @@ class LocalJob:
                 merged[key] = ""
 
     def confirm(self, quote, _last4):
+        self.check_cancelled()
+        if self.payment_request_sent:
+            raise Stop("duplicate_payment_blocked")
         safety = self.payload["safety"]
         try:
             payment_state.quote_digest(quote)
@@ -498,7 +510,17 @@ class LocalJob:
                 raise InvalidOperation()
         except (InvalidOperation, KeyError, TypeError):
             raise Stop("payment_quote_incomplete") from None
-        self.progress("payment_guard_passed", quote=quote, quote_authority="official_checkout_response")
+        upgrade = quote.get("operation") == "subscription_upgrade"
+        binding = {}
+        if upgrade:
+            if (not subscription_upgrade.UPGRADE_ID.fullmatch(str(quote.get("upgrade_identifier", "")))
+                    or quote.get("plan") not in {"pro-5x", "pro-20x", "pro-500"}):
+                raise Stop("invalid_upgrade_identifier")
+            binding = {"operation": "subscription_upgrade", "current_plan_before": "plus",
+                       "upgrade_identifier": quote["upgrade_identifier"], "target_plan": quote["plan"]}
+        self.progress("payment_guard_passed", quote=quote,
+                      quote_authority="official_upgrade_preview" if upgrade else "official_checkout_response",
+                      **binding)
         return True
 
     def restore_account(self, target):
@@ -560,8 +582,13 @@ class LocalJob:
 
     def run(self):
         original_atomic = attempt_ledger.atomic_json
+        original_payment_atomic = payment_state.atomic_json
+        original_upgrade_atomic = subscription_upgrade.atomic_json
         original_progress = browser_checkout.progress
         original_recovery_progress = payment_recovery.progress
+        original_pay_progress = pay.progress
+        original_network_progress = payment_network.progress
+        original_upgrade_progress = subscription_upgrade.progress
         original_wait = browser_checkout.wait_for_user
         original_callback_url = os.environ.get("AUTO_RECHARGE_CALLBACK_URL")
         try:
@@ -572,11 +599,16 @@ class LocalJob:
 
                 def durable(path, document):
                     self.persist(path, document)
+                    if (self.payload["mode"] == "payment" and document.get("operation") == "subscription_upgrade"
+                            and document.get("confirmation_requests_sent") == 1):
+                        self.payment_request_sent = True
                     original_atomic(path, document)
 
                 attempt_ledger.atomic_json = payment_state.atomic_json = durable
+                subscription_upgrade.atomic_json = durable
                 browser_checkout.progress = pay.progress = payment_network.progress = self.progress
                 payment_recovery.progress = self.progress
+                subscription_upgrade.progress = self.progress
                 browser_checkout.wait_for_user = self.wait_for_user
                 result = asyncio.run(self.execute())
         except Stop as exc:
@@ -588,9 +620,14 @@ class LocalJob:
                       "payment_status": "unknown" if self.payment_request_sent else "not_attempted",
                       "payment_requests_sent": 1 if self.payment_request_sent else 0}
         finally:
-            attempt_ledger.atomic_json = payment_state.atomic_json = original_atomic
-            browser_checkout.progress = pay.progress = payment_network.progress = original_progress
+            attempt_ledger.atomic_json = original_atomic
+            payment_state.atomic_json = original_payment_atomic
+            subscription_upgrade.atomic_json = original_upgrade_atomic
+            browser_checkout.progress = original_progress
+            pay.progress = original_pay_progress
+            payment_network.progress = original_network_progress
             payment_recovery.progress = original_recovery_progress
+            subscription_upgrade.progress = original_upgrade_progress
             browser_checkout.wait_for_user = original_wait
             if original_callback_url is None:
                 os.environ.pop("AUTO_RECHARGE_CALLBACK_URL", None)

@@ -1,11 +1,12 @@
 import asyncio
 from copy import deepcopy
+from datetime import date
 import unittest
 from unittest.mock import patch
 
 from checkout_core import Stop
 from registration_job import RegistrationJob
-from registration_security import offer_from_text, totp, verification_link, validate_birthdate
+from registration_security import offer_from_text, totp, verification_link, validate_birthdate, birth_age, registration_age
 from registration_browser import RegistrationBrowser
 import bitbrowser_options
 
@@ -102,7 +103,38 @@ class RegistrationTests(unittest.TestCase):
 
     def test_invalid_identity_does_not_generate_an_age(self):
         for birthday in ['2016-01-01', '1980-01-01', '1996-02-30', '20']:
-            with self.assertRaises(Stop): validate_birthdate(birthday)
+                with self.assertRaises(Stop): validate_birthdate(birthday)
+
+    def test_fixed_registration_age_is_optional_and_strict(self):
+        for age in [20, 21, 45]:
+            data = payload(); data['registrationAge'] = age
+            self.assertEqual(RegistrationJob(data, 'https://manager.example.test', object).payload['registrationAge'], age)
+            self.assertEqual(registration_age(age, '1996-01-01'), age)
+        for age in [None, True, '20', 19, 46, 20.0]:
+            data = payload(); data['registrationAge'] = age
+            with self.assertRaises(Stop): RegistrationJob(data, 'https://manager.example.test', object)
+        self.assertEqual(RegistrationJob(payload(), 'https://manager.example.test', object).payload['birthDate'], '1996-01-01')
+
+    def test_resume_keeps_fixed_task_age_and_original_birthdate(self):
+        for age in [20, 21, 45]:
+            with self.subTest(age=age):
+                data = payload(); data['registrationAge'] = age
+                job = RegistrationJob(data, 'https://manager.example.test', object)
+                job.waiting_for_user = True
+                credentials = dict(attempt=1, password='current-synthetic-password', totpSecret=None)
+                with self.assertRaises(Stop):
+                    job.signal_resume({**credentials, 'registrationAge': 22})
+                self.assertFalse(job.resume_event.is_set())
+                job.signal_resume(credentials)
+                self.assertEqual(job.payload['registrationAge'], age)
+                self.assertEqual(job.payload['birthDate'], data['birthDate'])
+                self.assertTrue(job.resume_event.is_set())
+
+    def test_legacy_birth_age_observes_actual_birthday_boundaries(self):
+        self.assertEqual(birth_age('2006-10-03', date(2026, 10, 3)), 20)
+        with self.assertRaises(Stop): birth_age('2006-10-03', date(2026, 10, 2))
+        self.assertEqual(birth_age('1981-10-03', date(2026, 10, 3)), 45)
+        with self.assertRaises(Stop): birth_age('1980-10-03', date(2026, 10, 3))
 
 
 if __name__ == '__main__':

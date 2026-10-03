@@ -3,6 +3,8 @@ export type {
   V2RegistrationName,
   V2RegistrationJob,
   V2RegistrationMailbox,
+  V2RegistrationMailboxStatusFilter,
+  V2RegistrationMailboxStartBlockedReason,
   V2RegistrationStart,
   V2RegistrationPage
 } from '@apple-business/shared';

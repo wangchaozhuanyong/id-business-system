@@ -1,12 +1,14 @@
 import { effectScope, nextTick, ref, type Ref } from 'vue';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import type { V2RegistrationJob } from './contracts';
+import type { V2RegistrationJob, V2RegistrationMailbox } from './contracts';
 import { useRegistrationPage } from './useRegistrationPage';
 import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 const mock = vi.hoisted(() => ({
   connector: vi.fn(),
   create: vi.fn(),
   launch: vi.fn(),
+  pending: vi.fn(),
+  job: vi.fn(),
   connection: vi.fn(),
   code: vi.fn(),
   cancel: vi.fn(),
@@ -27,6 +29,8 @@ vi.mock('./api', () => ({
   registrationApi: {
     create: mock.create,
     launch: mock.launch,
+    pending: mock.pending,
+    job: mock.job,
     connection: mock.connection,
     code: mock.code,
     cancel: mock.cancel,
@@ -34,6 +38,20 @@ vi.mock('./api', () => ({
   }
 }));
 const id = '11111111-1111-4111-8111-111111111111';
+const mailbox: V2RegistrationMailbox = {
+  id: 'mail-1',
+  email: 'test@example.invalid',
+  primaryEmail: 'primary@example.invalid',
+  status: 'ACTIVE',
+  registered: false,
+  accountId: null,
+  accountUpdatedAt: null,
+  note: null,
+  updatedAt: '',
+  canStart: true,
+  startBlockedReason: null,
+  pendingJobId: null
+};
 const baseJob = {
   id,
   emailMasked: 'ow***@example.test',
@@ -71,6 +89,8 @@ beforeEach(() => {
   mock.launch.mockResolvedValue({ id, attempt: 1, delivery: 'accepted' });
   mock.resume.mockResolvedValue({ id, attempt: 1, delivery: 'accepted' });
   mock.create.mockResolvedValue(baseJob);
+  mock.pending.mockResolvedValue(null);
+  mock.job.mockResolvedValue(baseJob);
   mock.code.mockResolvedValue({ id, attempt: 1, delivery: 'accepted' });
   scope = effectScope();
   page = scope.run(() => useRegistrationPage({ moduleKey: 'auto-registration' }))!;
@@ -91,15 +111,15 @@ describe('注册表单和邮件生命周期', () => {
   });
   it('空白注册表单带入共用默认代理，已有手动选择不被覆盖', () => {
     page.options.data.value = { defaultProxyId: 'default-proxy' } as never;
-    page.openStart();
+    page.openStart(mailbox);
     expect(page.draft.form.proxyId).toBe('default-proxy');
     page.draft.form.proxyId = 'manual-proxy';
     page.formOpen.value = false;
-    page.openStart();
+    page.openStart(mailbox);
     expect(page.draft.form.proxyId).toBe('manual-proxy');
   });
   it('执行器不可用时创建失败并保留草稿', async () => {
-    page.openStart();
+    page.openStart(mailbox);
     page.draft.form.mailboxAliasId = 'mail-1';
     mock.create.mockRejectedValueOnce(new Error('内置浏览器尚未就绪'));
     await page.start();
@@ -107,7 +127,7 @@ describe('注册表单和邮件生命周期', () => {
     expect(page.draft.form.mailboxAliasId).toBe('mail-1');
   });
   it('后端确认接收后才清除提交快照，密码不进入会话草稿', async () => {
-    page.openStart();
+    page.openStart(mailbox);
     Object.assign(page.draft.form, {
       mailboxAliasId: 'mail-1',
       proxyId: id,
@@ -119,18 +139,86 @@ describe('注册表单和邮件生命周期', () => {
     expect(mock.launch).toHaveBeenCalledWith(id);
     expect(mock.connector).not.toHaveBeenCalled();
     expect(page.formOpen.value).toBe(false);
-    page.openStart();
-    expect(page.draft.form.mailboxAliasId).toBe('');
+    page.openStart(mailbox);
+    expect(page.draft.form.mailboxAliasId).toBe(mailbox.id);
     expect(page.draft.form).not.toHaveProperty('password');
   });
   it('提交失败保留输入及任务编号，不标记成功', async () => {
-    page.openStart();
+    page.openStart(mailbox);
     page.draft.form.mailboxAliasId = 'mail-1';
     mock.launch.mockResolvedValueOnce({ id, attempt: 1, delivery: 'unknown' });
     await page.start();
     expect(page.formOpen.value).toBe(true);
     expect(page.draft.form.mailboxAliasId).toBe('mail-1');
     expect(page.filters.activeJobId).toBe(id);
+  });
+  it('派发结果未知后核对原任务，不重新创建或派发', async () => {
+    page.openStart(mailbox);
+    mock.launch.mockResolvedValueOnce({ id, attempt: 1, delivery: 'unknown' });
+    await page.start();
+    mock.pending.mockResolvedValueOnce(baseJob);
+    expect(page.startConfirmText.value).toBe('核对原任务');
+    await page.start();
+    expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.launch).toHaveBeenCalledOnce();
+    expect(mock.pending).toHaveBeenCalledWith(mailbox.id);
+    expect(page.filters.activeJobId).toBe(id);
+  });
+  it('创建响应丢失时查回原任务，保留草稿并等待原任务操作', async () => {
+    page.openStart(mailbox);
+    page.draft.form.birthDate = '1996-01-01';
+    mock.create.mockRejectedValueOnce(new Error('网络中断'));
+    mock.pending.mockResolvedValueOnce(baseJob);
+    await page.start();
+    expect(mock.launch).not.toHaveBeenCalled();
+    expect(page.filters.activeJobId).toBe(id);
+    expect(page.draft.form.birthDate).toBe('1996-01-01');
+    expect(page.message.value).toContain('已找到原注册任务');
+  });
+  it('创建和核对都失败时锁定为核对原任务，不能重建', async () => {
+    page.openStart(mailbox);
+    mock.create.mockRejectedValueOnce(new Error('网络中断'));
+    mock.pending.mockRejectedValueOnce(new Error('核对失败'));
+    await page.start();
+    expect(page.startConfirmText.value).toBe('核对原任务');
+    mock.pending.mockRejectedValueOnce(new Error('仍无法读取'));
+    await page.start();
+    expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.launch).not.toHaveBeenCalled();
+  });
+  it('校验尚未返回时连点也只创建一次', async () => {
+    let finish!: (value: boolean) => void;
+    page.formRef.value = {
+      validate: () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        })
+    } as never;
+    page.openStart(mailbox);
+    const start = page.start();
+    await page.start();
+    finish(true);
+    await start;
+    expect(mock.create).toHaveBeenCalledOnce();
+  });
+  it('邮箱草稿隔离，取消和切页不丢失各自真实资料', () => {
+    page.openStart(mailbox);
+    page.draft.form.birthDate = '1996-01-01';
+    page.openStart({ ...mailbox, id: 'mail-2', email: 'other@example.invalid' });
+    expect(page.draft.form.birthDate).toBe('');
+    page.draft.form.birthDate = '1997-02-03';
+    page.openStart(mailbox);
+    expect(page.draft.form.birthDate).toBe('1996-01-01');
+    expect(page.draft.form.mailboxAliasId).toBe(mailbox.id);
+  });
+  it('派发后列表读取失败仍显示已接收，不把成功注册派发当失败', async () => {
+    page.openStart(mailbox);
+    vi.mocked(page.query.refresh).mockRejectedValueOnce(new Error('读取失败'));
+    await page.start();
+    expect(page.formOpen.value).toBe(false);
+    expect(page.error.value).toBe('');
+    expect(page.message.value).toContain('已接收注册任务');
+    expect(page.message.value).toContain('任务列表读取失败');
   });
   it('页面只读取任务进度，自动取码由后端完成；退出停止进度刷新', async () => {
     page.filters.activeJobId = id;
@@ -154,15 +242,15 @@ describe('注册表单和邮件生命周期', () => {
     expect(mock.connector).not.toHaveBeenCalled();
   });
   it('切页保留注册草稿，临时验证码不保留', () => {
-    page.openStart();
-    page.draft.form.mailboxAliasId = 'mail-kept';
+    page.openStart(mailbox);
+    page.draft.form.birthDate = '1996-01-01';
     page.loginCode.value = '123456';
     scope.stop();
     mock.index = 0;
     scope = effectScope();
     page = scope.run(() => useRegistrationPage({ moduleKey: 'auto-registration' }))!;
-    page.openStart();
-    expect(page.draft.form.mailboxAliasId).toBe('mail-kept');
+    page.openStart(mailbox);
+    expect(page.draft.form.birthDate).toBe('1996-01-01');
     expect(page.loginCode.value).toBe('');
   });
   it('取消关闭未确认时保留明确提示，并读取撤销后的任务状态', async () => {

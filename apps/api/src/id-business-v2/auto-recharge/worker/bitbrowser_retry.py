@@ -8,6 +8,7 @@ import browser_password_login
 import pay
 import payment_recovery
 import payment_state
+import subscription_upgrade
 from browser_session import SessionBudget, retryable_session_result
 from checkout_core import Stop
 
@@ -186,6 +187,9 @@ async def _execute_profiles(job, client, target, playwright, owned):
             job.progress("login_verified", account_matched=True,
                          current_plan=identity["current_plan"])
         if job.payload["mode"] == "recheck":
+            if job.payload.get("upgradeIdentifier"):
+                return await subscription_upgrade.recheck_upgrade_in_context(
+                    job.context, target, job.root, job.payload["plan"], job.payload["upgradeIdentifier"])
             with payment_state.PaymentLedger(job.root, target.account_id,
                                              target_plan=job.payload["plan"]) as ledger:
                 result = await payment_recovery.recheck_in_context(

@@ -49,6 +49,11 @@ def assert_no_other_payment(state_dir, account_id, checkout_id=None):
         if not isinstance(data, dict):
             raise Stop("invalid_payment_record")
         if data.get("account_key") == key and data.get("payment_attempted"):
+            if data.get("operation") == "subscription_upgrade":
+                from subscription_upgrade import validate_upgrade_record
+                validate_upgrade_record(data, key, data.get("target_plan"))
+                raise Stop("previous_upgrade_attempt_exists", action="recheck_original_order_only",
+                           recheck_plan=data["target_plan"], upgrade_identifier=data["upgrade_identifier"])
             recheck_plan = data.get("target_plan", "plus")
             checkout_identifier = data.get("checkout_identifier")
             try:

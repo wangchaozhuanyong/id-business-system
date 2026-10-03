@@ -1,4 +1,5 @@
 import json
+import io
 import asyncio
 from pathlib import Path
 import tempfile
@@ -12,6 +13,28 @@ from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_registration_dispatch_refusal_returns_only_controlled_reason(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/registration/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        body = b'{"attempt":1}'
+        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth', 'Content-Length': str(len(body))}
+        handler.reply = MagicMock()
+        for reason in ('worker_busy', 'builtin_original_window_pending', 'builtin_profile_missing'):
+            handler.rfile = io.BytesIO(body)
+            handler.reply.reset_mock()
+            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                  patch.object(server.registration_builtin, 'handle_request',
+                    side_effect=Stop(reason, unsafe='synthetic-private-details'))):
+                handler.do_POST()
+            handler.reply.assert_called_once_with(409, {'ok': False, 'reason': reason})
+        handler.rfile = io.BytesIO(body)
+        handler.reply.reset_mock()
+        with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+              patch.object(server.registration_builtin, 'handle_request',
+                side_effect=Stop('synthetic-private-details'))):
+            handler.do_POST()
+        handler.reply.assert_called_once_with(400, {'ok': False})
+
     def test_registration_health_protects_running_jobs_and_retained_partial_windows(self):
         handler = object.__new__(server.Handler)
         handler.path = '/registration/health'

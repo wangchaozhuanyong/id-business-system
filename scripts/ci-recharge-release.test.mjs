@@ -140,3 +140,63 @@ test('recovery dispatch keeps deployment run and reused image run separate', () 
     assert.ok(command.includes('--image-run-id 222 --image-run-attempt 1'));
   });
 });
+
+test('worker CI runs card setup, full upgrade and registration browser regression modules', () => {
+  fixture(({ root, env }) => {
+    const log = join(root, 'worker-arguments.txt');
+    writeFileSync(
+      env.TASK_CHANGED_PATHS,
+      'apps/api/src/id-business-v2/auto-recharge/worker/pay.py'
+    );
+    writeFileSync(
+      join(root, 'bin', 'python3'),
+      '#!/bin/sh\nprintf "%s\\n" "$@" > "$TASK_WORKER_LOG"\n',
+      { mode: 0o755 }
+    );
+    execFileSync(process.execPath, ['scripts/ci-recharge-check.mjs', 'connector', 'a'.repeat(40)], {
+      env: { ...env, TASK_WORKER_LOG: log }
+    });
+    const args = readFileSync(log, 'utf8').trim().split('\n');
+    assert.deepEqual(args.slice(0, 2), ['-m', 'unittest']);
+    for (const name of [
+      'test_subscription_upgrade',
+      'test_upgrade_card_selection',
+      'test_upgrade_card_flow',
+      'test_registration_browser',
+      'test_registration_builtin',
+      'test_payment_3ds',
+      'test_recharge_email_code',
+      'test_subscribe',
+      'test_payment.StateTests',
+      'test_go.GoStateTests'
+    ]) {
+      assert.equal(args.filter((arg) => arg === name).length, 1, name);
+    }
+  });
+});
+
+test('changed recharge mail bridge is exercised by the API CI command', () => {
+  fixture(({ root, env }) => {
+    const log = join(root, 'npm-arguments.txt');
+    writeFileSync(
+      env.TASK_CHANGED_PATHS,
+      'apps/api/src/id-business-v2/workspace/recharge-mail-code.service.ts'
+    );
+    writeFileSync(join(root, 'bin', 'npm'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_NPM_LOG"\n', {
+      mode: 0o755
+    });
+    execFileSync(process.execPath, ['scripts/ci-recharge-check.mjs', 'api', 'a'.repeat(40)], {
+      env: { ...env, TASK_NPM_LOG: log }
+    });
+    const command = readFileSync(log, 'utf8')
+      .split('\n')
+      .find((line) => line.includes('test --workspace'));
+    assert.ok(command.includes('src/id-business-v2/auto-recharge'));
+    assert.ok(command.includes('src/id-business-v2/workspace/recharge-mail-code.spec.ts'));
+    assert.ok(
+      command.includes(
+        'src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.spec.ts'
+      )
+    );
+  });
+});

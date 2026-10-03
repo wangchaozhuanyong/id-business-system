@@ -311,6 +311,7 @@ describe('本机任务持久化边界', () => {
     const tx = {};
     const repository = {
       lock: vi.fn(),
+      records: vi.fn().mockResolvedValue([]),
       findRunningJob: vi.fn().mockResolvedValue(null),
       findJob: vi.fn().mockImplementation((_tx, jobId) => {
         if (jobId === id) return null;
