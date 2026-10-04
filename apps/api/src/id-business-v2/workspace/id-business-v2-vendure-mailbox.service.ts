@@ -105,7 +105,7 @@ export class IdBusinessV2VendureMailboxService {
     assertRegistrationMailboxEmail(mailbox.email, expectedEmail);
     const result = await this.client.publicQuery(mailbox.queryCode);
     if (!result.success) throw new ServiceUnavailableException('邮件查询暂时不可用，请重试');
-    return registrationMail(result.items, mailbox.email, since, previousId);
+    return registrationMail(result.items, mailbox.email, since, previousId, aliasId);
   }
 
   async listPrimary(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {

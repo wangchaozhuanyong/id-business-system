@@ -1,5 +1,32 @@
 import type { V2VendureMailboxPublicMail } from '@apple-business/shared';
 
+function recipientMatches(
+  mail: V2VendureMailboxPublicMail,
+  email: string,
+  authorizedAliasId?: string
+) {
+  if (authorizedAliasId && mail.virtualEmailId !== authorizedAliasId) return false;
+  const recipient = mail.targetEmail?.toLowerCase();
+  const expected = email.toLowerCase();
+  if (recipient === expected) return true;
+  // The public mailbox endpoint masks addresses. Only the alias revalidated
+  // through the authenticated admin lookup can identify a masked recipient.
+  if (!authorizedAliasId || !recipient) return false;
+  const maskedParts = recipient.split('@');
+  const expectedParts = expected.split('@');
+  if (maskedParts.length !== 2 || expectedParts.length !== 2 || maskedParts[1] !== expectedParts[1])
+    return false;
+  const mask = /^([^*\s@]+)\*+([^*\s@]*)$/.exec(maskedParts[0]!);
+  if (!mask) return false;
+  const [, prefix, suffix] = mask;
+  const local = expectedParts[0]!;
+  return (
+    local.length > prefix!.length + suffix!.length &&
+    local.startsWith(prefix!) &&
+    local.endsWith(suffix!)
+  );
+}
+
 function officialSender(address: string) {
   const parts = address.trim().toLowerCase().split('@');
   if (parts.length !== 2) return false;
@@ -40,10 +67,11 @@ export function registrationMail(
   items: V2VendureMailboxPublicMail[],
   email: string,
   since: Date,
-  previousId: string | null
+  previousId: string | null,
+  authorizedAliasId?: string
 ) {
   const previous = items.find(
-    (mail) => mail.id === previousId && mail.targetEmail?.toLowerCase() === email.toLowerCase()
+    (mail) => mail.id === previousId && recipientMatches(mail, email, authorizedAliasId)
   );
   const previousReceived = previous ? Date.parse(previous.receivedAt) : NaN;
   const candidates = items
@@ -51,7 +79,7 @@ export function registrationMail(
       const received = Date.parse(mail.receivedAt);
       return (
         mail.id !== previousId &&
-        mail.targetEmail?.toLowerCase() === email.toLowerCase() &&
+        recipientMatches(mail, email, authorizedAliasId) &&
         officialSender(mail.fromAddress) &&
         Number.isFinite(received) &&
         received >= since.getTime() &&

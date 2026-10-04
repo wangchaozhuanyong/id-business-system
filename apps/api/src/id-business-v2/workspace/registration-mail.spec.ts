@@ -12,6 +12,67 @@ const mail = {
   bodyText: ''
 } as V2VendureMailboxPublicMail;
 describe('注册邮件不串码', () => {
+  it('已授权别名编号匹配时接受上游脱敏收件地址，原邮件保持脱敏', () => {
+    const masked = { ...mail, virtualEmailId: 'alias-1', targetEmail: 'ow***@example.test' };
+    expect(registrationMail([masked], mail.targetEmail, since, null, 'alias-1')).toEqual({
+      mailId: mail.id,
+      code: '123456'
+    });
+    expect(masked.targetEmail).toBe('ow***@example.test');
+    expect(registrationMail([masked], mail.targetEmail, since, null)).toBeNull();
+  });
+  it.each([
+    { virtualEmailId: 'other-alias' },
+    { virtualEmailId: null },
+    { targetEmail: 'ot***@example.test' },
+    { targetEmail: 'ow***x@example.test' },
+    { targetEmail: 'ow***@other.test' },
+    { targetEmail: '***@example.test' },
+    { targetEmail: 'o*w*@example.test' },
+    { targetEmail: 'ow***@example.test@evil.test' },
+    { targetEmail: 'other@example.test' },
+    { receivedAt: '2000-01-01T00:00:00Z' },
+    { fromAddress: 'x@openai.com.evil.test' }
+  ])('脱敏地址仍拒绝错别名、地址矛盾、旧邮件和非官方来源 %j', (patch) => {
+    const masked = {
+      ...mail,
+      virtualEmailId: 'alias-1',
+      targetEmail: 'ow***@example.test',
+      ...patch
+    };
+    expect(registrationMail([masked], mail.targetEmail, since, null, 'alias-1')).toBeNull();
+  });
+  it('完整地址也不能覆盖矛盾的别名编号', () => {
+    expect(
+      registrationMail(
+        [{ ...mail, virtualEmailId: 'other' }],
+        mail.targetEmail,
+        since,
+        null,
+        'alias-1'
+      )
+    ).toBeNull();
+  });
+  it('脱敏邮件恢复不能重用已消费验证码或倒退到更旧的邮件', () => {
+    const consumed = { ...mail, virtualEmailId: 'alias-1', targetEmail: 'ow***@example.test' };
+    const older = {
+      ...consumed,
+      id: 'mail-older',
+      receivedAt: new Date(Date.now() - 30_000).toISOString()
+    };
+    expect(
+      registrationMail([older, consumed], mail.targetEmail, since, consumed.id, 'alias-1')
+    ).toBeNull();
+    const newer = {
+      ...consumed,
+      id: 'mail-newer',
+      receivedAt: new Date(Date.now() + 1000).toISOString()
+    };
+    expect(
+      registrationMail([older, consumed, newer], mail.targetEmail, since, consumed.id, 'alias-1')
+        ?.mailId
+    ).toBe(newer.id);
+  });
   it.each([
     { subject: 'Your ChatGPT code', bodyText: 'Your ChatGPT code is 012345' },
     { subject: '你的临时 ChatGPT 登录代码', bodyText: '登录代码是 012345' },
