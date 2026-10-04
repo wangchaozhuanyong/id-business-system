@@ -54,7 +54,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             def event(self, event_type, **data):
                 events.append(event_type); self.step = data.get('step', self.step)
                 receipts.append((event_type, data))
-            def prepare_mail(self, step):
+            def prepare_mail(self, step, *, new_request=False):
+                receipts.append(('waiting_email', {'step': step, 'newMailRequest': new_request}))
                 self.step = step; self.awaiting_code = True
             async def wait_code(self):
                 self.awaiting_code = False; return '123456'
@@ -282,8 +283,9 @@ class VerificationBrowserTests(unittest.IsolatedAsyncioTestCase):
                     return page
                 context.new_page = new_page
                 return context
-            def prepare(step):
+            def prepare(step, *, new_request=False):
                 self.assertEqual(step, 'mfa' if mfa else 'password')
+                self.assertIs(new_request, True)
                 order.append('prepared')
             async def mail():
                 order.append('mail_read')
@@ -329,14 +331,14 @@ class VerificationBrowserTests(unittest.IsolatedAsyncioTestCase):
         result, submissions, job, order = await self.verify(['email', 'email_code', 'password', 'identity'])
         self.assertEqual(result, 'verified')
         self.assertEqual(submissions, ['email', 'email_code', 'password'])
-        job.prepare_mail.assert_called_once_with('password'); job.wait_code.assert_awaited_once()
+        job.prepare_mail.assert_called_once_with('password', new_request=True); job.wait_code.assert_awaited_once()
         self.assertLess(order.index('prepared'), order.index('email'))
 
     async def test_email_after_password_uses_the_same_verification_context(self):
         result, submissions, job, _ = await self.verify(['email', 'password', 'email_code', 'identity'])
         self.assertEqual(result, 'verified')
         self.assertEqual(submissions, ['email', 'password', 'email_code'])
-        job.prepare_mail.assert_called_once_with('password'); job.wait_code.assert_awaited_once()
+        job.prepare_mail.assert_called_once_with('password', new_request=True); job.wait_code.assert_awaited_once()
 
     async def test_email_and_totp_are_verified_separately_in_both_orders(self):
         for codes in [('email_code', 'totp_code'), ('totp_code', 'email_code')]:
@@ -344,7 +346,7 @@ class VerificationBrowserTests(unittest.IsolatedAsyncioTestCase):
                 result, submissions, job, _ = await self.verify(['email', 'password', *codes, 'identity'], mfa=True)
                 self.assertEqual(result, 'verified')
                 self.assertEqual(submissions, ['email', 'password', *codes])
-                job.prepare_mail.assert_called_once_with('mfa'); job.wait_code.assert_awaited_once()
+                job.prepare_mail.assert_called_once_with('mfa', new_request=True); job.wait_code.assert_awaited_once()
 
     async def test_email_before_password_then_totp_proves_both_credentials(self):
         result, submissions, job, _ = await self.verify(['email', 'email_code', 'password', 'totp_code', 'identity'], mfa=True)

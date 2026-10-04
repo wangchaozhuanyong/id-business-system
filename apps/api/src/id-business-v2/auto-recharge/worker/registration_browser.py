@@ -297,7 +297,7 @@ class RegistrationBrowser:
                 self.job.event('progress', step='email')
                 await field.fill(self.data['email'])
                 # Timestamp the expected mail BEFORE submission triggers sending.
-                self.job.prepare_mail('email_code')
+                self.job.prepare_mail('email_code', new_request=True)
                 email_submitted = True
                 await field.press('Enter')
                 await self.settle(3)
@@ -418,7 +418,7 @@ class RegistrationBrowser:
                 raise Stop('verification_required')
             await email.fill(self.data['email'])
             # Fence the current task's mail before either login submission can send it.
-            self.job.prepare_mail('mfa' if mfa else 'password')
+            self.job.prepare_mail('mfa' if mfa else 'password', new_request=True)
             await safe_page()
             self.official(page)
             await email.press('Enter')
@@ -552,7 +552,7 @@ class RegistrationBrowser:
                     return
             add = await self.button(self.page, r'^(add password|set password|设置密码|添加密码)$')
             if add:
-                self.job.prepare_mail('password')
+                self.job.prepare_mail('password', new_request=True)
                 await add.click()
                 await self.settle(3)
                 if await self.field(self.page, CODE_INPUT):
@@ -593,7 +593,7 @@ class RegistrationBrowser:
                 if checked == 'true' and not self.data['totpSecret']:
                     raise Stop('mfa_unverified')
                 if checked == 'false':
-                    self.job.prepare_mail('mfa')
+                    self.job.prepare_mail('mfa', new_request=True)
                     await switch.click()
                     await self.settle(3)
             code = await self.field(self.page, CODE_INPUT)
