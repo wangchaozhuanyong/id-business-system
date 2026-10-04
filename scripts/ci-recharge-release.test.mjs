@@ -164,6 +164,7 @@ test('worker CI runs card setup, full upgrade and registration browser regressio
       'test_upgrade_card_flow',
       'test_registration_browser',
       'test_registration_builtin',
+      'test_worker_isolation',
       'test_registration_auto_code',
       'test_payment_3ds',
       'test_payment_handoff',

@@ -9,6 +9,7 @@ const reply = (value: object, status = 200) => new Response(JSON.stringify(value
 beforeEach(() => {
   vi.stubEnv('AUTO_RECHARGE_WORKER_TOKEN', 'a'.repeat(64));
   vi.stubEnv('AUTO_RECHARGE_WORKER_URL', 'http://worker.example.test:8051');
+  vi.stubEnv('AUTO_REGISTRATION_WORKER_URL', 'http://registration.example.test:8051');
   vi.stubGlobal('fetch', fetchMock);
   fetchMock.mockReset();
 });
@@ -17,11 +18,35 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('注册私网执行器接收边界', () => {
+  it('健康、启动及失败后的原任务收据只请求独立注册执行器', async () => {
+    fetchMock.mockResolvedValueOnce(
+      reply({ ready: true, workerRole: 'registration', engine: 'camoufox', mailDeliveryVersion: 1 })
+    );
+    expect(await registrationWorkerReady()).toBe(true);
+    fetchMock.mockResolvedValueOnce(reply({}, 400));
+    fetchMock.mockResolvedValueOnce(reply({ attempt: 2, accepted: true }));
+    expect(await registrationWorkerCommand('job', 2, 'launch', {})).toEqual({
+      delivery: 'accepted'
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://registration.example.test:8051/registration/health',
+      'http://registration.example.test:8051/registration/jobs/job',
+      'http://registration.example.test:8051/registration/jobs/job/status'
+    ]);
+  });
+  it('未配置注册地址时使用独立服务名，不回退到充值执行器', async () => {
+    vi.stubEnv('AUTO_REGISTRATION_WORKER_URL', undefined);
+    fetchMock.mockResolvedValueOnce(
+      reply({ ready: true, workerRole: 'registration', engine: 'camoufox', mailDeliveryVersion: 1 })
+    );
+    expect(await registrationWorkerReady()).toBe(true);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://auto-registration:8051/registration/health');
+  });
   it('只接受实际指纹内核就绪，不接受普通 Chromium 健康响应', async () => {
     fetchMock.mockResolvedValueOnce(reply({ ready: true, engine: 'builtin-chromium' }));
     expect(await registrationWorkerReady()).toBe(false);
     fetchMock.mockResolvedValueOnce(
-      reply({ ready: true, engine: 'camoufox', mailDeliveryVersion: 1 })
+      reply({ ready: true, workerRole: 'registration', engine: 'camoufox', mailDeliveryVersion: 1 })
     );
     expect(await registrationWorkerReady()).toBe(true);
     fetchMock.mockResolvedValueOnce(reply({ ready: true, engine: 'camoufox' }));
@@ -31,6 +56,7 @@ describe('注册私网执行器接收边界', () => {
     fetchMock.mockResolvedValueOnce(
       reply({
         ready: true,
+        workerRole: 'registration',
         engine: 'camoufox',
         mailDeliveryVersion: 1,
         registrationWindowRetained: true
@@ -38,18 +64,33 @@ describe('注册私网执行器接收边界', () => {
     );
     await expect(requireRegistrationWorker(true)).rejects.toThrow('原注册窗口');
     fetchMock.mockResolvedValueOnce(
-      reply({ ready: true, engine: 'camoufox', mailDeliveryVersion: 1, registrationBusy: true })
+      reply({
+        ready: true,
+        workerRole: 'registration',
+        engine: 'camoufox',
+        mailDeliveryVersion: 1,
+        registrationBusy: true
+      })
     );
     await expect(requireRegistrationWorker(true)).rejects.toThrow('已有注册任务');
     fetchMock.mockResolvedValueOnce(
       reply({
         ready: true,
+        workerRole: 'registration',
         engine: 'camoufox',
         mailDeliveryVersion: 1,
         registrationWindowRetained: true
       })
     );
     await expect(requireRegistrationWorker()).resolves.toBeUndefined();
+  });
+  it('旧共用执行器或错误角色不得通过注册预检', async () => {
+    for (const workerRole of [undefined, 'recharge', 'unexpected']) {
+      fetchMock.mockResolvedValueOnce(
+        reply({ ready: true, workerRole, engine: 'camoufox', mailDeliveryVersion: 1 })
+      );
+      await expect(requireRegistrationWorker()).rejects.toThrow('尚未就绪');
+    }
   });
   it('明确拒绝保留受控占用原因，取消拒绝不能冒充窗口已关闭', async () => {
     for (const [action, reason] of [

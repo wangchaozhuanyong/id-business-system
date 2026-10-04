@@ -20,7 +20,7 @@ import urllib.request
 
 
 BASE = Path('/opt/id-business-v2')
-SERVICES = ('media-resolver', 'auto-recharge', 'api', 'admin')
+SERVICES = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')
 ALL_SERVICES = (*SERVICES, 'mysql', 'caddy')
 REUSE_CONTROL_FILES = frozenset({
     '.github/workflows/production-release.yml',
@@ -116,8 +116,46 @@ def release_services(admin_only, additions, edge_changed=False):
     require(not (admin_only and additions), 'Admin-only release contains migrations')
     services = ('admin',) if admin_only else SERVICES
     require(not (admin_only and edge_changed), 'Admin-only release contains edge configuration changes')
-    images = services if admin_only else (*services, 'migrate')
+    images = tuple(dict.fromkeys(image_service(service) for service in services))
+    if not admin_only:
+        images = (*images, 'migrate')
     return (*services, 'caddy') if edge_changed else services, images
+
+
+def image_service(service):
+    # Independent processes reuse one Worker build; the runtime role is Compose config.
+    return 'auto-recharge' if service == 'auto-registration' else service
+
+
+def release_image_references(services, images, repository, tags):
+    targets = (*[service for service in services if service in SERVICES],
+               *[service for service in images if service not in SERVICES])
+    return {service: f'{repository}:{tags[image_service(service)]}' for service in targets}
+
+
+def has_registration_worker(directory):
+    return bool(re.search(r'(?m)^  auto-registration:$',
+                          (directory / 'docker-compose.aws-mysql.yml').read_text()))
+
+
+def production_services(directory):
+    # The first split release has no registration container in its old baseline.
+    return tuple(service for service in ALL_SERVICES
+                 if service != 'auto-registration' or has_registration_worker(directory))
+
+
+def rollback_service(previous, release, service, before):
+    if service not in before:
+        require(service == 'auto-registration', 'Unexpected added production service')
+        compose(release, 'rm', '-s', '-f', service, timeout=300)
+        require(not compose(release, 'ps', '-q', '--all', service),
+                'Rollback added registration worker remains')
+        return
+    compose(previous, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
+            '--force-recreate', service, timeout=300)
+    require(service_state(previous, service)['image'] == before[service]['image'],
+            'Rollback image mismatch')
+    wait_healthy(previous, service)
 
 
 def run(*args, env=None, timeout=300):
@@ -247,6 +285,7 @@ try:
         value = json.loads(response.read(16384))
     if (not isinstance(value, dict) or value.get('ready') is not True
             or value.get('engine') != 'camoufox'
+            or (required_role is not None and value.get('workerRole') != required_role)
             or type(value.get('registrationBusy')) is not bool
             or type(value.get('registrationWindowRetained')) is not bool):
         raise ValueError()
@@ -261,12 +300,15 @@ except Exception:
     raise SystemExit('Registration runtime guard unavailable') from None
 '''
     try:
-        value = json.loads(compose(directory, 'exec', '-T', 'auto-recharge',
+        service = 'auto-registration' if has_registration_worker(directory) else 'auto-recharge'
+        probe = 'required_role = ' + repr('registration' if service == 'auto-registration' else None) + '\n' + probe
+        value = json.loads(compose(directory, 'exec', '-T', service,
                                    'python', '-c', probe, timeout=15))
     except Exception:
         raise RuntimeError('Registration runtime guard unavailable') from None
     if (isinstance(value, dict) and set(value) == {'supported'}
             and value['supported'] is False):
+        require(service == 'auto-recharge', 'Registration runtime guard unavailable')
         return value
     require(isinstance(value, dict) and set(value) == {
         'supported', 'registrationBusy', 'registrationWindowRetained'}
@@ -371,9 +413,50 @@ def sync_new_table_grants(release, additions):
     return report
 
 
+def normalize_worker_isolation(compose_text):
+    """Undo only the reviewed split layout for the existing Compose change gate."""
+    def worker_block(service):
+        matches = re.findall(r'(?ms)^  ' + re.escape(service)
+                             + r':\n.*?(?=^  [a-z][a-z0-9-]*:\n|\Z)', compose_text)
+        require(len(matches) == 1, 'Invalid independent worker compose layout')
+        return matches[0]
+
+    recharge = worker_block('auto-recharge')
+    registration = worker_block('auto-registration')
+    image = ('    image: &browser-worker-image '
+             '${AUTO_RECHARGE_WORKER_IMAGE:-id-business-v2-auto-recharge:local}\n')
+    build = ('    build:\n      context: .\n'
+             '      dockerfile: apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile\n')
+    role = '      AUTO_RECHARGE_WORKER_ROLE: recharge\n'
+    require(recharge.count(image) == 1 and recharge.count(build) == 1
+            and recharge.count(role) == 1, 'Invalid independent worker compose layout')
+    expected = recharge.replace('  auto-recharge:\n', '  auto-registration:\n', 1)
+    expected = expected.replace(image, '    image: *browser-worker-image\n', 1)
+    expected = expected.replace(build, '', 1).replace(role,
+        '      AUTO_RECHARGE_WORKER_ROLE: registration\n', 1)
+    expected = expected.replace('      - recharge-control\n', '      - registration-control\n', 1)
+    expected = expected.replace('      - recharge-egress\n', '      - registration-egress\n', 1)
+    require(registration == expected, 'Invalid independent worker compose layout')
+    normalized = compose_text.replace(registration, '', 1)
+    normalized = normalized.replace(recharge, recharge.replace(image, '', 1).replace(role, '', 1), 1)
+    for binding in (
+        '      AUTO_REGISTRATION_WORKER_URL: http://auto-registration:8051\n',
+        '      - registration-control\n',
+        '  registration-control:\n    internal: true\n  registration-egress:\n',
+    ):
+        require(normalized.count(binding) == 1, 'Invalid independent worker compose layout')
+        normalized = normalized.replace(binding, '', 1)
+    return normalized
+
+
 def configure_google_drive_sync(previous, release):
     old_compose = (previous / 'docker-compose.aws-mysql.yml').read_bytes()
     new_compose = (release / 'docker-compose.aws-mysql.yml').read_bytes()
+    old_split = has_registration_worker(previous)
+    new_split = has_registration_worker(release)
+    require(not old_split or new_split, 'Independent registration worker removed')
+    if new_split and not old_split:
+        new_compose = normalize_worker_isolation(new_compose.decode()).encode()
     mail_binding = b'      VENDURE_MAILBOX_WEBHOOK_SECRET: ${VENDURE_MAILBOX_WEBHOOK_SECRET:-}\n'
     require(old_compose.count(mail_binding) <= 1 and new_compose.count(mail_binding) <= 1,
             'Duplicate mailbox webhook compose binding')
@@ -453,7 +536,7 @@ def main():
     require(previous.parent == BASE / 'releases', 'Invalid current release path')
     old_manifest = json.loads((previous / 'release-manifest.json').read_text())
     require(old_manifest['commit'] == args.expected_current, 'Production baseline changed')
-    before = {service: service_state(previous, service) for service in ALL_SERVICES}
+    before = {service: service_state(previous, service) for service in production_services(previous)}
     require(all(state['status'] == 'running' for state in before.values()),
             'A production service is not running')
     require(all(state['health'] == 'healthy' for service, state in before.items()
@@ -505,9 +588,10 @@ def main():
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
                       for service in image_services}
-        for service in image_services:
-            override['services'].setdefault(service, {})['image'] = (
-                f'{args.repository}:{image_tags[service]}')
+        image_references = release_image_references(
+            updated_services, image_services, args.repository, image_tags)
+        for service, reference in image_references.items():
+            override['services'].setdefault(service, {})['image'] = reference
             override['services'][service]['pull_policy'] = 'never'
         (release / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
         require(json.loads(compose(release, 'config', '--format', 'json'))['name'] ==
@@ -558,9 +642,9 @@ def main():
         database_grants = sync_new_table_grants(release, additions)
         step = 'switch'
         for service in updated_services:
+            changed.append(service)
             compose(release, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
                     '--force-recreate', service, timeout=300)
-            changed.append(service)
             wait_healthy(release, service)
             print(f'HEALTHY {service}', flush=True)
 
@@ -569,9 +653,11 @@ def main():
                             historical_exception=args.historical_finance_exception,
                             stage='after', source=release,
                             before_receipt=release / 'before-audit.json')
-        after = {service: service_state(release, service) for service in ALL_SERVICES}
-        require(all(after[s] == before[s] for s in ALL_SERVICES if s not in updated_services),
+        after = {service: service_state(release, service) for service in production_services(release)}
+        require(all(after[s] == before[s] for s in before if s not in updated_services),
                 'Unrelated service changed')
+        require(all(after[s]['image'] == pulled_images[image_service(s)]
+                    for s in updated_services if s in SERVICES), 'Running image differs from release')
         public_url = environment_values(release / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
         with urllib.request.urlopen(public_url + '/api/health/ready', timeout=20) as response:
             require(response.status == 200, 'Public API readiness failed')
@@ -596,16 +682,17 @@ def main():
             'googleDriveSyncFolderId': google_drive_folder,
             'servicesUpdated': list(updated_services), 'sourceArchiveSha256': source_digest,
             'images': {**old_manifest.get('images', {}), **{
-                service: {'reference': f'{args.repository}:{image_tags[service]}',
+                service: {'reference': reference,
                           'digest': after[service]['image'] if service in SERVICES
                           else pulled_images[service], 'sourceCommit': image_commit}
-                for service in image_services}},
+                for service, reference in image_references.items()}},
             'backupBeforeRelease': backup['name'],
             'migrationApplied': bool(additions), 'newMigrations': additions,
             'dataAuditBefore': before_audit, 'dataAuditAfter': after_audit,
             'databaseGrants': database_grants,
             'rollback': {'release': str(previous),
-                         'images': {s: before[s]['image'] for s in updated_services}},
+                         'images': {s: before[s]['image'] for s in updated_services if s in before},
+                         'servicesAdded': [s for s in updated_services if s not in before]},
         })
         manifest.pop('prCiRunId', None)
         (release / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -625,11 +712,7 @@ def main():
                 rollback_ok = False
         for service in reversed(changed):
             try:
-                compose(previous, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
-                        '--force-recreate', service, timeout=300)
-                require(service_state(previous, service)['image'] == before[service]['image'],
-                        'Rollback image mismatch')
-                wait_healthy(previous, service)
+                rollback_service(previous, release, service, before)
             except Exception:
                 rollback_ok = False
         print(json.dumps({'status': 'DEPLOY_FAILED', 'step': step,

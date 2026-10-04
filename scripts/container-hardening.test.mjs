@@ -11,6 +11,14 @@ function readProjectFile(path) {
   return readFileSync(resolve(projectRoot, path), 'utf8');
 }
 
+function composeService(compose, name) {
+  const service = compose.match(
+    new RegExp(`^  ${name}:\\n[\\s\\S]*?(?=^  [a-z][a-z0-9-]*:|\\nvolumes:)`, 'mu')
+  )?.[0];
+  assert.ok(service, `${name} service exists`);
+  return service;
+}
+
 test('production base images and GitHub Actions are immutable', () => {
   const apiDockerfile = readProjectFile('apps/api/Dockerfile.mysql');
   const mediaResolverDockerfile = readProjectFile(
@@ -53,7 +61,7 @@ test('production base images and GitHub Actions are immutable', () => {
 test('auto-recharge worker pins its fingerprint engine and keeps legacy browser compatibility', () => {
   const dockerfile = readProjectFile('apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile');
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
-  const worker = compose.split(/\n {2}auto-recharge:\n/u)[1].split(/\n {2}api:\n/u)[0];
+  const worker = composeService(compose, 'auto-recharge');
 
   assert.doesNotMatch(dockerfile, /mcr\\.microsoft\\.com\/playwright/u);
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
@@ -84,6 +92,54 @@ test('auto-recharge worker pins its fingerprint engine and keeps legacy browser 
   assert.match(worker, /memswap_limit: 1536m/u);
   assert.match(worker, /networks:\s+- recharge-control\s+- recharge-egress/u);
   assert.doesNotMatch(worker, /ports:/u);
+});
+
+test('registration and recharge run in separate bounded workers with one image build', () => {
+  const compose = readProjectFile('docker-compose.aws-mysql.yml');
+  const recharge = composeService(compose, 'auto-recharge');
+  const registration = composeService(compose, 'auto-registration');
+  const api = composeService(compose, 'api');
+
+  assert.match(recharge, /image: &browser-worker-image \$\{AUTO_RECHARGE_WORKER_IMAGE:/u);
+  assert.match(recharge, /build:/u);
+  assert.match(recharge, /AUTO_RECHARGE_WORKER_ROLE: recharge/u);
+  assert.match(registration, /image: \*browser-worker-image/u);
+  assert.match(registration, /AUTO_RECHARGE_WORKER_ROLE: registration/u);
+  assert.doesNotMatch(registration, /build:/u);
+  for (const [worker, network] of [
+    [recharge, 'recharge'],
+    [registration, 'registration']
+  ]) {
+    assert.match(worker, /init: true/u);
+    assert.match(worker, /read_only: true/u);
+    assert.match(worker, /no-new-privileges:true/u);
+    assert.match(worker, /cap_drop:\s+- ALL/u);
+    assert.match(worker, /\/tmp:rw,noexec,nosuid,nodev,size=512m/u);
+    assert.match(worker, /shm_size: 256m/u);
+    assert.match(worker, /pids_limit: 512/u);
+    assert.match(worker, /mem_limit: 1g/u);
+    assert.match(worker, /memswap_limit: 1536m/u);
+    assert.match(
+      worker,
+      new RegExp(`networks:\\s+- ${network}-control\\s+- ${network}-egress`, 'u')
+    );
+    assert.doesNotMatch(worker, /ports:|volumes:|pid:|ipc:|network_mode:|container_name:/u);
+  }
+  assert.match(api, /AUTO_RECHARGE_WORKER_URL: http:\/\/auto-recharge:8051/u);
+  assert.match(api, /AUTO_REGISTRATION_WORKER_URL: http:\/\/auto-registration:8051/u);
+  assert.match(api, /- recharge-control\s+- registration-control/u);
+  assert.match(compose, /registration-control:\s+internal: true/u);
+  for (const path of ['.env.example', '.env.aws.production.example']) {
+    assert.match(readProjectFile(path), /^AUTO_RECHARGE_WORKER_ROLE=recharge$/mu);
+    assert.match(
+      readProjectFile(path),
+      /^AUTO_REGISTRATION_WORKER_URL=http:\/\/auto-registration:8051$/mu
+    );
+    assert.match(
+      readProjectFile(path),
+      /^AUTO_RECHARGE_WORKER_IMAGE=id-business-v2-auto-recharge:local$/mu
+    );
+  }
 });
 
 test('CI and production image installs defer vulnerability checks to the explicit audit gate', () => {

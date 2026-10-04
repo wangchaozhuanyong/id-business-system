@@ -126,6 +126,7 @@ if (part === 'guards') {
       'test_connector_health',
       'test_session_retry',
       'test_server',
+      'test_worker_isolation',
       'test_server_proxy',
       'test_registration',
       'test_registration_builtin',
