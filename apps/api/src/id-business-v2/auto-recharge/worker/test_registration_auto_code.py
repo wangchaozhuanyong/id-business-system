@@ -243,6 +243,7 @@ document.querySelector('form').onsubmit = async event => {
                 await page.goto('https://auth.openai.com/email-verification')
                 flow = RegistrationBrowser(job, context)
                 with stack:
+                    job.prepare_mail('email_code')
                     if expected_reason:
                         with self.assertRaises(Stop) as stopped:
                             await asyncio.wait_for(flow.mail(page), 15)
