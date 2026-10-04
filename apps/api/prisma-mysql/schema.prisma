@@ -2457,6 +2457,19 @@ model IdBusinessV2ScopeVersion {
   @@map("id_business_v2_scope_versions")
 }
 
+// Signed mailbox notification receipt. Never stores a code, address or mail body.
+model IdBusinessV2MailboxEvent {
+  id               String    @id @db.Char(36)
+  payloadHash      String    @map("payload_hash") @db.Char(64)
+  primaryAccountId String    @map("primary_account_id") @db.VarChar(64)
+  virtualEmailId   String?   @map("virtual_email_id") @db.VarChar(64)
+  receivedAt       DateTime  @default(now()) @map("received_at") @db.DateTime(6)
+  processedAt      DateTime? @map("processed_at") @db.DateTime(6)
+
+  @@index([processedAt, receivedAt])
+  @@map("id_business_v2_mailbox_events")
+}
+
 model Attachment {
   id               String   @id @default(uuid()) @db.Char(36)
   originalName     String   @map("original_name") @db.VarChar(255)

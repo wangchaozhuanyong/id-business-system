@@ -1,5 +1,16 @@
 import type { V2VendureMailboxAlias, V2VendureMailboxPrimaryAccount } from '@apple-business/shared';
 import { ConflictException } from '@nestjs/common';
+import type { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
+
+export async function loadRegistrationMailboxSummaries(
+  client: Pick<IdBusinessV2VendureMailboxClient, 'virtualEmails' | 'primaryAccounts'>
+) {
+  const [aliases, primaries] = await Promise.all([
+    client.virtualEmails(),
+    client.primaryAccounts()
+  ]);
+  return summarizeRegistrationMailboxes(aliases, primaries);
+}
 
 export function assertRegistrationMailboxEmail(email: string, expectedEmail?: string) {
   if (

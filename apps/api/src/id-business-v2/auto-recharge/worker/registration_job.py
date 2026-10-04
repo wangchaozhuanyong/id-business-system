@@ -103,10 +103,18 @@ class RegistrationJob:
             self.pending_code = None
             self.code_event.clear()
             self.awaiting_code = True
+            self.step = step
         self.event('waiting_email', step=step, newMailRequest=new_request)
 
     def signal_code(self, code, attempt=None, step=None, mail_id=None):
+        self.check()
         with self.code_lock:
+            if (getattr(self, 'event_mail_delivery', False)
+                    and attempt == self.attempt and step == self.step and mail_id):
+                if self.pending_code == (code, mail_id):
+                    return
+                if not self.awaiting_code and getattr(self, 'last_delivered_mail_id', None) == mail_id:
+                    return
             if (not self.awaiting_code or self.pending_code is not None
                     or attempt != self.attempt or step != self.step
                     or not isinstance(code, str) or len(code) > 8192

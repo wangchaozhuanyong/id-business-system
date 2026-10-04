@@ -1,6 +1,7 @@
 """系统内置 Camoufox 注册；代理和任务授权只从私网 API 接收。"""
 import asyncio
 import json
+import logging
 import re
 import time
 from urllib.error import HTTPError
@@ -75,6 +76,7 @@ def dispatch_rejection(error):
 
 
 class RegistrationServerJob(RegistrationJob):
+    event_mail_delivery = True
     def __init__(self, job_id, body, callback_base, runtime):
         expected = {'id', 'mode', 'attempt', 'agentToken', 'email', 'password', 'displayName',
                     'birthDate', 'totpSecret', 'browserProfileId', 'step', 'registered',
@@ -122,7 +124,6 @@ class RegistrationServerJob(RegistrationJob):
             return None
 
     async def wait_code(self):
-        next_poll = 0
         while True:
             self.check()
             with self.code_lock:
@@ -132,14 +133,11 @@ class RegistrationServerJob(RegistrationJob):
                     self.awaiting_code = False
             if pending:
                 code, mail_id = pending
+                self.last_delivered_mail_id = mail_id
                 self.event('mail_accepted', mailId=mail_id) if mail_id else self.event('progress')
                 return code
-            if time.monotonic() >= next_poll:
-                value = await asyncio.to_thread(self.read_mail)
-                next_poll = time.monotonic() + 8
-                if value and value.get('code'):
-                    self.signal_code(value['code'], value.get('attempt'), value.get('step'), value.get('mailId'))
-            await asyncio.sleep(.5)
+            # Wait for a private API delivery; timeout only checks cancellation/lease.
+            await asyncio.to_thread(self.code_event.wait, .5)
 
     def cancel(self):
         self.signal_cancel()
@@ -162,6 +160,8 @@ class RegistrationServerJob(RegistrationJob):
         try:
             self.runtime.run_registration(self.execute_builtin)
         except Exception as exc:
+            logging.getLogger('registration').warning('Registration stopped job=%s attempt=%s step=%s error_type=%s',
+                self.id, self.attempt, self.step, type(exc).__name__)
             reason = exc.report.get('reason') if isinstance(exc, Stop) else 'builtin_execution_failed'
             if not self.cancelled.is_set():
                 try:
@@ -207,8 +207,8 @@ def handle_request(handler, body, callback_base, runtime):
         job.cancel()
     elif parts[3] == 'resume':
         job.signal_resume(body)
-    elif parts[3] == 'code' and set(body) == {'attempt', 'step', 'code'}:
-        job.signal_code(body['code'], body['attempt'], body['step'])
+    elif parts[3] == 'code' and set(body) in ({'attempt', 'step', 'code'}, {'attempt', 'step', 'code', 'mailId'}):
+        job.signal_code(body['code'], body['attempt'], body['step'], body.get('mailId'))
     else:
         raise ValueError()
     return job
