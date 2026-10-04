@@ -6,6 +6,76 @@ import { IdBusinessV2VendureMailboxClient } from './id-business-v2-vendure-mailb
 describe('IdBusinessV2VendureMailboxClient', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(['admin', 'shop'])(
+    'normalizes %s mail codes without trusting stale words or changing the original mail',
+    async (entry) => {
+      const base = {
+        subject: 'Your temporary ChatGPT verification code',
+        fromAddress: 'noreply@openai.com',
+        receivedAt: '2026-10-04T01:00:00.000Z',
+        targetEmail: 'synthetic@example.test'
+      };
+      const mails = [
+        { ...base, id: 'recover', extractedCode: 'ChatGPT', bodyText: 'ChatGPT\n012345\nContinue' },
+        { ...base, id: 'unrecognized', extractedCode: 'continue', bodyText: 'ChatGPT\nContinue' },
+        { ...base, id: 'ambiguous', extractedCode: 'ChatGPT', bodyText: '123456\n654321' },
+        { ...base, id: 'other', subject: 'Other service', extractedCode: 'AB12CD', bodyText: null },
+        ...['1234-5678', '123456@example.test', '1234 5678', '1234 - 5678'].map((token, index) => ({
+          ...base,
+          id: `invalid-complete-token-${index}`,
+          subject: 'Other provider',
+          extractedCode: 'continue',
+          bodyText: `Security code: ${token}`
+        })),
+        ...['123456\n789', 'Security code:1234\n567890', 'Security code:012345'].map(
+          (bodyText, index) => ({
+            ...base,
+            id: `chatgpt-line-integrity-${index}`,
+            extractedCode: 'ChatGPT',
+            bodyText
+          })
+        )
+      ];
+      const queryResult = { success: true, totalEmails: mails.length, items: mails };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          Response.json({
+            data:
+              entry === 'admin' ? { icloudReceivedMails: mails } : { icloudQueryMails: queryResult }
+          })
+        )
+      );
+      const client = new IdBusinessV2VendureMailboxClient(
+        new ConfigService({
+          VENDURE_MAILBOX_ADMIN_API_URL: 'https://vendure.example/admin-api',
+          VENDURE_MAILBOX_SHOP_API_URL: 'https://vendure.example/shop-api',
+          VENDURE_MAILBOX_API_KEY: 'synthetic-key'
+        })
+      );
+      const result =
+        entry === 'admin'
+          ? await client.receivedMails({ virtualEmailId: 'synthetic-alias' })
+          : (await client.publicQuery('BUY-SYNTHETIC')).items;
+      expect(result.map((mail) => mail.extractedCode)).toEqual([
+        '012345',
+        null,
+        null,
+        'AB12CD',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '012345'
+      ]);
+      expect(result.map((mail) => mail.id)).toEqual(mails.map((mail) => mail.id));
+      expect(result[0]?.bodyText).toBe(mails[0]?.bodyText);
+      expect(mails[0]?.extractedCode).toBe('ChatGPT');
+    }
+  );
+
   it('keeps the dedicated API key server-side on admin GraphQL requests', async () => {
     const fetchMock = vi
       .fn()

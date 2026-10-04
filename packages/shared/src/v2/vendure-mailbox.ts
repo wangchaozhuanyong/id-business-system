@@ -1,5 +1,54 @@
 import type { PaginatedResult } from './common.js';
 
+export function isV2MailboxVerificationCode(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9]{4,8}$/i.test(value) && /\d/.test(value);
+}
+
+export function resolveV2MailboxVerificationCode(mail: {
+  extractedCode?: string | null;
+  subject: string;
+  bodyText?: string | null;
+}): string | null {
+  const extracted = typeof mail.extractedCode === 'string' ? mail.extractedCode.trim() : '';
+  if (isV2MailboxVerificationCode(extracted)) return extracted;
+
+  // 仅回退同封邮件中的明确数字验证码，不另建上游的通用邮件提取器。
+  const candidates = new Set<string>();
+  const body = mail.bodyText ?? '';
+  function addCandidate(text: string, match: RegExpExecArray, minimumDigits: number) {
+    const value = match[1]!;
+    if (!/^\d{4,8}$/.test(value) || value.length < minimumDigits) return;
+    const start = match.index + match[0].lastIndexOf(value);
+    const end = start + value.length;
+    // 所有候选统一校验完整内容与两侧分组，不能截取邮箱、连字符或跨行数字。
+    if (
+      /\d(?:\s+|\s*[-–—]\s*)$/.test(text.slice(0, start)) ||
+      /^(?:\s+|\s*[-–—]\s*)\d/.test(text.slice(end))
+    )
+      return;
+    candidates.add(value);
+  }
+  for (const text of [mail.subject, body]) {
+    for (const match of text.matchAll(
+      /(?:验证码|\b(?:verification|security|temporary|one[- ]time|login)[\t ]+code\b|\bOTP\b)[\t ]*[:：]?[\t ]*(?:\r?\n[\t ]*)?(\S+)/gi
+    )) {
+      addCandidate(text, match, 4);
+    }
+  }
+  if (/\bChatGPT\b/i.test(mail.subject) && /verification\s+code/i.test(mail.subject)) {
+    for (const match of body.matchAll(/^[\t ]*(\S+)[\t ]*\r?$/gm)) {
+      addCandidate(body, match, 6);
+    }
+  }
+  return candidates.size === 1 ? [...candidates][0]! : null;
+}
+
+export function normalizeV2MailboxVerificationMail<
+  T extends { extractedCode?: string | null; subject: string; bodyText?: string | null }
+>(mail: T): T & { extractedCode: string | null } {
+  return { ...mail, extractedCode: resolveV2MailboxVerificationCode(mail) };
+}
+
 export type V2VendureMailboxPrimaryStatus = 'ACTIVE' | 'DISABLED' | 'AUTH_ERROR' | 'SYNCING';
 export type V2VendureMailboxAliasStatus = 'ACTIVE' | 'DISABLED';
 

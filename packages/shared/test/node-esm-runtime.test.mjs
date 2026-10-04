@@ -1,6 +1,64 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+test('邮箱验证码读取保留数字和混合码，拒绝普通文字并仅回退同封明确验证码', async () => {
+  const { isV2MailboxVerificationCode, resolveV2MailboxVerificationCode } =
+    await import('../dist/index.js');
+  for (const value of ['123456', '012345', '1234', '12345678', 'AB12CD']) {
+    assert.equal(isV2MailboxVerificationCode(value), true);
+    assert.equal(
+      resolveV2MailboxVerificationCode({ subject: '其他服务', extractedCode: value }),
+      value
+    );
+  }
+  for (const value of [
+    'ChatGPT',
+    'continue',
+    'password',
+    '123',
+    '123456789',
+    'ABCDEF',
+    '123 456'
+  ]) {
+    assert.equal(isV2MailboxVerificationCode(value), false);
+    assert.equal(
+      resolveV2MailboxVerificationCode({ subject: '其他服务', extractedCode: value }),
+      null
+    );
+  }
+  const mail = {
+    subject: 'Your temporary ChatGPT verification code',
+    extractedCode: 'ChatGPT',
+    bodyText: 'ChatGPT\n\n012345\n\nEnter this code to continue.'
+  };
+  assert.equal(resolveV2MailboxVerificationCode(mail), '012345');
+  assert.equal(resolveV2MailboxVerificationCode({ ...mail, extractedCode: null }), '012345');
+  assert.equal(resolveV2MailboxVerificationCode({ ...mail, bodyText: 'ChatGPT\ncontinue' }), null);
+  assert.equal(resolveV2MailboxVerificationCode({ ...mail, bodyText: '123456\n654321' }), null);
+  assert.equal(
+    resolveV2MailboxVerificationCode({ ...mail, bodyText: 'Reference 123456789' }),
+    null
+  );
+  assert.equal(
+    resolveV2MailboxVerificationCode({
+      subject: 'Other provider',
+      bodyText: 'Security code: 654321'
+    }),
+    '654321'
+  );
+  assert.equal(
+    resolveV2MailboxVerificationCode({ subject: 'Order 123456', bodyText: 'Total: 654321' }),
+    null
+  );
+  assert.equal(
+    resolveV2MailboxVerificationCode({
+      subject: 'Other provider',
+      bodyText: 'Security code: 12345678AB'
+    }),
+    null
+  );
+});
+
 test('银充到期按北京时间自然月，含月末、闰年、跨年和秒精度', async () => {
   const { bankRechargeDefaultDueAt } = await import('../dist/index.js');
   for (const [openedAt, dueAt] of [
@@ -20,6 +78,82 @@ test('银充到期按北京时间自然月，含月末、闰年、跨年和秒�
     assert.equal(date.getTime(), original);
   }
   assert.throws(() => bankRechargeDefaultDueAt('invalid'), /开通时间无效/);
+});
+
+test('邮箱明确码回退校验完整内容，不能截取邮箱、连字符或分组数字前缀', async () => {
+  const { resolveV2MailboxVerificationCode } = await import('../dist/index.js');
+  for (const token of [
+    '1234-5678',
+    '123456@example.test',
+    '1234 5678',
+    '1234 - 5678',
+    '1234\n5678',
+    '123456.789',
+    '123456/789',
+    '12345678AB',
+    '123456789'
+  ]) {
+    assert.equal(
+      resolveV2MailboxVerificationCode({
+        subject: 'Other provider',
+        extractedCode: 'continue',
+        bodyText: `Security code: ${token}`
+      }),
+      null,
+      token
+    );
+  }
+  for (const bodyText of [
+    'Security code: 012345',
+    'Security code: 012345\nEnter this code to continue.'
+  ]) {
+    assert.equal(
+      resolveV2MailboxVerificationCode({ subject: 'Other provider', bodyText }),
+      '012345'
+    );
+  }
+  assert.equal(
+    resolveV2MailboxVerificationCode({
+      subject: 'Other provider',
+      bodyText: 'Security code: 123456 Verification code: 654321'
+    }),
+    null
+  );
+});
+
+test('主题与正文分开扫描，ChatGPT 独立行与带标签候选共用两侧分组校验', async () => {
+  const { resolveV2MailboxVerificationCode } = await import('../dist/index.js');
+  const subject = 'Your temporary ChatGPT verification code';
+  for (const bodyText of [
+    '123456\n789',
+    'Security code:1234\n567890',
+    '123\n456789',
+    '123456\n\n789'
+  ]) {
+    assert.equal(
+      resolveV2MailboxVerificationCode({ subject, bodyText, extractedCode: 'ChatGPT' }),
+      null,
+      bodyText
+    );
+  }
+  for (const bodyText of [
+    'Security code:012345',
+    'Security code:\n012345',
+    'ChatGPT\n012345\nEnter this code to continue.'
+  ]) {
+    assert.equal(
+      resolveV2MailboxVerificationCode({ subject, bodyText, extractedCode: 'ChatGPT' }),
+      '012345',
+      bodyText
+    );
+  }
+  assert.equal(
+    resolveV2MailboxVerificationCode({
+      subject: 'Security code:012345',
+      bodyText: 'No code in body'
+    }),
+    '012345'
+  );
 });
 
 test('loads the compiled shared package with standard Node ESM resolution', async () => {
