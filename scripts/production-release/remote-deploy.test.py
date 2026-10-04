@@ -32,13 +32,13 @@ class ReleaseScopeTests(unittest.TestCase):
     def test_other_scope_retains_the_full_release(self):
         services, images = deployment.release_services(False, ['20261001_example'])
         self.assertEqual(services, deployment.SERVICES)
-        self.assertEqual(images, (*deployment.SERVICES, 'migrate'))
+        self.assertEqual(images, ('media-resolver', 'auto-recharge', 'api', 'admin', 'migrate'))
 
 
     def test_edge_changes_switch_caddy_without_building_an_edge_image(self):
         services, images = deployment.release_services(False, [], True)
         self.assertEqual(services, (*deployment.SERVICES, 'caddy'))
-        self.assertEqual(images, (*deployment.SERVICES, 'migrate'))
+        self.assertEqual(images, ('media-resolver', 'auto-recharge', 'api', 'admin', 'migrate'))
         with self.assertRaisesRegex(RuntimeError, 'edge configuration'):
             deployment.release_services(True, [], True)
 
@@ -50,6 +50,55 @@ class ReleaseScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'did not become healthy'):
                 deployment.wait_healthy(None, 'admin')
 
+    def test_independent_workers_pin_the_same_built_image_reference(self):
+        services, images = deployment.release_services(False, [], True)
+        tags = {service: 'fixture-' + service for service in images}
+        references = deployment.release_image_references(services, images, 'fixture-registry', tags)
+        self.assertEqual(references['auto-registration'], references['auto-recharge'])
+        self.assertEqual(references['auto-registration'], 'fixture-registry:fixture-auto-recharge')
+        self.assertIn('migrate', references)
+        self.assertNotIn('caddy', references)
+        services, images = deployment.release_services(True, [])
+        self.assertEqual(deployment.release_image_references(services, images, 'fixture-registry', tags),
+                         {'admin': 'fixture-registry:fixture-admin'})
+
+    def test_old_baseline_and_split_layout_select_only_existing_services(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            compose = directory / 'docker-compose.aws-mysql.yml'
+            compose.write_text('services:\n  auto-recharge:\n  api:\n')
+            self.assertNotIn('auto-registration', deployment.production_services(directory))
+            compose.write_text('services:\n  auto-recharge:\n  auto-registration:\n  api:\n')
+            self.assertEqual(deployment.production_services(directory), deployment.ALL_SERVICES)
+
+    def test_transition_rollback_removes_only_the_added_worker(self):
+        with patch.object(deployment, 'compose', side_effect=['', '']) as compose, \
+                patch.object(deployment, 'service_state') as state:
+            deployment.rollback_service('old', 'new', 'auto-registration', {})
+        self.assertEqual(compose.call_args_list[0].args,
+                         ('new', 'rm', '-s', '-f', 'auto-registration'))
+        self.assertEqual(compose.call_args_list[1].args,
+                         ('new', 'ps', '-q', '--all', 'auto-registration'))
+        state.assert_not_called()
+        with patch.object(deployment, 'compose', side_effect=['', 'still-running']):
+            with self.assertRaisesRegex(RuntimeError, 'worker remains'):
+                deployment.rollback_service('old', 'new', 'auto-registration', {})
+        with patch.object(deployment, 'compose') as compose:
+            with self.assertRaisesRegex(RuntimeError, 'Unexpected added'):
+                deployment.rollback_service('old', 'new', 'api', {})
+        compose.assert_not_called()
+
+    def test_later_split_rollback_restores_existing_registration_image(self):
+        state = {'image': 'sha256:fixture-old'}
+        with patch.object(deployment, 'compose') as compose, \
+                patch.object(deployment, 'service_state', return_value=state), \
+                patch.object(deployment, 'wait_healthy') as health:
+            deployment.rollback_service('old', 'new', 'auto-registration', {'auto-registration': state})
+        self.assertEqual(compose.call_args.args,
+                         ('old', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
+                          '--force-recreate', 'auto-registration'))
+        health.assert_called_once_with('old', 'auto-registration')
+
 
 class RegistrationReleaseGuardTests(unittest.TestCase):
     def setUp(self):
@@ -60,6 +109,9 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
         self.database.create_function('UTC_TIMESTAMP', 1, lambda _: '2026-10-03 00:00:00')
         self.idle = {'supported': True, 'registrationBusy': False,
                      'registrationWindowRetained': False}
+        self.layout = patch.object(deployment, 'has_registration_worker', return_value=False)
+        self.layout.start()
+        self.addCleanup(self.layout.stop)
 
     def row(self, state, lease='2026-10-03 01:00:00', profile='reg_original'):
         self.database.execute('INSERT INTO id_business_v2_registration_jobs VALUES (?, ?, ?)',
@@ -150,7 +202,7 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '^Registration runtime guard unavailable$'):
                 deployment.registration_runtime_state(None)
 
-    def execute_probe(self, response_value=None, error=None):
+    def execute_probe(self, response_value=None, error=None, split=False):
         opener = MagicMock()
         if error is not None:
             opener.open.side_effect = error
@@ -159,7 +211,8 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
                 json.dumps(response_value).encode())
 
         def container(directory, *args, **kwargs):
-            self.assertEqual(args[:5], ('exec', '-T', 'auto-recharge', 'python', '-c'))
+            service = 'auto-registration' if split else 'auto-recharge'
+            self.assertEqual(args[:5], ('exec', '-T', service, 'python', '-c'))
             stdout = io.StringIO()
             with patch('urllib.request.build_opener', return_value=opener), \
                     patch.dict(deployment.os.environ, {'AUTO_RECHARGE_WORKER_TOKEN': 'fixture-token'}), \
@@ -170,7 +223,8 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
                     raise RuntimeError('container probe failed') from None
             return stdout.getvalue()
 
-        with patch.object(deployment, 'compose', side_effect=container):
+        with patch.object(deployment, 'compose', side_effect=container), \
+                patch.object(deployment, 'has_registration_worker', return_value=split):
             result = deployment.registration_runtime_state(None)
         request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, 'http://127.0.0.1:8051/registration/health')
@@ -179,15 +233,30 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
         return result
 
     def test_authenticated_probe_returns_only_boolean_queue_proof(self):
-        result = self.execute_probe({'ready': True, 'engine': 'camoufox',
-                                     'registrationBusy': False, 'registrationWindowRetained': False,
-                                     'extra': 'fixture-sensitive-value'})
-        self.assertEqual(result, self.idle)
+        for split in (False, True):
+            with self.subTest(split=split):
+                result = self.execute_probe({'ready': True, 'engine': 'camoufox',
+                                             'registrationBusy': False, 'registrationWindowRetained': False,
+                                             **({'workerRole': 'registration'} if split else {}),
+                                             'extra': 'fixture-sensitive-value'}, split=split)
+                self.assertEqual(result, self.idle)
+
+    def test_split_worker_requires_registration_role_without_legacy_fallback(self):
+        for role in (None, 'recharge', 'unrecognized'):
+            value = {'ready': True, 'engine': 'camoufox',
+                     'registrationBusy': False, 'registrationWindowRetained': False}
+            if role is not None:
+                value['workerRole'] = role
+            with self.subTest(role=role), \
+                    self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
+                self.execute_probe(value, split=True)
 
     def test_only_legacy_404_is_supported_not_auth_failure_redirect_or_timeout(self):
         from urllib.error import HTTPError
         self.assertEqual(self.execute_probe(error=HTTPError('unused', 404, 'old', {}, None)),
                          {'supported': False})
+        with self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
+            self.execute_probe(error=HTTPError('unused', 404, 'split', {}, None), split=True)
         for status in (301, 401, 403, 500):
             with self.subTest(status=status), \
                     self.assertRaisesRegex(RuntimeError, 'Registration runtime guard unavailable'):
@@ -314,6 +383,58 @@ class ReusableImageTests(unittest.TestCase):
                 with self.archive(files) as archive:
                     with self.assertRaisesRegex(RuntimeError, reason):
                         deployment.verify_reusable_archive(release, archive, 'a' * 40)
+
+
+class WorkerComposeTransitionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.previous = Path(self.temp.name) / 'previous'
+        self.release = Path(self.temp.name) / 'release'
+        self.previous.mkdir()
+        self.release.mkdir()
+        self.split = (Path(__file__).parents[2] / 'docker-compose.aws-mysql.yml').read_text()
+        # Legacy layout fixture: preserve every existing service setting while
+        # removing only the reviewed new worker, fixed role and API binding.
+        self.legacy = re.sub(r'(?ms)^  auto-registration:\n.*?(?=^  api:)', '', self.split)
+        self.legacy = self.legacy.replace(
+            '    image: &browser-worker-image '
+            '${AUTO_RECHARGE_WORKER_IMAGE:-id-business-v2-auto-recharge:local}\n', '')
+        for line in ('      AUTO_RECHARGE_WORKER_ROLE: recharge\n',
+                     '      AUTO_REGISTRATION_WORKER_URL: http://auto-registration:8051\n',
+                     '      - registration-control\n',
+                     '  registration-control:\n    internal: true\n  registration-egress:\n'):
+            self.legacy = self.legacy.replace(line, '')
+        (self.previous / 'docker-compose.aws-mysql.yml').write_text(self.legacy)
+        (self.release / 'docker-compose.aws-mysql.yml').write_text(self.split)
+        (self.release / '.env.aws.production').write_text('EXISTING_SETTING=fixture\n')
+
+    def test_transition_allows_the_exact_reviewed_layout_without_environment_rewrite(self):
+        self.assertIsNone(deployment.configure_google_drive_sync(self.previous, self.release))
+        self.assertEqual((self.release / '.env.aws.production').read_text(), 'EXISTING_SETTING=fixture\n')
+        (self.previous / 'docker-compose.aws-mysql.yml').write_text(self.split)
+        self.assertIsNone(deployment.configure_google_drive_sync(self.previous, self.release))
+
+    def test_worker_role_shared_volume_or_unrelated_mutation_is_rejected(self):
+        invalid = (
+            self.split.replace('AUTO_RECHARGE_WORKER_ROLE: registration', 'AUTO_RECHARGE_WORKER_ROLE: recharge'),
+            self.split.replace('  auto-registration:\n', '  auto-registration:\n    volumes:\n      - shared:/tmp\n'),
+            self.split.replace('    image: *browser-worker-image', '    image: unreviewed-image:latest'),
+            self.split.replace('AUTO_REGISTRATION_WORKER_URL: http://auto-registration:8051',
+                               'AUTO_REGISTRATION_WORKER_URL: http://auto-recharge:8051'),
+            self.split.replace('MYSQL_HOST_PORT:-3306', 'MYSQL_HOST_PORT:-3307'),
+        )
+        for compose in invalid:
+            with self.subTest(compose=invalid.index(compose)):
+                (self.release / 'docker-compose.aws-mysql.yml').write_text(compose)
+                with self.assertRaises(RuntimeError):
+                    deployment.configure_google_drive_sync(self.previous, self.release)
+
+    def test_registration_worker_cannot_be_silently_removed_on_later_release(self):
+        (self.previous / 'docker-compose.aws-mysql.yml').write_text(self.split)
+        (self.release / 'docker-compose.aws-mysql.yml').write_text(self.legacy)
+        with self.assertRaisesRegex(RuntimeError, 'Independent registration worker removed'):
+            deployment.configure_google_drive_sync(self.previous, self.release)
 
 
 class GoogleDriveReleaseConfigTests(unittest.TestCase):

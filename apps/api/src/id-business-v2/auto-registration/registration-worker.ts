@@ -1,6 +1,6 @@
 import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 
-const base = () => process.env.AUTO_RECHARGE_WORKER_URL ?? 'http://auto-recharge:8051';
+const base = () => process.env.AUTO_REGISTRATION_WORKER_URL ?? 'http://auto-registration:8051';
 const headers = () => ({ 'X-Recharge-Worker': process.env.AUTO_RECHARGE_WORKER_TOKEN ?? '' });
 export type RegistrationDelivery = 'accepted' | 'not_received' | 'unknown' | 'rejected';
 const rejectionReasons = [
@@ -24,7 +24,10 @@ async function registrationWorkerHealth() {
       signal: AbortSignal.timeout(3000)
     });
     const value = response.ok ? await response.json() : null;
-    return value?.ready === true && value?.engine === 'camoufox' && value?.mailDeliveryVersion === 1
+    return value?.ready === true &&
+      value?.workerRole === 'registration' &&
+      value?.engine === 'camoufox' &&
+      value?.mailDeliveryVersion === 1
       ? {
           registrationBusy: value.registrationBusy === true,
           windowRetained: value.registrationWindowRetained === true

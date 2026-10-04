@@ -12,7 +12,9 @@
 
 每次启动由 Camoufox 生成原生环境。启动后在空白页读取 UA、平台、硬件并发、语言、屏幕、Canvas 和 WebGL 的摘要；当前 Worker 中摘要重复时关闭并重新生成，最多三次。注册任务同时通过现有 `browserProfileId` 检查历史注册任务的重复摘要。摘要不包含账号、代理出口或授权信息。这证明当前采样参数的差异，不等于所有网站可观察属性均不重复。
 
-注册与充值共用一个执行队列。未结束的原注册窗口会阻止另一任务开启。注册完成或取消时关闭原窗口；失败保留原窗口供继续。Worker 重启后不保留 Cookie，也不假装恢复原窗口；系统要求先人工核对官网账号，避免重复注册。已使用比特的旧注册任务不会自动换成新窗口。
+2026-10-05 隔离候选将注册与充值拆为 `auto-registration` 和 `auto-recharge` 两个独立进程，各自拥有任务槽、浏览器、临时内存盘和控制网络；复用同一 Worker 镜像。未结束的原注册窗口只阻止另一笔注册，不占用充值。充值取消、超时退出或重启不会关闭注册窗口。同类任务继续串行。注册完成或取消时关闭原窗口；失败保留原窗口供继续。所属 Worker 重启后不保留 Cookie，也不假装恢复原窗口；系统要求先人工核对官网账号，避免重复注册。已使用比特的旧注册任务不会自动换成新窗口。
+
+拆分尚未上线。切换旧共用执行器前继续检查活跃注册与保留窗口，不能为发布取消原任务；现有内存中的窗口不能迁移到新进程，须待原任务结束并确认释放窗口后切换。
 
 ## 内核和依赖
 
@@ -21,7 +23,7 @@
 - Docker 构建时下载官方版本文件，并校验 SHA-256；版本、URL 和校验值集中在 `install_fingerprint_browser.py`。
 - 运行路径为 `/opt/camoufox/camoufox`。没有运行时内核、GeoIP 或默认扩展下载，没有普通 Chromium 回退。
 - 浏览器保持现有只读容器、临时内存盘、非 root 用户和内存限制。已有 Chromium 安装仍用于旧执行器兼容；当前注册与服务器充值入口使用 Camoufox。
-- 复用现有 `AUTO_RECHARGE_WORKER_URL`、`AUTO_RECHARGE_WORKER_TOKEN` 和回调地址，不新增环境变量。
+- 充值使用 `AUTO_RECHARGE_WORKER_URL`，注册使用新增 `AUTO_REGISTRATION_WORKER_URL`（默认 `http://auto-registration:8051`），不回退充值地址。两服务复用 `AUTO_RECHARGE_WORKER_TOKEN` 和回调地址；`AUTO_RECHARGE_WORKER_ROLE` 固定为 `recharge` 或 `registration`，拒绝另一类业务路由。`AUTO_RECHARGE_WORKER_IMAGE` 仅配置本地共享镜像名称，生产发布仍将两服务固定到同一不可变镜像。
 
 macOS 本地验收安装器支持官方 ARM64 文件，并把官方 `properties.json` 复制到库显式路径读取位置。自动注册与服务器充值在系统执行器内操作，不要求管理员安装比特浏览器或配置本机连接器；自动充值的本机模式仍遵循既有比特浏览器设置。
 

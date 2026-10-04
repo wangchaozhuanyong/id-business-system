@@ -23,6 +23,7 @@ class ServerTests(unittest.TestCase):
             handler.rfile = io.BytesIO(body)
             handler.reply.reset_mock()
             with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                  patch.object(server, 'WORKER_ROLE', 'registration'),
                   patch.object(server.registration_builtin, 'handle_request',
                     side_effect=Stop(reason, unsafe='synthetic-private-details'))):
                 handler.do_POST()
@@ -30,6 +31,7 @@ class ServerTests(unittest.TestCase):
         handler.rfile = io.BytesIO(body)
         handler.reply.reset_mock()
         with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+              patch.object(server, 'WORKER_ROLE', 'registration'),
               patch.object(server.registration_builtin, 'handle_request',
                 side_effect=Stop('synthetic-private-details'))):
             handler.do_POST()
@@ -46,11 +48,13 @@ class ServerTests(unittest.TestCase):
                                         (True, None, (False, False))]:
             job.done = done
             with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                  patch.object(server, 'WORKER_ROLE', 'registration'),
                   patch.object(server.Handler, 'job', job),
                   patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
                 handler.do_GET()
             status, value = handler.reply.call_args.args
             self.assertEqual(status, 200)
+            self.assertEqual(value['workerRole'], 'registration')
             self.assertEqual((value['registrationBusy'], value['registrationWindowRetained']), expected)
             self.assertNotIn('job_id', value)
 
@@ -67,6 +71,7 @@ class ServerTests(unittest.TestCase):
                                         (True, None, True)]:
             job.done = done
             with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                  patch.object(server, 'WORKER_ROLE', 'registration'),
                   patch.object(server.Handler, 'job', job),
                   patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
                 handler.do_GET()

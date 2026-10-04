@@ -1,4 +1,4 @@
-"""私网单笔执行器。业务标记先由 API 提交 MySQL，再允许官网写请求。"""
+"""私网单用途执行器。注册与充值分别部署，业务标记先于官网写请求。"""
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +34,7 @@ from plan_selection import safe_diagnostics
 from browser_session import SessionBudget, load_session_page, session_failure
 
 MAX_BODY = 96000
+WORKER_ROLE = os.environ.get("AUTO_RECHARGE_WORKER_ROLE", "recharge")
 TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
 API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
 REGISTRATION_API = API.removesuffix("/auto-recharge/internal") + "/auto-registration/local"
@@ -48,9 +49,10 @@ PUBLIC_KEYS.update("handoff_session_id handoff_generation".split())
 
 
 class PersistentBrowserRuntime:
-    """Playwright 固定在同一事件循环；服务器充值独占浏览器进程。"""
-    def __init__(self, browser_factory=None):
+    """Playwright 固定在同一事件循环；所属任务独占本执行器的浏览器进程。"""
+    def __init__(self, browser_factory=None, *, registration_owner=False):
         self.browser_factory = browser_factory
+        self.registration_owner = registration_owner
         self.loop = None
         self.thread = None
         self.playwright = None
@@ -114,7 +116,7 @@ class PersistentBrowserRuntime:
                 pass
 
     async def _shutdown(self):
-        if registration_builtin.PROFILES.profile:
+        if self.registration_owner and registration_builtin.PROFILES.profile:
             await registration_builtin.PROFILES.close(registration_builtin.PROFILES.profile['job_id'])
         await self._discard()
         playwright, self.playwright = self.playwright, None
@@ -149,7 +151,8 @@ class PersistentBrowserRuntime:
                 return
             self.ready.clear()
             self.startup_error = None
-            self.thread = threading.Thread(target=self._thread_main, name="recharge-browser", daemon=True)
+            name = "registration-browser" if self.registration_owner else "recharge-browser"
+            self.thread = threading.Thread(target=self._thread_main, name=name, daemon=True)
             self.thread.start()
         if not self.ready.wait(timeout) or not self.started:
             raise RuntimeError("persistent_browser_startup_failed") from self.startup_error
@@ -189,7 +192,7 @@ class PersistentBrowserRuntime:
         self.loop = None
 
 
-BROWSER_RUNTIME = PersistentBrowserRuntime()
+BROWSER_RUNTIME = PersistentBrowserRuntime(registration_owner=WORKER_ROLE == "registration")
 
 
 async def current_totp(config):
@@ -971,15 +974,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def serves_path(self):
+        if WORKER_ROLE == "registration":
+            return self.path.startswith("/registration/")
+        return WORKER_ROLE == "recharge" and self.path.startswith("/jobs/")
+
     def do_GET(self):
         if self.path == "/health":
-            self.reply(200, {"ok": True, "busy": bool(self.job and not self.job.done)})
+            self.reply(200, {"ok": True, "workerRole": WORKER_ROLE,
+                             "busy": bool(self.job and not self.job.done)})
             return
         if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
             self.reply(403, {"ok": False})
             return
+        if not self.serves_path():
+            self.reply(404, {"ok": False})
+            return
         if self.path == "/registration/health":
-            self.reply(200, {"ready": BROWSER_RUNTIME.started, "engine": "camoufox", "mailDeliveryVersion": 1,
+            self.reply(200, {"ready": BROWSER_RUNTIME.started, "workerRole": WORKER_ROLE,
+                             "engine": "camoufox", "mailDeliveryVersion": 1,
                              "registrationBusy": (isinstance(self.job, registration_builtin.RegistrationServerJob)
                                                   and not self.job.done),
                              "registrationWindowRetained": registration_builtin.PROFILES.profile is not None})
@@ -1015,6 +1028,9 @@ class Handler(BaseHTTPRequestHandler):
         if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
             self.reply(403, {"ok": False})
             return
+        if not self.serves_path():
+            self.reply(404, {"ok": False})
+            return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
@@ -1039,7 +1055,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with self.lock:
                 if len(parts) == 2:
-                    if registration_builtin.PROFILES.profile or (self.job and not self.job.done):
+                    if self.job and not self.job.done:
                         self.reply(409, {"ok": False})
                         return
                     if body.get("plan") not in PLANS or body.get("action") not in {"check", "quote", "prepare", "recheck", "flow", "server"}:
@@ -1067,6 +1083,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if WORKER_ROLE not in {"recharge", "registration"}:
+        raise SystemExit("执行器类型无效")
     if len(TOKEN) < 32:
         raise SystemExit("执行器凭据未配置")
     try:
