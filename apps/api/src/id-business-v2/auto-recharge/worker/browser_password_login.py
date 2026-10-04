@@ -95,7 +95,7 @@ async def wait_for_input(page, selector, seconds):
     return None
 
 
-async def official_identity(page, expected_email, *, budget=None, strict=False):
+async def official_identity(page, expected_email, *, budget=None, strict=False, observe_errors=False):
     if urlsplit(page.url).hostname != "chatgpt.com":
         return None
     try:
@@ -113,6 +113,10 @@ async def official_identity(page, expected_email, *, budget=None, strict=False):
         _, identity = await check_session(page, target, budget=budget)
         return target, identity
     except Stop as exc:
+        if observe_errors and exc.report.get("reason") in {
+                "session_network_error", "session_load_timeout", "verification_required",
+                "http_error", "operation_cancelled"}:
+            raise
         if strict or exc.report.get("reason") in {"official_login_email_mismatch",
                                          "official_user_mismatch", "official_account_mismatch"}:
             raise

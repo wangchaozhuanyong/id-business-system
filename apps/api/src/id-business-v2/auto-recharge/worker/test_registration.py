@@ -2,7 +2,9 @@ import asyncio
 from copy import deepcopy
 from datetime import date
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
+import threading
 
 from checkout_core import Stop
 from registration_job import RegistrationJob
@@ -135,6 +137,83 @@ class RegistrationTests(unittest.TestCase):
         with self.assertRaises(Stop): birth_age('2006-10-03', date(2026, 10, 2))
         self.assertEqual(birth_age('1981-10-03', date(2026, 10, 3)), 45)
         with self.assertRaises(Stop): birth_age('1980-10-03', date(2026, 10, 3))
+
+
+class RegistrationObservationTests(unittest.IsolatedAsyncioTestCase):
+    def flow(self):
+        job = SimpleNamespace(payload={'email': 'owner@example.test', 'registered': False},
+                              check=lambda: None, cancelled=threading.Event())
+        context = SimpleNamespace(route=AsyncMock(), unroute=AsyncMock())
+        flow = RegistrationBrowser(job, context)
+        flow.page = SimpleNamespace(url='https://chatgpt.com/auth/login')
+        context.pages = [flow.page]
+        return flow
+
+    async def test_identity_has_shared_budget_and_propagates_transport_failures(self):
+        from browser_session import SessionBudget
+        flow = self.flow()
+        flow.observation_budget = SessionBudget(10)
+        with patch('registration_browser.official_identity', AsyncMock(side_effect=Stop('session_network_error'))) as identity:
+            with self.assertRaises(Stop) as stopped:
+                await flow.identity()
+        self.assertEqual(stopped.exception.report['reason'], 'session_network_error')
+        self.assertIs(identity.await_args.kwargs['budget'], flow.observation_budget)
+        self.assertTrue(identity.await_args.kwargs['observe_errors'])
+        self.assertEqual(flow.job.registration_operation, 'identity_read')
+
+    async def test_navigation_context_change_reobserves_same_page_without_submission(self):
+        flow = self.flow()
+        Error = type('Error', (Exception,), {})
+        flow.registration_view = AsyncMock(side_effect=[Error('Execution context was destroyed'), ('registered', None)])
+        flow.page.goto = AsyncMock(return_value=SimpleNamespace(status=200))
+        flow.registration_country = AsyncMock(return_value='US')
+        flow.settle = AsyncMock()
+        flow.job.event = lambda *_args, **_kwargs: None
+        flow.job.manual = AsyncMock()
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 0):
+            await flow.register()
+        flow.page.goto.assert_awaited_once_with('https://chatgpt.com/auth/login', wait_until='domcontentloaded', timeout=0)
+        flow.job.manual.assert_not_awaited()
+        self.assertTrue(flow.data['registered'])
+
+    async def test_unknown_script_error_is_not_treated_as_navigation_or_network(self):
+        flow = self.flow()
+        Error = type('Error', (Exception,), {})
+        error = Error('TypeError: synthetic application defect')
+        flow.registration_view = AsyncMock(side_effect=error)
+        flow.page.goto = AsyncMock()
+        with self.assertRaises(Error) as stopped:
+            await flow.register()
+        self.assertIs(stopped.exception, error)
+        flow.page.goto.assert_not_awaited()
+
+    async def test_cleanup_cannot_replace_first_failure_and_still_unroutes(self):
+        flow = self.flow()
+        primary = Stop('official_login_email_mismatch')
+        flow.register = AsyncMock(side_effect=primary)
+        flow.end_recovery = AsyncMock(side_effect=RuntimeError('synthetic cleanup failure'))
+        with patch('registration_browser.clear_visible_secrets', AsyncMock()) as clear:
+            with self.assertRaises(Stop) as stopped:
+                await flow.run()
+        self.assertIs(stopped.exception, primary)
+        clear.assert_awaited_once_with(flow.page)
+        flow.context.unroute.assert_awaited_once()
+        self.assertEqual(flow.job.registration_cleanup_error, 'UnexpectedError')
+
+    async def test_cleanup_only_failure_is_not_reported_as_success(self):
+        flow = self.flow()
+        flow.data.update(registered=True, passwordVerified=True, mfaVerified=True)
+        flow.guard_registered_onboarding = AsyncMock()
+        flow.identity = AsyncMock(return_value=('fixture', 'identity'))
+        flow.offer = AsyncMock()
+        flow.job.event = lambda *_args, **_kwargs: None
+        flow.end_recovery = AsyncMock()
+        flow.context.unroute.side_effect = RuntimeError('synthetic cleanup failure')
+        with patch('registration_browser.clear_visible_secrets', AsyncMock()):
+            with self.assertRaises(RuntimeError):
+                await flow.run()
+        self.assertEqual(flow.job.registration_operation, 'browser_cleanup')
+        self.assertEqual(flow.job.registration_cleanup_error, 'UnexpectedError')
 
 
 if __name__ == '__main__':

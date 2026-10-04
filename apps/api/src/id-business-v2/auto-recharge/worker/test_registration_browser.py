@@ -6,7 +6,6 @@ from urllib.parse import urlsplit
 import unittest
 import threading
 from types import SimpleNamespace
-from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 from checkout_core import Stop
 from registration_security import totp
@@ -103,7 +102,7 @@ root.innerHTML='<form><input type="email" name="email"><button>Continue</button>
             if operation in {'enroll', 'challenge'}:
                 self.assertEqual(data['code'], totp(key)); state['mfa'] = True
             return dict(state)
-        async def identity(page, email):
+        async def identity(page, email, **_kwargs):
             if wrong_original and len(contexts) > 1 and page is flow.page:
                 return None
             current = await page.evaluate('document.documentElement.dataset.accountEmail || \"\"'); self.assertIn(current, ['', expected])
@@ -308,7 +307,7 @@ class VerificationBrowserTests(unittest.IsolatedAsyncioTestCase):
             async def settle(_seconds=2):
                 await asyncio.sleep(.025)
             flow.settle = settle
-            async def identity(page, email):
+            async def identity(page, email, **_kwargs):
                 self.assertEqual(email, expected)
                 return ('synthetic-target', 'synthetic-identity') if await page.evaluate(
                     'document.documentElement.dataset.stage') == 'identity' else None
@@ -648,6 +647,95 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.browser.close()
         await self.driver.stop()
 
+    async def observation_fixture(self, mode):
+        from browser_session import SessionBudget
+        self.session_reads = 0
+        async def local(route):
+            self.navigation_methods.append(route.request.method)
+            path = urlsplit(route.request.url).path
+            if path == '/api/auth/session':
+                self.session_reads += 1
+                if mode == 'network' or (mode == 'recover' and self.session_reads == 1):
+                    await route.abort('failed')
+                    return
+                if mode == 'timeout':
+                    await asyncio.sleep(.5)
+                await route.fulfill(content_type='application/json', body='{}')
+                return
+            body = '<main>Preparing</main>'
+            if mode == 'recover' and self.session_reads:
+                body = '<form><input type="email"><button>Continue</button></form>'
+            await route.fulfill(content_type='text/html', body='<!doctype html><html><body>' + body + '</body></html>')
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login')
+        if mode == 'timeout':
+            self.flow.observation_budget = SessionBudget(.15, cancelled=self.job.cancelled.is_set)
+
+    async def test_anonymous_session_is_observed_without_mocking_identity(self):
+        await self.observation_fixture('healthy')
+        self.assertEqual(await self.flow.registration_view(), ('unknown', None))
+        self.assertEqual(self.session_reads, 1)
+        self.assertFalse(self.job.payload['registered'])
+        self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
+
+    async def test_failed_session_fetch_is_controlled_and_recoverable(self):
+        from browser_session import retryable_page_load_error
+        await self.observation_fixture('network')
+        with self.assertRaises(Stop) as stopped:
+            await self.flow.registration_view()
+        self.assertEqual(stopped.exception.report['reason'], 'session_network_error')
+        self.assertTrue(retryable_page_load_error(stopped.exception))
+        self.assertEqual(self.job.registration_operation, 'identity_read')
+        self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
+
+    async def test_session_timeout_uses_observation_budget(self):
+        await self.observation_fixture('timeout')
+        with self.assertRaises(Stop) as stopped:
+            await self.flow.identity()
+        self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+        self.assertLess(self.flow.observation_budget.elapsed, .5)
+
+    async def test_network_failure_refreshes_same_page_then_recognizes_email(self):
+        await self.observation_fixture('recover')
+        def progress(name, **data):
+            if data.get('step') == 'email':
+                raise Stop('fixture_email_reached')
+        self.job.event = progress
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 0):
+            with self.assertRaises(Stop) as stopped:
+                await self.flow.register()
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_email_reached')
+        self.assertTrue(self.flow.registration_refreshed)
+        self.assertEqual(self.session_reads, 2)
+        self.assertIs(self.flow.page, self.page)
+        self.job.manual.assert_not_awaited()
+        self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
+
+    async def test_network_recovery_exhaustion_pauses_without_submission(self):
+        await self.observation_fixture('network')
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 0):
+            with self.assertRaises(Stop) as stopped:
+                await self.flow.register()
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertEqual(self.session_reads, 2)
+        self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
+
+    async def test_disappearing_submitted_form_reobserves_without_manual_handoff(self):
+        import registration_browser
+        await self.serve('<form><input name="name"><input name="birthdate" type="date"><button>Continue</button></form>')
+        original = registration_browser.unique_visible
+        async def detach_after_name(page, selector):
+            field = await original(page, selector)
+            if selector == registration_browser.NAME_INPUT and field:
+                await self.page.evaluate("document.body.innerHTML='<main>Preparing</main>'")
+            return field
+        with patch('registration_browser.unique_visible', detach_after_name):
+            self.assertEqual(await self.flow.registration_view(), ('unknown', None))
+        self.assertTrue(self.flow.registration_loading)
+        self.job.manual.assert_not_awaited()
+        self.assertEqual(self.submissions, [])
+
     async def serve(self, body):
         html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' + body + '''<script>
         document.querySelectorAll('form').forEach(form=>{form.onsubmit=async event=>{
@@ -879,8 +967,6 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
             return result;
         }''')
         result['binding_callback_invoked'] = bool(captured)
-        path = Path(__file__).resolve().parents[6] / '.runtime/registration-profile-repair-20261003/dom-compat-result.json'
-        path.write_text(json.dumps(result, sort_keys=True) + '\n', encoding='utf-8')
         for key in ['array_from', 'node_for_each', 'node_spread', 'node_for_of', 'form_data_entries']:
             self.assertTrue(result[key]['ok'])
 

@@ -277,6 +277,23 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FinishedTaskTests(unittest.TestCase):
+    def test_failure_diagnostics_exclude_exception_text_and_uncontrolled_codes(self):
+        value = server_payload()
+        Error = type('Error', (Exception,), {})
+        runtime = MagicMock(run_registration=MagicMock(side_effect=Error('synthetic-private-detail')))
+        job = builtin.RegistrationServerJob(value['id'], value,
+            'http://api:3000/api/id-business-v2/auto-registration/local', runtime)
+        job.registration_operation = 'identity_read'
+        job.registration_observation_error = {'reason': 'session_network_error', 'browser_error_code': 'synthetic-private-code'}
+        job.event = MagicMock()
+        with self.assertLogs('registration', level='WARNING') as captured:
+            job.run()
+        logged = '\n'.join(captured.output)
+        self.assertIn('operation=identity_read error_type=Error', logged)
+        self.assertIn('browser_error_code=none observation_reason=session_network_error', logged)
+        self.assertNotIn('synthetic-private', logged)
+        job.event.assert_called_once_with('partial', reason='builtin_execution_failed')
+
     def test_close_failure_reports_partial_without_false_complete_or_releasing_queue(self):
         value = server_payload()
         runtime = SimpleNamespace(run_registration=lambda operation: asyncio.run(operation()))
