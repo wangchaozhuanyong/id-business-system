@@ -1,4 +1,4 @@
-import { onScopeDispose } from 'vue';
+import { computed, onScopeDispose, shallowRef } from 'vue';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
 import { rechargeApi } from './api';
 import { DirectBrowserError } from './bitbrowser-direct-api';
@@ -8,10 +8,16 @@ export function useBitBrowserDirectOpen(
   refresh: () => Promise<unknown>,
   reportError: (message: string) => void
 ) {
-  let active: { id: string; controller: AbortController; done?: Promise<void> } | undefined;
+  const activeTask = shallowRef<{
+    id: string;
+    controller: AbortController;
+    done?: Promise<void>;
+    endedRemotely: boolean;
+  }>();
   let codeRequest: { id: string; resolve: (code: string) => void } | undefined;
   let disposed = false;
-  const owns = (id: string) => active?.id === id;
+  const owns = (id: string) => activeTask.value?.id === id;
+  const running = computed(() => Boolean(activeTask.value));
   async function start(
     launch: V2RechargeBitBrowserOpenLaunch,
     credential: DirectLoginCredential,
@@ -30,15 +36,17 @@ export function useBitBrowserDirectOpen(
       clearCredentials();
       throw new DirectBrowserError('bitbrowser_direct_cancelled');
     }
-    if (active) throw new Error('当前网页已有登录任务，请先处理原任务');
+    if (activeTask.value) throw new Error('当前网页已有登录任务，请先处理原任务');
     const task = {
       id: launch.id,
       controller: new AbortController(),
-      done: undefined as Promise<void> | undefined
+      done: undefined as Promise<void> | undefined,
+      endedRemotely: false
     };
-    active = task;
+    activeTask.value = task;
     let profileId: unknown;
     const callback = async (type: 'progress' | 'finished', result: Record<string, unknown>) => {
+      if (task.endedRemotely) return;
       await rechargeApi.directBrowserCallback(launch.id, launch.agentToken, {
         type,
         result: {
@@ -57,7 +65,7 @@ export function useBitBrowserDirectOpen(
         transport: 'web_direct'
       });
     } catch (error) {
-      active = undefined;
+      activeTask.value = undefined;
       clearCredentials();
       throw error;
     }
@@ -95,6 +103,7 @@ export function useBitBrowserDirectOpen(
         );
         await callback('finished', result);
       } catch (error) {
+        if (task.endedRemotely) return;
         const cancelled = task.controller.signal.aborted;
         const reason = cancelled
           ? 'bitbrowser_direct_cancelled'
@@ -110,13 +119,13 @@ export function useBitBrowserDirectOpen(
             ...(cancelled ? { cancellation_confirmed: true } : {})
           });
         } catch {
-          if (!disposed)
+          if (!disposed && !task.endedRemotely)
             reportError('网页直连已停止，但执行结果未能保存，请刷新原任务核对；不要重复启动。');
         }
       } finally {
         clearCredentials();
         codeRequest = undefined;
-        if (active === task) active = undefined;
+        if (activeTask.value === task) activeTask.value = undefined;
       }
     })();
   }
@@ -125,15 +134,16 @@ export function useBitBrowserDirectOpen(
       throw new Error('当前网页登录任务没有等待验证码，请检查原窗口');
     codeRequest.resolve(code);
   }
-  async function cancel(id: string) {
+  async function cancel(id: string, endedRemotely = false) {
     if (!owns(id)) throw new Error('当前网页没有此登录任务，请刷新原任务核对');
-    const task = active!;
+    const task = activeTask.value!;
+    task.endedRemotely ||= endedRemotely;
     task.controller.abort();
     await task.done;
   }
   onScopeDispose(() => {
     disposed = true;
-    active?.controller.abort();
+    activeTask.value?.controller.abort();
   });
-  return { start, owns, submitCode, cancel };
+  return { start, owns, running, submitCode, cancel };
 }

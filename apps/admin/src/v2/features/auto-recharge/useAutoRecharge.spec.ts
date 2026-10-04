@@ -73,6 +73,7 @@ vi.mock('./useBitBrowserDirectOpen', () => ({
   useBitBrowserDirectOpen: () => ({
     start: mock.directStart,
     owns: mock.directOwns,
+    running: ref(false),
     submitCode: mock.directSubmitCode,
     cancel: mock.directCancel
   })
@@ -384,6 +385,7 @@ beforeEach(() => {
   });
   mock.directStart.mockResolvedValue(undefined);
   mock.directOwns.mockReturnValue(false);
+  mock.directCancel.mockReset().mockResolvedValue(undefined);
 
   mock.cancelBitBrowser.mockResolvedValue({ id: launch.id });
   mock.abandonUnreceivedBitBrowser.mockResolvedValue({ id: launch.id });
@@ -1097,8 +1099,10 @@ describe('本机比特浏览器自动充值', () => {
     }
   );
 
-  it('另一网页查看直连任务时提示回到原页面，不改用连接器重复操作', async () => {
+  it('另一网页查看直连任务时不显示无效的继续操作，可停止任务并解锁保留的资料', async () => {
     const id = '99999999-9999-4999-8999-999999999999';
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(directSessionJson());
     jobs.value.items = [
       {
         id,
@@ -1115,13 +1119,105 @@ describe('本机比特浏览器自动充值', () => {
         updatedAt: ''
       }
     ];
-    flow.selectJob(id);
+    await nextTick();
+    expect(flow.selected.value?.id).toBe(id);
     expect(flow.workflowMessage.value).toContain('原网页直连');
+    expect(flow.needsHuman.value).toBe(false);
+    expect(flow.canCancel.value).toBe(true);
+    expect(flow.formLocked.value).toBe(true);
     await flow.resume();
-    expect(flow.error.value).toContain('原网页直连');
+    expect(flow.error.value).toBe('');
     expect(mock.bitBrowserAccess).not.toHaveBeenCalled();
     expect(mock.connectorResume).not.toHaveBeenCalled();
     expect(mock.connectorStatus).not.toHaveBeenCalled();
+    mock.cancelBitBrowser.mockImplementationOnce(async () => {
+      jobs.value.items = [
+        {
+          ...jobs.value.items[0]!,
+          state: 'finished',
+          result: {
+            ...jobs.value.items[0]!.result,
+            status: 'cancelled',
+            cancellation_confirmed: true
+          }
+        }
+      ];
+      return { id };
+    });
+    await flow.cancel();
+    expect(mock.cancelBitBrowser).toHaveBeenCalledWith(id);
+    expect(mock.connectorCancel).not.toHaveBeenCalled();
+    expect(flow.formLocked.value).toBe(false);
+    expect(flow.selected.value?.id).toBe(id);
+    expect(flow.sessionJson.value).toBe(directSessionJson());
+    expect(flow.workflowMessage.value).toContain('登录已停止');
+  });
+
+  it('直连任务停止回传丢失时使用本人任务接口收尾，不等待连接器', async () => {
+    const id = launch.id;
+    jobs.value.items = [
+      {
+        id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'running',
+        result: { mode: 'open_browser', transport: 'web_direct', payment_requests_sent: 0 },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    mock.directOwns.mockReturnValue(true);
+    await flow.cancel();
+    expect(mock.directCancel).toHaveBeenCalledWith(id);
+    expect(mock.cancelBitBrowser).toHaveBeenCalledWith(id);
+    expect(mock.connectorCancel).not.toHaveBeenCalled();
+  });
+
+  it('原网页读到其他页面已停止登录的结果后中止本地控制，不回写覆盖终态', async () => {
+    mock.directOwns.mockReturnValue(true);
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'finished',
+        result: {
+          mode: 'open_browser',
+          transport: 'web_direct',
+          status: 'cancelled',
+          cancellation_confirmed: true,
+          payment_requests_sent: 0
+        },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    await nextTick();
+    expect(mock.directCancel).toHaveBeenCalledWith(launch.id, true);
+    expect(mock.cancelBitBrowser).not.toHaveBeenCalled();
+  });
+
+  it('已过期的直连登录任务仍可停止，其他未知付款任务不能借此释放', () => {
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'unknown',
+        result: {
+          mode: 'open_browser',
+          transport: 'web_direct',
+          status: 'blocked',
+          payment_requests_sent: 0
+        },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    flow.selectJob(launch.id);
+    expect(flow.canCancel.value).toBe(true);
+    jobs.value.items[0]!.result.mode = 'payment';
+    expect(flow.canCancel.value).toBe(false);
   });
 
   it('核价失败和付款结果未确认时保留卡资料', async () => {

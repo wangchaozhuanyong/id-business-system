@@ -334,7 +334,7 @@
               >
             </el-form>
             <el-button v-if="needsHuman" type="primary" :loading="busy" @click="resume">
-              我已完成验证，继续原任务
+              {{ resumeActionLabel }}
             </el-button>
             <el-button v-if="canCancel" :disabled="busy" @click="cancel">停止本次任务</el-button>
             <el-button v-if="canRecheck" type="primary" :loading="busy" @click="recheck">
@@ -466,6 +466,7 @@ const {
   canRecheck,
   canResolveNoBankRequest,
   needsHuman,
+  resumeActionLabel,
   needsCode,
   needsManualCode,
   autoCodeBusy,

@@ -1,6 +1,7 @@
-import { effectScope } from 'vue';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { computed, effectScope } from 'vue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
+import { DirectBrowserError } from './bitbrowser-direct-api';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
 const mock = vi.hoisted(() => ({ run: vi.fn(), callback: vi.fn() }));
 vi.mock('./bitbrowser-direct-login', () => ({ runDirectLogin: mock.run }));
@@ -101,5 +102,54 @@ describe('网页直连登录任务生命周期', () => {
     expect(credential.sessionJson).toBe('');
     expect(input.agentToken).toBe('');
     expect(input.bitBrowser.localApiToken).toBe('');
+  });
+});
+
+afterEach(() => vi.resetAllMocks());
+
+describe('仅登录窗口控制器收尾', () => {
+  it('登录失败且终态保存失败后响应式释放控制器，可重新操作', async () => {
+    mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(new Error('离线'));
+    mock.run.mockRejectedValue(new DirectBrowserError('official_login_not_verified'));
+    const scope = effectScope();
+    const error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), error))!;
+    const current = launch();
+    const credential = { sessionJson: 'fixture-json' };
+    const owns = computed(() => flow.owns(current.id));
+    expect(owns.value).toBe(false);
+    await flow.start(current, credential, '测试窗口');
+    await vi.waitFor(() => expect(mock.callback).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(owns.value).toBe(false));
+    expect(credential.sessionJson).toBe('');
+    expect(current.agentToken).toBe('');
+    expect(current.bitBrowser.localApiToken).toBe('');
+    expect(error).toHaveBeenLastCalledWith(expect.stringContaining('执行结果未能保存'));
+    scope.stop();
+  });
+
+  it('另一页面已结束任务时中止本地执行，不再用旧凭据回传或报失败', async () => {
+    mock.callback.mockResolvedValue({ ok: true });
+    mock.run.mockImplementation(
+      (_settings, _credential, _name, signal: AbortSignal) =>
+        new Promise((_resolve, reject) =>
+          signal.addEventListener('abort', () =>
+            reject(new DirectBrowserError('bitbrowser_direct_cancelled'))
+          )
+        )
+    );
+    const scope = effectScope();
+    const error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), error))!;
+    const current = launch();
+    await flow.start(current, { sessionJson: 'fixture-json' }, '测试窗口');
+    expect(flow.owns(current.id)).toBe(true);
+    expect(flow.running.value).toBe(true);
+    await flow.cancel(current.id, true);
+    expect(flow.owns(current.id)).toBe(false);
+    expect(flow.running.value).toBe(false);
+    expect(mock.callback).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+    scope.stop();
   });
 });

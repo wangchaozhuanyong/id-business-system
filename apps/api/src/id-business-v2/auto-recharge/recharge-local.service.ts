@@ -565,13 +565,18 @@ export class RechargeLocalService {
         if (current.payment_attempted === true || Number(current.payment_requests_sent) > 0) {
           throw new ConflictException('官网付款请求已发出，只能查看原单结果');
         }
+        const directLogin = current.mode === 'open_browser' && current.transport === 'web_direct';
+        if (directLogin && Number(current.confirmation_requests_sent ?? 0) > 0)
+          throw new ConflictException('官网付款请求已发出，只能查看原单结果');
         await this.repository.updateJob(tx, id, {
-          // 本机取消请求已接收，但必须等它结束执行、清理窗口后才能结束任务。
-          leaseUntil: new Date(Date.now() + 5 * 60000),
+          // 仅登录的网页可能已关闭，不能依赖原网页或连接器回传才能释放任务。
+          ...(directLogin ? { state: 'finished', nonceHash: null } : {}),
+          leaseUntil: new Date(Date.now() + (directLogin ? 0 : 5 * 60000)),
           result: toV2JsonDocument({
             ...current,
-            status: 'cancelling',
-            reason: 'operation_cancel_requested',
+            status: directLogin ? 'cancelled' : 'cancelling',
+            reason: directLogin ? 'bitbrowser_direct_cancelled' : 'operation_cancel_requested',
+            ...(directLogin ? { cancellation_confirmed: true, payment_attempted: false } : {}),
             payment_requests_sent: 0
           })
         });
@@ -581,7 +586,9 @@ export class RechargeLocalService {
           action: 'id_business_v2.auto_recharge.bitbrowser.cancel',
           objectType: 'recharge_job',
           objectId: id,
-          remark: '停止本机比特浏览器充值任务'
+          remark: directLogin
+            ? '停止网页直连登录任务，保留窗口供手动检查'
+            : '停止本机比特浏览器充值任务'
         });
         return { id };
       },
