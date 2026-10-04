@@ -11,6 +11,56 @@ const operator = {
 };
 
 describe('IdBusinessV2VendureMailboxService', () => {
+  it('自动注册从重验授权后的别名编号识别脱敏收件地址', async () => {
+    const alias = {
+      id: 'alias-1',
+      aliasEmail: 'hidden@example.invalid',
+      primaryAccountId: 'primary-1',
+      status: 'ACTIVE',
+      buyerQueryCode: 'synthetic-code',
+      codeExpiresAt: null
+    };
+    const client = {
+      virtualEmails: vi.fn().mockResolvedValue([alias]),
+      primaryAccounts: vi.fn().mockResolvedValue([{ id: 'primary-1', status: 'ACTIVE' }]),
+      publicQuery: vi.fn().mockResolvedValue({
+        success: true,
+        items: [
+          {
+            id: 'synthetic-mail',
+            virtualEmailId: 'alias-1',
+            targetEmail: 'hi***@example.invalid',
+            fromAddress: 'noreply@tm.openai.com',
+            subject: 'Your verification code',
+            receivedAt: new Date().toISOString(),
+            extractedCode: '123456'
+          }
+        ]
+      })
+    };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    await expect(
+      service.registrationCode(
+        'alias-1',
+        new Date(Date.now() - 60_000),
+        null,
+        operator,
+        alias.aliasEmail
+      )
+    ).resolves.toEqual({ mailId: 'synthetic-mail', code: '123456' });
+    expect(client.virtualEmails).toHaveBeenCalledOnce();
+    expect(client.primaryAccounts).toHaveBeenCalledOnce();
+    expect(client.publicQuery).toHaveBeenCalledWith('synthetic-code');
+    client.virtualEmails.mockResolvedValueOnce([{ ...alias, status: 'DISABLED' }]);
+    await expect(
+      service.registrationCode('alias-1', new Date(), null, operator, alias.aliasEmail)
+    ).rejects.toThrow('未启用');
+    expect(client.publicQuery).toHaveBeenCalledOnce();
+  });
   it('任务绑定原邮箱地址，源邮箱变化后不读取新邮箱邮件', async () => {
     const client = { publicQuery: vi.fn().mockResolvedValue({ success: true, items: [] }) };
     const service = new IdBusinessV2VendureMailboxService(
