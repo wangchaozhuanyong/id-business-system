@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import browser_checkout
 import bitbrowser_retry
 import bitbrowser_connector as connector
-from browser_session import SessionBudget, retryable_session_result
+from browser_session import SessionBudget, retryable_session_result, session_failure, retryable_page_load_error
 from checkout_core import Stop
 from test_bitbrowser_connector import payload
 
@@ -190,15 +190,13 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
         async def human(*args):
             await clock.advance(900)
         with patch.object(browser_checkout, 'wait_for_user', side_effect=human) as wait, \
-                patch.object(browser_checkout, 'browser_read', new=AsyncMock(side_effect=[{}, {
-                    'accounts': {'fixture': {'account': {'account_id': 'fixture', 'plan_type': 'free'}}}
-                }])), \
-                patch.object(browser_checkout, 'verify_official_session', return_value=SimpleNamespace(token='new')):
+                patch.object(browser_checkout, 'browser_read', new=AsyncMock(return_value={})), \
+                patch.object(browser_checkout, 'verify_official_session', return_value=SimpleNamespace(token='new')), \
+                patch.object(browser_checkout, 'official_subscription', return_value={'current_plan': 'free'}):
             _, identity = await browser_checkout.check_session(
                 page, SimpleNamespace(account_id='fixture', old_token='old'), 1800, budget)
         wait.assert_awaited_once_with('verification_required', 1800)
         self.assertTrue(identity['account_matched'])
-        self.assertEqual(identity['current_plan'], 'free')
         self.assertEqual(budget.remaining_ms(), 120000)
 
     async def test_cancel_interrupts_pending_navigation(self):
@@ -561,6 +559,145 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["payment_requests_sent"], 0)
         restore.assert_called_once()
         context.add_cookies.assert_called_once()
+
+
+class SessionFailureReceiptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pro_dispatch_preserves_context_and_distinguishes_recheck_budgets(self):
+        import pay
+        context, page, guard = MagicMock(), MagicMock(), MagicMock(unroute=AsyncMock())
+        page.context = context
+        context.unroute = AsyncMock()
+        budget = SessionBudget(60)
+        async def browser(*args, **kwargs):
+            self.assertEqual(kwargs['session_budget'].phase, 'subscription_check')
+            return await kwargs['session_handler'](page, guard, {'current_plan': 'free'})
+        with patch.object(pay, 'run_browser', side_effect=browser), \
+                patch.object(pay, 'run_checkout_flow', new=AsyncMock(return_value={'status': 'fixture'})) as checkout:
+            await pay.run_flow(SimpleNamespace(), None, 'pro-500', details_reader=None,
+                               confirmer=None, browser_context=context, session_budget=budget)
+        self.assertIs(checkout.call_args.kwargs['browser_context'], context)
+        self.assertEqual(checkout.call_args.kwargs['session_budget'].phase, 'checkout_check')
+        self.assertIsNot(checkout.call_args.kwargs['session_budget'], budget)
+        self.assertEqual(checkout.call_args.kwargs['session_budget'].seconds, 60)
+
+    async def execute_failure(self, error=None, *, repeat=False, status=200, seconds=7,
+                              check_error=None, cancelled=False):
+        clock, reports = Clock(), MagicMock()
+        budget = SessionBudget(60, clock=clock, report=reports,
+                               cancelled=lambda: cancelled, phase='subscription_check')
+        navigation = []
+        async def navigate(*args, **kwargs):
+            navigation.append(kwargs)
+            await clock.advance(seconds)
+            if error and (repeat or len(navigation) == 1):
+                raise error
+            return SimpleNamespace(status=status)
+        page = MagicMock(url='about:blank', goto=AsyncMock(side_effect=navigate),
+                         reload=AsyncMock(side_effect=navigate))
+        context = MagicMock(pages=[], route=AsyncMock(), unroute=AsyncMock(),
+                            route_web_socket=AsyncMock(), new_page=AsyncMock(return_value=page))
+        async def check(_page, _target, _wait, current):
+            async def read():
+                await clock.advance(3)
+                if check_error:
+                    raise check_error
+            await current.run(read, 'page_title')
+            return None, {'account_matched': True, 'current_plan': 'free', 'session_status': 'restored'}
+        with patch.object(browser_checkout, 'check_session', side_effect=check), \
+                patch.object(browser_checkout, 'progress') as progress, \
+                patch.dict('os.environ', {}, clear=True):
+            result = await browser_checkout.workflow(
+                context, SimpleNamespace(session_token=None), session_budget=budget)
+        self.assertEqual(result['checkout_requests_sent'], 0)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertNotIn('synthetic-secret', json.dumps(result))
+        return result, navigation, budget, progress
+
+    async def test_firefox_and_chromium_restore_once_in_same_budget(self):
+        codes = ['NS_ERROR_NET_RESET', 'NS_ERROR_NET_TIMEOUT', 'NS_ERROR_NET_INTERRUPT',
+                 'NS_ERROR_CONNECTION_REFUSED', 'NS_ERROR_PROXY_CONNECTION_REFUSED',
+                 'NS_ERROR_UNKNOWN_HOST', 'NS_ERROR_UNKNOWN_PROXY_HOST',
+                 'net::ERR_PROXY_CONNECTION_FAILED', 'net::ERR_CONNECTION_RESET']
+        for code in codes:
+            with self.subTest(code=code):
+                result, navigation, budget, progress = await self.execute_failure(
+                    RuntimeError(code + ' synthetic-secret'))
+                self.assertEqual(result['status'], 'session_verified')
+                self.assertEqual(len(navigation), 2)
+                self.assertEqual(budget.elapsed, 17)
+                self.assertEqual(budget.refresh_count, 1)
+                self.assertTrue(any(c.args == ('session_restore',) and
+                                    c.kwargs.get('account_matched') is False
+                                    for c in progress.call_args_list))
+
+    async def test_continuous_failure_returns_final_refresh_snapshot(self):
+        result, navigation, _, _ = await self.execute_failure(
+            RuntimeError('NS_ERROR_PROXY_CONNECTION_REFUSED synthetic-secret'), repeat=True)
+        self.assertEqual(len(navigation), 2)
+        self.assertEqual(result['reason'], 'session_network_error')
+        self.assertEqual(result['browser_error_code'], 'NS_ERROR_PROXY_CONNECTION_REFUSED')
+        self.assertEqual(result['session_step'], 'page_refresh')
+        self.assertEqual(result['session_elapsed_seconds'], 14)
+        self.assertEqual(result['session_refresh_count'], 1)
+        self.assertEqual(result['session_wait_seconds'], 60)
+        self.assertEqual(result['session_phase'], 'subscription_check')
+        self.assertFalse(result['account_matched'])
+
+    async def test_title_failure_is_distinct_from_navigation(self):
+        result, navigation, _, _ = await self.execute_failure(
+            check_error=RuntimeError('synthetic-secret'))
+        self.assertEqual(len(navigation), 1)
+        self.assertEqual(result['reason'], 'browser_operation_failed')
+        self.assertEqual(result['session_step'], 'page_title')
+        self.assertEqual(result['session_elapsed_seconds'], 10)
+        self.assertEqual(result['session_refresh_count'], 0)
+
+    async def test_deadline_and_cancellation_do_not_start_recovery(self):
+        result, navigation, _, _ = await self.execute_failure(seconds=60)
+        self.assertEqual(result['reason'], 'session_load_timeout')
+        self.assertEqual(result['session_elapsed_seconds'], 60)
+        self.assertEqual(len(navigation), 1)
+        result, navigation, _, _ = await self.execute_failure(cancelled=True)
+        self.assertEqual(result['reason'], 'operation_cancelled')
+        self.assertEqual(result['session_elapsed_seconds'], 0)
+        self.assertEqual(navigation, [])
+
+    async def test_http_identity_challenge_certificate_and_unknown_failures_stop(self):
+        for status in [403, 500]:
+            with self.subTest(status=status):
+                result, navigation, _, _ = await self.execute_failure(status=status)
+                self.assertEqual(result['http_status'], status)
+                self.assertEqual(len(navigation), 1)
+        for error in [Stop('official_account_mismatch', account_matched=False),
+                      Stop('verification_required', user_action_required=True),
+                      RuntimeError('SEC_ERROR_UNKNOWN_ISSUER synthetic-secret'),
+                      RuntimeError('NS_ERROR_NET_RESET_EXTRA synthetic-secret'),
+                      RuntimeError('synthetic-secret')]:
+            with self.subTest(error=type(error).__name__):
+                result, navigation, _, _ = await self.execute_failure(error)
+                self.assertEqual(len(navigation), 1)
+                self.assertNotIn('browser_error_code', result)
+
+    def test_http_or_user_action_has_priority_over_network_reason(self):
+        for details in [{'http_status': 403}, {'user_action_required': True}]:
+            self.assertFalse(retryable_page_load_error(Stop('session_network_error', **details)))
+        self.assertEqual(session_failure(RuntimeError('NS_ERROR_NET_RESET_EXTRA'))['reason'],
+                         'browser_operation_failed')
+
+    def test_phase_restart_and_public_projection(self):
+        budget = SessionBudget(60, phase='subscription_check')
+        budget.refresh_count = 1
+        restarted = budget.restart(phase='checkout_check')
+        self.assertEqual(restarted.phase, 'checkout_check')
+        self.assertEqual(restarted.refresh_count, 0)
+        report = {'session_step': 'page_title', 'session_phase': 'checkout_check',
+                  'session_elapsed_seconds': 9, 'first_session_verified_at': 'forged',
+                  'raw_error': 'synthetic-secret'}
+        expected = {key: value for key, value in report.items()
+                    if key not in {'raw_error', 'first_session_verified_at'}}
+        self.assertEqual(connector.public_result(report), expected)
+        from server import public_result
+        self.assertEqual(public_result(report), expected)
 
 
 if __name__ == '__main__':

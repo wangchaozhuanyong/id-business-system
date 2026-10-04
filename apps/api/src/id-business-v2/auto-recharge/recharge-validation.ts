@@ -313,6 +313,11 @@ const scalarKeys = new Set(
     ' '
   )
 );
+const browserNetworkCodes = new Set(
+  'net::ERR_TIMED_OUT net::ERR_CONNECTION_TIMED_OUT net::ERR_CONNECTION_RESET net::ERR_CONNECTION_CLOSED net::ERR_PROXY_CONNECTION_FAILED net::ERR_TUNNEL_CONNECTION_FAILED net::ERR_NAME_NOT_RESOLVED net::ERR_NETWORK_CHANGED net::ERR_EMPTY_RESPONSE net::ERR_CONNECTION_REFUSED net::ERR_INTERNET_DISCONNECTED NS_ERROR_NET_RESET NS_ERROR_NET_TIMEOUT NS_ERROR_NET_INTERRUPT NS_ERROR_CONNECTION_REFUSED NS_ERROR_PROXY_CONNECTION_REFUSED NS_ERROR_UNKNOWN_HOST NS_ERROR_UNKNOWN_PROXY_HOST'.split(
+    ' '
+  )
+);
 const paymentFailureReasons = new Set([
   'card_declined',
   'expired_card',
@@ -353,6 +358,23 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     )
       result[key] = item;
   }
+  if (
+    result.browser_error_code !== undefined &&
+    !browserNetworkCodes.has(String(result.browser_error_code))
+  )
+    delete result.browser_error_code;
+  if (
+    result.error_type !== undefined &&
+    ![
+      'TimeoutError',
+      'AssertionError',
+      'Error',
+      'TypeError',
+      'TargetClosedError',
+      'UnexpectedError'
+    ].includes(String(result.error_type))
+  )
+    delete result.error_type;
   if (
     result.payment_failure_reason !== undefined &&
     !paymentFailureReasons.has(String(result.payment_failure_reason))
@@ -467,11 +489,15 @@ export function safeDocument(value: unknown): Record<string, unknown> {
   if (input.proxy_attempt_limit === 1 || input.proxy_attempt_limit === 10)
     result.proxy_attempt_limit = input.proxy_attempt_limit;
   if (
-    ['page_load', 'page_refresh', 'session_read', 'account_read'].includes(
+    ['page_load', 'page_title', 'page_refresh', 'session_read', 'account_read'].includes(
       String(input.session_step)
     )
   )
     result.session_step = input.session_step;
+  if (
+    ['initial_login', 'subscription_check', 'checkout_check'].includes(String(input.session_phase))
+  )
+    result.session_phase = input.session_phase;
   if (
     [
       'blank',

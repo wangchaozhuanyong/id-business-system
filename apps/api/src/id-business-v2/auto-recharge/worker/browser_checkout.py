@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlsplit
 
 from attempt_ledger import AttemptLedger, existing_checkout
+from browser_session import retryable_page_load_error, session_failure
 from checkout_core import (ACCOUNT_PATH, CHECKOUT_PATH, MAX_BYTES, ROOT, BrowserCredential,
                            Stop, account_plan, checkout_result, parse_credential, response_json,
                            safe_text, session_cookies, verify_official_session)
@@ -54,21 +55,6 @@ def checkout_page_matches(url, checkout_id):
     # 返回页的查询参数也带订单编号，不能把它当成结算页面。
     return (parts.hostname in {"chatgpt.com", "checkout.stripe.com"}
             and parts.path.rstrip("/").split("/")[-1] == checkout_id)
-
-
-def retryable_page_load_error(error):
-    """Only retry transport failures before any official write is armed."""
-    report = error.report if isinstance(error, Stop) else {}
-    if report.get("reason") in {"session_load_timeout", "session_network_error"}:
-        return True
-    if type(error).__name__ == "TimeoutError":
-        return True
-    return bool(re.search(
-        r"net::ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT|CONNECTION_RESET|CONNECTION_CLOSED|"
-        r"PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|NAME_NOT_RESOLVED|NETWORK_CHANGED|"
-        r"EMPTY_RESPONSE|CONNECTION_REFUSED|INTERNET_DISCONNECTED)",
-        str(error),
-    ))
 
 
 def checkout_page_state(url, text, quote, checkout_id):
@@ -216,6 +202,7 @@ async def restore_session_with_refresh(page, target, wait_seconds, budget):
     """Load once, then refresh the same page once while the window budget remains."""
     for load_attempt in range(2):
         try:
+            budget.refresh_count = load_attempt
             if load_attempt == 0:
                 operation = lambda: page.goto(
                     ORIGIN + "/", wait_until="commit", timeout=0
@@ -229,7 +216,11 @@ async def restore_session_with_refresh(page, target, wait_seconds, budget):
             else:
                 operation = lambda: page.reload(wait_until="commit", timeout=0)
                 step = "page_refresh"
-            await budget.run(operation, step)
+            response = await budget.run(operation, step)
+            status = getattr(response, "status", None)
+            if type(status) is int and status >= 400:
+                raise Stop("verification_required" if status == 403 else "http_error",
+                           http_status=status, user_action_required=status == 403)
             return await check_session(page, target, wait_seconds, budget)
         except Exception as exc:
             if load_attempt or not retryable_page_load_error(exc):
@@ -616,7 +607,7 @@ async def check_session(page, target, wait_seconds=0, budget=None):
         return await budget.run(operation, step) if budget else await operation()
     for attempt in range(2):
         try:
-            title = await read(page.title, "page_load")
+            title = await read(page.title, "page_title")
             if re.search(r"Just a moment|Verify.*human|安全验证|请稍候", title, re.I):
                 raise Stop("verification_required", challenge_observed=True)
             session = await read(lambda: browser_read(page, "/api/auth/session", budget=budget), "session_read")
@@ -716,7 +707,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     try:
         if getattr(target, "session_token", None):
             await context.add_cookies(session_cookies(target))
-        progress(stage)
+        progress(stage, account_matched=False, session_status="not_verified",
+                 **(session_budget.snapshot() if session_budget else {}))
         if session_budget:
             _, identity = await restore_session_with_refresh(
                 page, target, wait_seconds, session_budget
@@ -819,6 +811,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     except Stop as exc:
         result = {**identity, **exc.report, "stage": exc.report.get("stage", stage), **guard.summary(),
                   "checkout_status": guard.checkout_status()}
+        if stage == "session_restore" and session_budget:
+            result.update(session_budget.snapshot())
         if quote is not None:
             result["quote"] = quote
             lines = [line.strip() for line in quote_text.splitlines() if line.strip()]
@@ -833,12 +827,13 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         return result
     except Exception as exc:
         # Playwright 错误可能含 URL/脚本参数，不输出异常字符串或 traceback。
-        result = {"status": "blocked", "reason": "browser_operation_failed", "stage": stage,
-                  "error_type": type(exc).__name__, **identity, **guard.summary(),
+        failure = session_failure(exc)
+        if stage != "session_restore":
+            failure["reason"] = "browser_operation_failed"
+        result = {**failure, "stage": stage, **identity, **guard.summary(),
                   "checkout_status": guard.checkout_status()}
-        network_code = re.search(r"net::ERR_[A-Z_]+", str(exc))
-        if network_code:
-            result["browser_error_code"] = network_code.group(0)
+        if stage == "session_restore" and session_budget:
+            result.update(session_budget.snapshot())
         if guard.checkout_id:
             result["checkout_identifier"] = guard.checkout_id
         if ledger:

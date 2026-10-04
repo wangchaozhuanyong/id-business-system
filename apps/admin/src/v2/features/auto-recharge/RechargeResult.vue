@@ -60,13 +60,17 @@
           <dd>{{ planLabels[job.plan] }}</dd>
         </template>
         <dt>账户核对</dt>
-        <dd>{{ job.result.account_matched ? '官网账户核对通过' : '尚未核实' }}</dd>
+        <dd>{{ accountVerificationLabel(job) }}</dd>
         <dt v-if="job.result.current_plan">当前套餐</dt>
         <dd v-if="job.result.current_plan">{{ statusLabel(job.result.current_plan) }}</dd>
         <dt v-if="job.result.card_last4">银行卡尾号</dt>
         <dd v-if="job.result.card_last4">{{ job.result.card_last4 }}</dd>
         <dt>执行阶段</dt>
-        <dd>{{ statusLabel(job.result.stage) }}</dd>
+        <dd>{{ executionStageLabel(job) }}</dd>
+        <template v-if="job.result.session_phase && job.result.stage === 'session_restore'">
+          <dt>核实阶段</dt>
+          <dd>{{ sessionPhaseLabel(job.result.session_phase) }}</dd>
+        </template>
         <dt v-if="job.result.window_name">窗口名称</dt>
         <dd v-if="job.result.window_name">{{ job.result.window_name }}</dd>
         <dt v-if="job.result.locked_currency">付款保护</dt>
@@ -97,8 +101,14 @@
         {{ job.result.quote_elapsed_seconds ?? 0 }} 秒，最多
         {{ job.result.quote_wait_seconds }} 秒。
       </p>
-      <p v-else-if="job.result.session_attempt" class="recharge-note" role="status">
-        第 {{ job.result.session_attempt }} / {{ job.result.session_attempt_limit }} 次尝试，
+      <p
+        v-else-if="job.result.session_wait_seconds && job.result.stage === 'session_restore'"
+        class="recharge-note"
+        role="status"
+      >
+        <template v-if="job.result.session_attempt">
+          第 {{ job.result.session_attempt }} / {{ job.result.session_attempt_limit }} 次尝试，
+        </template>
         本轮已等待 {{ job.result.session_elapsed_seconds ?? 0 }} 秒， 最多
         {{ job.result.session_wait_seconds }} 秒。
         <span v-if="job.result.session_step && job.result.stage === 'session_restore'"
@@ -107,7 +117,11 @@
       </p>
       <p v-if="job.result.session_refresh_count" class="recharge-note" role="status">
         当前窗口加载失败后已自动刷新
-        {{ job.result.session_refresh_count }} 次；刷新仍失败才会清理并重建窗口。
+        {{ job.result.session_refresh_count }} 次；{{
+          job.action === 'server'
+            ? '恢复期间沿用原窗口和代理，仍失败时停止本次任务。'
+            : '刷新仍失败才会清理并重建窗口。'
+        }}
       </p>
       <p v-if="job.result.quote_refresh_count" class="recharge-note" role="status">
         当前报价页没有有效内容，已自动刷新 {{ job.result.quote_refresh_count }} 次并继续等待。
@@ -121,6 +135,10 @@
         <dl class="recharge-summary">
           <dt>记录时间</dt>
           <dd>{{ formatV2DateTime(job.createdAt) }}</dd>
+          <template v-if="job.result.first_session_verified_at">
+            <dt>首次核实成功</dt>
+            <dd>{{ formatV2DateTime(job.result.first_session_verified_at) }}</dd>
+          </template>
           <dt>{{ job.action === 'bitbrowser' ? '浏览器出口' : '服务器出口' }}</dt>
           <dd>
             {{ job.result.network?.ip || '出口未确认' }} ·
@@ -173,6 +191,9 @@ import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import {
   browserFailureLabel,
+  accountVerificationLabel,
+  executionStageLabel,
+  sessionPhaseLabel,
   failureReasonLabel,
   planLabels,
   paymentFailureLabel,

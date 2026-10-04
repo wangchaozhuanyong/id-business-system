@@ -1,5 +1,6 @@
 """One cancellable deadline for the initial official page and identity reads."""
 import asyncio
+import re
 import time
 
 from checkout_core import Stop
@@ -7,7 +8,7 @@ from checkout_core import Stop
 
 class SessionBudget:
     def __init__(self, seconds, *, cancelled=lambda: False, report=lambda **details: None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, phase=None):
         self.seconds = seconds
         self.cancelled = cancelled
         self.report = report
@@ -15,6 +16,8 @@ class SessionBudget:
         self.started = clock()
         self.paused = 0
         self.step = "page_load"
+        self.phase = phase if phase in {"initial_login", "subscription_check", "checkout_check"} else None
+        self.refresh_count = 0
         self.last_report = float("-inf")
 
     @property
@@ -24,6 +27,11 @@ class SessionBudget:
     def check_cancelled(self):
         if self.cancelled():
             raise Stop("operation_cancelled")
+
+    def snapshot(self):
+        return {"session_step": self.step, "session_elapsed_seconds": int(self.elapsed),
+                "session_wait_seconds": self.seconds, "session_refresh_count": self.refresh_count,
+                **({"session_phase": self.phase} if self.phase else {})}
 
     def remaining_ms(self):
         self.check_cancelled()
@@ -41,16 +49,14 @@ class SessionBudget:
                 self.check_cancelled()
                 remaining = self.remaining_ms() / 1000
                 if self.clock() - self.last_report >= 10:
-                    self.report(session_step=step, session_elapsed_seconds=int(self.elapsed),
-                                session_wait_seconds=self.seconds)
+                    self.report(**self.snapshot())
                     self.last_report = self.clock()
                 await asyncio.wait({task}, timeout=min(1, remaining))
                 self.check_cancelled()
                 if task.done():
                     self.remaining_ms()
                     value = await task
-                    self.report(session_step=step, session_elapsed_seconds=int(self.elapsed),
-                                session_wait_seconds=self.seconds)
+                    self.report(**self.snapshot())
                     return value
         finally:
             if not task.done():
@@ -64,10 +70,10 @@ class SessionBudget:
         finally:
             self.paused += self.clock() - started
 
-    def restart(self, *, report=None):
+    def restart(self, *, report=None, phase=None):
         """同一窗口的新阶段使用独立预算，并沿用取消信号。"""
         return SessionBudget(self.seconds, cancelled=self.cancelled, report=report or self.report,
-                             clock=self.clock)
+                             clock=self.clock, phase=phase or self.phase)
 
 
 RETRYABLE_NETWORK_CODES = {
@@ -76,7 +82,15 @@ RETRYABLE_NETWORK_CODES = {
     "net::ERR_TUNNEL_CONNECTION_FAILED", "net::ERR_NAME_NOT_RESOLVED",
     "net::ERR_NETWORK_CHANGED", "net::ERR_EMPTY_RESPONSE", "net::ERR_CONNECTION_REFUSED",
     "net::ERR_INTERNET_DISCONNECTED",
+    "NS_ERROR_NET_RESET", "NS_ERROR_NET_TIMEOUT", "NS_ERROR_NET_INTERRUPT",
+    "NS_ERROR_CONNECTION_REFUSED", "NS_ERROR_PROXY_CONNECTION_REFUSED",
+    "NS_ERROR_UNKNOWN_HOST", "NS_ERROR_UNKNOWN_PROXY_HOST",
 }
+
+NETWORK_CODE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(code) for code in sorted(RETRYABLE_NETWORK_CODES))
+    + r")(?![A-Za-z0-9_])"
+)
 
 
 def session_failure(error):
@@ -85,21 +99,28 @@ def session_failure(error):
     details = {"error_type": name if name in {
         "TimeoutError", "AssertionError", "Error", "TargetClosedError"
     } else "UnexpectedError"}
-    code = next((code for code in RETRYABLE_NETWORK_CODES if code in str(error)), None)
+    code = NETWORK_CODE_PATTERN.search(str(error))
     if code:
-        details["browser_error_code"] = code
+        details["browser_error_code"] = code.group(0)
     reason = ("session_load_timeout" if name == "TimeoutError" else
               "session_network_error" if code else "browser_operation_failed")
     return {"status": "blocked", "reason": reason, **details}
+
+
+def retryable_page_load_error(error):
+    """仅恢复明确传输失败；HTTP 错误、验证和取消不能被网络码覆盖。"""
+    report = error.report if isinstance(error, Stop) else session_failure(error)
+    return (not report.get("user_action_required") and report.get("http_status") is None
+            and report.get("reason") in {"session_load_timeout", "session_network_error"})
 
 
 async def load_session_page(page, url, budget):
     """同一登录窗口最多两次只读导航；页面响应与账号核实使用同一预算。"""
     for attempt in range(2):
         step = "page_refresh" if attempt else "page_load"
-        budget.report(session_step=step, session_refresh_count=attempt,
-                      session_elapsed_seconds=int(budget.elapsed),
-                      session_wait_seconds=budget.seconds)
+        budget.step = step
+        budget.refresh_count = attempt
+        budget.report(**budget.snapshot())
         try:
             response = await budget.run(lambda: page.goto(
                 url, wait_until="commit", timeout=0), step)

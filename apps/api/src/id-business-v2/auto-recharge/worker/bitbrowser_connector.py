@@ -51,7 +51,7 @@ SAFE_PUBLIC_KEYS = set(
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
-    "session_elapsed_seconds session_wait_seconds session_step session_refresh_count cancellation_confirmed browser_cleanup_status "
+    "session_elapsed_seconds session_wait_seconds session_step session_phase session_refresh_count cancellation_confirmed browser_cleanup_status "
     "quote_elapsed_seconds quote_wait_seconds quote_refresh_count page_state stale_profiles_cleaned "
     "checkout_replacement_performed "
     "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
