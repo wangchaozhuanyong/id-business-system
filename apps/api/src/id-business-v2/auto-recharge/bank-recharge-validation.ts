@@ -113,14 +113,18 @@ const FX_RATE_PATTERN = /^(?:0|[1-9]\d{0,8})(?:\.\d{1,8})?$/;
 export function bankRechargeFxRate(
   value: unknown,
   previous: { toString(): string } | null,
-  label: string
+  label: string,
+  currencyCode?: string | null
 ) {
-  if (value === undefined) return previous?.toString() ?? null;
+  if (value === undefined) value = previous?.toString() ?? null;
   if (value === null || value === '') return null;
   if (typeof value !== 'string' || !FX_RATE_PATTERN.test(value)) {
     throw new BadRequestException(`${label}格式无效`);
   }
   const rate = Rate8.from(value);
   if (!rate.gt('0')) throw new BadRequestException(`${label}必须大于 0`);
+  if (currencyCode === 'CNY' && !rate.equals('1')) {
+    throw new BadRequestException(`${label}为人民币时必须为 1，请明确更正后再保存或完成`);
+  }
   return rate.toString();
 }

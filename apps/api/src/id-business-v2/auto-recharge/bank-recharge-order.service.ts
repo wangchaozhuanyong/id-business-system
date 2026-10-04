@@ -23,7 +23,7 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { bankRechargeCardSnapshot } from './bank-recharge-card-summary';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import { resolveBankRechargeSource } from './bank-recharge-recheck';
-import { officialBankRechargeDueAt } from './bank-recharge-official-period';
+import { activateBankRechargeSubscription } from './bank-recharge-subscription-projection';
 import {
   hasVerifiedRechargePayment,
   isRechargeUpgrade,
@@ -130,7 +130,8 @@ export class BankRechargeOrderService {
             updatedByUserId: operator.id
           }
         });
-        if (accountId && openedAt) await this.activateSubscription(tx, item);
+        if (accountId && openedAt)
+          await activateBankRechargeSubscription(tx, this.repository, item);
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -197,6 +198,20 @@ export class BankRechargeOrderService {
     ) {
       throw new ConflictException('官网代付事实不能修改');
     }
+    if (
+      previous.source === 'automatic' &&
+      ['openedAt', 'dueAt'].some((key) => {
+        if (input[key] === undefined) return false;
+        const prior = key === 'openedAt' ? previous.openedAt : previous.dueAt;
+        if (input[key] === null) return prior !== null;
+        return (
+          bankRechargeDate(input[key], key === 'openedAt' ? '开通时间' : '到期时间').getTime() !==
+          prior?.getTime()
+        );
+      })
+    ) {
+      throw new ConflictException('自动付款日期须通过核对订阅操作确认，不能在普通编辑中推定');
+    }
     const currencyCode =
       input.chargeCurrencyCode === undefined
         ? previous.chargeCurrencyCode
@@ -222,7 +237,17 @@ export class BankRechargeOrderService {
         : bankRechargeOptionalId(input.customerId, '客户');
     const cardId =
       input.cardId === undefined ? previous.cardId : bankRechargeOptionalId(input.cardId, '银行卡');
-    if (accountId) await this.accounts.requireActive(tx, accountId);
+    if (accountId) {
+      const account = await this.accounts.requireActive(tx, accountId);
+      if (previous.source === 'automatic') {
+        const source = previous.rechargeJobId
+          ? await this.repository.findRechargeJob(tx, previous.rechargeJobId)
+          : null;
+        if (!source?.accountKey || account.officialAccountKey !== source.accountKey) {
+          throw new ConflictException('所选账号与原官网付款身份不一致，请先核验账号归属');
+        }
+      }
+    }
     if (customerId) await this.requireCustomer(tx, customerId);
     const card = cardId ? await this.requireCard(tx, cardId, currencyCode) : null;
     if (
@@ -291,9 +316,10 @@ export class BankRechargeOrderService {
           : bankRechargeDate(input.openedAt, '开通时间');
     const dueAt =
       input.dueAt === undefined
-        ? (previous.dueAt ?? (openedAt ? bankRechargeDefaultDueAt(openedAt) : null))
+        ? (previous.dueAt ??
+          (previous.source === 'manual' && openedAt ? bankRechargeDefaultDueAt(openedAt) : null))
         : input.dueAt === null
-          ? openedAt
+          ? previous.source === 'manual' && openedAt
             ? bankRechargeDefaultDueAt(openedAt)
             : null
           : bankRechargeDate(input.dueAt, '到期时间');
@@ -334,17 +360,20 @@ export class BankRechargeOrderService {
     const chargeFxRateToCny = bankRechargeFxRate(
       input.chargeFxRateToCny,
       previous.chargeFxRateToCny,
-      '代付汇率'
+      '代付汇率',
+      currencyCode
     );
     const bankFeeFxRateToCny = bankRechargeFxRate(
       input.bankFeeFxRateToCny,
       previous.bankFeeFxRateToCny,
-      '银行手续费汇率'
+      '银行手续费汇率',
+      bankFeeCurrencyCode
     );
     const receivedFxRateToCny = bankRechargeFxRate(
       input.receivedFxRateToCny,
       previous.receivedFxRateToCny,
-      '实收汇率'
+      '实收汇率',
+      receivedCurrencyCode
     );
     const fundingFinanceAccountId =
       input.fundingFinanceAccountId === undefined
@@ -388,7 +417,7 @@ export class BankRechargeOrderService {
       }
     });
     if (accountId && openedAt) {
-      await this.activateSubscription(tx, updated);
+      await activateBankRechargeSubscription(tx, this.repository, updated);
     } else if (previous.accountId) {
       await this.repository.cancelSubscriptionForOrder(tx, previous.accountId, id);
     }
@@ -427,6 +456,8 @@ export class BankRechargeOrderService {
       typeof checkoutIdentifier !== 'string' ||
       !checkoutIdentifier ||
       typeof evidence.identifier !== 'string' ||
+      !evidence.identifier ||
+      !Number.isSafeInteger(evidence.amount_minor) ||
       evidence.amount_minor !== quote.today.amount_minor ||
       evidence.currency !== quote.today.currency ||
       typeof quote.today.amount !== 'string'
@@ -444,8 +475,10 @@ export class BankRechargeOrderService {
     );
     if (prior) {
       if (
+        prior.rechargeJobId !== job.id ||
         prior.checkoutIdentifier !== checkoutIdentifier ||
         prior.paymentEvidenceId !== evidence.identifier ||
+        prior.chargeCurrencyCode !== quote.today.currency ||
         prior.chargeAmount.toString() !== Amount4.from(quote.today.amount).toString()
       ) {
         throw new ConflictException('官网付款证据已关联其他银充订单');
@@ -459,6 +492,9 @@ export class BankRechargeOrderService {
       quote.today.amount.split('.')[1]?.length ?? 0
     );
     const charge = bankRechargeMoney(quote.today.amount, '官网代付金额', currency.minorUnits, true);
+    if (!charge.mul(`1${'0'.repeat(currency.minorUnits)}`).equals(String(evidence.amount_minor))) {
+      return null;
+    }
     const cardLast4 =
       typeof result.card_last4 === 'string' && /^\d{4}$/.test(result.card_last4)
         ? result.card_last4
@@ -473,13 +509,7 @@ export class BankRechargeOrderService {
         : null;
     const verifiedAt = new Date();
     const accountId = await this.accounts.ensureAccountForVerifiedPayment(tx, job);
-    const existingSubscription = accountId
-      ? await this.repository.findSubscription(tx, accountId)
-      : null;
-    // 开通记录代表本次成功订阅/升级，不能沿用旧套餐账期开始时间。
-    const openedAt = verifiedAt;
-    const dueAt =
-      officialBankRechargeDueAt(result, job, verifiedAt) ?? bankRechargeDefaultDueAt(openedAt);
+    // 核验时刻和官网旧账期均不代表本次实际付款时间，先保留待人工核对。
     const item = await this.repository.createOrder(tx, {
       data: {
         orderNo: this.orderNo(),
@@ -488,7 +518,7 @@ export class BankRechargeOrderService {
         checkoutIdentifier,
         paymentEvidenceId: evidence.identifier,
         accountId,
-        customerId: existingSubscription?.customerId ?? null,
+        customerId: null,
         cardId: card?.id ?? null,
         ...bankRechargeCardSnapshot(this.encryption, card),
         cardLast4,
@@ -498,15 +528,14 @@ export class BankRechargeOrderService {
         accountingVersion: 'subscription_cost_v2',
         customerFeeRate: '0',
         customerFeeAmount: '0',
-        openedAt,
+        openedAt: null,
         verifiedAt,
-        dueAt,
-        renewedFromOrderId: existingSubscription?.currentOrderId ?? null,
+        dueAt: null,
+        renewedFromOrderId: null,
         createdByUserId: job.ownerId,
         updatedByUserId: job.ownerId
       }
     });
-    if (accountId) await this.activateSubscription(tx, item);
     await this.audit.append(tx, {
       userId: job.ownerId,
       module: 'id_business_v2',
@@ -526,32 +555,6 @@ export class BankRechargeOrderService {
       remark: '官网付款和订阅生效均核实，自动生成待补全银充订单'
     });
     return item;
-  }
-
-  private async activateSubscription(
-    tx: V2CommandTransaction,
-    order: {
-      id: string;
-      accountId: string | null;
-      customerId: string | null;
-      plan: string;
-      openedAt: Date | null;
-      dueAt: Date | null;
-    }
-  ) {
-    if (!order.accountId || !order.openedAt) return;
-    const current = await this.repository.findSubscriptionWithOrder(tx, order.accountId);
-    if (current && current.currentOrderId !== order.id && current.openedAt >= order.openedAt) {
-      return;
-    }
-    await this.repository.upsertSubscription(tx, {
-      accountId: order.accountId,
-      currentOrderId: order.id,
-      customerId: order.customerId,
-      plan: order.plan,
-      openedAt: order.openedAt,
-      dueAt: order.dueAt
-    });
   }
 
   private async requireCustomer(tx: V2CommandTransaction, id: string) {

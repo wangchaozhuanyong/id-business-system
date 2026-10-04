@@ -7,7 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { V2CommandTransactionManager } from '../runtime/public-api';
+import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2GiftCardReversalService } from './id-business-v2-gift-card-reversal.service';
 import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gift-cards.repository';
 
@@ -147,7 +147,8 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     reportLossInTransaction: vi.fn()
   };
   const supplierFundsService = {
-    reverseGiftCardDebit: vi.fn()
+    reverseGiftCardDebit: vi.fn(),
+    resolveWithdrawalFunding: vi.fn()
   };
   const financePostingService = {
     post: vi.fn()
@@ -166,6 +167,15 @@ describe('IdBusinessV2GiftCardReversalService', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
+    supplierFundsService.resolveWithdrawalFunding.mockResolvedValue({
+      source: 'supplier_wallet',
+      sourceLedgerId: 'supplier-debit',
+      supplierAccountId: 'supplier-wallet',
+      financeAccountId: null,
+      currency: 'CNY',
+      amountOriginal: Amount4.from('108'),
+      amountCny: Amount4.from('108')
+    });
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     prisma.idBusinessV2Account.findFirst.mockResolvedValue({
       id: accountId,
@@ -484,11 +494,30 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     expect(result.action).toBe('withdrawn');
     expect(result.giftCard.status).toBe('withdrawn');
     expect(result.ledgerEntry.entryType).toBe('gift_card_withdrawal');
-    expect(supplierFundsService.reverseGiftCardDebit).toHaveBeenCalledWith(tx, {
-      giftCardId,
-      reason: '录入目标错误，需要撤回',
-      operator
-    });
+    expect(supplierFundsService.resolveWithdrawalFunding).toHaveBeenCalledWith(tx, giftCardId);
+    expect(supplierFundsService.reverseGiftCardDebit).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2GiftCard.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          supplierRefundAmount: '108',
+          supplierRefundAmountCny: '108'
+        })
+      })
+    );
+    const journal = financePostingService.post.mock.calls[0]![1];
+    expect(journal.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountCode: 'supplier_refund_receivable',
+          amountCny: Amount4.from('108')
+        }),
+        expect.objectContaining({
+          accountCode: 'gift_card_cost',
+          direction: 'debit',
+          amountCny: Amount4.from('4')
+        })
+      ])
+    );
   });
 
   it('reverses a customer-owned gift-card cost without changing company inventory', async () => {

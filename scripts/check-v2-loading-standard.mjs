@@ -34,7 +34,8 @@ const allowedSkeletonKinds = new Set([
   'settings',
   'detail',
   'cards',
-  'inline'
+  'inline',
+  'control'
 ]);
 const issues = [];
 

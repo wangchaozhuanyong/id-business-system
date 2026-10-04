@@ -2,9 +2,9 @@
   <section class="v2-page-stack v2-analytics-section-stack" aria-label="资产余额分析">
     <section class="v2-finance-asset-overview" aria-label="资产总览">
       <article class="is-primary">
-        <span>资产账面合计</span>
+        <span>当前全局资产</span>
         <strong>{{ formatCny(overview.assets.totalBookValueCny) }}</strong>
-        <small>以历史交易汇率记录</small>
+        <small>含停用账户，按历史成本；不随筛选改变</small>
       </article>
       <article>
         <span>最新人民币估值</span>
@@ -34,7 +34,7 @@
       <header>
         <V2SectionHeading
           title="资产构成"
-          help="资产合计只包含公司所有的资金、预付款、ID 余额、ID 库存和待退款；客户已购 ID 余额仅作备查。"
+          help="当前全局资产含停用账户，只包含公司所有的资金、预付款、ID 余额、ID 库存和待退款；客户已购 ID 余额仅作备查。"
         >
           <template #actions>
             <span>共 {{ assetRows.length }} 类资产</span>

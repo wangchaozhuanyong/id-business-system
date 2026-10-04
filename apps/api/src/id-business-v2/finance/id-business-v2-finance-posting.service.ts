@@ -24,8 +24,17 @@ import { toIdBusinessV2BusinessDate } from './id-business-v2-finance-input';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
 import {
   findLockedFinancePeriodStatus,
+  findLockedJournalReplay,
   lockFinanceAccount
 } from './persistence/id-business-v2-finance-posting.repository';
+import {
+  prepareCashHistoricalCost,
+  lockCashHistoricalCostAccounts,
+  assertCashCostMetadataInput,
+  replayCashCostFingerprint,
+  cashCostRequestFingerprint,
+  type LockedCashAccount
+} from './id-business-v2-finance-cash-cost';
 
 export interface FinancePostingLineInput {
   accountCode: IdBusinessV2FinanceAccountCode;
@@ -54,7 +63,7 @@ export interface FinancePostingInput {
   lines: FinancePostingLineInput[];
 }
 
-interface NormalizedFinancePostingLine extends Omit<
+export interface NormalizedFinancePostingLine extends Omit<
   FinancePostingLineInput,
   'amountOriginal' | 'fxRateToCny' | 'amountCny'
 > {
@@ -116,18 +125,30 @@ export class IdBusinessV2FinancePostingService {
   }
 
   async post(tx: V2CommandTransaction, input: FinancePostingInput) {
+    assertCashCostMetadataInput(input.metadata);
     if (input.lines.length < 2) throw new BadRequestException('财务日记至少需要两条分录');
     const normalizedLines = input.lines.map((line, index) => this.normalizeLine(line, index));
     this.assertBalanced(normalizedLines);
 
     const replay = await this.repository.findJournalReplay(tx, input.idempotencyKey);
     if (replay) {
-      this.assertReplayMatches(replay, input, normalizedLines);
+      this.assertOriginalRequestMatches(replay, input, normalizedLines);
       return replay;
     }
 
     const business = toIdBusinessV2BusinessDate(input.occurredAt);
     await this.assertPeriodOpen(tx, business.month);
+    const lockedAccounts = await lockCashHistoricalCostAccounts(tx, input, normalizedLines);
+    if (lockedAccounts) {
+      // A same-key request may have committed while this one waited for the cash lock.
+      const lockedReplay = await findLockedJournalReplay(tx, input.idempotencyKey);
+      if (lockedReplay) {
+        this.assertOriginalRequestMatches(lockedReplay, input, normalizedLines);
+        return lockedReplay;
+      }
+    }
+    const prepared = await prepareCashHistoricalCost(tx, input, normalizedLines, lockedAccounts);
+    this.assertBalanced(prepared.lines);
 
     const journalId = randomUUID();
     const journal = await this.repository.createJournal(tx, {
@@ -141,12 +162,12 @@ export class IdBusinessV2FinancePostingService {
       periodMonth: business.month,
       occurredAt: input.occurredAt,
       summary: input.summary,
-      metadata: input.metadata,
+      metadata: prepared.metadata,
       reversalOfJournalId: input.reversalOfJournalId,
       idempotencyKey: input.idempotencyKey,
       createdByUserId: input.operator?.id,
       lines: {
-        create: normalizedLines.map((line, index) => ({
+        create: prepared.lines.map((line, index) => ({
           id: randomUUID(),
           lineNo: index + 1,
           accountCode: line.accountCode,
@@ -162,7 +183,7 @@ export class IdBusinessV2FinancePostingService {
         }))
       }
     });
-    await this.applyFinanceAccountMovements(tx, normalizedLines);
+    await this.applyFinanceAccountMovements(tx, prepared.lines, prepared.accounts);
     return journal;
   }
 
@@ -286,7 +307,8 @@ export class IdBusinessV2FinancePostingService {
 
   private async applyFinanceAccountMovements(
     tx: V2CommandTransaction,
-    lines: NormalizedFinancePostingLine[]
+    lines: NormalizedFinancePostingLine[],
+    lockedAccounts?: Map<string, LockedCashAccount>
   ) {
     const movements = new Map<string, { original: Amount4; cny: Amount4 }>();
     for (const line of lines) {
@@ -306,13 +328,26 @@ export class IdBusinessV2FinancePostingService {
 
     for (const accountId of [...movements.keys()].sort()) {
       const movement = movements.get(accountId)!;
-      const account = await lockFinanceAccount(tx, accountId);
+      const account = lockedAccounts?.get(accountId) ?? (await lockFinanceAccount(tx, accountId));
       if (!account || account.status !== 'active') {
         throw new BadRequestException('资金账户不存在或已停用');
       }
       if (account.currentBalance.add(movement.original).isNegative()) {
         throw new ConflictException('资金账户余额不足');
       }
+      if (
+        lines.some(
+          (line) =>
+            line.accountCode === 'cash' &&
+            line.financeAccountId === accountId &&
+            line.currency !== account.currency
+        )
+      )
+        throw new BadRequestException('现金分录币种与资金账户不一致');
+      const nextOriginal = account.currentBalance.add(movement.original);
+      const nextCost = account.currentBalanceCny.add(movement.cny);
+      if (nextCost.isNegative() || (nextOriginal.isZero() && !nextCost.isZero()))
+        throw new ConflictException('现金账面成本无法精确结清，请先核对历史收付或按原业务处理');
       await this.repository.incrementFinanceAccount(
         tx,
         accountId,
@@ -320,6 +355,20 @@ export class IdBusinessV2FinancePostingService {
         movement.cny.toString()
       );
     }
+  }
+
+  private assertOriginalRequestMatches(
+    replay: FinanceJournalReplay,
+    input: FinancePostingInput,
+    lines: NormalizedFinancePostingLine[]
+  ) {
+    const originalFingerprint = replayCashCostFingerprint(replay.metadata);
+    if (originalFingerprint) {
+      if (originalFingerprint !== cashCostRequestFingerprint(input, lines))
+        throw new ConflictException('财务日记幂等键已用于其他过账内容');
+      return;
+    }
+    this.assertReplayMatches(replay, input, lines);
   }
 
   private assertReplayMatches(

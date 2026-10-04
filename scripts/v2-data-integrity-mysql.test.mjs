@@ -196,3 +196,42 @@ for (const [name, source, reversal] of invalidCases) {
     assert.equal((await check(source, reversal)).length, 1);
   });
 }
+
+const consumptionStateQuery = V2_DATA_INTEGRITY_CHECKS.find(
+  (check) => check.code === 'order_consumption_state_mismatch'
+).sql;
+const cashOnlyRefund = {
+  balanceRefundMode: 'none',
+  restoreBalance: false,
+  refundedBalanceAmount: '0',
+  restoredBalanceCostAmount: '0'
+};
+for (const [name, status, metadata, expected] of [
+  ['cash-only refund with immutable zero-restoration evidence', 'refunded', cashOnlyRefund, 0],
+  ['refund without restoration decision evidence', 'refunded', {}, 1],
+  [
+    'refund claiming balance was restored without a reversal',
+    'refunded',
+    { ...cashOnlyRefund, restoreBalance: true },
+    1
+  ],
+  [
+    'refund claiming nonzero returned cost without a reversal',
+    'refunded',
+    { ...cashOnlyRefund, restoredBalanceCostAmount: '1' },
+    1
+  ],
+  [
+    'cancelled consumption cannot use cash-refund evidence to bypass reversal',
+    'cancelled',
+    cashOnlyRefund,
+    1
+  ]
+]) {
+  test(`MySQL consumption audit checks ${name}`, { skip: !enabled }, async () => {
+    const fixtures = `WITH id_business_v2_orders AS (${sqlRow({ id: 'order', status, balance_amount: '20' })}),
+      id_business_v2_balance_ledger AS (${sqlRow({ order_id: 'order', entry_type: 'order_consumption' })}),
+      id_business_v2_finance_journals AS (${sqlRow({ source_type: 'order', source_id: 'order', journal_type: 'order_refund', status: 'posted', metadata: JSON.stringify(metadata) })}) `;
+    assert.equal((await client.$queryRawUnsafe(fixtures + consumptionStateQuery)).length, expected);
+  });
+}

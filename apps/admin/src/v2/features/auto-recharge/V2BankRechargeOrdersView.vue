@@ -10,6 +10,9 @@
       </template>
     </V2PageContext>
 
+    <el-tabs v-model="deletedFilter" aria-label="银充记录范围"
+      ><el-tab-pane label="业务清单" name="active" /><el-tab-pane label="回收站" name="deleted"
+    /></el-tabs>
     <el-tabs v-model="expiry" aria-label="银充订单分类">
       <el-tab-pane label="全部订单" name="all" />
       <el-tab-pane label="已到期订单" name="expired" />
@@ -29,6 +32,7 @@
         <el-option label="待补全" value="pending_details" />
         <el-option label="已完成" value="completed" />
         <el-option label="已退款" value="refunded" />
+        <el-option label="已作废" value="cancelled" />
       </el-select>
       <AppButton variant="soft" @click="applyFilters">查询</AppButton>
     </section>
@@ -37,6 +41,9 @@
       <AppButton size="small" variant="ghost" @click="clearAccountFilter">查看全部订单</AppButton>
     </p>
 
+    <p v-if="restoreNavigationError" class="bank-recharge-error" role="alert">
+      {{ restoreNavigationError }}
+    </p>
     <V2AsyncRegion
       skeleton="table"
       :phase="ordersQuery.phase.value"
@@ -45,7 +52,7 @@
       loading-title="正在加载银充订单"
       @retry="ordersQuery.refresh"
     >
-      <section class="v2-records-list">
+      <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
         <header>
           <V2SectionHeading title="订单清单">
             <template #actions>
@@ -131,22 +138,24 @@
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[10]"
             ><template #default="{ row }">{{
-              row.openedAt ? formatV2DateTime(row.openedAt) : formatV2DateTime(row.createdAt)
+              row.openedAt ? formatV2DateTime(row.openedAt) : '日期待核对'
             }}</template></V2TableColumn
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[11]"
             ><template #default="{ row }">{{
-              row.dueAt ? formatV2DateTime(row.dueAt) : '待设'
+              row.dueAt ? formatV2DateTime(row.dueAt) : '日期待核对'
             }}</template></V2TableColumn
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[12]"
             ><template #default="{ row }"
               ><el-tag :type="row.status === 'refunded' ? 'warning' : 'success'" effect="plain">{{
-                row.status === 'refunded'
-                  ? '已退款'
-                  : row.source === 'automatic'
-                    ? '官网已充值'
-                    : '手工已录入'
+                row.status === 'cancelled'
+                  ? '已作废'
+                  : row.status === 'refunded'
+                    ? '已退款'
+                    : row.source === 'automatic'
+                      ? '官网已充值'
+                      : '手工已录入'
               }}</el-tag></template
             ></V2TableColumn
           >
@@ -174,36 +183,72 @@
           >
           <V2TableActionColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[15]">
             <template #default="{ row }">
-              <AppButton size="small" variant="ghost" @click="openEdit(row)">{{
-                row.status === 'completed' || row.status === 'refunded' ? '详情' : '修改'
-              }}</AppButton>
               <AppButton
-                v-if="row.status === 'pending_details'"
+                v-if="row.deletedAt"
                 size="small"
                 variant="ghost"
-                :disabled="working"
-                @click="complete(row)"
-                >完成</AppButton
+                @click="requestRestore('bank_recharge_order', row, row.orderNo)"
+                >申请恢复</AppButton
               >
-              <el-dropdown
-                v-else-if="
-                  row.status === 'completed' ||
-                  (row.status === 'refunded' && row.financeStatus === 'partial')
-                "
-                trigger="click"
-              >
-                <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
-                <template #dropdown
-                  ><el-dropdown-menu>
-                    <el-dropdown-item
-                      v-if="row.status === 'completed' && row.financeStatus === 'posted'"
-                      @click="openCorrection(row)"
-                      >更正订单</el-dropdown-item
-                    >
-                    <el-dropdown-item @click="openRefund(row)">退款与回款</el-dropdown-item>
-                  </el-dropdown-menu></template
+              <template v-else>
+                <AppButton size="small" variant="ghost" @click="openEdit(row)">{{
+                  ['completed', 'refunded', 'cancelled'].includes(row.status) ? '详情' : '修改'
+                }}</AppButton>
+                <AppButton
+                  v-if="row.status === 'pending_details'"
+                  size="small"
+                  variant="ghost"
+                  :disabled="working"
+                  @click="complete(row)"
+                  >完成</AppButton
                 >
-              </el-dropdown>
+                <el-dropdown trigger="click">
+                  <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
+                  <template #dropdown
+                    ><el-dropdown-menu>
+                      <el-dropdown-item
+                        v-if="row.status === 'completed' && row.financeStatus === 'posted'"
+                        @click="openCorrection(row)"
+                        >更正订单</el-dropdown-item
+                      >
+                      <el-dropdown-item
+                        v-if="
+                          row.status === 'completed' ||
+                          (row.status === 'refunded' && row.financeStatus === 'partial')
+                        "
+                        @click="openRefund(row)"
+                        >退款与回款</el-dropdown-item
+                      >
+                      <el-dropdown-item
+                        v-if="row.accountId && !['cancelled', 'refunded'].includes(row.status)"
+                        @click="reviewOrderId = row.id"
+                        >核对订阅</el-dropdown-item
+                      >
+                      <el-dropdown-item
+                        v-if="
+                          row.source === 'manual' &&
+                          row.financeStatus === 'unposted' &&
+                          row.status !== 'cancelled'
+                        "
+                        @click="lifecycleTarget = { entity: 'order', id: row.id, action: 'cancel' }"
+                        >作废误录</el-dropdown-item
+                      >
+                      <el-dropdown-item
+                        v-if="row.status === 'cancelled'"
+                        @click="
+                          lifecycleTarget = { entity: 'order', id: row.id, action: 'restore' }
+                        "
+                        >恢复待补全</el-dropdown-item
+                      >
+                      <el-dropdown-item
+                        v-if="row.status === 'cancelled'"
+                        @click="lifecycleTarget = { entity: 'order', id: row.id, action: 'delete' }"
+                        >移入回收站</el-dropdown-item
+                      >
+                    </el-dropdown-menu></template
+                  >
+                </el-dropdown>
+              </template>
             </template>
           </V2TableActionColumn>
         </V2Table>
@@ -225,10 +270,32 @@
     </V2AsyncRegion>
 
     <V2BankRechargeOrderDrawers :state="drawerState" />
+    <BankRechargeLifecycleDialog
+      :target="lifecycleTarget"
+      @close="lifecycleTarget = null"
+      @completed="ordersQuery.refresh"
+    />
+    <BankRechargeSubscriptionReviewDialog
+      :order-id="reviewOrderId"
+      @close="reviewOrderId = null"
+      @completed="ordersQuery.refresh"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
+import { useBankRechargeRestoreNavigation } from './useBankRechargeRestoreNavigation';
+const { requestRestore, restoreNavigationError } = useBankRechargeRestoreNavigation();
+import { ref } from 'vue';
+import BankRechargeLifecycleDialog from './BankRechargeLifecycleDialog.vue';
+import BankRechargeSubscriptionReviewDialog from './BankRechargeSubscriptionReviewDialog.vue';
+import type { BankLifecycleEntity, BankLifecycleAction } from './bank-recharge-api';
+const lifecycleTarget = ref<{
+  entity: BankLifecycleEntity;
+  id: string;
+  action: BankLifecycleAction;
+} | null>(null);
+const reviewOrderId = ref<string | null>(null);
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -243,6 +310,7 @@ import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2BankRechargeOrderDrawers from './V2BankRechargeOrderDrawers.vue';
 import type { BankRechargeOrder } from './bank-recharge-api';
 import { useBankRechargeOrdersPage } from './useBankRechargeOrdersPage';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 
@@ -256,6 +324,7 @@ function feeLabel(row: BankRechargeOrder, prefix: 'usdtFee' | 'shoppingFee') {
 const drawerState = useBankRechargeOrdersPage();
 const {
   expiry,
+  deletedFilter,
   page,
   pageSize,
   keywordInput,
@@ -282,4 +351,8 @@ const {
   changePage,
   changePageSize
 } = drawerState;
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => data.value?.items ?? [],
+  pageSize: () => pageSize.value
+});
 </script>

@@ -27,9 +27,9 @@ export function isWriteConflictError(error: unknown) {
   if (isPrismaErrorCode(error, 'P2034')) return true;
   if (!isPrismaErrorCode(error, 'P2010')) return false;
   const meta = (error as PrismaErrorLike).meta;
-  return Boolean(
-    meta && typeof meta === 'object' && (meta as PrismaErrorMetaLike).code === '40001'
-  );
+  if (!meta || typeof meta !== 'object') return false;
+  const code = (meta as PrismaErrorMetaLike).code;
+  return code === '40001' || code === '1213' || code === 1213;
 }
 
 export function isUnsupportedFinanceCurrencyEnumError(error: unknown, currency?: string) {

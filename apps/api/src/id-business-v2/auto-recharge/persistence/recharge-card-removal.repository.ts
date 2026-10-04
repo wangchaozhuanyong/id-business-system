@@ -8,7 +8,7 @@ export class RechargeCardRemovalRepository {
     return acquireMysqlTransactionLock(tx, 'auto-recharge-single-worker');
   }
   account(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2ChatgptAccount.findUnique({ where: { id } });
+    return tx.idBusinessV2ChatgptAccount.findFirst({ where: { id, deletedAt: null } });
   }
   openingOrder(tx: V2CommandTransaction, accountId: string) {
     return tx.idBusinessV2BankRechargeOrder.findFirst({

@@ -47,15 +47,17 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
     };
   }
 
-  list(currency?: IdBusinessV2FinanceCurrency, supplierOptionId?: string) {
+  list(currency?: IdBusinessV2FinanceCurrency, supplierOptionId?: string, includeDisabled = false) {
     return this.prisma.idBusinessV2TopupSupplierAccount
       .findMany({
         where: {
           currency,
           supplierOptionId,
-          status: 'active',
+          status: includeDisabled ? undefined : 'active',
           supplierOption: {
-            is: { type: 'topup_supplier', status: 'active', deletedAt: null }
+            is: includeDisabled
+              ? { type: 'topup_supplier' }
+              : { type: 'topup_supplier', status: 'active', deletedAt: null }
           }
         },
         include: { supplierOption: true },

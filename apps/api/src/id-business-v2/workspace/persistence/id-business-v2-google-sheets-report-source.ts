@@ -33,7 +33,7 @@ export async function loadGoogleSheetsReportSource(
     orders: { deletedAt: null, ...after(previous.records.orders) },
     giftCards: after(previous.records.giftCards),
     renewals: after(previous.records.renewals),
-    chatgptAccounts: after(previous.records.chatgptAccounts),
+    chatgptAccounts: { ...after(previous.records.chatgptAccounts), deletedAt: null },
     mailboxes: after(previous.records.mailboxes),
     bankCards: after(previous.records.bankCards),
     customers: { deletedAt: null, ...after(previous.records.customers) },

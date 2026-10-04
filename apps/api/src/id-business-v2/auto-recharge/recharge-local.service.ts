@@ -23,7 +23,10 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { bankRechargeEmail } from './bank-recharge-validation';
 import { hash, object, uuidPattern } from './recharge-validation';
 import { rechargeUpgradeRecheckBinding } from './recharge-upgrade-protocol';
-import { recoverRechargePaymentResult } from './recharge-payment-facts';
+import {
+  persistLocalPaymentFacts,
+  recoverLocalRechargePaymentFacts
+} from './recharge-local-payment-recovery';
 import {
   validateRechargeBitBrowserOpenStart,
   validateRechargeBitBrowserRecheckStart,
@@ -292,14 +295,7 @@ export class RechargeLocalService {
           throw new ConflictException('已有一笔充值任务执行中');
         }
         const source = await this.repository.findJob(tx, input.sourceJobId);
-        const sourceResult = source?.accountKey
-          ? recoverRechargePaymentResult(
-              source,
-              await this.repository.records(tx, source.accountKey)
-            )
-          : source
-            ? object(source.result)
-            : {};
+        const sourceResult = await recoverLocalRechargePaymentFacts(tx, this.repository, source);
         const paymentAttempted =
           sourceResult.payment_attempted === true ||
           Number(sourceResult.payment_requests_sent) === 1 ||
@@ -309,7 +305,7 @@ export class RechargeLocalService {
           source.ownerId !== operator.id ||
           !source.accountKey ||
           source.plan !== input.plan ||
-          !['prepare', 'flow', 'bitbrowser', 'recheck'].includes(source.action) ||
+          !['prepare', 'flow', 'bitbrowser'].includes(source.action) ||
           !paymentAttempted ||
           sourceResult.recheck_only === true ||
           sourceResult.payment_status === 'declined' ||
@@ -321,6 +317,7 @@ export class RechargeLocalService {
         const upgrade = rechargeUpgradeRecheckBinding(sourceResult, source.plan);
         if (sourceResult.operation === 'subscription_upgrade' && !upgrade)
           throw new ConflictException('原升级操作绑定不完整，不能复查');
+        await persistLocalPaymentFacts(tx, this.repository, this.audit, source, sourceResult);
         const created = await this.repository.createJob(tx, {
           id: input.id,
           ownerId: operator.id,

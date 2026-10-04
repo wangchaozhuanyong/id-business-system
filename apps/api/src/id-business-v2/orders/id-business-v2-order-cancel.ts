@@ -193,6 +193,10 @@ export async function cancelIdBusinessV2Order(
         profitAmount: profitAmount?.toString() ?? null,
         updatedByUserId: operator?.id
       });
+      if (financeJournal) profitAmount = await repository.synchronizePostedProfit(tx, order.id);
+      if (restoredSourceOrderId && !restoredSourceOrderCost.isZero()) {
+        await repository.synchronizePostedProfit(tx, restoredSourceOrderId);
+      }
       await support.writeLifecycleAudit(
         tx,
         'cancel',

@@ -14,6 +14,14 @@ import {
 } from './persistence/id-business-v2-data-governance.repository';
 
 import { canRestoreServiceMasters } from './data-governance-restore-dependencies';
+import {
+  bankOrderRestoreAllowed,
+  chatgptRestoreAllowed,
+  findBankOrderRestoreState,
+  findChatgptRestoreState,
+  restoreBankOrder,
+  restoreChatgptAccount
+} from './persistence/data-governance-bank-restore';
 
 interface ExecutionOutcome {
   status: 'succeeded' | 'skipped';
@@ -114,6 +122,8 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
       return this.restoreOption(tx, item, eligibility, operatorId);
     }
     if (item.entityType === 'order') return this.restoreOrder(tx, item, eligibility, operatorId);
+    if (item.entityType === 'chatgpt_account' || item.entityType === 'bank_recharge_order')
+      return this.restoreSubscriptionData(tx, item, eligibility, operatorId);
     return { status: 'skipped', code: 'unsupported_entity', message: '不支持该恢复类型。' };
   }
 
@@ -143,6 +153,57 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
           code: 'account_restored_disabled',
           message: 'ID 已恢复并保持停用。',
           evidence: { recordStatus: 'disabled' }
+        }
+      : this.sourceChanged();
+  }
+
+  private async restoreSubscriptionData(
+    tx: V2CommandTransaction,
+    item: GovernanceJobItem,
+    eligibility: GovernanceEligibility,
+    operatorId: string
+  ): Promise<ExecutionOutcome> {
+    const updatedAt = eligibility.sourceUpdatedAt ? new Date(eligibility.sourceUpdatedAt) : null;
+    if (!item.sourceDeletedAt || !updatedAt || !Number.isFinite(updatedAt.getTime()))
+      return this.missingPreviewSnapshot();
+    const account = item.entityType === 'chatgpt_account';
+    const state = account ? null : await findBankOrderRestoreState(tx, item.entityId);
+    const current = account ? await findChatgptRestoreState(tx, item.entityId) : state?.item;
+    if (!current) return this.notFound();
+    if (
+      !this.sameDate(current.deletedAt, item.sourceDeletedAt) ||
+      !this.sameDate(current.updatedAt, updatedAt)
+    )
+      return this.sourceChanged();
+    const allowed = account
+      ? chatgptRestoreAllowed(
+          current as NonNullable<Awaited<ReturnType<typeof findChatgptRestoreState>>>
+        )
+      : bankOrderRestoreAllowed(state!.item!, state!.journals);
+    if (!allowed)
+      return {
+        status: 'skipped',
+        code: 'unsafe_subscription_state',
+        message: '官网绑定、付款收款、业务引用或状态已变化，请重新预览。'
+      };
+    const input = { id: item.entityId, deletedAt: item.sourceDeletedAt, updatedAt, operatorId };
+    const result = account
+      ? await restoreChatgptAccount(tx, input)
+      : await restoreBankOrder(tx, input);
+    return result.count === 1
+      ? {
+          status: 'succeeded',
+          code: account
+            ? 'chatgpt_account_restored_disabled'
+            : 'bank_recharge_order_restored_pending',
+          message: account
+            ? 'ChatGPT 账号已恢复并保持停用。'
+            : '银充误录单已恢复为待补全，未激活订阅或变更账务。',
+          evidence: {
+            financialMutation: false,
+            subscriptionActivated: false,
+            restoredStatus: account ? 'disabled' : 'pending_details'
+          }
         }
       : this.sourceChanged();
   }
@@ -423,9 +484,17 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
       customer: 'customers',
       option: 'options',
       order: 'orders',
+      chatgpt_account: 'auto-recharge',
+      bank_recharge_order: 'auto-recharge',
       exchange_rate_run: 'exchange-rates'
     };
-    return ['data-governance', entityScope[entityType]];
+    return [
+      'data-governance',
+      entityScope[entityType],
+      ...(['chatgpt_account', 'bank_recharge_order'].includes(entityType)
+        ? (['renewals', 'renewal-warning-summary'] as const)
+        : [])
+    ];
   }
 
   private parseEligibility(value: unknown): GovernanceEligibility {
@@ -444,6 +513,8 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
           ? record.originalStatus
           : undefined,
       expectedStatus: typeof record.expectedStatus === 'string' ? record.expectedStatus : undefined,
+      sourceUpdatedAt:
+        typeof record.sourceUpdatedAt === 'string' ? record.sourceUpdatedAt : undefined,
       cutoff: typeof record.cutoff === 'string' ? record.cutoff : undefined,
       retentionDays:
         typeof record.retentionDays === 'number' && Number.isInteger(record.retentionDays)

@@ -8,12 +8,18 @@ import type {
   V2TopupSupplierLedgerResult,
   V2TopupSupplierPaymentListQuery,
   V2TopupSupplierPaymentListResult,
-  V2TopupSupplierPaymentMutationResult
+  V2TopupSupplierPaymentMutationResult,
+  V2TopupSupplierPaymentAccount
 } from '@/v2/types/topupSupplierFunds';
 
 const invalidationScopes = ['supplier-funds', 'supplier-payments', 'balance-records'] as const;
 
 export const idBusinessV2TopupSupplierFundsApi = {
+  listPaymentAccounts(options: ApiRequestOptions = {}) {
+    return request<{ items: V2TopupSupplierPaymentAccount[] }>(
+      http.get('/id-business-v2/topup-supplier-funds/payment-accounts', { signal: options.signal })
+    );
+  },
   listSuppliers(params: V2TopupSupplierFundListQuery, options: ApiRequestOptions = {}) {
     return request<V2TopupSupplierFundListResult>(
       http.get('/id-business-v2/topup-supplier-funds/suppliers', {
@@ -59,6 +65,7 @@ export const idBusinessV2TopupSupplierFundsApi = {
   createPayment(
     supplierOptionId: string,
     payload: {
+      financeAccountId: string;
       receivedUsdt: string;
       networkFeeUsdt?: string;
       settlementRateCnyUsdt: string;
@@ -76,7 +83,13 @@ export const idBusinessV2TopupSupplierFundsApi = {
           payload
         )
       ),
-      [...invalidationScopes, 'balances-options']
+      [
+        ...invalidationScopes,
+        'balances-options',
+        'finance-accounts',
+        'finance-ledger',
+        'finance-reports'
+      ]
     );
   },
   adjust(
@@ -98,7 +111,13 @@ export const idBusinessV2TopupSupplierFundsApi = {
       request<V2TopupSupplierFundMutationResult>(
         http.post(`/id-business-v2/topup-supplier-funds/payments/${paymentId}/reversals`, payload)
       ),
-      [...invalidationScopes, 'balances-options']
+      [
+        ...invalidationScopes,
+        'balances-options',
+        'finance-accounts',
+        'finance-ledger',
+        'finance-reports'
+      ]
     );
   }
 };

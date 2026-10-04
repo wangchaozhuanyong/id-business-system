@@ -110,6 +110,10 @@
       </div>
     </template>
 
+    <template v-else-if="kind === 'control'">
+      <span class="v2-content-skeleton__bone is-field-control" />
+    </template>
+
     <template v-else>
       <div class="v2-content-skeleton__inline">
         <span class="v2-content-skeleton__bone is-short" />
@@ -174,6 +178,11 @@ defineProps<{
 .v2-content-skeleton__bone.is-control {
   width: 100%;
   height: 38px;
+}
+
+.v2-content-skeleton__bone.is-field-control {
+  width: 100%;
+  height: var(--el-component-size);
 }
 
 .v2-content-skeleton__bone.is-note {

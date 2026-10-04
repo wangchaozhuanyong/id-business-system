@@ -22,6 +22,9 @@ export function bankRechargeOrderAuditSnapshot(order: {
   customerFeeAmount: { toString(): string };
   bankFeeAmount: { toString(): string } | null;
   receivedAmount: { toString(): string } | null;
+  chargeFxRateToCny?: { toString(): string } | null;
+  bankFeeFxRateToCny?: { toString(): string } | null;
+  receivedFxRateToCny?: { toString(): string } | null;
   openedAt: Date | null;
   dueAt: Date | null;
 }) {
@@ -49,6 +52,9 @@ export function bankRechargeOrderAuditSnapshot(order: {
     customerFeeAmount: order.customerFeeAmount.toString(),
     bankFeeAmount: order.bankFeeAmount?.toString() ?? null,
     receivedAmount: order.receivedAmount?.toString() ?? null,
+    chargeFxRateToCny: order.chargeFxRateToCny?.toString() ?? null,
+    bankFeeFxRateToCny: order.bankFeeFxRateToCny?.toString() ?? null,
+    receivedFxRateToCny: order.receivedFxRateToCny?.toString() ?? null,
     openedAt: order.openedAt?.toISOString() ?? null,
     dueAt: order.dueAt?.toISOString() ?? null
   };

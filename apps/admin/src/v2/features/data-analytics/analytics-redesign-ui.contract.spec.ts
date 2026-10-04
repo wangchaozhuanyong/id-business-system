@@ -58,7 +58,9 @@ describe('data analytics scheme 3 redesign contract', () => {
     }
     expect(pageState).toContain('addDecimalStrings');
     expect(pageState).toContain('formatV2Decimal');
-    expect(toolbar).toContain('Decimal 字符串');
+    expect(toolbar).toContain('账户关联业务损益');
+    expect(toolbar).toContain('多账户关联损益不可按账户相加');
+    expect(assetsReport).toContain('当前全局资产');
     expect(currencyReport).toContain('formatOriginal(row.netCashFlow, row.currency)');
     expect(assetsReport).toContain('formatCny(overview.assets.totalBookValueCny)');
   });

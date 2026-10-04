@@ -62,24 +62,49 @@ export class IdBusinessV2FinanceGiftCardRefundsService {
           tx,
           `${idempotencyKey}:journal`
         );
-        if (replay) return replay;
+        if (replay) return this.assertReplay(replay, giftCardId, action, reason, dto.receivedAt);
         const card = await this.refundRepository.lock(tx, giftCardId);
         if (!card) throw new NotFoundException('礼品卡不存在');
+        const lockedReplay = await this.commandRepository.findJournalReplay(
+          tx,
+          `${idempotencyKey}:journal`
+        );
+        if (lockedReplay)
+          return this.assertReplay(lockedReplay, giftCardId, action, reason, dto.receivedAt);
         if (card.supplierRefundStatus !== 'pending') {
           throw new ConflictException('该礼品卡没有待处理的卡商退款');
         }
-        let walletId = card.purchaseSupplierAccountId;
-        if (!walletId) {
-          walletId = await this.refundRepository.findOriginalSupplierWalletId(tx, giftCardId);
+        if (await this.refundRepository.findPrematureWithdrawal(tx, giftCardId)) {
+          throw new ConflictException('该礼品卡存在旧版提前返还余额，请先核对并受控纠正历史账务');
         }
-        if (action === 'received' && !walletId) {
-          throw new ConflictException('礼品卡缺少原卡商钱包，不能确认退款到账');
+        const withdrawal = await this.refundRepository.findWithdrawalJournal(tx, giftCardId);
+        const evidence = withdrawal?.metadata;
+        if (
+          withdrawal?.status !== 'posted' ||
+          !evidence ||
+          typeof evidence !== 'object' ||
+          Array.isArray(evidence) ||
+          evidence.refundFundingVersion !== 2 ||
+          evidence.refundOriginalAmount !== card.supplierRefundAmount.toString() ||
+          evidence.refundCostAmountCny !== card.supplierRefundAmountCny.toString() ||
+          evidence.supplierAccountId !== card.purchaseSupplierAccountId
+        ) {
+          throw new ConflictException('礼品卡缺少一致的原付款与撤回应收证据，请先核对历史账务');
+        }
+        const walletId = card.purchaseSupplierAccountId;
+        if (action === 'received' && (evidence.fundingSource !== 'supplier_wallet' || !walletId)) {
+          throw new ConflictException(
+            '该退款资金来源尚不支持到账确认，请核对原资金账户或切账前证据'
+          );
         }
 
         if (action === 'received' && walletId) {
           const wallet = await this.supplierWalletRepository.lock(tx, walletId);
-          if (!wallet || wallet.currency !== 'CNY') {
-            throw new ConflictException('第一版礼品卡退款要求原卡商钱包币种为 CNY');
+          if (!wallet || wallet.currency !== 'CNY' || evidence.refundCurrency !== wallet.currency) {
+            throw new ConflictException('当前仅支持原 CNY 卡商钱包退款到账，外币来源请先核对');
+          }
+          if (!card.supplierRefundAmount.equals(card.supplierRefundAmountCny)) {
+            throw new ConflictException('人民币原付款数量与账面成本不一致，请先核对');
           }
           const nextBalance = wallet.currentBalance.add(card.supplierRefundAmount);
           const nextBalanceCny = wallet.currentBalanceCny.add(card.supplierRefundAmountCny);
@@ -166,5 +191,32 @@ export class IdBusinessV2FinanceGiftCardRefundsService {
       },
       { changedScopes: ['accounts', 'supplier-funds'], requestId: randomUUID(), operator }
     );
+  }
+
+  private assertReplay<
+    T extends { sourceId: string | null; journalType: string; metadata: unknown; occurredAt: Date }
+  >(
+    replay: T,
+    giftCardId: string,
+    action: 'received' | 'written_off',
+    reason: string,
+    receivedAt?: string | null
+  ) {
+    const metadata = replay.metadata;
+    if (
+      replay.sourceId !== giftCardId ||
+      replay.journalType !==
+        (action === 'received' ? 'gift_card_refund_received' : 'gift_card_refund_write_off') ||
+      !metadata ||
+      typeof metadata !== 'object' ||
+      Array.isArray(metadata) ||
+      !('reason' in metadata) ||
+      metadata.reason !== reason ||
+      (receivedAt &&
+        replay.occurredAt.getTime() !== normalizeFinanceDate(receivedAt, '处理时间').getTime())
+    ) {
+      throw new ConflictException('退款幂等键已用于不同的礼品卡或处理内容');
+    }
+    return replay;
   }
 }

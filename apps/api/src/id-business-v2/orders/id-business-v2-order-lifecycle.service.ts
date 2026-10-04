@@ -148,13 +148,16 @@ export class IdBusinessV2OrderLifecycleService {
         ) {
           throw new ConflictException('已售出 ID 请从 ID 管理执行“纠正售出”');
         }
-        const sourceSoldOrderId = await this.support.resolveUpdatedAccountSource(
-          tx,
-          order.id,
-          accountId,
-          customerId,
-          accountSource
-        );
+        const financiallyConfirmed = order.status === 'completed';
+        const sourceSoldOrderId = financiallyConfirmed
+          ? order.sourceSoldOrderId
+          : await this.support.resolveUpdatedAccountSource(
+              tx,
+              order.id,
+              accountId,
+              customerId,
+              accountSource
+            );
         const settlementPlatformOptionId =
           dto.settlementPlatformOptionId === undefined
             ? order.settlementPlatformOptionId
@@ -242,36 +245,42 @@ export class IdBusinessV2OrderLifecycleService {
 
         await this.support.assertActiveCustomer(tx, customerId);
         await this.support.assertActiveService(tx, serviceOptionId);
-        const settlementPlatform = await this.support.resolveSettlementPlatform(
-          tx,
-          settlementPlatformOptionId,
-          settlementPlatformOptionId === order.settlementPlatformOptionId
-        );
-        const platformFeeAmount = this.support.calculatePlatformFee(
-          receivedAmount,
-          settlementPlatform
-        );
-        const accountCostAmount = await applyUpdatedOrderAccountDisposition(
-          tx,
-          this.repository,
-          { ...order, accountSource },
-          accountId,
-          accountDisposition,
-          operator
-        );
-        const appliedAccountCostAmount =
-          accountSource === 'inventory' && accountDisposition === 'sold'
+        const settlementPlatform = financiallyConfirmed
+          ? null
+          : await this.support.resolveSettlementPlatform(
+              tx,
+              settlementPlatformOptionId,
+              settlementPlatformOptionId === order.settlementPlatformOptionId
+            );
+        const platformFeeAmount = financiallyConfirmed
+          ? order.platformFeeAmount
+          : this.support.calculatePlatformFee(receivedAmount, settlementPlatform);
+        const accountCostAmount = financiallyConfirmed
+          ? order.accountCostAmount
+          : await applyUpdatedOrderAccountDisposition(
+              tx,
+              this.repository,
+              { ...order, accountSource },
+              accountId,
+              accountDisposition,
+              operator
+            );
+        const appliedAccountCostAmount = financiallyConfirmed
+          ? order.appliedAccountCostAmount
+          : accountSource === 'inventory' && accountDisposition === 'sold'
             ? accountCostAmount
             : Amount4.zero();
-        const profitAmount = consumption
-          ? this.support.calculateProfit(
-              receivedAmount,
-              platformFeeAmount,
-              appliedAccountCostAmount,
-              order.appliedBalanceCostAmount,
-              order.refundCostAmount
-            )
-          : null;
+        const profitAmount = financiallyConfirmed
+          ? order.profitAmount
+          : consumption
+            ? this.support.calculateProfit(
+                receivedAmount,
+                platformFeeAmount,
+                appliedAccountCostAmount,
+                order.appliedBalanceCostAmount,
+                order.refundCostAmount
+              )
+            : null;
         const website = this.support.resolveWebsiteAccount(dto, order);
         const remark =
           dto.remark === undefined

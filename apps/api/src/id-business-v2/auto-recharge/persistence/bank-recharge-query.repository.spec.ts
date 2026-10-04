@@ -44,7 +44,7 @@ describe('BankRechargeQueryRepository renewal warnings', () => {
       vi.useRealTimers();
     }
   });
-  it('uses the existing global warning days and returns active due subscriptions only', async () => {
+  it('includes reviewed expired subscriptions and excludes cancelled or deleted projections', async () => {
     const prisma = {
       idBusinessV2RenewalWarningSetting: {
         findUnique: vi.fn().mockResolvedValue({ warningDays: 5 })
@@ -71,11 +71,42 @@ describe('BankRechargeQueryRepository renewal warnings', () => {
     expect(prisma.idBusinessV2BankRechargeSubscription.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          status: 'active',
-          dueAt: { not: null, lte: new Date('2026-09-28T12:00:00.000Z') }
+          account: { deletedAt: null },
+          currentOrder: { deletedAt: null },
+          OR: [
+            { status: 'active', dueAt: { gt: now, lte: new Date('2026-09-28T12:00:00.000Z') } },
+            { status: { in: ['active', 'expired'] }, dueAt: { lte: now } }
+          ]
         }
       })
     );
+    expect(prisma.idBusinessV2BankRechargeSubscription.count.mock.calls).toEqual([
+      [
+        {
+          where: {
+            account: { deletedAt: null },
+            currentOrder: { deletedAt: null },
+            status: 'active',
+            dueAt: { gt: now, lte: new Date('2026-09-28T12:00:00.000Z') }
+          }
+        }
+      ],
+      [
+        {
+          where: {
+            account: { deletedAt: null },
+            currentOrder: { deletedAt: null },
+            status: { in: ['active', 'expired'] },
+            dueAt: { lte: now }
+          }
+        }
+      ]
+    ]);
+    for (const call of prisma.idBusinessV2BankRechargeSubscription.findFirst.mock.calls) {
+      expect(call[0]).toMatchObject({
+        where: { account: { deletedAt: null }, currentOrder: { deletedAt: null } }
+      });
+    }
     expect(result).toMatchObject({
       warningDays: 5,
       upcomingCount: 1,

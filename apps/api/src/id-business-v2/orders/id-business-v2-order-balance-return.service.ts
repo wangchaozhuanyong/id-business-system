@@ -19,12 +19,11 @@ import type {
   ReverseUpgradeBalanceReturnIdBusinessV2OrderDto
 } from './dto/upgrade-balance-return-id-business-v2-order.dto';
 import {
-  assertOrderCanRecordUpgradeBalanceReturn,
+  assertUpgradeBalanceReturnOwnership,
   assertUpgradeBalanceReturnReplay,
   assertUpgradeBalanceReturnReversalReplay,
   appendUpgradeBalanceReturnActivationRemark,
-  buildUpgradeBalanceReturnPreview,
-  calculateOrderProfit,
+  loadUpgradeBalanceReturnPreview,
   calculateUpgradeBalanceReturnCost,
   minAmount,
   normalizeUpgradeBalanceReturnAmount,
@@ -53,10 +52,7 @@ export class IdBusinessV2OrderBalanceReturnService {
   async preview(orderIdValue: string, dto: PreviewUpgradeBalanceReturnIdBusinessV2OrderDto) {
     const orderId = normalizeUuid(orderIdValue, '订单');
     const returnedBalanceAmount = normalizeUpgradeBalanceReturnAmount(dto.returnedBalanceAmount);
-    const order = await this.repository.findOrder(orderId);
-    if (!order) throw new NotFoundException('订单不存在');
-    assertOrderCanRecordUpgradeBalanceReturn(order);
-    return buildUpgradeBalanceReturnPreview(order, returnedBalanceAmount);
+    return loadUpgradeBalanceReturnPreview(this.repository, orderId, returnedBalanceAmount);
   }
 
   async record(
@@ -122,6 +118,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         const account = await this.repository.lockAccount(tx, order.accountId);
         if (!account) throw new NotFoundException('订单绑定的 ID 不存在或已停用');
         if (account.lossReportedAt) throw new ConflictException('已报损冻结 ID 不能登记升级退币');
+        assertUpgradeBalanceReturnOwnership(order, account);
         const activation = await this.repository.findActivationByOrder(tx, order.id);
 
         const currencyCode = resolveOrderBalanceCurrencyCode(
@@ -146,13 +143,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         const appliedBalanceCostAmount = order.appliedBalanceCostAmount.sub(
           restoredAppliedBalanceCostAmount
         );
-        const adjustedProfitAmount = calculateOrderProfit(
-          order.receivedAmount,
-          order.platformFeeAmount,
-          order.appliedAccountCostAmount,
-          appliedBalanceCostAmount,
-          order.refundCostAmount
-        );
+        const adjustedProfitAmount = order.profitAmount.add(restoredAppliedBalanceCostAmount);
         const movement = this.balanceCalculator.calculateReversalCredit(
           {
             currentBalance: account.currentBalance,
@@ -232,6 +223,9 @@ export class IdBusinessV2OrderBalanceReturnService {
               ]
             });
 
+        const postedProfit = await this.repository.synchronizePostedProfit(tx, order.id);
+        if (!postedProfit.equals(adjustedProfitAmount))
+          throw new ConflictException('原订单利润与已过账账务不一致，请先核对');
         const balanceReturn = await this.repository.createBalanceReturn(tx, {
           orderId: order.id,
           accountId: account.id,
@@ -391,6 +385,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         const account = await this.repository.lockAccount(tx, balanceReturn.accountId);
         if (!account) throw new NotFoundException('订单绑定的 ID 不存在或已停用');
         if (account.lossReportedAt) throw new ConflictException('已报损冻结 ID 不能撤销升级退币');
+        assertUpgradeBalanceReturnOwnership(order, account);
 
         const activation = await this.repository.findActivationByOrder(tx, order.id);
         const activationCancellation = removeUpgradeBalanceReturnActivationRemark(
@@ -439,13 +434,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         const appliedBalanceCostAmount = order.appliedBalanceCostAmount.add(
           balanceReturn.restoredAppliedBalanceCostAmount
         );
-        const profitAmount = calculateOrderProfit(
-          order.receivedAmount,
-          order.platformFeeAmount,
-          order.appliedAccountCostAmount,
-          appliedBalanceCostAmount,
-          order.refundCostAmount
-        );
+        const profitAmount = order.profitAmount.sub(balanceReturn.restoredAppliedBalanceCostAmount);
         if (!profitAmount.equals(balanceReturn.originalProfitAmount)) {
           throw new ConflictException('撤销后的利润与原始快照不一致，请先核对订单成本');
         }
@@ -490,6 +479,9 @@ export class IdBusinessV2OrderBalanceReturnService {
               operator
             )
           : null;
+        const postedProfit = await this.repository.synchronizePostedProfit(tx, order.id);
+        if (!postedProfit.equals(profitAmount))
+          throw new ConflictException('撤销后的利润与已过账账务不一致，请先核对');
         const reversedAt = context.businessTime;
         const reversed = await this.repository.reverseBalanceReturn(tx, balanceReturn.id, {
           activeKey: null,

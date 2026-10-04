@@ -19,6 +19,20 @@ const LEDGER_SUPPLIER_INCLUDE = {
 export class IdBusinessV2TopupSupplierCommandRepository {
   constructor(private readonly accounts: IdBusinessV2TopupSupplierAccountRepository) {}
 
+  findPaymentFinanceAccount(tx: V2CommandTransaction, id: string) {
+    return tx.idBusinessV2FinanceAccount.findUnique({
+      where: { id },
+      select: { id: true, status: true, currency: true }
+    });
+  }
+
+  createPaymentFxSnapshot(
+    tx: V2CommandTransaction,
+    data: Prisma.IdBusinessV2FinanceFxRateSnapshotUncheckedCreateInput
+  ) {
+    return tx.idBusinessV2FinanceFxRateSnapshot.create({ data });
+  }
+
   findActiveSupplier(tx: V2CommandTransaction, supplierOptionId: string) {
     return tx.idBusinessV2Option.findFirst({
       where: {
@@ -190,6 +204,13 @@ export class IdBusinessV2TopupSupplierCommandRepository {
     return row ? mapLedger(row) : null;
   }
 
+  findPrematureGiftCardWithdrawal(tx: V2CommandTransaction, giftCardId: string) {
+    return tx.idBusinessV2TopupSupplierLedger.findUnique({
+      where: { idempotencyKey: `supplier_gift_card_withdrawal:${giftCardId}` },
+      select: { id: true }
+    });
+  }
+
   async findGiftCard(tx: V2CommandTransaction, giftCardId: string) {
     const row = await tx.idBusinessV2GiftCard.findUnique({
       where: { id: giftCardId },
@@ -200,9 +221,18 @@ export class IdBusinessV2TopupSupplierCommandRepository {
           ...row,
           faceValue: mapAmount4(row.faceValue, 'id_business_v2_gift_cards.face_value'),
           exchangeRate: mapRate8(row.exchangeRate, 'id_business_v2_gift_cards.exchange_rate'),
-          costAmount: mapAmount4(row.costAmount, 'id_business_v2_gift_cards.cost_amount')
+          costAmount: mapAmount4(row.costAmount, 'id_business_v2_gift_cards.cost_amount'),
+          purchaseOriginalAmount: mapAmount4(
+            row.purchaseOriginalAmount,
+            'id_business_v2_gift_cards.purchase_original_amount'
+          )
         }
       : null;
+  }
+
+  async lockGiftCardForReassignment(tx: V2CommandTransaction, giftCardId: string) {
+    await tx.$queryRaw`SELECT \`id\` FROM \`id_business_v2_gift_cards\` WHERE \`id\` = ${giftCardId} FOR UPDATE`;
+    return this.findGiftCard(tx, giftCardId);
   }
 
   async findReassignmentReplays(
@@ -226,6 +256,13 @@ export class IdBusinessV2TopupSupplierCommandRepository {
     };
   }
 
+  findReassignmentJournal(tx: V2CommandTransaction, idempotencyKey: string) {
+    return tx.idBusinessV2FinanceJournal.findUnique({
+      where: { idempotencyKey },
+      select: { id: true }
+    });
+  }
+
   async hasActiveGiftCardDebit(tx: V2CommandTransaction, giftCardId: string) {
     return Boolean(
       await tx.idBusinessV2TopupSupplierLedger.findFirst({
@@ -242,6 +279,7 @@ export class IdBusinessV2TopupSupplierCommandRepository {
       supplierOptionId: string;
       supplierName: string;
       operatorId?: string;
+      purchaseSupplierAccountId?: string;
     }
   ) {
     return tx.idBusinessV2GiftCard.update({
@@ -249,6 +287,9 @@ export class IdBusinessV2TopupSupplierCommandRepository {
       data: {
         supplierOptionId: input.supplierOptionId,
         supplierNameSnapshot: input.supplierName,
+        ...(input.purchaseSupplierAccountId
+          ? { purchaseSupplierAccountId: input.purchaseSupplierAccountId }
+          : {}),
         updatedByUserId: input.operatorId
       }
     });

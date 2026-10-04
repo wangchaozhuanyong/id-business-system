@@ -20,6 +20,7 @@ export type ChatgptAccountListQuery = {
   keyword?: string;
   subscriptionState?: string;
   offerStatus?: string;
+  deleted?: string;
 };
 
 export async function listChatgptAccounts(
@@ -39,7 +40,10 @@ export async function listChatgptAccounts(
     !V2_ACCOUNT_OFFERS.includes(query.offerStatus as V2AccountOffer)
   )
     throw new BadRequestException('优惠筛选无效');
+  if (query.deleted && !['active', 'deleted'].includes(query.deleted))
+    throw new BadRequestException('删除状态筛选无效');
   const where = {
+    deletedAt: query.deleted === 'deleted' ? { not: null } : null,
     ...bankRechargeAccountFilter(
       keyword,
       keyword.includes('@') ? encryption.hash(keyword.toLowerCase()) : null,

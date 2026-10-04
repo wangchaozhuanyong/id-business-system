@@ -198,3 +198,8 @@ export interface V2TopupSupplierPaymentMutationResult {
   };
   idempotentReplay: boolean;
 }
+export interface V2TopupSupplierPaymentAccount {
+  id: string;
+  name: string;
+  currentBalance: string;
+}

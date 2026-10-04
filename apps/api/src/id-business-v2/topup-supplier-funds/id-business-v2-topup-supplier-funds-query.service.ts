@@ -42,6 +42,10 @@ export class IdBusinessV2TopupSupplierFundsQueryService extends IdBusinessV2Topu
     super();
   }
 
+  async listPaymentAccounts() {
+    return { items: await this.repository.listPaymentAccounts() };
+  }
+
   async listSuppliers(query: ListIdBusinessV2TopupSuppliersQuery) {
     const pagination = getPagination(query);
     const result = await this.repository.listSuppliers({

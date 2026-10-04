@@ -190,6 +190,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
 
   protected assertPaymentReplay(
     replay: {
+      financeAccountId: string | null;
       receivedUsdt: Amount4 | null;
       networkFeeUsdt: Amount4 | null;
       settlementRateCnyUsdt: Rate8 | null;
@@ -202,6 +203,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       remark: string | null;
     },
     expected: {
+      financeAccountId: string;
       receivedUsdt: Amount4;
       networkFeeUsdt: Amount4;
       settlementRate: Rate8;
@@ -215,6 +217,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
     const networkFeeUsdt = replay.networkFeeUsdt ?? replay.networkFeeAmount;
     const settlementRate = replay.settlementRateCnyUsdt ?? replay.fxRateToCny;
     if (
+      replay.financeAccountId !== expected.financeAccountId ||
       !receivedUsdt.equals(expected.receivedUsdt) ||
       !networkFeeUsdt.equals(expected.networkFeeUsdt) ||
       !settlementRate.equals(expected.settlementRate) ||

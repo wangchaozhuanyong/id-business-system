@@ -7,7 +7,11 @@ import {
 } from '@apple-business/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import {
+  Amount4,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService
+} from '../runtime/public-api';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
 import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 import { IdBusinessV2FinanceExchangeRepository } from './persistence/id-business-v2-finance-exchange.repository';
@@ -44,7 +48,10 @@ suite('换汇与订阅成本隔离 MySQL', () => {
   const currencies = new Map<V2FinanceCurrency, string>();
   beforeAll(async () => {
     const parsed = new URL(url!);
-    if (parsed.hostname !== '127.0.0.1' || !parsed.pathname.includes('bank_recharge_'))
+    const isolatedDatabase =
+      /^\/bank_recharge_(?:fx_cost|legacy)_\d+$/.test(parsed.pathname) ||
+      /^\/id_business_v2_financial_integrity_\d+$/.test(parsed.pathname);
+    if (parsed.hostname !== '127.0.0.1' || !isolatedDatabase)
       throw new Error('仅允许隔离本机验收库');
     prisma = new PrismaService({ datasourceUrl: url });
     await prisma.$connect();
@@ -128,7 +135,7 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       sourceFxRateToCny: '1',
       targetFxRateToCny: '1',
       manualRateReason: '隔离验收固定估值',
-      occurredAt: new Date().toISOString(),
+      occurredAt: '2088-02-15T00:00:00.000Z',
       idempotencyKey: randomUUID(),
       ...extra
     };
@@ -137,6 +144,99 @@ suite('换汇与订阅成本隔离 MySQL', () => {
     return (
       await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({ where: { id } })
     ).currentBalance.toString();
+  }
+  async function assertBankProfit(orderId: string, expected: string) {
+    const journals = await prisma.idBusinessV2FinanceJournal.findMany({
+      where: { sourceType: 'bank_recharge', sourceId: orderId },
+      include: { lines: { orderBy: { lineNo: 'asc' } } }
+    });
+    const profitCodes = new Set([
+      'bank_recharge_revenue',
+      'bank_recharge_service_fee',
+      'bank_recharge_cost',
+      'bank_recharge_bank_fee',
+      'bank_recharge_usdt_fee',
+      'bank_recharge_shopping_fee',
+      'realized_fx_gain_loss'
+    ]);
+    let profit = Amount4.zero(),
+      fx = Amount4.zero();
+    for (const journal of journals)
+      for (const line of journal.lines) {
+        const amount = Amount4.from(line.amountCny.toString());
+        const signed = line.direction === 'credit' ? amount : Amount4.zero().sub(amount);
+        if (profitCodes.has(line.accountCode)) profit = profit.add(signed);
+        if (line.accountCode === 'realized_fx_gain_loss') fx = fx.add(signed);
+      }
+    expect(profit.toString()).toBe(expected);
+    expect(fx.toString()).toBe('2.5');
+    expect(
+      (
+        await prisma.idBusinessV2BankRechargeOrder.findUniqueOrThrow({ where: { id: orderId } })
+      ).profitAmountCny?.toString()
+    ).toBe(expected);
+  }
+  async function assertUsdtFeeEvidence(orderId: string) {
+    const journal = await prisma.idBusinessV2FinanceJournal.findFirstOrThrow({
+      where: {
+        sourceType: 'bank_recharge',
+        sourceId: orderId,
+        journalType: 'bank_recharge_completed',
+        status: 'posted'
+      },
+      include: { lines: { orderBy: { lineNo: 'asc' } } }
+    });
+    const cash = journal.lines.find(
+      (line) =>
+        line.accountCode === 'cash' &&
+        line.direction === 'credit' &&
+        line.financeAccountId === currencies.get('USDT')
+    )!;
+    expect([
+      cash.amountOriginal.toString(),
+      cash.amountCny.toString(),
+      cash.fxRateToCny.toString()
+    ]).toEqual(['0.5', '0.5', '1']);
+    const fee = journal.lines.find((line) => line.accountCode === 'bank_recharge_usdt_fee')!;
+    expect([
+      fee.amountOriginal.toString(),
+      fee.amountCny.toString(),
+      fee.fxRateToCny.toString()
+    ]).toEqual(['0.5', '3', '6']);
+    const fx = journal.lines.find(
+      (line) =>
+        line.accountCode === 'realized_fx_gain_loss' &&
+        line.financeAccountId === currencies.get('USDT')
+    )!;
+    expect([fx.direction, fx.amountCny.toString()]).toEqual(['credit', '2.5']);
+    expect(journal.metadata).toMatchObject({
+      cashHistoricalCost: {
+        version: 1,
+        accounts: [
+          {
+            financeAccountId: currencies.get('USDT'),
+            currency: 'USDT',
+            balanceBefore: '10000',
+            balanceBeforeCny: '10000',
+            incomingOriginal: '0',
+            incomingCny: '0',
+            creditOriginal: '0.5',
+            transactionCreditCny: '3',
+            carryingCreditCny: '0.5',
+            realizedFxCny: '2.5',
+            lineAllocations: [
+              {
+                lineNo: cash.lineNo,
+                transactionAmountCny: '3',
+                transactionFxRateToCny: '6',
+                bookCostCny: '0.5'
+              }
+            ]
+          }
+        ]
+      }
+    });
+    return journal;
   }
   it('26 币种账户、常用方向、两种扣费及分币种统计', async () => {
     for (const source of ['CNY', 'MYR', 'USD'] as const)
@@ -161,9 +261,13 @@ suite('换汇与订阅成本隔离 MySQL', () => {
     });
     expect(list.total).toBe(1);
     expect(list.summary.feeAmountCny).toBe('1');
-    expect((await reports.profitLoss({})).exchangeFeeCny).toBe('19');
-    expect((await reports.profitLoss({})).salesRevenueCny).toBe('0');
-    expect(await reports.currencyBreakdown({})).toHaveLength(26);
+    const reportQuery = { dateFrom: '2088-02-15', dateTo: '2088-02-15' };
+    const profitLoss = await reports.profitLoss(reportQuery);
+    expect(profitLoss.exchangeFeeCny).toBe('19');
+    expect(profitLoss.salesRevenueCny).toBe('0');
+    expect(
+      (await reports.currencyBreakdown(reportQuery)).map((row) => row.currency).sort()
+    ).toEqual([...V2_FINANCE_CURRENCIES].sort());
   });
   it('重复提交和冲销重放只扣一次，异内容幂等键拒绝', async () => {
     const dto = input();
@@ -281,14 +385,15 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       operator
     );
   }
-  it('未知费用阻止入账，双成本利润45、共用账户合并扣款、独立多币种费用', async () => {
+  it('未知费用阻止入账，多币种现金历史成本和FX贯穿完成、更正与分次回款', async () => {
     let row = await subscription();
     expect(row.accountingVersion).toBe('subscription_cost_v2');
     expect(row.usdtFeeAmount).toBeNull();
     await expect(
       finance.complete(row.id, { expectedUpdatedAt: row.updatedAt.toISOString() }, operator)
     ).rejects.toThrow('请核对');
-    const fxCount = await prisma.idBusinessV2FinanceExchange.count();
+    const suiteExchanges = { where: { createdByUserId: operator.id } };
+    const fxCount = await prisma.idBusinessV2FinanceExchange.count(suiteExchanges);
     row = await orders.update(
       row.id,
       {
@@ -309,8 +414,17 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       { expectedUpdatedAt: row.updatedAt.toISOString() },
       operator
     );
-    expect(row.profitAmountCny?.toString()).toBe('45');
-    expect(await prisma.idBusinessV2FinanceExchange.count()).toBe(fxCount);
+    // Revenue 150 - principal 100 - transaction fee 3 - shopping fee 2 + historical FX 2.5.
+    const originalJournal = await assertUsdtFeeEvidence(row.id);
+    await assertBankProfit(row.id, '47.5');
+    const spentCash = await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({
+      where: { id: currencies.get('USDT') }
+    });
+    expect([spentCash.currentBalance.toString(), spentCash.currentBalanceCny.toString()]).toEqual([
+      '9999.5',
+      '9999.5'
+    ]);
+    expect(await prisma.idBusinessV2FinanceExchange.count(suiteExchanges)).toBe(fxCount);
     const corrected = await corrections.correct(
       row.id,
       {
@@ -320,7 +434,30 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       },
       operator
     );
-    expect(corrected.profitAmountCny?.toString()).toBe('44');
+    await assertBankProfit(row.id, '46.5');
+    await assertUsdtFeeEvidence(row.id);
+    const preservedOriginal = await prisma.idBusinessV2FinanceJournal.findUniqueOrThrow({
+      where: { id: originalJournal.id },
+      include: { lines: { orderBy: { lineNo: 'asc' } } }
+    });
+    expect(preservedOriginal.status).toBe('reversed');
+    expect(preservedOriginal.lines).toEqual(originalJournal.lines);
+    expect(preservedOriginal.metadata).toEqual(originalJournal.metadata);
+    const reversal = await prisma.idBusinessV2FinanceJournal.findUniqueOrThrow({
+      where: { reversalOfJournalId: originalJournal.id },
+      include: { lines: true }
+    });
+    const reversedCash = reversal.lines.find(
+      (line) => line.accountCode === 'cash' && line.financeAccountId === currencies.get('USDT')
+    )!;
+    const reversedFx = reversal.lines.find((line) => line.accountCode === 'realized_fx_gain_loss')!;
+    expect([
+      reversedCash.direction,
+      reversedCash.amountOriginal.toString(),
+      reversedCash.amountCny.toString(),
+      reversedFx.direction,
+      reversedFx.amountCny.toString()
+    ]).toEqual(['debit', '0.5', '0.5', 'debit', '2.5']);
     const refunded = await finance.refund(
       row.id,
       {
@@ -331,7 +468,7 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       },
       operator
     );
-    expect(refunded.profitAmountCny?.toString()).toBe('-106');
+    await assertBankProfit(row.id, '-103.5');
     expect(refunded.financeStatus).toBe('partial');
     await expect(
       corrections.correct(
@@ -353,7 +490,7 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       },
       operator
     );
-    expect(part.profitAmountCny?.toString()).toBe('-103.8');
+    await assertBankProfit(row.id, '-101.3');
     await expect(
       finance.refund(
         row.id,
@@ -382,7 +519,15 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       },
       operator
     );
-    expect(last.profitAmountCny?.toString()).toBe('0');
+    // Full quantity recovery retains the realized gain; incoming 0.5 USDT is acquired at rate 6.
+    await assertBankProfit(row.id, '2.5');
+    const recoveredCash = await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({
+      where: { id: currencies.get('USDT') }
+    });
+    expect([
+      recoveredCash.currentBalance.toString(),
+      recoveredCash.currentBalanceCny.toString()
+    ]).toEqual(['10000', '10002.5']);
     expect(last.financeStatus).toBe('reversed');
   });
   it('同账户费用资金不足时订单、余额、状态和审计均回滚', async () => {

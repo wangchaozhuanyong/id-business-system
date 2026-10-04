@@ -10,6 +10,7 @@ function setup(
   const account = { id, status: 'active', officialAccountKey: accountKey };
   const repository = {
     findAccount: vi.fn().mockResolvedValue(account),
+    hasUnreviewedVerifiedPayment: vi.fn().mockResolvedValue(false),
     subscriptionForAccount: vi
       .fn()
       .mockResolvedValue({ plan, status: 'active', dueAt, currentOrderId: id })
@@ -51,6 +52,15 @@ describe('已保存账号自动升级资格', () => {
       await expect(service.assertRechargeEligible({} as never, id, 'pro-20x')).rejects.toThrow(
         '不能自动再次付款'
       );
+  });
+  it('已付款但日期待核对，即使没有订阅投影也拒绝再次付款', async () => {
+    const { service, repository } = setup();
+    repository.hasUnreviewedVerifiedPayment.mockResolvedValue(true);
+    repository.subscriptionForAccount.mockResolvedValueOnce(null as never);
+    await expect(service.assertRechargeEligible({} as never, id, 'pro-20x')).rejects.toThrow(
+      '开通时间待核对'
+    );
+    expect(repository.subscriptionForAccount).not.toHaveBeenCalled();
   });
   it('无有效订阅保持原首次开通资格', async () => {
     const { service, repository, account } = setup();

@@ -20,16 +20,28 @@ export class BankRechargeQueryRepository {
         ? setting.warningDays
         : ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS;
     const boundary = new Date(now.getTime() + warningDays * 24 * 60 * 60 * 1000);
-    const where: Prisma.IdBusinessV2BankRechargeSubscriptionWhereInput = {
+    const visible: Prisma.IdBusinessV2BankRechargeSubscriptionWhereInput = {
+      account: { deletedAt: null },
+      currentOrder: { deletedAt: null }
+    };
+    const upcoming: Prisma.IdBusinessV2BankRechargeSubscriptionWhereInput = {
       status: 'active',
-      dueAt: { not: null, lte: boundary }
+      dueAt: { gt: now, lte: boundary }
+    };
+    const expired: Prisma.IdBusinessV2BankRechargeSubscriptionWhereInput = {
+      status: { in: ['active', 'expired'] },
+      dueAt: { lte: now }
+    };
+    const where: Prisma.IdBusinessV2BankRechargeSubscriptionWhereInput = {
+      ...visible,
+      OR: [upcoming, expired]
     };
     const [upcomingCount, expiredCount, subscriptions, nextDue, nextEntering] = await Promise.all([
       this.prisma.idBusinessV2BankRechargeSubscription.count({
-        where: { ...where, dueAt: { gt: now, lte: boundary } }
+        where: { ...visible, ...upcoming }
       }),
       this.prisma.idBusinessV2BankRechargeSubscription.count({
-        where: { ...where, dueAt: { lte: now } }
+        where: { ...visible, ...expired }
       }),
       this.prisma.idBusinessV2BankRechargeSubscription.findMany({
         where,
@@ -42,12 +54,12 @@ export class BankRechargeQueryRepository {
         take: 100
       }),
       this.prisma.idBusinessV2BankRechargeSubscription.findFirst({
-        where: { status: 'active', dueAt: { gt: now, lte: boundary } },
+        where: { ...visible, ...upcoming },
         select: { dueAt: true },
         orderBy: { dueAt: 'asc' }
       }),
       this.prisma.idBusinessV2BankRechargeSubscription.findFirst({
-        where: { status: 'active', dueAt: { gt: boundary } },
+        where: { ...visible, status: 'active', dueAt: { gt: boundary } },
         select: { dueAt: true },
         orderBy: { dueAt: 'asc' }
       })
@@ -105,7 +117,10 @@ export class BankRechargeQueryRepository {
     ) {
       throw new BadRequestException('订单状态无效');
     }
+    if (query.deleted && !['active', 'deleted'].includes(String(query.deleted)))
+      throw new BadRequestException('删除状态筛选无效');
     const where: Prisma.IdBusinessV2BankRechargeOrderWhereInput = {
+      deletedAt: query.deleted === 'deleted' ? { not: null } : null,
       ...(expiry === 'expired' ? { dueAt: { lte: now } } : {}),
       ...(accountId ? { accountId } : {}),
       ...(status

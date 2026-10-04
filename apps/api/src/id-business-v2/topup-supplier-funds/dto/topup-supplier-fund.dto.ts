@@ -5,6 +5,7 @@ export interface InitializeIdBusinessV2TopupSupplierFundDto {
 }
 
 export interface CreateIdBusinessV2TopupSupplierPaymentDto {
+  financeAccountId: string;
   receivedUsdt: string | number;
   networkFeeUsdt?: string | number | null;
   settlementRateCnyUsdt: string | number;

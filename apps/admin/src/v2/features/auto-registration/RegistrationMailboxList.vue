@@ -62,15 +62,20 @@
               </el-select>
             </template>
           </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[4]">
+            <template #default="{ row }">{{
+              chatgptCountryLabel(row.registrationCountryCode)
+            }}</template>
+          </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.registrationMailboxes.main.columns[4]"
+            :definition="v2TableSchemas.registrationMailboxes.main.columns[5]"
             prop="note"
             show-overflow-tooltip
           />
-          <V2TableColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[5]">
+          <V2TableColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[6]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[6]">
+          <V2TableActionColumn :definition="v2TableSchemas.registrationMailboxes.main.columns[7]">
             <template #default="{ row }">
               <AppButton
                 v-if="row.pendingJobId"
@@ -96,6 +101,14 @@
                         : '不可注册'
                 }}</AppButton
               >
+              <AppButton
+                v-if="row.registered && row.accountId"
+                size="small"
+                variant="ghost"
+                :disabled="page.busy.value || !row.accountUpdatedAt"
+                @click="page.openCountry(row)"
+                >修改国家</AppButton
+              >
             </template>
           </V2TableActionColumn>
         </V2Table>
@@ -115,6 +128,42 @@
       </section>
     </V2AsyncRegion>
     <p v-if="page.message.value" role="status">{{ page.message.value }}</p>
+    <V2FormDrawer
+      :model-value="page.countryOpen.value"
+      title="修改国家"
+      description="记录此 ChatGPT 账号的注册国家；未知时可留空。"
+      :confirm-loading="page.busy.value"
+      @update:model-value="page.setCountryOpen"
+      @confirm="page.saveCountry"
+    >
+      <p>{{ page.countryTarget.value?.email }}</p>
+      <el-form
+        label-position="left"
+        label-width="80px"
+        require-asterisk-position="right"
+        @submit.prevent="page.saveCountry"
+      >
+        <el-form-item label="国家">
+          <el-select
+            :model-value="page.countryDraft.form.registrationCountryCode"
+            aria-label="注册国家"
+            placeholder="选择国家；未知可留空"
+            filterable
+            clearable
+            :disabled="page.busy.value"
+            @update:model-value="page.setCountry"
+          >
+            <el-option
+              v-for="[code, label] in chatgptCountries"
+              :key="code"
+              :label="label"
+              :value="code"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <p v-if="page.countryError.value" role="alert">{{ page.countryError.value }}</p>
+    </V2FormDrawer>
     <V2ConfirmDialog
       :model-value="page.confirmOpen.value"
       :title="page.desiredRegistered.value ? '标记已注册' : '标记未注册'"
@@ -146,6 +195,8 @@ import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import { chatgptCountries, chatgptCountryLabel } from '@/v2/features/auto-recharge/public-api';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';

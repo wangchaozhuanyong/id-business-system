@@ -85,7 +85,14 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2OrderBalanceReturnService', () => {
   const repository = {
-    findOrder: vi.fn()
+    findOrder: vi.fn(),
+    findSoldAccountOwnershipForPreview: vi.fn().mockResolvedValue({
+      soldByOrder: {
+        id: 'source-sale',
+        customerId: '33333333-3333-4333-8333-333333333333',
+        deletedAt: null
+      }
+    })
   };
   const service = new IdBusinessV2OrderBalanceReturnService(
     new IdBusinessV2BalanceCalculatorService(),
@@ -138,6 +145,7 @@ describe('IdBusinessV2OrderBalanceReturnService', () => {
     repository.findOrder.mockResolvedValueOnce(
       makeOrder({
         accountSource: 'customer_owned',
+        sourceSoldOrderId: 'source-sale',
         appliedBalanceCostAmount: Amount4.zero(),
         profitAmount: Amount4.from('100')
       })
@@ -150,6 +158,63 @@ describe('IdBusinessV2OrderBalanceReturnService', () => {
     expect(result.adjustedProfitAmount).toBe('100');
     expect(result.costReturnsToCompany).toBe(false);
   });
+
+  it.each([
+    { soldByOrderId: null, soldByCustomerId: null },
+    { soldByOrderId: 'new-sale', soldByCustomerId: 'new-customer' },
+    { soldByOrderId: 'source-sale', soldByCustomerId: 'wrong-customer' }
+  ])(
+    'rejects old customer-owned return before any balance or journal write for changed ownership %j',
+    async (ownership) => {
+      const oldOrder = makeOrder({
+        accountSource: 'customer_owned',
+        sourceSoldOrderId: 'source-sale'
+      });
+      const writes = { createBalanceLedger: vi.fn(), updateAccount: vi.fn(), updateOrder: vi.fn() };
+      const commands = {
+        findBalanceReturnReplay: async () => null,
+        lockOrder: async () => oldOrder,
+        findActiveBalanceReturn: async () => null,
+        findLedgerByOrderAndType: async (_: unknown, _id: string, type: string) =>
+          type === 'order_consumption'
+            ? {
+                accountId,
+                direction: 'debit',
+                reversalOfEntryId: null,
+                balanceAmount: Amount4.from('90'),
+                costAmount: Amount4.from('90')
+              }
+            : null,
+        lockAccount: async () => ({
+          id: accountId,
+          currentBalance: Amount4.from('50'),
+          balanceCostAmount: Amount4.from('350'),
+          currencyCode: 'USD',
+          lossReportedAt: null,
+          ownershipTransferredAt: createdAt,
+          ...ownership
+        }),
+        ...writes
+      };
+      const posting = { post: vi.fn() };
+      const commandsService = new IdBusinessV2OrderBalanceReturnService(
+        new IdBusinessV2BalanceCalculatorService(),
+        posting as never,
+        {} as never,
+        commands as never,
+        { execute: async (fn: (tx: unknown) => Promise<unknown>) => fn({}) } as never
+      );
+      await expect(
+        commandsService.record(orderId, {
+          returnedBalanceAmount: '10',
+          reason: '旧订单升级退币',
+          idempotencyKey: 'old-customer-return'
+        })
+      ).rejects.toThrow('客户归属已变化');
+      for (const write of Object.values(writes)) expect(write).not.toHaveBeenCalled();
+      expect(posting.post).not.toHaveBeenCalled();
+    }
+  );
 
   it('ends the original activation when an upgrade balance return is recorded', async () => {
     const activation = {
@@ -225,6 +290,7 @@ describe('IdBusinessV2OrderBalanceReturnService', () => {
       updateAccount: vi.fn().mockResolvedValue({}),
       updateOrder: vi.fn().mockResolvedValue({}),
       createBalanceReturn: vi.fn().mockResolvedValue(balanceReturn),
+      synchronizePostedProfit: vi.fn().mockResolvedValue(Amount4.from('45')),
       updateActivation: vi.fn().mockResolvedValue({}),
       appendAudit: vi.fn().mockResolvedValue({})
     };
@@ -343,6 +409,7 @@ describe('IdBusinessV2OrderBalanceReturnService', () => {
       updateAccount: vi.fn().mockResolvedValue({}),
       updateOrder: vi.fn().mockResolvedValue({}),
       reverseBalanceReturn: vi.fn().mockResolvedValue(reversedBalanceReturn),
+      synchronizePostedProfit: vi.fn().mockResolvedValue(Amount4.from('10')),
       updateActivation: vi.fn().mockResolvedValue({}),
       appendAudit: vi.fn().mockResolvedValue({})
     };

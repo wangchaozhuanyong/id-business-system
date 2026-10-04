@@ -102,7 +102,7 @@ const props = withDefaults(
     empty?: boolean;
     error?: string;
     forbidden?: boolean;
-    variant?: 'page' | 'section';
+    variant?: 'page' | 'section' | 'field';
     skeleton?: V2SkeletonKind;
     loadingTitle: string;
     refreshingTitle?: string;
@@ -202,6 +202,36 @@ onBeforeUnmount(clearRefreshTimer);
 
 .v2-async-region--section {
   min-height: 120px;
+}
+
+.v2-async-region--field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--v2-layout-control-gap);
+  width: 100%;
+  min-height: var(--el-component-size);
+}
+
+.v2-async-region--field .v2-async-region__refresh-error {
+  order: 1;
+  margin-bottom: 0;
+}
+
+.v2-async-region--field :deep(.v2-page-state) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--el-component-size);
+  padding: var(--v2-layout-control-gap);
+  place-content: start;
+  justify-items: start;
+}
+
+.v2-async-region--field :deep(.v2-page-state--loading) {
+  padding: 0;
+}
+
+.v2-async-region--field .v2-async-region__content {
+  gap: var(--v2-layout-control-gap);
 }
 
 .v2-async-region__content {

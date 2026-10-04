@@ -1,5 +1,6 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
+import { bankRechargeApi } from '@/v2/features/auto-recharge/public-api';
 import type {
   V2RegistrationName,
   V2RegistrationJob,
@@ -36,6 +37,12 @@ export const registrationApi = {
   ) {
     return request<V2RegistrationPage<V2RegistrationMailbox>>(
       http.get(`${base}/mailboxes`, { params: query, signal: options.signal })
+    );
+  },
+  updateCountry(id: string, registrationCountryCode: string | null, expectedUpdatedAt: string) {
+    return withV2QueryInvalidation(
+      bankRechargeApi.updateAccount(id, { registrationCountryCode, expectedUpdatedAt }),
+      'auto-recharge'
     );
   },
   markRegistered(

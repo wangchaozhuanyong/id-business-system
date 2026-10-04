@@ -88,6 +88,7 @@ export class RegistrationMailboxesService {
         registered,
         accountId: account?.id ?? null,
         accountUpdatedAt: account?.updatedAt.toISOString() ?? null,
+        registrationCountryCode: account?.registrationCountryCode ?? null,
         canStart: startBlockedReason === null,
         startBlockedReason,
         pendingJobId: ownedPendingJobIds.get(hashes[index]!) ?? null,
@@ -143,6 +144,8 @@ export class RegistrationMailboxesService {
       async (tx) => {
         await this.repository.lock(tx);
         let account = await this.repository.account(tx, emailHash);
+        if (account?.deletedAt)
+          throw new ConflictException('该邮箱账号已软删除，请先通过数据治理恢复原账号');
         const beforeRegistered = account?.registered ?? false;
         if (explicitStatus && (account?.updatedAt.getTime() ?? null) !== expectedAccountUpdatedAt)
           throw new ConflictException('账号资料已变化，请刷新后重新确认');

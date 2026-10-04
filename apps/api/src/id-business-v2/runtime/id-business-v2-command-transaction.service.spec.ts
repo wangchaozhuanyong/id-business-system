@@ -1,5 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { V2CommandTransactionManager } from './id-business-v2-command-transaction.service';
+import { V2TransactionalAuditService } from './persistence/id-business-v2-transactional-audit.repository';
 import {
   getPrismaErrorCode,
   isPrismaErrorCode,
@@ -22,6 +23,12 @@ describe('V2CommandTransactionManager', () => {
     expect(getPrismaErrorCode({ code: 'NOT_PRISMA' })).toBeNull();
     expect(isWriteConflictError({ code: 'P2034' })).toBe(true);
     expect(isWriteConflictError({ code: 'P2010', meta: { code: '40001' } })).toBe(true);
+    expect(isWriteConflictError({ code: 'P2010', meta: { code: '1213' } })).toBe(true);
+    expect(isWriteConflictError({ code: 'P2010', meta: { code: 1213 } })).toBe(true);
+    expect(isWriteConflictError({ code: 'P2010', meta: { code: '1205' } })).toBe(false);
+    expect(isWriteConflictError({ code: 'P2010', meta: { code: '1213-invalid' } })).toBe(false);
+    expect(isWriteConflictError({ code: 'P2010', meta: { message: 'deadlock 1213' } })).toBe(false);
+    expect(isWriteConflictError({ code: 'OTHER', meta: { code: '1213' } })).toBe(false);
     expect(isWriteConflictError({ code: 'P2010', meta: { code: '23505' } })).toBe(false);
   });
 
@@ -39,6 +46,137 @@ describe('V2CommandTransactionManager', () => {
     expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       isolationLevel: 'Serializable'
     });
+  });
+
+  it('does not silently retry a raw MySQL deadlock for a command with no replay authorization', async () => {
+    const publish = vi.fn();
+    const prisma = {
+      $transaction: vi.fn().mockRejectedValue({ code: 'P2010', meta: { code: '1213' } })
+    };
+    const manager = new V2CommandTransactionManager(
+      prisma as never,
+      {
+        publishCommittedChangeBestEffort: publish
+      } as never
+    );
+    await expect(
+      manager.execute(async () => 'saved', {
+        changedScopes: ['finance-ledger'],
+        requestId: 'mysql-no-retry',
+        retryMode: 'none'
+      })
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it.each(['stableIdempotency', 'fullReplay'] as const)(
+    'retries a raw MySQL deadlock only in authorized %s mode with one committed ledger, audit and event',
+    async (retryMode) => {
+      let committed = { ledgers: [] as string[], audits: [] as unknown[], version: 0 };
+      let attempts = 0;
+      const prisma = {
+        $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => {
+          attempts += 1;
+          const staged = {
+            ledgers: [...committed.ledgers],
+            audits: [...committed.audits],
+            version: committed.version
+          };
+          const tx = {
+            ledger: {
+              create: async (id: string) => {
+                staged.ledgers.push(id);
+              }
+            },
+            auditLog: {
+              create: async ({ data }: { data: unknown }) => {
+                staged.audits.push(data);
+                return data;
+              }
+            },
+            idBusinessV2ScopeVersion: {
+              updateMany: async () => {
+                staged.version += 1;
+                return { count: 1 };
+              }
+            }
+          };
+          const result = await work(tx);
+          if (attempts === 1) throw { code: 'P2010', meta: { code: '1213' } };
+          committed = staged;
+          return result;
+        })
+      };
+      const publish = vi.fn();
+      const manager = new V2CommandTransactionManager(
+        prisma as never,
+        {
+          publishCommittedChangeBestEffort: publish
+        } as never
+      );
+      const audit = new V2TransactionalAuditService();
+      const businessTime = new Date('2026-10-04T08:00:00Z');
+      const contexts: Array<{
+        attempt: number;
+        requestId: string;
+        idempotencyKey?: string;
+        businessTime: Date;
+      }> = [];
+      const result = await manager.execute(
+        async (tx, context) => {
+          contexts.push(context);
+          await (
+            tx as unknown as { ledger: { create: (id: string) => Promise<void> } }
+          ).ledger.create('cash:one');
+          await audit.append(tx, {
+            module: 'id_business_v2_finance',
+            action: 'synthetic.deadlock.retry',
+            objectType: 'finance_journal',
+            objectId: 'cash:one',
+            afterData: { amount: '700' }
+          });
+          return context.attempt;
+        },
+        {
+          changedScopes: ['finance-ledger'],
+          requestId: 'mysql-retry',
+          businessTime,
+          retryMode,
+          idempotencyKey: 'cash:one',
+          replay: async () => 99
+        }
+      );
+      expect(result).toBe(2);
+      expect(committed.ledgers).toEqual(['cash:one']);
+      expect(committed.audits).toHaveLength(1);
+      expect(committed.version).toBe(1);
+      expect(contexts.map((context) => context.attempt)).toEqual([1, 2]);
+      expect(
+        contexts.every(
+          (context) =>
+            context.requestId === 'mysql-retry' &&
+            context.idempotencyKey === 'cash:one' &&
+            context.businessTime === businessTime
+        )
+      ).toBe(true);
+      expect(publish).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('does not classify MySQL lock timeout as an authorized deadlock retry', async () => {
+    const error = { code: 'P2010', meta: { code: '1205' } };
+    const prisma = { $transaction: vi.fn().mockRejectedValue(error) };
+    await expect(
+      createManager(prisma).execute(async () => 'saved', {
+        changedScopes: ['finance-ledger'],
+        requestId: 'mysql-timeout',
+        retryMode: 'stableIdempotency',
+        idempotencyKey: 'cash:timeout',
+        replay: async () => 'replayed'
+      })
+    ).rejects.toBe(error);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it('bumps only the declared portable scope versions in the same successful transaction', async () => {

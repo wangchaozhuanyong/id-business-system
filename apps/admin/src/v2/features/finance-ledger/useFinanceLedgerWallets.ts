@@ -51,7 +51,8 @@ export function useFinanceLedgerWallets(input: {
     reason: '',
     network: '',
     transactionHash: '',
-    remark: ''
+    remark: '',
+    idempotencyKey: ''
   }));
   const walletMutationForm = walletMutationFormDraft.form;
   const matchingFinanceAccounts = computed(() =>
@@ -131,7 +132,8 @@ export function useFinanceLedgerWallets(input: {
       reason: '',
       network: '',
       transactionHash: '',
-      remark: ''
+      remark: '',
+      idempotencyKey: globalThis.crypto.randomUUID()
     });
     walletMutationDrawerVisible.value = true;
   }
@@ -165,6 +167,7 @@ export function useFinanceLedgerWallets(input: {
       return showWarning('填写人工汇率时必须说明原因');
     }
     walletMutationSubmitting.value = true;
+    walletMutationForm.idempotencyKey ||= globalThis.crypto.randomUUID();
     const completeSave = walletMutationFormDraft.beginSave();
     try {
       if (walletMutationMode.value === 'deposit') {
@@ -179,7 +182,7 @@ export function useFinanceLedgerWallets(input: {
           network: walletMutationForm.network.trim() || undefined,
           transactionHash: walletMutationForm.transactionHash.trim() || undefined,
           remark: walletMutationForm.remark.trim() || undefined,
-          idempotencyKey: globalThis.crypto.randomUUID()
+          idempotencyKey: walletMutationForm.idempotencyKey
         });
       } else if (walletMutationMode.value === 'refund') {
         await idBusinessV2FinanceApi.refundSupplierWallet(wallet.id, {
@@ -189,7 +192,7 @@ export function useFinanceLedgerWallets(input: {
           fxRateToCny: walletMutationForm.fxRateToCny || undefined,
           manualRateReason: walletMutationForm.manualRateReason.trim() || undefined,
           reason: walletMutationForm.reason.trim(),
-          idempotencyKey: globalThis.crypto.randomUUID()
+          idempotencyKey: walletMutationForm.idempotencyKey
         });
       } else {
         await idBusinessV2FinanceApi.adjustSupplierWallet(wallet.id, {
@@ -197,7 +200,7 @@ export function useFinanceLedgerWallets(input: {
           fxRateToCny: walletMutationForm.fxRateToCny || undefined,
           manualRateReason: walletMutationForm.manualRateReason.trim() || undefined,
           reason: walletMutationForm.reason.trim(),
-          idempotencyKey: globalThis.crypto.randomUUID()
+          idempotencyKey: walletMutationForm.idempotencyKey
         });
       }
       completeSave();

@@ -42,6 +42,21 @@ describe('data governance route helpers', () => {
     expect(readAuditRestoreRouteRequest({ restoreEntity: 'order' })).toBeNull();
   });
 
+  it.each(['chatgpt_account', 'bank_recharge_order'])(
+    'routes financial recycle records through independent approval: %s',
+    (entity) => {
+      const request = readAuditRestoreRouteRequest({
+        restoreEntity: entity,
+        restoreId: 'preserved-id',
+        restoreLabel: '误删资料'
+      });
+      expect(request?.entity).toBe(entity);
+      expect(
+        buildAuditRestoreReason(request!, createRecycleItemFromAuditRestoreRequest(request!))
+      ).toContain('误删资料');
+    }
+  );
+
   it('builds a restore draft that preserves audit evidence without inventing backup evidence', () => {
     const request = readAuditRestoreRouteRequest({
       restoreEntity: 'account',

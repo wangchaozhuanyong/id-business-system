@@ -59,6 +59,20 @@ export class IdBusinessV2FinanceGiftCardRefundRepository {
     return lockFinanceGiftCardRefund(tx, giftCardId);
   }
 
+  findPrematureWithdrawal(tx: V2CommandTransaction, giftCardId: string) {
+    return tx.idBusinessV2TopupSupplierLedger.findUnique({
+      where: { idempotencyKey: `supplier_gift_card_withdrawal:${giftCardId}` },
+      select: { id: true }
+    });
+  }
+
+  findWithdrawalJournal(tx: V2CommandTransaction, giftCardId: string) {
+    return tx.idBusinessV2FinanceJournal.findUnique({
+      where: { idempotencyKey: `auto:gift_card_withdrawn:${giftCardId}` },
+      select: { status: true, metadata: true }
+    });
+  }
+
   findOriginalSupplierWalletId(tx: V2CommandTransaction, giftCardId: string) {
     return tx.idBusinessV2TopupSupplierLedger
       .findFirst({

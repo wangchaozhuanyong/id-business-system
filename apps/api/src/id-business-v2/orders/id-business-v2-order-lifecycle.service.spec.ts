@@ -195,6 +195,9 @@ describe('IdBusinessV2OrderLifecycleService', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.spyOn(IdBusinessV2OrdersRepository.prototype, 'synchronizePostedProfit').mockImplementation(
+      async () => Amount4.from(storedOrder.profitAmount!.toString())
+    );
     financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
     storedOrder = makeOrder();
     consumption = makeConsumption();
@@ -479,6 +482,57 @@ describe('IdBusinessV2OrderLifecycleService', () => {
 
     expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves every completed monetary snapshot when only a remark changes after platform repricing', async () => {
+    storedOrder = makeOrder({
+      status: 'completed',
+      platformFeeAmount: decimal('20'),
+      receivedAmount: decimal('1000'),
+      receivedOriginalAmount: decimal('1000'),
+      accountCostAmount: decimal('25'),
+      appliedAccountCostAmount: decimal('0'),
+      appliedBalanceCostAmount: decimal('700'),
+      profitAmount: decimal('280')
+    });
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) =>
+      where.type === 'settlement_platform'
+        ? { fixedFee: decimal('999'), percentageFee: decimal('50') }
+        : { id: where.id }
+    );
+    await service.update(
+      orderId,
+      { remark: '仅编辑资料', expectedUpdatedAt: updatedAt.toISOString() },
+      operator
+    );
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          receivedAmount: '1000',
+          receivedOriginalAmount: '1000',
+          platformFeeAmount: '20',
+          accountCostAmount: '25',
+          appliedAccountCostAmount: '0',
+          appliedBalanceCostAmount: '700',
+          profitAmount: '280',
+          remark: '仅编辑资料'
+        })
+      })
+    );
+    expect(
+      tx.idBusinessV2Option.findFirst.mock.calls.some(
+        ([args]) => args.where.type === 'settlement_platform'
+      )
+    ).toBe(false);
+    expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
+    await expect(
+      service.update(
+        orderId,
+        { remark: '迟到编辑', expectedUpdatedAt: updatedAt.toISOString() },
+        operator
+      )
+    ).rejects.toThrow('订单已被其他操作修改');
   });
 
   it('reprices a non-CNY processing order with its locked exchange rate', async () => {

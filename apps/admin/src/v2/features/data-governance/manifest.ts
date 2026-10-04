@@ -17,7 +17,7 @@ export const dataGovernanceFeature = defineV2Feature({
       key: 'entity',
       label: '回收站类型',
       kind: 'select',
-      options: ['ID 资料', '客户', '业务选项', '订单']
+      options: ['ID 资料', '客户', '业务选项', '订单', 'ChatGPT 账号', '银充误录订单']
     },
     {
       key: 'type',

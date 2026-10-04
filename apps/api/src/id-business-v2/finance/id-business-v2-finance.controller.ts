@@ -138,7 +138,7 @@ export class IdBusinessV2FinanceController {
     const [overview, accounts, wallets, journals] = await Promise.all([
       this.reportsService.overview(reportQuery),
       this.accountsService.list(),
-      this.supplierWalletsService.list(),
+      this.supplierWalletsService.list(undefined, undefined, true),
       this.journalsService.list({
         ...reportQuery,
         page: '1',

@@ -126,6 +126,8 @@ export function useDataGovernancePage() {
     () =>
       recycleQuery.data.value?.byEntity ?? {
         account: 0,
+        chatgpt_account: 0,
+        bank_recharge_order: 0,
         customer: 0,
         option: 0,
         order: 0

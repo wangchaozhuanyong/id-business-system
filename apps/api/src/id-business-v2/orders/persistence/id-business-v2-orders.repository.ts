@@ -7,6 +7,7 @@ import type {
   Prisma
 } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { synchronizePostedOrderProfit } from './id-business-v2-order-posted-profit';
 import {
   buildV2StringArrayContainsFilter,
   mapAmount4,
@@ -212,6 +213,9 @@ function minNullableDate(...values: Array<Date | null | undefined>) {
 
 @Injectable()
 export class IdBusinessV2OrdersRepository {
+  synchronizePostedProfit(tx: V2CommandTransaction, orderId: string) {
+    return synchronizePostedOrderProfit(tx, orderId);
+  }
   constructor(private readonly prisma: PrismaService) {}
 
   async listOrders(criteria: IdBusinessV2OrderListCriteria) {
@@ -640,6 +644,17 @@ export class IdBusinessV2OrdersRepository {
         id: true,
         soldByOrder: {
           select: { id: true, orderNo: true, customerId: true, deletedAt: true }
+        }
+      }
+    });
+  }
+
+  findSoldAccountOwnershipForPreview(accountId: string) {
+    return this.prisma.idBusinessV2Account.findFirst({
+      where: { id: accountId, deletedAt: null, soldByOrderId: { not: null } },
+      select: {
+        soldByOrder: {
+          select: { id: true, customerId: true, deletedAt: true }
         }
       }
     });

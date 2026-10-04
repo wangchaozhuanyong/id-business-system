@@ -16,6 +16,8 @@ export interface V2AuditRestoreRouteRequest {
 const GOVERNANCE_TABS: readonly V2GovernanceTab[] = ['overview', 'recycle', 'jobs'];
 const RESTORE_ENTITIES: readonly V2GovernanceRecycleEntity[] = [
   'account',
+  'chatgpt_account',
+  'bank_recharge_order',
   'customer',
   'option',
   'order'

@@ -24,7 +24,7 @@ export class IdBusinessV2FinanceReportRepository {
   async groupProfitLoss(filter: FinanceReportPersistenceFilter) {
     const rows = await this.prisma.idBusinessV2FinanceJournalLine.groupBy({
       by: ['accountCode', 'direction'],
-      where: buildLineWhere(filter),
+      where: buildProfitLossWhere(filter),
       _sum: { amountCny: true }
     });
     return rows.map((row) => ({
@@ -255,11 +255,9 @@ export class IdBusinessV2FinanceReportRepository {
       unsoldIds
     ] = await Promise.all([
       this.prisma.idBusinessV2FinanceAccount.findMany({
-        where: { status: 'active' },
         select: { currency: true, currentBalance: true, currentBalanceCny: true }
       }),
       this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-        where: { status: 'active' },
         select: { currency: true, currentBalance: true, currentBalanceCny: true }
       }),
       this.prisma.idBusinessV2Account.aggregate({
@@ -370,6 +368,54 @@ export class IdBusinessV2FinanceReportRepository {
           }
         })
       : [];
+    const allocatedJournals = orderIds.length
+      ? await this.prisma.idBusinessV2FinanceJournal.findMany({
+          where: {
+            sourceType: 'order',
+            status: 'posted',
+            OR: [
+              { sourceId: { in: orderIds } },
+              ...orderIds.map((id) => ({
+                metadata: { path: '$.restoredSourceOrderId', equals: id }
+              }))
+            ]
+          },
+          select: { sourceId: true, journalType: true, metadata: true }
+        })
+      : [];
+    const allocatedLines: Array<{
+      accountCode: 'customer_owned_balance_cost';
+      direction: 'debit' | 'credit';
+      amountCny: Amount4;
+      journal: { sourceId: string; journalType: (typeof allocatedJournals)[number]['journalType'] };
+    }> = [];
+    for (const journal of allocatedJournals) {
+      const metadata =
+        journal.metadata && typeof journal.metadata === 'object' && !Array.isArray(journal.metadata)
+          ? journal.metadata
+          : null;
+      if (
+        typeof metadata?.restoredSourceOrderId !== 'string' ||
+        typeof metadata.restoredSourceOrderCostAmount !== 'string'
+      )
+        continue;
+      const amount = Amount4.from(metadata.restoredSourceOrderCostAmount);
+      if (amount.isZero() || metadata.restoredSourceOrderId === journal.sourceId) continue;
+      if (journal.sourceId && orderIds.includes(journal.sourceId))
+        allocatedLines.push({
+          accountCode: 'customer_owned_balance_cost',
+          direction: 'debit',
+          amountCny: amount,
+          journal: { sourceId: journal.sourceId, journalType: journal.journalType }
+        });
+      if (orderIds.includes(metadata.restoredSourceOrderId))
+        allocatedLines.push({
+          accountCode: 'customer_owned_balance_cost',
+          direction: 'credit',
+          amountCny: amount,
+          journal: { sourceId: metadata.restoredSourceOrderId, journalType: journal.journalType }
+        });
+    }
     return {
       rows: completedOrders.map((row) => ({
         ...row,
@@ -381,10 +427,13 @@ export class IdBusinessV2FinanceReportRepository {
           'orders.applied_account_cost_amount'
         )
       })),
-      orderLines: orderLines.map((row) => ({
-        ...row,
-        amountCny: mapAmount4(row.amountCny, 'finance_journal_lines.amount_cny')
-      })),
+      orderLines: [
+        ...orderLines.map((row) => ({
+          ...row,
+          amountCny: mapAmount4(row.amountCny, 'finance_journal_lines.amount_cny')
+        })),
+        ...allocatedLines
+      ],
       nextCursor: hasMore ? (completedOrders.at(-1)?.id ?? null) : null
     };
   }
@@ -644,6 +693,45 @@ function estimatePendingAfterSalesProfit(order: {
         ? balanceCostAmount
         : balanceCostAmount.ratio(currentBalance).apply(balanceAmount);
   return receivedAmount.sub(platformFeeAmount).sub(estimatedBalanceCost);
+}
+
+function buildProfitLossWhere(
+  filter: FinanceReportPersistenceFilter
+): Prisma.IdBusinessV2FinanceJournalLineWhereInput {
+  if (!filter.financeAccountId) return buildLineWhere(filter);
+  return {
+    journal: {
+      is: {
+        businessDate:
+          filter.dateFrom || filter.dateTo
+            ? { gte: filter.dateFrom, lte: filter.dateTo }
+            : undefined,
+        journalType: filter.journalType
+          ? (filter.journalType as Prisma.EnumIdBusinessV2FinanceJournalTypeFilter)
+          : undefined,
+        AND: [
+          {
+            lines: {
+              some: {
+                accountCode: 'cash',
+                financeAccountId: filter.financeAccountId,
+                currency: filter.currency
+              }
+            }
+          },
+          ...(filter.supplierOptionId
+            ? [
+                {
+                  lines: {
+                    some: { supplierAccount: { is: { supplierOptionId: filter.supplierOptionId } } }
+                  }
+                }
+              ]
+            : [])
+        ]
+      }
+    }
+  };
 }
 
 function buildLineWhere(

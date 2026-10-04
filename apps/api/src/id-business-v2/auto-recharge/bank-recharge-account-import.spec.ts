@@ -194,25 +194,10 @@ describe('ChatGPT 账号批量导入和删除', () => {
     expect(transactions.execute).not.toHaveBeenCalled();
   });
 
-  it('拒绝删除有关联的账号，并审计删除未关联账号', async () => {
-    const { service, repository, audit, operator } = setup();
+  it('已软删除账号即使状态异常为启用也不能取用', async () => {
+    const { service, repository } = setup();
     const id = '123e4567-e89b-42d3-a456-426614174000';
-    repository.findAccount.mockResolvedValue({
-      id,
-      emailMasked: 'ab***@example.com',
-      status: 'active'
-    });
-    repository.accountHasReferences.mockResolvedValueOnce(true);
-    await expect(service.deleteAccount(id, operator)).rejects.toThrow('请改为停用');
-    expect(repository.deleteAccount).not.toHaveBeenCalled();
-    await expect(service.deleteAccount(id, operator)).resolves.toEqual({ id });
-    expect(repository.deleteAccount).toHaveBeenCalledTimes(1);
-    expect(audit.append).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        action: 'id_business_v2.auto_recharge.chatgpt_account.delete',
-        objectId: id
-      })
-    );
+    repository.findAccount.mockResolvedValue({ id, status: 'active', deletedAt: new Date() });
+    await expect(service.requireActive({} as never, id)).rejects.toThrow('不存在或已停用');
   });
 });

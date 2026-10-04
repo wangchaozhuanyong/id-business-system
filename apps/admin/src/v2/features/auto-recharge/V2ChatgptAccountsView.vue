@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
-      description="管理待用 ChatGPT 账号；开通成功后从本页隐藏，可在银充订单中追溯。密码与 2FA 加密存储。"
+      description="管理未开通或订阅已取消的待用账号及回收站；软删除保留资料，恢复后保持停用。密码与 2FA 加密存储。"
     >
       <template #actions>
         <ChatgptAccountCopySettings />
@@ -30,6 +30,13 @@
       </template>
     </V2PageContext>
 
+    <el-tabs v-model="deletedFilter" aria-label="账号清单分类">
+      <el-tab-pane label="待用账号" name="active" />
+      <el-tab-pane label="回收站" name="deleted" />
+    </el-tabs>
+    <p v-if="restoreNavigationError" class="bank-recharge-error" role="alert">
+      {{ restoreNavigationError }}
+    </p>
     <p v-if="operationError" class="bank-recharge-error" role="alert">{{ operationError }}</p>
     <V2AsyncRegion
       skeleton="table"
@@ -154,28 +161,42 @@
           </V2TableColumn>
           <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[14]">
             <template #default="{ row }">
-              <ChatgptAccountCopyButton
-                :id="row.id"
-                :disabled="working"
-                @error="operationError = $event"
-              />
-              <AppButton size="small" variant="ghost" @click="openEdit(row)">编辑</AppButton>
-              <ChatgptOpeningCardDeleteButton
-                :account="row"
-                :disabled="working"
-                @deleted="query.refresh"
-              />
-              <el-dropdown trigger="click">
-                <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item @click="changeStatus(row)">{{
-                      row.status === 'active' ? '停用' : '启用'
-                    }}</el-dropdown-item>
-                    <el-dropdown-item @click="openDelete(row)">删除</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <AppButton
+                v-if="row.deletedAt"
+                size="small"
+                variant="ghost"
+                @click="requestRestore('chatgpt_account', row, row.emailMasked)"
+                >申请恢复</AppButton
+              >
+              <template v-else>
+                <ChatgptAccountCopyButton
+                  :id="row.id"
+                  :disabled="working"
+                  @error="operationError = $event"
+                />
+                <AppButton size="small" variant="ghost" @click="openEdit(row)">编辑</AppButton>
+                <ChatgptOpeningCardDeleteButton
+                  :account="row"
+                  :disabled="working"
+                  @deleted="query.refresh"
+                />
+                <el-dropdown trigger="click">
+                  <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="changeStatus(row)">{{
+                        row.status === 'active' ? '停用' : '启用'
+                      }}</el-dropdown-item>
+                      <el-dropdown-item
+                        @click="
+                          lifecycleTarget = { entity: 'account', id: row.id, action: 'delete' }
+                        "
+                        >移入回收站</el-dropdown-item
+                      >
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </template>
             </template>
           </V2TableActionColumn>
         </V2Table>
@@ -197,18 +218,11 @@
     </V2AsyncRegion>
     <ChatgptAccountImportDrawer v-model="importOpen" @imported="onAccountsImported" />
 
-    <V2ConfirmDialog
-      v-model="deleteOpen"
-      title="删除 ChatGPT 账号"
-      message=""
-      confirm-text="删除账号"
-      :confirm-loading="working"
-      danger
-      @confirm="confirmDelete"
-    >
-      <p>确认删除 {{ deleting?.emailMasked ?? '该账号' }}？有关联的账号不能删除，请停用。</p>
-      <p v-if="deleteError" class="bank-recharge-error" role="alert">{{ deleteError }}</p>
-    </V2ConfirmDialog>
+    <BankRechargeLifecycleDialog
+      :target="lifecycleTarget"
+      @close="lifecycleTarget = null"
+      @completed="query.refresh"
+    />
 
     <V2FormDrawer
       v-model="drawerOpen"
@@ -240,14 +254,17 @@
 </template>
 
 <script setup lang="ts">
-import { useChatgptAccountDeletion } from './useChatgptAccountDeletion';
+import { useBankRechargeRestoreNavigation } from './useBankRechargeRestoreNavigation';
+const { requestRestore, restoreNavigationError } = useBankRechargeRestoreNavigation();
+import BankRechargeLifecycleDialog from './BankRechargeLifecycleDialog.vue';
+import type { BankLifecycleEntity, BankLifecycleAction } from './bank-recharge-api';
+import ChatgptAccountOfferSelect from './ChatgptAccountOfferSelect.vue';
 import ChatgptAccountEditorFields from './ChatgptAccountEditorFields.vue';
 import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
-import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
@@ -284,6 +301,14 @@ const keywordInput = useV2SessionDraft('auto-recharge/V2ChatgptAccountsView:keyw
 const offerStatus = useV2SessionDraft('chatgpt-accounts:offer-filter', () =>
   ref<V2AccountOffer | 'all'>('all')
 );
+const deletedFilter = useV2SessionDraft('chatgpt-accounts:deleted', () =>
+  ref<'active' | 'deleted'>('active')
+);
+const lifecycleTarget = ref<{
+  entity: BankLifecycleEntity;
+  id: string;
+  action: BankLifecycleAction;
+} | null>(null);
 const query = useV2ModuleQuery({
   moduleKey: 'chatgpt-accounts',
   scope: 'auto-recharge',
@@ -292,7 +317,8 @@ const query = useV2ModuleQuery({
       page: page.value,
       pageSize: pageSize.value,
       keyword: keyword.value,
-      subscriptionState: 'never_subscribed',
+      subscriptionState: deletedFilter.value === 'deleted' ? 'all' : 'never_subscribed',
+      deleted: deletedFilter.value,
       offerStatus: offerStatus.value
     }),
   keepPreviousData: true,
@@ -303,15 +329,16 @@ const query = useV2ModuleQuery({
         page: page.value,
         pageSize: pageSize.value,
         keyword: keyword.value,
-        subscriptionState: 'never_subscribed',
+        subscriptionState: deletedFilter.value === 'deleted' ? 'all' : 'never_subscribed',
+        deleted: deletedFilter.value,
         offerStatus: offerStatus.value
       }
     )
 });
-watch([page, pageSize, keyword, offerStatus], () => {
+watch([page, pageSize, keyword, offerStatus, deletedFilter], () => {
   void query.ensureFresh();
 });
-watch(offerStatus, () => {
+watch([offerStatus, deletedFilter], () => {
   page.value = 1;
 });
 function search() {
@@ -333,11 +360,7 @@ const { listRef, listFrameStyle } = useV2StableListFrame({
 const importOpen = ref(false);
 const operationError = ref('');
 const working = ref(false);
-const { deleteOpen, deleting, deleteError, openDelete, confirmDelete } = useChatgptAccountDeletion(
-  working,
-  operationError,
-  () => query.refresh()
-);
+
 const drawerOpen = ref(false);
 const editing = ref<BankChatgptAccount | null>(null);
 const saving = ref(false);

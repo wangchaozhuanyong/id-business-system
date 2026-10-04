@@ -12,6 +12,7 @@ const supplierOptionId = '11111111-1111-4111-8111-111111111111';
 const supplierAccountId = '22222222-2222-4222-8222-222222222222';
 const giftCardId = '33333333-3333-4333-8333-333333333333';
 const paymentId = '44444444-4444-4444-8444-444444444444';
+const financeAccountId = '77777777-7777-4777-8777-777777777777';
 const ledgerId = '55555555-5555-4555-8555-555555555555';
 const operator = {
   id: '66666666-6666-4666-8666-666666666666',
@@ -41,6 +42,8 @@ function lockedAccount(balance: Prisma.Decimal.Value) {
 describe('IdBusinessV2TopupSupplierFundsService', () => {
   const tx = {
     $queryRaw: vi.fn(),
+    idBusinessV2FinanceAccount: { findUnique: vi.fn() },
+    idBusinessV2FinanceFxRateSnapshot: { create: vi.fn() },
     idBusinessV2Option: {
       findFirst: vi.fn()
     },
@@ -96,6 +99,12 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       name: '供应商 A'
     });
     tx.idBusinessV2TopupSupplierPayment.findUnique.mockResolvedValue(null);
+    tx.idBusinessV2FinanceAccount.findUnique.mockResolvedValue({
+      id: financeAccountId,
+      currency: 'USDT',
+      status: 'active'
+    });
+    tx.idBusinessV2FinanceFxRateSnapshot.create.mockImplementation(async ({ data }) => data);
     tx.idBusinessV2TopupSupplierLedger.findUnique.mockResolvedValue(null);
     tx.idBusinessV2TopupSupplierLedger.findFirst.mockResolvedValue(null);
     tx.idBusinessV2FinanceJournal.findFirst.mockResolvedValue(null);
@@ -122,6 +131,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     const result = await service.createPayment(
       supplierOptionId,
       {
+        financeAccountId,
         receivedUsdt: '1000',
         networkFeeUsdt: '1.5',
         settlementRateCnyUsdt: '6.8',
@@ -204,6 +214,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     const result = await service.createPayment(
       supplierOptionId,
       {
+        financeAccountId,
         receivedUsdt: '100',
         settlementRateCnyUsdt: '6.8',
         paidAt: createdAt.toISOString(),
@@ -255,6 +266,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       id: paymentId,
       supplierAccountId,
       supplierNameSnapshot: '供应商 A',
+      financeAccountId,
       receivedUsdt: databaseDecimal('1000'),
       networkFeeUsdt: databaseDecimal('1.5'),
       settlementRateCnyUsdt: databaseDecimal('6.8'),
@@ -291,6 +303,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     const result = await service.createPayment(
       supplierOptionId,
       {
+        financeAccountId,
         receivedUsdt: '1000',
         networkFeeUsdt: '1.5',
         settlementRateCnyUsdt: '6.8',

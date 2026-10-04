@@ -1,3 +1,6 @@
+import { BankRechargeSubscriptionReviewService } from './bank-recharge-subscription-review.service';
+import { BankRechargeLifecycleService } from './bank-recharge-lifecycle.service';
+import { BankRechargeLifecycleRepository } from './persistence/bank-recharge-lifecycle.repository';
 import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { Module } from '@nestjs/common';
 import { RechargeNameService } from './recharge-name.service';
@@ -43,6 +46,9 @@ import { RechargeEmailCodeService } from './recharge-email-code.service';
   ],
   exports: [RechargeSettingsService, RechargeProxyService],
   providers: [
+    BankRechargeSubscriptionReviewService,
+    BankRechargeLifecycleService,
+    BankRechargeLifecycleRepository,
     RechargeEmailCodeService,
     V2IdentityService,
     RechargeNameService,

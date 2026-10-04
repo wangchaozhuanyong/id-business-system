@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import type { ReassignIdBusinessV2GiftCardSupplierDto } from './dto/topup-supplier-fund.dto';
 import { IdBusinessV2TopupSupplierFundsSupport } from './id-business-v2-topup-supplier-funds-support';
@@ -16,7 +17,8 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
   constructor(
     repository: IdBusinessV2TopupSupplierCommandRepository,
     private readonly commandTransactions: V2CommandTransactionManager,
-    transactionalAudit: V2TransactionalAuditService
+    transactionalAudit: V2TransactionalAuditService,
+    private readonly postingService: IdBusinessV2FinancePostingService
   ) {
     super(repository, transactionalAudit);
   }
@@ -36,7 +38,7 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
 
     return this.commandTransactions.execute(
       async (tx) => {
-        const giftCard = await this.repository.findGiftCard(tx, giftCardId);
+        const giftCard = await this.repository.lockGiftCardForReassignment(tx, giftCardId);
         if (!giftCard) throw new NotFoundException('礼品卡记录不存在');
         const { outgoing: existingOutgoing, incoming: existingIncoming } =
           await this.repository.findReassignmentReplays(tx, outgoingKey, incomingKey);
@@ -52,6 +54,9 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
             giftCard.supplierOptionId !== newSupplierOptionId
           ) {
             throw new ConflictException('幂等键已用于不同的供应商更正操作');
+          }
+          if (!(await this.repository.findReassignmentJournal(tx, `auto:${incomingKey}:finance`))) {
+            throw new ConflictException('原供应商更正缺少对应财务凭证，请先核对历史账务');
           }
           return {
             giftCardId,
@@ -70,6 +75,9 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
             },
             idempotentReplay: true
           };
+        }
+        if (giftCard.status !== 'credited') {
+          throw new ConflictException('已撤回或赎回的礼品卡不能更正供应商，请先核对原资金来源');
         }
         if (giftCard.supplierOptionId === newSupplierOptionId) {
           const activeDebit = await this.repository.hasActiveGiftCardDebit(tx, giftCardId);
@@ -134,11 +142,19 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
         if (!oldAccount || !newAccount) {
           throw new ConflictException('供应商资金账户状态已变化，请刷新后重试');
         }
+        if (
+          oldAccount.currency !== 'CNY' ||
+          newAccount.currency !== 'CNY' ||
+          activeDebit.currency !== 'CNY' ||
+          !activeDebit.amount.equals(activeDebit.amountCny)
+        ) {
+          throw new ConflictException('当前供应商更正只支持人民币原付款，外币来源请先核对');
+        }
 
         const activeDebitAmountCny = activeDebit.amountCny;
         const oldAfter = oldAccount.currentBalanceCny.add(activeDebitAmountCny);
         const newAfter = newAccount.currentBalanceCny.sub(activeDebitAmountCny);
-        await this.repository.createLedger(tx, {
+        const outgoing = await this.repository.createLedger(tx, {
           supplierAccountId: oldAccount.id,
           giftCardId,
           entryType: 'gift_card_withdrawal_reversal',
@@ -150,7 +166,7 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
           reason: `供应商更正返还：${reason}`,
           createdByUserId: operator?.id
         });
-        await this.repository.createLedger(tx, {
+        const incoming = await this.repository.createLedger(tx, {
           supplierAccountId: newAccount.id,
           giftCardId,
           entryType: 'gift_card_debit',
@@ -179,7 +195,49 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
           giftCardId,
           supplierOptionId: newSupplier.id,
           supplierName: newSupplier.name,
-          operatorId: operator?.id
+          operatorId: operator?.id,
+          purchaseSupplierAccountId: newAccount.id
+        });
+        await this.postingService.post(tx, {
+          journalType: 'supplier_adjustment',
+          sourceType: 'gift_card',
+          sourceId: giftCardId,
+          sourceReference: giftCard.codeMasked,
+          occurredAt: new Date(),
+          summary: `礼品卡供应商资金更正：${giftCard.codeMasked}`,
+          idempotencyKey: `auto:${incomingKey}:finance`,
+          operator,
+          metadata: {
+            reason,
+            originalDebitLedgerId: activeDebit.id,
+            outgoingLedgerId: outgoing.id,
+            incomingLedgerId: incoming.id,
+            oldSupplierAccountId: oldAccount.id,
+            newSupplierAccountId: newAccount.id,
+            transferredCostCny: activeDebitAmountCny.toString()
+          },
+          lines: [
+            {
+              accountCode: 'supplier_prepayment',
+              direction: 'debit',
+              currency: 'CNY',
+              amountOriginal: activeDebitAmountCny,
+              fxRateToCny: 1,
+              amountCny: activeDebitAmountCny,
+              supplierAccountId: oldAccount.id,
+              memo: '更正供应商返还原钱包预付款'
+            },
+            {
+              accountCode: 'supplier_prepayment',
+              direction: 'credit',
+              currency: 'CNY',
+              amountOriginal: activeDebitAmountCny,
+              fxRateToCny: 1,
+              amountCny: activeDebitAmountCny,
+              supplierAccountId: newAccount.id,
+              memo: '更正供应商扣减新钱包预付款'
+            }
+          ]
         });
         await this.writeAudit(tx, {
           operator,

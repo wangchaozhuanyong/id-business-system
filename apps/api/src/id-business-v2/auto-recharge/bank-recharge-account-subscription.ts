@@ -21,7 +21,7 @@ export function accountSubscriptionState(
   now: number,
   warningBoundary: number
 ): Exclude<AccountSubscriptionState, 'all'> {
-  if (!subscription) return 'never_subscribed';
+  if (!subscription || subscription.status === 'cancelled') return 'never_subscribed';
   if (subscription.status !== 'active') return 'expired';
   if (!subscription.dueAt) return 'unknown';
   if (subscription.dueAt.getTime() <= now) return 'expired';
@@ -36,6 +36,7 @@ export function accountListItem(
 ) {
   return {
     id: item.id,
+    deletedAt: item.deletedAt ?? null,
     emailMasked: item.emailMasked,
     registrationCountryCode: item.registrationCountryCode,
     status: item.status,

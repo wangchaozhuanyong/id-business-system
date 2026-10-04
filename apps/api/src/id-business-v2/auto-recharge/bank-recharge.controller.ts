@@ -1,3 +1,5 @@
+import { BankRechargeSubscriptionReviewService } from './bank-recharge-subscription-review.service';
+import { BankRechargeLifecycleService } from './bank-recharge-lifecycle.service';
 import {
   Body,
   Controller,
@@ -32,6 +34,8 @@ export class BankRechargeController {
     private readonly finance: BankRechargeFinanceService,
     private readonly delivery: BankRechargeAccountDeliveryService,
     private readonly corrections: BankRechargeCorrectionService,
+    private readonly subscriptionReview: BankRechargeSubscriptionReviewService,
+    private readonly lifecycle: BankRechargeLifecycleService,
     private readonly cardRemoval: RechargeCardRemovalService
   ) {}
 
@@ -76,6 +80,7 @@ export class BankRechargeController {
       keyword?: string;
       subscriptionState?: string;
       offerStatus?: string;
+      deleted?: string;
     }
   ) {
     return this.accounts.listAccounts(query);
@@ -100,9 +105,69 @@ export class BankRechargeController {
     return this.accounts.updateAccount(id, value, operator);
   }
 
+  @Get('accounts/:id/lifecycle-preview')
+  accountLifecyclePreview(@Param('id') id: string, @Query('action') action: string) {
+    return this.lifecycle.preview('account', id, action === 'restore' ? 'restore' : 'delete');
+  }
   @Delete('accounts/:id')
-  deleteAccount(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
-    return this.accounts.deleteAccount(id, operator);
+  deleteAccount(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.lifecycle.execute('account', id, 'delete', value, operator);
+  }
+  @Post('accounts/:id/restore')
+  restoreAccount(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.lifecycle.execute('account', id, 'restore', value, operator);
+  }
+  @Get('orders/:id/lifecycle-preview')
+  orderLifecyclePreview(@Param('id') id: string, @Query('action') action: string) {
+    return this.lifecycle.preview(
+      'order',
+      id,
+      action === 'restore' ? 'restore' : action === 'delete' ? 'delete' : 'cancel'
+    );
+  }
+  @Get('orders/:id/subscription-review')
+  subscriptionReviewPreview(@Param('id') id: string) {
+    return this.subscriptionReview.preview(id);
+  }
+  @Post('orders/:id/subscription-review')
+  verifySubscription(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.subscriptionReview.verify(id, value, operator);
+  }
+  @Post('orders/:id/cancel')
+  cancelOrder(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.lifecycle.execute('order', id, 'cancel', value, operator);
+  }
+  @Delete('orders/:id')
+  deleteOrder(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.lifecycle.execute('order', id, 'delete', value, operator);
+  }
+  @Post('orders/:id/restore')
+  restoreOrder(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.lifecycle.execute('order', id, 'restore', value, operator);
   }
 
   @Post('accounts/:id/totp-code')

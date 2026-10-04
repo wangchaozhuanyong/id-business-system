@@ -24,6 +24,37 @@ import { safeDocument } from './recharge-validation';
 
 const url = process.env.V2_BANK_RECHARGE_TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
+const seededCurrencyCodes = [
+  'PHP',
+  'IDR',
+  'CLP',
+  'USD',
+  'MYR',
+  'EUR',
+  'GBP',
+  'AUD',
+  'CAD',
+  'JPY',
+  'KRW',
+  'SGD',
+  'INR',
+  'THB',
+  'VND',
+  'TWD',
+  'HKD',
+  'BRL',
+  'MXN',
+  'AED',
+  'SAR',
+  'ZAR',
+  'NZD',
+  'CHF',
+  'SEK',
+  'NOK',
+  'DKK',
+  'PLN',
+  'TRY'
+];
 
 suite('bank recharge real MySQL lifecycle', () => {
   let prisma: PrismaService;
@@ -42,11 +73,19 @@ suite('bank recharge real MySQL lifecycle', () => {
 
   beforeAll(async () => {
     const parsed = new URL(url!);
-    if (parsed.hostname !== '127.0.0.1' || !parsed.pathname.includes('bank_recharge_')) {
+    const isolatedDatabase =
+      parsed.pathname.includes('bank_recharge_') ||
+      /^\/id_business_v2_financial_integrity_\d+$/.test(parsed.pathname);
+    if (parsed.hostname !== '127.0.0.1' || !isolatedDatabase) {
       throw new Error('银充集成测试仅允许连接本机隔离库');
     }
     prisma = new PrismaService({ datasourceUrl: url });
     await prisma.$connect();
+    await prisma.idBusinessV2BankRechargeCurrency.upsert({
+      where: { code: 'CNY' },
+      create: { code: 'CNY', name: '人民币', minorUnits: 2, active: true },
+      update: {}
+    });
     await prisma.user.create({
       data: {
         id: operatorId,
@@ -86,14 +125,28 @@ suite('bank recharge real MySQL lifecycle', () => {
   });
 
   it('persists account, manual order, fee, active subscription, prepaid debit and refund', async () => {
-    const seededCurrencies = await prisma.idBusinessV2BankRechargeCurrency.findMany();
-    expect(seededCurrencies).toHaveLength(29);
+    const seededCurrencies = await prisma.idBusinessV2BankRechargeCurrency.findMany({
+      where: { code: { in: seededCurrencyCodes } }
+    });
+    expect(seededCurrencies.map((currency) => currency.code).sort()).toEqual(
+      [...seededCurrencyCodes].sort()
+    );
+    for (const currency of seededCurrencies) {
+      expect(currency.name.trim().length).toBeGreaterThan(0);
+      expect(currency.active).toBe(true);
+      expect(currency.minorUnits).toBe(
+        ['CLP', 'JPY', 'KRW', 'VND'].includes(currency.code) ? 0 : 2
+      );
+    }
     expect(seededCurrencies).toContainEqual(
       expect.objectContaining({ code: 'USD', minorUnits: 2 })
     );
     expect(seededCurrencies).toContainEqual(
       expect.objectContaining({ code: 'CLP', minorUnits: 0 })
     );
+    expect(
+      await prisma.idBusinessV2BankRechargeCurrency.findUnique({ where: { code: 'CNY' } })
+    ).toEqual(expect.objectContaining({ code: 'CNY', minorUnits: 2, active: true }));
     const customer = await prisma.idBusinessV2Customer.create({
       data: { name: '银充集成测试客户', createdByUserId: operatorId }
     });
@@ -127,7 +180,7 @@ suite('bank recharge real MySQL lifecycle', () => {
       { label: '集成测试预存 Visa 卡', last4: '1234', currencyCode: 'PHP' },
       operator
     );
-    const openedAt = new Date();
+    const openedAt = new Date('2026-10-01T00:00:00Z');
     const dueAt = new Date(openedAt.getTime() + 2 * 24 * 60 * 60 * 1000);
     const created = await orders.createManual(
       {
@@ -169,8 +222,10 @@ suite('bank recharge real MySQL lifecycle', () => {
     const listed = await queries.list({ page: 1, pageSize: 20, keyword: created.orderNo });
     expect(listed.items[0]?.activeSubscription?.status).toBe('active');
     const warnings = await queries.renewalWarnings(openedAt);
-    expect(warnings.totalCount).toBe(1);
-    expect(warnings.items[0]?.orderId).toBe(created.id);
+    expect(warnings.totalCount).toBe(warnings.upcomingCount + warnings.expiredCount);
+    expect(warnings.items.filter((item) => item.orderId === created.id)).toEqual([
+      expect.objectContaining({ orderId: created.id, warningState: 'upcoming', dueAt })
+    ]);
     const paused = await orders.update(
       created.id,
       {
@@ -180,7 +235,9 @@ suite('bank recharge real MySQL lifecycle', () => {
       },
       operator
     );
-    expect((await queries.renewalWarnings(openedAt)).totalCount).toBe(0);
+    expect(
+      (await queries.renewalWarnings(openedAt)).items.filter((item) => item.orderId === created.id)
+    ).toEqual([]);
     const restored = await orders.update(
       created.id,
       {
@@ -190,7 +247,9 @@ suite('bank recharge real MySQL lifecycle', () => {
       },
       operator
     );
-    expect((await queries.renewalWarnings(openedAt)).totalCount).toBe(1);
+    expect(
+      (await queries.renewalWarnings(openedAt)).items.filter((item) => item.orderId === created.id)
+    ).toEqual([expect.objectContaining({ orderId: created.id, warningState: 'upcoming', dueAt })]);
 
     let completed = await finance.complete(
       created.id,
@@ -223,7 +282,7 @@ suite('bank recharge real MySQL lifecycle', () => {
       new V2CommandTransactionManager(prisma),
       new IdBusinessV2FinanceReportRepository(prisma)
     );
-    const profitLoss = await reports.profitLoss({});
+    const profitLoss = await reports.profitLoss({ financeAccountId: cash.id });
     expect(profitLoss.bankRechargeRevenueCny).toBe('196.75');
     expect(profitLoss.bankRechargeServiceFeeCny).toBe('3.25');
     expect(profitLoss.bankRechargeCostCny).toBe('130');
@@ -327,12 +386,14 @@ suite('bank recharge real MySQL lifecycle', () => {
       operator
     );
     expect(refunded.status).toBe('refunded');
-    expect((await queries.renewalWarnings(openedAt)).totalCount).toBe(0);
+    expect(
+      (await queries.renewalWarnings(openedAt)).items.filter((item) => item.orderId === created.id)
+    ).toEqual([]);
     const finalBalance = await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({
       where: { id: cash.id }
     });
     expect(finalBalance.currentBalanceCny.toString()).toBe('869.545');
-    expect((await reports.profitLoss({})).netProfitCny).toBe('-130.455');
+    expect((await reports.profitLoss({ financeAccountId: cash.id })).netProfitCny).toBe('-130.455');
     await finance.refund(
       created.id,
       {
@@ -351,7 +412,20 @@ suite('bank recharge real MySQL lifecycle', () => {
         await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({ where: { id: cash.id } })
       ).currentBalanceCny.toString()
     ).toBe('1000');
-    expect((await reports.profitLoss({})).netProfitCny).toBe('0');
+    expect((await reports.profitLoss({ financeAccountId: cash.id })).netProfitCny).toBe('0');
+
+    const newerSubscriptionOrder = await orders.createManual(
+      {
+        accountId: saved.id,
+        plan: 'plus',
+        chargeCurrencyCode: 'PHP',
+        chargeAmount: '123.45',
+        manualEvidenceRef: `current-${randomUUID()}`,
+        openedAt: '2026-10-03T00:00:00Z',
+        dueAt: '2026-11-01T00:00:00Z'
+      },
+      operator
+    );
 
     const accountKey = `${randomUUID()}${randomUUID()}`.replace(/-/g, '');
     const job = await prisma.idBusinessV2RechargeJob.create({
@@ -374,17 +448,25 @@ suite('bank recharge real MySQL lifecycle', () => {
       account_matched: true,
       quote_authority: 'official_checkout_response',
       payment_requests_sent: 1,
-      checkout_identifier: `cs_fixture_${randomUUID()}`,
+      checkout_identifier: `cs_fixture_${randomUUID().replace(/-/g, '')}`,
       payment_evidence: {
         kind: 'payment_intent',
-        identifier: `pi_fixture_${randomUUID().replace(/-/g, '')}`,
+        identifier: `pi_fixture${randomUUID().replace(/-/g, '')}`,
         amount_minor: 12345,
         currency: 'PHP'
       },
-      quote: { today: { amount: '123.45', amount_minor: 12345, currency: 'PHP' } },
+      quote: {
+        plan: 'plus',
+        today: { amount: '123.45', amount_minor: 12345, currency: 'PHP' },
+        tax: { amount: '0.00', amount_minor: 0, currency: 'PHP' },
+        tax_status: 'displayed',
+        renewal: { amount: '123.45', amount_minor: 12345, currency: 'PHP' },
+        renewal_interval: 'monthly'
+      },
       card_last4: '1234'
     };
     const sanitizedResult = safeDocument(verifiedResult);
+    expect(sanitizedResult.payment_evidence).toEqual(verifiedResult.payment_evidence);
     const automatic = await prisma.$transaction(async (tx) => {
       await bindSavedChatgptAccount(tx, job, sanitizedResult, accounts);
       await recordVerifiedBankRecharge(tx, job, sanitizedResult, orders);
@@ -393,6 +475,13 @@ suite('bank recharge real MySQL lifecycle', () => {
       });
     });
     expect(automatic.source).toBe('automatic');
+    expect(automatic.accountId).toBe(saved.id);
+    expect(automatic.checkoutIdentifier).toBe(verifiedResult.checkout_identifier);
+    expect(automatic.paymentEvidenceId).toBe(verifiedResult.payment_evidence.identifier);
+    expect(
+      (await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({ where: { id: saved.id } }))
+        .officialAccountKey
+    ).toBe(accountKey);
     expect(automatic.chargeAmount.toString()).toBe('123.45');
     await prisma.$transaction(async (tx) => {
       await bindSavedChatgptAccount(tx, job, sanitizedResult, accounts);
@@ -404,12 +493,15 @@ suite('bank recharge real MySQL lifecycle', () => {
     const active = await prisma.idBusinessV2BankRechargeSubscription.findUniqueOrThrow({
       where: { accountId: saved.id }
     });
-    expect(active.currentOrderId).toBe(automatic.id);
+    expect(automatic.openedAt).toBeNull();
+    expect(automatic.dueAt).toBeNull();
+    expect(automatic.renewedFromOrderId).toBeNull();
+    expect(active.currentOrderId).toBe(newerSubscriptionOrder.id);
     expect(active.status).toBe('active');
 
     const sourceResult = {
       ...sanitizedResult,
-      checkout_identifier: `cs_recheck_${randomUUID()}`,
+      checkout_identifier: `cs_recheck_${randomUUID().replace(/-/g, '')}`,
       status: 'subscription_pending',
       payment_outcome: 'subscription_pending',
       payment_evidence: null
@@ -447,7 +539,7 @@ suite('bank recharge real MySQL lifecycle', () => {
       checkout_identifier: sourceResult.checkout_identifier,
       payment_evidence: {
         ...verifiedResult.payment_evidence,
-        identifier: `pi_recheck_${randomUUID().replace(/-/g, '')}`
+        identifier: `pi_recheck${randomUUID().replace(/-/g, '')}`
       }
     });
     for (let replay = 0; replay < 2; replay += 1) {
@@ -465,13 +557,26 @@ suite('bank recharge real MySQL lifecycle', () => {
       where: { rechargeJobId: sourceJob.id }
     });
     expect(recoveredOrder.accountId).toBe(saved.id);
+    expect(recoveredOrder.checkoutIdentifier).toBe(sourceResult.checkout_identifier);
+    expect(recoveredOrder.paymentEvidenceId).toBe(
+      (recheckResult.payment_evidence as { identifier: string }).identifier
+    );
     expect(
       (
         await prisma.idBusinessV2BankRechargeSubscription.findUniqueOrThrow({
           where: { accountId: saved.id }
         })
       ).currentOrderId
-    ).toBe(recoveredOrder.id);
+    ).toBe(newerSubscriptionOrder.id);
+    expect(recoveredOrder.openedAt).toBeNull();
+    expect(recoveredOrder.dueAt).toBeNull();
+    expect(recoveredOrder.renewedFromOrderId).toBeNull();
+    const retainedSubscription =
+      await prisma.idBusinessV2BankRechargeSubscription.findUniqueOrThrow({
+        where: { accountId: saved.id }
+      });
+    expect(retainedSubscription.openedAt.toISOString()).toBe('2026-10-03T00:00:00.000Z');
+    expect(retainedSubscription.dueAt?.toISOString()).toBe('2026-11-01T00:00:00.000Z');
 
     const audits = await prisma.auditLog.findMany({ where: { userId: operatorId } });
     expect(audits.length).toBeGreaterThanOrEqual(6);

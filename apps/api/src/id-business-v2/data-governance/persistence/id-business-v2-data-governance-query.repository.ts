@@ -7,6 +7,7 @@ import type {
   GovernanceJobType,
   RecycleEntity
 } from '../data-governance.types';
+import { bankRestoreSources } from './data-governance-bank-restore';
 
 interface RecycleRow {
   id: string;
@@ -39,46 +40,69 @@ export class IdBusinessV2DataGovernanceQueryRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async overviewRows(requesterUserId: string) {
-    const [counts, accounts, customers, options, orders, latestRetentionAudit, approvalReadiness] =
-      await Promise.all([
-        this.recycleCounts(),
-        this.prisma.idBusinessV2Account.findMany({
-          where: { deletedAt: { not: null } },
-          select: { id: true, appleIdMasked: true, deletedAt: true },
-          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-          take: 20
-        }),
-        this.prisma.idBusinessV2Customer.findMany({
-          where: { deletedAt: { not: null } },
-          select: { id: true, name: true, deletedAt: true },
-          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-          take: 20
-        }),
-        this.prisma.idBusinessV2Option.findMany({
-          where: { deletedAt: { not: null } },
-          select: { id: true, name: true, deletedAt: true },
-          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-          take: 20
-        }),
-        this.prisma.idBusinessV2Order.findMany({
-          where: { deletedAt: { not: null } },
-          select: { id: true, orderNo: true, deletedAt: true },
-          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-          take: 20
-        }),
-        this.prisma.auditLog.findFirst({
-          where: { action: 'id_business_v2.exchange_rate.retention_cleanup' },
-          select: { id: true, createdAt: true },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
-        }),
-        this.approvalReadiness(requesterUserId)
-      ]);
+    const [
+      counts,
+      accounts,
+      customers,
+      options,
+      orders,
+      latestRetentionAudit,
+      approvalReadiness,
+      chatgptAccounts,
+      bankOrders
+    ] = await Promise.all([
+      this.recycleCounts(),
+      this.prisma.idBusinessV2Account.findMany({
+        where: { deletedAt: { not: null } },
+        select: { id: true, appleIdMasked: true, deletedAt: true },
+        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+        take: 20
+      }),
+      this.prisma.idBusinessV2Customer.findMany({
+        where: { deletedAt: { not: null } },
+        select: { id: true, name: true, deletedAt: true },
+        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+        take: 20
+      }),
+      this.prisma.idBusinessV2Option.findMany({
+        where: { deletedAt: { not: null } },
+        select: { id: true, name: true, deletedAt: true },
+        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+        take: 20
+      }),
+      this.prisma.idBusinessV2Order.findMany({
+        where: { deletedAt: { not: null } },
+        select: { id: true, orderNo: true, deletedAt: true },
+        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+        take: 20
+      }),
+      this.prisma.auditLog.findFirst({
+        where: { action: 'id_business_v2.exchange_rate.retention_cleanup' },
+        select: { id: true, createdAt: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+      }),
+      this.approvalReadiness(requesterUserId),
+      this.prisma.idBusinessV2ChatgptAccount.findMany({
+        where: { deletedAt: { not: null } },
+        select: { id: true, emailMasked: true, deletedAt: true },
+        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+        take: 20
+      }),
+      this.prisma.idBusinessV2BankRechargeOrder.findMany({
+        where: { deletedAt: { not: null } },
+        select: { id: true, orderNo: true, deletedAt: true },
+        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+        take: 20
+      })
+    ]);
     return {
       counts,
       accounts,
       customers,
       options,
       orders,
+      chatgptAccounts,
+      bankOrders,
       latestRetentionAudit,
       approvalReadiness
     };
@@ -121,6 +145,12 @@ export class IdBusinessV2DataGovernanceQueryRepository {
           UNION ALL
           SELECT id, 'order' AS entity, order_no AS label, deleted_at
           FROM id_business_v2_orders WHERE deleted_at IS NOT NULL
+          UNION ALL
+          SELECT id, 'chatgpt_account' AS entity, email_masked AS label, deleted_at
+          FROM id_business_v2_chatgpt_accounts WHERE deleted_at IS NOT NULL
+          UNION ALL
+          SELECT id, 'bank_recharge_order' AS entity, order_no AS label, deleted_at
+          FROM id_business_v2_bank_recharge_orders WHERE deleted_at IS NOT NULL
         ) recycled
         WHERE (${entityFilter} = '' OR recycled.entity = ${entityFilter})
         ORDER BY recycled.deleted_at DESC, recycled.id DESC
@@ -133,13 +163,24 @@ export class IdBusinessV2DataGovernanceQueryRepository {
   }
 
   async recycleCounts() {
-    const [account, customer, option, order] = await Promise.all([
-      this.prisma.idBusinessV2Account.count({ where: { deletedAt: { not: null } } }),
-      this.prisma.idBusinessV2Customer.count({ where: { deletedAt: { not: null } } }),
-      this.prisma.idBusinessV2Option.count({ where: { deletedAt: { not: null } } }),
-      this.prisma.idBusinessV2Order.count({ where: { deletedAt: { not: null } } })
-    ]);
-    return { account, customer, option, order };
+    const [account, customer, option, order, chatgptAccount, bankRechargeOrder] = await Promise.all(
+      [
+        this.prisma.idBusinessV2Account.count({ where: { deletedAt: { not: null } } }),
+        this.prisma.idBusinessV2Customer.count({ where: { deletedAt: { not: null } } }),
+        this.prisma.idBusinessV2Option.count({ where: { deletedAt: { not: null } } }),
+        this.prisma.idBusinessV2Order.count({ where: { deletedAt: { not: null } } }),
+        this.prisma.idBusinessV2ChatgptAccount.count({ where: { deletedAt: { not: null } } }),
+        this.prisma.idBusinessV2BankRechargeOrder.count({ where: { deletedAt: { not: null } } })
+      ]
+    );
+    return {
+      account,
+      customer,
+      option,
+      order,
+      chatgpt_account: chatgptAccount,
+      bank_recharge_order: bankRechargeOrder
+    };
   }
 
   async listJobs(input: {
@@ -213,7 +254,13 @@ export class IdBusinessV2DataGovernanceQueryRepository {
         select: { id: true, orderNo: true, status: true, deletedAt: true }
       })
     ]);
-    return { accounts, customers, options, orders };
+    return {
+      accounts,
+      customers,
+      options,
+      orders,
+      ...(await bankRestoreSources(this.prisma, ids))
+    };
   }
 
   findOptionUniqueKeys(uniqueKeys: string[]) {
