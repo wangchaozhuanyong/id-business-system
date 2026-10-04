@@ -12,6 +12,7 @@ from checkout_core import Stop, unique_object
 from registration_job import RegistrationJob, NoRedirect
 import server_proxy
 import fingerprint_runtime
+from browser_session import session_failure, RETRYABLE_NETWORK_CODES
 
 
 class BuiltinProfiles:
@@ -160,8 +161,19 @@ class RegistrationServerJob(RegistrationJob):
         try:
             self.runtime.run_registration(self.execute_builtin)
         except Exception as exc:
-            logging.getLogger('registration').warning('Registration stopped job=%s attempt=%s step=%s error_type=%s',
-                self.id, self.attempt, self.step, type(exc).__name__)
+            details = session_failure(exc)
+            observation = getattr(self, 'registration_observation_error', {})
+            code = details.get('browser_error_code', 'none')
+            if code not in RETRYABLE_NETWORK_CODES:
+                code = 'none'
+            observation_reason = observation.get('reason', 'none')
+            if observation_reason not in {'session_network_error', 'session_load_timeout', 'registration_page_changing'}:
+                observation_reason = 'none'
+            logging.getLogger('registration').warning(
+                'Registration stopped job=%s attempt=%s step=%s operation=%s error_type=%s browser_error_code=%s observation_reason=%s cleanup_error_type=%s',
+                self.id, self.attempt, self.step, getattr(self, 'registration_operation', 'browser_prepare'),
+                'Stop' if isinstance(exc, Stop) else details['error_type'], code, observation_reason,
+                getattr(self, 'registration_cleanup_error', 'none'))
             reason = exc.report.get('reason') if isinstance(exc, Stop) else 'builtin_execution_failed'
             if not self.cancelled.is_set():
                 try:

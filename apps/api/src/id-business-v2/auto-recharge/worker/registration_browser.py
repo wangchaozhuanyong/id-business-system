@@ -9,7 +9,7 @@ from browser_password_login import (EMAIL_INPUT, PASSWORD_INPUT, CODE_INPUT,
                                     login_payment_write, login_code_type, unique_visible, clear_visible_secrets)
 from checkout_core import Stop
 from browser_checkout import observe_page_network, retryable_page_load_error
-from browser_session import SessionBudget
+from browser_session import SessionBudget, session_failure
 from registration_security import verification_link, totp, totp_key, offer_from_text, registration_age, birth_age
 
 NAME_INPUT = 'input[name="name"], input[name="fullName"], input[autocomplete="name"]'
@@ -28,6 +28,10 @@ class RegistrationBrowser:
         self.registration_refreshed = False
         self.recovery_readonly = None
         self.registration_loading = False
+        self.observation_budget = None
+
+    def operation(self, name):
+        self.job.registration_operation = name
 
     async def guard(self, route):
         request = route.request
@@ -60,7 +64,10 @@ class RegistrationBrowser:
 
     async def identity(self, page=None):
         self.official(page or self.page)
-        return await official_identity(page or self.page, self.data['email'])
+        self.operation('identity_read')
+        budget = self.observation_budget or SessionBudget(10, cancelled=self.job.cancelled.is_set)
+        return await official_identity(page or self.page, self.data['email'],
+                                       budget=budget, observe_errors=True)
 
     async def settle(self, seconds=2):
         deadline = time.monotonic() + seconds
@@ -85,6 +92,7 @@ class RegistrationBrowser:
 
     async def challenge(self):
         self.official(self.page)
+        self.operation('challenge_read')
         title = await self.page.title()
         text = (await self.page.locator('body').inner_text())[:12000]
         busy = self.page.locator('[aria-busy="true"], [role="progressbar"]')
@@ -103,6 +111,7 @@ class RegistrationBrowser:
 
     async def profile_fields(self):
         self.official(self.page)
+        self.operation('profile_read')
         name = await unique_visible(self.page, NAME_INPUT)
         if not name:
             birth = await unique_visible(self.page, BIRTH_INPUT)
@@ -117,7 +126,11 @@ class RegistrationBrowser:
                 return None, birth, age, None  # Split/delayed onboarding cannot be called complete.
             return None
         roots = name.locator('xpath=ancestor::*[self::form or @role="dialog"][1]')
-        if await roots.count() != 1:
+        root_count = await roots.count()
+        if root_count == 0 and not await name.is_visible():
+            self.registration_loading = True
+            return None
+        if root_count != 1:
             raise Stop('form_unrecognized')
         root = roots.first
         birth = await unique_visible(root, BIRTH_INPUT)
@@ -135,6 +148,9 @@ class RegistrationBrowser:
             raise Stop('form_unrecognized')
         button = buttons[0] if buttons else visible_buttons[0] if visible_buttons else None
         ready = button and await name.is_enabled() and await (birth or age).is_enabled()
+        if not await name.is_visible():
+            self.registration_loading = True
+            return None
         return name, birth, age, button if ready else None
 
     async def registration_view(self):
@@ -185,6 +201,7 @@ class RegistrationBrowser:
         await self.job.manual(reason)
 
     async def refresh_registration(self):
+        self.operation('page_refresh')
         self.official(self.page)
         url = self.page.url
         parsed = urlsplit(url)
@@ -232,14 +249,28 @@ class RegistrationBrowser:
             self.job.check()
             try:
                 budget = SessionBudget(10, cancelled=self.job.cancelled.is_set)
+                self.observation_budget = budget
                 view, field = await budget.run(self.registration_view, 'registration_observe')
             except Exception as exc:
+                if isinstance(exc, Stop) and exc.report.get('reason') == 'verification_required':
+                    await self.manual_registration('verification_required')
+                    continue
                 if isinstance(exc, Stop) and exc.report.get('reason') in {'form_unrecognized', 'login_form_ambiguous'}:
                     await self.manual_registration('form_unrecognized')
                     continue
-                if not retryable_page_load_error(exc):
+                page_changing = (type(exc).__name__ == 'Error' and bool(re.search(
+                    r'Execution context was destroyed|Cannot find context with specified id', str(exc))))
+                if not page_changing and not retryable_page_load_error(exc):
                     raise
+                # Only controlled transport diagnostics survive; never exception text or session data.
+                details = exc.report if isinstance(exc, Stop) else session_failure(exc)
+                self.job.registration_observation_error = {
+                    key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
+                if page_changing:
+                    self.job.registration_observation_error['reason'] = 'registration_page_changing'
                 view, field = 'unknown', None
+            finally:
+                self.observation_budget = None
             if view == 'verification':
                 await self.manual_registration('verification_required')
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
@@ -267,6 +298,7 @@ class RegistrationBrowser:
                 name, birth, age, button = field
                 await self.end_recovery()
                 self.job.event('progress', step='profile')
+                self.operation('profile_submit')
                 await name.fill(self.data['displayName'])
                 if birth:
                     await birth.fill(self.data['birthDate'])
@@ -295,6 +327,7 @@ class RegistrationBrowser:
             if view == 'email' and not email_submitted:
                 await self.end_recovery()
                 self.job.event('progress', step='email')
+                self.operation('email_submit')
                 await field.fill(self.data['email'])
                 # Timestamp the expected mail BEFORE submission triggers sending.
                 self.job.prepare_mail('email_code', new_request=True)
@@ -666,9 +699,11 @@ class RegistrationBrowser:
                        offerSummary='明确展示的账号优惠' if status != 'unknown' else '页面未提供可确认的优惠信息')
 
     async def run(self):
+        self.operation('browser_attach')
         await self.context.route('**/*', self.guard)
         pages = [page for page in self.context.pages if official_login_page(page.url)]
         self.page = pages[-1] if pages else await self.context.new_page()
+        primary_error = None
         try:
             if self.data['registered'] and not official_login_page(self.page.url):
                 await self.page.goto('https://chatgpt.com', wait_until='domcontentloaded')
@@ -686,7 +721,19 @@ class RegistrationBrowser:
                 await self.mfa()
             await self.offer()
             self.job.event('complete', step='completed')
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
-            await self.end_recovery()
-            await clear_visible_secrets(self.page)
-            await self.context.unroute('**/*', self.guard)
+            cleanup_error = None
+            for cleanup in (self.end_recovery, lambda: clear_visible_secrets(self.page),
+                            lambda: self.context.unroute('**/*', self.guard)):
+                try:
+                    await cleanup()
+                except Exception as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+                    self.job.registration_cleanup_error = session_failure(exc)['error_type']
+            if primary_error is None and cleanup_error is not None:
+                self.operation('browser_cleanup')
+                raise cleanup_error
