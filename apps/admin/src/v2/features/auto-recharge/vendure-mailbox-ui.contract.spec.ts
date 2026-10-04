@@ -53,4 +53,16 @@ describe('Vendure mailbox UI contract', () => {
     expect(api).not.toContain('VENDURE_MAILBOX_API_KEY');
     expect(api).not.toContain('vendure-api-key');
   });
+
+  it('normalizes the list and both latest-code paths and guards OTP copying independently from query-code copying', () => {
+    expect(view.match(/\.map\(normalizeV2MailboxVerificationMail\)/g)).toHaveLength(3);
+    expect(view).toContain('verificationCode && !isV2MailboxVerificationCode(value)');
+    expect(view).toContain('copyCodeWithFeedback(row.extractedCode, true)');
+    expect(view).toContain('copyCodeWithFeedback(relayResult.latestOtp.code, true)');
+    expect(view).toContain('copyCodeWithFeedback(mail.extractedCode, true)');
+    expect(view).toContain('copyCodeWithFeedback(value, true)');
+    expect(view).toContain('copyCodeWithFeedback(row.masterQueryCode)');
+    expect(view).toContain('copyCodeWithFeedback(row.buyerQueryCode)');
+    expect(view).toContain('验证码未识别');
+  });
 });

@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { normalizeV2MailboxVerificationMail } from '@apple-business/shared';
 import type {
   BatchCreateV2VendureMailboxAliasesInput,
   CreateV2VendureMailboxAliasInput,
@@ -86,7 +87,7 @@ export class IdBusinessV2VendureMailboxClient {
       }`,
       input
     );
-    return data.icloudReceivedMails;
+    return data.icloudReceivedMails.map(normalizeV2MailboxVerificationMail);
   }
 
   createPrimary(input: CreateV2VendureMailboxPrimaryInput) {
@@ -226,7 +227,10 @@ export class IdBusinessV2VendureMailboxClient {
       { queryCode },
       clientIp
     );
-    return data.icloudQueryMails;
+    return {
+      ...data.icloudQueryMails,
+      items: data.icloudQueryMails.items.map(normalizeV2MailboxVerificationMail)
+    };
   }
 
   private async adminMutation<T>(

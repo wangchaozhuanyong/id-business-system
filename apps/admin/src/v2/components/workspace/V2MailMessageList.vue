@@ -60,6 +60,7 @@
                 一键复制
               </AppButton>
             </div>
+            <span v-else class="v2-text-muted">验证码未识别</span>
             <dl>
               <div>
                 <dt>发件人</dt>
@@ -98,7 +99,11 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { V2MailViewerQueryResult } from '@apple-business/shared';
+import {
+  isV2MailboxVerificationCode,
+  resolveV2MailboxVerificationCode,
+  type V2MailViewerQueryResult
+} from '@apple-business/shared';
 import { CopyDocument, Message } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -110,7 +115,13 @@ const props = withDefaults(defineProps<{ result: V2MailViewerQueryResult; title?
 const selectedVirtualEmailId = ref('');
 const virtualEmailOptions = computed(() => props.result.virtualEmailsList ?? []);
 const visibleItems = computed(() =>
-  filterMailViewerMessages(props.result.items, selectedVirtualEmailId.value)
+  filterMailViewerMessages(props.result.items, selectedVirtualEmailId.value).map((item) => ({
+    ...item,
+    extractedCode: resolveV2MailboxVerificationCode({
+      ...item,
+      bodyText: mailBodyToPlainText(item.body)
+    })
+  }))
 );
 const queryTypeLabel = computed(() =>
   props.result.targetType === 'VIRTUAL' ? '买家专属' : '主管理码'
@@ -133,6 +144,7 @@ watch(
 );
 
 async function copyCode(code: string) {
+  if (!isV2MailboxVerificationCode(code)) return;
   if (await copyText(code)) ElMessage.success('验证码已复制');
   else ElMessage.error('无法复制验证码，请手动选择复制');
 }

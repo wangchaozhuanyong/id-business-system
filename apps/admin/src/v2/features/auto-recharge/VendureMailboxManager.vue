@@ -725,14 +725,14 @@
                       class="vendure-copy-btn"
                       :variant="copiedCode === row.extractedCode ? 'success' : 'default'"
                       title="点击一键复制验证码"
-                      @click="copyCodeWithFeedback(row.extractedCode)"
+                      @click="copyCodeWithFeedback(row.extractedCode, true)"
                     >
                       <el-icon v-if="copiedCode !== row.extractedCode"><CopyDocument /></el-icon>
                       <el-icon v-else><Check /></el-icon>
                       <span>{{ copiedCode === row.extractedCode ? '已复制' : '复制' }}</span>
                     </AppButton>
                   </div>
-                  <span v-else>—</span>
+                  <span v-else>未识别</span>
                 </template>
               </V2TableColumn>
               <V2TableActionColumn :definition="v2TableSchemas.vendureMailbox.mails.columns[5]"
@@ -783,6 +783,7 @@
                   >
                     {{ item.extractedCode }}
                   </AppButton>
+                  <span v-else>验证码未识别</span>
                 </header>
                 <dl>
                   <div
@@ -1017,7 +1018,7 @@
                 :variant="copiedCode === relayResult.latestOtp.code ? 'success' : 'primary'"
                 size="large"
                 title="一键复制最新验证码"
-                @click="copyCodeWithFeedback(relayResult.latestOtp.code)"
+                @click="copyCodeWithFeedback(relayResult.latestOtp.code, true)"
               >
                 <el-icon v-if="copiedCode !== relayResult.latestOtp.code"><CopyDocument /></el-icon>
                 <el-icon v-else><Check /></el-icon>
@@ -1051,13 +1052,14 @@
                       class="vendure-copy-btn"
                       :variant="copiedCode === mail.extractedCode ? 'success' : 'default'"
                       title="点击一键复制验证码"
-                      @click="copyCodeWithFeedback(mail.extractedCode)"
+                      @click="copyCodeWithFeedback(mail.extractedCode, true)"
                     >
                       <el-icon v-if="copiedCode !== mail.extractedCode"><CopyDocument /></el-icon>
                       <el-icon v-else><Check /></el-icon>
                       <span>{{ copiedCode === mail.extractedCode ? '已复制' : '复制' }}</span>
                     </AppButton>
                   </div>
+                  <span v-else>验证码未识别</span>
                 </div>
 
                 <div v-if="mail.bodyText" class="vendure-relay-mail-body-wrapper">
@@ -1294,6 +1296,10 @@
 
 <script setup lang="ts">
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import {
+  isV2MailboxVerificationCode,
+  normalizeV2MailboxVerificationMail
+} from '@apple-business/shared';
 
 import type {
   V2VendureMailboxAlias,
@@ -1451,7 +1457,9 @@ const activeQuery = computed(() =>
 const primaryItems = computed(() => primaryQuery.data.value?.items ?? []);
 const aliasItems = computed(() => aliasQuery.data.value?.items ?? []);
 const allAliases = computed(() => aliasQuery.data.value?.items ?? []);
-const mailItems = computed(() => mailQuery.data.value?.items ?? []);
+const mailItems = computed(() =>
+  (mailQuery.data.value?.items ?? []).map(normalizeV2MailboxVerificationMail)
+);
 const selectedAliasEmail = computed(
   () =>
     allAliases.value.find((item) => item.id === virtualEmailId.value)?.aliasEmail ?? '所选虚拟邮箱'
@@ -1557,23 +1565,29 @@ function targetEmail(mail: V2VendureMailboxMail) {
 const copiedCode = ref('');
 let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
-async function copyCodeWithFeedback(value: string | null | undefined) {
+async function copyCodeWithFeedback(value: string | null | undefined, verificationCode = false) {
   if (!value) return;
+  if (verificationCode && !isV2MailboxVerificationCode(value)) {
+    operationError.value = '未识别到有效验证码';
+    return;
+  }
   try {
     await navigator.clipboard.writeText(value);
     copiedCode.value = value;
-    operationMessage.value = '查询码已复制';
+    operationMessage.value = verificationCode ? '验证码已复制' : '查询码已复制';
     if (copyTimer) clearTimeout(copyTimer);
     copyTimer = setTimeout(() => {
       copiedCode.value = '';
     }, 2000);
   } catch {
-    operationError.value = '复制失败，请手动选择查询码';
+    operationError.value = verificationCode
+      ? '复制失败，请手动选择验证码'
+      : '复制失败，请手动选择查询码';
   }
 }
 
 async function copyCode(value: string | null) {
-  await copyCodeWithFeedback(value);
+  await copyCodeWithFeedback(value, true);
 }
 
 interface RelayQueryResult {
@@ -1669,9 +1683,9 @@ function formatPublicQueryResult(
   res: V2VendureMailboxPublicQueryResult,
   queryInput: string
 ): RelayQueryResult {
-  const items = [...(res.items || [])].sort(
-    (left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt)
-  );
+  const items = (res.items || [])
+    .map(normalizeV2MailboxVerificationMail)
+    .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt));
   const latestOtpItem = items.find((m) => Boolean(m.extractedCode));
   return {
     email: res.aliasEmail || res.primaryEmail || queryInput,
@@ -1770,9 +1784,9 @@ async function handleRelayQuery() {
           primaryAccountId: matchedPrimary?.id,
           pageSize: 20
         });
-        const items = [...(mailRes.items || [])].sort(
-          (left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt)
-        );
+        const items = (mailRes.items || [])
+          .map(normalizeV2MailboxVerificationMail)
+          .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt));
         const latestOtpItem = items.find((m) => m.extractedCode);
         resultData = {
           email: query,
