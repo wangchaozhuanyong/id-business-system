@@ -348,6 +348,13 @@ def sync_new_table_grants(release, additions):
 def configure_google_drive_sync(previous, release):
     old_compose = (previous / 'docker-compose.aws-mysql.yml').read_bytes()
     new_compose = (release / 'docker-compose.aws-mysql.yml').read_bytes()
+    mail_binding = b'      VENDURE_MAILBOX_WEBHOOK_SECRET: ${VENDURE_MAILBOX_WEBHOOK_SECRET:-}\n'
+    require(old_compose.count(mail_binding) <= 1 and new_compose.count(mail_binding) <= 1,
+            'Duplicate mailbox webhook compose binding')
+    if new_compose.count(mail_binding) != old_compose.count(mail_binding):
+        require(old_compose.count(mail_binding) == 0 and new_compose.count(mail_binding) == 1,
+                'Mailbox webhook compose binding removed')
+        new_compose = new_compose.replace(mail_binding, b'')
     config = release / 'deploy/aws/google-drive-sync-folder.json'
     if not config.exists():
         require(new_compose == old_compose, 'Production compose definition changed')
