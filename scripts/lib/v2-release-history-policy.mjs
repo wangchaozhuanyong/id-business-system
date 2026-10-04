@@ -30,6 +30,12 @@ export function fingerprintRows(rows) {
   return fingerprint([...rows].sort((a, b) => String(a.id).localeCompare(String(b.id), 'en')));
 }
 
+export function serializeHistoricalAuditReport(report) {
+  return JSON.stringify(report, (_key, value) =>
+    typeof value === 'bigint' ? value.toString() : value
+  );
+}
+
 export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
   if (
     fingerprint(policy) !== policySha256 ||

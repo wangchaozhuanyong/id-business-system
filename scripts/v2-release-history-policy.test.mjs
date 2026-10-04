@@ -6,6 +6,7 @@ import { V2_DATA_INTEGRITY_CHECKS } from './lib/v2-data-integrity-audit.mjs';
 import {
   acceptHistoricalAudit,
   fingerprintRows,
+  serializeHistoricalAuditReport,
   validateHistoryPolicy
 } from './lib/v2-release-history-policy.mjs';
 
@@ -36,6 +37,22 @@ const fixture = () => ({
     transactionIsolation: 'REPEATABLE-READ',
     foreignKeyChecks: 1
   }
+});
+test('real MySQL BigInt identity serializes without changing audit or gate status', () => {
+  const input = fixture();
+  input.identity.foreignKeyChecks = 1n;
+  const report = JSON.parse(
+    serializeHistoricalAuditReport({
+      ok: false,
+      violationCount: 10,
+      identity: input.identity,
+      gate: acceptHistoricalAudit(input)
+    })
+  );
+  assert.equal(report.identity.foreignKeyChecks, '1');
+  assert.equal(report.ok, false);
+  assert.equal(report.violationCount, 10);
+  assert.equal(report.gate.accepted, true);
 });
 test('approved baseline retains 10 actual violations and accepts only the release gate', () => {
   const input = fixture();

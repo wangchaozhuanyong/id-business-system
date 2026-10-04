@@ -11,6 +11,7 @@ import {
   acceptHistoricalAudit,
   fingerprintRows,
   historySourceQueries,
+  serializeHistoricalAuditReport,
   validateHistoryPolicy
 } from './lib/v2-release-history-policy.mjs';
 
@@ -82,7 +83,7 @@ try {
       const ids = policy.sources.journals.ids;
       const metadata = await tx.$queryRawUnsafe(
         `SELECT id,
-      SHA2(IF(metadata IS NULL, 'NULL', CAST(metadata AS CHAR)), 256) AS metadataSha256
+      CAST(SHA2(IF(metadata IS NULL, 'NULL', CAST(metadata AS CHAR)), 256) AS CHAR) AS metadataSha256
       FROM id_business_v2_finance_journals WHERE id IN (${ids.map(() => '?').join(',')})`,
         ...ids
       );
@@ -101,7 +102,7 @@ try {
     },
     { isolationLevel: 'RepeatableRead', timeout: 120000 }
   );
-  console.log(JSON.stringify({ ...report, generatedAt: new Date().toISOString() }));
+  console.log(serializeHistoricalAuditReport({ ...report, generatedAt: new Date().toISOString() }));
 } catch {
   console.log(
     JSON.stringify({
