@@ -96,12 +96,14 @@ class RegistrationJob:
         except Exception:
             raise Stop('durable_state_unavailable') from None
 
-    def prepare_mail(self, step):
+    def prepare_mail(self, step, *, new_request=False):
+        if type(new_request) is not bool:
+            raise Stop('invalid_registration_payload')
         with self.code_lock:
             self.pending_code = None
             self.code_event.clear()
             self.awaiting_code = True
-        self.event('waiting_email', step=step)
+        self.event('waiting_email', step=step, newMailRequest=new_request)
 
     def signal_code(self, code, attempt=None, step=None, mail_id=None):
         with self.code_lock:

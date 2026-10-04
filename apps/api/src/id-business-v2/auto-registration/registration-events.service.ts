@@ -42,7 +42,8 @@ export class RegistrationEventsService {
             'offerStatus',
             'offerSummary',
             'reason',
-            'mailId'
+            'mailId',
+            'newMailRequest'
           ].includes(key)
       )
     )
@@ -67,6 +68,11 @@ export class RegistrationEventsService {
       throw new BadRequestException('任务回执类型无效');
     if (input.registrationCountryCode !== undefined && type !== 'registered')
       throw new BadRequestException('仅注册完成回执可记录注册国家');
+    if (
+      input.newMailRequest !== undefined &&
+      (type !== 'waiting_email' || typeof input.newMailRequest !== 'boolean')
+    )
+      throw new BadRequestException('邮件请求标记无效');
     const registrationCountryCode = bankRechargeCountryCode(input.registrationCountryCode);
     return this.transactions.execute(
       async (tx) => {
@@ -146,7 +152,17 @@ export class RegistrationEventsService {
           if (!['email_code', 'password', 'mfa'].includes(nextStep))
             throw new BadRequestException('当前步骤不能读取邮件');
           patch.state = 'awaiting_email';
-          patch.codeRequestedAt = new Date();
+          // Registration resumes its existing email challenge in the retained window.
+          // Password/MFA prepare_mail starts a new challenge, even after a progress event.
+          patch.codeRequestedAt =
+            input.newMailRequest === false &&
+            nextStep === 'email_code' &&
+            row.codeRequestedAt &&
+            profileId &&
+            row.step === nextStep &&
+            row.browserProfileId === profileId
+              ? row.codeRequestedAt
+              : new Date();
         }
         if (type === 'waiting_user') patch.state = 'awaiting_user';
         if (type === 'mail_accepted') {
