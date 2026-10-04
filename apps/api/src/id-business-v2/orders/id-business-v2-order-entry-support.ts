@@ -19,6 +19,7 @@ import type {
   IdBusinessV2OrderRecord
 } from './id-business-v2-order.types';
 import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import { normalizeOrderReceiptAccount } from './id-business-v2-order-receipt-account';
 
 export interface NormalizedCreateOrderInput {
   customerId: string;
@@ -31,6 +32,7 @@ export interface NormalizedCreateOrderInput {
   websiteAccount: string | null;
   websiteAccountHash: string | null;
   receivedAmount: Amount4;
+  receivedFinanceAccountId: string | null;
   balanceAmount: Amount4;
   openedAt: Date;
   dueAt: Date;
@@ -96,6 +98,7 @@ export function normalizeCreateOrderInput(
     websiteAccount,
     websiteAccountHash: hash(websiteAccount),
     receivedAmount,
+    receivedFinanceAccountId: normalizeOrderReceiptAccount(dto.receivedFinanceAccountId),
     balanceAmount,
     openedAt,
     dueAt,
@@ -146,6 +149,7 @@ export function assertOrderEntryReplayMatches(
     order.settlementPlatformOptionId !== input.settlementPlatformOptionId ||
     order.platformOrderNo !== input.platformOrderNo ||
     order.websiteAccountHash !== input.websiteAccountHash ||
+    order.receivedFinanceAccountId !== input.receivedFinanceAccountId ||
     !order.receivedAmount.equals(input.receivedAmount) ||
     !order.balanceAmount.equals(input.balanceAmount) ||
     order.openedAt?.getTime() !== input.openedAt.getTime() ||
@@ -191,6 +195,7 @@ export async function writeOrderEntryAuditLog(
       platformOrderNo: input.platformOrderNo,
       websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
       receivedAmount: input.receivedAmount.toString(),
+      receivedFinanceAccountId: input.receivedFinanceAccountId,
       platformFeeAmount: platformFeeAmount.toString(),
       balanceAmount: input.balanceAmount.toString(),
       openedAt: input.openedAt,

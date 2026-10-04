@@ -169,7 +169,8 @@ def wait_healthy(directory, service):
     raise RuntimeError(f'{service} did not become healthy')
 
 
-def audit(directory, receipt):
+def audit(directory, receipt, *, historical_exception=False, stage=None,
+          source=None, before_receipt=None):
     values = environment_values(directory / '.env.aws.production')
     audit_url = values.get('V2_DATA_INTEGRITY_DATABASE_URL')
     require(bool(audit_url), 'Read-only audit database URL missing')
@@ -182,19 +183,44 @@ def audit(directory, receipt):
         netloc=f'{userinfo}@mysql' + (f':{parts.port}' if parts.port else '')))
     env = os.environ.copy()
     env['V2_DATA_INTEGRITY_DATABASE_URL'] = container_url
+    audit_args = ['node', 'scripts/v2-data-integrity-audit.mjs']
+    mounts = ['-v', f'{directory / "scripts"}:/app/scripts:ro']
+    if historical_exception:
+        require(stage in ('before', 'after') and source is not None,
+                'Historical exception audit source missing')
+        mounts = ['-v', f'{source / "scripts"}:/app/scripts:ro',
+                  '-v', f'{source / "deploy/aws"}:/release-policy:ro']
+        audit_args = ['node', 'scripts/v2-release-history-audit.mjs',
+                      '--policy=/release-policy/historical-finance-20261005.json',
+                      '--expected-current=ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
+                      f'--stage={stage}']
+        if stage == 'after':
+            require(before_receipt is not None, 'Historical before audit missing')
+            mounts.extend(['-v', f'{before_receipt}:/release-policy/before-audit.json:ro'])
+            audit_args.append('--before-receipt=/release-policy/before-audit.json')
     output = compose(
         directory, 'run', '--rm', '--no-deps',
-        '-v', f'{directory / "scripts"}:/app/scripts:ro',
+        *mounts,
         '-e', 'V2_DATA_INTEGRITY_DATABASE_URL',
-        'migrate', 'node', 'scripts/v2-data-integrity-audit.mjs',
+        'migrate', *audit_args,
         env=env, timeout=240,
     )
     report = json.loads(output)
-    require(report.get('ok') is True and report.get('violationCount') == 0,
-            'Financial data integrity audit failed')
+    if historical_exception:
+        gate = report.get('gate', {})
+        require(gate.get('accepted') is True and gate.get('policyId') == 'historical-finance-20261005'
+                and gate.get('expectedCurrent') == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+                and gate.get('stage') == stage and gate.get('checkCount') == 48
+                and report.get('violationCount') == gate.get('violationCount') == 10
+                and (stage != 'after' or gate.get('unavailableCheckCount') == 0),
+                'Approved historical integrity gate failed')
+    else:
+        require(report.get('ok') is True and report.get('violationCount') == 0,
+                'Financial data integrity audit failed')
     receipt.write_text(json.dumps(report, indent=2) + '\n')
     receipt.chmod(0o600)
-    return {'checkCount': report.get('checkCount'), 'violationCount': 0}
+    return {'checkCount': report.get('checkCount'), 'violationCount': report.get('violationCount'),
+            **({'historicalException': report['gate']} if historical_exception else {})}
 
 
 def assert_no_active_recharge(directory):
@@ -402,10 +428,14 @@ def main():
     parser.add_argument('--image-run-id')
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
+    parser.add_argument('--historical-finance-exception', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
+    require(not args.historical_finance_exception or
+            args.expected_current == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
+            'Historical release exception cannot be reused after publication')
     require(re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository), 'Invalid image repository')
     require(re.fullmatch(r'[0-9]+', args.run_id), 'Invalid workflow run')
     require(re.fullmatch(r'[1-9][0-9]*', args.run_attempt), 'Invalid workflow attempt')
@@ -491,7 +521,9 @@ def main():
                     '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
 
         step = 'audit-before'
-        before_audit = audit(previous, release / 'before-audit.json')
+        before_audit = audit(previous, release / 'before-audit.json',
+                             historical_exception=args.historical_finance_exception,
+                             stage='before', source=release)
         step = 'images'
         pulled_images = {}
         registry = args.repository.split('/')[0]
@@ -533,7 +565,10 @@ def main():
             print(f'HEALTHY {service}', flush=True)
 
         step = 'audit-after'
-        after_audit = audit(release, release / 'after-audit.json')
+        after_audit = audit(release, release / 'after-audit.json',
+                            historical_exception=args.historical_finance_exception,
+                            stage='after', source=release,
+                            before_receipt=release / 'before-audit.json')
         after = {service: service_state(release, service) for service in ALL_SERVICES}
         require(all(after[s] == before[s] for s in ALL_SERVICES if s not in updated_services),
                 'Unrelated service changed')

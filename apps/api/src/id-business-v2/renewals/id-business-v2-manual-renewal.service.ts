@@ -195,6 +195,7 @@ export class IdBusinessV2ManualRenewalService {
               'id_business_v2_orders.website_account_search_tokens'
             ),
             receivedAmount: input.receivedAmount,
+            receivedFinanceAccountId: input.receivedFinanceAccountId,
             balanceAmount: input.balanceAmount,
             openedAt: input.openedAt,
             dueAt: input.dueAt,
@@ -301,6 +302,7 @@ export class IdBusinessV2ManualRenewalService {
           },
           afterData: {
             executionMode: 'manual_operator_confirmation',
+            receivedFinanceAccountId: input.receivedFinanceAccountId,
             orderId: createdOrder.order.id,
             orderNo: createdOrder.order.orderNo,
             activationId: activation.id,

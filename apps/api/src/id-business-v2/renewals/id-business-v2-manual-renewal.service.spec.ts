@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as financeApi from '../finance/public-api';
 import { IdBusinessV2OrderCompletionService } from '../orders/public-api';
 import { Amount4, Rate8 } from '../runtime/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
@@ -8,6 +9,8 @@ import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2ManualRenewalService } from './id-business-v2-manual-renewal.service';
 import { IdBusinessV2RenewalsRepository } from './persistence/id-business-v2-renewals.repository';
 
+const financeAccountId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const financeAccountLock = vi.spyOn(financeApi, 'lockFinanceAccount');
 const activationId = '11111111-1111-4111-8111-111111111111';
 const sourceOrderId = '22222222-2222-4222-8222-222222222222';
 const targetOrderId = '33333333-3333-4333-8333-333333333333';
@@ -42,6 +45,7 @@ function makeDto(overrides: Record<string, unknown> = {}) {
     settlementPlatformOptionId,
     platformOrderNo: 'RENEW-PLATFORM-1001',
     receivedAmount: '100',
+    receivedFinanceAccountId: financeAccountId,
     balanceAmount: '20',
     openedAt: nextOpenedAt.toISOString(),
     dueAt: nextDueAt.toISOString(),
@@ -124,6 +128,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
     }
   };
   const prisma = {
+    idBusinessV2FinanceAccount: { findMany: vi.fn() },
     $transaction: vi.fn(),
     idBusinessV2Order: {
       findUnique: vi.fn()
@@ -152,6 +157,14 @@ describe('IdBusinessV2ManualRenewalService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.idBusinessV2FinanceAccount.findMany.mockResolvedValue([]);
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'CNY',
+      currentBalance: Amount4.from('1000'),
+      currentBalanceCny: Amount4.from('1000')
+    });
     orderCompletionService.postCompletionJournalInTransaction
       .mockReset()
       .mockResolvedValue({ id: 'journal-1' });
@@ -310,6 +323,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
       settlementPlatformOptionId,
       platformOrderNo: 'RENEW-PLATFORM-1001',
       receivedAmount: decimal('100'),
+      receivedFinanceAccountId: financeAccountId,
       platformFeeAmount: decimal('3'),
       balanceAmount: decimal('20'),
       balanceCostAmount: decimal('60'),
@@ -354,6 +368,13 @@ describe('IdBusinessV2ManualRenewalService', () => {
 
     expect(result.idempotentReplay).toBe(true);
     expect(result.balance.after).toBe('10');
+    await expect(
+      service.create(
+        activationId,
+        makeDto({ receivedFinanceAccountId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }),
+        operator
+      )
+    ).rejects.toThrow('幂等键');
     expect(orderEntryService.createManualRenewalOrderInTransaction).not.toHaveBeenCalled();
     expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
     expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
@@ -458,6 +479,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
         id: targetOrderId,
         orderNo: 'RENEW',
         receivedAmount: Amount4.from('100'),
+        receivedFinanceAccountId: financeAccountId,
         receivedOriginalAmount: Amount4.from('100'),
         receivedCurrency: 'CNY',
         receivedFxRateToCny: Rate8.one(),
@@ -583,6 +605,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
       ]);
 
     await expect(service.listOptions()).resolves.toEqual({
+      financeAccounts: [],
       settlementPlatforms: [
         {
           id: settlementPlatformOptionId,

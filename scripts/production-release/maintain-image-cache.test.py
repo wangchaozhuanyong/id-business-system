@@ -371,5 +371,30 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(calls, 1)
 
 
+
+class HistoricalReceiptRetentionTests(unittest.TestCase):
+    def manifest(self):
+        baseline = 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+        gate = {'accepted': True, 'policyId': 'historical-finance-20261005',
+            'expectedCurrent': baseline, 'stage': 'after', 'checkCount': 48,
+            'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 10,
+            'sources': {'accounts': 'a' * 64}, 'metadataSha256': 'b' * 64}
+        return {'previousCommit': baseline, 'deploymentRun': 'github-actions-123-1',
+            'dataAuditBefore': {'historicalException': {**gate, 'stage': 'before'}},
+            'dataAuditAfter': {'violationCount': 10, 'historicalException': gate}}
+
+    def test_cache_cleanup_requires_exact_successful_exception_receipt(self):
+        cache.verify_deployment(self.manifest(), 'github-actions-123-1')
+
+    def test_new_anomaly_or_changed_metadata_or_reused_baseline_prevents_cleanup(self):
+        for mutate in [lambda x: x.update(previousCommit='f' * 40),
+            lambda x: x['dataAuditAfter'].update(violationCount=11),
+            lambda x: x['dataAuditAfter']['historicalException'].update(unavailableCheckCount=1),
+            lambda x: x['dataAuditAfter']['historicalException'].update(metadataSha256='c' * 64),
+            lambda x: x['dataAuditAfter']['historicalException'].update(policyId='other')]:
+            manifest = self.manifest(); mutate(manifest)
+            with self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                cache.verify_deployment(manifest, 'github-actions-123-1')
+
 if __name__ == '__main__':
     unittest.main()

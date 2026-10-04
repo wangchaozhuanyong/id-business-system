@@ -189,6 +189,80 @@ describe('IdBusinessV2FinancePostingService', () => {
     expect(tx.$queryRaw).not.toHaveBeenCalled();
   });
 
+  it.each(['debit', 'credit'] as const)(
+    'rejects unassigned nonzero cash %s before creating a journal',
+    async (direction) => {
+      const input = postingInput({
+        lines: postingInput().lines.map((line) => ({
+          ...line,
+          direction:
+            line.accountCode === 'cash' ? direction : direction === 'debit' ? 'credit' : 'debit',
+          financeAccountId: null
+        }))
+      });
+      await expect(service.post(tx as never, input)).rejects.toThrow('缺少真实资金账户');
+      expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2FinanceAccount.update).not.toHaveBeenCalled();
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires an account for a nonzero cash book-cost adjustment even with zero quantity', async () => {
+    const input = postingInput({
+      lines: postingInput().lines.map((line) => ({
+        ...line,
+        amountOriginal: '0',
+        amountCny: '1',
+        financeAccountId: null
+      }))
+    });
+    await expect(service.post(tx as never, input)).rejects.toThrow('缺少真实资金账户');
+    expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
+  });
+
+  it('permits zero-amount legacy cash lines without creating a cash movement', async () => {
+    const input = postingInput({
+      lines: postingInput().lines.map((line) => ({
+        ...line,
+        amountOriginal: '0',
+        amountCny: '0',
+        financeAccountId: null
+      }))
+    });
+    await expect(service.post(tx as never, input)).resolves.toBeDefined();
+    expect(tx.idBusinessV2FinanceAccount.update).not.toHaveBeenCalled();
+  });
+
+  it('returns an exact historical unassigned replay without rewriting or moving money', async () => {
+    const input = postingInput({
+      lines: postingInput().lines.map((line) => ({ ...line, financeAccountId: null }))
+    });
+    const replay = replayFor(input);
+    tx.idBusinessV2FinanceJournal.findUnique.mockResolvedValue(replay);
+    await expect(service.post(tx as never, input)).resolves.toMatchObject({
+      id: replay.id,
+      lines: [{ financeAccountId: null }, { financeAccountId: null }]
+    });
+    expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2FinanceAccount.update).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('blocks a new unassigned reversal until historical cash ownership is reconciled', async () => {
+    const input = postingInput({
+      journalType: 'reversal',
+      reversalOfJournalId: 'journal-legacy',
+      lines: postingInput().lines.map((line) => ({
+        ...line,
+        direction: line.direction === 'debit' ? 'credit' : 'debit',
+        financeAccountId: null
+      }))
+    });
+    await expect(service.post(tx as never, input)).rejects.toThrow('缺少真实资金账户');
+    expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2FinanceAccount.update).not.toHaveBeenCalled();
+  });
+
   it('returns only a replay whose full header and lines match', async () => {
     const input = postingInput();
     const replay = replayFor(input);

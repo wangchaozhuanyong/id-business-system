@@ -1,5 +1,5 @@
 import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
-import type { V2Order } from './orders';
+import type { V2Order, V2OrderReceiptFinanceAccount } from './orders';
 
 export type V2RenewalDueStatus =
   | 'due_within_1_hour'
@@ -140,6 +140,7 @@ export interface V2RenewalFilterOptions {
 }
 
 export interface V2ManualRenewalOptions {
+  financeAccounts: V2OrderReceiptFinanceAccount[];
   settlementPlatforms: Array<{
     id: string;
     code: string;
@@ -171,6 +172,7 @@ export interface V2ManualRenewalPayload {
   settlementPlatformOptionId: string;
   platformOrderNo?: string | null;
   receivedAmount: string;
+  receivedFinanceAccountId?: string | null;
   balanceAmount: string;
   openedAt: string;
   dueAt: string;

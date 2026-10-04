@@ -74,6 +74,7 @@ export interface V2Order {
   receivedFxRateToCny: string;
   receivedFxSnapshotId: string | null;
   receivedFinanceAccountId: string | null;
+  receivedFinanceAccount: V2OrderReceiptFinanceAccount | null;
   receivedAt: string | null;
   platformFeeAmount: string;
   accountSource: V2OrderAccountSource;
@@ -109,6 +110,7 @@ export interface V2Order {
     canEdit: boolean;
     canEditCore: boolean;
     canEditPricing: boolean;
+    canEditReceiptAccount: boolean;
     canRefund: boolean;
     canRecordUpgradeBalanceReturn: boolean;
     canReverseUpgradeBalanceReturn: boolean;
@@ -181,6 +183,14 @@ export interface V2OrderEntryOptions {
   countries: V2OrderEntryCountry[];
   settlementPlatforms: V2OrderEntrySettlementPlatform[];
   latestFxRates: V2FinanceLatestRate[];
+  financeAccounts: V2OrderReceiptFinanceAccount[];
+}
+
+export interface V2OrderReceiptFinanceAccount {
+  id: string;
+  name: string;
+  currency: V2FinanceCurrency;
+  isActive: boolean;
 }
 
 export interface V2OrderCandidate {
@@ -246,6 +256,7 @@ export interface CreateV2OrderInput {
   receivedAmount?: string;
   receivedOriginalAmount: string;
   receivedCurrency: V2FinanceCurrency;
+  receivedFinanceAccountId?: string | null;
   receivedFxRateToCny?: string;
   receivedFxSnapshotId?: string;
   receivedManualRateReason?: string;
@@ -331,6 +342,7 @@ export interface UpdateV2OrderInput {
   clearWebsiteAccount?: boolean;
   receivedAmount?: string;
   receivedOriginalAmount?: string;
+  receivedFinanceAccountId?: string | null;
   balanceAmount?: string;
   openedAt?: string;
   dueAt?: string;

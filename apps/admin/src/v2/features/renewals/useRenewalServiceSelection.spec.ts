@@ -36,6 +36,7 @@ describe('useRenewalServiceSelection', () => {
 
 function createSelection(form: { categoryOptionId: string; serviceOptionId: string }) {
   const options = computed<V2ManualRenewalOptions>(() => ({
+    financeAccounts: [],
     settlementPlatforms: [],
     services
   }));

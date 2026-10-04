@@ -1,6 +1,9 @@
 import type { FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
-import { validateTargetProfitRate } from '@/v2/features/order-entry/public-api';
+import {
+  createOrderReceiptFinanceAccountRules,
+  validateTargetProfitRate
+} from '@/v2/features/order-entry/public-api';
 import { parseV2DateTimeInput } from '@/v2/utils/dateTime';
 import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2OrderEntryCustomer } from '../contracts';
@@ -17,6 +20,7 @@ export function createEmptyOrderEditForm() {
     websiteAccount: '',
     clearWebsiteAccount: false,
     receivedOriginalAmount: '',
+    receivedFinanceAccountId: '',
     targetProfitRate: '',
     balanceAmount: '',
     openedAt: null as string | null,
@@ -32,7 +36,8 @@ export function createOrderEditRules(
   form: ReturnType<typeof createEmptyOrderEditForm>,
   canEditCore: () => boolean,
   canEditPricing: () => boolean,
-  percentageFee: () => string
+  percentageFee: () => string,
+  getReceiptAccountError: () => string
 ): FormRules {
   return {
     customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
@@ -61,6 +66,7 @@ export function createOrderEditRules(
         trigger: 'blur'
       }
     ],
+    ...createOrderReceiptFinanceAccountRules(getReceiptAccountError),
     targetProfitRate: [
       {
         validator: (_rule, value, callback) => {

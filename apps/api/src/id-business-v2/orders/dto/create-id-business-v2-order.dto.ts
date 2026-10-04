@@ -17,6 +17,7 @@ export interface CreateIdBusinessV2OrderDto {
   receivedAmount?: string | number;
   receivedOriginalAmount?: string | number;
   receivedCurrency?: IdBusinessV2FinanceCurrency;
+  receivedFinanceAccountId?: string | null;
   receivedFxRateToCny?: string | number;
   receivedFxSnapshotId?: string | null;
   receivedManualRateReason?: string | null;

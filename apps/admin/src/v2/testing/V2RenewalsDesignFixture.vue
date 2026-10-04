@@ -62,6 +62,7 @@
             v-model:settlement-platform-option-id="renewalForm.settlementPlatformOptionId"
             v-model:platform-order-no="renewalForm.platformOrderNo"
             v-model:received-amount="renewalForm.receivedAmount"
+            v-model:received-finance-account-id="renewalForm.receivedFinanceAccountId"
             v-model:target-profit-rate="renewalForm.targetProfitRate"
             v-model:balance-amount="renewalForm.balanceAmount"
             v-model:opened-at="renewalForm.openedAt"
@@ -77,6 +78,11 @@
             :submitting="false"
             submit-disabled-reason=""
             platform-fee-preview="2.80"
+            :receipt-finance-account-required="true"
+            :receipt-finance-account-choices="[
+              { value: 'account-cny', label: '合成收款银行账户 · CNY', disabled: false }
+            ]"
+            receipt-finance-account-error=""
             estimated-balance-cost-preview="116.00"
             estimated-profit-preview="31.20"
             estimated-profit-rate-preview="20.80"
@@ -237,6 +243,9 @@ const confirmationVisible = ref(false);
 const selectedRenewal = ref<V2RenewalWorkbenchItem | null>(null);
 const recommendationApplied = ref(false);
 const manualRenewalOptions: V2ManualRenewalOptions = {
+  financeAccounts: [
+    { id: 'account-cny', name: '合成收款银行账户', currency: 'CNY', isActive: true }
+  ],
   services: [
     {
       id: 'service-1',
@@ -297,6 +306,7 @@ const renewalForm = reactive({
   settlementPlatformOptionId: 'platform-1',
   platformOrderNo: '202608120001',
   receivedAmount: '150',
+  receivedFinanceAccountId: 'account-cny',
   targetProfitRate: '20',
   balanceAmount: '20',
   openedAt: '2026-09-10T16:20',

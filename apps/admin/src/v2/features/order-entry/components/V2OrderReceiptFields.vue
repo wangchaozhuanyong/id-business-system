@@ -9,6 +9,14 @@
       </el-select>
     </el-form-item>
 
+    <V2OrderReceiptAccountField
+      v-model="form.receivedFinanceAccountId"
+      :currency="form.receivedCurrency"
+      :choices="receiptFinanceAccountChoices"
+      :required="receiptFinanceAccountRequired"
+      :error="receiptFinanceAccountError"
+    />
+
     <el-form-item label="售卖价格" prop="receivedOriginalAmount">
       <el-input
         v-model="form.receivedOriginalAmount"
@@ -107,11 +115,15 @@
 <script setup lang="ts">
 import type { V2FinanceFxRateSnapshot, V2OrderReceiptFxQuote } from '@apple-business/shared';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2OrderReceiptAccountField from './V2OrderReceiptAccountField.vue';
 import type { V2OrderEntryForm } from '../order-entry-form';
 
 defineProps<{
   form: V2OrderEntryForm;
   receivedAmountPreview: string;
+  receiptFinanceAccountRequired: boolean;
+  receiptFinanceAccountChoices: Array<{ value: string; label: string; disabled: boolean }>;
+  receiptFinanceAccountError: string;
   receiptFxQuote: V2OrderReceiptFxQuote | null;
   receiptFxLoading: boolean;
   receiptFxError: string;

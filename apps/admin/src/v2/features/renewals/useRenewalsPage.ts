@@ -28,8 +28,9 @@ import type {
   V2RenewalWorkbenchResult
 } from './contracts';
 import { useRenewalWarningSettings } from './useRenewalWarningSettings';
-import { useRenewalPricing } from './useRenewalPricing';
+import { createRenewalOrderForm, useRenewalPricing } from './useRenewalPricing';
 import { useRenewalServiceSelection } from './useRenewalServiceSelection';
+import { useOrderReceiptFinanceAccount } from '@/v2/features/order-entry/public-api';
 import {
   formatRenewalDate as formatDate,
   formatRenewalTime as formatTime,
@@ -65,6 +66,7 @@ const EMPTY_FILTER_OPTIONS: V2RenewalFilterOptions = {
   services: []
 };
 const EMPTY_MANUAL_RENEWAL_OPTIONS: V2ManualRenewalOptions = {
+  financeAccounts: [],
   settlementPlatforms: [],
   services: []
 };
@@ -88,18 +90,7 @@ export function useRenewalsPage() {
   const submitting = ref(false);
   const selectedRenewal = ref<V2RenewalWorkbenchItem | null>(null);
   const idempotencyKey = ref('');
-  const formDraft = useV2FormDraft('renewal-order-editor', () => ({
-    categoryOptionId: '',
-    serviceOptionId: '',
-    settlementPlatformOptionId: '',
-    platformOrderNo: '',
-    receivedAmount: '',
-    targetProfitRate: '',
-    balanceAmount: '',
-    openedAt: null as string | null,
-    dueAt: null as string | null,
-    remark: ''
-  }));
+  const formDraft = useV2FormDraft('renewal-order-editor', createRenewalOrderForm);
   const form = formDraft.form;
   const query = useV2SessionDraft('renewals/useRenewalsPage:query', () =>
     reactive({
@@ -249,6 +240,15 @@ export function useRenewalsPage() {
     if (!currentBalance || !isValidNonNegativeDecimal(form.balanceAmount)) return '0';
     return addDecimalStrings(currentBalance, `-${form.balanceAmount}`);
   });
+  const {
+    receiptFinanceAccountRequired,
+    receiptFinanceAccountChoices,
+    receiptFinanceAccountError
+  } = useOrderReceiptFinanceAccount(
+    form,
+    () => options.value.financeAccounts ?? [],
+    () => platformFeePreview.value
+  );
   const renewalSubmitDisabledReason = computed(() => {
     const renewal = selectedRenewal.value;
     if (!canRenew.value) return '当前账号无续费权限';
@@ -414,16 +414,11 @@ export function useRenewalsPage() {
     selectedRenewal.value = renewal;
     idempotencyKey.value = globalThis.crypto.randomUUID();
     const restored = formDraft.open(renewal.id, {
+      ...createRenewalOrderForm(),
       categoryOptionId: renewal.service.parent?.id ?? '',
       serviceOptionId: renewal.service.id,
-      settlementPlatformOptionId: '',
-      platformOrderNo: '',
-      receivedAmount: '',
-      targetProfitRate: '',
-      balanceAmount: '',
       openedAt,
-      dueAt: addOneInclusiveMonthToV2DateTimeInput(openedAt),
-      remark: ''
+      dueAt: addOneInclusiveMonthToV2DateTimeInput(openedAt)
     });
     if (!restored) applySelectedServiceAmount();
     resetRecommendation();
@@ -457,7 +452,7 @@ export function useRenewalsPage() {
   }
 
   function openConfirmation() {
-    if (renewalSubmitDisabledReason.value) return;
+    if (renewalSubmitDisabledReason.value || receiptFinanceAccountError.value) return;
     confirmationVisible.value = true;
   }
 
@@ -468,6 +463,7 @@ export function useRenewalsPage() {
       !form.openedAt ||
       !form.dueAt ||
       renewalSubmitDisabledReason.value ||
+      receiptFinanceAccountError.value ||
       submitting.value
     ) {
       return;
@@ -480,6 +476,7 @@ export function useRenewalsPage() {
         settlementPlatformOptionId: form.settlementPlatformOptionId,
         platformOrderNo: form.platformOrderNo.trim() || null,
         receivedAmount: form.receivedAmount.trim(),
+        receivedFinanceAccountId: form.receivedFinanceAccountId.trim() || null,
         balanceAmount: form.balanceAmount.trim(),
         openedAt: v2DateTimeInputToIso(form.openedAt),
         dueAt: v2DateTimeInputToIso(form.dueAt),
@@ -556,6 +553,9 @@ export function useRenewalsPage() {
     categoryServices,
     selectedManualService,
     platformFeePreview,
+    receiptFinanceAccountRequired,
+    receiptFinanceAccountChoices,
+    receiptFinanceAccountError,
     estimatedBalanceCostPreview,
     estimatedProfitPreview,
     estimatedProfitRatePreview,

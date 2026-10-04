@@ -14,6 +14,22 @@ interface RenewalPricingForm {
   balanceAmount: string;
 }
 
+export function createRenewalOrderForm() {
+  return {
+    categoryOptionId: '',
+    serviceOptionId: '',
+    settlementPlatformOptionId: '',
+    platformOrderNo: '',
+    receivedAmount: '',
+    receivedFinanceAccountId: '',
+    targetProfitRate: '',
+    balanceAmount: '',
+    openedAt: null as string | null,
+    dueAt: null as string | null,
+    remark: ''
+  };
+}
+
 export function useRenewalPricing(
   form: RenewalPricingForm,
   selectedRenewal: Ref<V2RenewalWorkbenchItem | null>,

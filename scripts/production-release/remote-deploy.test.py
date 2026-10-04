@@ -390,5 +390,48 @@ class GoogleDriveReleaseConfigTests(unittest.TestCase):
             deployment.configure_google_drive_sync(self.previous, self.release)
 
 
+
+class HistoricalAuditTests(unittest.TestCase):
+    def report(self):
+        return {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': {
+            'accepted': True, 'policyId': 'historical-finance-20261005',
+            'expectedCurrent': 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
+            'stage': 'after', 'checkCount': 48, 'violationCount': 10, 'unavailableCheckCount': 0}}
+
+    def audit(self, report, historical=True):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); source = root / 'candidate'
+            with patch.object(deployment, 'environment_values', return_value={
+                    'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
+                    patch.object(deployment, 'compose', return_value=json.dumps(report)) as compose:
+                result = deployment.audit(root, root / 'receipt.json', historical_exception=historical,
+                    stage='after', source=source, before_receipt=root / 'before.json')
+                saved = json.loads((root / 'receipt.json').read_text())
+                self.assertEqual(saved['ok'], report['ok'])
+                return result, compose.call_args.args
+
+    def test_regular_audit_never_accepts_legacy_exception(self):
+        with self.assertRaisesRegex(RuntimeError, 'Financial data integrity audit failed'):
+            self.audit(self.report(), False)
+
+    def test_special_audit_preserves_actual_violation_count_and_mounts_exact_source(self):
+        result, command = self.audit(self.report())
+        self.assertEqual(result['violationCount'], 10)
+        self.assertIn('scripts/v2-release-history-audit.mjs', command)
+        self.assertIn('--stage=after', command)
+        self.assertIn('--before-receipt=/release-policy/before-audit.json', command)
+
+    def test_changed_report_count_stage_schema_baseline_or_policy_is_rejected(self):
+        mutations = [lambda x: x.update(violationCount=11),
+            lambda x: x['gate'].update(policyId='other'),
+            lambda x: x['gate'].update(expectedCurrent='f' * 40),
+            lambda x: x['gate'].update(stage='before'),
+            lambda x: x['gate'].update(unavailableCheckCount=1),
+            lambda x: x['gate'].update(accepted=False)]
+        for mutate in mutations:
+            report = self.report(); mutate(report)
+            with self.subTest(report=report), self.assertRaisesRegex(RuntimeError, 'historical integrity gate failed'):
+                self.audit(report)
+
 if __name__ == '__main__':
     unittest.main()

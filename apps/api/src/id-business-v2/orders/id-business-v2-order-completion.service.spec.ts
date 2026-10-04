@@ -6,9 +6,14 @@ import type {
   IdBusinessV2Order
 } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as financeApi from '../finance/public-api';
+import { Amount4 as ReceiptAmount4 } from '../runtime/public-api';
 import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+
+const financeAccountId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const financeAccountLock = vi.spyOn(financeApi, 'lockFinanceAccount');
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -47,7 +52,7 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     receivedCurrency: 'CNY',
     receivedFxRateToCny: decimal('1'),
     receivedFxSnapshotId: null,
-    receivedFinanceAccountId: null,
+    receivedFinanceAccountId: financeAccountId,
     receivedAt: openedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'sold',
@@ -173,6 +178,14 @@ describe('IdBusinessV2OrderCompletionService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'CNY',
+      currentBalance: ReceiptAmount4.from('1000'),
+      currentBalanceCny: ReceiptAmount4.from('1000')
+    });
+
     vi.spyOn(IdBusinessV2OrdersRepository.prototype, 'synchronizePostedProfit').mockImplementation(
       async () => Amount4.from(order.profitAmount!.toString())
     );
@@ -344,5 +357,65 @@ describe('IdBusinessV2OrderCompletionService', () => {
     expect(tx.idBusinessV2Activation.create).not.toHaveBeenCalled();
     expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('blocks a legacy positive order without an account before completion writes', async () => {
+    order = makeOrder({ receivedFinanceAccountId: null });
+    await expect(service.complete(orderId, operator)).rejects.toThrow('缺少真实收款账户');
+    expect(tx.idBusinessV2Activation.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
+  });
+
+  it('posts no zero cash lines when the receipt and fee are both zero', async () => {
+    order = makeOrder({
+      receivedFinanceAccountId: null,
+      receivedCurrency: 'USDT',
+      receivedFxRateToCny: decimal('7'),
+      receivedAmount: decimal('0'),
+      receivedOriginalAmount: decimal('0'),
+      platformFeeAmount: decimal('0')
+    });
+    await service.complete(orderId, operator);
+    const lines = financePostingService.post.mock.calls[0]![1].lines;
+    expect(lines.some((line: { accountCode: string }) => line.accountCode === 'cash')).toBe(false);
+    expect(
+      lines.find((line: { accountCode: string }) => line.accountCode === 'sales_revenue')
+    ).toMatchObject({ currency: 'CNY' });
+    expect(financeAccountLock).not.toHaveBeenCalled();
+  });
+  it('keeps the frozen foreign currency for a fee-only zero receipt with a real account', async () => {
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'USDT',
+      currentBalance: ReceiptAmount4.from('1000'),
+      currentBalanceCny: ReceiptAmount4.from('7000')
+    });
+    order = makeOrder({
+      receivedCurrency: 'USDT',
+      receivedAmount: decimal('0'),
+      receivedOriginalAmount: decimal('0'),
+      receivedFxRateToCny: decimal('7'),
+      platformFeeAmount: decimal('7')
+    });
+    await service.complete(orderId, operator);
+    const lines = financePostingService.post.mock.calls[0]![1].lines;
+    const cash = lines.filter((line: { accountCode: string }) => line.accountCode === 'cash');
+    expect(cash).toHaveLength(1);
+    expect(cash[0]).toMatchObject({ direction: 'credit', currency: 'USDT', financeAccountId });
+    expect(cash[0].amountOriginal.toString()).toBe('1');
+    expect(cash[0].amountCny.toString()).toBe('7');
+    expect(cash[0].fxRateToCny.toString()).toBe('7');
+  });
+  it('preserves the old CNY amount fallback when a receipt account is explicitly known', async () => {
+    order = makeOrder({ receivedOriginalAmount: decimal('0') });
+    await service.complete(orderId, operator);
+    const cash = financePostingService.post.mock.calls[0]![1].lines.find(
+      (line: { accountCode: string; direction: string }) =>
+        line.accountCode === 'cash' && line.direction === 'debit'
+    );
+    expect(cash.currency).toBe('CNY');
+    expect(cash.amountOriginal.toString()).toBe('100');
+    expect(cash.amountCny.toString()).toBe('100');
   });
 });

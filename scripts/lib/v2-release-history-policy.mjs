@@ -1,0 +1,178 @@
+import { createHash } from 'node:crypto';
+
+export const HISTORY_POLICY_ID = 'historical-finance-20261005';
+export const HISTORY_BASELINE = 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22';
+const policySha256 = '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca';
+const allowedRules = new Set([
+  'finance_cash_source_currency_mismatch',
+  'cash_historical_cost_evidence_mismatch'
+]);
+
+export function fingerprint(value) {
+  const normalize = (item) => {
+    if (item instanceof Date) return item.toISOString();
+    if (typeof item === 'bigint') return String(item);
+    if (Array.isArray(item)) return item.map(normalize);
+    if (item && typeof item === 'object')
+      return Object.fromEntries(
+        Object.keys(item)
+          .sort()
+          .map((key) => [key, normalize(item[key])])
+      );
+    return item;
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(normalize(value)))
+    .digest('hex');
+}
+
+export function fingerprintRows(rows) {
+  return fingerprint([...rows].sort((a, b) => String(a.id).localeCompare(String(b.id), 'en')));
+}
+
+export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
+  if (
+    fingerprint(policy) !== policySha256 ||
+    policy?.id !== HISTORY_POLICY_ID ||
+    policy.version !== 1 ||
+    policy.expectedCurrent !== HISTORY_BASELINE ||
+    expectedCurrent !== HISTORY_BASELINE ||
+    policy.userApproved !== true ||
+    policy.checkCount !== 48 ||
+    definitions.length !== 48 ||
+    policy.rulesSha256 !== fingerprint(definitions)
+  )
+    throw new Error('Historical release policy identity, baseline or rules changed');
+  const codes = new Set(policy.exceptions.map((item) => item.code));
+  if (codes.size !== 2 || [...codes].some((code) => !allowedRules.has(code)))
+    throw new Error('Historical release exception scope changed');
+  for (const item of policy.exceptions) {
+    const expected = item.code === 'finance_cash_source_currency_mismatch' ? 4 : 6;
+    if (item.entityIds.length !== expected || new Set(item.entityIds).size !== expected)
+      throw new Error('Historical release entity set changed');
+  }
+  for (const group of Object.values(policy.sources)) {
+    if (
+      !Array.isArray(group.ids) ||
+      !group.ids.length ||
+      group.ids.length > 100 ||
+      group.ids.some((id) => !/^[a-f0-9-]{36}$/.test(id)) ||
+      !/^[a-f0-9]{64}$/.test(group.sha256)
+    )
+      throw new Error('Invalid frozen historical source');
+  }
+}
+
+export function acceptHistoricalAudit({
+  policy,
+  definitions,
+  expectedCurrent,
+  stage,
+  checks,
+  sources,
+  metadata,
+  before,
+  identity
+}) {
+  validateHistoryPolicy(policy, definitions, expectedCurrent);
+  if (
+    !['before', 'after'].includes(stage) ||
+    !/^id_business_audit@/.test(identity.currentUser) ||
+    identity.transactionIsolation !== 'REPEATABLE-READ' ||
+    String(identity.foreignKeyChecks) !== '1'
+  )
+    throw new Error('Historical release audit stage or read-only identity invalid');
+  const expectedCodes = definitions.map((item) => item.code).sort();
+  if (JSON.stringify(checks.map((item) => item.code).sort()) !== JSON.stringify(expectedCodes))
+    throw new Error('Historical release audit rule coverage changed');
+  const unavailable = new Set([
+    'bank_subscription_projection_mismatch',
+    'bank_soft_delete_safety_mismatch'
+  ]);
+  const exceptions = new Map(
+    policy.exceptions.map((item) => [item.code, [...item.entityIds].sort()])
+  );
+  for (const check of checks) {
+    if (check.status === 'SCHEMA_NOT_DEPLOYED') {
+      if (
+        stage !== 'before' ||
+        !unavailable.has(check.code) ||
+        check.databaseCode !== '1054' ||
+        check.field !== 'o.deleted_at'
+      )
+        throw new Error('Historical release audit rule unavailable');
+      continue;
+    }
+    if (!Number.isSafeInteger(check.count) || check.count < 0 || !Array.isArray(check.samples))
+      throw new Error('Historical release audit rule did not execute');
+    const expected = exceptions.get(check.code) ?? [];
+    const actual = check.samples.map((sample) => sample.entityId).sort();
+    if (check.count !== expected.length || JSON.stringify(actual) !== JSON.stringify(expected))
+      throw new Error('New, missing or changed financial integrity exception');
+  }
+  if (
+    JSON.stringify(Object.keys(sources).sort()) !==
+    JSON.stringify(Object.keys(policy.sources).sort())
+  )
+    throw new Error('Historical source coverage changed');
+  for (const [name, group] of Object.entries(policy.sources))
+    if (sources[name] !== group.sha256)
+      throw new Error('Frozen historical financial source changed');
+  if (
+    JSON.stringify(metadata.map((item) => item.id).sort()) !==
+      JSON.stringify([...policy.sources.journals.ids].sort()) ||
+    metadata.some((item) => !/^[a-f0-9]{64}$/.test(item.metadataSha256))
+  )
+    throw new Error('Historical journal metadata coverage changed');
+  const metadataSha256 = fingerprintRows(metadata);
+  if (
+    stage === 'after' &&
+    (before?.gate?.policyId !== policy.id ||
+      before.gate.expectedCurrent !== expectedCurrent ||
+      before.gate.stage !== 'before' ||
+      before.gate.accepted !== true ||
+      before.gate.metadataSha256 !== metadataSha256 ||
+      JSON.stringify(before.gate.sources) !== JSON.stringify(sources))
+  )
+    throw new Error('Historical source or metadata changed during release');
+  return {
+    accepted: true,
+    status: 'APPROVED_HISTORICAL_EXCEPTIONS',
+    policyId: policy.id,
+    expectedCurrent,
+    stage,
+    checkCount: checks.length,
+    violationCount: 10,
+    executedCheckCount: checks.filter((item) => item.status !== 'SCHEMA_NOT_DEPLOYED').length,
+    unavailableCheckCount: checks.filter((item) => item.status === 'SCHEMA_NOT_DEPLOYED').length,
+    sources,
+    metadataSha256
+  };
+}
+
+export const historySourceQueries = {
+  accounts: `SELECT id, currency, status, CAST(opening_balance AS CHAR) AS openingBalance,
+    CAST(opening_balance_cny AS CHAR) AS openingBalanceCny, CAST(current_balance AS CHAR) AS currentBalance,
+    CAST(current_balance_cny AS CHAR) AS currentBalanceCny, created_at AS createdAt, updated_at AS updatedAt
+    FROM id_business_v2_finance_accounts WHERE id IN (IDS)`,
+  journals: `SELECT id, journal_no AS journalNo, journal_type AS journalType, source_type AS sourceType,
+    source_id AS sourceId, status, reversal_of_journal_id AS reversalOfJournalId, occurred_at AS occurredAt,
+    created_at AS createdAt, business_date AS businessDate,
+    JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.cashHistoricalCost.version')) AS cashCostEvidenceVersion
+    FROM id_business_v2_finance_journals WHERE id IN (IDS)`,
+  lines: `SELECT id, journal_id AS journalId, line_no AS lineNo, account_code AS accountCode, direction, currency,
+    CAST(amount_original AS CHAR) AS amountOriginal, CAST(amount_cny AS CHAR) AS amountCny,
+    CAST(fx_rate_to_cny AS CHAR) AS fxRateToCny, fx_rate_snapshot_id AS fxSnapshotId,
+    finance_account_id AS financeAccountId, supplier_account_id AS supplierAccountId, created_at AS createdAt
+    FROM id_business_v2_finance_journal_lines WHERE journal_id IN (IDS)`,
+  expenses: `SELECT id, journal_id AS journalId, finance_account_id AS financeAccountId, currency,
+    CAST(amount_original AS CHAR) AS amountOriginal, CAST(amount_cny AS CHAR) AS amountCny,
+    CAST(fx_rate_to_cny AS CHAR) AS fxRateToCny, fx_rate_snapshot_id AS fxSnapshotId,
+    occurred_at AS occurredAt, created_at AS createdAt FROM id_business_v2_finance_expenses WHERE id IN (IDS)`,
+  orders: `SELECT id, order_no AS orderNo, status, deleted_at AS deletedAt,
+    received_finance_account_id AS receivedFinanceAccountId, received_currency AS receivedCurrency,
+    CAST(received_amount AS CHAR) AS receivedAmount, CAST(received_original_amount AS CHAR) AS receivedOriginalAmount,
+    CAST(received_fx_rate_to_cny AS CHAR) AS receivedFxRateToCny, CAST(platform_fee_amount AS CHAR) AS platformFeeAmount,
+    CAST(profit_amount AS CHAR) AS profitAmount, CAST(refund_cost_amount AS CHAR) AS refundCostAmount,
+    created_at AS createdAt, updated_at AS updatedAt FROM id_business_v2_orders WHERE id IN (IDS)`
+};

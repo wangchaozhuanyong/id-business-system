@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { CreateIdBusinessV2ManualRenewalDto } from './dto/create-id-business-v2-manual-renewal.dto';
 import { Amount4, V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES } from '../runtime/public-api';
+import { normalizeOptionalFinanceUuid } from '../finance/public-api';
 import type {
   ManualRenewalLedgerRecord,
   ManualRenewalReplayOrder
@@ -11,6 +12,7 @@ export interface NormalizedManualRenewal {
   settlementPlatformOptionId: string;
   platformOrderNo: string | null;
   receivedAmount: Amount4;
+  receivedFinanceAccountId: string | null;
   balanceAmount: Amount4;
   openedAt: Date;
   dueAt: Date;
@@ -47,6 +49,10 @@ export function normalizeManualRenewalInput(
     settlementPlatformOptionId,
     platformOrderNo,
     receivedAmount,
+    receivedFinanceAccountId: normalizeOptionalFinanceUuid(
+      dto.receivedFinanceAccountId,
+      '收款账户'
+    ),
     balanceAmount,
     openedAt,
     dueAt,
@@ -82,6 +88,7 @@ function assertReplayMatches(
     order.settlementPlatformOptionId === input.settlementPlatformOptionId &&
     order.platformOrderNo === input.platformOrderNo &&
     order.receivedAmount.equals(input.receivedAmount) &&
+    order.receivedFinanceAccountId === input.receivedFinanceAccountId &&
     order.balanceAmount.equals(input.balanceAmount) &&
     order.openedAt?.getTime() === input.openedAt.getTime() &&
     order.dueAt?.getTime() === input.dueAt.getTime() &&

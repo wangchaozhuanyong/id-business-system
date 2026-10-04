@@ -5,10 +5,12 @@ import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2OrderEntryForm } from './order-entry-form';
 import { isPositiveOrderAmount, validateTargetProfitRate } from './order-pricing';
 import { createOrderReceiptRules } from './order-receipt';
+import { createOrderReceiptFinanceAccountRules } from './order-receipt-account';
 
 export function createOrderEntryRules(
   form: V2OrderEntryForm,
-  getSettlementPercentageFee: () => string
+  getSettlementPercentageFee: () => string,
+  getReceiptAccountError: () => string
 ): FormRules {
   return {
     countryId: [{ required: true, message: '请选择国家', trigger: 'change' }],
@@ -17,6 +19,7 @@ export function createOrderEntryRules(
     customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
     accountId: [{ required: true, message: '请选择可用 ID', trigger: 'change' }],
     ...createOrderReceiptRules(form),
+    ...createOrderReceiptFinanceAccountRules(getReceiptAccountError),
     settlementPlatformOptionId: [{ required: true, message: '请选择结算平台', trigger: 'change' }],
     targetProfitRate: [
       {

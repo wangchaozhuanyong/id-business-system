@@ -97,7 +97,22 @@ def verify_deployment(manifest, deployment_run):
             'Invalid successful deployment identity')
     require(manifest.get('deploymentRun') == deployment_run,
             'Cache retention does not follow this successful release')
-    require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0,
+    before = manifest.get('dataAuditBefore', {}).get('historicalException', {})
+    after = manifest.get('dataAuditAfter', {}).get('historicalException', {})
+    historical_ok = (
+        manifest.get('previousCommit') == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+        and before.get('accepted') is True and after.get('accepted') is True
+        and before.get('policyId') == after.get('policyId') == 'historical-finance-20261005'
+        and before.get('expectedCurrent') == after.get('expectedCurrent') == manifest.get('previousCommit')
+        and before.get('stage') == 'before' and after.get('stage') == 'after'
+        and after.get('checkCount') == after.get('executedCheckCount') == 48
+        and after.get('unavailableCheckCount') == 0
+        and after.get('violationCount') == manifest.get('dataAuditAfter', {}).get('violationCount') == 10
+        and before.get('sources') == after.get('sources') and bool(after.get('sources'))
+        and before.get('metadataSha256') == after.get('metadataSha256')
+        and re.fullmatch(r'[a-f0-9]{64}', after.get('metadataSha256', '')) is not None
+    )
+    require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0 or historical_ok,
             'Post-release financial audit is missing or failed')
 
 

@@ -36,6 +36,7 @@ export function createInitialOrderEntryForm() {
     receivedAmount: '',
     receivedOriginalAmount: '',
     receivedCurrency: 'CNY' as V2FinanceCurrency,
+    receivedFinanceAccountId: '',
     receivedFxMode: 'automatic' as V2OrderReceiptFxMode,
     receivedFxRateToCny: '',
     receivedFxSnapshotId: '',
