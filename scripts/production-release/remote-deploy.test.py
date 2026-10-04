@@ -350,6 +350,34 @@ class GoogleDriveReleaseConfigTests(unittest.TestCase):
         self.assertNotIn('GOOGLE_DRIVE_SYNC_FOLDER_ID=',
                          (self.release / '.env.aws.production').read_text())
 
+    def test_mailbox_binding_addition_with_or_without_folder_configuration(self):
+        mailbox = '      VENDURE_MAILBOX_WEBHOOK_SECRET: ${VENDURE_MAILBOX_WEBHOOK_SECRET:-}\n'
+        compose = self.release / 'docker-compose.aws-mysql.yml'
+        compose.write_text(self.original + self.binding + mailbox)
+        self.assertEqual(deployment.configure_google_drive_sync(self.previous, self.release),
+                         'reviewed-folder-123')
+        (self.release / 'deploy/aws/google-drive-sync-folder.json').unlink()
+        compose.write_text(self.original + mailbox)
+        self.assertIsNone(deployment.configure_google_drive_sync(self.previous, self.release))
+        # A later release keeps the existing binding without changing its value.
+        (self.previous / 'docker-compose.aws-mysql.yml').write_text(self.original + mailbox)
+        self.assertIsNone(deployment.configure_google_drive_sync(self.previous, self.release))
+
+    def test_mailbox_binding_does_not_allow_unreviewed_compose_changes(self):
+        mailbox = '      VENDURE_MAILBOX_WEBHOOK_SECRET: ${VENDURE_MAILBOX_WEBHOOK_SECRET:-}\n'
+        compose = self.release / 'docker-compose.aws-mysql.yml'
+        for contents in [self.original + self.binding + mailbox * 2,
+                         self.original.replace('  api:', '  unexpected:') + self.binding + mailbox]:
+            compose.write_text(contents)
+            with self.assertRaises(RuntimeError):
+                deployment.configure_google_drive_sync(self.previous, self.release)
+        (self.previous / 'docker-compose.aws-mysql.yml').write_text(self.original + mailbox)
+        for contents in [self.original + self.binding,
+                         self.original + self.binding + mailbox.replace(':-}', ':?required}')]:
+            compose.write_text(contents)
+            with self.assertRaises(RuntimeError):
+                deployment.configure_google_drive_sync(self.previous, self.release)
+
     def test_invalid_folder_and_duplicate_environment_fail_closed(self):
         config = self.release / 'deploy/aws/google-drive-sync-folder.json'
         config.write_text(json.dumps({'folderId': 'bad\ninjected=value'}))
