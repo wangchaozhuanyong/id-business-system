@@ -73,6 +73,11 @@ class PaymentGuard(NetworkGuard):
         self.payment_state = "unknown"
 
     async def route(self, route):
+        if self.operation_cancelled():
+            await route.abort('blockedbyclient')
+            return
+        if await self.route_hcaptcha(route):
+            return
         request = route.request
         p = urlsplit(request.url)
         if (self.approved and not self.read_only and not self.three_ds_closed and self.confirmation_sent == 1
@@ -94,7 +99,7 @@ class PaymentGuard(NetworkGuard):
             if decision is None and not checkout_resource_url(request.url):
                 decision = False
             if decision is not None:
-                if decision:
+                if decision and not self.operation_cancelled():
                     if p.hostname == 'api.stripe.com' and p.path in AUTH_PATHS and request.method == 'POST':
                         self.three_ds_ready.clear()
                     await route.fallback()
@@ -117,6 +122,9 @@ class PaymentGuard(NetworkGuard):
                     return
                 self.tokenization_sent = 1
                 self.token_request = request
+                if self.operation_cancelled():
+                    await route.abort('blockedbyclient')
+                    return
                 await route.fallback()
                 return
             if p.path == f"/v1/payment_pages/{self.checkout_id}/confirm" and not self.confirmation_reserved:
@@ -125,6 +133,8 @@ class PaymentGuard(NetworkGuard):
                 try:
                     if self.validate_before_confirm:
                         await self.validate_before_confirm()
+                    if self.operation_cancelled():
+                        raise Stop('operation_cancelled')
                     self.payment_ledger.mark_confirmation_sent()
                 except Exception:
                     self.payment_error = "payment_request_precheck_failed"
@@ -198,7 +208,12 @@ class PaymentGuard(NetworkGuard):
                         self.payment_done.set()
                     return
                 self.linked_intent = intent_id
-            if not self.approved or not self.quote:
+            # Revoking input/writes must not discard an in-flight original payment
+            # receipt. It grants observation only; confirmation stays reserved.
+            original_in_flight = (self.read_only and self.confirmation_sent == 1
+                and self.payment_ledger is not None
+                and (self.payment_ledger.record or {}).get('payment_attempted') is True)
+            if not self.quote or not self.approved and not original_in_flight:
                 return
             evidence = payment_evidence(data, self.checkout_id, self.quote, linked_intent=self.linked_intent) if (
                 200 <= response.status < 300 and (initialization or confirmation or linked_read or authentication)) else None

@@ -83,6 +83,8 @@ export function mergeRechargeCallbackResult(
   // 首次成功时间只来自 API 已通过身份和出口核实的回调，执行器不能伪造。
   const workerReport = { ...report };
   delete workerReport.first_session_verified_at;
+  delete workerReport.manual_payment_confirmation;
+  delete workerReport.manual_confirmation_accepted;
   const firstVerifiedAt =
     previous.first_session_verified_at ?? (job.action === 'server' ? verifiedAt : undefined);
   // 邮件读取状态只由内部读码服务维护，执行器进度回执不能覆盖或清除。
@@ -100,6 +102,12 @@ export function mergeRechargeCallbackResult(
     ...mergeRechargePaymentFacts(previous, workerReport),
     ...(firstVerifiedAt ? { first_session_verified_at: firstVerifiedAt } : {}),
     ...loginMail,
+    ...(Object.hasOwn(previous, 'manual_payment_confirmation')
+      ? { manual_payment_confirmation: previous.manual_payment_confirmation }
+      : {}),
+    ...(previous.manual_confirmation_accepted === true
+      ? { manual_confirmation_accepted: true }
+      : {}),
     ...(previous.recheck_only === true
       ? { recheck_only: true, source_job_id: previous.source_job_id }
       : {})

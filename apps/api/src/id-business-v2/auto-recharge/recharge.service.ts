@@ -58,6 +58,13 @@ import { startServerRecheck } from './recharge-server-recheck';
 import { listRechargeJobs } from './recharge-job-list';
 import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
+import {
+  readRechargeHandoff,
+  submitRechargeHandoff,
+  serverHandoffProgressState,
+  serverQuoteConfirmationState,
+  assertManualServerConfirmationAllowed
+} from './recharge-handoff';
 @Injectable()
 export class RechargeService {
   constructor(
@@ -258,11 +265,17 @@ export class RechargeService {
         await this.repository.lock(tx);
         const job = await this.repository.active(tx, id);
         if (job.ownerId !== operator.id) throw new ForbiddenException('无权操作此任务');
-        if (job.action === 'server') throw new ConflictException('服务器任务已经获得单次付款授权');
+        const result = object(job.result);
+        assertManualServerConfirmationAllowed(job, result);
         if (job.state !== 'awaiting_confirmation' || job.nonceHash !== hash(nonce)) {
           throw new ConflictException('报价已变化或本次确认已提交，禁止重复付款');
         }
-        await this.repository.updateJob(tx, id, { state: 'confirming' });
+        await this.repository.updateJob(tx, id, {
+          state: 'confirming',
+          ...(job.action === 'server'
+            ? { result: toV2JsonDocument({ ...result, manual_confirmation_accepted: true }) }
+            : {})
+        });
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -288,7 +301,17 @@ export class RechargeService {
             await this.repository.lock(tx);
             const job = await this.repository.findJob(tx, id);
             if (job?.ownerId === operator.id && job.state === 'confirming') {
-              await this.repository.updateJob(tx, id, { state: 'awaiting_confirmation' });
+              await this.repository.updateJob(tx, id, {
+                state: 'awaiting_confirmation',
+                ...(job.action === 'server'
+                  ? {
+                      result: toV2JsonDocument({
+                        ...object(job.result),
+                        manual_confirmation_accepted: false
+                      })
+                    }
+                  : {})
+              });
             }
           },
           { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
@@ -316,6 +339,16 @@ export class RechargeService {
       throw new ServiceUnavailableException('付款确认接收结果待核验，只能刷新或复查原订单');
     }
     return { id };
+  }
+  handoffFrame(id: string, operator: AuthenticatedUser) {
+    return readRechargeHandoff(id, operator, { repository: this.repository });
+  }
+  handoffCommand(id: string, input: unknown, operator: AuthenticatedUser) {
+    return submitRechargeHandoff(id, input, operator, {
+      repository: this.repository,
+      transactions: this.transactions,
+      audit: this.audit
+    });
   }
   async cancel(id: string, operator: AuthenticatedUser) {
     const job = await this.repository.owned(id, operator.id);
@@ -468,6 +501,9 @@ export class RechargeService {
             ? 'awaiting_human_verification'
             : 'running';
         }
+        if (input.type === 'progress' && job.action === 'server') {
+          state = serverHandoffProgressState(job, report);
+        }
         if (input.type === 'details_required') {
           if (job.action !== 'flow' || job.state !== 'running') {
             throw new ConflictException('当前任务不能等待付款资料');
@@ -482,6 +518,10 @@ export class RechargeService {
             input.result,
             process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
           );
+          state =
+            job.action === 'server'
+              ? serverQuoteConfirmationState(job.result, report)
+              : 'awaiting_confirmation';
           if (job.action === 'server') {
             const limit = object(job.result);
             const quote = object(report.quote);
@@ -498,7 +538,10 @@ export class RechargeService {
             await this.audit.append(tx, {
               userId: job.ownerId,
               module: 'id_business_v2',
-              action: 'id_business_v2.auto_recharge.server.confirm',
+              action:
+                object(job.result).manual_payment_confirmation === true
+                  ? 'id_business_v2.auto_recharge.server.quote_verified'
+                  : 'id_business_v2.auto_recharge.server.confirm',
               objectType: 'recharge_job',
               objectId: id,
               afterData: {
@@ -506,10 +549,12 @@ export class RechargeService {
                 currency: String(today.currency),
                 amountMinor: today.amount_minor
               },
-              remark: '官网报价在授权上限内，确认本次最多一次付款'
+              remark:
+                object(job.result).manual_payment_confirmation === true
+                  ? '官网报价在授权上限内，等待本人确认；尚未付款'
+                  : '官网报价在授权上限内，确认本次最多一次付款'
             });
           }
-          state = job.action === 'server' ? 'confirming' : 'awaiting_confirmation';
         }
         if (input.type === 'finished') {
           await consumeRechargeAddress({

@@ -36,6 +36,7 @@ export function validateStart(value: unknown): V2RechargeStart {
           'lockedCurrency',
           'maxAmount',
           'authorizeSinglePayment',
+          'manualPaymentConfirmation',
           'proxyId',
           'proxyCountryCode'
         ].includes(key)
@@ -54,6 +55,11 @@ export function validateStart(value: unknown): V2RechargeStart {
   ) {
     throw new BadRequestException('请提供完整授权 JSON、支持的套餐及有效操作');
   }
+  if (
+    input.manualPaymentConfirmation !== undefined &&
+    (input.action !== 'server' || typeof input.manualPaymentConfirmation !== 'boolean')
+  )
+    throw new BadRequestException('付款前人工确认仅支持服务器充值，必须为开关值');
   if (input.action === 'server') {
     const sourceCount =
       Number(typeof input.sessionJson === 'string') +
@@ -426,6 +432,19 @@ export function safeDocument(value: unknown): Record<string, unknown> {
       account_key: period.account_key,
       target_plan: period.target_plan
     };
+  if (typeof input.handoff_available === 'boolean')
+    result.handoff_available = input.handoff_available;
+  if (['hcaptcha', 'bank'].includes(String(input.handoff_kind)))
+    result.handoff_kind = input.handoff_kind;
+  if (canonicalTime(input.handoff_expires_at)) result.handoff_expires_at = input.handoff_expires_at;
+  if (typeof input.handoff_session_id === 'string' && uuidPattern.test(input.handoff_session_id))
+    result.handoff_session_id = input.handoff_session_id;
+  if (
+    Number.isSafeInteger(input.handoff_generation) &&
+    Number(input.handoff_generation) >= 1 &&
+    Number(input.handoff_generation) <= 10
+  )
+    result.handoff_generation = input.handoff_generation;
   const cleanQuote = (value: unknown) => {
     const quote = object(value);
     const money = (value: unknown) => {

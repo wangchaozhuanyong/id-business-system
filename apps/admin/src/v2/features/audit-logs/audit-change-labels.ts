@@ -11,6 +11,8 @@ export const auditChangeFieldLabels: Record<string, string> = {
   label: '名称',
   orderNo: '订单号',
   jobNo: '任务编号',
+  commandId: '验证操作编号',
+  manualPaymentConfirmation: '付款前人工确认',
   status: '状态',
   recordStatus: '资料状态',
   state: '处理状态',

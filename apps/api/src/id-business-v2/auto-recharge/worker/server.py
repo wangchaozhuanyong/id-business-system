@@ -25,6 +25,7 @@ import subscription_upgrade
 import server_proxy
 import registration_builtin
 import fingerprint_runtime
+from payment_handoff import PaymentHandoff, challenge_frames
 from checkout_core import Stop, parse_browser_credential, session_cookies, unique_object, write_json
 from payment_form import PaymentDetails, validate_details
 from payment_recovery import recheck_in_context, recheck_payment
@@ -42,6 +43,8 @@ CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage proxy_attempt proxy_attempt_limit proxy_wait_seconds session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 PUBLIC_KEYS.update("operation current_plan_before upgrade_identifier upgrade_invoice_identifier upgrade_payment_intent_identifier subscription_period three_ds_status".split())
 PUBLIC_KEYS.update("error_type session_step session_phase session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())
+PUBLIC_KEYS.update("handoff_available handoff_kind handoff_expires_at".split())
+PUBLIC_KEYS.update("handoff_session_id handoff_generation".split())
 
 
 class PersistentBrowserRuntime:
@@ -298,6 +301,9 @@ def email_code_request(job_id, body):
 
 class Job:
     def __init__(self, job_id, payload):
+        if ('manualPaymentConfirmation' in payload and
+                (payload.get('action') != 'server' or type(payload['manualPaymentConfirmation']) is not bool)):
+            raise Stop('invalid_manual_payment_confirmation')
         self.id, self.payload = job_id, payload
         self.root = None
         self.account_key = None
@@ -316,6 +322,84 @@ class Job:
         self.resolved_proxy = None
         self.prepared_browser = None
         self.stage = None
+        self.handoff = None
+        self.handoff_loop = None
+        self.handoff_deadline = None
+        self.handoff_expires_at = None
+        self.handoff_generation = 0
+        self.handoff_revoked = False
+
+    async def await_handoff(self, page, guard, kind):
+        if self.payload.get('action') != 'server' or self.cancelled or self.done or self.handoff_revoked:
+            raise Stop('operation_cancelled')
+        if self.handoff_generation >= 10:
+            raise Stop('handoff_generation_exhausted')
+        session = PaymentHandoff(self, page, guard, kind, deadline=self.handoff_deadline,
+                                 expires_at=self.handoff_expires_at)
+        self.handoff_generation += 1
+        generation = self.handoff_generation
+        self.handoff_deadline, self.handoff_expires_at = session.deadline, session.expires_at
+        self.handoff_loop = asyncio.get_running_loop()
+        self.handoff = session
+        announced = False
+        try:
+            # A full-page redirect/new tab is never captured as a challenge iframe.
+            ready = time.monotonic() + 5
+            while not await challenge_frames(page, guard, kind):
+                session.check()
+                if time.monotonic() >= ready:
+                    raise Stop('handoff_frame_unavailable')
+                await asyncio.sleep(.1)
+            await session.validate()
+            self.progress('human_verification_ready', handoff_available=True,
+                          handoff_kind=kind, handoff_expires_at=session.expires_at,
+                          handoff_session_id=session.session_id, handoff_generation=generation)
+            announced = True
+            identity_check_at = time.monotonic() + 5
+            while True:
+                session.check_page()
+                # Original response observers can finish payment or move from captcha
+                # to the first bound bank intent. Retire this capability before doing
+                # any further input; the caller only observes the original order.
+                payment_state = (guard.upgrade_ledger.record.get('payment_status')
+                    if getattr(guard, 'upgrade_ledger', None) else getattr(guard, 'payment_state', None))
+                if (payment_state in {'paid', 'declined'} or
+                    kind == 'bank' and not guard.three_ds.needs_user or
+                    kind == 'hcaptcha' and guard.three_ds.needs_user):
+                    break
+                session.check()
+                if not await challenge_frames(page, guard, kind):
+                    break
+                if time.monotonic() >= identity_check_at:
+                    await session.validate()
+                    identity_check_at = time.monotonic() + 5
+                await asyncio.sleep(.5)
+        except BaseException:
+            session.close(revoke=True)
+            raise
+        finally:
+            session.close()
+            self.handoff = None
+            if announced:
+                callback(self.id, {'type': 'progress', 'result': {
+                    'stage': 'human_verification_ready', 'handoff_available': False,
+                    'handoff_kind': kind, 'handoff_expires_at': session.expires_at,
+                    'handoff_session_id': session.session_id, 'handoff_generation': generation}})
+
+    def handoff_request(self, value=None):
+        if (self.payload.get('action') != 'server' or self.cancelled or self.done
+                or self.handoff is None or self.handoff_loop is None):
+            raise Stop('handoff_unavailable')
+        session = self.handoff
+        operation = session.snapshot() if value is None else session.command(value)
+        future = asyncio.run_coroutine_threadsafe(operation, self.handoff_loop)
+        try:
+            return future.result(timeout=7)
+        except BaseException:
+            future.cancel()
+            if self.handoff is session and not session.closed or session.revoked:
+                session.close(revoke=True)
+            raise
 
     def persist(self, path, document):
         name = str(path.relative_to(self.root))
@@ -365,19 +449,22 @@ class Job:
                     today["amount_minor"] > safety.get("maxAmountMinor", 0) or
                     today["amount_minor"] <= 0):
                 raise Stop("payment_quote_outside_authorization")
-            callback(self.id, {"type": "confirmation", "result": {
-                "status": "confirming", "stage": "payment_ready", "quote": quote,
-                "quote_authority": authority, **operation,
-                "nonce": self.nonce, "card_last4": last4}})
-            self.confirmed = True
-            return True
+            if self.payload.get('manualPaymentConfirmation') is not True:
+                callback(self.id, {"type": "confirmation", "result": {
+                    "status": "confirming", "stage": "payment_ready", "quote": quote,
+                    "quote_authority": authority, **operation,
+                    "nonce": self.nonce, "card_last4": last4}})
+                self.confirmed = True
+                return True
         self.waiting_confirmation = True
         callback(self.id, {"type": "confirmation", "result": {
             "status": "awaiting_confirmation", "stage": "payment_ready", "quote": quote,
             "quote_authority": authority, **operation,
             "nonce": self.nonce, "card_last4": last4}})
-        self.confirm_event.wait(300)
-        self.waiting_confirmation = False
+        try:
+            self.confirm_event.wait(300)
+        finally:
+            self.waiting_confirmation = False
         return self.confirmed and not self.cancelled
 
     @staticmethod
@@ -388,9 +475,13 @@ class Job:
     def signal(self, nonce=None, cancel=False):
         if cancel:
             self.cancelled = True
+            if self.handoff:
+                self.handoff.close(revoke=True)
             self.details_event.set()
             self.confirm_event.set()
             return
+        if self.cancelled or self.done or not self.waiting_confirmation:
+            raise Stop('confirmation_not_waiting')
         if self.nonce is None or not isinstance(nonce, str) or not hmac.compare_digest(self.nonce, nonce):
             raise Stop("confirmation_mismatch")
         if self.confirm_event.is_set():
@@ -835,6 +926,9 @@ class Job:
                 self.pending_details.clear()
                 self.pending_details = None
             self.nonce = None
+            if self.handoff:
+                self.handoff.close()
+                self.handoff = None
             self.done = True
             watchdog.cancel()
         oom_kills_after = read_cgroup_oom_kill()
@@ -891,6 +985,13 @@ class Handler(BaseHTTPRequestHandler):
                              "registrationWindowRetained": registration_builtin.PROFILES.profile is not None})
             return
         parts = self.path.strip("/").split("/")
+        if (len(parts) == 3 and parts[0] == 'jobs' and parts[2] == 'handoff'
+                and JOB_ID.fullmatch(parts[1]) and isinstance(self.job, Job) and self.job.id == parts[1]):
+            try:
+                self.reply(200, self.job.handoff_request())
+            except Exception:
+                self.reply(409, {'ok': False})
+            return
         if (len(parts) == 4 and parts[:2] == ["registration", "jobs"] and parts[3] == "status"):
             job = self.job
             if not isinstance(job, registration_builtin.RegistrationServerJob) or job.id != parts[2]:
@@ -931,6 +1032,11 @@ class Handler(BaseHTTPRequestHandler):
             parts = self.path.strip("/").split("/")
             if len(parts) < 2 or parts[0] != "jobs" or not JOB_ID.fullmatch(parts[1]):
                 raise ValueError()
+            if len(parts) == 3 and parts[2] == 'handoff':
+                if not isinstance(self.job, Job) or self.job.id != parts[1]:
+                    raise ValueError()
+                self.reply(200, self.job.handoff_request(body))
+                return
             with self.lock:
                 if len(parts) == 2:
                     if registration_builtin.PROFILES.profile or (self.job and not self.job.done):

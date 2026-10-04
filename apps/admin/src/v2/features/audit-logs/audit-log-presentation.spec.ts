@@ -14,6 +14,12 @@ import {
 } from './audit-log-presentation';
 
 describe('audit log presentation', () => {
+  it('人工验证与等待确认审计使用明确中文名称', () => {
+    expect(auditActionLabel('id_business_v2.auto_recharge.handoff')).toBe('操作原付款验证窗口');
+    expect(auditActionLabel('id_business_v2.auto_recharge.server.quote_verified')).toBe(
+      '核实报价并等待本人确认'
+    );
+  });
   it('充值邮箱读码审计使用明确中文操作名', () => {
     expect(auditActionLabel('id_business_v2.auto_recharge.email_code.prepare')).toBe(
       '准备登录邮箱验证'

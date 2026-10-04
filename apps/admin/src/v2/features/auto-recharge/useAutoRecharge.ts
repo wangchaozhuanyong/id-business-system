@@ -15,6 +15,7 @@ import type {
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useRechargeManualPaymentConfirmation } from './useRechargeManualPaymentConfirmation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
@@ -124,6 +125,7 @@ async function loadCountryProxies(countryCode: string, signal?: AbortSignal) {
 }
 
 export function useAutoRecharge() {
+  const manualPaymentConfirmation = useRechargeManualPaymentConfirmation();
   const execution = useV2SessionDraft('auto-recharge-execution', () => ({
     currentId: ref(''),
     paymentJobId: ref(''),
@@ -692,6 +694,10 @@ export function useAutoRecharge() {
         : '官网要求 TOTP 验证码，正在使用系统 2FA 功能自动取码并提交。';
     if (job?.state === 'awaiting_human_verification' && job.result.transport === 'web_direct')
       return '请在已打开的比特官网窗口完成验证；网页会自动核对登录结果，也可点击刷新核对。';
+    if (job?.action === 'server' && job.state === 'awaiting_confirmation')
+      return '官网报价已取得，等待本人核对金额并确认本次单次付款。';
+    if (job?.action === 'server' && job.state === 'awaiting_human_verification')
+      return '官网要求本人验证，请打开原付款验证窗口完成验证后核对原单。';
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running' && job.result.transport === 'web_direct')
@@ -1116,6 +1122,7 @@ export function useAutoRecharge() {
         details: { ...details.value },
         lockedCurrency: lockedCurrency.value,
         authorizeSinglePayment: true,
+        manualPaymentConfirmation: manualPaymentConfirmation.value,
         ...(selectedProxyId.value
           ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
           : {})
@@ -1547,6 +1554,7 @@ export function useAutoRecharge() {
   });
 
   return {
+    manualPaymentConfirmation,
     query,
     addressQuery,
     jobs,

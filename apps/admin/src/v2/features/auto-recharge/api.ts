@@ -10,6 +10,8 @@ import type {
   V2RechargeAddressStatus,
   V2RechargeJob,
   V2RechargeStart,
+  V2RechargeHandoffFrame,
+  V2RechargeHandoffCommand,
   V2RechargePaymentCap,
   V2RechargeBitBrowserSettings,
   V2RechargeServerProxySettings,
@@ -34,6 +36,19 @@ export const rechargeTotpApi = {
 export const rechargeApi = {
   startServer(input: V2RechargeStart) {
     return request<{ id: string }>(http.post(base, input));
+  },
+  confirmServer(id: string, nonce: string) {
+    return request<{ id: string }>(http.post(`${base}/${id}/confirm`, { nonce }));
+  },
+  handoffFrame(id: string, options: ApiRequestOptions = {}) {
+    return request<V2RechargeHandoffFrame>(
+      http.get(`${base}/${id}/handoff`, { signal: options.signal })
+    );
+  },
+  handoffCommand(id: string, command: V2RechargeHandoffCommand, options: ApiRequestOptions = {}) {
+    return request<{ commandId: string; accepted: true }>(
+      http.post(`${base}/${id}/handoff`, command, { signal: options.signal })
+    );
   },
   listPaymentCaps(options: ApiRequestOptions = {}) {
     return request<{ items: V2RechargePaymentCap[] }>(
