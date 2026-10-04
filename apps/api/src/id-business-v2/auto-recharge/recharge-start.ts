@@ -103,6 +103,12 @@ export async function startRechargeJob(
       const previous = await deps.repository.findJob(tx, input.id);
       if (previous) {
         if (previous.ownerId !== operator.id) throw new ForbiddenException('无权访问此任务');
+        if (
+          input.action === 'server' &&
+          (object(previous.result).manual_payment_confirmation === true) !==
+            (input.manualPaymentConfirmation === true)
+        )
+          throw new ConflictException('同一操作编号不能更换付款确认方式');
         if (previous.plan !== input.plan || previous.action !== input.action) {
           throw new ConflictException('同一操作编号不能更换套餐或步骤');
         }
@@ -239,6 +245,7 @@ export async function startRechargeJob(
                 ...(manualAddress ? { manual_address: true } : {}),
                 ...(input.action === 'server'
                   ? {
+                      manual_payment_confirmation: input.manualPaymentConfirmation === true,
                       locked_currency: input.lockedCurrency,
                       max_amount: effectiveMax,
                       max_amount_minor: amountMinor,
@@ -261,7 +268,10 @@ export async function startRechargeJob(
         afterData: {
           plan: input.plan,
           action: input.action,
-          ...(address ? { addressId: address.id } : {})
+          ...(address ? { addressId: address.id } : {}),
+          ...(input.action === 'server'
+            ? { manualPaymentConfirmation: input.manualPaymentConfirmation === true }
+            : {})
         },
         remark: '启动单笔订阅操作'
       });

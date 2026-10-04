@@ -109,6 +109,43 @@ beforeEach(() => {
   });
 });
 
+describe('付款确认方式任务快照', () => {
+  it.each([true, false, undefined])('人工开关 %s 持久化并传给同一执行器任务', async (mode) => {
+    const deps = dependencies();
+    const submitted = {
+      ...input(),
+      ...(mode === undefined ? {} : { manualPaymentConfirmation: mode })
+    };
+    await startRechargeJob(submitted, operator, deps as never);
+    expect(deps.repository.createJob.mock.calls[0]![1]).toMatchObject({
+      result: { manual_payment_confirmation: mode === true }
+    });
+    expect(dispatched.manualPaymentConfirmation).toBe(mode);
+    expect(dispatched.safety).toMatchObject({
+      authorizeSinglePayment: true,
+      lockedCurrency: 'USD',
+      maxAmountMinor: 3000
+    });
+  });
+  it.each(['true', 1, null])('拒绝非布尔开关 %s', (mode) => {
+    expect(() => validateStart({ ...input(), manualPaymentConfirmation: mode })).toThrow('开关值');
+  });
+  it('同一任务编号不能更换人工确认方式，也不能再次交付', async () => {
+    const deps = dependencies();
+    deps.repository.findJob.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      plan: 'plus',
+      action: 'server',
+      result: { addressId, manual_payment_confirmation: true }
+    } as never);
+    await expect(
+      startRechargeJob({ ...input(), manualPaymentConfirmation: false }, operator, deps as never)
+    ).rejects.toThrow('确认方式');
+    expect(sendRechargeWorkerRequest).not.toHaveBeenCalled();
+  });
+});
+
 describe('服务器使用已保存 2FA', () => {
   it('按当前用户读取配置，仅向执行器内存传递且不写入任务或日志', async () => {
     const deps = dependencies();

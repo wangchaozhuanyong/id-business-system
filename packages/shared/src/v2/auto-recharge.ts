@@ -133,6 +133,12 @@ export interface V2RechargeResult {
   locked_currency?: string;
   max_amount?: string;
   user_action_required?: boolean;
+  manual_payment_confirmation?: boolean;
+  handoff_available?: boolean;
+  handoff_kind?: 'hcaptcha' | 'bank';
+  handoff_expires_at?: string;
+  handoff_session_id?: string;
+  handoff_generation?: number;
   [key: string]: unknown;
 }
 export interface V2RechargeJob {
@@ -179,9 +185,45 @@ export interface V2RechargeStart {
   lockedCurrency?: string;
   maxAmount?: string;
   authorizeSinglePayment?: true;
+  manualPaymentConfirmation?: boolean;
   proxyId?: string;
   proxyCountryCode?: string;
 }
+
+/** 原任务验证区域的临时画面；不得进入任务记录、草稿或浏览器存储。 */
+export interface V2RechargeHandoffFrame {
+  sessionId: string;
+  frameId: string;
+  revision: number;
+  kind: 'hcaptcha' | 'bank';
+  image: string;
+  width: number;
+  height: number;
+  expiresAt: string;
+}
+
+export type V2RechargeHandoffCommand = {
+  commandId: string;
+  sessionId: string;
+  frameId: string;
+  revision: number;
+} & (
+  | { type: 'click'; x: number; y: number }
+  | {
+      type: 'key';
+      key:
+        | 'Tab'
+        | 'Enter'
+        | 'Space'
+        | 'Backspace'
+        | 'ArrowUp'
+        | 'ArrowDown'
+        | 'ArrowLeft'
+        | 'ArrowRight';
+    }
+  | { type: 'text'; text: string }
+  | { type: 'scroll'; deltaY: number }
+);
 
 export interface V2RechargeDetailsSubmission {
   addressId: string;

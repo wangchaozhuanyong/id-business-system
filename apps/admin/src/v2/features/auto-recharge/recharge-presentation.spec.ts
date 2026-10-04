@@ -27,6 +27,31 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('原窗口接管失败区分绑定、验证区、敏感字段和超时，内部错误码不直接展示', () => {
+    expect(failureReasonLabel('handoff_binding_changed')).toContain('绑定已变化');
+    expect(failureReasonLabel('handoff_frame_unavailable')).toContain('验证区域不可用');
+    expect(failureReasonLabel('handoff_sensitive_frame')).toContain('敏感字段');
+    expect(failureReasonLabel('handoff_expired')).toContain('超时');
+    for (const suffix of [
+      'binding_changed',
+      'binding_invalid',
+      'command_invalid',
+      'command_replayed',
+      'expired',
+      'focus_invalid',
+      'frame_obscured',
+      'frame_unavailable',
+      'identity_page_unavailable',
+      'image_too_large',
+      'page_untrusted',
+      'sensitive_frame',
+      'unavailable'
+    ]) {
+      const label = failureReasonLabel(`handoff_${suffix}`);
+      expect(label).not.toContain('handoff_');
+      expect(label).not.toBe('系统未识别到具体失败原因');
+    }
+  });
   it('首次成功与本轮复核分开，旧记录没有首次成功事实时保持原展示', () => {
     expect(accountVerificationLabel(job({ result: { account_matched: false } }))).toBe('尚未核实');
     expect(accountVerificationLabel(job())).toBe('官网账户核对通过');

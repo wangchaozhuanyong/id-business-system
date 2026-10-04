@@ -20,6 +20,7 @@ from checkout_core import MAX_BYTES, ROOT, Stop, parse_browser_credential, write
 from payment_form import (PaymentDetails, fill_official_form, subscribe_button, validate_details,
                           verify_billing_fields, verify_card_fields)
 from payment_network import PaymentGuard
+from payment_handoff import challenge_frames, controller_cancelled
 from payment_state import PaymentLedger, outcome, quote_digest, validate_evidence
 from plans import PLANS, plan_spec, subscription_match
 
@@ -147,6 +148,11 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
                           wait_seconds, poll_count, poll_interval, quote_wait_seconds=9,
                           expected_country=None):
     selected_plan = ledger.target_plan
+    controller = getattr(confirmer, '__self__', None)
+    handoff = getattr(controller, 'await_handoff', None)
+    server_handoff = callable(handoff) and getattr(controller, 'payload', {}).get('action') == 'server'
+    guard.hcaptcha_enabled = server_handoff
+    guard.operation_cancelled = lambda: controller_cancelled(controller)
     if os.environ.get("AUTO_RECHARGE_CALLBACK_URL") and not identity.get("network", {}).get("country"):
         raise Stop("network_unconfirmed")
     if expected_country and identity.get("network", {}).get("country") != expected_country:
@@ -204,12 +210,17 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
         guard.validate_before_confirm = preflight
         ledger.begin(quote, confirmed_digest=fingerprint, card_last4=details.last4)
         guard.approve(quote)
+        if guard.operation_cancelled():
+            raise Stop('operation_cancelled')
         # 请求与 UI 重复点击均由单次 guard 和落盘标记保护。
         await button.click()
         progress("payment_submitted_or_pending", repeated_payment="blocked")
-        deadline = time.monotonic() + wait_seconds
+        deadline = time.monotonic() + (300 if server_handoff else wait_seconds)
         verification_announced = False
+        handed_off = set()
         while time.monotonic() < deadline:
+            if guard.operation_cancelled():
+                raise Stop('operation_cancelled')
             if guard.payment_state in {"paid", "declined"}:
                 break
             if (guard.payment_state == "requires_action" and guard.three_ds.needs_user
@@ -218,6 +229,12 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
                 verification_announced = True
             if guard.three_ds.status in {"failed", "unsupported"}:
                 break
+            if server_handoff:
+                kind = 'bank' if guard.three_ds.needs_user else 'hcaptcha'
+                if kind not in handed_off and (kind == 'bank' or await challenge_frames(page, guard, kind)):
+                    handed_off.add(kind)
+                    await handoff(page, guard, kind)
+                    continue
             if (guard.three_ds.needs_user and os.environ.get("AUTO_RECHARGE_CALLBACK_URL")):
                 # 服务器窗口没有本人可交互入口；关闭认证写后仅复查原付款。
                 break

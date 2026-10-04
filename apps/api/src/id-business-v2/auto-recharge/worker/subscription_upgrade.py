@@ -18,6 +18,7 @@ from attempt_ledger import atomic_json
 from browser_checkout import NetworkGuard, browser_read, check_session, money, progress, quote_from_text, observe_page_network
 from checkout_core import MAX_BYTES, Stop, parse_credential, unique_object
 from payment_3ds import AUTH_PATHS
+from payment_handoff import controller_cancelled
 from upgrade_authentication import (UpgradeAuthentication, UpgradeResponseObservers,
                                     wait_upgrade_authentication, upgrade_authentication_summary, route_upgrade_card_change)
 from upgrade_card_network import UpgradeCardChange
@@ -248,6 +249,11 @@ class UpgradeGuard(NetworkGuard):
         self.card_change = UpgradeCardChange(target, origin_frame, read_only=self.read_only)
 
     async def route(self, route):
+        if self.operation_cancelled():
+            await route.abort('blockedbyclient')
+            return
+        if await self.route_hcaptcha(route):
+            return
         request = route.request
         p = urlsplit(request.url)
         if request.method == 'POST' and p.scheme == 'https' and p.hostname == 'chatgpt.com' and p.path == UPGRADE_PATH:
@@ -270,7 +276,7 @@ class UpgradeGuard(NetworkGuard):
                     raise Stop('duplicate_payment_blocked' if self.sent else 'upgrade_not_authorized')
                 self.reserved = True  # 第一个 await 前预留；并发第二次 update 不能通过。
                 await self.preflight()
-                if not self.approved or self.three_ds.closed:
+                if not self.approved or self.three_ds.closed or self.operation_cancelled():
                     raise Stop('operation_cancelled')
                 self.upgrade_ledger.update(confirmation_requests_sent=1, stage='upgrade_request_sending')
                 self.sent, self.approved, self.update_request = 1, False, request
@@ -287,7 +293,7 @@ class UpgradeGuard(NetworkGuard):
         decision = await self.three_ds.original_request_decision(request, self.target, sent=self.sent,
             read_only=self.read_only, payment_status=lambda: (self.upgrade_ledger.record or {}).get('payment_status'))
         if decision is not None:
-            if decision:
+            if decision and not self.operation_cancelled():
                 await route.fallback()
             else:
                 self.blocked_unknown_writes += int(request.method not in {'GET', 'HEAD', 'OPTIONS'})
@@ -491,12 +497,17 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
                                  session_budget=None, expected_country=None, upgrade_id=None):
     with UpgradeLedger(state_dir, target.account_id, target_plan, upgrade_id) as ledger:
         guard = UpgradeGuard(target, ledger, origin_frame=page.main_frame)
+        controller = getattr(confirmer, '__self__', None)
+        handoff = getattr(controller, 'await_handoff', None)
+        server_handoff = callable(handoff) and getattr(controller, 'payload', {}).get('action') == 'server'
+        guard.hcaptcha_enabled = server_handoff
+        guard.operation_cancelled = lambda: controller_cancelled(controller)
         context = page.context
         await context.route('**/*', guard.route)
         observers = UpgradeResponseObservers(context, guard)
         details = None
         def cancelled():
-            if session_budget and session_budget.cancelled():
+            if guard.operation_cancelled() or session_budget and session_budget.cancelled():
                 raise Stop('operation_cancelled')
         try:
             if ledger.record:
@@ -560,7 +571,11 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
             guard.preflight, guard.method_id, guard.approved = lambda: preflight(network_request=True), method_id, True
             cancelled()
             await button.click()
-            await wait_upgrade_authentication(guard, wait_seconds, cancelled, progress)
+            if server_handoff:
+                await wait_upgrade_authentication(guard, wait_seconds, cancelled, progress,
+                    page=page, handoff=handoff)
+            else:
+                await wait_upgrade_authentication(guard, wait_seconds, cancelled, progress)
             await observers.finish()
             result = await inspect_upgrade(page, target, ledger, guard, poll_count=poll_count, poll_interval=poll_interval)
             result.update(stage='payment_result', recheck_only=False)

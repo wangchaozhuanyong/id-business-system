@@ -19,6 +19,18 @@
       <AppButton variant="ghost" @click="$emit('settings')">{{
         serverMode ? '服务器默认代理' : directMode ? '比特浏览器直连设置' : '代理 IP 与窗口设置'
       }}</AppButton>
+      <label
+        v-if="serverMode"
+        class="recharge-manual-confirmation"
+        title="开启后官网报价暂停，由本人确认付款；关闭后仍自动付款，官网强制验证仍需本人完成。最多等待 5 分钟。"
+      >
+        <span>付款前人工确认</span>
+        <el-switch
+          v-model="manualPaymentConfirmation"
+          :disabled="locked"
+          aria-label="付款前人工确认"
+        />
+      </label>
       <BitBrowserConnectionHelp v-if="directMode" />
       <AppButton variant="ghost" @click="$emit('history')">最近执行记录</AppButton>
     </template>
@@ -29,11 +41,21 @@
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import BitBrowserConnectionHelp from './BitBrowserConnectionHelp.vue';
+import { useRechargeManualPaymentConfirmation } from './useRechargeManualPaymentConfirmation';
+const manualPaymentConfirmation = useRechargeManualPaymentConfirmation();
 defineProps<{
   connectorStatus: string;
   connectorMessage: string;
   serverMode?: boolean;
   directMode?: boolean;
+  locked?: boolean;
 }>();
 defineEmits<{ settings: []; history: [] }>();
 </script>
+<style scoped>
+.recharge-manual-confirmation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+</style>

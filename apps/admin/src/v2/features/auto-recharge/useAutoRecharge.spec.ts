@@ -1629,6 +1629,31 @@ describe('本机比特浏览器自动充值', () => {
 });
 
 describe('服务器自动充值', () => {
+  it.each([false, true])(
+    '付款前人工确认默认关闭，显式选择 %s 时随服务器任务提交',
+    async (manual) => {
+      expect(flow.manualPaymentConfirmation.value).toBe(false);
+      flow.manualPaymentConfirmation.value = manual;
+      await startServerFixture();
+      expect(mock.startServer.mock.calls[0]![0]).toMatchObject({
+        manualPaymentConfirmation: manual
+      });
+    }
+  );
+
+  it('人工确认选项切页保留，安全码和单次付款授权不保留', async () => {
+    flow.manualPaymentConfirmation.value = true;
+    flow.details.value.cvc = '123';
+    flow.authorizeSinglePayment.value = true;
+    scope.stop();
+    mock.queryIndex = 0;
+    scope = effectScope();
+    flow = scope.run(() => useAutoRecharge())!;
+    expect(flow.manualPaymentConfirmation.value).toBe(true);
+    expect(flow.details.value.cvc).toBe('');
+    expect(flow.authorizeSinglePayment.value).toBe(false);
+  });
+
   async function serverPasswordForm() {
     flow.operationMode.value = 'server_payment';
     fillForm();

@@ -1038,6 +1038,9 @@ class ServerTests(unittest.TestCase):
         job = server.Job('test', {})
         job.nonce = 'a' * 64
         with self.assertRaises(Stop):
+            job.signal('a' * 64)
+        job.waiting_confirmation = True
+        with self.assertRaises(Stop):
             job.signal('b' * 64)
         self.assertFalse(job.confirmed)
         job.signal('a' * 64)

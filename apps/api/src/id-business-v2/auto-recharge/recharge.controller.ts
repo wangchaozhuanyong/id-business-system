@@ -125,6 +125,20 @@ export class RechargeController {
   bitBrowserAccess(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.access(id, operator);
   }
+  @Get('jobs/:id/handoff')
+  @Header('Cache-Control', 'no-store')
+  handoffFrame(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.handoffFrame(id, operator);
+  }
+  @Post('jobs/:id/handoff')
+  @Header('Cache-Control', 'no-store')
+  handoffCommand(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.handoffCommand(id, input, operator);
+  }
   @Post('jobs/:id/confirm')
   confirm(
     @Param('id') id: string,

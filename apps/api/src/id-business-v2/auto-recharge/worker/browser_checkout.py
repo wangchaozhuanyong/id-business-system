@@ -386,6 +386,8 @@ class NetworkGuard:
     """只允许已核对账户、已选套餐的一次官网建单；付款相关写入默认拒绝。"""
     def __init__(self, target: BrowserCredential, ledger=None):
         self.target, self.ledger = target, ledger
+        self.operation_cancelled = lambda: False
+        self.hcaptcha_enabled = False
         self.target_plan = getattr(ledger, "target_plan", "plus")
         self.armed = False
         self.sent = 0
@@ -449,7 +451,24 @@ class NetworkGuard:
             return "payment"
         return "unknown_write"
 
+    async def route_hcaptcha(self, route):
+        from payment_handoff import hcaptcha_resource_allowed
+        decision = await hcaptcha_resource_allowed(route.request, self.target,
+            enabled=self.hcaptcha_enabled and self.account_verified and not getattr(self, 'read_only', False))
+        if decision is None:
+            return False
+        if decision and not self.operation_cancelled():
+            await route.fallback()
+        else:
+            await route.abort('blockedbyclient')
+        return True
+
     async def route(self, route):
+        if self.operation_cancelled():
+            await route.abort('blockedbyclient')
+            return
+        if await self.route_hcaptcha(route):
+            return
         request = route.request
         if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
             parts = urlsplit(request.url)

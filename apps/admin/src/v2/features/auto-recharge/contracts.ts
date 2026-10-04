@@ -1,5 +1,7 @@
 export type {
   V2RechargeStart,
+  V2RechargeHandoffFrame,
+  V2RechargeHandoffCommand,
   V2RechargeJob,
   V2RechargePlan,
   V2RechargePaymentCap,

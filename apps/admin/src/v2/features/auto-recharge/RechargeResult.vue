@@ -130,6 +130,11 @@
         已关闭并清理 {{ job.result.stale_profiles_cleaned }} 个属于该账号的历史付款前失败窗口。
       </p>
       <slot />
+      <RechargeServerPaymentControl
+        v-if="job.action === 'server'"
+        :job="job"
+        @refresh="$emit('refresh')"
+      />
       <details class="recharge-diagnostics">
         <summary>执行详情</summary>
         <dl class="recharge-summary">
@@ -186,7 +191,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, defineAsyncComponent } from 'vue';
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import {
@@ -209,6 +214,10 @@ const props = defineProps<{
   job?: V2RechargeJob;
   mode?: 'server_payment' | 'payment' | 'open_browser';
 }>();
+defineEmits<{ refresh: [] }>();
+const RechargeServerPaymentControl = defineAsyncComponent(
+  () => import('./RechargeServerPaymentControl.vue')
+);
 const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
 const proxyProgress = computed(() => (props.job ? proxyAttemptLabel(props.job) : ''));
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {

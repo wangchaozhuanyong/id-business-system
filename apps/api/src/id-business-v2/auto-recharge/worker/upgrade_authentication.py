@@ -55,11 +55,22 @@ class UpgradeAuthentication(ThreeDSAuthentication):
         return decision
 
 
-async def wait_upgrade_authentication(guard, wait_seconds, cancelled, progress):
-    deadline = time.monotonic() + wait_seconds
+async def wait_upgrade_authentication(guard, wait_seconds, cancelled, progress, *, page=None, handoff=None):
+    from payment_handoff import challenge_frames
+    deadline = time.monotonic() + (300 if handoff else wait_seconds)
     announced = False
+    handed_off = set()
     while time.monotonic() < deadline:
         cancelled()
+        if guard.done.is_set() and (guard.upgrade_ledger.record['payment_status'] != 'requires_action'
+                or guard.error or guard.three_ds.status in {'failed', 'unsupported'}):
+            break
+        if handoff:
+            kind = 'bank' if guard.three_ds.needs_user else 'hcaptcha'
+            if kind not in handed_off and (kind == 'bank' or await challenge_frames(page, guard, kind)):
+                handed_off.add(kind)
+                await handoff(page, guard, kind)
+                continue
         if guard.done.is_set():
             if (guard.upgrade_ledger.record['payment_status'] != 'requires_action' or guard.error
                     or guard.three_ds.status in {'failed', 'unsupported'}):
@@ -113,6 +124,8 @@ async def route_upgrade_card_change(guard, route):
     decision = await guard.card_change.decision(route.request)
     if decision is None:
         return False
+    if decision and guard.operation_cancelled():
+        decision = False
     guard.blocked_unknown_writes += int(not decision and route.request.method not in {'GET', 'HEAD', 'OPTIONS'})
     await (route.fallback() if decision else route.abort('blockedbyclient'))
     return True

@@ -138,6 +138,7 @@ if (part === 'guards') {
       'test_payment.StateTests',
       'test_recharge_email_code',
       'test_payment_3ds',
+      'test_payment_handoff',
       'test_subscription_upgrade',
       'test_upgrade_card_selection',
       'test_upgrade_card_flow',

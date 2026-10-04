@@ -2,6 +2,7 @@
   <section class="v2-page-layout recharge-page">
     <RechargePageContext
       :server-mode="operationMode === 'server_payment'"
+      :locked="formLocked"
       :direct-mode="operationMode === 'open_browser'"
       :connector-status="operationMode === 'server_payment' ? 'unknown' : connectorStatus"
       :connector-message="
@@ -299,7 +300,7 @@
           </div>
           <p class="recharge-workflow" role="status">{{ workflowMessage }}</p>
           <p v-if="error" class="recharge-error" role="alert">{{ error }}</p>
-          <RechargeResult :job="selected" :mode="operationMode" />
+          <RechargeResult :job="selected" :mode="operationMode" @refresh="refresh" />
           <div class="recharge-actions">
             <p v-if="needsCode && !needsManualCode" class="recharge-note" role="status">
               {{ autoCodeMessage }}
