@@ -4,7 +4,12 @@ import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 import { useRegistrationMailboxes } from './useRegistrationMailboxes';
 import type { V2RegistrationMailbox, V2RegistrationMailboxStatusFilter } from './contracts';
 
-const mock = vi.hoisted(() => ({ mark: vi.fn(), refresh: vi.fn(), ensureFresh: vi.fn() }));
+const mock = vi.hoisted(() => ({
+  mark: vi.fn(),
+  country: vi.fn(),
+  refresh: vi.fn(),
+  ensureFresh: vi.fn()
+}));
 vi.mock('@/api/client', () => ({ getApiErrorMessage: (error: Error) => error.message }));
 vi.mock('@/v2/composables/useV2Query', () => ({
   createV2QueryKey: JSON.stringify,
@@ -14,7 +19,16 @@ vi.mock('@/v2/composables/useV2Query', () => ({
     ensureFresh: mock.ensureFresh
   })
 }));
-vi.mock('./api', () => ({ registrationApi: { markRegistered: mock.mark } }));
+vi.mock('@/v2/features/auto-recharge/public-api', () => ({
+  chatgptCountries: [
+    ['MY', '马来西亚'],
+    ['US', '美国'],
+    ['JP', '日本']
+  ]
+}));
+vi.mock('./api', () => ({
+  registrationApi: { markRegistered: mock.mark, updateCountry: mock.country }
+}));
 const row: V2RegistrationMailbox = {
   id: 'alias-1',
   email: 'hidden@example.invalid',
@@ -34,6 +48,7 @@ let page: ReturnType<typeof useRegistrationMailboxes>;
 beforeEach(() => {
   vi.clearAllMocks();
   clearV2SessionDrafts();
+  mock.country.mockResolvedValue({ id: 'account-1' });
   mock.mark.mockResolvedValue({ accountId: 'account-1', created: true });
   mock.refresh.mockResolvedValue(undefined);
   scope = effectScope();
@@ -166,5 +181,94 @@ describe('隐藏邮箱人工注册标记', () => {
     expect(page.filters.appliedKeyword).toBe('hidden');
     expect(page.filters.page).toBe(3);
     expect(page.target.value?.id).toBe(row.id);
+  });
+});
+
+const countryRow = {
+  ...row,
+  registered: true,
+  accountId: 'account-1',
+  registrationCountryCode: 'MY',
+  accountUpdatedAt: '2026-10-04T08:00:00.000Z'
+};
+describe('隐藏邮箱注册国家修改', () => {
+  it('国家回填，保存只提交国家与原账号版本', async () => {
+    page.openCountry(countryRow);
+    expect(page.countryDraft.form.registrationCountryCode).toBe('MY');
+    page.countryDraft.form.registrationCountryCode = 'US';
+    await page.saveCountry();
+    expect(mock.country).toHaveBeenCalledWith('account-1', 'US', countryRow.accountUpdatedAt);
+    expect(page.countryOpen.value).toBe(false);
+    expect(page.message.value).toBe('国家已修改');
+    page.openCountry({ ...countryRow, registrationCountryCode: 'US' });
+    expect(page.countryDraft.form.registrationCountryCode).toBe('US');
+  });
+  it('失败保留输入并可重试，未知国家可清空', async () => {
+    page.openCountry(countryRow);
+    page.countryDraft.form.registrationCountryCode = '';
+    mock.country.mockRejectedValueOnce(new Error('账号资料已变化'));
+    await page.saveCountry();
+    expect(page.countryOpen.value).toBe(true);
+    expect(page.countryError.value).toBe('账号资料已变化');
+    expect(page.countryDraft.form.registrationCountryCode).toBe('');
+    await page.saveCountry();
+    expect(mock.country).toHaveBeenLastCalledWith('account-1', null, countryRow.accountUpdatedAt);
+  });
+  it('按账号保留草稿，关闭、换记录及离页返回保留原版本', () => {
+    page.openCountry(countryRow);
+    page.countryDraft.form.registrationCountryCode = 'US';
+    page.setCountryOpen(false);
+    page.openCountry({
+      ...countryRow,
+      id: 'alias-2',
+      accountId: 'account-2',
+      registrationCountryCode: 'JP'
+    });
+    expect(page.countryDraft.form.registrationCountryCode).toBe('JP');
+    scope.stop();
+    scope = effectScope();
+    page = scope.run(() => useRegistrationMailboxes(() => true))!;
+    page.openCountry({ ...countryRow, accountUpdatedAt: '2026-10-04T09:00:00.000Z' });
+    expect(page.countryDraft.form.registrationCountryCode).toBe('US');
+    expect(page.countryDraft.version.value).toBe(countryRow.accountUpdatedAt);
+  });
+  it('非法国家和未注册记录不写入', async () => {
+    page.openCountry(row);
+    expect(page.countryOpen.value).toBe(false);
+    page.openCountry(countryRow);
+    page.countryDraft.form.registrationCountryCode = 'invalid';
+    await page.saveCountry();
+    expect(page.countryError.value).toBe('请选择有效的国家');
+    expect(mock.country).not.toHaveBeenCalled();
+  });
+  it('提交中不重复发送、不允许关闭或换记录，迟到响应不改变新页面', async () => {
+    let finish!: () => void;
+    mock.country.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+    );
+    page.openCountry(countryRow);
+    page.countryDraft.form.registrationCountryCode = 'US';
+    const save = page.saveCountry();
+    page.setCountryOpen(false);
+    page.openCountry({ ...countryRow, accountId: 'account-2' });
+    await page.saveCountry();
+    expect(page.countryOpen.value).toBe(true);
+    expect(page.countryTarget.value?.accountId).toBe('account-1');
+    expect(mock.country).toHaveBeenCalledOnce();
+    scope.stop();
+    finish();
+    await save;
+    expect(mock.refresh).not.toHaveBeenCalled();
+    expect(page.message.value).toBe('');
+  });
+  it('写入成功但刷新失败仍明确告知已保存', async () => {
+    page.openCountry(countryRow);
+    mock.refresh.mockRejectedValueOnce(new Error('读取失败'));
+    await page.saveCountry();
+    expect(page.countryOpen.value).toBe(false);
+    expect(page.countryError.value).toBe('');
+    expect(page.message.value).toContain('国家已修改；列表刷新失败');
   });
 });

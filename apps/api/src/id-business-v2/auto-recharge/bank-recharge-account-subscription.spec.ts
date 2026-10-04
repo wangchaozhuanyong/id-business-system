@@ -31,7 +31,36 @@ describe('ChatGPT account subscription filters', () => {
       AND: [{}, { subscription: { is: { status: 'active', dueAt: { gt: now, lte: warning } } } }]
     });
     expect(bankRechargeAccountFilter('', null, 'never_subscribed', now, warning)).toEqual({
-      AND: [{}, { subscription: { is: null } }]
+      AND: [
+        {},
+        { OR: [{ subscription: { is: null } }, { subscription: { is: { status: 'cancelled' } } }] }
+      ]
+    });
+  });
+
+  it('returns cancelled subscriptions to waiting accounts without mixing expired accounts', () => {
+    expect(accountSubscriptionState(undefined, now.getTime(), warning.getTime())).toBe(
+      'never_subscribed'
+    );
+    expect(
+      accountSubscriptionState(
+        { status: 'cancelled', dueAt: now },
+        now.getTime(),
+        warning.getTime()
+      )
+    ).toBe('never_subscribed');
+    expect(
+      accountSubscriptionState({ status: 'expired', dueAt: now }, now.getTime(), warning.getTime())
+    ).toBe('expired');
+    expect(bankRechargeAccountFilter('', null, 'expired', now, warning)).toEqual({
+      AND: [
+        {},
+        {
+          subscription: {
+            is: { OR: [{ status: 'expired' }, { status: 'active', dueAt: { lte: now } }] }
+          }
+        }
+      ]
     });
   });
 

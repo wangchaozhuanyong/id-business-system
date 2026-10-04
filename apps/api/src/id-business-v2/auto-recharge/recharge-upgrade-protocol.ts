@@ -26,8 +26,9 @@ export function hasVerifiedRechargePayment(
   result: Record<string, unknown>,
   job: { action: string; accountKey: string | null; plan: string }
 ) {
+  const quote = result.quote as { plan?: unknown } | undefined;
   return (
-    ['bitbrowser', 'server'].includes(job.action) &&
+    isRechargePaymentAction(job.action) &&
     result.payment_status === 'paid' &&
     result.payment_outcome === 'subscription_activated' &&
     result.status === 'subscription_activated' &&
@@ -35,8 +36,13 @@ export function hasVerifiedRechargePayment(
     hasOfficialRechargeQuote(result) &&
     result.payment_requests_sent === 1 &&
     !!job.accountKey &&
+    quote?.plan === job.plan &&
     (!isRechargeUpgrade(result) || result.target_plan === job.plan)
   );
+}
+
+export function isRechargePaymentAction(action: string) {
+  return ['prepare', 'flow', 'bitbrowser', 'server'].includes(action);
 }
 
 export function rechargeOperationIdentifier(result: Record<string, unknown>) {

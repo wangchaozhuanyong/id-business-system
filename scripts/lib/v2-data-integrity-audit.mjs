@@ -483,6 +483,17 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
          SELECT 1 FROM id_business_v2_balance_ledger ledger
          WHERE ledger.order_id = order_record.id AND ledger.entry_type = 'order_consumption_reversal'
        )
+       AND NOT (
+         order_record.status = 'refunded' AND EXISTS (
+           SELECT 1 FROM id_business_v2_finance_journals refund
+           WHERE refund.source_type = 'order' AND refund.source_id = order_record.id
+             AND refund.journal_type = 'order_refund' AND refund.status = 'posted'
+             AND JSON_UNQUOTE(JSON_EXTRACT(refund.metadata, '$.balanceRefundMode')) = 'none'
+             AND JSON_UNQUOTE(JSON_EXTRACT(refund.metadata, '$.restoreBalance')) = 'false'
+             AND JSON_UNQUOTE(JSON_EXTRACT(refund.metadata, '$.refundedBalanceAmount')) = '0'
+             AND JSON_UNQUOTE(JSON_EXTRACT(refund.metadata, '$.restoredBalanceCostAmount')) = '0'
+         )
+       )
      )`
   ),
   check(
@@ -836,7 +847,18 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   check(
     'completed_order_finance_reconciliation_mismatch',
     '已完成订单缺少完成凭证或订单利润与财务分录复算结果不一致',
-    `WITH order_finance AS (
+    `WITH allocation_movement AS (
+       SELECT JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.restoredSourceOrderId')) AS order_id,
+         CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.restoredSourceOrderCostAmount')) AS DECIMAL(18,4)) AS amount
+       FROM id_business_v2_finance_journals WHERE source_type = 'order' AND status = 'posted'
+         AND JSON_EXTRACT(metadata, '$.restoredSourceOrderId') IS NOT NULL
+       UNION ALL
+       SELECT source_id, -CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.restoredSourceOrderCostAmount')) AS DECIMAL(18,4))
+       FROM id_business_v2_finance_journals WHERE source_type = 'order' AND status = 'posted'
+         AND JSON_EXTRACT(metadata, '$.restoredSourceOrderId') IS NOT NULL
+     ), allocation AS (
+       SELECT order_id, SUM(amount) AS amount FROM allocation_movement GROUP BY order_id
+     ), order_finance AS (
        SELECT order_record.id,
               order_record.order_no,
               order_record.profit_amount,
@@ -852,15 +874,16 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
                 )
                 THEN CASE WHEN line.direction = 'credit' THEN line.amount_cny ELSE -line.amount_cny END
                 ELSE 0
-              END), 0) AS recalculated_profit
+              END), 0) + COALESCE(allocation.amount, 0) AS recalculated_profit
        FROM id_business_v2_orders order_record
        LEFT JOIN id_business_v2_finance_journals journal
          ON journal.source_type = 'order' AND journal.source_id = order_record.id
        LEFT JOIN id_business_v2_finance_journal_lines line ON line.journal_id = journal.id
+       LEFT JOIN allocation ON allocation.order_id = order_record.id
        WHERE order_record.status = 'completed'
          AND order_record.deleted_at IS NULL
          AND order_record.profit_amount IS NOT NULL
-       GROUP BY order_record.id, order_record.order_no, order_record.profit_amount
+       GROUP BY order_record.id, order_record.order_no, order_record.profit_amount, allocation.amount
      )
      SELECT CAST(id AS CHAR) AS entity_id,
             JSON_OBJECT(
@@ -896,6 +919,8 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      WHERE reversal.journal_type = 'reversal'
        AND (
          original.id IS NULL OR original.status <> 'reversed'
+         OR original.source_type <> reversal.source_type
+         OR NOT (original.source_id <=> reversal.source_id)
          OR EXISTS (
            SELECT 1
            FROM id_business_v2_finance_journal_lines reversal_line
@@ -908,6 +933,9 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
                OR original_line.amount_original <> reversal_line.amount_original
                OR original_line.amount_cny <> reversal_line.amount_cny
                OR original_line.account_code <> reversal_line.account_code
+               OR original_line.currency <> reversal_line.currency
+               OR original_line.fx_rate_to_cny <> reversal_line.fx_rate_to_cny
+               OR NOT (original_line.fx_rate_snapshot_id <=> reversal_line.fx_rate_snapshot_id)
                OR NOT (original_line.finance_account_id <=> reversal_line.finance_account_id)
                OR NOT (original_line.supplier_account_id <=> reversal_line.supplier_account_id)
              )
@@ -974,6 +1002,290 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
            OR audit.action = 'id_business_v2.integrity.legacy_soft_delete_reconciled'
          )
      )`
+  ),
+  check(
+    'supplier_wallet_gl_mismatch',
+    '供应商原币及账面成本余额与预付款总账净额不一致（期初只计一次，保留原账与冲销）',
+    `WITH movement AS (
+       SELECT line.supplier_account_id,
+              SUM(IF(line.direction = 'debit', line.amount_original, -line.amount_original)) AS quantity,
+              SUM(IF(line.direction = 'debit', line.amount_cny, -line.amount_cny)) AS cost
+       FROM id_business_v2_finance_journal_lines line
+       JOIN id_business_v2_finance_journals journal ON journal.id = line.journal_id
+       WHERE line.account_code = 'supplier_prepayment'
+         AND journal.journal_type <> 'opening_balance'
+       GROUP BY line.supplier_account_id
+     )
+     SELECT CAST(wallet.id AS CHAR) AS entity_id,
+            JSON_OBJECT('currency', wallet.currency, 'walletQuantity', wallet.current_balance,
+                        'walletCost', wallet.current_balance_cny,
+                        'glQuantity', wallet.opening_balance + COALESCE(movement.quantity, 0),
+                        'glCost', wallet.opening_balance_cny + COALESCE(movement.cost, 0)) AS detail
+     FROM id_business_v2_topup_supplier_accounts wallet
+     LEFT JOIN movement ON movement.supplier_account_id = wallet.id
+     WHERE wallet.initialized_at IS NOT NULL AND (
+       wallet.current_balance <> wallet.opening_balance + COALESCE(movement.quantity, 0)
+       OR wallet.current_balance_cny <> wallet.opening_balance_cny + COALESCE(movement.cost, 0))`
+  ),
+  check(
+    'gift_card_refund_frozen_source_mismatch',
+    '撤卡应收缺少原付款冻结证据、提前返还余额或未按状态结清',
+    `WITH receivable AS (
+       SELECT journal.source_id,
+              SUM(IF(line.direction = 'debit', line.amount_cny, -line.amount_cny)) AS outstanding
+       FROM id_business_v2_finance_journals journal
+       JOIN id_business_v2_finance_journal_lines line ON line.journal_id = journal.id
+       WHERE journal.source_type = 'gift_card' AND line.account_code = 'supplier_refund_receivable'
+       GROUP BY journal.source_id
+     )
+     SELECT CAST(card.id AS CHAR) AS entity_id,
+            JSON_OBJECT('refundStatus', card.supplier_refund_status,
+                        'expectedCost', card.supplier_refund_amount_cny,
+                        'outstanding', COALESCE(receivable.outstanding, 0)) AS detail
+     FROM id_business_v2_gift_cards card
+     LEFT JOIN id_business_v2_finance_journals withdrawal
+       ON withdrawal.idempotency_key = CONCAT('auto:gift_card_withdrawn:', card.id)
+     LEFT JOIN receivable ON receivable.source_id = card.id
+     WHERE card.supplier_refund_status <> 'none' AND (
+       withdrawal.id IS NULL OR withdrawal.status <> 'posted'
+       OR NOT (JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.refundFundingVersion')) <=> '2')
+       OR NOT (CAST(JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.refundOriginalAmount')) AS DECIMAL(18,4)) <=> card.supplier_refund_amount)
+       OR NOT (CAST(JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.refundCostAmountCny')) AS DECIMAL(18,4)) <=> card.supplier_refund_amount_cny)
+       OR (JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.fundingSource')) = 'supplier_wallet' AND (
+         NOT (JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.supplierAccountId')) <=> card.purchase_supplier_account_id)
+         OR NOT EXISTS (SELECT 1 FROM id_business_v2_topup_supplier_ledger debit
+           WHERE debit.id = JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.sourceLedgerId'))
+             AND debit.entry_type = 'gift_card_debit' AND debit.gift_card_id = card.id
+             AND debit.supplier_account_id = card.purchase_supplier_account_id
+             AND debit.amount = card.supplier_refund_amount AND debit.amount_cny = card.supplier_refund_amount_cny
+             AND debit.currency = JSON_UNQUOTE(JSON_EXTRACT(withdrawal.metadata, '$.refundCurrency')))))
+       OR EXISTS (SELECT 1 FROM id_business_v2_topup_supplier_ledger advance
+          WHERE advance.idempotency_key = CONCAT('supplier_gift_card_withdrawal:', card.id))
+       OR COALESCE(receivable.outstanding, 0) <>
+          IF(card.supplier_refund_status = 'pending', card.supplier_refund_amount_cny, 0))`
+  ),
+  check(
+    'finance_cash_source_currency_mismatch',
+    '现金分录未绑定真实账户、账户币种不符或供应商预付款币种/来源不符',
+    `SELECT CAST(line.id AS CHAR) AS entity_id,
+            JSON_OBJECT('accountCode', line.account_code, 'currency', line.currency,
+                        'financeAccountId', line.finance_account_id,
+                        'supplierAccountId', line.supplier_account_id) AS detail
+     FROM id_business_v2_finance_journal_lines line
+     JOIN id_business_v2_finance_journals journal ON journal.id = line.journal_id
+     LEFT JOIN id_business_v2_finance_accounts cash ON cash.id = line.finance_account_id
+     LEFT JOIN id_business_v2_topup_supplier_accounts wallet ON wallet.id = line.supplier_account_id
+     WHERE (line.account_code = 'cash' AND journal.journal_type <> 'opening_balance'
+            AND (line.amount_original <> 0 OR line.amount_cny <> 0)
+            AND (cash.id IS NULL OR cash.currency <> line.currency))
+        OR (line.account_code = 'supplier_prepayment'
+            AND (wallet.id IS NULL OR wallet.currency <> line.currency))`
+  ),
+  check(
+    'order_financial_snapshot_mismatch',
+    '已确认新旧订单的实收汇率、平台手续费或利润快照不守恒',
+    `WITH completion AS (
+       SELECT journal.source_id,
+              SUM(IF(line.account_code = 'sales_revenue' AND line.direction = 'credit', line.amount_cny, 0)) AS revenue,
+              SUM(IF(line.account_code = 'platform_fee' AND line.direction = 'debit', line.amount_cny, 0)) AS fee
+       FROM id_business_v2_finance_journals journal
+       JOIN id_business_v2_finance_journal_lines line ON line.journal_id = journal.id
+       WHERE journal.source_type = 'order' AND journal.journal_type = 'order_completed'
+       GROUP BY journal.source_id
+     )
+     SELECT CAST(o.id AS CHAR) AS entity_id,
+            JSON_OBJECT('orderNo', o.order_no, 'snapshotFee', o.platform_fee_amount,
+                        'journalFee', completion.fee, 'snapshotProfit', o.profit_amount) AS detail
+     FROM id_business_v2_orders o LEFT JOIN completion ON completion.source_id = o.id
+     WHERE o.status IN ('completed', 'refunded') AND (
+       o.profit_amount IS NULL OR completion.source_id IS NULL
+       OR completion.revenue <> o.received_amount OR completion.fee <> o.platform_fee_amount
+       OR o.profit_amount <> IF(o.status = 'refunded', 0, o.received_amount) - o.platform_fee_amount
+          - o.applied_account_cost_amount - o.applied_balance_cost_amount - COALESCE(o.refund_cost_amount, 0)
+          + COALESCE((SELECT SUM(IF(fx.direction = 'credit', fx.amount_cny, -fx.amount_cny))
+            FROM id_business_v2_finance_journal_lines fx JOIN id_business_v2_finance_journals journal ON journal.id = fx.journal_id
+            WHERE journal.source_type = 'order' AND journal.source_id = o.id AND fx.account_code = 'realized_fx_gain_loss'), 0)
+       OR o.received_amount <> ROUND(o.received_original_amount * o.received_fx_rate_to_cny, 4)
+       OR o.received_fx_rate_to_cny <= 0)`
+  ),
+  check(
+    'bank_paid_job_order_missing',
+    '已付款任务或同编号已持久化付款记录未生成银充订单',
+    `SELECT CAST(job.id AS CHAR) AS entity_id, JSON_OBJECT('state', job.state) AS detail
+     FROM id_business_v2_recharge_jobs job
+     LEFT JOIN id_business_v2_bank_recharge_orders o ON o.recharge_job_id = job.id
+     WHERE o.id IS NULL AND (
+       JSON_UNQUOTE(JSON_EXTRACT(job.result, '$.payment_status')) = 'paid'
+       OR EXISTS (SELECT 1 FROM id_business_v2_recharge_records record
+         WHERE record.owner_id = job.owner_id AND record.account_key = job.account_key
+           AND JSON_UNQUOTE(JSON_EXTRACT(record.document, '$.payment_status')) = 'paid'
+           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(record.document, '$.upgrade_identifier')),
+                        JSON_UNQUOTE(JSON_EXTRACT(record.document, '$.checkout_identifier'))) =
+               COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job.result, '$.upgrade_identifier')),
+                        JSON_UNQUOTE(JSON_EXTRACT(job.result, '$.checkout_identifier')))))`
+  ),
+  check(
+    'bank_order_financial_reconciliation_mismatch',
+    '已过账银充单费用、退款后利润或财务状态与总账不一致',
+    `WITH finance AS (
+       SELECT journal.source_id,
+         COUNT(DISTINCT IF(journal.journal_type = 'bank_recharge_completed' AND journal.status = 'posted', journal.id, NULL)) AS completed,
+         SUM(IF(line.account_code IN ('bank_recharge_revenue', 'bank_recharge_service_fee',
+           'bank_recharge_cost', 'bank_recharge_bank_fee', 'bank_recharge_usdt_fee', 'bank_recharge_shopping_fee', 'realized_fx_gain_loss'),
+           IF(line.direction = 'credit', line.amount_cny, -line.amount_cny), 0)) AS profit,
+         SUM(IF(journal.journal_type = 'bank_recharge_completed' AND journal.status = 'posted' AND line.account_code = 'bank_recharge_usdt_fee', line.amount_cny, 0)) AS usdt_fee,
+         SUM(IF(journal.journal_type = 'bank_recharge_completed' AND journal.status = 'posted' AND line.account_code = 'bank_recharge_shopping_fee', line.amount_cny, 0)) AS shopping_fee,
+         COUNT(DISTINCT IF(journal.journal_type = 'order_refund', journal.id, NULL)) AS refunds
+       FROM id_business_v2_finance_journals journal
+       JOIN id_business_v2_finance_journal_lines line ON line.journal_id = journal.id
+       WHERE journal.source_type = 'bank_recharge' GROUP BY journal.source_id
+     )
+     SELECT CAST(o.id AS CHAR) AS entity_id,
+            JSON_OBJECT('financeStatus', o.finance_status, 'storedProfit', o.profit_amount_cny,
+                        'journalProfit', finance.profit) AS detail
+     FROM id_business_v2_bank_recharge_orders o LEFT JOIN finance ON finance.source_id = o.id
+     WHERE (o.finance_status IN ('posted', 'partial', 'reversed') AND (
+       finance.completed <> 1 OR finance.completed IS NULL OR o.profit_amount_cny IS NULL
+       OR o.profit_amount_cny <> finance.profit
+       OR (o.accounting_version = 'subscription_cost_v2' AND (
+         NOT (finance.usdt_fee <=> o.usdt_fee_amount_cny) OR NOT (finance.shopping_fee <=> o.shopping_fee_amount_cny)))
+       OR (o.finance_status IN ('partial', 'reversed') AND finance.refunds = 0)))
+       OR (o.finance_status = 'unposted' AND finance.source_id IS NOT NULL)`
+  ),
+  check(
+    'bank_subscription_projection_mismatch',
+    '当前订阅指向已删除、已退款或不同账号/客户/套餐/周期的银充单',
+    `SELECT CAST(subscription.id AS CHAR) AS entity_id,
+            JSON_OBJECT('currentOrderId', subscription.current_order_id, 'status', subscription.status) AS detail
+     FROM id_business_v2_bank_recharge_subscriptions subscription
+     LEFT JOIN id_business_v2_bank_recharge_orders o ON o.id = subscription.current_order_id
+     LEFT JOIN id_business_v2_chatgpt_accounts account ON account.id = subscription.account_id
+     WHERE subscription.status = 'active' AND (
+       o.id IS NULL OR o.deleted_at IS NOT NULL OR o.status IN ('cancelled', 'refunded')
+       OR account.deleted_at IS NOT NULL OR NOT (o.account_id <=> subscription.account_id)
+       OR NOT (o.customer_id <=> subscription.customer_id) OR o.plan <> subscription.plan
+       OR NOT (o.opened_at <=> subscription.opened_at) OR NOT (o.due_at <=> subscription.due_at))`
+  ),
+  check(
+    'fx_exchange_principal_fee_mismatch',
+    '换汇本金、实际收付、独立费用及汇兑损益与交易快照不一致',
+    `WITH posting AS (
+       SELECT exchange.id,
+         SUM(IF(line.account_code = 'cash' AND line.direction = 'credit' AND line.finance_account_id = exchange.source_account_id, line.amount_original, 0)) AS paid,
+         SUM(IF(line.account_code = 'cash' AND line.direction = 'debit' AND line.finance_account_id = exchange.target_account_id, line.amount_original, 0)) AS received,
+         SUM(IF(line.account_code = 'fx_exchange_fee', IF(line.direction = 'debit', line.amount_cny, -line.amount_cny), 0)) AS fee,
+         SUM(IF(line.account_code = 'realized_fx_gain_loss', IF(line.direction = 'credit', line.amount_cny, -line.amount_cny), 0)) AS gain,
+         COUNT(line.id) AS line_count
+       FROM id_business_v2_finance_exchanges exchange
+       LEFT JOIN id_business_v2_finance_journal_lines line ON line.journal_id = exchange.journal_id
+       GROUP BY exchange.id
+     )
+     SELECT CAST(exchange.id AS CHAR) AS entity_id,
+            JSON_OBJECT('feeMode', exchange.fee_mode, 'paid', posting.paid,
+                        'received', posting.received, 'fee', posting.fee, 'gain', posting.gain) AS detail
+     FROM id_business_v2_finance_exchanges exchange JOIN posting ON posting.id = exchange.id
+     JOIN id_business_v2_finance_journals journal ON journal.id = exchange.journal_id
+     WHERE journal.journal_type <> 'fx_exchange' OR journal.source_id <> exchange.id
+       OR posting.line_count < 2 OR posting.paid <> exchange.total_debit
+       OR posting.received <> exchange.target_amount OR posting.fee <> exchange.fee_amount_cny
+       OR posting.gain <> exchange.fx_gain_loss_cny
+       OR exchange.total_debit <> exchange.source_amount + IF(exchange.fee_mode = 'source_extra', exchange.fee_amount, 0)
+       OR exchange.gross_target_amount <> exchange.target_amount + IF(exchange.fee_mode = 'target_deducted', exchange.fee_amount, 0)`
+  ),
+  check(
+    'cash_historical_cost_evidence_mismatch',
+    '外币现金支出缺少冻结成本依据、成本分摊/对应账户汇兑差额不守恒',
+    `WITH credit AS (
+       SELECT journal.id AS journal_id, line.finance_account_id,
+         SUM(line.amount_original) AS quantity, SUM(line.amount_cny) AS cost, COUNT(*) AS line_count
+       FROM id_business_v2_finance_journals journal
+       JOIN id_business_v2_finance_journal_lines line ON line.journal_id = journal.id
+       WHERE line.account_code = 'cash' AND line.direction = 'credit' AND line.currency <> 'CNY'
+         AND line.amount_original > 0
+         AND journal.journal_type NOT IN ('opening_balance', 'reversal')
+       GROUP BY journal.id, line.finance_account_id
+     ), evidence AS (
+       SELECT journal.id AS journal_id, item.*
+       FROM id_business_v2_finance_journals journal
+       JOIN JSON_TABLE(COALESCE(JSON_EXTRACT(journal.metadata, '$.cashHistoricalCost.accounts'), JSON_ARRAY()),
+         '$[*]' COLUMNS (
+           account_id CHAR(36) PATH '$.financeAccountId',
+           balance_before DECIMAL(18,4) PATH '$.balanceBefore', cost_before DECIMAL(18,4) PATH '$.balanceBeforeCny',
+           incoming DECIMAL(18,4) PATH '$.incomingOriginal', incoming_cost DECIMAL(18,4) PATH '$.incomingCny',
+           quantity DECIMAL(18,4) PATH '$.creditOriginal', transaction_cost DECIMAL(18,4) PATH '$.transactionCreditCny',
+           carrying_cost DECIMAL(18,4) PATH '$.carryingCreditCny', realized_fx DECIMAL(18,4) PATH '$.realizedFxCny'
+         )) item
+     ), allocation AS (
+       SELECT journal.id AS journal_id, item.*
+       FROM id_business_v2_finance_journals journal
+       JOIN JSON_TABLE(COALESCE(JSON_EXTRACT(journal.metadata, '$.cashHistoricalCost.accounts'), JSON_ARRAY()),
+         '$[*]' COLUMNS (account_id CHAR(36) PATH '$.financeAccountId',
+           NESTED PATH '$.lineAllocations[*]' COLUMNS (
+             line_no INT PATH '$.lineNo', transaction_cost DECIMAL(18,4) PATH '$.transactionAmountCny',
+             book_cost DECIMAL(18,4) PATH '$.bookCostCny'
+           ))) item
+     ), allocation_total AS (
+       SELECT journal_id, account_id, COUNT(line_no) AS line_count,
+         SUM(book_cost) AS book_cost, SUM(transaction_cost) AS transaction_cost
+       FROM allocation GROUP BY journal_id, account_id
+     ), fx AS (
+       SELECT journal_id, finance_account_id,
+         SUM(IF(direction = 'credit', amount_cny, -amount_cny)) AS realized_fx
+       FROM id_business_v2_finance_journal_lines
+       WHERE account_code = 'realized_fx_gain_loss' AND finance_account_id IS NOT NULL
+       GROUP BY journal_id, finance_account_id
+     )
+     SELECT CONCAT(credit.journal_id, ':', COALESCE(credit.finance_account_id, 'unassigned')) AS entity_id,
+       JSON_OBJECT('quantity', credit.quantity, 'cost', credit.cost, 'evidenceCost', evidence.carrying_cost) AS detail
+     FROM credit JOIN id_business_v2_finance_journals journal ON journal.id = credit.journal_id
+     LEFT JOIN evidence ON evidence.journal_id = credit.journal_id AND BINARY evidence.account_id = BINARY credit.finance_account_id
+     LEFT JOIN allocation_total ON allocation_total.journal_id = credit.journal_id AND BINARY allocation_total.account_id = BINARY credit.finance_account_id
+     LEFT JOIN fx ON fx.journal_id = credit.journal_id AND fx.finance_account_id = credit.finance_account_id
+     WHERE NOT (JSON_UNQUOTE(JSON_EXTRACT(journal.metadata, '$.cashHistoricalCost.version')) <=> '1')
+       OR evidence.account_id IS NULL OR NOT (credit.quantity <=> evidence.quantity)
+       OR NOT (credit.cost <=> evidence.carrying_cost)
+       OR NOT (allocation_total.line_count <=> credit.line_count)
+       OR NOT (allocation_total.book_cost <=> evidence.carrying_cost)
+       OR NOT (allocation_total.transaction_cost <=> evidence.transaction_cost)
+       OR NOT (evidence.realized_fx <=> evidence.transaction_cost - evidence.carrying_cost)
+       OR NOT (COALESCE(fx.realized_fx, 0) <=> evidence.realized_fx)
+       OR evidence.balance_before + evidence.incoming <= 0
+       OR evidence.quantity > evidence.balance_before + evidence.incoming
+       OR NOT (evidence.carrying_cost <=> IF(evidence.quantity = evidence.balance_before + evidence.incoming,
+         evidence.cost_before + evidence.incoming_cost,
+         ROUND((evidence.cost_before + evidence.incoming_cost) * evidence.quantity / NULLIF(evidence.balance_before + evidence.incoming, 0), 4)))
+       OR EXISTS (SELECT 1 FROM allocation
+         LEFT JOIN id_business_v2_finance_journal_lines line
+           ON line.journal_id = allocation.journal_id AND line.line_no = allocation.line_no
+         WHERE allocation.journal_id = credit.journal_id AND BINARY allocation.account_id = BINARY credit.finance_account_id
+           AND (line.id IS NULL OR line.account_code <> 'cash' OR line.direction <> 'credit'
+             OR NOT (BINARY line.finance_account_id <=> BINARY allocation.account_id) OR line.amount_cny <> allocation.book_cost))`
+  ),
+  check(
+    'bank_soft_delete_safety_mismatch',
+    '银充删除越过已付款/过账/当前订阅或账号在途任务保护',
+    `SELECT CAST(o.id AS CHAR) AS entity_id, JSON_OBJECT('kind', 'order', 'status', o.status) AS detail
+     FROM id_business_v2_bank_recharge_orders o
+     LEFT JOIN id_business_v2_recharge_jobs job ON job.id = o.recharge_job_id
+     WHERE o.deleted_at IS NOT NULL AND (
+       o.status <> 'cancelled' OR o.source <> 'manual' OR o.finance_status <> 'unposted'
+       OR o.payment_evidence_id IS NOT NULL OR o.checkout_identifier IS NOT NULL
+       OR o.recharge_job_id IS NOT NULL OR o.verified_at IS NOT NULL OR COALESCE(o.received_amount, 0) <> 0
+       OR JSON_UNQUOTE(JSON_EXTRACT(job.result, '$.payment_status')) = 'paid'
+       OR EXISTS (SELECT 1 FROM id_business_v2_finance_journals journal
+                  WHERE journal.source_type = 'bank_recharge' AND journal.source_id = o.id)
+       OR EXISTS (SELECT 1 FROM id_business_v2_bank_recharge_subscriptions subscription
+                  WHERE subscription.current_order_id = o.id AND subscription.status = 'active'))
+     UNION ALL
+     SELECT CAST(account.id AS CHAR) AS entity_id, JSON_OBJECT('kind', 'account', 'status', account.status) AS detail
+     FROM id_business_v2_chatgpt_accounts account
+     WHERE account.deleted_at IS NOT NULL AND (
+       account.status <> 'disabled' OR account.official_account_key IS NOT NULL
+       OR EXISTS (SELECT 1 FROM id_business_v2_bank_recharge_orders o WHERE o.account_id = account.id)
+       OR EXISTS (SELECT 1 FROM id_business_v2_bank_recharge_subscriptions subscription
+                  WHERE subscription.account_id = account.id AND subscription.status = 'active')
+       OR EXISTS (SELECT 1 FROM id_business_v2_recharge_jobs job
+                  WHERE job.chatgpt_account_id = account.id))`
   ),
   check(
     'audit_immutability_trigger_missing',

@@ -10,7 +10,10 @@ function defaultDueAt(openedAt: string) {
     : '';
 }
 
-export function useBankRechargeOrderTiming(form: { openedAt: string; dueAt: string }) {
+export function useBankRechargeOrderTiming(
+  form: { openedAt: string; dueAt: string },
+  requiresDateVerification: () => boolean = () => false
+) {
   const businessNow = ref<number | null>(getV2BusinessNowMs());
   let disposed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -25,6 +28,7 @@ export function useBankRechargeOrderTiming(form: { openedAt: string; dueAt: stri
   watch(
     () => form.openedAt,
     (openedAt, previous) => {
+      if (requiresDateVerification()) return;
       if (!form.dueAt || (previous && form.dueAt === defaultDueAt(previous))) {
         form.dueAt = defaultDueAt(openedAt);
       }
@@ -37,6 +41,8 @@ export function useBankRechargeOrderTiming(form: { openedAt: string; dueAt: stri
     }
   }
   function usageLabel(row: BankRechargeOrder) {
+    if (row.source === 'automatic' && !row.accountId) return '账号归属待核验';
+    if (row.source === 'automatic' && (!row.openedAt || !row.dueAt)) return '开通时间待核对';
     if (businessNow.value === null) return '时间同步中';
     if (row.dueAt && Date.parse(row.dueAt) <= businessNow.value) return '已到期';
     if (row.activeSubscription?.status !== 'active') {

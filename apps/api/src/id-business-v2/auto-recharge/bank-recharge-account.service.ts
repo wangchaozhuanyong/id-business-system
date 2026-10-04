@@ -96,7 +96,7 @@ export class BankRechargeAccountService {
       requestId: randomUUID(),
       operator,
       retryMode: 'none',
-      uniqueConflictMessage: '该 ChatGPT 邮箱已保存'
+      uniqueConflictMessage: '该 ChatGPT 邮箱已保存；已删除时请恢复原账号'
     });
   }
 
@@ -122,7 +122,7 @@ export class BankRechargeAccountService {
     if (emails.size !== accounts.length) throw new BadRequestException('导入内容包含重复邮箱');
     const hashes = accounts.map((account) => this.encryption.hash(account.email)!);
     if (await this.repository.hasAccountEmailHashes(hashes))
-      throw new ConflictException('部分 ChatGPT 邮箱已保存，整批未导入');
+      throw new ConflictException('部分 ChatGPT 邮箱已保存；已删除时请恢复原账号，整批未导入');
     return this.transactions.execute(
       async (tx) => {
         for (const account of accounts) await this.insertAccount(tx, account, operator);
@@ -134,7 +134,7 @@ export class BankRechargeAccountService {
         operator,
         retryMode: 'none',
         timeoutMs: 30_000,
-        uniqueConflictMessage: '部分 ChatGPT 邮箱已保存，整批未导入'
+        uniqueConflictMessage: '部分 ChatGPT 邮箱已保存；已删除时请恢复原账号，整批未导入'
       }
     );
   }
@@ -188,7 +188,7 @@ export class BankRechargeAccountService {
     return this.transactions.execute(
       async (tx) => {
         const before = await this.repository.findAccount(tx, id);
-        if (!before) throw new NotFoundException('ChatGPT 账号不存在');
+        if (!before || before.deletedAt) throw new NotFoundException('ChatGPT 账号不存在或已删除');
         assertAccountEditVersion(input.expectedUpdatedAt, before.updatedAt);
         if (
           email &&
@@ -254,47 +254,15 @@ export class BankRechargeAccountService {
         requestId: randomUUID(),
         operator,
         retryMode: 'none',
-        uniqueConflictMessage: '该 ChatGPT 邮箱已保存'
+        uniqueConflictMessage: '该 ChatGPT 邮箱已保存；已删除时请恢复原账号'
       }
     );
-  }
-
-  async deleteAccount(id: string, operator: AuthenticatedUser) {
-    bankRechargeId(id, '账号编号');
-    try {
-      return await this.transactions.execute(
-        async (tx) => {
-          const account = await this.repository.findAccount(tx, id);
-          if (!account) throw new NotFoundException('ChatGPT 账号不存在');
-          if (account.officialAccountKey || (await this.repository.accountHasReferences(tx, id))) {
-            throw new ConflictException('账号已有充值或订单关联，请改为停用');
-          }
-          await this.repository.deleteAccount(tx, id);
-          await this.audit.append(tx, {
-            userId: operator.id,
-            module: 'id_business_v2',
-            action: 'id_business_v2.auto_recharge.chatgpt_account.delete',
-            objectType: 'chatgpt_account',
-            objectId: id,
-            beforeData: { emailMasked: account.emailMasked, status: account.status },
-            remark: '删除未关联的 ChatGPT 充值账号'
-          });
-          return { id };
-        },
-        { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
-      );
-    } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'P2003') {
-        throw new ConflictException('账号已有充值或订单关联，请改为停用');
-      }
-      throw error;
-    }
   }
 
   async requireActive(tx: V2CommandTransaction, id: string) {
     bankRechargeId(id, 'ChatGPT 账号');
     const account = await this.repository.findAccount(tx, id);
-    if (!account || account.status !== 'active')
+    if (!account || account.deletedAt || account.status !== 'active')
       throw new BadRequestException('ChatGPT 账号不存在或已停用');
     return account;
   }
@@ -383,6 +351,9 @@ export class BankRechargeAccountService {
     targetPlan: V2RechargePlan = 'plus'
   ) {
     const account = await this.requireActive(tx, id);
+    if (await this.repository.hasUnreviewedVerifiedPayment(tx, id)) {
+      throw new ConflictException('该账号已有付款成功但开通时间待核对的订单，不能再次付款');
+    }
     const subscription = await this.repository.subscriptionForAccount(tx, id);
     if (
       subscription?.status === 'active' &&
@@ -423,7 +394,11 @@ export class BankRechargeAccountService {
 
   async ensureAccountForVerifiedPayment(tx: V2CommandTransaction, job: IdBusinessV2RechargeJob) {
     if (job.chatgptAccountId) return job.chatgptAccountId;
-    if (!job.expectedEmailEncrypted || !job.accountKey) return null;
+    if (!job.accountKey) return null;
+    if (!job.expectedEmailEncrypted) {
+      const account = await this.repository.findAccountByOfficialKey(tx, job.accountKey);
+      return account && !account.deletedAt && account.status === 'active' ? account.id : null;
+    }
     const email = this.encryption.decrypt(job.expectedEmailEncrypted);
     if (!email) return null;
     const emailHash = this.encryption.hash(email)!;
@@ -434,6 +409,7 @@ export class BankRechargeAccountService {
     if (byOfficial && byOfficial.id !== byEmail?.id) return null;
     if (byEmail) {
       if (
+        byEmail.deletedAt ||
         byEmail.status !== 'active' ||
         (byEmail.officialAccountKey && byEmail.officialAccountKey !== job.accountKey)
       )

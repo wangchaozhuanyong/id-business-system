@@ -1,4 +1,10 @@
-export type V2GovernanceRecycleEntity = 'account' | 'customer' | 'option' | 'order';
+export type V2GovernanceRecycleEntity =
+  | 'account'
+  | 'customer'
+  | 'option'
+  | 'order'
+  | 'chatgpt_account'
+  | 'bank_recharge_order';
 export type V2GovernanceJobType = 'recycle_restore' | 'exchange_rate_cleanup';
 export type V2GovernanceJobStatus =
   | 'pending_approval'

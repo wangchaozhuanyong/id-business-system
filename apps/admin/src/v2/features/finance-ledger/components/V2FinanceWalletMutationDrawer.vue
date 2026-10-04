@@ -32,6 +32,13 @@
       <V2PanelSection
         heading-id="finance-wallet-mutation-amount"
         :title="page.walletMutationMode === 'adjust' ? '余额调整' : '收付款信息'"
+        :help="
+          page.walletMutationMode === 'adjust'
+            ? '只调整数量：增加按新增数量计成本，减少按历史成本比例结转，清零时结转尾差；已有余额不会按新汇率重估。'
+            : page.walletMutationMode === 'refund'
+              ? '预付款按历史成本减少；实际到账与历史成本的差额计入已实现汇兑损益。'
+              : undefined
+        "
         step="01"
       >
         <el-form-item
@@ -91,6 +98,11 @@
       <V2PanelSection
         heading-id="finance-wallet-mutation-evidence"
         title="汇率与入账依据"
+        :help="
+          page.walletMutationMode === 'adjust'
+            ? '减少数量使用历史成本，不需要新汇率；人工汇率仅用于增加数量。'
+            : undefined
+        "
         :step="page.walletMutationMode === 'deposit' ? '03' : '02'"
       >
         <template v-if="page.selectedWallet?.currency !== 'CNY'">

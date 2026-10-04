@@ -19,6 +19,16 @@ interface GiftCardFundInput {
   operator?: AuthenticatedUser;
 }
 
+export interface GiftCardWithdrawalFunding {
+  source: 'supplier_wallet' | 'cash' | 'legacy_unverified';
+  sourceLedgerId: string | null;
+  supplierAccountId: string | null;
+  financeAccountId: string | null;
+  currency: string;
+  amountOriginal: Amount4;
+  amountCny: Amount4;
+}
+
 @Injectable()
 export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2TopupSupplierFundsSupport {
   constructor(
@@ -26,6 +36,46 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
     transactionalAudit: V2TransactionalAuditService
   ) {
     super(repository, transactionalAudit);
+  }
+
+  async resolveWithdrawalFunding(
+    tx: V2CommandTransaction,
+    giftCardId: string
+  ): Promise<GiftCardWithdrawalFunding> {
+    if (await this.repository.findPrematureGiftCardWithdrawal(tx, giftCardId)) {
+      throw new ConflictException('该礼品卡存在旧版提前返还供应商余额流水，请先核对历史账务');
+    }
+    const debit = await this.repository.findActiveGiftCardDebit(tx, giftCardId);
+    if (debit) {
+      if (
+        debit.amount.lte(0) ||
+        debit.amountCny.lte(0) ||
+        (debit.currency === 'CNY' && !debit.amount.equals(debit.amountCny))
+      ) {
+        throw new ConflictException('礼品卡原付款金额或账面成本不一致，请先核对');
+      }
+      return {
+        source: 'supplier_wallet',
+        sourceLedgerId: debit.id,
+        supplierAccountId: debit.supplierAccountId,
+        financeAccountId: null,
+        currency: debit.currency,
+        amountOriginal: debit.amount,
+        amountCny: debit.amountCny
+      };
+    }
+    const card = await this.repository.findGiftCard(tx, giftCardId);
+    if (!card) throw new ConflictException('礼品卡原采购证据不存在，请先核对');
+    const cost = card.costAmount;
+    return {
+      source: card.purchaseFinanceAccountId ? 'cash' : 'legacy_unverified',
+      sourceLedgerId: null,
+      supplierAccountId: null,
+      financeAccountId: card.purchaseFinanceAccountId,
+      currency: card.purchaseCurrency,
+      amountOriginal: card.purchaseOriginalAmount ? card.purchaseOriginalAmount : cost,
+      amountCny: cost
+    };
   }
 
   async debitGiftCard(tx: V2CommandTransaction, input: GiftCardFundInput) {

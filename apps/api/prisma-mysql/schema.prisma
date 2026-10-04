@@ -430,6 +430,8 @@ enum IdBusinessV2GovernanceJobStatus {
 }
 
 enum IdBusinessV2GovernanceEntityType {
+  chatgpt_account
+  bank_recharge_order
   account
   customer
   option
@@ -2585,6 +2587,7 @@ model IdBusinessV2ChatgptAccount {
   offerObservedAt     DateTime?                        @map("offer_observed_at") @db.DateTime(6)
   createdByUserId     String?                          @map("created_by_user_id") @db.Char(36)
   updatedByUserId     String?                          @map("updated_by_user_id") @db.Char(36)
+  deletedAt              DateTime? @map("deleted_at") @db.DateTime(6)
   createdAt           DateTime                         @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt           DateTime                         @updatedAt @map("updated_at") @db.DateTime(6)
 
@@ -2593,6 +2596,7 @@ model IdBusinessV2ChatgptAccount {
   subscription     IdBusinessV2BankRechargeSubscription?
   registrationJobs IdBusinessV2RegistrationJob[]
 
+  @@index([deletedAt, updatedAt])
   @@index([status, updatedAt])
   @@map("id_business_v2_chatgpt_accounts")
 }
@@ -2813,6 +2817,7 @@ model IdBusinessV2BankRechargeOrder {
   remark                 String?                            @db.Text
   createdByUserId        String?                            @map("created_by_user_id") @db.Char(36)
   updatedByUserId        String?                            @map("updated_by_user_id") @db.Char(36)
+  deletedAt              DateTime? @map("deleted_at") @db.DateTime(6)
   createdAt              DateTime                           @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt              DateTime                           @updatedAt @map("updated_at") @db.DateTime(6)
 
@@ -2824,6 +2829,7 @@ model IdBusinessV2BankRechargeOrder {
   renewedBy          IdBusinessV2BankRechargeOrder? @relation("BankRechargeRenewalChain")
   activeSubscription IdBusinessV2BankRechargeSubscription?
 
+  @@index([deletedAt, updatedAt])
   @@index([customerId, createdAt])
   @@index([accountId, createdAt])
   @@index([status, dueAt])

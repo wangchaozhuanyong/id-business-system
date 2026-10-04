@@ -37,6 +37,7 @@
             >
               <V2ProfitOverview
                 :overview="page.overview"
+                :account-related="page.accountRelated"
                 :analysis-range-label="page.analysisRangeLabel"
                 :format-cny="page.formatCny"
                 :add-amounts="page.addAmounts"

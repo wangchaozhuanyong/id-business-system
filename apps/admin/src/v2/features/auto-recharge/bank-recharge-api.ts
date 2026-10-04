@@ -4,6 +4,30 @@ import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 
 const base = '/id-business-v2/bank-recharge';
 
+export type BankLifecycleEntity = 'account' | 'order';
+export type BankLifecycleAction = 'cancel' | 'delete' | 'restore';
+export interface BankLifecyclePreview {
+  id: string;
+  entity: BankLifecycleEntity;
+  action: BankLifecycleAction;
+  label: string;
+  status: string;
+  deletedAt: string | null;
+  expectedUpdatedAt: string;
+  references: Record<string, string | number | null>;
+  previewFingerprint: string;
+}
+export interface BankSubscriptionReview {
+  orderId: string;
+  orderNo: string;
+  expectedUpdatedAt: string;
+  expectedCurrentOrderId: string | null;
+  expectedSubscriptionUpdatedAt: string | null;
+  openedAt: string | null;
+  dueAt: string | null;
+  currentOpenedAt: string | null;
+}
+
 export interface OpeningCardDeletion {
   cardId: string;
   orderId: string;
@@ -24,6 +48,7 @@ export interface BankChatgptAccount {
     deleted: boolean;
   } | null;
   id: string;
+  deletedAt?: string | null;
   emailMasked: string;
   registrationCountryCode?: string | null;
   status: 'active' | 'disabled';
@@ -126,6 +151,7 @@ export interface BankRechargeOrder {
 
   id: string;
   orderNo: string;
+  deletedAt?: string | null;
   source: 'automatic' | 'manual';
   rechargeJobId: string | null;
   accountId: string | null;
@@ -196,6 +222,7 @@ export const bankRechargeApi = {
       keyword?: string;
       subscriptionState?: string;
       offerStatus?: V2AccountOffer | 'all';
+      deleted?: 'active' | 'deleted';
     } = {}
   ) {
     return request<{ items: BankChatgptAccount[]; total: number; page: number; pageSize: number }>(
@@ -236,8 +263,48 @@ export const bankRechargeApi = {
   updateAccount(id: string, input: Record<string, unknown>) {
     return request<{ id: string }>(http.patch(`${base}/accounts/${id}`, input));
   },
-  deleteAccount(id: string) {
-    return request<{ id: string }>(http.delete(`${base}/accounts/${id}`));
+  deleteAccount(id: string, input: Record<string, unknown> = {}) {
+    return request<{ id: string }>(http.delete(`${base}/accounts/${id}`, { data: input }));
+  },
+  lifecyclePreview(
+    entity: BankLifecycleEntity,
+    id: string,
+    action: BankLifecycleAction,
+    options: ApiRequestOptions = {}
+  ) {
+    return request<BankLifecyclePreview>(
+      http.get(`${base}/${entity === 'account' ? 'accounts' : 'orders'}/${id}/lifecycle-preview`, {
+        params: { action },
+        signal: options.signal
+      })
+    );
+  },
+  lifecycle(
+    entity: BankLifecycleEntity,
+    id: string,
+    action: BankLifecycleAction,
+    input: Record<string, unknown>
+  ) {
+    const path = `${base}/${entity === 'account' ? 'accounts' : 'orders'}/${id}`;
+    return withV2QueryInvalidation(
+      request<{ id: string }>(
+        action === 'delete'
+          ? http.delete(path, { data: input })
+          : http.post(`${path}/${action}`, input)
+      ),
+      ['auto-recharge', 'renewals', 'renewal-warning-summary']
+    );
+  },
+  subscriptionReview(id: string, options: ApiRequestOptions = {}) {
+    return request<BankSubscriptionReview>(
+      http.get(`${base}/orders/${id}/subscription-review`, { signal: options.signal })
+    );
+  },
+  verifySubscription(id: string, input: Record<string, unknown>) {
+    return withV2QueryInvalidation(
+      request<{ id: string }>(http.post(`${base}/orders/${id}/subscription-review`, input)),
+      ['auto-recharge', 'renewals', 'renewal-warning-summary']
+    );
   },
   totpCode(id: string) {
     return request<{ token: string; expiresAt: string }>(
@@ -385,6 +452,7 @@ export const bankRechargeApi = {
       status?: string;
       accountId?: string;
       expiry?: 'all' | 'expired';
+      deleted?: 'active' | 'deleted';
     },
     options: ApiRequestOptions = {}
   ) {

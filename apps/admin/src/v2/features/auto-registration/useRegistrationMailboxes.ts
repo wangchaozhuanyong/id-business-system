@@ -1,8 +1,9 @@
 import { reactive, ref, watch, onScopeDispose } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { registrationApi } from './api';
+import { chatgptCountries } from '@/v2/features/auto-recharge/public-api';
 import type { V2RegistrationMailbox, V2RegistrationMailboxStatusFilter } from './contracts';
 
 export function useRegistrationMailboxes(
@@ -69,6 +70,14 @@ export function useRegistrationMailboxes(
       if (updated) selected.value = { ...updated };
     }
   );
+  const countryDraft = useV2FormDraft('auto-registration:mailbox-country', () => ({
+    registrationCountryCode: ''
+  }));
+  const countryTarget = useV2SessionDraft('auto-registration:mailbox-country-target', () =>
+    ref<V2RegistrationMailbox | null>(null)
+  );
+  const countryOpen = ref(false);
+  const countryError = ref('');
   const confirmOpen = ref(false);
   const busy = ref(false);
   const error = ref('');
@@ -105,6 +114,52 @@ export function useRegistrationMailboxes(
     desiredRegistered.value = value;
     error.value = '';
     confirmOpen.value = true;
+  }
+  function setCountryOpen(value: boolean) {
+    if (!busy.value) countryOpen.value = value;
+  }
+  function setCountry(value: string) {
+    if (!busy.value) countryDraft.form.registrationCountryCode = value;
+  }
+  function openCountry(row: V2RegistrationMailbox) {
+    if (busy.value || !row.registered || !row.accountId || !row.accountUpdatedAt) return;
+    countryTarget.value = { ...row };
+    countryDraft.open(
+      row.accountId,
+      { registrationCountryCode: row.registrationCountryCode ?? '' },
+      row.accountUpdatedAt
+    );
+    countryError.value = '';
+    countryOpen.value = true;
+  }
+  async function saveCountry() {
+    if (busy.value || !countryTarget.value?.accountId || !countryDraft.version.value) return;
+    const country = countryDraft.form.registrationCountryCode;
+    if (country && !chatgptCountries.some(([code]) => code === country)) {
+      countryError.value = '请选择有效的国家';
+      return;
+    }
+    const accountId = countryTarget.value.accountId;
+    const completeSave = countryDraft.beginSave();
+    busy.value = true;
+    countryError.value = '';
+    message.value = '';
+    try {
+      await registrationApi.updateCountry(accountId, country || null, countryDraft.version.value);
+      completeSave();
+      if (disposed) return;
+      countryOpen.value = false;
+      message.value = '国家已修改';
+      try {
+        await query.refresh();
+      } catch {
+        if (!disposed) message.value += '；列表刷新失败，请重试读取列表';
+      }
+    } catch (cause) {
+      if (!disposed) countryError.value = getApiErrorMessage(cause);
+    } finally {
+      busy.value = false;
+    }
   }
   async function confirm() {
     if (busy.value || !target.value) return;
@@ -153,6 +208,14 @@ export function useRegistrationMailboxes(
     },
     selected,
     select,
+    countryDraft,
+    countryTarget,
+    countryOpen,
+    countryError,
+    setCountryOpen,
+    setCountry,
+    openCountry,
+    saveCountry,
     desiredRegistered,
     query,
     target,

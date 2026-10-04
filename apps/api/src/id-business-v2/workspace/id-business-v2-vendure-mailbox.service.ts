@@ -36,6 +36,7 @@ import {
   registrationMailboxAuthorizationValid,
   loadRegistrationMailboxSummaries
 } from './registration-mailbox-summaries';
+import { paginateVendureMailboxes, vendureMailboxIncludes } from './vendure-mailbox-list';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIMARY_STATUSES = new Set(['ACTIVE', 'DISABLED', 'AUTH_ERROR', 'SYNCING']);
@@ -113,9 +114,9 @@ export class IdBusinessV2VendureMailboxService {
     const items = (await this.client.primaryAccounts()).filter(
       (item) =>
         (!query.status || item.status === query.status) &&
-        (!query.q || this.includes(item, query.q, ['email', 'note']))
+        (!query.q || vendureMailboxIncludes(item, query.q, ['email', 'note']))
     );
-    return this.page(items, query.page, query.pageSize);
+    return paginateVendureMailboxes(items, query.page, query.pageSize);
   }
 
   async listAliases(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {
@@ -125,9 +126,10 @@ export class IdBusinessV2VendureMailboxService {
     const items = (await this.client.virtualEmails(primaryAccountId)).filter(
       (item) =>
         (!query.status || item.status === query.status) &&
-        (!query.q || this.includes(item, query.q, ['aliasEmail', 'primaryAccountEmail', 'note']))
+        (!query.q ||
+          vendureMailboxIncludes(item, query.q, ['aliasEmail', 'primaryAccountEmail', 'note']))
     );
-    return this.page(items, query.page, query.pageSize);
+    return paginateVendureMailboxes(items, query.page, query.pageSize);
   }
 
   async accountBuyerCode(emailValue: string, operator: AuthenticatedUser) {
@@ -198,9 +200,14 @@ export class IdBusinessV2VendureMailboxService {
         (!virtualEmailId || item.virtualEmailId === virtualEmailId) &&
         (!unassignedOnly || item.virtualEmailId === null) &&
         (!query.q ||
-          this.includes(item, query.q, ['fromAddress', 'fromName', 'subject', 'extractedCode']))
+          vendureMailboxIncludes(item, query.q, [
+            'fromAddress',
+            'fromName',
+            'subject',
+            'extractedCode'
+          ]))
     );
-    return this.page(items, query.page, query.pageSize);
+    return paginateVendureMailboxes(items, query.page, query.pageSize);
   }
 
   async createPrimary(
@@ -472,32 +479,6 @@ export class IdBusinessV2VendureMailboxService {
       q: this.optionalString(dto.q, 120).toLocaleLowerCase(),
       status: this.optionalString(dto.status, 30)
     };
-  }
-
-  private page<T>(items: T[], page: number, pageSize: number) {
-    const ordered = [...items].sort((left, right) =>
-      this.updatedAt(right).localeCompare(this.updatedAt(left))
-    );
-    return {
-      items: ordered.slice((page - 1) * pageSize, page * pageSize),
-      total: ordered.length,
-      page,
-      pageSize
-    };
-  }
-
-  private updatedAt(value: unknown) {
-    const record = value as { updatedAt?: unknown; receivedAt?: unknown };
-    return String(record.receivedAt ?? record.updatedAt ?? '');
-  }
-
-  private includes(value: unknown, query: string, keys: string[]) {
-    const record = value as Record<string, unknown>;
-    return keys.some((key) =>
-      String(record[key] ?? '')
-        .toLocaleLowerCase()
-        .includes(query)
-    );
   }
 
   private requireAdmin(operator?: AuthenticatedUser) {

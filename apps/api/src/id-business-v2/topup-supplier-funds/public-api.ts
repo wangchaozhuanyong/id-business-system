@@ -14,5 +14,8 @@ export {
   type ListIdBusinessV2TopupSuppliersQuery
 } from './id-business-v2-topup-supplier-funds-query.service';
 export { IdBusinessV2TopupSupplierFundsService } from './id-business-v2-topup-supplier-funds.service';
-export { IdBusinessV2TopupSupplierGiftCardFundsService } from './id-business-v2-topup-supplier-gift-card-funds.service';
+export {
+  IdBusinessV2TopupSupplierGiftCardFundsService,
+  type GiftCardWithdrawalFunding
+} from './id-business-v2-topup-supplier-gift-card-funds.service';
 export { IdBusinessV2TopupSupplierReassignmentService } from './id-business-v2-topup-supplier-reassignment.service';

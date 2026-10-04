@@ -80,6 +80,7 @@ describe('隐藏邮箱注册资料', () => {
         emailHash: 'hash:hidden@example.invalid',
         id: 'existing-account',
         registered: true,
+        registrationCountryCode: 'MY',
         updatedAt: new Date(row.updatedAt)
       }
     ]);
@@ -95,6 +96,7 @@ describe('隐藏邮箱注册资料', () => {
           registered: true,
           accountId: 'existing-account',
           accountUpdatedAt: row.updatedAt.replace('Z', '.000Z'),
+          registrationCountryCode: 'MY',
           canStart: false,
           startBlockedReason: 'registered',
           pendingJobId: null,
@@ -107,6 +109,34 @@ describe('隐藏邮箱注册资料', () => {
       pageSize: 20
     });
     expect(JSON.stringify(result)).not.toContain('authorizationValid');
+  });
+
+  it('未记录国家时返回空值，不从当前代理或邮箱推测注册国家', async () => {
+    const { service, mailboxes, repository, operator } = fixture();
+    mailboxes.registrationMailboxSummaries.mockResolvedValue([
+      {
+        id: 'alias-1',
+        email: 'hidden@example.invalid',
+        primaryEmail: null,
+        status: 'ACTIVE',
+        note: null,
+        updatedAt: '2026-10-02T12:00:00Z',
+        authorizationValid: true,
+        primaryAvailable: true
+      }
+    ]);
+    repository.accountsByEmailHashes.mockResolvedValue([
+      {
+        emailHash: 'hash:hidden@example.invalid',
+        id: 'account-1',
+        registered: true,
+        registrationCountryCode: null,
+        updatedAt: new Date('2026-10-02T12:00:00Z')
+      }
+    ]);
+    expect((await service.list({}, operator)).items[0]?.registrationCountryCode).toBeNull();
+    repository.accountsByEmailHashes.mockResolvedValue([]);
+    expect((await service.list({}, operator)).items[0]?.registrationCountryCode).toBeNull();
   });
 
   it('空列表不伪造邮箱，读取失败保留错误', async () => {

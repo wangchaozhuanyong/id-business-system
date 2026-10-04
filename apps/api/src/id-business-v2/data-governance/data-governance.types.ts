@@ -19,11 +19,13 @@ export type GovernanceEntityType =
   | 'customer'
   | 'option'
   | 'order'
+  | 'chatgpt_account'
+  | 'bank_recharge_order'
   | 'exchange_rate_run';
 export type GovernanceApprovalDecision = 'approved' | 'rejected';
 export type RecycleEntity = Extract<
   GovernanceEntityType,
-  'account' | 'customer' | 'option' | 'order'
+  'account' | 'customer' | 'option' | 'order' | 'chatgpt_account' | 'bank_recharge_order'
 >;
 
 export interface RestorePreviewItemInput {
@@ -66,6 +68,7 @@ export interface GovernanceEligibility {
   originalUniqueKey?: string;
   originalStatus?: 'active' | 'disabled';
   expectedStatus?: string;
+  sourceUpdatedAt?: string;
   cutoff?: string;
   retentionDays?: number;
   snapshotId?: string | null;
@@ -88,7 +91,14 @@ export interface GovernancePreviewItem {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_PATTERN = /^[A-Za-z0-9._:-]{8,160}$/;
-const RECYCLE_ENTITIES = new Set<RecycleEntity>(['account', 'customer', 'option', 'order']);
+const RECYCLE_ENTITIES = new Set<RecycleEntity>([
+  'account',
+  'customer',
+  'option',
+  'order',
+  'chatgpt_account',
+  'bank_recharge_order'
+]);
 const JOB_TYPES = new Set<GovernanceJobType>(['recycle_restore', 'exchange_rate_cleanup']);
 const JOB_STATUSES = new Set<GovernanceJobStatus>([
   'pending_approval',

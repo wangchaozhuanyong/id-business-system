@@ -28,7 +28,9 @@ export function bankRechargeAccountFilter(
     : {};
   const subscriptionFilter: Prisma.IdBusinessV2ChatgptAccountWhereInput =
     subscriptionState === 'never_subscribed'
-      ? { subscription: { is: null } }
+      ? {
+          OR: [{ subscription: { is: null } }, { subscription: { is: { status: 'cancelled' } } }]
+        }
       : subscriptionState === 'active'
         ? {
             subscription: {
@@ -51,7 +53,7 @@ export function bankRechargeAccountFilter(
             ? {
                 subscription: {
                   is: {
-                    OR: [{ status: { not: 'active' } }, { dueAt: { lte: now } }]
+                    OR: [{ status: 'expired' }, { status: 'active', dueAt: { lte: now } }]
                   }
                 }
               }
@@ -109,6 +111,22 @@ export class BankRechargeRepository {
     return tx.idBusinessV2BankRechargeSubscription.findUnique({ where: { accountId } });
   }
 
+  async hasUnreviewedVerifiedPayment(tx: V2CommandTransaction, accountId: string) {
+    return Boolean(
+      await tx.idBusinessV2BankRechargeOrder.findFirst({
+        where: {
+          accountId,
+          source: 'automatic',
+          verifiedAt: { not: null },
+          deletedAt: null,
+          status: { not: 'cancelled' },
+          OR: [{ openedAt: null }, { dueAt: null }]
+        },
+        select: { id: true }
+      })
+    );
+  }
+
   async renewalWarningDays() {
     const setting = await this.prisma.idBusinessV2RenewalWarningSetting.findUnique({
       where: { scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE }
@@ -121,7 +139,7 @@ export class BankRechargeRepository {
     return this.prisma.idBusinessV2ChatgptAccount.count({ where });
   }
   findAccount(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2ChatgptAccount.findUnique({ where: { id } });
+    return tx.idBusinessV2ChatgptAccount.findFirst({ where: { id, deletedAt: null } });
   }
   async hasAccountEmailHashes(emailHashes: string[]) {
     return (
@@ -180,9 +198,6 @@ export class BankRechargeRepository {
     ]);
     return Boolean(job || order || subscription || registration);
   }
-  deleteAccount(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2ChatgptAccount.delete({ where: { id } });
-  }
 
   listCurrencies() {
     return this.prisma.idBusinessV2BankRechargeCurrency.findMany({ orderBy: { code: 'asc' } });
@@ -220,11 +235,11 @@ export class BankRechargeRepository {
   }
 
   findOrder(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2BankRechargeOrder.findUnique({ where: { id } });
+    return tx.idBusinessV2BankRechargeOrder.findFirst({ where: { id, deletedAt: null } });
   }
   findOrderForCompletion(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2BankRechargeOrder.findUnique({
-      where: { id },
+    return tx.idBusinessV2BankRechargeOrder.findFirst({
+      where: { id, deletedAt: null },
       include: { card: true, account: true, customer: true }
     });
   }

@@ -209,6 +209,8 @@ export class RegistrationJobsService {
         if (await this.repository.active(tx))
           throw new ConflictException('已有注册任务执行中，请处理原任务');
         const account = await this.repository.account(tx, emailHash);
+        if (account?.deletedAt)
+          throw new ConflictException('该邮箱账号已软删除，请先通过数据治理恢复原账号');
         if (account?.registered)
           throw new ConflictException('该邮箱已经保存为 ChatGPT 账号，请使用已有账号');
         if (await this.repository.pendingEmail(tx, emailHash))
@@ -479,6 +481,7 @@ export class RegistrationJobsService {
   ) {
     const account = await this.repository.account(tx, job.emailHash);
     if (
+      account?.deletedAt ||
       (account?.id ?? null) !== job.accountId ||
       (account?.registered ?? false) !== job.registered
     )

@@ -17,6 +17,12 @@ export class IdBusinessV2TopupSupplierFundsController {
     private readonly queryService: IdBusinessV2TopupSupplierFundsQueryService
   ) {}
 
+  @Get('payment-accounts')
+  @RequirePermissions('apple.topup_supplier_fund.manage')
+  listPaymentAccounts() {
+    return this.queryService.listPaymentAccounts();
+  }
+
   @Get('suppliers')
   @RequirePermissions('apple.topup_supplier_fund.view')
   listSuppliers(

@@ -127,6 +127,8 @@ const overview: V2GovernanceOverview = {
     total: emptyState ? 0 : 23,
     byEntity: {
       account: emptyState ? 0 : 7,
+      chatgpt_account: 0,
+      bank_recharge_order: 0,
       customer: emptyState ? 0 : 5,
       option: emptyState ? 0 : 4,
       order: emptyState ? 0 : 7

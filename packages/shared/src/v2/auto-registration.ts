@@ -92,6 +92,7 @@ export interface V2RegistrationMailbox {
   registered: boolean;
   accountId: string | null;
   accountUpdatedAt: string | null;
+  registrationCountryCode?: string | null;
   canStart: boolean;
   startBlockedReason: V2RegistrationMailboxStartBlockedReason | null;
   pendingJobId: string | null;

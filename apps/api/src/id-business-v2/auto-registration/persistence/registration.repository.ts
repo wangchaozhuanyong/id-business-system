@@ -97,8 +97,14 @@ export class RegistrationRepository {
   }
   accountsByEmailHashes(emailHashes: string[]) {
     return this.prisma.idBusinessV2ChatgptAccount.findMany({
-      where: { emailHash: { in: emailHashes } },
-      select: { id: true, emailHash: true, registered: true, updatedAt: true }
+      where: { emailHash: { in: emailHashes }, deletedAt: null },
+      select: {
+        id: true,
+        emailHash: true,
+        registered: true,
+        registrationCountryCode: true,
+        updatedAt: true
+      }
     });
   }
   unfinishedJobsByEmailHashes(emailHashes: string[]) {
@@ -116,7 +122,7 @@ export class RegistrationRepository {
     operatorId: string
   ) {
     const result = await tx.idBusinessV2ChatgptAccount.updateMany({
-      where: { id, updatedAt: expectedUpdatedAt },
+      where: { id, updatedAt: expectedUpdatedAt, deletedAt: null },
       data: {
         registered,
         updatedByUserId: operatorId,
@@ -183,7 +189,7 @@ export class RegistrationRepository {
       });
     }
     const existing = await this.account(tx, job.emailHash);
-    if (!existing || existing.id !== job.accountId)
+    if (!existing || existing.deletedAt || existing.id !== job.accountId)
       throw new ConflictException('关联账号资料已变化，请人工核对');
     if (event === 'registered' && !existing.registered)
       return tx.idBusinessV2ChatgptAccount.update({

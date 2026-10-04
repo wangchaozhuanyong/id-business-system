@@ -313,6 +313,13 @@ export class IdBusinessV2FinanceExchangesService {
         lines
       });
       const persisted: Omit<typeof input, 'reverseRate'> & { reverseRate?: string } = { ...input };
+      const realizedGain = journal.lines
+        .filter((line) => line.accountCode === 'realized_fx_gain_loss')
+        .reduce(
+          (total, line) =>
+            line.direction === 'credit' ? total.add(line.amountCny) : total.sub(line.amountCny),
+          Amount4.zero()
+        );
       delete persisted.reverseRate;
       const row = await this.repository.create(tx, {
         ...persisted,
@@ -325,7 +332,7 @@ export class IdBusinessV2FinanceExchangesService {
         sourceFxSnapshotId: rates.source.id,
         targetFxSnapshotId: rates.target.id,
         feeAmountCny: feeCny.toString(),
-        fxGainLossCny: gain.toString(),
+        fxGainLossCny: realizedGain.toString(),
         correctionOfId: correctionOfId ?? null,
         idempotencyKey: key,
         requestFingerprint: fingerprint,

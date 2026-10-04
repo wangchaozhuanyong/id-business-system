@@ -98,7 +98,15 @@ describe('IdBusinessV2FinancePostingService', () => {
     tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
       const sql = Array.from(strings).join('');
       if (sql.includes('id_business_v2_finance_periods')) return [];
-      return [{ id: financeAccountId, status: 'active', currentBalance: decimal('20') }];
+      return [
+        {
+          id: financeAccountId,
+          status: 'active',
+          currency: 'CNY',
+          currentBalance: decimal('20'),
+          currentBalanceCny: decimal('20')
+        }
+      ];
     });
     tx.idBusinessV2FinanceAccount.update.mockResolvedValue({});
     tx.idBusinessV2FinanceIncomeReference.findUnique.mockResolvedValue(null);
@@ -153,7 +161,9 @@ describe('IdBusinessV2FinancePostingService', () => {
         {
           id: financeAccountId,
           status: 'active',
-          currentBalance: new MysqlPrisma.Decimal('20')
+          currency: 'CNY',
+          currentBalance: new MysqlPrisma.Decimal('20'),
+          currentBalanceCny: new MysqlPrisma.Decimal('20')
         }
       ];
     });
@@ -314,7 +324,13 @@ describe('IdBusinessV2FinancePostingService', () => {
       where.id ? original : null
     );
     tx.$queryRaw.mockResolvedValue([
-      { id: financeAccountId, status: 'active', currentBalance: decimal('120') }
+      {
+        id: financeAccountId,
+        status: 'active',
+        currency: 'CNY',
+        currentBalance: decimal('120'),
+        currentBalanceCny: decimal('120')
+      }
     ]);
     tx.idBusinessV2FinanceJournal.findUniqueOrThrow.mockResolvedValue({
       ...original,

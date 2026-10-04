@@ -68,13 +68,14 @@
   `memory-cache | network`。首次数据失败上报 `v2:route-data-error`，迟到的旧路由响应不得结束
   当前导航指标。
 - 每个 V2 路由页面必须使用 `V2AsyncRegion`；主列表使用 `page`，抽屉、页签子列表和独立数据块使用
-  `section`。
+  `section`；表单中独立读取的单个控件使用 `field`，宽度随表单内容区伸展，不保留整块区域高度。
 - 显式声明 `status: 'planned'`、且不读取任何远程数据的规划占位页，不使用
   `V2AsyncRegion` 或 `useV2ModuleQuery`，也不得伪造加载、空数据或成功结果；开始接入真实数据时必须
   先移除规划状态并完整遵守本规范。
 - 每个 `V2AsyncRegion` 必须显式声明 `skeleton`。共享内容形状固定为：列表与分页使用 `table`，
   订单录入及复杂编辑使用 `form`，汇率概览使用 `metrics`，选项工作区使用 `settings`，抽屉详情使用
-  `detail`，候选项与卡片列表使用 `cards`，单行引用数据使用 `inline`。页面不得复制或改造私有骨架。
+  `detail`，候选项与卡片列表使用 `cards`，单行引用数据使用 `inline`，表单单控件使用 `control`。
+  页面不得复制或改造私有骨架。
 - 每个 V2 模块必须在 `V2ModuleDefinition.freshnessPolicy` 声明
   `event-driven | event-with-deadline`。所有真实远程数据页面必须
   使用 `useV2ModuleQuery({ moduleKey, scope, key, query })`；禁止继续使用仅缓存完成标记的

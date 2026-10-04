@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { GOVERNANCE_APPROVAL_NOT_READY_MESSAGE, requireOperator } from './data-governance.types';
+import {
+  GOVERNANCE_APPROVAL_NOT_READY_MESSAGE,
+  requireOperator,
+  type RecycleEntity
+} from './data-governance.types';
 import { IdBusinessV2DataGovernanceQueryRepository } from './persistence/id-business-v2-data-governance-query.repository';
-
-type RecycleEntity = 'account' | 'customer' | 'option' | 'order';
 
 interface RecycleItem {
   id: string;
@@ -27,6 +29,8 @@ export class IdBusinessV2DataGovernanceService {
       customers,
       options,
       orders,
+      chatgptAccounts,
+      bankOrders,
       latestRetentionAudit,
       approvalReadiness
     } = await this.repository.overviewRows(currentOperator.id);
@@ -62,6 +66,26 @@ export class IdBusinessV2DataGovernanceService {
           item.deletedAt,
           '/v2/options',
           '删除时唯一键已改写，恢复前必须检查编码冲突和关联引用。'
+        )
+      ),
+      ...chatgptAccounts.map((item) =>
+        this.recycleItem(
+          'chatgpt_account',
+          item.id,
+          item.emailMasked,
+          item.deletedAt,
+          '/v2/auto-recharge/chatgpt-accounts',
+          '恢复后保持停用，官网绑定或业务引用变化时拒绝恢复。'
+        )
+      ),
+      ...bankOrders.map((item) =>
+        this.recycleItem(
+          'bank_recharge_order',
+          item.id,
+          item.orderNo,
+          item.deletedAt,
+          '/v2/auto-recharge/bank-orders',
+          '只恢复手工误录单为待补全，不激活订阅或改动财务。'
         )
       ),
       ...orders.map((item) =>

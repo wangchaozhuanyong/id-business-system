@@ -7,7 +7,11 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
-import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import {
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  toIdBusinessV2BusinessDate
+} from '../runtime/public-api';
 import type {
   AdjustIdBusinessV2TopupSupplierFundDto,
   CreateIdBusinessV2TopupSupplierPaymentDto,
@@ -131,6 +135,7 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
     operator?: AuthenticatedUser
   ) {
     const supplierOptionId = this.normalizeUuid(supplierOptionIdValue, '加卡供应商');
+    const financeAccountId = this.normalizeUuid(dto.financeAccountId, '付款账户');
     const receivedUsdt = this.normalizeUnsignedAmount(dto.receivedUsdt, '到账 USDT', false);
     const networkFeeUsdt = this.normalizeUnsignedAmount(
       dto.networkFeeUsdt ?? 0,
@@ -156,6 +161,7 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       const replay = await this.repository.findPaymentReplay(tx, idempotencyKey);
       if (replay) {
         this.assertPaymentReplay(replay, {
+          financeAccountId,
           receivedUsdt,
           networkFeeUsdt,
           settlementRate,
@@ -169,9 +175,29 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
 
       const account = await this.lockSupplierAccount(tx, supplierOptionId);
       this.assertInitialized(account);
+      const financeAccount = await this.repository.findPaymentFinanceAccount(tx, financeAccountId);
+      if (
+        !financeAccount ||
+        financeAccount.status !== 'active' ||
+        financeAccount.currency !== 'USDT'
+      ) {
+        throw new BadRequestException('付款账户必须是启用的 USDT 资金账户');
+      }
+      const fxSnapshot = await this.repository.createPaymentFxSnapshot(tx, {
+        id: randomUUID(),
+        currency: 'USDT',
+        rateToCny: settlementRate.toString(),
+        source: 'manual',
+        businessDate: toIdBusinessV2BusinessDate(paidAt).date,
+        capturedAt: paidAt,
+        manualReason: '卡商付款实际结算汇率',
+        createdByUserId: operator?.id
+      });
       const balanceAfter = account.currentBalanceCny.add(creditedCny);
       const payment = await this.repository.createPayment(tx, {
         supplierAccountId: account.id,
+        financeAccountId,
+        fxRateSnapshotId: fxSnapshot.id,
         supplierNameSnapshot: account.supplierName,
         paidCurrency: 'USDT',
         paidAmount: receivedUsdt.toString(),
@@ -232,7 +258,8 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
             currency: 'USDT',
             amountOriginal: networkFeeUsdt,
             fxRateToCny: settlementRate,
-            amountCny: feeCny
+            amountCny: feeCny,
+            fxRateSnapshotId: fxSnapshot.id
           },
           {
             accountCode: 'cash',
@@ -240,7 +267,9 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
             currency: 'USDT',
             amountOriginal: receivedUsdt.add(networkFeeUsdt),
             fxRateToCny: settlementRate,
-            amountCny: creditedCny.add(feeCny)
+            amountCny: creditedCny.add(feeCny),
+            financeAccountId,
+            fxRateSnapshotId: fxSnapshot.id
           }
         ]
       });
@@ -251,6 +280,8 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         objectId: payment.id,
         afterData: {
           supplierOptionId,
+          financeAccountId,
+          fxRateSnapshotId: fxSnapshot.id,
           receivedUsdt: receivedUsdt.toString(),
           networkFeeUsdt: networkFeeUsdt.toString(),
           settlementRateCnyUsdt: settlementRate.toString(),
@@ -465,5 +496,9 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
 }
 
 function commandOptions(operator?: AuthenticatedUser) {
-  return { changedScopes: ['supplier-funds'], requestId: randomUUID(), operator } as const;
+  return {
+    changedScopes: ['supplier-funds', 'finance-accounts', 'finance-ledger', 'finance-reports'],
+    requestId: randomUUID(),
+    operator
+  } as const;
 }

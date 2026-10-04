@@ -196,6 +196,12 @@
           require-asterisk-position="right"
         >
           <template v-if="mutationMode === 'payment'">
+            <el-form-item label="付款资金账户" required>
+              <V2TopupSupplierPaymentAccountField
+                v-model="paymentForm.financeAccountId"
+                :enabled="mutationDrawerVisible && mutationMode === 'payment'"
+              />
+            </el-form-item>
             <el-form-item label="到账 USDT" required>
               <el-input
                 v-model="paymentForm.receivedUsdt"
@@ -289,6 +295,7 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TopupSupplierFundDetailsDrawer from './V2TopupSupplierFundDetailsDrawer.vue';
 import V2TopupSupplierFundsMobileList from './V2TopupSupplierFundsMobileList.vue';
+import V2TopupSupplierPaymentAccountField from './V2TopupSupplierPaymentAccountField.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { idBusinessV2TopupSupplierFundsApi } from '../api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -375,6 +382,7 @@ const balanceFormDraft = useV2FormDraft('topup-supplier-balance', () => ({
 }));
 const balanceForm = balanceFormDraft.form;
 const paymentFormDraft = useV2FormDraft('topup-supplier-payment', () => ({
+  financeAccountId: '',
   receivedUsdt: '',
   networkFeeUsdt: '',
   settlementRateCnyUsdt: '',
@@ -416,6 +424,7 @@ const paymentPreviewCny = computed(() => {
 const mutationDirty = computed(() =>
   mutationMode.value === 'payment'
     ? Boolean(
+        paymentForm.financeAccountId ||
         paymentForm.receivedUsdt ||
         paymentForm.networkFeeUsdt ||
         paymentForm.settlementRateCnyUsdt ||
@@ -470,6 +479,7 @@ async function openMutation(item: V2TopupSupplierFundItem, mode: MutationMode) {
     idempotencyKey: createIdempotencyKey()
   });
   paymentFormDraft.open(`${item.supplier.id}:${mode}`, {
+    financeAccountId: '',
     receivedUsdt: '',
     networkFeeUsdt: '',
     settlementRateCnyUsdt: '',
@@ -507,6 +517,7 @@ async function submitMutation() {
       ElMessage.success('供应商余额已调整并记录流水');
     } else {
       await idBusinessV2TopupSupplierFundsApi.createPayment(item.supplier.id, {
+        financeAccountId: paymentForm.financeAccountId,
         receivedUsdt: paymentForm.receivedUsdt.trim(),
         ...(paymentForm.networkFeeUsdt.trim()
           ? { networkFeeUsdt: paymentForm.networkFeeUsdt.trim() }
@@ -534,6 +545,10 @@ async function submitMutation() {
 
 function validateMutation() {
   if (mutationMode.value === 'payment') {
+    if (!paymentForm.financeAccountId) {
+      ElMessage.warning('请选择启用的 USDT 付款账户');
+      return false;
+    }
     if (!isV2UnsignedDecimal(paymentForm.receivedUsdt, { allowZero: false })) {
       ElMessage.warning('到账 USDT 必须是最多 4 位小数的正数');
       return false;

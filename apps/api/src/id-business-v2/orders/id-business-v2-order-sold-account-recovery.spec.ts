@@ -241,6 +241,7 @@ function makeDependencies() {
     }),
     releaseSoldAccount: vi.fn().mockResolvedValue({ count: 1 }),
     updateOrder: vi.fn().mockResolvedValue(order),
+    synchronizePostedProfit: vi.fn().mockResolvedValue(Amount4.from('57')),
     appendAudit: vi.fn().mockResolvedValue({ id: 'audit-1' })
   };
   const orderLockService = {

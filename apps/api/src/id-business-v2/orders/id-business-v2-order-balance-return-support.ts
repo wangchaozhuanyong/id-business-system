@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 import { Amount4, V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES } from '../runtime/public-api';
 import type {
   IdBusinessV2OrderBalanceReturnRecord,
@@ -6,6 +7,25 @@ import type {
 } from './id-business-v2-order.types';
 
 const MAX_AMOUNT = Amount4.from('99999999999999.9999');
+
+export async function loadUpgradeBalanceReturnPreview(
+  repository: IdBusinessV2OrdersRepository,
+  orderId: string,
+  returnedBalanceAmount: Amount4
+) {
+  const order = await repository.findOrder(orderId);
+  if (!order) throw new NotFoundException('订单不存在');
+  assertOrderCanRecordUpgradeBalanceReturn(order);
+  if (order.accountSource === 'customer_owned') {
+    const ownership = await repository.findSoldAccountOwnershipForPreview(order.accountId!);
+    const source = ownership?.soldByOrder?.deletedAt === null ? ownership.soldByOrder : null;
+    assertUpgradeBalanceReturnOwnership(order, {
+      soldByOrderId: source?.id ?? null,
+      soldByCustomerId: source?.customerId ?? null
+    });
+  }
+  return buildUpgradeBalanceReturnPreview(order, returnedBalanceAmount);
+}
 
 export function normalizeUpgradeBalanceReturnAmount(value: unknown) {
   const normalized =
@@ -108,13 +128,7 @@ export function buildUpgradeBalanceReturnPreview(
   const restoredAppliedBalanceCostAmount = costReturnsToCompany
     ? minAmount(restoredBalanceCostAmount, order.appliedBalanceCostAmount)
     : Amount4.zero();
-  const adjustedProfitAmount = calculateOrderProfit(
-    order.receivedAmount,
-    order.platformFeeAmount,
-    order.appliedAccountCostAmount,
-    order.appliedBalanceCostAmount.sub(restoredAppliedBalanceCostAmount),
-    order.refundCostAmount
-  );
+  const adjustedProfitAmount = order.profitAmount!.add(restoredAppliedBalanceCostAmount);
   return {
     orderId: order.id,
     orderNo: order.orderNo,
@@ -149,6 +163,20 @@ export function assertOrderCanRecordUpgradeBalanceReturn(order: IdBusinessV2Orde
   }
   if (order.balanceReturns[0]?.status === 'active') {
     throw new ConflictException('订单已有生效中的升级退币记录，请先撤销原记录');
+  }
+}
+
+export function assertUpgradeBalanceReturnOwnership(
+  order: { accountSource: string; sourceSoldOrderId: string | null; customerId: string },
+  account: { soldByOrderId: string | null; soldByCustomerId: string | null }
+) {
+  if (order.accountSource !== 'customer_owned') return;
+  if (
+    !order.sourceSoldOrderId ||
+    account.soldByOrderId !== order.sourceSoldOrderId ||
+    account.soldByCustomerId !== order.customerId
+  ) {
+    throw new ConflictException('该 ID 已收回、转售或客户归属已变化，不能处理原客户订单升级退币');
   }
 }
 

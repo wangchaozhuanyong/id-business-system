@@ -116,7 +116,7 @@ export async function recoverIdBusinessV2SoldAccount(
       const appliedBalanceCostAmount = order.balanceCostAmount.add(
         order.transferredBalanceCostAmount.sub(recoveredSourceTransferCost)
       );
-      const profitAmount = consumption
+      let profitAmount = consumption
         ? support.calculateProfit(
             order.receivedAmount,
             order.platformFeeAmount,
@@ -165,6 +165,8 @@ export async function recoverIdBusinessV2SoldAccount(
             })
           : null;
 
+      if (profitAmount !== null)
+        profitAmount = await repository.synchronizePostedProfit(tx, order.id);
       await repository.appendAudit(tx, {
         userId: operator?.id,
         module: 'id_business_v2',

@@ -75,7 +75,10 @@ export function useBankRechargeOrdersPage() {
     open: openFormDraft,
     beginSave: beginFormSave
   } = useV2FormDraft('bank-orders-editor', emptyForm);
-  const { usageLabel, usageTagType, initializeDates } = useBankRechargeOrderTiming(form);
+  const { usageLabel, usageTagType, initializeDates } = useBankRechargeOrderTiming(
+    form,
+    () => selected.value?.source === 'automatic'
+  );
   const correctionReasons = useV2SessionDraft(
     'bank-orders-correction-reasons',
     () => new Map<string, string>()
@@ -100,35 +103,28 @@ export function useBankRechargeOrdersPage() {
     manualEvidenceRef: [{ required: true, message: '请填写付款凭据编号', trigger: 'blur' }]
   };
 
+  const deletedFilter = useV2SessionDraft('bank-recharge-orders:deleted', () =>
+    ref<'active' | 'deleted'>('active')
+  );
+  const listQuery = () => ({
+    page: page.value,
+    pageSize: pageSize.value,
+    keyword: keyword.value,
+    status: status.value,
+    expiry: expiry.value,
+    deleted: deletedFilter.value,
+    accountId: accountIdFilter.value
+  });
   const ordersQuery = useV2ModuleQuery<Awaited<ReturnType<typeof bankRechargeApi.listOrders>>>({
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
-    key: () =>
-      createV2QueryKey({
-        page: page.value,
-        pageSize: pageSize.value,
-        keyword: keyword.value,
-        status: status.value,
-        expiry: expiry.value,
-        accountId: accountIdFilter.value
-      }),
+    key: () => createV2QueryKey(listQuery()),
     keepPreviousData: true,
     getRevalidateAt: (result) =>
       Date.now() + Math.max(1000, Date.parse(result.revalidateAt) - Date.parse(result.evaluatedAt)),
-    query: ({ signal }) =>
-      bankRechargeApi.listOrders(
-        {
-          page: page.value,
-          pageSize: pageSize.value,
-          keyword: keyword.value,
-          status: status.value,
-          expiry: expiry.value,
-          accountId: accountIdFilter.value
-        },
-        { signal }
-      )
+    query: ({ signal }) => bankRechargeApi.listOrders(listQuery(), { signal })
   });
-  watch([page, pageSize, keyword, status, expiry, accountIdFilter], () => {
+  watch([page, pageSize, keyword, status, expiry, accountIdFilter, deletedFilter], () => {
     void ordersQuery.ensureFresh();
   });
   watch([accountIdFilter, linkedOrderNo], () => {
@@ -369,16 +365,29 @@ export function useBankRechargeOrdersPage() {
                 customerFeeAmount: form.feeOverride ? form.customerFeeAmount : null,
                 bankFeeAmount: form.bankFeeAmount || null,
                 bankFeeCurrencyCode: form.bankFeeCurrencyCode || null,
-                bankFeeFxRateToCny: form.bankFeeFxRateToCny || null
+                bankFeeFxRateToCny:
+                  form.bankFeeCurrencyCode === 'CNY' ? '1' : form.bankFeeFxRateToCny || null
               }),
           receivedAmount: form.receivedAmount || null,
           receivedCurrencyCode: form.receivedCurrencyCode || null,
-          chargeFxRateToCny: form.chargeFxRateToCny || null,
-          receivedFxRateToCny: form.receivedFxRateToCny || null,
+          chargeFxRateToCny:
+            form.chargeCurrencyCode === 'CNY' ? '1' : form.chargeFxRateToCny || null,
+          receivedFxRateToCny:
+            form.receivedCurrencyCode === 'CNY' ? '1' : form.receivedFxRateToCny || null,
           fundingFinanceAccountId: form.fundingFinanceAccountId || null,
           receivedFinanceAccountId: form.receivedFinanceAccountId || null,
-          openedAt: form.openedAt ? v2DateTimeInputToIso(form.openedAt) : null,
-          dueAt: form.dueAt ? v2DateTimeInputToIso(form.dueAt) : null,
+          openedAt:
+            selected.value.source === 'automatic'
+              ? selected.value.openedAt
+              : form.openedAt
+                ? v2DateTimeInputToIso(form.openedAt)
+                : null,
+          dueAt:
+            selected.value.source === 'automatic'
+              ? selected.value.dueAt
+              : form.dueAt
+                ? v2DateTimeInputToIso(form.dueAt)
+                : null,
           remark: form.remark
         };
         if (correcting.value)
@@ -515,6 +524,7 @@ export function useBankRechargeOrdersPage() {
   }
 
   return {
+    deletedFilter,
     expiry,
     financeCurrencies,
     page,

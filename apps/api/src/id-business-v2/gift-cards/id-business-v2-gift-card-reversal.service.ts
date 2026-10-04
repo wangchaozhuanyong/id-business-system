@@ -16,7 +16,10 @@ import {
   V2CommandTransactionManager,
   type V2CommandTransaction
 } from '../runtime/public-api';
-import { IdBusinessV2TopupSupplierGiftCardFundsService } from '../topup-supplier-funds/public-api';
+import {
+  IdBusinessV2TopupSupplierGiftCardFundsService,
+  type GiftCardWithdrawalFunding
+} from '../topup-supplier-funds/public-api';
 import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type {
   IdBusinessV2GiftCardReversalAction,
@@ -150,15 +153,11 @@ export class IdBusinessV2GiftCardReversalService {
           Boolean(account.ownershipTransferredAt),
           reason,
           existingEntry.createdAt,
-          operator
+          operator,
+          action === 'withdrawn'
+            ? await this.supplierFundsService.resolveWithdrawalFunding(tx, giftCardId)
+            : undefined
         );
-        if (action === 'withdrawn') {
-          await this.supplierFundsService.reverseGiftCardDebit(tx, {
-            giftCardId,
-            reason,
-            operator
-          });
-        }
         return buildGiftCardReversalResponse(
           action,
           account,
@@ -202,6 +201,10 @@ export class IdBusinessV2GiftCardReversalService {
         },
         giftCard.faceValue
       );
+      const withdrawalFunding =
+        action === 'withdrawn'
+          ? await this.supplierFundsService.resolveWithdrawalFunding(tx, giftCardId)
+          : undefined;
 
       const ledgerEntry = await this.repository.createCreditLedger(tx, {
         accountId: account.id,
@@ -227,8 +230,11 @@ export class IdBusinessV2GiftCardReversalService {
         status: action,
         statusChangedAt,
         supplierRefundStatus: action === 'withdrawn' ? 'pending' : 'none',
-        supplierRefundAmount: action === 'withdrawn' ? snapshot.costAmount.toString() : '0',
-        supplierRefundAmountCny: action === 'withdrawn' ? snapshot.costAmount.toString() : '0',
+        supplierRefundAmount: withdrawalFunding?.amountOriginal.toString() ?? '0',
+        supplierRefundAmountCny: withdrawalFunding?.amountCny.toString() ?? '0',
+        ...(withdrawalFunding
+          ? { purchaseSupplierAccountId: withdrawalFunding.supplierAccountId }
+          : {}),
         updatedByUserId: operator?.id
       });
 
@@ -266,15 +272,9 @@ export class IdBusinessV2GiftCardReversalService {
         Boolean(account.ownershipTransferredAt),
         reason,
         ledgerEntry.createdAt,
-        operator
+        operator,
+        withdrawalFunding
       );
-      if (action === 'withdrawn') {
-        await this.supplierFundsService.reverseGiftCardDebit(tx, {
-          giftCardId,
-          reason,
-          operator
-        });
-      }
       const result = buildGiftCardReversalResponse(
         action,
         updatedAccount,
@@ -305,7 +305,8 @@ export class IdBusinessV2GiftCardReversalService {
     customerOwned: boolean,
     reason: string,
     occurredAt: Date,
-    operator?: AuthenticatedUser
+    operator?: AuthenticatedUser,
+    funding?: GiftCardWithdrawalFunding
   ) {
     const redeemed = action === 'redeemed';
     return this.financePostingService.post(tx, {
@@ -315,7 +316,21 @@ export class IdBusinessV2GiftCardReversalService {
       sourceReference: giftCard.codeMasked,
       occurredAt,
       summary: `${redeemed ? '礼品卡赎回损失' : '礼品卡撤回待退款'}：${giftCard.codeMasked}`,
-      metadata: { reason },
+      metadata: funding
+        ? {
+            reason,
+            refundFundingVersion: 2,
+            fundingSource: funding.source,
+            sourceLedgerId: funding.sourceLedgerId,
+            supplierAccountId: funding.supplierAccountId,
+            financeAccountId: funding.financeAccountId,
+            refundCurrency: funding.currency,
+            refundOriginalAmount: funding.amountOriginal.toString(),
+            refundCostAmountCny: funding.amountCny.toString(),
+            withdrawnIdCostAmountCny: costAmount.toString(),
+            withdrawalCostAdjustmentCny: costAmount.sub(funding.amountCny).toString()
+          }
+        : { reason },
       idempotencyKey: `auto:gift_card_${action}:${giftCard.id}`,
       operator,
       lines: [
@@ -323,9 +338,9 @@ export class IdBusinessV2GiftCardReversalService {
           accountCode: redeemed ? 'gift_card_redemption_loss' : 'supplier_refund_receivable',
           direction: 'debit',
           currency: 'CNY',
-          amountOriginal: costAmount,
+          amountOriginal: funding?.amountCny ?? costAmount,
           fxRateToCny: 1,
-          amountCny: costAmount,
+          amountCny: funding?.amountCny ?? costAmount,
           memo: reason
         },
         {
@@ -336,7 +351,22 @@ export class IdBusinessV2GiftCardReversalService {
           fxRateToCny: 1,
           amountCny: costAmount,
           memo: customerOwned ? '冲回客户已购 ID 余额转移成本' : '冲减礼品卡余额资产'
-        }
+        },
+        ...(funding && !costAmount.equals(funding.amountCny)
+          ? [
+              {
+                accountCode: 'gift_card_cost' as const,
+                direction: costAmount.gt(funding.amountCny)
+                  ? ('debit' as const)
+                  : ('credit' as const),
+                currency: 'CNY' as const,
+                amountOriginal: costAmount.sub(funding.amountCny).abs(),
+                fxRateToCny: 1,
+                amountCny: costAmount.sub(funding.amountCny).abs(),
+                memo: '撤卡成本调整'
+              }
+            ]
+          : [])
       ]
     });
   }

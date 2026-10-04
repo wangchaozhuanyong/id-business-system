@@ -27,6 +27,10 @@ import { IdBusinessV2DataGovernanceRepository } from './persistence/id-business-
 import { IdBusinessV2DataGovernanceQueryRepository } from './persistence/id-business-v2-data-governance-query.repository';
 
 import { canRestoreServiceMasters } from './data-governance-restore-dependencies';
+import {
+  chatgptRestoreAllowed,
+  bankOrderRestoreAllowed
+} from './persistence/data-governance-bank-restore';
 
 const MAX_RESTORE_ITEMS = 100;
 const MAX_CLEANUP_ITEMS = 1_000;
@@ -188,17 +192,21 @@ export class IdBusinessV2DataGovernancePreviewService {
   private async buildRestorePreview(selected: Array<{ entity: RecycleEntity; id: string }>) {
     const ids = (entity: RecycleEntity) =>
       selected.filter((item) => item.entity === entity).map((item) => item.id);
-    const { accounts, customers, options, orders } =
+    const { accounts, customers, options, orders, chatgptAccounts, bankOrders, bankJournalIds } =
       await this.queryRepository.restorePreviewSources({
         account: ids('account'),
         customer: ids('customer'),
         option: ids('option'),
-        order: ids('order')
+        order: ids('order'),
+        chatgpt_account: ids('chatgpt_account'),
+        bank_recharge_order: ids('bank_recharge_order')
       });
     const accountMap = new Map(accounts.map((item) => [item.id, item]));
     const customerMap = new Map(customers.map((item) => [item.id, item]));
     const optionMap = new Map(options.map((item) => [item.id, item]));
     const orderMap = new Map(orders.map((item) => [item.id, item]));
+    const chatgptMap = new Map(chatgptAccounts.map((item) => [item.id, item]));
+    const bankOrderMap = new Map(bankOrders.map((item) => [item.id, item]));
     const optionOriginalKeys = options
       .map((item) => this.originalOptionKey(item.id, item.uniqueKey))
       .filter((value): value is string => Boolean(value));
@@ -241,6 +249,46 @@ export class IdBusinessV2DataGovernancePreviewService {
 
     return selected.map<GovernancePreviewItem>((selectedItem, index) => {
       const sequence = index + 1;
+      if (
+        selectedItem.entity === 'chatgpt_account' ||
+        selectedItem.entity === 'bank_recharge_order'
+      ) {
+        const isAccount = selectedItem.entity === 'chatgpt_account';
+        const item = isAccount
+          ? chatgptMap.get(selectedItem.id)
+          : bankOrderMap.get(selectedItem.id);
+        const safe = isAccount
+          ? chatgptMap.get(selectedItem.id) &&
+            chatgptRestoreAllowed(chatgptMap.get(selectedItem.id)!)
+          : bankOrderMap.get(selectedItem.id) &&
+            bankOrderRestoreAllowed(
+              bankOrderMap.get(selectedItem.id)!,
+              bankJournalIds.has(selectedItem.id) ? 1 : 0
+            );
+        return this.restoreItem(
+          sequence,
+          selectedItem,
+          isAccount
+            ? chatgptMap.get(selectedItem.id)?.emailMasked
+            : bankOrderMap.get(selectedItem.id)?.orderNo,
+          item?.deletedAt,
+          !item
+            ? this.ineligible('not_found', '记录不存在。')
+            : !item.deletedAt
+              ? this.ineligible('not_deleted', '记录已不在回收站。')
+              : !safe
+                ? this.ineligible(
+                    'unsafe_subscription_state',
+                    '官网绑定、付款收款、业务引用或状态不符合安全恢复条件。'
+                  )
+                : this.eligible(
+                    isAccount
+                      ? '恢复 ChatGPT 账号并保持停用，不改变原唯一标识或登录凭据。'
+                      : '仅恢复手工误录银充单为待补全；日期待核对，不激活订阅或变更账务。',
+                    { sourceUpdatedAt: item.updatedAt.toISOString(), expectedStatus: item.status }
+                  )
+        );
+      }
       if (selectedItem.entity === 'account') {
         const item = accountMap.get(selectedItem.id);
         return this.restoreItem(

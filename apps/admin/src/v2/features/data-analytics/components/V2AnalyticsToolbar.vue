@@ -4,8 +4,8 @@
     aria-label="经营分析筛选"
     title="分析筛选"
     :help="[
-      '筛选按业务日期和财务维度重新核算全部分析分区，不会修改原始流水。',
-      ' 全部金额继续按后端 Decimal 字符串与已锁定汇率展示；筛选只更新报表口径。 '
+      '账户现金流按实际资金分录筛选；账户关联业务损益汇总该账户参与凭证的完整损益。',
+      ' 当前全局资产包含停用账户，不随筛选改变；多账户关联损益不可按账户相加。 '
     ]"
   >
     <el-date-picker
@@ -58,7 +58,7 @@
       <el-option
         v-for="item in page.accounts"
         :key="item.id"
-        :label="`${item.name} · ${item.currency}`"
+        :label="`${item.name} · ${item.currency}${item.status === 'disabled' ? ' · 已停用' : ''}`"
         :value="item.id"
       />
     </el-select>

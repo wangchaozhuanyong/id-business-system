@@ -154,6 +154,7 @@ export function useDataAnalyticsPage() {
     assetRows,
     analysisRangeLabel,
     activeFilterLabel,
+    accountRelated: computed(() => Boolean(applied.value.financeAccountId)),
     applyFilters,
     resetFilters,
     refresh: () => void query.refresh(),

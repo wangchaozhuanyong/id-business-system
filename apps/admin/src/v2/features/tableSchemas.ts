@@ -55,9 +55,10 @@ export const v2TableSchemas = {
         { key: 'primaryEmail', label: '所属主邮箱', kind: 'identifier', widthPreset: 'wide' },
         { key: 'status', label: '邮箱状态', kind: 'status', widthPreset: 'compact' },
         { key: 'registered', label: '注册状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'registrationCountryCode', label: '国家', kind: 'text', widthPreset: 'standard' },
         { key: 'note', label: '备注', kind: 'text', widthPreset: 'wide' },
         { key: 'updatedAt', label: '邮箱更新时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })
   },

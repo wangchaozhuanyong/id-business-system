@@ -19,10 +19,16 @@ import {
   normalizeV2ExpectedUpdatedAt,
   type V2CommandTransaction
 } from '../runtime/public-api';
-import { bankRechargeId, bankRechargeObject, bankRechargeText } from './bank-recharge-validation';
+import {
+  bankRechargeFxRate,
+  bankRechargeId,
+  bankRechargeObject,
+  bankRechargeText
+} from './bank-recharge-validation';
 
 import { object } from './recharge-validation';
 import { calculateBankRechargeRefund } from './bank-recharge-refund-calculation';
+import { bankRechargeJournalProfit } from './bank-recharge-journal-profit';
 
 const FINANCE_CURRENCIES = new Set(['CNY', 'MYR', 'USD', 'USDT']);
 
@@ -87,10 +93,32 @@ export class BankRechargeFinanceService {
       order.customer.deletedAt ||
       order.customer.recordStatus !== 'active' ||
       order.account.status !== 'active' ||
+      order.account.deletedAt ||
       !order.card.active
     ) {
       throw new ConflictException('账号、客户或银行卡已停用');
     }
+    if (order.source === 'automatic') {
+      const source = order.rechargeJobId
+        ? await this.repository.findRechargeJob(tx, order.rechargeJobId)
+        : null;
+      if (!source?.accountKey || order.account.officialAccountKey !== source.accountKey) {
+        throw new ConflictException('账号与原官网付款身份不一致，不能完成财务');
+      }
+    }
+    bankRechargeFxRate(undefined, order.chargeFxRateToCny, '代付汇率', order.chargeCurrencyCode);
+    bankRechargeFxRate(
+      undefined,
+      order.bankFeeFxRateToCny,
+      '银行手续费汇率',
+      order.bankFeeCurrencyCode
+    );
+    bankRechargeFxRate(
+      undefined,
+      order.receivedFxRateToCny,
+      '实收汇率',
+      order.receivedCurrencyCode
+    );
     if (!FINANCE_CURRENCIES.has(order.receivedCurrencyCode)) {
       throw new BadRequestException('客户实收币种暂不支持财务入账，请选择 CNY、MYR、USD 或 USDT');
     }
@@ -145,14 +173,15 @@ export class BankRechargeFinanceService {
       !newFees && order.bankFeeAmount ? Amount4.from(order.bankFeeAmount) : Amount4.zero();
     const bankFeeFx = bankFee.isZero()
       ? Rate8.one()
-      : order.bankFeeCurrencyCode === order.chargeCurrencyCode
-        ? chargeFx
-        : order.bankFeeFxRateToCny
-          ? Rate8.from(order.bankFeeFxRateToCny)
-          : null;
+      : order.bankFeeCurrencyCode === 'CNY'
+        ? Rate8.one()
+        : order.bankFeeCurrencyCode === order.chargeCurrencyCode
+          ? chargeFx
+          : order.bankFeeFxRateToCny
+            ? Rate8.from(order.bankFeeFxRateToCny)
+            : null;
     if (!bankFeeFx || !bankFeeFx.gt('0')) throw new BadRequestException('请填写银行手续费汇率');
     const bankFeeCny = bankFeeFx.apply(bankFee);
-    const profit = receivedCny.sub(chargeCny).sub(bankFeeCny).sub(extraFees.total);
     const journal = await this.posting.post(tx, {
       journalType: 'bank_recharge_completed',
       sourceType: 'bank_recharge',
@@ -248,6 +277,7 @@ export class BankRechargeFinanceService {
         ...extraFees.lines
       ]
     });
+    const profit = bankRechargeJournalProfit(journal.lines);
     const updated = await this.repository.updateOrder(tx, {
       where: { id },
       data: {
@@ -340,7 +370,7 @@ export class BankRechargeFinanceService {
           shoppingFeeRecoveryCny: refund.shoppingFeeRecoveryCny.toString(),
           originalJournalId: journal.id
         };
-        await this.posting.post(tx, {
+        const posted = await this.posting.post(tx, {
           journalType: 'order_refund',
           sourceType: 'bank_recharge',
           sourceId: id,
@@ -352,10 +382,11 @@ export class BankRechargeFinanceService {
           metadata,
           lines: refund.lines
         });
-        const profit = Amount4.from(order.profitAmountCny!)
-          .sub(refund.customerRefundCny)
-          .add(refund.chargeRecovery)
-          .add(refund.feeRecovery);
+        const profit = bankRechargeJournalProfit([
+          ...journal.lines,
+          ...priorRefunds.flatMap((prior) => prior.lines),
+          ...posted.lines
+        ]);
         const updated = await this.repository.updateOrder(tx, {
           where: { id },
           data: {

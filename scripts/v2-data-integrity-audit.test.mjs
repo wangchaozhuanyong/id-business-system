@@ -29,11 +29,85 @@ test('integrity audit covers lifecycle, ledger, finance, and audit invariants', 
     'unsafe_active_account_lock',
     'customer_owned_order_source_mismatch',
     'sold_account_ownership_mismatch',
-    'customer_owned_order_duplicate_id_cost'
+    'customer_owned_order_duplicate_id_cost',
+    'supplier_wallet_gl_mismatch',
+    'gift_card_refund_frozen_source_mismatch',
+    'finance_cash_source_currency_mismatch',
+    'order_financial_snapshot_mismatch',
+    'bank_paid_job_order_missing',
+    'bank_order_financial_reconciliation_mismatch',
+    'bank_subscription_projection_mismatch',
+    'fx_exchange_principal_fee_mismatch',
+    'bank_soft_delete_safety_mismatch',
+    'cash_historical_cost_evidence_mismatch'
   ]) {
     assert.ok(codes.has(expected), `missing ${expected}`);
   }
   assert.equal(codes.size, V2_DATA_INTEGRITY_CHECKS.length);
+});
+
+test('supplier wallet reconciliation nets originals and reversals and counts opening only once', () => {
+  const sql = V2_DATA_INTEGRITY_CHECKS.find((c) => c.code === 'supplier_wallet_gl_mismatch').sql;
+  assert.match(sql, /journal\.journal_type <> 'opening_balance'/);
+  assert.match(sql, /wallet\.opening_balance_cny \+ COALESCE\(movement\.cost, 0\)/);
+  assert.doesNotMatch(sql, /journal\.status = 'posted'/);
+  assert.match(sql, /line\.amount_original, -line\.amount_original/);
+});
+
+test('withdrawal audit requires frozen original O and K instead of current ID weighted C', () => {
+  const sql = V2_DATA_INTEGRITY_CHECKS.find(
+    (c) => c.code === 'gift_card_refund_frozen_source_mismatch'
+  ).sql;
+  assert.match(sql, /refundFundingVersion/);
+  assert.match(sql, /sourceLedgerId/);
+  assert.match(sql, /supplier_gift_card_withdrawal:/);
+  assert.match(sql, /supplier_refund_amount_cny, 0/);
+  assert.doesNotMatch(sql, /card\.face_value|card\.cost_amount/);
+});
+
+test('paid record detection uses owner, account and exact operation identifier, not only task success', () => {
+  const sql = V2_DATA_INTEGRITY_CHECKS.find((c) => c.code === 'bank_paid_job_order_missing').sql;
+  assert.match(sql, /id_business_v2_recharge_records/);
+  assert.match(sql, /record\.owner_id = job\.owner_id/);
+  assert.match(sql, /record\.account_key = job\.account_key/);
+  assert.match(sql, /upgrade_identifier/);
+  assert.match(sql, /checkout_identifier/);
+});
+
+test('FX and bank checks keep independent fee accounts and include net refunds', () => {
+  const bank = V2_DATA_INTEGRITY_CHECKS.find(
+    (c) => c.code === 'bank_order_financial_reconciliation_mismatch'
+  ).sql;
+  const fx = V2_DATA_INTEGRITY_CHECKS.find(
+    (c) => c.code === 'fx_exchange_principal_fee_mismatch'
+  ).sql;
+  assert.match(bank, /bank_recharge_usdt_fee/);
+  assert.match(bank, /bank_recharge_shopping_fee/);
+  assert.match(bank, /order_refund/);
+  assert.match(bank, /realized_fx_gain_loss/);
+  assert.match(bank, /bank_recharge_completed' AND journal\.status = 'posted'/);
+  assert.match(bank, /WHERE journal\.source_type = 'bank_recharge' GROUP BY journal\.source_id/);
+  assert.match(fx, /fx_exchange_fee/);
+  assert.match(fx, /total_debit/);
+  assert.match(fx, /gross_target_amount/);
+});
+
+test('cash cost evidence checks positive foreign cash dispositions and exact allocation costs', () => {
+  const sql = V2_DATA_INTEGRITY_CHECKS.find(
+    (c) => c.code === 'cash_historical_cost_evidence_mismatch'
+  ).sql;
+  assert.match(sql, /line\.amount_original > 0/);
+  assert.match(sql, /line\.line_no = allocation\.line_no/);
+  assert.match(sql, /line\.amount_cny <> allocation\.book_cost/);
+  assert.match(sql, /evidence\.transaction_cost - evidence\.carrying_cost/);
+});
+
+test('finance reversals retain source, currency and frozen rate identity as well as money', () => {
+  const sql = V2_DATA_INTEGRITY_CHECKS.find((c) => c.code === 'finance_reversal_mismatch').sql;
+  assert.match(sql, /original\.source_id <=> reversal\.source_id/);
+  assert.match(sql, /original_line\.currency <> reversal_line\.currency/);
+  assert.match(sql, /original_line\.fx_rate_to_cny <> reversal_line\.fx_rate_to_cny/);
+  assert.match(sql, /original_line\.fx_rate_snapshot_id <=> reversal_line\.fx_rate_snapshot_id/);
 });
 
 test('user phone integrity rejects incomplete encryption and a legacy plaintext column', () => {

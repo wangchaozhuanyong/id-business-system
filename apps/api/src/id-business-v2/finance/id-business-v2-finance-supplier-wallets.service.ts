@@ -8,7 +8,6 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import {
-  Amount4,
   Rate8,
   V2CommandTransactionManager,
   V2TransactionalAuditService
@@ -34,6 +33,13 @@ import {
   type FinancePostingLineInput
 } from './id-business-v2-finance-posting.service';
 import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
+import {
+  allocateSupplierBookCost,
+  assertSupplierBookCost,
+  supplierCarryingRate,
+  supplierRefundPostingLines,
+  supplierAdjustmentPostingLines
+} from './id-business-v2-finance-supplier-cost';
 
 @Injectable()
 export class IdBusinessV2FinanceSupplierWalletsService {
@@ -45,12 +51,16 @@ export class IdBusinessV2FinanceSupplierWalletsService {
     private readonly postingService: IdBusinessV2FinancePostingService
   ) {}
 
-  async list(currency?: string, supplierOptionId?: string) {
+  async list(currency?: string, supplierOptionId?: string, includeDisabled = false) {
     const normalizedCurrency = currency ? normalizeFinanceCurrency(currency) : undefined;
     const normalizedSupplierId = supplierOptionId
       ? normalizeFinanceUuid(supplierOptionId, '供应商')
       : undefined;
-    const items = await this.repository.list(normalizedCurrency, normalizedSupplierId);
+    const items = await this.repository.list(
+      normalizedCurrency,
+      normalizedSupplierId,
+      includeDisabled
+    );
     return { items };
   }
 
@@ -361,9 +371,20 @@ export class IdBusinessV2FinanceSupplierWalletsService {
       if (replay) return replay;
       const locked = await this.repository.lock(tx, walletId);
       if (locked.currentBalance.lt(amount)) throw new ConflictException('供应商钱包余额不足');
+      assertSupplierBookCost(wallet.currency, locked.currentBalance, locked.currentBalanceCny);
+      const bookCost = allocateSupplierBookCost(
+        locked.currentBalance,
+        locked.currentBalanceCny,
+        amount
+      );
+      const bookRate = supplierCarryingRate(
+        wallet.currency,
+        locked.currentBalance,
+        locked.currentBalanceCny
+      );
+      if (!bookRate.gt('0')) throw new ConflictException('退款成本低于可保存汇率精度，请先核对');
       const nextBalance = locked.currentBalance.sub(amount);
-      const rawNextBalanceCny = locked.currentBalanceCny.sub(amountCny);
-      const nextBalanceCny = rawNextBalanceCny.isNegative() ? Amount4.zero() : rawNextBalanceCny;
+      const nextBalanceCny = locked.currentBalanceCny.sub(bookCost);
       const ledger = await this.repository.createLedger(tx, {
         id: randomUUID(),
         supplierAccountId: walletId,
@@ -373,7 +394,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
         amount: amount.toString(),
         balanceBefore: locked.currentBalance.toString(),
         balanceAfter: nextBalance.toString(),
-        amountCny: amountCny.toString(),
+        amountCny: bookCost.toString(),
         balanceBeforeCny: locked.currentBalanceCny.toString(),
         balanceAfterCny: nextBalanceCny.toString(),
         supplierNameSnapshot: locked.supplierName,
@@ -388,30 +409,27 @@ export class IdBusinessV2FinanceSupplierWalletsService {
         sourceReference: locked.supplierName,
         occurredAt: receivedAt,
         summary: `供应商退款：${locked.supplierName}`,
+        metadata: {
+          costMethod: 'proportional_historical_cost',
+          balanceBefore: locked.currentBalance.toString(),
+          costBeforeCny: locked.currentBalanceCny.toString(),
+          quantity: amount.toString(),
+          bookCostCny: bookCost.toString(),
+          cashReceivedCny: amountCny.toString()
+        },
         idempotencyKey: `${idempotencyKey}:journal`,
         operator,
-        lines: [
-          {
-            accountCode: 'cash',
-            direction: 'debit',
-            currency: wallet.currency,
-            amountOriginal: amount,
-            fxRateToCny: rateToCny,
-            amountCny,
-            financeAccountId,
-            fxRateSnapshotId: rate.id
-          },
-          {
-            accountCode: 'supplier_prepayment',
-            direction: 'credit',
-            currency: wallet.currency,
-            amountOriginal: amount,
-            fxRateToCny: rateToCny,
-            amountCny,
-            supplierAccountId: walletId,
-            fxRateSnapshotId: rate.id
-          }
-        ]
+        lines: supplierRefundPostingLines({
+          currency: wallet.currency,
+          quantity: amount,
+          cashCny: amountCny,
+          cashRate: rateToCny,
+          cashSnapshotId: rate.id,
+          financeAccountId,
+          walletId,
+          bookCost,
+          bookRate
+        })
       });
       await this.repository.updateBalances(
         tx,
@@ -424,6 +442,8 @@ export class IdBusinessV2FinanceSupplierWalletsService {
         walletId,
         amount: amount.toString(),
         amountCny: amountCny.toString(),
+        bookCostCny: bookCost.toString(),
+        realizedFxGainLossCny: amountCny.sub(bookCost).toString(),
         reason
       });
       return ledger;
@@ -441,28 +461,45 @@ export class IdBusinessV2FinanceSupplierWalletsService {
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'supplier_adjust');
     const wallet = await this.repository.findWallet(walletId);
     if (!wallet) throw new NotFoundException('供应商钱包不存在');
-    const manualRate =
-      dto.fxRateToCny === undefined ? null : normalizeFinanceRate(dto.fxRateToCny, wallet.currency);
     const now = new Date();
-    const rate = await this.fxService.resolve({
-      currency: wallet.currency,
-      occurredAt: now,
-      fxRateSnapshotId: dto.fxRateSnapshotId,
-      manualRate,
-      manualReason: dto.manualRateReason,
-      operator
-    });
+    // A decrease uses existing cost evidence and must not require a fresh FX quote.
+    const rate = target.gt(wallet.currentBalance)
+      ? await this.fxService.resolve({
+          currency: wallet.currency,
+          occurredAt: now,
+          fxRateSnapshotId: dto.fxRateSnapshotId,
+          manualRate:
+            dto.fxRateToCny === undefined
+              ? null
+              : normalizeFinanceRate(dto.fxRateToCny, wallet.currency),
+          manualReason: dto.manualRateReason,
+          operator
+        })
+      : null;
     return this.commandTransactions.execute(async (tx) => {
       const replay = await this.repository.findLedgerReplay(tx, idempotencyKey);
       if (replay) return replay;
       const locked = await this.repository.lock(tx, walletId);
+      assertSupplierBookCost(wallet.currency, locked.currentBalance, locked.currentBalanceCny);
       const difference = target.sub(locked.currentBalance);
       if (difference.equals(0)) throw new BadRequestException('目标余额与当前余额相同');
       const amount = difference.abs();
-      const rateToCny = Rate8.from(rate.rateToCny);
-      const amountCny = rateToCny.apply(amount);
-      const targetCny = rateToCny.apply(target);
       const increase = difference.gt(0);
+      if (increase && !rate) throw new ConflictException('供应商余额已变化，请刷新后重试调整');
+      const rateToCny = rate ? Rate8.from(rate.rateToCny) : Rate8.one();
+      const amountCny =
+        wallet.currency === 'CNY'
+          ? amount
+          : increase
+            ? rateToCny.apply(amount)
+            : allocateSupplierBookCost(locked.currentBalance, locked.currentBalanceCny, amount);
+      const bookRate = increase
+        ? rateToCny
+        : supplierCarryingRate(wallet.currency, locked.currentBalance, locked.currentBalanceCny);
+      if (!bookRate.gt('0')) throw new ConflictException('调账成本低于可保存汇率精度，请先核对');
+      const targetCny = increase
+        ? locked.currentBalanceCny.add(amountCny)
+        : locked.currentBalanceCny.sub(amountCny);
       const ledger = await this.repository.createLedger(tx, {
         id: randomUUID(),
         supplierAccountId: walletId,
@@ -487,30 +524,25 @@ export class IdBusinessV2FinanceSupplierWalletsService {
         sourceReference: locked.supplierName,
         occurredAt: now,
         summary: `供应商余额调整：${locked.supplierName}`,
-        metadata: { reason },
+        metadata: {
+          reason,
+          costMethod: increase ? 'incremental_transaction_cost' : 'proportional_historical_cost',
+          balanceBefore: locked.currentBalance.toString(),
+          costBeforeCny: locked.currentBalanceCny.toString(),
+          quantity: difference.toString(),
+          bookCostMovementCny: increase ? amountCny.toString() : amountCny.negated().toString()
+        },
         idempotencyKey: `${idempotencyKey}:journal`,
         operator,
-        lines: [
-          {
-            accountCode: 'supplier_prepayment',
-            direction: increase ? 'debit' : 'credit',
-            currency: wallet.currency,
-            amountOriginal: amount,
-            fxRateToCny: rateToCny,
-            amountCny,
-            supplierAccountId: walletId,
-            fxRateSnapshotId: rate.id
-          },
-          {
-            accountCode: 'manual_adjustment',
-            direction: increase ? 'credit' : 'debit',
-            currency: wallet.currency,
-            amountOriginal: amount,
-            fxRateToCny: rateToCny,
-            amountCny,
-            fxRateSnapshotId: rate.id
-          }
-        ]
+        lines: supplierAdjustmentPostingLines({
+          currency: wallet.currency,
+          quantity: amount,
+          bookCost: amountCny,
+          bookRate,
+          walletId,
+          increase,
+          fxRateSnapshotId: increase ? rate!.id : null
+        })
       });
       await this.repository.updateBalances(
         tx,
@@ -530,10 +562,9 @@ export class IdBusinessV2FinanceSupplierWalletsService {
   }
 
   async ledger(walletIdValue: string, query: PaginationQuery) {
-    const walletId = normalizeFinanceUuid(walletIdValue, '供应商钱包');
     const pagination = getPagination(query);
     const { items, total } = await this.repository.listLedger(
-      walletId,
+      normalizeFinanceUuid(walletIdValue, '供应商钱包'),
       pagination.skip,
       pagination.take
     );
@@ -559,6 +590,10 @@ export class IdBusinessV2FinanceSupplierWalletsService {
   }
 
   private commandOptions(operator?: AuthenticatedUser) {
-    return { changedScopes: ['supplier-funds'], requestId: randomUUID(), operator } as const;
+    return {
+      changedScopes: ['supplier-funds', 'finance-accounts', 'finance-ledger', 'finance-reports'],
+      requestId: randomUUID(),
+      operator
+    } as const;
   }
 }

@@ -5,7 +5,8 @@ export const V2_SKELETON_KINDS = [
   'settings',
   'detail',
   'cards',
-  'inline'
+  'inline',
+  'control'
 ] as const;
 
 export type V2SkeletonKind = (typeof V2_SKELETON_KINDS)[number];

@@ -21,6 +21,14 @@ function createPrismaMock() {
     idBusinessV2Customer: { count: vi.fn(), findMany: vi.fn() },
     idBusinessV2Option: { count: vi.fn(), findMany: vi.fn() },
     idBusinessV2Order: { count: vi.fn(), findMany: vi.fn() },
+    idBusinessV2ChatgptAccount: {
+      count: vi.fn().mockResolvedValue(0),
+      findMany: vi.fn().mockResolvedValue([])
+    },
+    idBusinessV2BankRechargeOrder: {
+      count: vi.fn().mockResolvedValue(0),
+      findMany: vi.fn().mockResolvedValue([])
+    },
     auditLog: { findFirst: vi.fn() },
     user: { count: countActiveAdmins }
   };

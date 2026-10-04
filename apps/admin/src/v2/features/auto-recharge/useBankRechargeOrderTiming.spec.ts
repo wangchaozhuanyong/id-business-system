@@ -42,6 +42,22 @@ describe('银充开通与到期时间', () => {
     expect(form.dueAt).toBe('2026-04-01T10:15');
   });
 
+  it('自动付款未核对日期不推定到期时间，列表明确待核对', async () => {
+    const form = reactive({ openedAt: '', dueAt: '' });
+    const timing = scope.run(() => useBankRechargeOrderTiming(form, () => true))!;
+    form.openedAt = '2026-10-04T10:15';
+    await nextTick();
+    expect(form.dueAt).toBe('');
+    const row = {
+      source: 'automatic',
+      openedAt: null,
+      dueAt: null,
+      accountId: 'account'
+    } as BankRechargeOrder;
+    expect(timing.usageLabel(row)).toBe('开通时间待核对');
+    expect(timing.usageLabel({ ...row, accountId: null })).toBe('账号归属待核验');
+  });
+
   it('服务器时间未同步时不猜测日期，并将到期边界和历史订单判为已到期', () => {
     clock.now = null;
     const form = reactive({ openedAt: '', dueAt: '' });

@@ -204,11 +204,22 @@
           ></el-form-item>
           <el-form-item label="代付汇率"
             ><el-input
-              v-model="form.chargeFxRateToCny"
+              :model-value="form.chargeCurrencyCode === 'CNY' ? '1' : form.chargeFxRateToCny"
               inputmode="decimal"
               placeholder="1 单位代付币种折合人民币"
-              :disabled="readonly"
+              :disabled="readonly || form.chargeCurrencyCode === 'CNY'"
+              @update:model-value="form.chargeFxRateToCny = $event"
           /></el-form-item>
+          <el-alert
+            v-if="
+              selected?.chargeCurrencyCode === 'CNY' &&
+              selected.chargeFxRateToCny &&
+              selected.chargeFxRateToCny !== '1'
+            "
+            type="warning"
+            :closable="false"
+            title="原人民币代付汇率需核对；保存将明确更正为 1，已入账订单请使用更正流程。"
+          />
           <el-form-item v-if="form.receivedCurrencyCode !== 'CNY'" label="实收汇率"
             ><el-input
               v-model="form.receivedFxRateToCny"
@@ -261,7 +272,7 @@
             type="datetime"
             value-format="YYYY-MM-DDTHH:mm"
             placeholder="选择开通时间"
-            :disabled="readonly"
+            :disabled="readonly || selected?.source === 'automatic'"
         /></el-form-item>
         <el-form-item label="到期时间"
           ><el-date-picker
@@ -269,9 +280,12 @@
             type="datetime"
             value-format="YYYY-MM-DDTHH:mm"
             placeholder="选择到期时间"
-            :disabled="readonly"
+            :disabled="readonly || selected?.source === 'automatic'"
         /></el-form-item>
-        <p class="bank-recharge-form-note">
+        <p v-if="selected?.source === 'automatic'" class="bank-recharge-form-note">
+          自动付款的日期须通过核对订阅确认；核验时间和官网旧账期不能代替实际开通时间。
+        </p>
+        <p v-else class="bank-recharge-form-note">
           默认按自然月计算：3 月 4 日开通，4 月 3
           日到期；月底按下月最后一天的前一天计算。请按官网实际账期核对。
         </p>

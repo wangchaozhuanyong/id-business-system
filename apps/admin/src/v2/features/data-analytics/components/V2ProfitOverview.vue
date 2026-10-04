@@ -4,7 +4,7 @@
       <header>
         <div>
           <span class="v2-finance-eyebrow">已实现经营结果</span>
-          <strong>人民币净利润</strong>
+          <strong>{{ accountRelated ? '账户关联业务损益' : '人民币净利润' }}</strong>
         </div>
         <el-tag
           :type="overview.settings.historyStatus === 'completed' ? 'success' : 'warning'"
@@ -20,9 +20,12 @@
         {{ formatCny(overview.profitLoss.netProfitCny) }}
       </strong>
       <p>只包含已记账收入与已确认成本、退款、损失和开支，不把处理中订单并入当期利润。</p>
+      <p v-if="accountRelated">
+        按参与现金收支的凭证汇总完整损益；多账户凭证可能同时归属多个账户，此视图不可按账户相加。无现金的库存损耗仍计入全局损益。
+      </p>
       <footer>
         <div>
-          <span>待确认利润</span>
+          <span>{{ accountRelated ? '全局待确认利润' : '待确认利润' }}</span>
           <strong>{{ formatCny(overview.profitLoss.estimatedProfitCny) }}</strong>
         </div>
         <small>{{ analysisRangeLabel }}</small>
@@ -144,6 +147,7 @@ import type { V2FinanceOverview } from '@apple-business/shared';
 
 defineProps<{
   overview: V2FinanceOverview;
+  accountRelated?: boolean;
   analysisRangeLabel: string;
   formatCny: (value: string | null | undefined) => string;
   addAmounts: (...values: string[]) => string;

@@ -145,6 +145,7 @@ export class IdBusinessV2OrderCompletionService {
         completedAt,
         operator
       );
+      const postedProfitAmount = await this.repository.synchronizePostedProfit(tx, order.id);
 
       await this.repository.appendAudit(tx, {
         userId: operator?.id,
@@ -165,7 +166,8 @@ export class IdBusinessV2OrderCompletionService {
           releasedLockCount: releasedLocks.count,
           transferredBalanceCostAmount: transferredBalanceCostAmount.toString(),
           appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
-          financeJournalId: financeJournal.id
+          financeJournalId: financeJournal.id,
+          profitAmount: postedProfitAmount.toString()
         },
         remark: `V2 订单完成并生成开通记录：${order.orderNo}`
       });

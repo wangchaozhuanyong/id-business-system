@@ -6,6 +6,9 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
+import { IdBusinessV2FinanceGiftCardRefundsService } from './id-business-v2-finance-gift-card-refunds.service';
+import { IdBusinessV2FinanceGiftCardRefundRepository } from './persistence/id-business-v2-finance-gift-card-refund.repository';
+import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
 import { IdBusinessV2FinanceJournalsService } from './id-business-v2-finance-journals.service';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
 import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
@@ -423,7 +426,7 @@ describeMysql('rollback/delete/restore real MySQL integrity', () => {
     expect(await snapshot()).toBe(afterDelete);
   });
 
-  it('withdraws a gift card with weighted ID cost and exact supplier credit, with failure rollback and replay', async () => {
+  it('withdraws a gift card into a receivable and credits the supplier only on receipt, with failure rollback and replay', async () => {
     const { account, country } = await seedAccount('150', '840');
     const cardName = await prisma.idBusinessV2Option.create({
       data: { type: 'gift_card_name', code: key(), name: '隔离卡', uniqueKey: key() }
@@ -523,7 +526,37 @@ describeMysql('rollback/delete/restore real MySQL integrity', () => {
           where: { id: wallet.id }
         })
       ).currentBalance.toString()
+    ).toBe('892');
+    expect(
+      await prisma.idBusinessV2TopupSupplierLedger.count({ where: { giftCardId: card.id } })
+    ).toBe(1);
+    const refunds = new IdBusinessV2FinanceGiftCardRefundsService(
+      transactions,
+      new IdBusinessV2FinanceCommandRepository(),
+      new IdBusinessV2FinanceGiftCardRefundRepository(),
+      new IdBusinessV2FinanceSupplierWalletRepository(prisma),
+      new V2TransactionalAuditService(),
+      posting
+    );
+    const receiveDto = { reason: '合成供应商实际回款108', idempotencyKey: key() };
+    await refunds.receive(card.id, receiveDto, requester);
+    const afterReceive = await snapshot();
+    await refunds.receive(card.id, receiveDto, requester);
+    expect(await snapshot()).toBe(afterReceive);
+    expect(
+      (
+        await prisma.idBusinessV2TopupSupplierAccount.findUniqueOrThrow({
+          where: { id: wallet.id }
+        })
+      ).currentBalance.toString()
     ).toBe('1000');
+    const closedCard = await prisma.idBusinessV2GiftCard.findUniqueOrThrow({
+      where: { id: card.id }
+    });
+    expect([
+      closedCard.supplierRefundStatus,
+      closedCard.supplierRefundAmountCny.toString()
+    ]).toEqual(['received', '108']);
     expect(await prisma.idBusinessV2BalanceLedger.count({ where: { giftCardId: card.id } })).toBe(
       2
     );

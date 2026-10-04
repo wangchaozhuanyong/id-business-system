@@ -191,7 +191,7 @@ export async function refundIdBusinessV2Order(
       const appliedBalanceCostAmount = order.appliedBalanceCostAmount
         .sub(restoredAppliedBalanceCost)
         .sub(recoveredSourceTransferCost);
-      const profitAmount = support.calculateProfit(
+      let profitAmount = support.calculateProfit(
         Amount4.zero(),
         order.platformFeeAmount,
         appliedAccountCostAmount,
@@ -281,6 +281,10 @@ export async function refundIdBusinessV2Order(
           restoredCustomerOwnedBalanceCost
         )
       });
+      profitAmount = await repository.synchronizePostedProfit(tx, order.id);
+      if (restoredSourceOrder && !restoredSourceOrder.costAmount.isZero()) {
+        await repository.synchronizePostedProfit(tx, restoredSourceOrder.id);
+      }
       await support.writeLifecycleAudit(
         tx,
         'refund',
@@ -369,13 +373,8 @@ export async function restoreRecoveredCustomerOwnedSourceOrderCost(
     : restoredCost;
   if (sourceOrderCost.isZero()) return { id: sourceOrder.id, costAmount: sourceOrderCost };
   const appliedBalanceCostAmount = sourceOrder.appliedBalanceCostAmount.sub(sourceOrderCost);
-  const profitAmount = support.calculateProfit(
-    sourceOrder.status === 'refunded' ? Amount4.zero() : sourceOrder.receivedAmount,
-    sourceOrder.platformFeeAmount,
-    sourceOrder.appliedAccountCostAmount,
-    appliedBalanceCostAmount,
-    sourceOrder.refundCostAmount
-  );
+  if (!sourceOrder.profitAmount) throw new ConflictException('来源销售订单缺少利润快照');
+  const profitAmount = sourceOrder.profitAmount.add(sourceOrderCost);
   await repository.updateOrder(tx, sourceOrder.id, {
     appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
     profitAmount: profitAmount.toString(),

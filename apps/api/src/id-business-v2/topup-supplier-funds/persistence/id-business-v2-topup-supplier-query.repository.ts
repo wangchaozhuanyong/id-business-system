@@ -70,6 +70,18 @@ interface CountryAggregatePersistenceRow {
 export class IdBusinessV2TopupSupplierQueryRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  async listPaymentAccounts() {
+    const rows = await this.prisma.idBusinessV2FinanceAccount.findMany({
+      where: { currency: 'USDT', status: 'active' },
+      select: { id: true, name: true, currentBalance: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }]
+    });
+    return rows.map((row) => ({
+      ...row,
+      currentBalance: mapAmount4(row.currentBalance, 'finance_accounts.current_balance').toString()
+    }));
+  }
+
   async listSuppliers(criteria: SupplierListCriteria) {
     const accountWhere =
       criteria.fundingStatus === 'initialized'

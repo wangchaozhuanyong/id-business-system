@@ -173,6 +173,9 @@ describe('IdBusinessV2OrderCompletionService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(IdBusinessV2OrdersRepository.prototype, 'synchronizePostedProfit').mockImplementation(
+      async () => Amount4.from(order.profitAmount!.toString())
+    );
     financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
     financePostingService.reserveOrderIncomeReferences.mockResolvedValue(undefined);
     order = makeOrder();

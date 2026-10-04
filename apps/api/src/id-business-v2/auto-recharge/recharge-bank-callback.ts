@@ -5,6 +5,7 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { object } from './recharge-validation';
 import { mergeRechargePaymentFacts } from './recharge-payment-facts';
+import { isRechargePaymentAction } from './recharge-upgrade-protocol';
 
 export async function bindSavedChatgptAccount(
   tx: V2CommandTransaction,
@@ -68,7 +69,7 @@ export async function recordVerifiedBankRecharge(
   report: Record<string, unknown>,
   orders?: BankRechargeOrderService
 ) {
-  if (['bitbrowser', 'server'].includes(job.action) && orders) {
+  if (isRechargePaymentAction(job.action) && orders) {
     return orders.recordVerifiedSuccess(tx, job, { ...object(job.result), ...report });
   }
   return null;
