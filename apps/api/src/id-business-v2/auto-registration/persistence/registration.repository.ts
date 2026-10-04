@@ -134,13 +134,6 @@ export class RegistrationRepository {
   create(tx: V2CommandTransaction, data: Prisma.IdBusinessV2RegistrationJobUncheckedCreateInput) {
     return tx.idBusinessV2RegistrationJob.create({ data });
   }
-  async nextRegistrationAge(tx: V2CommandTransaction) {
-    // 调用方已持有注册任务锁。只统计新任务快照，旧任务不回填、不参与轮换。
-    const assigned = await tx.idBusinessV2RegistrationJob.count({
-      where: { registrationAge: { not: null } }
-    });
-    return 20 + (assigned % 26);
-  }
   update(
     tx: V2CommandTransaction,
     id: string,

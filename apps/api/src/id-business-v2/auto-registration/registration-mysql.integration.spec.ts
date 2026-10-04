@@ -166,6 +166,12 @@ suite('自动注册 MySQL 事务和恢复', () => {
     expect(existing.registered).toBe(true);
   });
   it('并发启动只创建一个任务，回执限定邮箱、原窗口、时效和尝试', async () => {
+    const expectedAge =
+      Number(
+        new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(
+          new Date()
+        )
+      ) - 1996;
     const input = {
       mailboxAliasId: 'synthetic-mailbox',
       proxyId,
@@ -178,14 +184,14 @@ suite('自动注册 MySQL 事务和恢复', () => {
     ]);
     expect(starts.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
     const job = (await jobs.list({}, operator)).items[0]!;
-    expect(job.registrationAge).toBe(20);
+    expect(job.registrationAge).toBe(expectedAge);
     const receipt = await jobs.launch(job.id, operator);
     expect(receipt).not.toHaveProperty('agentToken');
     expect(receipt).not.toHaveProperty('password');
     expect(worker.payload).toMatchObject({
       expectedCountry: 'US',
       proxy: { countryCode: 'US' },
-      registrationAge: 20,
+      registrationAge: expectedAge,
       birthDate: '1996-01-01'
     });
     const launch = worker.payload as {
@@ -241,7 +247,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
     restart();
     await jobs.launch(job.id, operator);
     const resumed = worker.payload as typeof launch;
-    expect(worker.payload.registrationAge).toBe(20);
+    expect(worker.payload.registrationAge).toBe(expectedAge);
     expect(resumed.browserProfileId).toBe('reg_' + 'a'.repeat(64));
     expect(resumed.password).toBe(launch.password);
     await expect(emit('password_verified')).rejects.toThrow('授权');
@@ -618,7 +624,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
     await jobs.cancel(newJob.id, operator);
   });
 
-  it('完整20至45轮换在重启后继续，事务失败不消耗年龄，历史任务不参与计数', async () => {
+  it('手动及随机年龄快照跨重启保留，事务失败不留下任务', async () => {
     const assignedBefore = await prisma.idBusinessV2RegistrationJob.count({
       where: { registrationAge: { not: null } }
     });
@@ -626,7 +632,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
     const input = (index: number) => ({
       mailboxAliasId: `age-cycle-${index}`,
       proxyId,
-      birthDate: '1996-01-01',
+      ...(index % 2 === 0 ? { age: 20 + (index % 26) } : {}),
       confirmIdentity: true
     });
     for (let index = 0; index < 27; index += 1) {
@@ -653,18 +659,17 @@ suite('自动注册 MySQL 事务和恢复', () => {
         ).toBe(assignedBefore + index);
       }
       const job = await jobs.create(input(index), operator);
-      const expectedAge = 20 + ((assignedBefore + index) % 26);
-      expect(job.registrationAge).toBe(expectedAge);
-      expect((await repository.find(job.id))!.registrationAge).toBe(expectedAge);
+      expect(Number.isInteger(job.registrationAge)).toBe(true);
+      expect(job.registrationAge).toBeGreaterThanOrEqual(20);
+      expect(job.registrationAge).toBeLessThanOrEqual(45);
+      if (index % 2 === 0) expect(job.registrationAge).toBe(input(index).age);
+      expect((await repository.find(job.id))!.registrationAge).toBe(job.registrationAge);
       ages.push(job.registrationAge!);
       await expect(jobs.create(input(index), operator)).rejects.toThrow('已有注册任务');
       await jobs.cancel(job.id, operator);
     }
-    expect(new Set(ages.slice(0, 26)).size).toBe(26);
-    expect(ages[26]).toBe(ages[0]);
-    expect(ages).toContain(45);
-    const wrap = ages.indexOf(45);
-    expect(ages[wrap + 1]).toBe(20);
+    expect(ages[0]).toBe(20);
+    expect(ages[26]).toBe(20);
     const stored = await prisma.idBusinessV2RegistrationJob.findFirstOrThrow({
       where: { mailboxAliasId: 'age-cycle-0' }
     });

@@ -209,7 +209,7 @@ export class RegistrationJobsService {
           throw new ConflictException('该邮箱已有注册记录，请继续原任务');
         const name = await this.repository.name(tx, input.nameId);
         if (!name) throw new ConflictException('请先录入并启用可用名字');
-        const registrationAge = await this.repository.nextRegistrationAge(tx);
+        const registrationAge = input.age;
         const email = mailbox.email.toLowerCase();
         const [local, domain] = email.split('@');
         const job = await this.repository.create(tx, {

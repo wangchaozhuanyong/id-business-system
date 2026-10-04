@@ -28,7 +28,7 @@ export function useRegistrationStart(config: {
     mailboxAliasId: '',
     proxyId: '',
     nameId: '',
-    birthDate: '',
+    age: undefined as number | undefined,
     confirmIdentity: false
   }));
   const optionState = useRegistrationOptions(() => formOpen.value);
@@ -41,11 +41,21 @@ export function useRegistrationStart(config: {
   const rules: FormRules = {
     mailboxAliasId: [{ required: true, message: '请先在邮箱列表选择邮箱', trigger: 'change' }],
     proxyId: [{ required: true, message: '请选择代理', trigger: 'change' }],
-    birthDate: [{ required: true, message: '请填写真实出生日期', trigger: 'change' }],
+    age: [
+      {
+        validator: (_rule, value, done) =>
+          done(
+            value == null || (Number.isInteger(value) && value >= 20 && value <= 45)
+              ? undefined
+              : new Error('年龄须为 20 至 45 岁的整数')
+          ),
+        trigger: 'change'
+      }
+    ],
     confirmIdentity: [
       {
         validator: (_rule, value, done) =>
-          done(value === true ? undefined : new Error('请确认邮箱授权及真实资料')),
+          done(value === true ? undefined : new Error('请确认邮箱已授权用于注册')),
         trigger: 'change'
       }
     ]
@@ -121,7 +131,13 @@ export function useRegistrationStart(config: {
         return;
       }
       const completeSave = draft.beginSave();
-      const input = { ...draft.form, nameId: draft.form.nameId || undefined };
+      const input = {
+        mailboxAliasId: aliasId,
+        proxyId: draft.form.proxyId,
+        nameId: draft.form.nameId || undefined,
+        age: draft.form.age ?? undefined,
+        confirmIdentity: draft.form.confirmIdentity
+      };
       attempts[aliasId] = { jobId: '', uncertain: true };
       let job;
       try {

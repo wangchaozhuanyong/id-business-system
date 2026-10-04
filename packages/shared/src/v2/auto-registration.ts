@@ -64,7 +64,9 @@ export interface V2RegistrationStart {
   mailboxAliasId: string;
   proxyId: string;
   nameId?: string;
-  birthDate: string;
+  age?: number;
+  /** 兼容已有客户端；新表单仅提交年龄。 */
+  birthDate?: string;
   confirmIdentity: boolean;
 }
 export interface V2RegistrationPage<T> {

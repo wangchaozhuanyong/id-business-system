@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { randomInt } from 'node:crypto';
 import {
   V2_ACCOUNT_OFFERS,
   V2_REGISTRATION_STEPS,
@@ -64,21 +65,51 @@ export function birthDate(value: unknown, now = new Date()): string {
     throw new BadRequestException('本功能仅接受实际年龄为 20 至 45 岁的资料');
   return result;
 }
-export function startInput(value: unknown): V2RegistrationStart {
+export function startInput(
+  value: unknown,
+  now = new Date()
+): V2RegistrationStart & { age: number; birthDate: string } {
   const input = record(value);
   if (
     Object.keys(input).some(
       (key) =>
-        !['mailboxAliasId', 'proxyId', 'nameId', 'birthDate', 'confirmIdentity'].includes(key)
+        !['mailboxAliasId', 'proxyId', 'nameId', 'age', 'birthDate', 'confirmIdentity'].includes(
+          key
+        )
     )
   )
     throw new BadRequestException('注册资料包含未知字段');
-  if (input.confirmIdentity !== true) throw new BadRequestException('请确认邮箱授权和真实出生日期');
+  if (input.confirmIdentity !== true) throw new BadRequestException('请确认邮箱已授权用于注册');
+  if (
+    input.age != null &&
+    (typeof input.age !== 'number' ||
+      !Number.isInteger(input.age) ||
+      input.age < 20 ||
+      input.age > 45)
+  )
+    throw new BadRequestException('年龄须为 20 至 45 岁的整数');
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+  const legacyBirthday = input.birthDate == null ? null : birthDate(input.birthDate, now);
+  const legacyAge = legacyBirthday
+    ? Number(today.slice(0, 4)) -
+      Number(legacyBirthday.slice(0, 4)) -
+      (today.slice(5) < legacyBirthday.slice(5) ? 1 : 0)
+    : undefined;
+  if (input.age != null && legacyAge != null && input.age !== legacyAge)
+    throw new BadRequestException('年龄与出生日期不一致');
+  const age = (input.age as number | null | undefined) ?? legacyAge ?? randomInt(20, 46);
   return {
     mailboxAliasId: text(input.mailboxAliasId, '邮箱编号', 191),
     proxyId: id(input.proxyId),
     ...(input.nameId ? { nameId: id(input.nameId) } : {}),
-    birthDate: birthDate(input.birthDate),
+    age,
+    // Worker 兼容官网完整日期控件；这只是年龄推导日期，并非用户真实生日。
+    birthDate: legacyBirthday ?? `${Number(today.slice(0, 4)) - age}-01-01`,
     confirmIdentity: true
   };
 }
