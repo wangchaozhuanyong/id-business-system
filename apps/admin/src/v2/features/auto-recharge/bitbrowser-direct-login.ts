@@ -202,7 +202,15 @@ export async function runDirectLogin(
       try {
         state = await cdp.evaluate<LoginPageState>(sessionId, loginPageExpression('inspect'));
       } catch (error) {
-        if (signal.aborted || guardError) throw error;
+        if (
+          signal.aborted ||
+          guardError ||
+          (error instanceof DirectBrowserError &&
+            ['bitbrowser_direct_cancelled', 'bitbrowser_direct_debug_unavailable'].includes(
+              error.reason
+            ))
+        )
+          throw error;
         state = { kind: 'loading' };
       }
       if (state?.kind === 'identity') {
@@ -223,6 +231,12 @@ export async function runDirectLogin(
           payment_requests_sent: 0
         };
       }
+      if (
+        !credential.login &&
+        (['unauthenticated', 'email', 'password', 'code'].includes(state?.kind) ||
+          (state?.kind === 'loading' && Date.now() >= automaticDeadline && !manualReported))
+      )
+        throw new DirectBrowserError('official_login_not_verified');
       if (
         !manualReported &&
         Date.now() < automaticDeadline &&

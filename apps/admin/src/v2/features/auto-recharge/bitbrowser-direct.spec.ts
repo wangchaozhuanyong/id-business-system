@@ -7,10 +7,40 @@ import {
   localBrowserUrl
 } from './bitbrowser-direct-api';
 import { isLoginPaymentWrite, parseDirectCredential } from './bitbrowser-direct-login';
+import { inspectLoginPage } from './bitbrowser-login-page';
 
 const signal = () => new AbortController().signal;
 afterEach(() => vi.unstubAllGlobals());
 describe('网页直连比特浏览器的输入和读取边界', () => {
+  it('页面加载中不提前核验空会话，真正的人工验证页继续等待', async () => {
+    vi.stubGlobal('location', {
+      protocol: 'https:',
+      hostname: 'chatgpt.com',
+      href: 'https://chatgpt.com/'
+    });
+    const document = { readyState: 'loading', title: 'Just a moment' };
+    vi.stubGlobal('document', document);
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'loading' });
+    document.readyState = 'complete';
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'manual' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([200, 401])('已加载的官网明确没有登录会话时返回失效状态：%s', async (status) => {
+    vi.stubGlobal('location', {
+      protocol: 'https:',
+      hostname: 'chatgpt.com',
+      href: 'https://chatgpt.com/'
+    });
+    vi.stubGlobal('document', {
+      readyState: 'complete',
+      title: 'ChatGPT',
+      querySelectorAll: () => []
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status })));
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'unauthenticated' });
+  });
   it('只允许当前电脑的接口和窗口控制地址，不接受外部地址或凭据 URL', () => {
     expect(localBrowserUrl('http://127.0.0.1:54345')).toBe('http://127.0.0.1:54345');
     expect(localBrowserUrl('ws://localhost:9222/devtools/browser/abc-123', true)).toContain(

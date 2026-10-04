@@ -1,3 +1,4 @@
+/* global document, innerWidth, getComputedStyle */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,7 +10,12 @@ import { chromium } from 'playwright';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const built = process.argv.includes('--built');
-const output = resolve(root, '.runtime/bitbrowser-direct-20261002', built ? 'built' : '.');
+const outputDirectory = process.argv.find((value) => value.startsWith('--output='))?.slice(9);
+const output = resolve(
+  root,
+  outputDirectory ?? '.runtime/bitbrowser-direct-20261002',
+  built ? 'built' : '.'
+);
 mkdirSync(output, { recursive: true });
 const freePort = () =>
   new Promise((done) => {
@@ -72,6 +78,7 @@ let browser, controlled, controlledContext, bitServer;
 let authenticated = false;
 let identityMismatch = false;
 let profileSync = false;
+let manualVerification = false;
 let connectorRequests = 0;
 let apiStarts = 0;
 let codeRequests = 0;
@@ -166,7 +173,9 @@ try {
     if (url.hostname === 'chatgpt.com')
       return route.fulfill({
         contentType: 'text/html',
-        body: '<!doctype html><title>模拟 ChatGPT</title><p>模拟登录窗口</p>'
+        body: manualVerification
+          ? '<!doctype html><title>Just a moment</title><p>模拟人工验证窗口</p>'
+          : '<!doctype html><title>模拟 ChatGPT</title><p>模拟登录窗口</p>'
       });
     return route.abort();
   });
@@ -324,7 +333,11 @@ try {
               action: 'bitbrowser',
               plan: 'plus',
               state: 'running',
-              result: { mode: 'open_browser', status: 'waiting_local_connector' },
+              result: {
+                mode: 'open_browser',
+                transport: 'web_direct',
+                status: 'waiting_local_connector'
+              },
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
             }
@@ -338,12 +351,32 @@ try {
             bitBrowser: { ...bitSettings }
           });
         }
+        if (path.endsWith('/bitbrowser-cancel')) {
+          const job = jobs.find((item) => path.includes(item.id));
+          assert.equal(job.result.mode, 'open_browser');
+          assert.equal(job.result.transport, 'web_direct');
+          job.state = 'finished';
+          job.result = {
+            ...job.result,
+            status: 'cancelled',
+            reason: 'bitbrowser_direct_cancelled',
+            cancellation_confirmed: true,
+            payment_attempted: false,
+            payment_requests_sent: 0
+          };
+          return success(route, { id: job.id });
+        }
         if (/\/auto-recharge\/local\//.test(path)) {
           assert.equal(request.headers()['x-recharge-local'], 'fixture-only-agent');
           const input = request.postDataJSON();
           const job = jobs[0];
           assert.equal(input.result.payment_requests_sent, 0);
           assert.ok(!JSON.stringify(input).includes('fixture-only-password'));
+          if (job.state === 'finished')
+            return route.fulfill({
+              status: 409,
+              json: { success: false, message: '执行窗口已结束' }
+            });
           job.result = { ...job.result, ...input.result };
           job.state =
             input.type === 'finished'
@@ -370,6 +403,13 @@ try {
   await install(context);
   const page = await context.newPage();
   page.on('pageerror', (error) => errors.push(error.message));
+  const dismissClosableMessages = async () => {
+    for (const notice of await page.locator('.el-message.is-closable').all()) {
+      if (!(await notice.isVisible())) continue;
+      await notice.locator('.el-message__closeBtn').click();
+      await notice.waitFor({ state: 'hidden' });
+    }
+  };
   await page.goto(origin + '/v2/auto-recharge');
   await page.getByText('仅登录窗口', { exact: true }).click();
   await page.getByText('已保存账号', { exact: true }).click();
@@ -427,6 +467,7 @@ try {
   for (const width of [1440, 1024, 901, 900, 768, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const theme of ['light', 'dark']) {
+      await dismissClosableMessages();
       await page.getByTitle(theme === 'light' ? '切换为浅色主题' : '切换为深色主题').click();
       await page.getByRole('button', { name: '连接说明', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '比特浏览器直连说明' });
@@ -453,6 +494,135 @@ try {
       results.push({ scenario: '连接说明弹窗', width, theme, ok: true });
     }
   }
+  await page.getByText('授权 JSON', { exact: true }).first().click();
+  const jsonInput = page.getByPlaceholder(/粘贴完整授权 JSON|授权已自动载入/);
+  const fixtureSession = JSON.stringify({
+    sessionToken: 'fixture-only-session-cookie',
+    user: { id: 'user-fixture', email: fixtureEmail },
+    account: { id: 'account-fixture' }
+  });
+  await jsonInput.fill(fixtureSession);
+  authenticated = false;
+  const expiredSourceId = jobs[0].id;
+  await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
+  await waitFor(() => jobs[0]?.id !== expiredSourceId && jobs[0]?.state === 'finished');
+  assert.equal(jobs[0].result.reason, 'official_login_not_verified');
+  assert.equal(jobs[0].result.stage, 'session_restore');
+  await waitFor(async () => await jsonInput.isEnabled());
+  // Accepted JSON is cleared from the visible password input and retained in the session draft.
+  assert.equal(await jsonInput.getAttribute('placeholder'), '授权已自动载入，可粘贴新 JSON 替换');
+  assert.equal(
+    await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).isEnabled(),
+    true
+  );
+  results.push({ scenario: '无效 JSON 明确失败并释放表单，保留输入可重试', ok: true });
+
+  manualVerification = true;
+  await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
+  await waitFor(() => jobs[0]?.state === 'awaiting_human_verification').catch(async (error) => {
+    const diagnostic = {
+      apiStarts,
+      errors,
+      jobs: jobs.map((job) => ({
+        state: job.state,
+        status: job.result.status,
+        stage: job.result.stage,
+        reason: job.result.reason
+      }))
+    };
+    writeFileSync(resolve(output, 'recovery-failure.json'), JSON.stringify(diagnostic, null, 2));
+    await page.screenshot({
+      path: resolve(output, 'recovery-failure.png'),
+      animations: 'disabled'
+    });
+    console.log(JSON.stringify(diagnostic));
+    throw error;
+  });
+  await page.getByRole('button', { name: '我已完成验证，刷新核对', exact: true }).click();
+  assert.equal(jobs[0].state, 'awaiting_human_verification');
+  assert.equal(connectorRequests, 0);
+  // Reload removes the original JS controller while the backend task is still active.
+  await page.reload();
+  await page.getByText('本页可停止本次登录并解锁资料', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /我已完成验证/ }).count(), 0);
+  for (const width of [1440, 1024, 901, 900, 768, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ['light', 'dark']) {
+      await dismissClosableMessages();
+      await page.getByTitle(theme === 'light' ? '切换为浅色主题' : '切换为深色主题').click();
+      const geometry = await page.locator('.recharge-status-panel').evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const textBox = (node) => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height,
+            lineHeight: getComputedStyle(node).lineHeight
+          };
+        };
+        const buttons = [...element.querySelectorAll('button')].map((button) => {
+          const rect = button.getBoundingClientRect();
+          return {
+            label: button.textContent.trim(),
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height
+          };
+        });
+        return {
+          left: box.left,
+          right: box.right,
+          overflow: document.documentElement.scrollWidth > innerWidth + 1,
+          buttons,
+          rows: [...element.querySelectorAll('.recharge-summary dt')].map((dt) => {
+            const dd = dt.nextElementSibling;
+            return {
+              label: dt.textContent.trim(),
+              labelText: textBox(dt),
+              valueText: textBox(dd)
+            };
+          })
+        };
+      });
+      assert.equal(geometry.overflow, false);
+      assert.ok(
+        geometry.buttons.every(
+          (button) => button.left >= geometry.left - 1 && button.right <= geometry.right + 1
+        )
+      );
+      assert.ok(geometry.rows.every((row) => Math.abs(row.labelText.top - row.valueText.top) <= 1));
+      await page.locator('.recharge-status-panel').screenshot({
+        path: resolve(output, `${width}-${theme}-orphan.png`),
+        animations: 'disabled'
+      });
+      results.push({
+        scenario: '失去原控制器后仍可停止，按钮与文字无溢出',
+        width,
+        theme,
+        geometry,
+        ok: true
+      });
+    }
+  }
+  await page.getByRole('button', { name: '停止本次任务', exact: true }).click();
+  await page.getByText('本次登录已停止', { exact: false }).waitFor();
+  assert.equal(jobs[0].state, 'finished');
+  assert.equal(jobs[0].result.status, 'cancelled');
+  await page.getByText('仅登录窗口', { exact: true }).first().click();
+  await page.getByPlaceholder(/粘贴完整授权 JSON|授权已自动载入/).fill(fixtureSession);
+  manualVerification = false;
+  authenticated = true;
+  const cancelledSourceId = jobs[0].id;
+  await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
+  await waitFor(() => jobs[0]?.id !== cancelledSourceId && jobs[0]?.state === 'finished');
+  assert.equal(jobs[0].result.status, 'session_ready');
+  assert.equal(connectorRequests, 0);
+  results.push({ scenario: '失去原控制器的任务停止成功后可再次登录', ok: true });
   await context.close();
   if (!built) {
     const protocolContext = await browser.newContext();

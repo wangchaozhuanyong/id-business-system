@@ -505,6 +505,7 @@ export function useAutoRecharge() {
     () =>
       busy.value ||
       active.value ||
+      directOpen.running.value ||
       paymentCardLoading.value ||
       Boolean(paymentJobId.value && !jobs.value.some((job) => job.id === paymentJobId.value))
   );
@@ -578,12 +579,17 @@ export function useAutoRecharge() {
     const job = selected.value;
     const connectorNeverReceived =
       job?.state === 'unknown' && job.result.status === 'waiting_local_connector';
+    const interruptedDirectLogin =
+      job?.state === 'unknown' &&
+      job.result.mode === 'open_browser' &&
+      job.result.transport === 'web_direct';
     return Boolean(
       job &&
       ['bitbrowser', 'server'].includes(job.action) &&
       job.state !== 'confirming' &&
-      (activeStates.has(job.state) || connectorNeverReceived) &&
-      job.result.status !== 'cancelling' &&
+      (activeStates.has(job.state) || connectorNeverReceived || interruptedDirectLogin) &&
+      (job.result.status !== 'cancelling' ||
+        (job.result.mode === 'open_browser' && job.result.transport === 'web_direct')) &&
       job.result.payment_attempted !== true &&
       Number(job.result.payment_requests_sent ?? 0) === 0
     );
@@ -637,7 +643,8 @@ export function useAutoRecharge() {
     () =>
       selected.value?.state === 'awaiting_human_verification' &&
       selected.value?.action === 'bitbrowser' &&
-      selected.value.result.stage === 'login_code_required'
+      selected.value.result.stage === 'login_code_required' &&
+      (selected.value.result.transport !== 'web_direct' || directOpen.owns(selected.value.id))
   );
   const autoCodeBusy = ref(false);
   const autoCodeFailureJobId = ref('');
@@ -660,7 +667,13 @@ export function useAutoRecharge() {
     () =>
       selected.value?.action === 'bitbrowser' &&
       selected.value.state === 'awaiting_human_verification' &&
-      !needsCode.value
+      !needsCode.value &&
+      (selected.value.result.transport !== 'web_direct' || directOpen.owns(selected.value.id))
+  );
+  const resumeActionLabel = computed(() =>
+    selected.value?.result.transport === 'web_direct'
+      ? '我已完成验证，刷新核对'
+      : '我已完成验证，继续原任务'
   );
   const workflowMessage = computed(() => {
     const job = selected.value;
@@ -669,7 +682,7 @@ export function useAutoRecharge() {
       activeStates.has(job.state) &&
       !directOpen.owns(job.id)
     )
-      return '此登录任务由原网页直连执行，请回到启动任务的网页和比特窗口查看；本页不会重复启动。';
+      return '此登录任务由原网页直连执行。本页可停止本次登录并解锁资料；继续核对需回到原网页。';
     if (job?.result.status === 'cancelling') return '正在停止执行并清理本次窗口，请稍候。';
     if (needsCode.value && autoCodeSubmittedJobId.value === job?.id)
       return '2FA 验证码已提交，正在等待官网确认。';
@@ -678,7 +691,7 @@ export function useAutoRecharge() {
         ? '自动取码不可用，请输入当次验证码，或重试自动取码。'
         : '官网要求 TOTP 验证码，正在使用系统 2FA 功能自动取码并提交。';
     if (job?.state === 'awaiting_human_verification' && job.result.transport === 'web_direct')
-      return '请在已打开的比特官网窗口完成验证；保留当前管理页面，网页会继续核对登录结果。';
+      return '请在已打开的比特官网窗口完成验证；网页会自动核对登录结果，也可点击刷新核对。';
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running' && job.result.transport === 'web_direct')
@@ -1331,7 +1344,10 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     try {
-      if (selected.value && directOpen.owns(selected.value.id)) return;
+      if (selected.value && directOpen.owns(selected.value.id)) {
+        // 网页直连持续核对原窗口，无连接器可恢复；下方 finally 刷新当前核对结果。
+        return;
+      }
       const current = await access();
       await rechargeConnectorApi.resume(
         current.connectorUrl,
@@ -1462,8 +1478,13 @@ export function useAutoRecharge() {
     error.value = '';
     const id = selected.value.id;
     try {
-      if (directOpen.owns(id)) {
-        await directOpen.cancel(id);
+      if (
+        selected.value.result.mode === 'open_browser' &&
+        selected.value.result.transport === 'web_direct'
+      ) {
+        if (directOpen.owns(id)) await directOpen.cancel(id);
+        if (jobs.value.find((job) => job.id === id)?.state !== 'finished')
+          await rechargeApi.cancelBitBrowser(id);
         return;
       }
       if (selected.value.action === 'server') {
@@ -1488,6 +1509,32 @@ export function useAutoRecharge() {
       busy.value = false;
     }
   }
+
+  watch(
+    jobs,
+    (items) => {
+      if (!currentId.value) {
+        const loginJob = items.find(
+          (job) =>
+            job.result.mode === 'open_browser' &&
+            job.result.transport === 'web_direct' &&
+            activeStates.has(job.state)
+        );
+        if (loginJob) currentId.value = loginJob.id;
+      }
+      for (const job of items) {
+        if (
+          job.state === 'finished' &&
+          job.result.cancellation_confirmed === true &&
+          directOpen.owns(job.id)
+        )
+          void directOpen.cancel(job.id, true).catch((cause) => {
+            if (!disposed) error.value = getApiErrorMessage(cause);
+          });
+      }
+    },
+    { deep: true, immediate: true, flush: 'post' }
+  );
 
   onScopeDispose(() => {
     disposed = true;
@@ -1563,6 +1610,7 @@ export function useAutoRecharge() {
     canRecheck,
     canResolveNoBankRequest,
     needsHuman,
+    resumeActionLabel,
     needsCode,
     needsManualCode,
     autoCodeBusy,

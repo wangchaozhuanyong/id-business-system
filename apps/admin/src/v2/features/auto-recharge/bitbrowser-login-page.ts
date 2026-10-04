@@ -6,7 +6,10 @@ export async function inspectLoginPage(
   const official =
     location.protocol === 'https:' &&
     ['chatgpt.com', 'auth.openai.com', 'auth0.openai.com'].includes(location.hostname);
-  if (!official) return { kind: 'manual' as const };
+  if (!official)
+    return { kind: location.href === 'about:blank' ? ('loading' as const) : ('manual' as const) };
+  if (action === 'inspect' && document.readyState !== 'complete')
+    return { kind: 'loading' as const };
   const selectors = {
     email: 'input[type="email"], input[name="username"], input[autocomplete="username"]',
     password: 'input[type="password"], input[autocomplete="current-password"]',
@@ -39,6 +42,7 @@ export async function inspectLoginPage(
   }
   if (/Just a moment|Verify.*human|安全验证|请稍候/i.test(document.title))
     return { kind: 'manual' as const };
+  let unauthenticated = false;
   if (location.hostname === 'chatgpt.com') {
     try {
       const response = await fetch('/api/auth/session', {
@@ -48,6 +52,7 @@ export async function inspectLoginPage(
       });
       if (response.status === 403) return { kind: 'manual' as const };
       const session = response.ok ? await response.json() : null;
+      unauthenticated = response.status === 401 || (response.ok && !session?.user);
       if (session?.user?.id && session.user.email && session.accessToken) {
         const claims = JSON.parse(
           atob(session.accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
@@ -100,7 +105,7 @@ export async function inspectLoginPage(
     if (inputs.length > 1) return { kind: 'manual' as const };
     if (inputs.length === 1) return { kind };
   }
-  return { kind: 'loading' as const };
+  return { kind: unauthenticated ? ('unauthenticated' as const) : ('loading' as const) };
 }
 
 export function loginPageExpression(action: Parameters<typeof inspectLoginPage>[0], value = '') {

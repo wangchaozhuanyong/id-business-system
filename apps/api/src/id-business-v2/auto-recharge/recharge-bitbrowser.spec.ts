@@ -121,6 +121,58 @@ describe('比特浏览器充值输入边界', () => {
 });
 
 describe('本机任务持久化边界', () => {
+  it.each(['running', 'awaiting_human_verification', 'unknown'])(
+    '原网页丢失后可结束本人的仅登录任务并释放执行锁：%s',
+    async (state) => {
+      const job = {
+        id,
+        ownerId: operator.id,
+        action: 'bitbrowser',
+        state,
+        nonceHash: 'existing',
+        result: { mode: 'open_browser', transport: 'web_direct', payment_requests_sent: 0 }
+      };
+      const repository = {
+        lock: vi.fn(),
+        findJob: vi.fn().mockResolvedValue(job),
+        updateJob: vi.fn()
+      };
+      const audit = { append: vi.fn() };
+      const service = new RechargeLocalService(
+        repository as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        { execute: (fn: (tx: object) => unknown) => fn({}) } as never,
+        audit as never
+      );
+      await service.cancel(id, operator);
+      const update = repository.updateJob.mock.calls[0]![2];
+      expect(update).toMatchObject({
+        state: 'finished',
+        nonceHash: null,
+        result: {
+          ...job.result,
+          status: 'cancelled',
+          reason: 'bitbrowser_direct_cancelled',
+          cancellation_confirmed: true,
+          payment_attempted: false
+        }
+      });
+      expect(update.leaseUntil.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(audit.append).toHaveBeenCalledOnce();
+      repository.findJob.mockResolvedValue({ ...job, state: 'finished', result: update.result });
+      await expect(service.cancel(id, operator)).resolves.toEqual({ id });
+      expect(repository.updateJob).toHaveBeenCalledOnce();
+      repository.findJob.mockResolvedValue({ ...job, ownerId: 'other-user' });
+      await expect(service.cancel(id, operator)).rejects.toThrow('无权操作');
+      repository.findJob.mockResolvedValue({
+        ...job,
+        result: { ...job.result, payment_requests_sent: 1 }
+      });
+      await expect(service.cancel(id, operator)).rejects.toThrow('付款请求已发出');
+    }
+  );
   it('取消请求保留回传凭据，待连接器完成清理；完成后的取消回执幂等', async () => {
     const job = {
       id,
