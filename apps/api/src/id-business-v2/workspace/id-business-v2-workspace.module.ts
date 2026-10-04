@@ -1,3 +1,6 @@
+import { MailEventsController } from './mail-events.controller';
+import { MailEventsService } from './mail-events.service';
+import { MailEventRepository } from './persistence/mail-event.repository';
 import { Module } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
@@ -61,6 +64,7 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
 @Module({
   imports: [IdBusinessV2RuntimeModule],
   controllers: [
+    MailEventsController,
     IdBusinessV2WebsiteVisitController,
     IdBusinessV2WorkspaceController,
     IdBusinessV2QuickActionController,
@@ -78,6 +82,8 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2PublicVendureMailboxController
   ],
   providers: [
+    MailEventsService,
+    MailEventRepository,
     IdBusinessV2WebsiteVisitService,
     IdBusinessV2WebsiteVisitSignatureGuard,
     IdBusinessV2WebsiteVisitRetentionWorker,
@@ -121,6 +127,7 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2VendureMailboxService
   ],
   exports: [
+    MailEventsService,
     IdBusinessV2TotpAccountService,
     IdBusinessV2VendureMailboxService,
     IdBusinessV2RechargeMailboxService

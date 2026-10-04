@@ -34,7 +34,7 @@ import { registrationMail } from './registration-mail';
 import {
   assertRegistrationMailboxEmail,
   registrationMailboxAuthorizationValid,
-  summarizeRegistrationMailboxes
+  loadRegistrationMailboxSummaries
 } from './registration-mailbox-summaries';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -90,11 +90,7 @@ export class IdBusinessV2VendureMailboxService {
 
   async registrationMailboxSummaries(operator: AuthenticatedUser) {
     this.requireAdmin(operator);
-    const [aliases, primaries] = await Promise.all([
-      this.client.virtualEmails(),
-      this.client.primaryAccounts()
-    ]);
-    return summarizeRegistrationMailboxes(aliases, primaries);
+    return loadRegistrationMailboxSummaries(this.client);
   }
 
   async registrationCode(
@@ -576,6 +572,7 @@ export class IdBusinessV2VendureMailboxService {
     objectType: string,
     objectId: string
   ) {
+    const changedScopes = ['vendure-mailbox', 'auto-recharge'] as const;
     try {
       await this.transactionManager.execute(
         async (tx) => {
@@ -589,7 +586,7 @@ export class IdBusinessV2VendureMailboxService {
             remark: '已通过 ID 系统操作 Vendure 邮箱数据'
           });
         },
-        { changedScopes: ['auto-recharge'], requestId, operator, retryMode: 'none' }
+        { changedScopes, requestId, operator, retryMode: 'none' }
       );
     } catch {
       throw new ServiceUnavailableException(

@@ -20,20 +20,34 @@ describe('注册私网执行器接收边界', () => {
   it('只接受实际指纹内核就绪，不接受普通 Chromium 健康响应', async () => {
     fetchMock.mockResolvedValueOnce(reply({ ready: true, engine: 'builtin-chromium' }));
     expect(await registrationWorkerReady()).toBe(false);
-    fetchMock.mockResolvedValueOnce(reply({ ready: true, engine: 'camoufox' }));
+    fetchMock.mockResolvedValueOnce(
+      reply({ ready: true, engine: 'camoufox', mailDeliveryVersion: 1 })
+    );
     expect(await registrationWorkerReady()).toBe(true);
+    fetchMock.mockResolvedValueOnce(reply({ ready: true, engine: 'camoufox' }));
+    expect(await registrationWorkerReady()).toBe(false);
   });
   it('创建前拒绝保留窗口和仍在执行的任务，恢复原任务只检查内核', async () => {
     fetchMock.mockResolvedValueOnce(
-      reply({ ready: true, engine: 'camoufox', registrationWindowRetained: true })
+      reply({
+        ready: true,
+        engine: 'camoufox',
+        mailDeliveryVersion: 1,
+        registrationWindowRetained: true
+      })
     );
     await expect(requireRegistrationWorker(true)).rejects.toThrow('原注册窗口');
     fetchMock.mockResolvedValueOnce(
-      reply({ ready: true, engine: 'camoufox', registrationBusy: true })
+      reply({ ready: true, engine: 'camoufox', mailDeliveryVersion: 1, registrationBusy: true })
     );
     await expect(requireRegistrationWorker(true)).rejects.toThrow('已有注册任务');
     fetchMock.mockResolvedValueOnce(
-      reply({ ready: true, engine: 'camoufox', registrationWindowRetained: true })
+      reply({
+        ready: true,
+        engine: 'camoufox',
+        mailDeliveryVersion: 1,
+        registrationWindowRetained: true
+      })
     );
     await expect(requireRegistrationWorker()).resolves.toBeUndefined();
   });

@@ -7,6 +7,16 @@ import type { V2CommandTransaction } from '../../runtime/public-api';
 @Injectable()
 export class RegistrationRepository {
   constructor(private readonly prisma: PrismaService) {}
+  waitingMailJobs(aliasId: string | null) {
+    return this.prisma.idBusinessV2RegistrationJob.findMany({
+      where: {
+        state: 'awaiting_email',
+        leaseUntil: { gt: new Date() },
+        ...(aliasId ? { mailboxAliasId: aliasId } : {})
+      },
+      select: { id: true }
+    });
+  }
   lock(tx: V2CommandTransaction) {
     return acquireMysqlTransactionLock(tx, 'auto-registration:single-task');
   }

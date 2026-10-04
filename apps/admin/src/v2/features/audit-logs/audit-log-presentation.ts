@@ -84,6 +84,7 @@ const AUDIT_MODULE_LABELS: Record<string, string> = {
 };
 
 const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'id_business_v2.vendure_mailbox.receive_event': '接收新邮件通知',
   'id_business_v2.auto_recharge.email_code.prepare': '准备登录邮箱验证',
   'id_business_v2.auto_recharge.email_code.read': '读取登录验证邮件',
   'id_business_v2.auto_recharge.email_code.received': '确认登录验证邮件已接受',
@@ -112,6 +113,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
 };
 
 const AUDIT_OBJECT_LABELS: Record<string, string> = {
+  vendure_mailbox: '邮件验证码查询',
   recharge_job: '自动充值任务',
   registration_job: '注册任务',
   registration_mailbox: '注册邮箱',

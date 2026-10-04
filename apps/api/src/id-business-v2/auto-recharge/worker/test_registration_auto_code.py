@@ -38,22 +38,36 @@ class MemoryMailApi:
         self.on_read = on_read
         self.polls = 0
         self.events = []
+        self.rejections = []
+
+    def deliver_next(self):
+        value = next(self.deliveries, None)
+        if value is None:
+            return
+        if not value.get('code'):
+            # One empty catch-up followed by a distinct synthetic arrival event.
+            asyncio.get_running_loop().call_soon(self.deliver_next)
+            return
+        if self.on_read:
+            self.on_read()
+        try:
+            self.job.signal_code(value['code'], value['attempt'], value['step'], value['mailId'])
+        except Stop as error:
+            self.rejections.append(error.report['reason'])
+            self.job.signal_cancel()
 
     def open(self, request, timeout):
         if timeout != 10 or request.get_method() != 'POST':
             raise AssertionError('Unexpected automatic email API request')
         body = json.loads(request.data)
         if request.full_url == self.job.payload['callbackUrl'] + '/code':
-            if body != {'attempt': self.job.attempt}:
-                raise AssertionError('Automatic read must bind the original attempt')
             self.polls += 1
-            value = next(self.deliveries)
-            if self.on_read:
-                self.on_read()
-            return MemoryResponse(value)
+            raise AssertionError('The Worker must not query mail on a fixed interval')
         if request.full_url != self.job.payload['callbackUrl']:
             raise AssertionError('No external API destination is permitted')
         self.events.append(body)
+        if body['type'] == 'waiting_email':
+            asyncio.get_running_loop().call_soon(self.deliver_next)
         return MemoryResponse({'step': body['step']})
 
 
@@ -76,7 +90,7 @@ def delivery(*, attempt=1, step='email_code'):
             'attempt': attempt, 'step': step}
 
 
-class AutoMailPollingTests(unittest.IsolatedAsyncioTestCase):
+class AutoMailEventTests(unittest.IsolatedAsyncioTestCase):
     async def test_waiting_mail_always_binds_an_explicit_boolean_request_kind(self):
         for new_request in [False, True]:
             with self.subTest(new_request=new_request):
@@ -138,17 +152,17 @@ class AutoMailPollingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
         self.assertEqual([event['type'] for event in api.events], ['waiting_email', 'mail_accepted'])
         self.assertIs(api.events[0]['newMailRequest'], False)
-        self.assertEqual(api.polls, 1)
+        self.assertEqual(api.polls, 0)
         field.fill.assert_awaited_once_with('123456')
         field.press.assert_awaited_once_with('Enter')
         self.assertFalse(job.awaiting_code)
         self.assertIsNone(job.pending_code)
 
-    async def test_real_server_poll_consumes_matching_mail_and_acknowledges_once(self):
+    async def test_private_delivery_consumes_matching_mail_and_acknowledges_once(self):
         job, api, stack = fixture([delivery()])
         with stack:
             self.assertEqual(await asyncio.wait_for(job.wait_code(), 3), '123456')
-            self.assertEqual(api.polls, 1)
+            self.assertEqual(api.polls, 0)
             self.assertFalse(job.awaiting_code)
             self.assertIsNone(job.pending_code)
             accepted = [event for event in api.events if event['type'] == 'mail_accepted']
@@ -168,7 +182,8 @@ class AutoMailPollingTests(unittest.IsolatedAsyncioTestCase):
                 with stack:
                     with self.assertRaises(Stop) as stopped:
                         await asyncio.wait_for(job.wait_code(), 3)
-                    self.assertEqual(stopped.exception.report['reason'], 'invalid_login_code')
+                    self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+                    self.assertEqual(api.rejections, ['invalid_login_code'])
                     self.assertIsNone(job.pending_code)
                     self.assertFalse(any(event['type'] == 'mail_accepted' for event in api.events))
 
@@ -179,7 +194,7 @@ class AutoMailPollingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(Stop) as stopped:
                 await asyncio.wait_for(job.wait_code(), 3)
             self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
-            self.assertEqual(api.polls, 1)
+            self.assertEqual(api.polls, 0)
             self.assertFalse(any(event['type'] == 'mail_accepted' for event in api.events))
 
 
@@ -187,7 +202,7 @@ class AutoMailPollingTests(unittest.IsolatedAsyncioTestCase):
 class AutoMailBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def browser_flow(self, deliveries, *, expected_reason=None, cancel_during_read=False):
         from playwright.async_api import async_playwright
-        job, api, stack = fixture(deliveries)
+        job, api, stack = fixture(deliveries, prepare=False)
         self.addCleanup(stack.close)
         if cancel_during_read:
             api.on_read = job.signal_cancel
@@ -228,6 +243,7 @@ document.querySelector('form').onsubmit = async event => {
                 await page.goto('https://auth.openai.com/email-verification')
                 flow = RegistrationBrowser(job, context)
                 with stack:
+                    job.prepare_mail('email_code')
                     if expected_reason:
                         with self.assertRaises(Stop) as stopped:
                             await asyncio.wait_for(flow.mail(page), 15)
@@ -251,18 +267,19 @@ document.querySelector('form').onsubmit = async event => {
 
     async def test_api_email_is_automatically_filled_and_entered_once(self):
         api = await self.browser_flow([delivery()])
-        self.assertEqual(api.polls, 1)
+        self.assertEqual(api.polls, 0)
         self.assertEqual([event['type'] for event in api.events], ['waiting_email', 'mail_accepted'])
 
-    async def test_empty_mail_then_arrival_is_polled_and_submitted_once(self):
+    async def test_empty_catchup_then_arrival_event_is_submitted_once(self):
         api = await self.browser_flow([{'code': None}, delivery()])
-        self.assertEqual(api.polls, 2)
+        self.assertEqual(api.polls, 0)
         self.assertEqual([event['type'] for event in api.events], ['waiting_email', 'mail_accepted'])
 
     async def test_wrong_attempt_and_step_never_fill_or_submit_the_page(self):
         for value in [delivery(attempt=2), delivery(step='password')]:
             with self.subTest(binding='attempt' if value['attempt'] != 1 else 'step'):
-                api = await self.browser_flow([value], expected_reason='invalid_login_code')
+                api = await self.browser_flow([value], expected_reason='operation_cancelled')
+                self.assertEqual(api.rejections, ['invalid_login_code'])
                 self.assertEqual([event['type'] for event in api.events], ['waiting_email'])
 
     async def test_cancelled_read_never_fills_or_submits_late_mail(self):

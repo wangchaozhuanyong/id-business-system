@@ -24,7 +24,7 @@ async function registrationWorkerHealth() {
       signal: AbortSignal.timeout(3000)
     });
     const value = response.ok ? await response.json() : null;
-    return value?.ready === true && value?.engine === 'camoufox'
+    return value?.ready === true && value?.engine === 'camoufox' && value?.mailDeliveryVersion === 1
       ? {
           registrationBusy: value.registrationBusy === true,
           windowRetained: value.registrationWindowRetained === true

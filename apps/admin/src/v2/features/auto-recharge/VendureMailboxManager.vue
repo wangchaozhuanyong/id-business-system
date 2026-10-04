@@ -856,10 +856,11 @@
                 </p>
               </div>
               <div class="vendure-relay-autorefresh-control">
-                <el-switch v-model="relayAutoRefresh" active-text="10秒自动刷新" />
-                <span v-if="relayAutoRefresh && relayCountdown > 0" class="vendure-relay-countdown">
-                  ({{ relayCountdown }}秒后刷新)
-                </span>
+                <el-switch
+                  v-model="relayAutoRefresh"
+                  active-text="新邮件自动更新"
+                  aria-label="新邮件自动更新"
+                />
               </div>
             </div>
 
@@ -903,7 +904,7 @@
                     size="large"
                     placeholder="请输入虚拟邮箱、买家查询码或主查询码..."
                     class="vendure-relay-input"
-                    @keyup.enter="handleRelayQuery"
+                    @keyup.enter="handleRelayQuery()"
                   >
                     <template #prefix>
                       <el-icon><Search /></el-icon>
@@ -926,7 +927,7 @@
                     size="large"
                     class="vendure-relay-search-btn"
                     :loading="relayLoading"
-                    @click="handleRelayQuery"
+                    @click="handleRelayQuery()"
                   >
                     <el-icon><Search /></el-icon>
                     <span>查询验证码</span>
@@ -992,7 +993,7 @@
                   size="small"
                   variant="soft"
                   :loading="relayLoading"
-                  @click="handleRelayQuery"
+                  @click="handleRelayQuery()"
                 >
                   <el-icon><RefreshRight /></el-icon>
                   <span>立即刷新</span>
@@ -1087,7 +1088,7 @@
                 size="small"
                 variant="soft"
                 :loading="relayLoading"
-                @click="handleRelayQuery"
+                @click="handleRelayQuery()"
               >
                 <el-icon><RefreshRight /></el-icon>
                 <span>刷新重试</span>
@@ -1323,6 +1324,7 @@ import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { subscribeV2ScopeChanges } from '@/v2/runtime/changeSync';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { vendureMailboxApi } from './vendure-mailbox-api';
@@ -1361,7 +1363,7 @@ let preserveMailScopeOnNextTabChange = false;
 
 const statusQuery = useV2ModuleQuery<V2VendureMailboxStatus>({
   moduleKey: 'vendure-mailbox',
-  scope: 'auto-recharge',
+  scope: 'vendure-mailbox',
   key: 'vendure-mailbox-status',
   query: ({ signal }) => vendureMailboxApi.status({ signal })
 });
@@ -1370,7 +1372,7 @@ const connected = computed(() => statusQuery.data.value?.connected === true);
 const ready = computed(() => configured.value && connected.value);
 const primaryQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxPrimaryAccount>>({
   moduleKey: 'vendure-mailbox',
-  scope: 'auto-recharge',
+  scope: 'vendure-mailbox',
   key: () =>
     createV2QueryKey({
       resource: 'primary',
@@ -1394,7 +1396,7 @@ const primaryQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxPrima
 });
 const aliasQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxAlias>>({
   moduleKey: 'vendure-mailbox',
-  scope: 'auto-recharge',
+  scope: 'vendure-mailbox',
   key: () =>
     createV2QueryKey({
       resource: 'aliases',
@@ -1420,7 +1422,7 @@ const aliasQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxAlias>>
 });
 const mailQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxMail>>({
   moduleKey: 'vendure-mailbox',
-  scope: 'auto-recharge',
+  scope: 'vendure-mailbox',
   key: () =>
     createV2QueryKey({
       resource: 'mails',
@@ -1621,10 +1623,8 @@ const relayLoading = ref(false);
 const relayError = ref('');
 const relayResult = ref<RelayQueryResult | null>(null);
 const lastQueriedTime = ref('');
-const relayAutoRefresh = ref(false);
-const relayCountdown = ref(10);
+const relayAutoRefresh = useV2SessionDraft('vendure-mailbox:relayLiveUpdates', () => ref(true));
 const expandedMailIds = ref<Set<string>>(new Set());
-let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let relayRequestId = 0;
 
 watch(
@@ -1714,7 +1714,7 @@ function formatPublicQueryResult(
   };
 }
 
-async function handleRelayQuery() {
+async function handleRelayQuery(background = false) {
   const query = relayInput.value.trim();
   if (!query) {
     relayResult.value = null;
@@ -1723,9 +1723,11 @@ async function handleRelayQuery() {
   }
   const requestId = ++relayRequestId;
   relayError.value = '';
-  relayResult.value = null;
-  lastQueriedTime.value = '';
-  expandedMailIds.value = new Set();
+  if (!background) {
+    relayResult.value = null;
+    lastQueriedTime.value = '';
+    expandedMailIds.value = new Set();
+  }
   relayLoading.value = true;
   try {
     let resultData: RelayQueryResult | null = null;
@@ -1828,11 +1830,14 @@ async function handleRelayQuery() {
     }
   } catch (err: unknown) {
     if (requestId === relayRequestId) {
-      relayResult.value = null;
+      if (!background) relayResult.value = null;
       relayError.value = getApiErrorMessage(err) || '查询失败，请核对输入信息';
     }
   } finally {
-    if (requestId === relayRequestId) relayLoading.value = false;
+    if (requestId === relayRequestId) {
+      relayLoading.value = false;
+      if (relayLiveDirty) refreshRelayFromEvent();
+    }
   }
 }
 
@@ -1843,29 +1848,26 @@ function jumpToRelayQuery(identifier: string) {
   void handleRelayQuery();
 }
 
-watch([relayAutoRefresh, activeTab], ([enabled, tab]) => {
-  if (autoRefreshTimer) {
-    clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
-  if (enabled && tab === 'relay-query') {
-    relayCountdown.value = 10;
-    autoRefreshTimer = setInterval(() => {
-      if (!relayAutoRefresh.value || activeTab.value !== 'relay-query' || !ready.value) return;
-      if (relayCountdown.value > 1) {
-        relayCountdown.value -= 1;
-      } else {
-        relayCountdown.value = 10;
-        if (!relayLoading.value && relayInput.value.trim()) {
-          void handleRelayQuery();
-        }
-      }
-    }, 1000);
-  }
+let relayLiveDirty = false;
+function refreshRelayFromEvent() {
+  if (
+    !relayAutoRefresh.value ||
+    activeTab.value !== 'relay-query' ||
+    !ready.value ||
+    !relayInput.value.trim()
+  )
+    return;
+  relayLiveDirty = true;
+  if (relayLoading.value) return;
+  relayLiveDirty = false;
+  void handleRelayQuery(true);
+}
+const unsubscribeMailChanges = subscribeV2ScopeChanges((scopes) => {
+  if (scopes.includes('vendure-mailbox')) refreshRelayFromEvent();
 });
 
 onBeforeUnmount(() => {
-  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  unsubscribeMailChanges();
   if (copyTimer) clearTimeout(copyTimer);
 });
 function clearNotice() {

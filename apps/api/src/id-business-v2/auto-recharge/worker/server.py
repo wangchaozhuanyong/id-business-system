@@ -885,7 +885,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(403, {"ok": False})
             return
         if self.path == "/registration/health":
-            self.reply(200, {"ready": BROWSER_RUNTIME.started, "engine": "camoufox",
+            self.reply(200, {"ready": BROWSER_RUNTIME.started, "engine": "camoufox", "mailDeliveryVersion": 1,
                              "registrationBusy": (isinstance(self.job, registration_builtin.RegistrationServerJob)
                                                   and not self.job.done),
                              "registrationWindowRetained": registration_builtin.PROFILES.profile is not None})

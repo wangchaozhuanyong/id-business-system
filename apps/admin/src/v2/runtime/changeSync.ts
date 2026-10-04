@@ -51,6 +51,14 @@ let streamConnected = false;
 let activeStream: ActiveStream | null = null;
 let unsubscribeIdentityChange: (() => void) | null = null;
 const localVersions = new Map<V2DataScope, bigint>(V2_DATA_SCOPES.map((scope) => [scope, 0n]));
+const scopeListeners = new Set<(scopes: readonly V2DataScope[]) => void>();
+
+export function subscribeV2ScopeChanges(listener: (scopes: readonly V2DataScope[]) => void) {
+  scopeListeners.add(listener);
+  return () => {
+    scopeListeners.delete(listener);
+  };
+}
 
 function applyVersions(scopes: readonly { scope: V2DataScope; version: string }[]) {
   const changed: V2DataScope[] = [];
@@ -60,7 +68,10 @@ function applyVersions(scopes: readonly { scope: V2DataScope; version: string }[
     localVersions.set(item.scope, incomingVersion);
     changed.push(item.scope);
   }
-  if (changed.length) invalidateV2Queries(changed);
+  if (changed.length) {
+    invalidateV2Queries(changed);
+    for (const listener of scopeListeners) listener(changed);
+  }
 }
 
 function establishEventBaseline(event: V2ChangeEvent) {
@@ -73,7 +84,7 @@ function establishEventBaseline(event: V2ChangeEvent) {
   versionBaselineEstablished = true;
 }
 
-async function reconcileVersions() {
+async function reconcileVersions(includeMailboxes = true) {
   if (!started) return;
   if (reconcilePromise) return reconcilePromise;
   const generation = syncGeneration;
@@ -85,7 +96,9 @@ async function reconcileVersions() {
         establishV2VersionBaseline(result, localVersions);
         versionBaselineEstablished = true;
       } else {
-        const changed = getChangedV2Scopes(result, localVersions);
+        const changed = getChangedV2Scopes(result, localVersions).filter(
+          (scope) => includeMailboxes || scope !== 'vendure-mailbox'
+        );
         applyVersions(
           changed.map((scope) => ({
             scope,
@@ -225,7 +238,7 @@ function scheduleFallbackReconcile() {
   if (!started || streamConnected || document.visibilityState === 'hidden') return;
   fallbackTimer = setTimeout(() => {
     fallbackTimer = undefined;
-    void reconcileVersions();
+    void reconcileVersions(false);
   }, V2_DEGRADED_RECONCILE_INTERVAL_MS);
 }
 

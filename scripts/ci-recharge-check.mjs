@@ -131,6 +131,7 @@ if (part === 'guards') {
       'test_registration_builtin',
       'test_registration_browser',
       'test_registration_auto_code',
+      'test_registration_mail_events',
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',
