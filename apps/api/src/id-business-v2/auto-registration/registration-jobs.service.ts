@@ -21,6 +21,12 @@ import { RegistrationRepository } from './persistence/registration.repository';
 import { registrationWorkerCommand, requireRegistrationWorker } from './registration-worker';
 import { id, record, startInput, text } from './registration-validation';
 
+const registrationProxyKindLabels: Readonly<Record<string, string>> = {
+  dynamic_residential: '动态住宅',
+  static_residential: '静态住宅',
+  mobile: '移动代理'
+};
+
 export function registrationSummary(row: IdBusinessV2RegistrationJob) {
   return {
     id: row.id,
@@ -147,7 +153,7 @@ export class RegistrationJobsService {
       proxies: proxies.items.map((item) => ({
         id: item.id,
         countryCode: item.countryCode,
-        label: `${item.countryCode} · ${item.linkMask}`
+        label: `${item.countryCode} · ${registrationProxyKindLabels[item.kind] ?? '未知属性'} · ${item.linkMask}`
       })),
       names: names.map((item) => ({ id: item.id, displayName: item.displayName })),
       defaultProxyId: defaults.proxy?.status === 'active' ? defaults.proxyId : null,

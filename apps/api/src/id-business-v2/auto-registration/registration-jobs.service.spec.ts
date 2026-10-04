@@ -73,7 +73,7 @@ function fixture() {
   const proxies = {
     forCharge: vi.fn().mockResolvedValue({ countryCode: 'US' }),
     list: vi.fn().mockResolvedValue({
-      items: [{ id: 'proxy-1', countryCode: 'US', linkMask: '已保存' }],
+      items: [{ id: 'proxy-1', countryCode: 'US', kind: 'mobile', linkMask: '已保存' }],
       total: 102
     })
   };
@@ -209,6 +209,24 @@ describe('注册年龄任务快照', () => {
 describe('注册列表候选与原任务查询', () => {
   it('代理和名字搜索分页独立，返回各自总量并兼容旧搜索', async () => {
     const { service, repository, proxies, operator } = fixture();
+    proxies.list.mockResolvedValue({
+      items: [
+        { id: 'proxy-1', countryCode: 'PH', kind: 'mobile', linkMask: '已保存 ···384888' },
+        {
+          id: 'proxy-2',
+          countryCode: 'PH',
+          kind: 'dynamic_residential',
+          linkMask: '已保存 ···361f55'
+        },
+        {
+          id: 'proxy-3',
+          countryCode: 'US',
+          kind: 'static_residential',
+          linkMask: '已保存 ···123456'
+        }
+      ],
+      total: 102
+    });
     const result = await service.options(
       { proxySearch: 'US', proxyPage: '2', nameSearch: '张', namePage: '3' },
       operator
@@ -225,6 +243,11 @@ describe('注册列表候选与原任务查询', () => {
       100
     );
     expect(result).toMatchObject({ proxyTotal: 102, nameTotal: 201 });
+    expect(result.proxies).toEqual([
+      { id: 'proxy-1', countryCode: 'PH', label: 'PH · 移动代理 · 已保存 ···384888' },
+      { id: 'proxy-2', countryCode: 'PH', label: 'PH · 动态住宅 · 已保存 ···361f55' },
+      { id: 'proxy-3', countryCode: 'US', label: 'US · 静态住宅 · 已保存 ···123456' }
+    ]);
     await service.options({ proxySearch: 'PH', proxyPage: '1' }, operator);
     expect(repository.names).toHaveBeenLastCalledWith({ active: true }, 0, 100);
     await service.options({ q: '旧搜索', page: '2' }, operator);
