@@ -25,6 +25,67 @@ describeMysql('IdBusinessV2FinancePostingService real MySQL integrity', () => {
     await prisma?.$disconnect();
   });
 
+  it('rolls back all earlier work when a new cash journal has no real account', async () => {
+    const account = await prisma.idBusinessV2FinanceAccount.create({
+      data: {
+        name: '缺失现金来源事务验收',
+        accountType: 'bank',
+        currency: 'CNY',
+        openingBalance: '100',
+        currentBalance: '100',
+        openingBalanceCny: '100',
+        currentBalanceCny: '100'
+      }
+    });
+    const idempotencyKey = `financial-integrity:missing-cash:${randomUUID()}`;
+    await expect(
+      transactions.execute(
+        async (tx) => {
+          await tx.idBusinessV2FinanceAccount.update({
+            where: { id: account.id },
+            data: {
+              currentBalance: { decrement: '1' },
+              currentBalanceCny: { decrement: '1' }
+            }
+          });
+          return posting.post(tx, {
+            journalType: 'manual_operating_income',
+            sourceType: 'manual',
+            occurredAt: new Date('2026-10-04T12:00:00Z'),
+            summary: '缺失现金来源应整体失败',
+            idempotencyKey,
+            lines: [
+              {
+                accountCode: 'cash',
+                direction: 'debit',
+                currency: 'CNY',
+                amountOriginal: '10',
+                amountCny: '10',
+                fxRateToCny: '1'
+              },
+              {
+                accountCode: 'other_operating_revenue',
+                direction: 'credit',
+                currency: 'CNY',
+                amountOriginal: '10',
+                amountCny: '10',
+                fxRateToCny: '1'
+              }
+            ]
+          });
+        },
+        { changedScopes: ['finance-accounts', 'finance-ledger'], requestId: randomUUID() }
+      )
+    ).rejects.toThrow('缺少真实资金账户');
+    const after = await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({
+      where: { id: account.id }
+    });
+    expect(after.currentBalance.toString()).toBe('100');
+    expect(after.currentBalanceCny.toString()).toBe('100');
+    expect(after.updatedAt).toEqual(account.updatedAt);
+    expect(await prisma.idBusinessV2FinanceJournal.count({ where: { idempotencyKey } })).toBe(0);
+  });
+
   it('keeps posting, rollback, idempotency, and concurrent reversal exact', async () => {
     const financeAccountId = randomUUID();
     await prisma.idBusinessV2FinanceAccount.create({

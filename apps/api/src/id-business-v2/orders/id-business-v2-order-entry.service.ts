@@ -20,6 +20,7 @@ import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-ord
 import type { QuoteIdBusinessV2OrderReceiptFxDto } from './dto/quote-id-business-v2-order-receipt-fx.dto';
 import { applyNewOrderAccountDisposition } from './id-business-v2-order-account-disposition';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
+import { assertOrderReceiptAccount } from './id-business-v2-order-receipt-account';
 import { getIdBusinessV2OrderEntryOptions } from './id-business-v2-order-entry-options';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
@@ -36,6 +37,7 @@ import {
 } from './id-business-v2-order-entry-support';
 
 export interface CreateWaitingExternalOrderInput {
+  receivedFinanceAccountId?: string | null;
   customerId: string;
   serviceOptionId: string;
   accountId: string;
@@ -55,6 +57,7 @@ export interface CreateWaitingExternalOrderInput {
 }
 
 export interface CreateManualRenewalOrderInput {
+  receivedFinanceAccountId?: string | null;
   customerId: string;
   serviceOptionId: string;
   accountId: string;
@@ -246,6 +249,12 @@ export class IdBusinessV2OrderEntryService {
           input.settlementPlatformOptionId
         );
         const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
+        const receivedFinanceAccountId = await assertOrderReceiptAccount(
+          tx,
+          input.receivedFinanceAccountId,
+          receivedCurrency,
+          [input.receivedAmount, receivedOriginalAmount, platformFeeAmount]
+        );
         const order = await this.repository.createOrder(tx, {
           orderNo: generateOrderNo(),
           customerId: input.customerId,
@@ -266,7 +275,7 @@ export class IdBusinessV2OrderEntryService {
           receivedCurrency,
           receivedFxRateToCny: receiptFxRate.toString(),
           receivedFxSnapshotId: receiptRate.id,
-          receivedFinanceAccountId: null,
+          receivedFinanceAccountId,
           receivedAt: orderTimestamp,
           platformFeeAmount: platformFeeAmount.toString(),
           accountCostAmount: 0,
@@ -358,6 +367,12 @@ export class IdBusinessV2OrderEntryService {
     const receivedAmount = Amount4.from(input.receivedAmount);
     const balanceAmount = Amount4.from(input.balanceAmount);
     const platformFeeAmount = calculatePlatformFee(receivedAmount, settlementPlatform);
+    const receivedFinanceAccountId = await assertOrderReceiptAccount(
+      tx,
+      input.receivedFinanceAccountId,
+      'CNY',
+      [receivedAmount, platformFeeAmount]
+    );
     const sourceSoldOrderId = await this.resolveRenewalAccountSource(
       tx,
       input.accountId,
@@ -379,7 +394,7 @@ export class IdBusinessV2OrderEntryService {
       receivedOriginalAmount: receivedAmount.toString(),
       receivedCurrency: 'CNY',
       receivedFxRateToCny: 1,
-      receivedFinanceAccountId: null,
+      receivedFinanceAccountId,
       receivedAt: orderTimestamp,
       platformFeeAmount: platformFeeAmount.toString(),
       accountCostAmount: 0,
@@ -418,6 +433,7 @@ export class IdBusinessV2OrderEntryService {
         platformOrderNo: input.platformOrderNo,
         websiteAccountMasked: input.websiteAccountMasked,
         receivedAmount: receivedAmount.toString(),
+        receivedFinanceAccountId,
         platformFeeAmount: platformFeeAmount.toString(),
         balanceAmount: balanceAmount.toString(),
         openedAt: input.openedAt,
@@ -450,6 +466,12 @@ export class IdBusinessV2OrderEntryService {
     const receivedAmount = Amount4.from(input.receivedAmount);
     const balanceAmount = Amount4.from(input.balanceAmount);
     const platformFeeAmount = calculatePlatformFee(receivedAmount, settlementPlatform);
+    const receivedFinanceAccountId = await assertOrderReceiptAccount(
+      tx,
+      input.receivedFinanceAccountId,
+      'CNY',
+      [receivedAmount, platformFeeAmount]
+    );
     const sourceSoldOrderId = await this.resolveAccountSource(
       tx,
       input.accountId,
@@ -472,7 +494,7 @@ export class IdBusinessV2OrderEntryService {
       receivedOriginalAmount: receivedAmount.toString(),
       receivedCurrency: 'CNY',
       receivedFxRateToCny: 1,
-      receivedFinanceAccountId: null,
+      receivedFinanceAccountId,
       receivedAt: orderTimestamp,
       platformFeeAmount: platformFeeAmount.toString(),
       accountCostAmount: 0,

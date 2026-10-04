@@ -79,6 +79,9 @@
               :settlement-choices="settlementChoices"
               :received-amount-preview="receivedAmountPreview"
               :platform-fee-preview="platformFeePreview"
+              :receipt-finance-account-choices="receiptFinanceAccountChoices"
+              :receipt-finance-account-required="receiptFinanceAccountRequired"
+              :receipt-finance-account-error="receiptFinanceAccountError"
               :suggested-received="suggestedReceived"
               :suggested-original-amount="suggestedOriginalAmount"
               :recommendation-applied="recommendationApplied"
@@ -122,6 +125,8 @@ import {
   calculateSuggestedReceivedAmount,
   getVisibleOrderEntryCustomers,
   preserveSelectedOrderEntryCustomer,
+  preserveSelectedOrderReceiptFinanceAccount,
+  useOrderReceiptFinanceAccount,
   useOrderEntryOptionsQuery
 } from '@/v2/features/order-entry/public-api';
 import { multiplyDecimalStrings } from '@/v2/utils/decimal';
@@ -165,7 +170,8 @@ const options = ref<V2OrderEntryOptions>({
   customers: [],
   countries: [],
   settlementPlatforms: [],
-  latestFxRates: []
+  latestFxRates: [],
+  financeAccounts: []
 });
 const formDraft = useV2FormDraft('order-edit', () => createEmptyOrderEditForm());
 const form = formDraft.form;
@@ -212,7 +218,15 @@ watch(
     const selectedCustomer = customerChoices.value.find(
       (customer) => customer.id === form.customerId
     );
-    options.value = preserveSelectedOrderEntryCustomer(result, selectedCustomer);
+    options.value = {
+      ...preserveSelectedOrderEntryCustomer(result, selectedCustomer),
+      financeAccounts: preserveSelectedOrderReceiptFinanceAccount(
+        result.financeAccounts ?? [],
+        options.value.financeAccounts.find(
+          (account) => account.id === form.receivedFinanceAccountId
+        )
+      )
+    };
   },
   { immediate: true }
 );
@@ -247,6 +261,13 @@ const appliedAccountCostPreview = computed(() =>
     ? (selectedCandidate.value?.purchaseCost ?? props.order?.accountCostAmount ?? '0')
     : '0'
 );
+const { receiptFinanceAccountRequired, receiptFinanceAccountChoices, receiptFinanceAccountError } =
+  useOrderReceiptFinanceAccount(
+    form,
+    () => options.value.financeAccounts,
+    () => platformFeePreview.value,
+    () => props.order
+  );
 const estimatedBalanceCostPreview = computed(
   () => selectedCandidate.value?.estimatedBalanceCostAmount ?? props.order?.balanceCostAmount ?? '0'
 );
@@ -312,7 +333,8 @@ const rules = createOrderEditRules(
   form,
   () => Boolean(props.order?.operations.canEditCore),
   () => Boolean(props.order?.operations.canEditPricing),
-  () => selectedPlatform.value?.percentageFee ?? '0'
+  () => selectedPlatform.value?.percentageFee ?? '0',
+  () => receiptFinanceAccountError.value
 );
 
 watch(
@@ -379,6 +401,7 @@ async function initialize(order: V2Order) {
       websiteAccount: '',
       clearWebsiteAccount: false,
       receivedOriginalAmount: order.receivedOriginalAmount,
+      receivedFinanceAccountId: order.receivedFinanceAccountId ?? '',
       targetProfitRate: '',
       balanceAmount: order.balanceAmount,
       openedAt: order.openedAt ? toV2DateTimeInput(order.openedAt) : null,
@@ -506,6 +529,12 @@ async function submit() {
     remark: form.remark.trim() || null,
     expectedUpdatedAt: formDraft.version.value ?? order.updatedAt
   };
+  if (order.operations.canEditReceiptAccount) {
+    const receiptAccountId = form.receivedFinanceAccountId.trim() || null;
+    if (receiptAccountId !== order.receivedFinanceAccountId) {
+      payload.receivedFinanceAccountId = receiptAccountId;
+    }
+  }
   if (order.operations.canEditPricing) {
     const platformOrderNo = form.platformOrderNo.trim() || null;
     if (form.settlementPlatformOptionId !== (order.settlementPlatform?.id ?? '')) {

@@ -136,6 +136,17 @@ export class IdBusinessV2FinancePostingService {
       return replay;
     }
 
+    if (
+      normalizedLines.some(
+        (line) =>
+          line.accountCode === 'cash' &&
+          (!line.amountOriginal.isZero() || !line.amountCny.isZero()) &&
+          !line.financeAccountId
+      )
+    ) {
+      throw new ConflictException('现金收付分录缺少真实资金账户，请先核对原业务资金归属');
+    }
+
     const business = toIdBusinessV2BusinessDate(input.occurredAt);
     await this.assertPeriodOpen(tx, business.month);
     const lockedAccounts = await lockCashHistoricalCostAccounts(tx, input, normalizedLines);

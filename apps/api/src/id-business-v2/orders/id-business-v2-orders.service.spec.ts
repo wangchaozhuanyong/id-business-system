@@ -87,6 +87,7 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
 describe('IdBusinessV2OrdersService', () => {
   const prisma = {
     $transaction: vi.fn(),
+    idBusinessV2FinanceJournal: { findMany: vi.fn() },
     idBusinessV2Order: {
       findMany: vi.fn(),
       count: vi.fn(),
@@ -108,6 +109,7 @@ describe('IdBusinessV2OrdersService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.idBusinessV2FinanceJournal.findMany.mockResolvedValue([]);
     prisma.idBusinessV2Order.findMany.mockImplementation(async (input) =>
       input?.select ? [] : [makeOrder()]
     );
@@ -343,6 +345,7 @@ describe('IdBusinessV2OrdersService', () => {
         canEdit,
         canEditCore,
         canEditPricing: ['pending', 'processing', 'failed'].includes(status),
+        canEditReceiptAccount: ['pending', 'processing', 'failed'].includes(status),
         canRefund,
         canRecordUpgradeBalanceReturn: status === 'completed',
         canReverseUpgradeBalanceReturn: false,
@@ -381,5 +384,19 @@ describe('IdBusinessV2OrdersService', () => {
       reason: '订单占用'
     });
     expect(JSON.stringify(result)).not.toContain('must-not-leak');
+  });
+  it('locks receipt, price and core editing when even a reversed journal exists', async () => {
+    prisma.idBusinessV2Order.findFirst.mockResolvedValue(makeOrder({ status: 'pending' }));
+    prisma.idBusinessV2FinanceJournal.findMany.mockResolvedValue([{ sourceId: orderId }]);
+    const result = await service.get(orderId);
+    expect(result.operations).toMatchObject({
+      canEdit: true,
+      canEditReceiptAccount: false,
+      canEditPricing: false,
+      canEditCore: false
+    });
+    expect(prisma.idBusinessV2FinanceJournal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { sourceType: 'order', sourceId: { in: [orderId] } } })
+    );
   });
 });

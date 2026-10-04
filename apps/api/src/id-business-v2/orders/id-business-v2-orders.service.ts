@@ -327,6 +327,7 @@ export class IdBusinessV2OrdersService {
       receivedFxRateToCny: receivedFxRateToCny.toString(),
       receivedFxSnapshotId: order.receivedFxSnapshotId,
       receivedFinanceAccountId: order.receivedFinanceAccountId,
+      receivedFinanceAccount: order.receivedFinanceAccount ?? null,
       receivedAt: order.receivedAt ?? order.openedAt ?? order.createdAt,
       platformFeeAmount: platformFeeAmount.toString(),
       accountDisposition: order.accountDisposition,
@@ -388,8 +389,11 @@ export class IdBusinessV2OrdersService {
         canConsume: order.status === 'pending',
         canComplete: order.status === 'processing',
         canEdit: EDITABLE_ORDER_STATUSES.has(order.status),
-        canEditCore: FULLY_EDITABLE_ORDER_STATUSES.has(order.status),
-        canEditPricing: PRICING_EDITABLE_ORDER_STATUSES.has(order.status),
+        canEditCore: FULLY_EDITABLE_ORDER_STATUSES.has(order.status) && !order.hasFinanceJournal,
+        canEditPricing:
+          PRICING_EDITABLE_ORDER_STATUSES.has(order.status) && !order.hasFinanceJournal,
+        canEditReceiptAccount:
+          PRICING_EDITABLE_ORDER_STATUSES.has(order.status) && !order.hasFinanceJournal,
         canRefund: REFUNDABLE_ORDER_STATUSES.has(order.status),
         canRecordUpgradeBalanceReturn:
           order.status === 'completed' &&

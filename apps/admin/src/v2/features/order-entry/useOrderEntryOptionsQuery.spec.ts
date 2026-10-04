@@ -37,7 +37,8 @@ function createOptions(label: string): V2OrderEntryOptions {
     ],
     countries: [],
     settlementPlatforms: [],
-    latestFxRates: []
+    latestFxRates: [],
+    financeAccounts: []
   };
 }
 

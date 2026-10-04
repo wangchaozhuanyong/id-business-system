@@ -164,6 +164,8 @@ export interface IdBusinessV2OrderActivationRecord {
 }
 
 export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
+  hasFinanceJournal?: boolean;
+  receivedFinanceAccount?: { id: string; name: string; currency: string; isActive: boolean } | null;
   customer: { id: string; name: string };
   serviceOption: {
     id: string;

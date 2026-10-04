@@ -2,9 +2,14 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { IdBusinessV2AccountLockScope, Prisma } from '@prisma/client';
 import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as financeApi from '../finance/public-api';
+import { Amount4 as ReceiptAmount4 } from '../runtime/public-api';
 import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+
+const financeAccountId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const financeAccountLock = vi.spyOn(financeApi, 'lockFinanceAccount');
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -39,6 +44,7 @@ function makeDto(overrides: Record<string, unknown> = {}) {
     platformOrderNo: 'PLATFORM-1001',
     websiteAccount: 'customer@example.com',
     receivedAmount: '100',
+    receivedFinanceAccountId: financeAccountId,
     accountDisposition: 'retained',
     balanceAmount: '20',
     openedAt: openedAt.toISOString(),
@@ -89,7 +95,7 @@ function makeStoredOrder(overrides: Record<string, unknown> = {}) {
     receivedCurrency: 'CNY',
     receivedFxRateToCny: decimal('1'),
     receivedFxSnapshotId: null,
-    receivedFinanceAccountId: null,
+    receivedFinanceAccountId: financeAccountId,
     receivedAt: openedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'retained',
@@ -139,6 +145,7 @@ describe('IdBusinessV2OrderEntryService', () => {
   };
   const prisma = {
     $transaction: vi.fn(),
+    idBusinessV2FinanceAccount: { findMany: vi.fn() },
     idBusinessV2Customer: {
       findMany: vi.fn()
     },
@@ -192,6 +199,15 @@ describe('IdBusinessV2OrderEntryService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.idBusinessV2FinanceAccount.findMany.mockResolvedValue([]);
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'CNY',
+      currentBalance: ReceiptAmount4.from('1000'),
+      currentBalanceCny: ReceiptAmount4.from('1000')
+    });
+
     prisma.$transaction.mockImplementation(async (argument: unknown) => {
       if (Array.isArray(argument)) return Promise.all(argument);
       return (argument as (client: typeof tx) => Promise<unknown>)(tx);
@@ -311,7 +327,7 @@ describe('IdBusinessV2OrderEntryService', () => {
       })
     });
     const createdOrderData = tx.idBusinessV2Order.create.mock.calls[0]?.[0].data;
-    expect(createdOrderData.receivedFinanceAccountId).toBeNull();
+    expect(createdOrderData.receivedFinanceAccountId).toBe(financeAccountId);
     expect(createdOrderData.receivedAt).toBeInstanceOf(Date);
     expect(createdOrderData.createdAt).toEqual(createdOrderData.receivedAt);
     expect(financeFxService.resolve).toHaveBeenCalledWith(
@@ -700,6 +716,7 @@ describe('IdBusinessV2OrderEntryService', () => {
     const result = await service.getEntryOptions(' 138 (0013)-5678 ');
 
     expect(result).toEqual({
+      financeAccounts: [],
       customers: [
         {
           id: customerId,
@@ -771,5 +788,65 @@ describe('IdBusinessV2OrderEntryService', () => {
     );
     expect(fieldEncryptionService.hash).toHaveBeenCalledWith('13800135678');
     expect(JSON.stringify(result)).not.toContain('phoneEncrypted');
+  });
+  it('rejects a missing account before saving positive receipt or fee-only orders', async () => {
+    await expect(
+      service.create(makeDto({ receivedFinanceAccountId: null }), operator)
+    ).rejects.toThrow('缺少真实收款账户');
+    await expect(
+      service.create(makeDto({ receivedAmount: '0', receivedFinanceAccountId: null }), operator)
+    ).rejects.toThrow('缺少真实收款账户');
+    expect(tx.idBusinessV2Order.create).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'disabled', 'currency'])(
+    'rejects %s receipt accounts before creating an order',
+    async (condition) => {
+      financeAccountLock.mockResolvedValue(
+        condition === 'missing'
+          ? null
+          : {
+              id: financeAccountId,
+              status: condition === 'disabled' ? 'disabled' : 'active',
+              currency: condition === 'currency' ? 'MYR' : 'CNY',
+              currentBalance: ReceiptAmount4.zero(),
+              currentBalanceCny: ReceiptAmount4.zero()
+            }
+      );
+      await expect(service.create(makeDto(), operator)).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.idBusinessV2Order.create).not.toHaveBeenCalled();
+      expect(orderLockService.reserveAccountForOrderInTransaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects the same idempotency key with a different receipt account', async () => {
+    tx.idBusinessV2Order.findUnique.mockResolvedValue(
+      makeStoredOrder({ locks: [makeLock()], accountSource: 'inventory' })
+    );
+    await expect(
+      service.create(
+        makeDto({ receivedFinanceAccountId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }),
+        operator
+      )
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.idBusinessV2Order.create).not.toHaveBeenCalled();
+    expect(financeAccountLock).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicitly zero receipt and fee without selecting an account', async () => {
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) =>
+      where.type === 'settlement_platform'
+        ? { id: settlementPlatformOptionId, fixedFee: decimal('0'), percentageFee: decimal('0') }
+        : { id: serviceOptionId }
+    );
+    await service.create(
+      makeDto({ receivedAmount: '0', receivedFinanceAccountId: null }),
+      operator
+    );
+    expect(tx.idBusinessV2Order.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ receivedFinanceAccountId: null }) })
+    );
+    expect(financeAccountLock).not.toHaveBeenCalled();
   });
 });

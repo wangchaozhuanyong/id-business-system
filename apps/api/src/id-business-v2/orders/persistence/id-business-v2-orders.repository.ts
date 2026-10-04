@@ -55,6 +55,7 @@ const ORDER_INCLUDE = {
     }
   },
   settlementPlatform: { select: { id: true, code: true, name: true } },
+  receivedFinanceAccount: { select: { id: true, name: true, currency: true, status: true } },
   createdBy: { select: { id: true, username: true, displayName: true } },
   locks: {
     where: { status: 'active' as const },
@@ -231,7 +232,7 @@ export class IdBusinessV2OrdersRepository {
       this.prisma.idBusinessV2Order.count({ where })
     ]);
     return {
-      items: rows.map(mapOrderListRow),
+      items: await this.withReceiptFinanceEvidence(rows),
       total
     };
   }
@@ -271,7 +272,30 @@ export class IdBusinessV2OrdersRepository {
       where: { id, deletedAt: null },
       include: ORDER_INCLUDE
     });
-    return row ? mapOrderListRow(row) : null;
+    return row ? (await this.withReceiptFinanceEvidence([row]))[0] : null;
+  }
+
+  hasOrderFinanceJournal(tx: V2CommandTransaction, orderId: string) {
+    return tx.idBusinessV2FinanceJournal
+      .findFirst({
+        where: { sourceType: 'order', sourceId: orderId },
+        select: { id: true }
+      })
+      .then(Boolean);
+  }
+
+  private async withReceiptFinanceEvidence(rows: OrderListPersistenceRow[]) {
+    if (!rows.length) return [];
+    const journals = await this.prisma.idBusinessV2FinanceJournal.findMany({
+      where: { sourceType: 'order', sourceId: { in: rows.map((row) => row.id) } },
+      select: { sourceId: true },
+      distinct: ['sourceId']
+    });
+    const postedOrderIds = new Set(journals.map((journal) => journal.sourceId));
+    return rows.map((row) => ({
+      ...mapOrderListRow(row),
+      hasFinanceJournal: postedOrderIds.has(row.id)
+    }));
   }
 
   async getEntryOptions(criteria: {
@@ -294,111 +318,121 @@ export class IdBusinessV2OrdersRepository {
       whatsappSearchTokens,
       maximumCustomers
     } = criteria;
-    const [customers, countries, categories, services, settlementPlatforms] = await Promise.all([
-      this.prisma.idBusinessV2Customer.findMany({
-        where: {
-          deletedAt: null,
-          recordStatus: 'active',
-          OR: customerKeyword
-            ? [
-                { name: { contains: customerKeyword } },
-                { wechat: { contains: customerKeyword } },
-                {
-                  wechatSearchTokens: buildV2StringArrayContainsFilter(wechatSearchTokens)
-                },
-                { qq: { contains: customerKeyword } },
-                {
-                  qqSearchTokens: buildV2StringArrayContainsFilter(qqSearchTokens)
-                },
-                {
-                  phoneTail: {
-                    contains: normalizedContact?.slice(-8) ?? customerKeyword
+    const [customers, countries, categories, services, settlementPlatforms, financeAccounts] =
+      await Promise.all([
+        this.prisma.idBusinessV2Customer.findMany({
+          where: {
+            deletedAt: null,
+            recordStatus: 'active',
+            OR: customerKeyword
+              ? [
+                  { name: { contains: customerKeyword } },
+                  { wechat: { contains: customerKeyword } },
+                  {
+                    wechatSearchTokens: buildV2StringArrayContainsFilter(wechatSearchTokens)
+                  },
+                  { qq: { contains: customerKeyword } },
+                  {
+                    qqSearchTokens: buildV2StringArrayContainsFilter(qqSearchTokens)
+                  },
+                  {
+                    phoneTail: {
+                      contains: normalizedContact?.slice(-8) ?? customerKeyword
+                    }
+                  },
+                  { phoneHash: contactHash ?? undefined },
+                  {
+                    phoneSearchTokens: buildV2StringArrayContainsFilter(phoneSearchTokens)
+                  },
+                  {
+                    whatsappTail: {
+                      contains: normalizedContact?.slice(-8) ?? customerKeyword
+                    }
+                  },
+                  { whatsappHash: contactHash ?? undefined },
+                  {
+                    whatsappSearchTokens: buildV2StringArrayContainsFilter(whatsappSearchTokens)
                   }
-                },
-                { phoneHash: contactHash ?? undefined },
-                {
-                  phoneSearchTokens: buildV2StringArrayContainsFilter(phoneSearchTokens)
-                },
-                {
-                  whatsappTail: {
-                    contains: normalizedContact?.slice(-8) ?? customerKeyword
-                  }
-                },
-                { whatsappHash: contactHash ?? undefined },
-                {
-                  whatsappSearchTokens: buildV2StringArrayContainsFilter(whatsappSearchTokens)
-                }
-              ]
-            : undefined
-        },
-        select: {
-          id: true,
-          name: true,
-          wechat: true,
-          wechatEncrypted: true,
-          wechatMasked: true,
-          qq: true,
-          qqEncrypted: true,
-          qqMasked: true,
-          phoneEncrypted: true,
-          phoneMasked: true,
-          whatsappEncrypted: true,
-          whatsappMasked: true
-        },
-        take: maximumCustomers,
-        orderBy: [{ name: 'asc' }, { id: 'asc' }]
-      }),
-      this.prisma.idBusinessV2Option.findMany({
-        where: { type: 'country', status: 'active', deletedAt: null },
-        select: { id: true, code: true, name: true, currencyCode: true },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-      }),
-      this.prisma.idBusinessV2Option.findMany({
-        where: {
-          type: 'business_category',
-          status: 'active',
-          deletedAt: null,
-          parentId: null
-        },
-        select: { id: true, code: true, name: true },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-      }),
-      this.prisma.idBusinessV2Option.findMany({
-        where: {
-          type: 'service',
-          status: 'active',
-          deletedAt: null,
-          businessAmount: { gt: 0 },
-          parent: {
-            is: { type: 'business_category', status: 'active', deletedAt: null }
+                ]
+              : undefined
           },
-          countryOption: { is: { type: 'country', status: 'active', deletedAt: null } }
-        },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          parentId: true,
-          countryOptionId: true,
-          businessAmount: true,
-          countryOption: { select: { currencyCode: true } }
-        },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-      }),
-      this.prisma.idBusinessV2Option.findMany({
-        where: { type: 'settlement_platform', status: 'active', deletedAt: null },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          fixedFee: true,
-          percentageFee: true
-        },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-      })
-    ]);
+          select: {
+            id: true,
+            name: true,
+            wechat: true,
+            wechatEncrypted: true,
+            wechatMasked: true,
+            qq: true,
+            qqEncrypted: true,
+            qqMasked: true,
+            phoneEncrypted: true,
+            phoneMasked: true,
+            whatsappEncrypted: true,
+            whatsappMasked: true
+          },
+          take: maximumCustomers,
+          orderBy: [{ name: 'asc' }, { id: 'asc' }]
+        }),
+        this.prisma.idBusinessV2Option.findMany({
+          where: { type: 'country', status: 'active', deletedAt: null },
+          select: { id: true, code: true, name: true, currencyCode: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+        }),
+        this.prisma.idBusinessV2Option.findMany({
+          where: {
+            type: 'business_category',
+            status: 'active',
+            deletedAt: null,
+            parentId: null
+          },
+          select: { id: true, code: true, name: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+        }),
+        this.prisma.idBusinessV2Option.findMany({
+          where: {
+            type: 'service',
+            status: 'active',
+            deletedAt: null,
+            businessAmount: { gt: 0 },
+            parent: {
+              is: { type: 'business_category', status: 'active', deletedAt: null }
+            },
+            countryOption: { is: { type: 'country', status: 'active', deletedAt: null } }
+          },
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            parentId: true,
+            countryOptionId: true,
+            businessAmount: true,
+            countryOption: { select: { currencyCode: true } }
+          },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+        }),
+        this.prisma.idBusinessV2Option.findMany({
+          where: { type: 'settlement_platform', status: 'active', deletedAt: null },
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            fixedFee: true,
+            percentageFee: true
+          },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+        }),
+        this.prisma.idBusinessV2FinanceAccount.findMany({
+          where: { status: 'active' },
+          select: { id: true, name: true, currency: true, status: true },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }]
+        })
+      ]);
 
     return {
+      financeAccounts: financeAccounts.map(({ status, ...account }) => ({
+        ...account,
+        isActive: status === 'active'
+      })),
       customers: customers.map((customer) => ({
         id: customer.id,
         name: customer.name,
@@ -1667,6 +1701,7 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
     account,
     sourceSoldOrder,
     settlementPlatform,
+    receivedFinanceAccount,
     createdBy,
     locks,
     balanceReturns,
@@ -1674,6 +1709,14 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
   } = row;
   return {
     ...mapOrderRow(order),
+    receivedFinanceAccount: receivedFinanceAccount
+      ? {
+          id: receivedFinanceAccount.id,
+          name: receivedFinanceAccount.name,
+          currency: receivedFinanceAccount.currency,
+          isActive: receivedFinanceAccount.status === 'active'
+        }
+      : null,
     customer: {
       ...customer,
       name: snapshot?.customerName ?? customer.name

@@ -15,6 +15,10 @@ import {
 } from './id-business-v2-order-account-disposition';
 import { cancelIdBusinessV2Order } from './id-business-v2-order-cancel';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
+import {
+  assertOrderReceiptAccount,
+  normalizeOrderReceiptAccount
+} from './id-business-v2-order-receipt-account';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import { IdBusinessV2OrderLifecycleSupport } from './id-business-v2-order-lifecycle-support';
 import { refundIdBusinessV2Order } from './id-business-v2-order-refund';
@@ -107,9 +111,15 @@ export class IdBusinessV2OrderLifecycleService {
           this.repository.findActiveLockForOrder(tx, order.id)
         ]);
         const coreFieldsRequested = this.support.hasCoreFieldChanges(dto);
+        const financiallyConfirmed =
+          order.status === 'completed' ||
+          (await this.repository.hasOrderFinanceJournal(tx, order.id));
         if (
           coreFieldsRequested &&
-          (consumption || activation || !FULLY_EDITABLE_STATUSES.has(order.status))
+          (financiallyConfirmed ||
+            consumption ||
+            activation ||
+            !FULLY_EDITABLE_STATUSES.has(order.status))
         ) {
           throw new ConflictException('订单已有扣款或开通证据，不能修改客户、业务、ID 或消耗余额');
         }
@@ -148,7 +158,14 @@ export class IdBusinessV2OrderLifecycleService {
         ) {
           throw new ConflictException('已售出 ID 请从 ID 管理执行“纠正售出”');
         }
-        const financiallyConfirmed = order.status === 'completed';
+        const receivedFinanceAccountId =
+          dto.receivedFinanceAccountId === undefined
+            ? order.receivedFinanceAccountId
+            : normalizeOrderReceiptAccount(dto.receivedFinanceAccountId);
+        if (financiallyConfirmed && receivedFinanceAccountId !== order.receivedFinanceAccountId)
+          throw new ConflictException('订单已有财务凭证，不能直接修改收款账户，请受控核对原账');
+        if (financiallyConfirmed && pricingEvidenceRequested)
+          throw new ConflictException('订单已有财务凭证，不能直接修改价格或结算平台');
         const sourceSoldOrderId = financiallyConfirmed
           ? order.sourceSoldOrderId
           : await this.support.resolveUpdatedAccountSource(
@@ -255,6 +272,12 @@ export class IdBusinessV2OrderLifecycleService {
         const platformFeeAmount = financiallyConfirmed
           ? order.platformFeeAmount
           : this.support.calculatePlatformFee(receivedAmount, settlementPlatform);
+        if (!financiallyConfirmed)
+          await assertOrderReceiptAccount(tx, receivedFinanceAccountId, order.receivedCurrency, [
+            receivedAmount,
+            receivedOriginalAmount,
+            platformFeeAmount
+          ]);
         const accountCostAmount = financiallyConfirmed
           ? order.accountCostAmount
           : await applyUpdatedOrderAccountDisposition(
@@ -312,6 +335,7 @@ export class IdBusinessV2OrderLifecycleService {
           websiteAccountSearchTokens: website.searchTokens,
           receivedAmount: receivedAmount.toString(),
           receivedOriginalAmount: receivedOriginalAmount.toString(),
+          receivedFinanceAccountId,
           platformFeeAmount: platformFeeAmount.toString(),
           balanceAmount: balanceAmount.toString(),
           accountDisposition,
@@ -387,6 +411,7 @@ export class IdBusinessV2OrderLifecycleService {
             websiteAccountMasked: website.masked,
             receivedAmount: receivedAmount.toString(),
             receivedOriginalAmount: receivedOriginalAmount.toString(),
+            receivedFinanceAccountId,
             receivedCurrency: order.receivedCurrency,
             receivedFxRateToCny: order.receivedFxRateToCny.toString(),
             receivedFxSnapshotId: order.receivedFxSnapshotId,

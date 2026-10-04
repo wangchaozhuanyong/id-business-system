@@ -14,6 +14,10 @@ import {
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
+import {
+  assertOrderReceiptAccount,
+  nonZeroOrderCashLines
+} from './id-business-v2-order-receipt-account';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 import type {
   IdBusinessV2BalanceLedgerRecord,
@@ -56,6 +60,11 @@ export class IdBusinessV2OrderCompletionService {
       if (order.status !== 'processing') {
         throw new ConflictException('只有已真实扣款、等待开通的订单可以确认完成');
       }
+      await assertOrderReceiptAccount(tx, order.receivedFinanceAccountId, order.receivedCurrency, [
+        order.receivedAmount,
+        order.receivedOriginalAmount,
+        order.platformFeeAmount
+      ]);
 
       await this.financePostingService.reserveOrderIncomeReferences(tx, {
         orderId: order.id,
@@ -197,12 +206,17 @@ export class IdBusinessV2OrderCompletionService {
     };
   }
 
-  postCompletionJournalInTransaction(
+  async postCompletionJournalInTransaction(
     tx: V2CommandTransaction,
     order: IdBusinessV2OrderRecord,
     completedAt: Date,
     operator?: AuthenticatedUser
   ) {
+    await assertOrderReceiptAccount(tx, order.receivedFinanceAccountId, order.receivedCurrency, [
+      order.receivedAmount,
+      order.receivedOriginalAmount,
+      order.platformFeeAmount
+    ]);
     const receivedOriginalAmount = order.receivedOriginalAmount;
     const receivedAmount = order.receivedAmount;
     const rate = order.receivedFxRateToCny;
@@ -211,9 +225,12 @@ export class IdBusinessV2OrderCompletionService {
     const balanceCostAmount = order.appliedBalanceCostAmount.sub(transferredBalanceCostAmount);
     const appliedAccountCostAmount = order.appliedAccountCostAmount;
     const hasOriginalEvidence = receivedOriginalAmount.gt(0);
-    const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
-    const receivedOriginal = hasOriginalEvidence ? receivedOriginalAmount : receivedAmount;
-    const effectiveRate = hasOriginalEvidence ? rate : Rate8.one();
+    const hasReceiptCurrencyEvidence =
+      hasOriginalEvidence || Boolean(order.receivedFinanceAccountId);
+    const currency = hasReceiptCurrencyEvidence ? order.receivedCurrency : ('CNY' as const);
+    const receivedOriginal =
+      hasOriginalEvidence || currency !== 'CNY' ? receivedOriginalAmount : receivedAmount;
+    const effectiveRate = hasReceiptCurrencyEvidence ? rate : Rate8.one();
     const platformFeeOriginal =
       currency === 'CNY' ? platformFeeAmount : platformFeeAmount.div(effectiveRate);
     return this.financePostingService.post(tx, {
@@ -225,7 +242,7 @@ export class IdBusinessV2OrderCompletionService {
       summary: `订单完成：${order.orderNo}`,
       idempotencyKey: `auto:order_completed:${order.id}`,
       operator,
-      lines: [
+      lines: nonZeroOrderCashLines([
         {
           accountCode: 'cash',
           direction: 'debit',
@@ -334,7 +351,7 @@ export class IdBusinessV2OrderCompletionService {
                 memo: '结转 ID 库存成本'
               }
             ])
-      ]
+      ])
     });
   }
 

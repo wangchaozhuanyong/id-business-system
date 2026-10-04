@@ -21,7 +21,6 @@
         @quick-customer="quickCustomerVisible = true"
         @open-customers="openRoute('/v2/customers')"
       />
-
       <section class="v2-order-entry-workspace">
         <el-form
           ref="formRef"
@@ -179,7 +178,6 @@
                       />
                     </el-select>
                   </el-form-item>
-
                   <el-form-item label="平台订单号" prop="platformOrderNo">
                     <el-input
                       v-model="form.platformOrderNo"
@@ -188,7 +186,6 @@
                       placeholder="选填"
                     />
                   </el-form-item>
-
                   <el-form-item label="客户业务账号">
                     <el-input
                       v-model="form.websiteAccount"
@@ -198,7 +195,6 @@
                       :title="form.websiteAccount || undefined"
                     />
                   </el-form-item>
-
                   <V2OrderProfitRateField
                     v-model="profitRateInputValue"
                     label="目标/反算利率"
@@ -207,11 +203,13 @@
                     :hint="profitRateInputHint"
                   />
                 </div>
-
                 <div class="v2-order-entry-form-column">
                   <V2OrderReceiptFields
                     :form="form"
                     :received-amount-preview="receivedAmountPreview"
+                    :receipt-finance-account-required="receiptFinanceAccountRequired"
+                    :receipt-finance-account-choices="receiptFinanceAccountChoices"
+                    :receipt-finance-account-error="receiptFinanceAccountError"
                     :receipt-fx-quote="receiptFxQuote"
                     :receipt-fx-loading="receiptFxLoading"
                     :receipt-fx-error="receiptFxError"
@@ -235,7 +233,6 @@
                 </div>
               </div>
             </section>
-
             <section class="v2-order-entry-field-group">
               <V2SectionHeading
                 as="div"
@@ -454,6 +451,9 @@ const {
   hasPendingConsumption,
   platformFeePreview,
   receivedAmountPreview,
+  receiptFinanceAccountRequired,
+  receiptFinanceAccountChoices,
+  receiptFinanceAccountError,
   accountPurchaseCostPreview,
   appliedAccountCostPreview,
   estimatedBalanceCostPreview,

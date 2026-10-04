@@ -6,6 +6,10 @@ import type {
 } from './dto/refund-id-business-v2-order.dto';
 import { releaseSoldOrderAccount } from './id-business-v2-order-account-disposition';
 import {
+  assertOrderReceiptAccount,
+  nonZeroOrderCashLines
+} from './id-business-v2-order-receipt-account';
+import {
   buildOrderReversalIdempotencyKey,
   normalizeLifecycleBoolean
 } from './id-business-v2-order-lifecycle-input';
@@ -78,6 +82,11 @@ export async function refundIdBusinessV2Order(
       if (!REFUNDABLE_STATUSES.has(order.status)) {
         throw new ConflictException('只有已完成订单可以退款；处理中订单请按真实结果取消或先完成');
       }
+      await assertOrderReceiptAccount(tx, order.receivedFinanceAccountId, order.receivedCurrency, [
+        order.receivedAmount,
+        order.receivedOriginalAmount,
+        refundCostAmount
+      ]);
 
       const consumption = await support.findConsumption(tx, order.id);
       if (!consumption) {
@@ -502,9 +511,11 @@ function buildRefundFinanceLines(
   const receivedFxRateToCny = order.receivedFxRateToCny;
   const appliedAccountCostAmount = order.appliedAccountCostAmount;
   const hasOriginalEvidence = receivedOriginalAmount.gt(0);
-  const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
-  const rate = hasOriginalEvidence ? receivedFxRateToCny : Rate8.one();
-  const receivedOriginal = hasOriginalEvidence ? receivedOriginalAmount : receivedAmount;
+  const hasReceiptCurrencyEvidence = hasOriginalEvidence || Boolean(order.receivedFinanceAccountId);
+  const currency = hasReceiptCurrencyEvidence ? order.receivedCurrency : ('CNY' as const);
+  const rate = hasReceiptCurrencyEvidence ? receivedFxRateToCny : Rate8.one();
+  const receivedOriginal =
+    hasOriginalEvidence || currency !== 'CNY' ? receivedOriginalAmount : receivedAmount;
   const refundCostOriginal = currency === 'CNY' ? refundCostAmount : refundCostAmount.div(rate);
   const lines = [];
   if (completed) {
@@ -643,5 +654,5 @@ function buildRefundFinanceLines(
       }
     );
   }
-  return lines;
+  return nonZeroOrderCashLines(lines);
 }

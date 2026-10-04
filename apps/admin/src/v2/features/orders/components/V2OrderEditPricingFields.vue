@@ -16,6 +16,15 @@
     </el-select>
   </el-form-item>
 
+  <V2OrderReceiptAccountField
+    v-model="form.receivedFinanceAccountId"
+    :currency="order.receivedCurrency"
+    :choices="receiptFinanceAccountChoices"
+    :required="order.operations.canEditReceiptAccount && receiptFinanceAccountRequired"
+    :error="receiptFinanceAccountError"
+    :disabled="!order.operations.canEditReceiptAccount"
+  />
+
   <el-form-item label="平台订单号" prop="platformOrderNo">
     <el-input
       v-model="form.platformOrderNo"
@@ -122,6 +131,7 @@
 import AppButton from '@/components/ui/AppButton.vue';
 import {
   V2OrderProfitRateField,
+  V2OrderReceiptAccountField,
   type OrderPricingInputMode,
   type SuggestedReceivedAmount
 } from '@/v2/features/order-entry/public-api';
@@ -134,6 +144,9 @@ defineProps<{
   settlementChoices: V2OrderEntrySettlementPlatform[];
   receivedAmountPreview: string;
   platformFeePreview: string;
+  receiptFinanceAccountChoices: Array<{ value: string; label: string; disabled: boolean }>;
+  receiptFinanceAccountRequired: boolean;
+  receiptFinanceAccountError: string;
   suggestedReceived: SuggestedReceivedAmount;
   suggestedOriginalAmount: string | null;
   recommendationApplied: boolean;

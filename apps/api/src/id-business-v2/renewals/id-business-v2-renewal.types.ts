@@ -71,6 +71,7 @@ export interface ManualRenewalReplayOrder {
   settlementPlatformOptionId: string | null;
   platformOrderNo: string | null;
   receivedAmount: Amount4;
+  receivedFinanceAccountId: string | null;
   balanceAmount: Amount4;
   balanceCostAmount: Amount4;
   profitAmount: Amount4 | null;

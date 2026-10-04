@@ -25,6 +25,7 @@ import {
 } from './order-pricing';
 import { createOrderEntryRules } from './order-entry-rules';
 import { calculateReceivedAmountPreview } from './order-receipt';
+import { useOrderReceiptFinanceAccount } from './order-receipt-account';
 import { useOrderCandidateSelection } from './useOrderCandidateSelection';
 import {
   getVisibleOrderEntryCustomers,
@@ -54,7 +55,8 @@ export function useOrderEntryPage() {
     customers: [],
     countries: [],
     settlementPlatforms: [],
-    latestFxRates: []
+    latestFxRates: [],
+    financeAccounts: []
   });
   const hasConfiguredCustomers = ref(false);
   const form = reactive(createInitialOrderEntryForm());
@@ -134,6 +136,15 @@ export function useOrderEntryPage() {
     );
   });
   const accountPurchaseCostPreview = computed(() => selectedCandidate.value?.purchaseCost ?? '0');
+  const {
+    receiptFinanceAccountRequired,
+    receiptFinanceAccountChoices,
+    receiptFinanceAccountError
+  } = useOrderReceiptFinanceAccount(
+    form,
+    () => entryOptions.value.financeAccounts,
+    () => platformFeePreview.value
+  );
   const appliedAccountCostPreview = computed(() =>
     form.accountSource === 'inventory' && form.accountDisposition === 'sold'
       ? accountPurchaseCostPreview.value
@@ -258,10 +269,10 @@ export function useOrderEntryPage() {
     if (missingCustomersConfiguration.value) missing.push('客户');
     return `暂无可用${missing.join('、')}资料`;
   });
-
   const rules = createOrderEntryRules(
     form,
-    () => selectedSettlementPlatform.value?.percentageFee ?? '0'
+    () => selectedSettlementPlatform.value?.percentageFee ?? '0',
+    () => receiptFinanceAccountError.value
   );
 
   watch(
@@ -353,13 +364,11 @@ export function useOrderEntryPage() {
       form.platformOrderNo = '';
     }
   }
-
   function handleReceivedCurrencyChange() {
     resetPricingInputMode();
     resetReceiptPricingForCurrencyChange();
     void nextTick(() => formRef.value?.clearValidate('targetProfitRate'));
   }
-
   function handleManualPriceInput() {
     useReceiptDrivenProfitRate();
     void nextTick(() => formRef.value?.clearValidate('targetProfitRate'));
@@ -395,6 +404,7 @@ export function useOrderEntryPage() {
         receivedAmount: form.receivedAmount.trim() || undefined,
         receivedOriginalAmount: form.receivedOriginalAmount.trim(),
         receivedCurrency: form.receivedCurrency,
+        receivedFinanceAccountId: form.receivedFinanceAccountId.trim() || null,
         receivedFxRateToCny: usesManualReceiptFx
           ? form.receivedFxRateToCny.trim() || undefined
           : undefined,
@@ -544,6 +554,9 @@ export function useOrderEntryPage() {
     hasPendingConsumption,
     platformFeePreview,
     receivedAmountPreview,
+    receiptFinanceAccountRequired,
+    receiptFinanceAccountChoices,
+    receiptFinanceAccountError,
     accountPurchaseCostPreview,
     appliedAccountCostPreview,
     estimatedBalanceCostPreview,

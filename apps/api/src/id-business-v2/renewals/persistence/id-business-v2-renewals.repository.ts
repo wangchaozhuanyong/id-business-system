@@ -301,7 +301,7 @@ export class IdBusinessV2RenewalsRepository {
   }
 
   async listManualRenewalOptions() {
-    const [settlementPlatforms, services] = await Promise.all([
+    const [settlementPlatforms, services, financeAccounts] = await Promise.all([
       this.prisma.idBusinessV2Option.findMany({
         where: { type: 'settlement_platform', status: 'active', deletedAt: null },
         select: {
@@ -331,9 +331,18 @@ export class IdBusinessV2RenewalsRepository {
           countryOption: { select: { id: true, code: true, name: true, currencyCode: true } }
         },
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+      }),
+      this.prisma.idBusinessV2FinanceAccount.findMany({
+        where: { status: 'active' },
+        select: { id: true, name: true, currency: true, status: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }]
       })
     ]);
     return {
+      financeAccounts: financeAccounts.map(({ status, ...account }) => ({
+        ...account,
+        isActive: status === 'active'
+      })),
       settlementPlatforms: settlementPlatforms.map((platform) => ({
         ...platform,
         fixedFee: mapAmount4(platform.fixedFee, 'id_business_v2_options.fixed_fee').toString(),

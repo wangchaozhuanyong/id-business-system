@@ -29,6 +29,7 @@ export {
   toIdBusinessV2BusinessDate
 } from './id-business-v2-finance-input';
 export { IdBusinessV2FinanceModule } from './id-business-v2-finance.module';
+export { lockFinanceAccount } from './persistence/id-business-v2-finance-posting.repository';
 export {
   IdBusinessV2FinancePostingService,
   type FinancePostingInput,

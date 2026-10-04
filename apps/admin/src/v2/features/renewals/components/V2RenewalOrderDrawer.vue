@@ -236,6 +236,12 @@
                 placeholder="选填"
               />
             </el-form-item>
+            <V2OrderReceiptAccountField
+              v-model="receivedFinanceAccountId"
+              :choices="receiptFinanceAccountChoices"
+              :required="receiptFinanceAccountRequired"
+              :error="receiptFinanceAccountError"
+            />
           </div>
         </section>
 
@@ -351,6 +357,8 @@ import type { FormInstance, FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import {
   validateTargetProfitRate,
+  createOrderReceiptFinanceAccountRules,
+  V2OrderReceiptAccountField,
   type SuggestedReceivedAmount
 } from '@/v2/features/order-entry/public-api';
 import { validateV2Form } from '@/v2/utils/formValidation';
@@ -374,6 +382,9 @@ const props = defineProps<{
   submitting: boolean;
   submitDisabledReason: string;
   platformFeePreview: string;
+  receiptFinanceAccountRequired: boolean;
+  receiptFinanceAccountChoices: Array<{ value: string; label: string; disabled: boolean }>;
+  receiptFinanceAccountError: string;
   estimatedBalanceCostPreview: string;
   estimatedProfitPreview: string;
   estimatedProfitRatePreview: string | null;
@@ -404,6 +415,9 @@ const settlementPlatformOptionId = defineModel<string>('settlementPlatformOption
 });
 const platformOrderNo = defineModel<string>('platformOrderNo', { required: true });
 const receivedAmount = defineModel<string>('receivedAmount', { required: true });
+const receivedFinanceAccountId = defineModel<string>('receivedFinanceAccountId', {
+  required: true
+});
 const targetProfitRate = defineModel<string>('targetProfitRate', { required: true });
 const balanceAmount = defineModel<string>('balanceAmount', { required: true });
 const openedAt = defineModel<string | null>('openedAt', { required: true });
@@ -416,6 +430,7 @@ const formModel = computed(() => ({
   settlementPlatformOptionId: settlementPlatformOptionId.value,
   platformOrderNo: platformOrderNo.value,
   receivedAmount: receivedAmount.value,
+  receivedFinanceAccountId: receivedFinanceAccountId.value,
   targetProfitRate: targetProfitRate.value,
   balanceAmount: balanceAmount.value,
   openedAt: openedAt.value,
@@ -460,7 +475,6 @@ watch(
     }
   }
 );
-
 const formRules = computed<FormRules>(() => ({
   categoryOptionId: [{ required: true, message: '请选择业务分类', trigger: 'change' }],
   serviceOptionId: [
@@ -488,6 +502,7 @@ const formRules = computed<FormRules>(() => ({
     }
   ],
   settlementPlatformOptionId: [{ required: true, message: '请选择结算平台', trigger: 'change' }],
+  ...createOrderReceiptFinanceAccountRules(() => props.receiptFinanceAccountError),
   targetProfitRate: [
     {
       validator: (_rule, value, callback) => {
@@ -571,12 +586,10 @@ const formRules = computed<FormRules>(() => ({
     }
   ]
 }));
-
 async function confirm() {
   if (props.submitDisabledReason || !(await validateV2Form(formRef.value))) return;
   emit('openConfirmation');
 }
-
 function serviceLabel(service: ManualService) {
   return `${service.name} / ${formatDecimal(service.businessAmount)} ${service.currencyCode ?? ''}`;
 }

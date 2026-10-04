@@ -3,10 +3,15 @@ import { Prisma } from '@prisma/client';
 import type { IdBusinessV2Order } from '@prisma/client';
 import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as financeApi from '../finance/public-api';
+import { Amount4 as ReceiptAmount4 } from '../runtime/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderLifecycleService } from './id-business-v2-order-lifecycle.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+
+const financeAccountId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const financeAccountLock = vi.spyOn(financeApi, 'lockFinanceAccount');
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -51,7 +56,7 @@ function makeOrder(overrides: Record<string, unknown> = {}): IdBusinessV2Order {
     receivedCurrency: 'CNY',
     receivedFxRateToCny: decimal('1'),
     receivedFxSnapshotId: null,
-    receivedFinanceAccountId: null,
+    receivedFinanceAccountId: financeAccountId,
     receivedAt: openedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'retained',
@@ -124,6 +129,7 @@ function makeReversal(overrides: Record<string, unknown> = {}) {
 describe('IdBusinessV2OrderLifecycleService', () => {
   const tx = {
     $queryRaw: vi.fn(),
+    idBusinessV2FinanceJournal: { findFirst: vi.fn() },
     idBusinessV2Order: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
@@ -195,6 +201,15 @@ describe('IdBusinessV2OrderLifecycleService', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    tx.idBusinessV2FinanceJournal.findFirst.mockResolvedValue(null);
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'CNY',
+      currentBalance: ReceiptAmount4.from('1000'),
+      currentBalanceCny: ReceiptAmount4.from('1000')
+    });
+
     vi.spyOn(IdBusinessV2OrdersRepository.prototype, 'synchronizePostedProfit').mockImplementation(
       async () => Amount4.from(storedOrder.profitAmount!.toString())
     );
@@ -536,6 +551,13 @@ describe('IdBusinessV2OrderLifecycleService', () => {
   });
 
   it('reprices a non-CNY processing order with its locked exchange rate', async () => {
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'MYR',
+      currentBalance: ReceiptAmount4.from('1000'),
+      currentBalanceCny: ReceiptAmount4.from('1000')
+    });
     storedOrder = makeOrder({
       receivedAmount: decimal('80'),
       receivedOriginalAmount: decimal('50'),
@@ -1387,5 +1409,121 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(auditPayload).not.toContain('private-user@example.com');
     expect(auditPayload).not.toContain('secret-entry-key');
     expect(auditPayload).not.toContain('website-hash');
+  });
+  it('repairs an unposted legacy account using its original version and records audit', async () => {
+    storedOrder = makeOrder({ receivedFinanceAccountId: null });
+    await service.update(
+      orderId,
+      { expectedUpdatedAt: updatedAt.toISOString(), receivedFinanceAccountId: financeAccountId },
+      operator
+    );
+    expect(storedOrder.receivedFinanceAccountId).toBe(financeAccountId);
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          beforeData: expect.objectContaining({ receivedFinanceAccountId: null }),
+          afterData: expect.objectContaining({ receivedFinanceAccountId: financeAccountId })
+        })
+      })
+    );
+  });
+
+  it('rejects changing an account once any order financial journal exists', async () => {
+    tx.idBusinessV2FinanceJournal.findFirst.mockResolvedValue({ id: 'existing-journal' });
+    await expect(
+      service.update(
+        orderId,
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          receivedFinanceAccountId: 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+        },
+        operator
+      )
+    ).rejects.toThrow('已有财务凭证');
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+  });
+
+  it('preserves missing historical account and money snapshots on completed remark edits', async () => {
+    storedOrder = makeOrder({ status: 'completed', receivedFinanceAccountId: null });
+    await service.update(
+      orderId,
+      { expectedUpdatedAt: updatedAt.toISOString(), remark: '核对中，仅备注' },
+      operator
+    );
+    expect(storedOrder.receivedFinanceAccountId).toBeNull();
+    expect(storedOrder.receivedAmount.toString()).toBe('100');
+    expect(financeAccountLock).not.toHaveBeenCalled();
+  });
+
+  it('blocks legacy positive refunds without changing balances, orders or journals', async () => {
+    storedOrder = makeOrder({ status: 'completed', receivedFinanceAccountId: null });
+    await expect(
+      service.refund(
+        orderId,
+        {
+          refundCostAmount: '10',
+          reason: '需要核对资金归属',
+          idempotencyKey: 'refund-account-guard',
+          balanceRefundMode: 'none'
+        },
+        operator
+      )
+    ).rejects.toThrow('缺少真实收款账户');
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
+  });
+  it('pays additional refund costs in the frozen foreign currency even when the original receipt was zero', async () => {
+    financeAccountLock.mockResolvedValue({
+      id: financeAccountId,
+      status: 'active',
+      currency: 'USDT',
+      currentBalance: ReceiptAmount4.from('999'),
+      currentBalanceCny: ReceiptAmount4.from('6993')
+    });
+    storedOrder = makeOrder({
+      status: 'completed',
+      receivedCurrency: 'USDT',
+      receivedAmount: decimal('0'),
+      receivedOriginalAmount: decimal('0'),
+      receivedFxRateToCny: decimal('7'),
+      platformFeeAmount: decimal('7')
+    });
+    await service.refund(
+      orderId,
+      {
+        refundCostAmount: '7',
+        reason: '合成零实收外币退款成本',
+        idempotencyKey: 'zero-foreign-refund-cost',
+        balanceRefundMode: 'none'
+      },
+      operator
+    );
+    const lines = financePostingService.post.mock.calls[0]![1].lines;
+    const cash = lines.filter((line: { accountCode: string }) => line.accountCode === 'cash');
+    expect(cash).toHaveLength(1);
+    expect(cash[0]).toMatchObject({ direction: 'credit', currency: 'USDT', financeAccountId });
+    expect(cash[0].amountOriginal.toString()).toBe('1');
+    expect(cash[0].amountCny.toString()).toBe('7');
+    expect(cash[0].fxRateToCny.toString()).toBe('7');
+  });
+  it('preserves the old CNY refund amount fallback when a receipt account is explicitly known', async () => {
+    storedOrder = makeOrder({ status: 'completed', receivedOriginalAmount: decimal('0') });
+    await service.refund(
+      orderId,
+      {
+        refundCostAmount: '0',
+        reason: '合成人民币旧金额证据兼容',
+        idempotencyKey: 'legacy-cny-original-fallback',
+        balanceRefundMode: 'none'
+      },
+      operator
+    );
+    const cash = financePostingService.post.mock.calls[0]![1].lines.find(
+      (line: { accountCode: string }) => line.accountCode === 'cash'
+    );
+    expect(cash.currency).toBe('CNY');
+    expect(cash.amountOriginal.toString()).toBe('100');
+    expect(cash.amountCny.toString()).toBe('100');
   });
 });
