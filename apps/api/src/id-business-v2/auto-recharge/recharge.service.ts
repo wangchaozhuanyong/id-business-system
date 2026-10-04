@@ -452,8 +452,10 @@ export class RechargeService {
         }
         const report = safeDocument(input.result);
         await bindSavedChatgptAccount(tx, job, report, this.bankAccounts);
-        if (input.type === 'progress')
-          await recordServerLoginNetwork(tx, job, report, this.bankAccounts);
+        const verifiedAt =
+          input.type === 'progress'
+            ? await recordServerLoginNetwork(tx, job, report, this.bankAccounts)
+            : undefined;
         if (job.action === 'server') delete report.network;
         let state = job.state;
         let nonceHash = job.nonceHash;
@@ -542,7 +544,7 @@ export class RechargeService {
             : serverBusinessHandoff
               ? { leaseUntil: new Date(Date.now() + 16 * 60000) }
               : {}),
-          result: mergeRechargeCallbackResult(job, report)
+          result: mergeRechargeCallbackResult(job, report, verifiedAt)
         });
         return { ok: true };
       },

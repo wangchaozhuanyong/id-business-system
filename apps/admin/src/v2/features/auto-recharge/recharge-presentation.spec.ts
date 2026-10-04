@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   browserFailureLabel,
+  accountVerificationLabel,
+  executionStageLabel,
+  sessionPhaseLabel,
   currencyOptions,
   failureReasonLabel,
   paymentFailureLabel,
@@ -24,6 +27,58 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('首次成功与本轮复核分开，旧记录没有首次成功事实时保持原展示', () => {
+    expect(accountVerificationLabel(job({ result: { account_matched: false } }))).toBe('尚未核实');
+    expect(accountVerificationLabel(job())).toBe('官网账户核对通过');
+    const first = {
+      first_session_verified_at: '2026-10-04T05:18:25.901Z',
+      account_matched: false,
+      stage: 'session_restore'
+    };
+    expect(accountVerificationLabel(job({ action: 'server', result: first }))).toBe(
+      '首次核实已通过，本轮官网复核未完成'
+    );
+    expect(
+      accountVerificationLabel(
+        job({ state: 'running', result: { ...first, account_matched: true } })
+      )
+    ).toBe('首次核实已通过，正在复核官网账号');
+    expect(accountVerificationLabel(job({ result: { ...first, account_matched: true } }))).toBe(
+      '官网账户核对通过'
+    );
+    expect(sessionPhaseLabel('initial_login')).toBe('首次登录核实');
+    expect(sessionPhaseLabel('subscription_check')).toBe('订阅路径核实');
+    expect(sessionPhaseLabel('checkout_check')).toBe('建单前账号核实');
+    expect(statusLabel('page_title')).toBe('读取官网页面标题');
+    expect(
+      executionStageLabel(job({ result: { ...first, reason: 'session_network_error' } }))
+    ).toBe('官网会话恢复未完成');
+  });
+
+  it('Firefox受控网络错误有中文说明且失败主提示包含具体原因', () => {
+    const codes = [
+      'NS_ERROR_NET_RESET',
+      'NS_ERROR_NET_TIMEOUT',
+      'NS_ERROR_NET_INTERRUPT',
+      'NS_ERROR_CONNECTION_REFUSED',
+      'NS_ERROR_PROXY_CONNECTION_REFUSED',
+      'NS_ERROR_UNKNOWN_HOST',
+      'NS_ERROR_UNKNOWN_PROXY_HOST'
+    ];
+    for (const code of codes) expect(browserFailureLabel('Error', code)).not.toBe('浏览器操作异常');
+    expect(
+      rechargeIssueFeedback(
+        job({
+          action: 'server',
+          result: {
+            reason: 'session_network_error',
+            browser_error_code: 'NS_ERROR_PROXY_CONNECTION_REFUSED'
+          }
+        })
+      )?.message
+    ).toBe('代理连接被拒绝');
+  });
+
   it('升级可换卡，核实失败不再误称官网要求原付款卡', () => {
     expect(failureReasonLabel('upgrade_payment_method_unverified')).toContain('本次选择');
     expect(failureReasonLabel('upgrade_payment_method_unverified')).not.toContain('原付款卡');

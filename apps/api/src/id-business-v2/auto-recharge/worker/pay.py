@@ -273,6 +273,9 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    expected_country=None):
     from subscription_upgrade import run_upgrade_in_context
     from plans import subscription_transition
+    if session_budget:
+        session_budget.phase = ("subscription_check" if target_plan in {"pro-5x", "pro-20x", "pro-500"}
+                                else "checkout_check")
     if target_plan not in {"pro-5x", "pro-20x", "pro-500"}:
         return await run_checkout_flow(target, state_dir, target_plan, details_reader=details_reader,
             confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
@@ -294,7 +297,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
             target, state_dir, target_plan, details_reader=details_reader,
             confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
             poll_interval=poll_interval, browser_context=page.context,
-            session_budget=session_budget.restart() if session_budget else None,
+            session_budget=session_budget.restart(phase="checkout_check") if session_budget else None,
             allow_checkout_replacement=allow_checkout_replacement, expected_country=expected_country)
 
     return await run_browser(target, target_plan=target_plan, state_dir=state_dir,

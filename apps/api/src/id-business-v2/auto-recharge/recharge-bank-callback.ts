@@ -29,6 +29,7 @@ export async function recordServerLoginNetwork(
   report: Record<string, unknown>,
   accounts?: BankRechargeAccountService
 ) {
+  const receivedAt = new Date().toISOString();
   if (
     job.action !== 'server' ||
     !['login_verified', 'session_verified'].includes(String(report.stage))
@@ -58,6 +59,7 @@ export async function recordServerLoginNetwork(
     jobId: job.id,
     ownerId: job.ownerId
   });
+  return receivedAt;
 }
 
 export async function recordVerifiedBankRecharge(
@@ -74,9 +76,15 @@ export async function recordVerifiedBankRecharge(
 
 export function mergeRechargeCallbackResult(
   job: IdBusinessV2RechargeJob,
-  report: Record<string, unknown>
+  report: Record<string, unknown>,
+  verifiedAt?: string
 ) {
   const previous = object(job.result ?? {});
+  // 首次成功时间只来自 API 已通过身份和出口核实的回调，执行器不能伪造。
+  const workerReport = { ...report };
+  delete workerReport.first_session_verified_at;
+  const firstVerifiedAt =
+    previous.first_session_verified_at ?? (job.action === 'server' ? verifiedAt : undefined);
   // 邮件读取状态只由内部读码服务维护，执行器进度回执不能覆盖或清除。
   const loginMail = Object.fromEntries(
     [
@@ -89,7 +97,8 @@ export function mergeRechargeCallbackResult(
       .map((key) => [key, previous[key]])
   );
   return toV2JsonDocument({
-    ...mergeRechargePaymentFacts(previous, report),
+    ...mergeRechargePaymentFacts(previous, workerReport),
+    ...(firstVerifiedAt ? { first_session_verified_at: firstVerifiedAt } : {}),
     ...loginMail,
     ...(previous.recheck_only === true
       ? { recheck_only: true, source_job_id: previous.source_job_id }

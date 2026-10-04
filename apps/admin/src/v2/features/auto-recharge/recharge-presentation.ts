@@ -97,6 +97,7 @@ const labels: Record<string, string> = {
   bitbrowser_direct_command_failed: '窗口控制失败，请检查原窗口后重试',
   bitbrowser_direct_cancelled: '网页直连操作已停止，窗口保留供手动处理',
   page_load: '加载官网页面',
+  page_title: '读取官网页面标题',
   page_refresh: '刷新当前官网页面',
   session_page_refreshing: '页面加载失败，正在刷新当前窗口',
   session_read: '读取官网会话',
@@ -442,6 +443,36 @@ export function proxyAttemptLabel(job: V2RechargeJob): string {
   return `代理连接第 ${attempt} / ${limit} 次尝试，官网连接核验最多等待 ${wait} 秒。`;
 }
 
+export function accountVerificationLabel(job: V2RechargeJob): string {
+  if (
+    job.result.first_session_verified_at &&
+    job.result.stage === 'session_restore' &&
+    !['finished', 'unknown'].includes(job.state)
+  )
+    return '首次核实已通过，正在复核官网账号';
+  if (job.result.account_matched) return '官网账户核对通过';
+  if (!job.result.first_session_verified_at) return '尚未核实';
+  return job.state === 'finished' || job.state === 'unknown'
+    ? '首次核实已通过，本轮官网复核未完成'
+    : '首次核实已通过，正在复核官网账号';
+}
+
+export function executionStageLabel(job: V2RechargeJob): string {
+  if (job.state === 'finished' && job.result.stage === 'session_restore' && job.result.reason)
+    return '官网会话恢复未完成';
+  return statusLabel(job.result.stage);
+}
+
+export function sessionPhaseLabel(phase: V2RechargeJob['result']['session_phase']): string {
+  return phase
+    ? {
+        initial_login: '首次登录核实',
+        subscription_check: '订阅路径核实',
+        checkout_check: '建单前账号核实'
+      }[phase]
+    : '';
+}
+
 export interface RechargeIssueFeedback {
   title: string;
   message: string;
@@ -585,7 +616,10 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
       message:
         typeof job.result.page_state === 'string' && pageMessages[job.result.page_state]
           ? pageMessages[job.result.page_state]!
-          : failureReasonLabel(reason),
+          : ['session_network_error', 'browser_operation_failed'].includes(reason) &&
+              job.result.browser_error_code
+            ? browserFailureLabel(job.result.error_type, job.result.browser_error_code)
+            : failureReasonLabel(reason),
       action: issueAction(job, reason)
     };
   }
@@ -639,7 +673,14 @@ export function browserFailureLabel(type?: string, code?: string): string {
     'net::ERR_NETWORK_CHANGED': '网络发生切换',
     'net::ERR_EMPTY_RESPONSE': '网络未返回内容',
     'net::ERR_CONNECTION_REFUSED': '连接被拒绝',
-    'net::ERR_INTERNET_DISCONNECTED': '网络已断开'
+    'net::ERR_INTERNET_DISCONNECTED': '网络已断开',
+    NS_ERROR_NET_RESET: '连接被重置',
+    NS_ERROR_NET_TIMEOUT: '网络响应超时',
+    NS_ERROR_NET_INTERRUPT: '网络连接中断',
+    NS_ERROR_CONNECTION_REFUSED: '连接被拒绝',
+    NS_ERROR_PROXY_CONNECTION_REFUSED: '代理连接被拒绝',
+    NS_ERROR_UNKNOWN_HOST: '域名解析失败',
+    NS_ERROR_UNKNOWN_PROXY_HOST: '代理服务器域名解析失败'
   };
   if (code && Object.hasOwn(codes, code)) return codes[code];
   if (type && Object.hasOwn(types, type)) return types[type];

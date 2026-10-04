@@ -41,7 +41,7 @@ RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-(?:go|pro-(?:5x|20x|50
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage proxy_attempt proxy_attempt_limit proxy_wait_seconds session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id payment_status payment_outcome payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 PUBLIC_KEYS.update("operation current_plan_before upgrade_identifier upgrade_invoice_identifier upgrade_payment_intent_identifier subscription_period three_ds_status".split())
-PUBLIC_KEYS.update("error_type session_step session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())
+PUBLIC_KEYS.update("error_type session_step session_phase session_elapsed_seconds session_wait_seconds session_refresh_count user_action_required".split())
 
 
 class PersistentBrowserRuntime:
@@ -566,7 +566,7 @@ class Job:
             refresh_count = max(refresh_count, details.get("session_refresh_count", 0))
             self.progress("session_restore", **{**details, "session_refresh_count": refresh_count})
         budget = SessionBudget(60, cancelled=lambda: self.cancelled,
-                               report=report_session)
+                               report=report_session, phase="initial_login")
         page, routed, verified = initial_page, False, False
         async def block_payment(route):
             request = route.request
@@ -596,6 +596,7 @@ class Job:
                         raise
                     budget.remaining_ms()
                     refresh_count = 1
+                    budget.refresh_count = 1
                     # 固定官网首页 GET，只恢复同一窗口；不重放登录、建单或付款。
                     response = await budget.run(lambda: page.goto(
                         browser_checkout.ORIGIN + "/", wait_until="commit", timeout=0), "page_refresh")
@@ -615,8 +616,7 @@ class Job:
             if not isinstance(error, Stop):
                 details = session_failure(error)
                 error = Stop(details.pop("reason"), **details)
-            error.report.update(session_step=budget.step, session_elapsed_seconds=int(budget.elapsed),
-                                session_wait_seconds=budget.seconds, session_refresh_count=refresh_count)
+            error.report.update(budget.snapshot())
             raise error from None
         finally:
             cleaned = True
@@ -692,7 +692,7 @@ class Job:
                     previous_ip = self.payload.get("previousLoginIp")
                     if previous_ip and self.preflight_network["ip"] == previous_ip and not self.payload.get("recheckOnly"):
                         raise Stop("proxy_ip_not_rotated")
-                    self.progress("session_restore")
+                    self.progress("session_restore", session_phase="initial_login")
                     prepared_page = {"initial_page": self.prepared_browser["page"]} if self.prepared_browser else {}
                     if login is not None:
                         target, identity = await self.login_target(context, login, **prepared_page)
@@ -715,6 +715,7 @@ class Job:
                     if observed_after_login != self.preflight_network:
                         raise Stop("proxy_ip_changed_during_login")
                     self.progress("login_verified", account_matched=True,
+                                  session_phase="initial_login",
                                   current_plan=identity.get("current_plan"),
                                   network=observed_after_login)
                     if self.payload.get("recheckOnly") is True:

@@ -53,7 +53,10 @@ export interface V2RechargeResult {
   session_elapsed_seconds?: number;
   session_wait_seconds?: number;
   session_refresh_count?: number;
-  session_step?: 'page_load' | 'page_refresh' | 'session_read' | 'account_read';
+  session_step?: 'page_load' | 'page_title' | 'page_refresh' | 'session_read' | 'account_read';
+  session_phase?: 'initial_login' | 'subscription_check' | 'checkout_check';
+  /** API核实身份和出口后记录；仅用于展示，不作为当前付款授权。 */
+  first_session_verified_at?: string;
   quote_elapsed_seconds?: number;
   quote_wait_seconds?: number;
   quote_refresh_count?: number;
