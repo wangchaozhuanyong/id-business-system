@@ -57,8 +57,7 @@ function fixture() {
     countNames: vi.fn().mockResolvedValue(201),
     create: vi.fn(),
     name: vi.fn().mockResolvedValue({ id: 'name-1', displayName: '张明' }),
-    useName: vi.fn().mockResolvedValue(undefined),
-    nextRegistrationAge: vi.fn().mockResolvedValue(20)
+    useName: vi.fn().mockResolvedValue(undefined)
   };
   const tx = {};
   const transactions = {
@@ -102,40 +101,60 @@ function fixture() {
 }
 
 describe('注册年龄任务快照', () => {
-  it('创建时在注册锁内分配年龄，保留填写生日并写中文可展示的审计字段', async () => {
+  it('创建时保存手动年龄，推导兼容生日并写可展示的审计字段', async () => {
     const { service, repository, operator, tx, job, audit } = fixture();
-    repository.nextRegistrationAge.mockResolvedValue(21);
     repository.create.mockImplementation(async (_tx, data) => ({ ...job, ...data }));
     const result = await service.create(
       {
         mailboxAliasId: 'alias-1',
         proxyId: job.proxyId,
-        birthDate: '1996-01-01',
+        age: 25,
         confirmIdentity: true
       },
       operator
     );
-    expect(result.registrationAge).toBe(21);
+    expect(result.registrationAge).toBe(25);
     expect(repository.create).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({
-        registrationAge: 21,
-        birthDateEncrypted: 'encrypted:1996-01-01'
+        registrationAge: 25,
+        birthDateEncrypted: expect.stringMatching(/^encrypted:\d{4}-01-01$/)
       })
     );
     expect(repository.lock.mock.invocationCallOrder[0]).toBeLessThan(
-      repository.nextRegistrationAge.mock.invocationCallOrder[0]!
+      repository.create.mock.invocationCallOrder[0]!
     );
     expect(audit.append).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({
-        afterData: expect.objectContaining({ registrationAge: 21 })
+        afterData: expect.objectContaining({ registrationAge: 25 })
       })
     );
   });
 
-  it('新尝试派发原年龄与原生日，继续和取消不重新分配', async () => {
+  it('年龄留空时随机生成整数并持久化，启动和重试沿用原值', async () => {
     const { service, repository, operator, job } = fixture();
+    repository.create.mockImplementation(async (_tx, data) => {
+      Object.assign(job, data);
+      return { ...job };
+    });
+    const result = await service.create(
+      { mailboxAliasId: 'alias-1', proxyId: job.proxyId, confirmIdentity: true },
+      operator
+    );
+    expect(Number.isInteger(result.registrationAge)).toBe(true);
+    expect(result.registrationAge).toBeGreaterThanOrEqual(20);
+    expect(result.registrationAge).toBeLessThanOrEqual(45);
+    await service.launch(job.id, operator);
+    expect(worker.command.mock.calls[0]![3].registrationAge).toBe(result.registrationAge);
+    job.state = 'partial';
+    await service.launch(job.id, operator);
+    expect(worker.command.mock.calls[1]![3].registrationAge).toBe(result.registrationAge);
+    expect(repository.create).toHaveBeenCalledOnce();
+  });
+
+  it('新尝试派发原年龄与原生日，继续和取消不重新分配', async () => {
+    const { service, operator, job } = fixture();
     job.registrationAge = 45;
     job.birthDateEncrypted = 'encrypted:1996-01-01';
     await service.launch(job.id, operator);
@@ -165,15 +184,13 @@ describe('注册年龄任务快照', () => {
       expect.objectContaining({ attempt: 3 })
     );
     await service.cancel(job.id, operator);
-    expect(repository.nextRegistrationAge).not.toHaveBeenCalled();
     expect(job.registrationAge).toBe(45);
   });
 
-  it('历史任务不回填轮换年龄，客户端也不能覆盖分配值', async () => {
-    const { service, repository, operator, job } = fixture();
+  it('历史任务不回填年龄，客户端不能直接写内部快照字段', async () => {
+    const { service, operator, job } = fixture();
     await service.launch(job.id, operator);
     expect(worker.command.mock.calls[0]![3]).not.toHaveProperty('registrationAge');
-    expect(repository.nextRegistrationAge).not.toHaveBeenCalled();
     await expect(
       service.create(
         {

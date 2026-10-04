@@ -1,4 +1,5 @@
 import { effectScope, nextTick, ref, type Ref } from 'vue';
+import type { FormItemRule } from 'element-plus';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { V2RegistrationJob, V2RegistrationMailbox } from './contracts';
 import { useRegistrationPage } from './useRegistrationPage';
@@ -103,6 +104,29 @@ afterEach(() => {
   clearV2SessionDrafts();
 });
 describe('注册表单和邮件生命周期', () => {
+  it.each([undefined, 20, 25, 45])('年龄 %s 可通过表单校验并提交，不发送完整生日', async (age) => {
+    page.openStart(mailbox);
+    page.draft.form.age = age;
+    page.draft.form.confirmIdentity = true;
+    const done = vi.fn();
+    const rule = (page.rules.age as FormItemRule[])[0]!;
+    rule.validator!({} as never, age, done, {} as never, {} as never);
+    expect(done).toHaveBeenCalledWith(undefined);
+    await page.start();
+    expect(mock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ age, confirmIdentity: true })
+    );
+    expect(mock.create.mock.calls[0]![0]).not.toHaveProperty('birthDate');
+    expect(mock.launch).toHaveBeenCalledWith(id);
+  });
+  it.each([19, 46, 25.5])('年龄 %s 在提交前显示字段校验错误', (age) => {
+    const done = vi.fn();
+    const rule = (page.rules.age as FormItemRule[])[0]!;
+    rule.validator!({} as never, age, done, {} as never, {} as never);
+    expect(done).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '年龄须为 20 至 45 岁的整数' })
+    );
+  });
   it('条件不变时查询仍刷新列表和当前任务，避免关闭重试操作停留在旧状态', () => {
     page.filters.activeJobId = id;
     page.search();
@@ -131,7 +155,7 @@ describe('注册表单和邮件生命周期', () => {
     Object.assign(page.draft.form, {
       mailboxAliasId: 'mail-1',
       proxyId: id,
-      birthDate: '1996-01-01',
+      age: 25,
       confirmIdentity: true
     });
     await page.start();
@@ -166,13 +190,13 @@ describe('注册表单和邮件生命周期', () => {
   });
   it('创建响应丢失时查回原任务，保留草稿并等待原任务操作', async () => {
     page.openStart(mailbox);
-    page.draft.form.birthDate = '1996-01-01';
+    page.draft.form.age = 25;
     mock.create.mockRejectedValueOnce(new Error('网络中断'));
     mock.pending.mockResolvedValueOnce(baseJob);
     await page.start();
     expect(mock.launch).not.toHaveBeenCalled();
     expect(page.filters.activeJobId).toBe(id);
-    expect(page.draft.form.birthDate).toBe('1996-01-01');
+    expect(page.draft.form.age).toBe(25);
     expect(page.message.value).toContain('已找到原注册任务');
   });
   it('创建和核对都失败时锁定为核对原任务，不能重建', async () => {
@@ -201,14 +225,14 @@ describe('注册表单和邮件生命周期', () => {
     await start;
     expect(mock.create).toHaveBeenCalledOnce();
   });
-  it('邮箱草稿隔离，取消和切页不丢失各自真实资料', () => {
+  it('邮箱草稿隔离，取消和切页不丢失各自年龄', () => {
     page.openStart(mailbox);
-    page.draft.form.birthDate = '1996-01-01';
+    page.draft.form.age = 25;
     page.openStart({ ...mailbox, id: 'mail-2', email: 'other@example.invalid' });
-    expect(page.draft.form.birthDate).toBe('');
-    page.draft.form.birthDate = '1997-02-03';
+    expect(page.draft.form.age).toBeUndefined();
+    page.draft.form.age = 26;
     page.openStart(mailbox);
-    expect(page.draft.form.birthDate).toBe('1996-01-01');
+    expect(page.draft.form.age).toBe(25);
     expect(page.draft.form.mailboxAliasId).toBe(mailbox.id);
   });
   it('派发后列表读取失败仍显示已接收，不把成功注册派发当失败', async () => {
@@ -243,14 +267,14 @@ describe('注册表单和邮件生命周期', () => {
   });
   it('切页保留注册草稿，临时验证码不保留', () => {
     page.openStart(mailbox);
-    page.draft.form.birthDate = '1996-01-01';
+    page.draft.form.age = 25;
     page.loginCode.value = '123456';
     scope.stop();
     mock.index = 0;
     scope = effectScope();
     page = scope.run(() => useRegistrationPage({ moduleKey: 'auto-registration' }))!;
     page.openStart(mailbox);
-    expect(page.draft.form.birthDate).toBe('1996-01-01');
+    expect(page.draft.form.age).toBe(25);
     expect(page.loginCode.value).toBe('');
   });
   it('取消关闭未确认时保留明确提示，并读取撤销后的任务状态', async () => {

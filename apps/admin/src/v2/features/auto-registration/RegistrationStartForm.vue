@@ -79,17 +79,19 @@
         </template>
       </el-select>
     </el-form-item>
-    <el-form-item label="真实出生日期" prop="birthDate">
-      <el-date-picker
-        v-model="form.birthDate"
-        type="date"
-        value-format="YYYY-MM-DD"
-        aria-label="真实出生日期"
-        placeholder="实际年龄为 20 至 45 岁"
+    <el-form-item label="年龄" prop="age">
+      <el-input-number
+        v-model="form.age"
+        :min="20"
+        :max="45"
+        :step="1"
+        :controls="false"
+        aria-label="注册年龄"
+        placeholder="留空随机 20～45 岁"
       />
     </el-form-item>
     <el-form-item label="资料确认" prop="confirmIdentity">
-      <el-checkbox v-model="form.confirmIdentity">邮箱已授权，出生日期为真实资料</el-checkbox>
+      <el-checkbox v-model="form.confirmIdentity">确认邮箱已授权用于注册</el-checkbox>
     </el-form-item>
     <p>密码由系统生成并加密保存。遇到本人验证时暂停等待处理；本功能只检查优惠，不领取或付款。</p>
   </el-form>
