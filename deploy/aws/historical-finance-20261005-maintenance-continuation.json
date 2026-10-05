@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "historical-finance-20261005-maintenance-continuation",
+  "userApproved": true,
+  "expectedCurrent": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+  "databaseName": "id_business_v2_partial_cleanup_20261005_v1",
+  "originPolicySha256": "58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca",
+  "rulesSha256": "259332c0c8eb2d3d96d066cecd7cbe294ed5f2bd1e7af0d1c39f6c002859d7f4",
+  "schemaSha256": "3aef82a77e90f3cb4a2a953d67808193168159aa8983276b67e12f916a0a3655",
+  "candidateEntitySetSha256": "f23d021df7a2693b4b5ad3de3818ab6ea475a2362e7c71dd39dc489f3eeb2c43",
+  "items": [
+    {
+      "entitySha256": "14f8a0d430fbde3b93a4c8dbc3ef26bb09cbe6f118bb85dfdff06ee18bb30ace",
+      "closureSha256": "7e0245ab613cd5150b0dace5704082922dddb4f9fcc6c51dfc872cf99d40c222",
+      "predicateSha256": "9bb0daaf6ec949f81ae3da77c94684e9fa30639d295b7f49fb50d40e25c72b20"
+    },
+    {
+      "entitySha256": "83379e1d32822bb0018c7879835d8e8d8b410e997663d770a06d2b417456d467",
+      "closureSha256": "e19eb833b29f7b931a7360312496d1cbe2254c79dcf0b3de3c639fd8163dd138",
+      "predicateSha256": "9bb0daaf6ec949f81ae3da77c94684e9fa30639d295b7f49fb50d40e25c72b20"
+    },
+    {
+      "entitySha256": "ab2b7f90b842d992c28b46905c33ef8fa79dddccc93cdf39b55659af2776797f",
+      "closureSha256": "c8ef495334223c9292e75c61fb2e962cd2fbb59b45c04bd1748c6e28301f35da",
+      "predicateSha256": "9bb0daaf6ec949f81ae3da77c94684e9fa30639d295b7f49fb50d40e25c72b20"
+    },
+    {
+      "entitySha256": "bc5f38c1d0c8e4fa7fe32fd567115156e35e47951d7eed372e93cae63052c2cb",
+      "closureSha256": "e471f47b54508a809d85e6ac88ea37e8e6c85b96c39863ec8fc91b5dc0869803",
+      "predicateSha256": "9bb0daaf6ec949f81ae3da77c94684e9fa30639d295b7f49fb50d40e25c72b20"
+    },
+    {
+      "entitySha256": "cbfd0101b892cf5cf6f8cf78b45c146d53b6fcb51453c47334c03280518fc3b2",
+      "closureSha256": "374ea3c52c9c6d195f41c98120a4d4370743c5abea7009ace5fa184ba9668d40",
+      "predicateSha256": "9bb0daaf6ec949f81ae3da77c94684e9fa30639d295b7f49fb50d40e25c72b20"
+    },
+    {
+      "entitySha256": "dcfc8a2ddd64d5bb59dd684fba3c549e6d48e178f4fe1351fd9269a6c066ed25",
+      "closureSha256": "1a112cd979e13ed3eb849b49c1e86c3b6e9dc3a45ba258763a5c3318d099f0c9",
+      "predicateSha256": "9bb0daaf6ec949f81ae3da77c94684e9fa30639d295b7f49fb50d40e25c72b20"
+    }
+  ],
+  "receiptSha256": {
+    "originManifest": "202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866",
+    "originBefore": "b54520e73edffbc0a9fcf6592da3733b04564c5b65ff41f1ed8789ea782804d5",
+    "originAfter": "818e1980ab01bff0eafaca24863601bca8b02aa0e4bcadf64c3a671bc38edf63",
+    "maintenanceSwitch": "f8394310c8fe2a91a61c77e7bef4b2b196b68f704131a1fe11b116c2687f4634",
+    "maintenanceResume": "1692deacad7dc074a3fb2e30ef22d7f5b6fec8dd7930644d8d950f0089c21582",
+    "maintenanceProof": "d8b9fae9fb2269d8ae601bdcd7aeaf0f978b4865567723fe5d278de95279ca6b"
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a",
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "1734bacb68549f8dcc28a35426d659069b7aefc8070b110adb5c0bfd70c140a9",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py": "ac459b9a00eaeb482efc54cc7eecf23fc003c993e6d5991ecf45034c5e1c0696",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "1327c9fdd8e88807e8ba69bbd288c9b2e62edf015352250e2d54f8d4e9a69173",
+    "docs/V2_TASKS.md": "767b8f0a86a4207cea340f7185ad6c0ce1978ad752c226db7d2e89e19e5266e9",
+    "scripts/ci-recharge-check.mjs": "5b3781d2697ddcb64db3f3149e993b905492652654ff6bd79185d0ae7fc11b5b",
+    "scripts/lib/v2-data-integrity-audit.mjs": "3764d4701ed90404898ae40765c159bbd058d30090efc3a917ee2bf4e68d8405",
+    "scripts/v2-data-integrity-audit.test.mjs": "fbaedfc9f65a27c10e569cd846a79ee047021749039472bc722859333ad7db00",
+    "scripts/backup-aws-mysql.sh": "bd9c4c4c8f5355ef27393027f993f00b34ae115dfb867f3f11ad0b5ca2e3dadd",
+    "scripts/aws-mysql-backup.test.mjs": "d47e7812b9261e5e7622caa2f7681b67b87b1a06582ac8045706e16d4dcae9e0"
+  }
+}

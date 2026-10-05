@@ -115,6 +115,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Verify changed release controls
+        env:
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+          CHECK_MODE: ci-only
+        run: node scripts/ci-recharge-check.mjs guards "$CHECK_BASE"
+
       - name: Check admin UI guardrails
         run: npm run check:admin-ui
 

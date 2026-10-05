@@ -38,6 +38,38 @@ read_environment_value() {
   ' "${environment_file}"
 }
 
+# The mysql container keeps its initdb target when maintenance switches the live database.
+target_database="$(python3 - "${environment_file}" <<'PY'
+import re
+import sys
+from urllib.parse import unquote, urlsplit
+
+try:
+    values = {'MYSQL_DATABASE': [], 'DATABASE_URL': []}
+    with open(sys.argv[1], encoding='utf-8') as source:
+        for line in source:
+            key, separator, value = line.strip().partition('=')
+            if separator and key in values:
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('\"', "'"):
+                    value = value[1:-1]
+                values[key].append(value)
+    if any(len(items) != 1 for items in values.values()):
+        raise ValueError()
+    database = values['MYSQL_DATABASE'][0]
+    url = values['DATABASE_URL'][0]
+    connection = urlsplit(url)
+    if (not re.fullmatch(r'[A-Za-z0-9_]{1,64}', database)
+            or any(character.isspace() for character in url)
+            or connection.scheme != 'mysql' or connection.hostname != 'mysql'
+            or connection.port not in (None, 3306) or not connection.username
+            or connection.fragment or unquote(connection.path) != '/' + database):
+        raise ValueError()
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit('MySQL backup target configuration is invalid') from None
+print(database)
+PY
+)"
+
 s3_bucket="$(read_environment_value MYSQL_BACKUP_S3_BUCKET)"
 s3_prefix="$(read_environment_value MYSQL_BACKUP_S3_PREFIX)"
 s3_region="$(read_environment_value MYSQL_BACKUP_S3_REGION)"
@@ -79,7 +111,7 @@ if [[ ! "${minimum_free_bytes}" =~ ^[1-9][0-9]*$ ]] || ((minimum_free_bytes < 67
   exit 1
 fi
 
-for required_command in aws docker gzip openssl stat flock; do
+for required_command in aws docker gzip openssl stat flock python3; do
   if ! command -v "${required_command}" >/dev/null 2>&1; then
     echo "备份依赖命令不存在：${required_command}" >&2
     exit 1
@@ -132,8 +164,12 @@ partial_file="${backup_directory}/.id-business-v2-${stamp}.sql.gz.partial"
 backup_file="${backup_directory}/id-business-v2-${stamp}.sql.gz"
 
 cd "${deployment_directory}"
-docker compose --env-file "${environment_file}" -f "${compose_file}" exec -T mysql \
-  sh -c 'if [ "$MYSQL_BACKUP_USER" != "id_business_backup" ] || [ -z "$MYSQL_BACKUP_PASSWORD" ]; then echo "备份账号配置无效" >&2; exit 1; fi; exec mysqldump --host=127.0.0.1 --user="$MYSQL_BACKUP_USER" --password="$MYSQL_BACKUP_PASSWORD" --single-transaction --quick --hex-blob --no-tablespaces --triggers "$MYSQL_DATABASE"' \
+{
+  docker compose --env-file "${environment_file}" -f "${compose_file}" exec -e "MYSQL_DATABASE=${target_database}" -T mysql \
+    sh -c 'if [ "$MYSQL_BACKUP_USER" != "id_business_backup" ] || [ -z "$MYSQL_BACKUP_PASSWORD" ]; then echo "备份账号配置无效" >&2; exit 1; fi; exec mysqldump --host=127.0.0.1 --user="$MYSQL_BACKUP_USER" --password="$MYSQL_BACKUP_PASSWORD" --single-transaction --quick --hex-blob --no-tablespaces --triggers "$MYSQL_DATABASE"' || exit 1
+  docker compose --env-file "${environment_file}" -f "${compose_file}" exec -e "MYSQL_DATABASE=${target_database}" -T mysql \
+    sh -c 'test -n "$MYSQL_ROOT_PASSWORD" || exit 1; export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysqldump --host=127.0.0.1 --user=root --routines --no-data --no-create-info --skip-triggers --no-tablespaces --skip-add-locks --skip-lock-tables --set-gtid-purged=OFF "$MYSQL_DATABASE"' || exit 1
+} \
   | sed -E -f "${normalizer_script}" \
   | gzip -9 >"${partial_file}"
 

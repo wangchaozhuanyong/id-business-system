@@ -9,6 +9,10 @@ export const auditRetentionMigration =
 export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/historical-finance-20261005-registration-continuation.json',
   'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
+  'deploy/aws/historical-finance-20261005-maintenance-continuation.json',
+  'scripts/lib/v2-release-maintenance-policy.mjs',
+  'scripts/v2-release-maintenance-audit.mjs',
+  'scripts/v2-release-maintenance-policy.test.mjs',
   'scripts/lib/v2-release-history-policy.mjs',
   'scripts/v2-release-history-audit.mjs',
   'scripts/v2-release-history-policy.test.mjs',

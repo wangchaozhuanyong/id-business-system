@@ -42,7 +42,7 @@ function fixture(run) {
   }
 }
 
-function guardCommands(paths, { failHistory = false } = {}) {
+function guardCommands(paths, { failHistory = false, failMaintenance = false } = {}) {
   let commands;
   fixture(({ root, env }) => {
     const log = join(root, 'guard-commands.txt');
@@ -53,7 +53,7 @@ function guardCommands(paths, { failHistory = false } = {}) {
         join(root, 'bin', file),
         `#!/bin/sh\nprintf "%s\\n" "${file} $*" >> "$TASK_GUARD_LOG"\n${
           file === 'node'
-            ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\n'
+            ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\nif [ "$TASK_FAIL_MAINTENANCE" = true ] && [ "$*" = "--test scripts/v2-release-maintenance-policy.test.mjs" ]; then exit 24; fi\n'
             : ''
         }`,
         { mode: 0o755 }
@@ -67,7 +67,8 @@ function guardCommands(paths, { failHistory = false } = {}) {
           ...env,
           CHECK_MODE: 'ci-only',
           TASK_GUARD_LOG: log,
-          TASK_FAIL_HISTORY: String(failHistory)
+          TASK_FAIL_HISTORY: String(failHistory),
+          TASK_FAIL_MAINTENANCE: String(failMaintenance)
         },
         stdio: 'pipe'
       }
@@ -111,14 +112,25 @@ test('actual CI guards run historical tests for each exact control path, includi
   for (const path of [
     'deploy/aws/historical-finance-20261005-registration-continuation.json',
     'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
+    'deploy/aws/historical-finance-20261005-maintenance-continuation.json',
     'scripts/lib/v2-release-history-policy.mjs',
     'scripts/v2-release-history-audit.mjs',
-    'scripts/v2-release-history-policy.test.mjs'
+    'scripts/v2-release-history-policy.test.mjs',
+    'scripts/lib/v2-release-maintenance-policy.mjs',
+    'scripts/v2-release-maintenance-audit.mjs',
+    'scripts/v2-release-maintenance-policy.test.mjs'
   ]) {
     const commands = guardCommands([path]);
     assert.equal(
       commands.filter(
         (command) => command === 'node --test scripts/v2-release-history-policy.test.mjs'
+      ).length,
+      1,
+      path
+    );
+    assert.equal(
+      commands.filter(
+        (command) => command === 'node --test scripts/v2-release-maintenance-policy.test.mjs'
       ).length,
       1,
       path
@@ -139,6 +151,7 @@ test('historical CI selection preserves existing deployment and cache control ch
   const commands = guardCommands([
     'deploy/aws/historical-finance-20261005-registration-continuation.json',
     'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
+    'deploy/aws/historical-finance-20261005-maintenance-continuation.json',
     'scripts/production-release/remote-deploy.py',
     'scripts/production-release/maintain-image-cache.py',
     'scripts/production-release/cleanup-reviewed-cache.py',
@@ -147,6 +160,7 @@ test('historical CI selection preserves existing deployment and cache control ch
   ]);
   for (const command of [
     'node --test scripts/v2-release-history-policy.test.mjs',
+    'node --test scripts/v2-release-maintenance-policy.test.mjs',
     'python3 -B scripts/production-release/remote-deploy.test.py',
     'python3 -B scripts/production-release/maintain-image-cache.test.py',
     'python3 -B scripts/production-release/cleanup-reviewed-cache.test.py',
@@ -167,6 +181,7 @@ test('historical CI test selection is exact and a rejected historical test stops
     'deploy/aws/historical-finance-unreviewed.json',
     'deploy/aws/historical-finance-20261005-recharge-diagnostics-other.json',
     'deploy/aws/historical-finance-20261005-recharge-diagnostics.json.backup',
+    'deploy/aws/historical-finance-20261005-maintenance-continuation.json.backup',
     'scripts/v2-release-history-audit-other.mjs',
     'scripts/lib/v2-data-integrity-audit.mjs'
   ])
@@ -287,6 +302,12 @@ test('recovery dispatch keeps deployment run and reused image run separate', () 
 test('real historical dispatch selects only the flag approved for its exact baseline', () => {
   for (const [policy, current, selected, rejected] of [
     [
+      'historical-finance-20261005-maintenance-continuation',
+      '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
+      '--historical-finance-maintenance-continuation',
+      '--historical-finance-recharge-diagnostics'
+    ],
+    [
       'historical-finance-20261005-recharge-diagnostics',
       '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
       '--historical-finance-recharge-diagnostics',
@@ -316,7 +337,8 @@ test('real historical dispatch selects only the flag approved for its exact base
           [
             '--historical-finance-exception',
             '--historical-finance-continuation',
-            '--historical-finance-recharge-diagnostics'
+            '--historical-finance-recharge-diagnostics',
+            '--historical-finance-maintenance-continuation'
           ].includes(arg)
         ).length,
         1,
@@ -334,6 +356,15 @@ test('real historical dispatch selects only the flag approved for its exact base
 
 test('real historical dispatch rejects reused or wrong baselines before parameters and AWS', () => {
   for (const [policy, current] of [
+    ['historical-finance-20261005-maintenance-continuation', 'f'.repeat(40)],
+    [
+      'historical-finance-20261005-maintenance-continuation',
+      'd0f359dc78b2d2b166893bfec8545609f5baa16d'
+    ],
+    [
+      'historical-finance-20261005-maintenance-continuation --historical-finance-recharge-diagnostics',
+      '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+    ],
     ['historical-finance-20261005-recharge-diagnostics', 'f'.repeat(40)],
     [
       'historical-finance-20261005-recharge-diagnostics',
@@ -448,4 +479,59 @@ test('diagnostics dispatch refuses admin-only and image reuse before parameters 
       },
       extraEnv
     );
+});
+
+test('a rejected maintenance proof test stops actual CI guards', () => {
+  assert.throws(
+    () =>
+      guardCommands(['deploy/aws/historical-finance-20261005-maintenance-continuation.json'], {
+        failMaintenance: true
+      }),
+    (error) =>
+      error.status === 1 &&
+      String(error.stderr).includes(
+        'Command failed: node --test scripts/v2-release-maintenance-policy.test.mjs'
+      )
+  );
+});
+
+test('maintenance dispatch refuses partial publication and reused images before AWS', () => {
+  for (const extraEnv of [
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { REUSE_IMAGE_COMMIT: 'd'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '222' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '2' }
+  ]) {
+    dispatchFixture(
+      'historical-finance-20261005-maintenance-continuation',
+      '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
+      ({ execute, parametersFile, awsLog }) => {
+        assert.throws(
+          execute,
+          (error) => error.status === 1 && String(error.stderr).includes('AssertionError')
+        );
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      },
+      extraEnv
+    );
+  }
+});
+
+test('full Quality Gate includes the release guards alongside unchanged business checks', () => {
+  const workflow = readFileSync('.github/workflows/quality.yml', 'utf8');
+  const full = workflow.slice(workflow.indexOf('  full-quality:'), workflow.indexOf('  recharge:'));
+  assert.ok(full.includes('name: Verify changed release controls'));
+  assert.ok(full.includes('CHECK_BASE: ${{ needs.change-scope.outputs.base }}'));
+  assert.ok(full.includes('CHECK_MODE: ci-only'));
+  assert.ok(full.includes('run: node scripts/ci-recharge-check.mjs guards "$CHECK_BASE"'));
+  for (const command of [
+    'npm run typecheck',
+    'npm run test',
+    'npm run build',
+    'npm run acceptance:v2-data-governance',
+    'npm run acceptance:v2-financial-integrity',
+    'npm run acceptance:v2-rollback-integrity'
+  ])
+    assert.ok(full.includes(command), command);
 });
