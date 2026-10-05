@@ -538,3 +538,20 @@ test('maintenance continuation control is exact and preserves full compatibility
     assert.equal(checkMode([policy, path], schema, schema), 'full', path);
   }
 });
+
+test('fixed b8 runtime scope uses one exact control path without business checks', () => {
+  const path = 'deploy/aws/recharge-pro-menu-b8-20261005.json';
+  assert.equal(isCiOnly([path]), true);
+  assert.equal(checkMode([path], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([path]), ['guards']);
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py';
+  assert.deepEqual(selectedParts([path, worker]), ['guards', 'connector']);
+  for (const other of [
+    'deploy/aws/recharge-pro-menu-b8-20261006.json',
+    'deploy/aws/recharge-pro-menu-b8-20261005.json.backup',
+    'deploy/aws/recharge-pro-menu-unapproved.json'
+  ]) {
+    assert.equal(isCiOnly([other]), false, other);
+    assert.equal(checkMode([other], schema, schema), 'full', other);
+  }
+});
