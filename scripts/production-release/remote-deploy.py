@@ -122,6 +122,10 @@ MAILBOX_MANIFEST_SHA256 = 'a0c248295509397e1862b13bd3aa41f46f32955ad8862226de56e
 MAILBOX_EXPECTED_GATE = {'accepted': True, 'status': 'APPROVED_MAILBOX_FROZEN_EXCEPTIONS', 'policyId': 'historical-finance-20261005-mailbox-batch', 'policySha256': 'f3051a718cdbd55840d50affe6e5e1ddc62f187ff231f309679998608189481c', 'expectedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'fixedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'imageCommit': 'f5826f9fb4ad0d846d9875c035c913a61eb68290', 'imageRun': '37312405714', 'imageAttempt': '1', 'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6, 'snapshotSha256': '03c3c6c494f7c5878441813814d3dc0fac9ad9d4b3480b0e81835129c97c76df', 'servicesUpdated': ['api']}
 
 MAILBOX_CARRIED_SOURCE = {'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py': 'f63eeb60d191aeb535c96bcd13cdbca8bbf040119ef08ca259875f621f283972', 'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py': 'a7becf0fc1d17dd6e843dbdf0c7ecb138a739ca6d9e8979767846e9b31d07d88'}
+MAILBOX_REUSE_BUILD_CONTROLS = {
+    'scripts/production-release/build-images.sh': '91e8dd6e59ff0bf45407e621d73063a0f63f663710828e8e4c727c4913b8536b',
+    'scripts/production-release/push-images.sh': 'f39a459a6da9fb0bfc00a0b83624b4a6767bb888a4b58de9a091ff4b3d89eb40',
+}
 
 REUSE_CONTROL_FILES = frozenset({
     'deploy/aws/recharge-pro-menu-b8-20261005.json',
@@ -737,7 +741,7 @@ def command_failure_summary(data):
 
 
 def require_reusable_paths(paths, *, mailbox_only=False):
-    allowed = REUSE_CONTROL_FILES | (set(MAILBOX_CARRIED_SOURCE) if mailbox_only else set())
+    allowed = REUSE_CONTROL_FILES | ((set(MAILBOX_CARRIED_SOURCE) | set(MAILBOX_REUSE_BUILD_CONTROLS)) if mailbox_only else set())
     require(set(paths) <= allowed, 'Application or build source changed since image build')
 
 
@@ -745,10 +749,13 @@ def verify_mailbox_carried_sources(directory):
     for name, digest in MAILBOX_CARRIED_SOURCE.items():
         require(hashlib.sha256((directory / name).read_bytes()).hexdigest() == digest,
                 'Unchanged worker source carry differs from approved mailbox release')
+    for name, digest in MAILBOX_REUSE_BUILD_CONTROLS.items():
+        require(hashlib.sha256((directory / name).read_bytes()).hexdigest() == digest,
+                'Mailbox reusable build controls differ from verified API-only scope')
 
 
 def verify_reusable_archive(release, source, commit, *, mailbox_only=False):
-    allowed = REUSE_CONTROL_FILES | (set(MAILBOX_CARRIED_SOURCE) if mailbox_only else set())
+    allowed = REUSE_CONTROL_FILES | ((set(MAILBOX_CARRIED_SOURCE) | set(MAILBOX_REUSE_BUILD_CONTROLS)) if mailbox_only else set())
     if mailbox_only:
         verify_mailbox_carried_sources(release)
     prefix = f'id-business-system-{commit}/'
