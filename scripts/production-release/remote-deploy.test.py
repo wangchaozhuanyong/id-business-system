@@ -2252,7 +2252,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                 extra = root / (filename + '.extra')
                 link_target = directory / ('private-link-target-' + str(index))
                 link_target.write_bytes(original); link_target.chmod(0o644)
-                for mutation in ('wrong-hash', 'missing', 'extra', 0o600, 0o444, 0o755, 'symlink'):
+                for mutation in ('wrong-hash', 'missing', 'extra', 0o600, 0o444, 0o664, 0o755, 'symlink'):
                     if mutation == 'wrong-hash':
                         path.write_bytes(b'unapproved')
                     elif mutation == 'missing':
@@ -2273,6 +2273,124 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                     if extra.exists():
                         extra.unlink()
                     verify()
+
+    def mode_archive_fixture(self, directory, mode):
+        policy = self.policy(); data = io.BytesIO(); prefix = 'id-business-system-' + 'a' * 40 + '/'
+        contents = {name: ('synthetic-diagnostics:' + name).encode()
+                    for name in policy['candidateSourceSha256']}
+        contents['frozen.txt'] = b'unchanged full-mode baseline'
+        with tarfile.open(fileobj=data, mode='w:gz') as source:
+            for name, content in contents.items():
+                item = tarfile.TarInfo(prefix + name); item.size = len(content)
+                item.mode = mode if name in policy['candidateSourceSha256'] else 0o664
+                source.addfile(item, io.BytesIO(content))
+        with tarfile.open(fileobj=io.BytesIO(data.getvalue()), mode='r:gz') as source:
+            source.extractall(directory)
+        release = directory / prefix[:-1]
+        baseline = io.BytesIO()
+        with tarfile.open(fileobj=baseline, mode='w') as source:
+            item = tarfile.TarInfo(f'id-business-system-{deployment.HISTORY_DIAGNOSTICS_BASELINE}/frozen.txt')
+            item.size = len(contents['frozen.txt']); item.mode = 0o664
+            source.addfile(item, io.BytesIO(contents['frozen.txt']))
+        return release, policy, contents, baseline.getvalue()
+
+    def test_github_0664_and_original_0644_candidates_normalize_only_the_exact_seven(self):
+        for mode in (0o644, 0o664):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir='.deploy') as name:
+                release, policy, contents, baseline = self.mode_archive_fixture(Path(name), mode)
+                with patch.object(deployment.os, 'fchmod', wraps=deployment.os.fchmod) as chmod:
+                    deployment.normalize_diagnostics_candidate_modes(release, policy)
+                self.assertEqual(chmod.call_count, 7 if mode == 0o664 else 0)
+                for filename, content in contents.items():
+                    path = release / filename
+                    self.assertEqual(path.read_bytes(), content)
+                    self.assertEqual(path.stat().st_mode & 0o7777,
+                                     0o644 if filename in policy['candidateSourceSha256'] else 0o664)
+                with tarfile.open(fileobj=io.BytesIO(baseline), mode='r') as archive:
+                    deployment.verify_continuation_archive(release, archive, policy,
+                        deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+
+    def test_mode_normalization_rejects_before_chmod_on_any_unverified_candidate(self):
+        filenames = sorted(deployment.DIAGNOSTICS_CANDIDATE_FILES)
+        for filename in filenames:
+            for mutation in ('wrong-hash', 'missing', 'symlink', 'hardlink', 0o600, 0o444, 0o755, 0o2664):
+                with self.subTest(filename=filename, mutation=mutation), tempfile.TemporaryDirectory(dir='.deploy') as name:
+                    directory = Path(name)
+                    release, policy, contents, _baseline = self.mode_archive_fixture(directory, 0o664)
+                    path = release / filename
+                    if mutation == 'wrong-hash':
+                        path.write_bytes(b'changed')
+                    elif mutation == 'missing':
+                        path.unlink()
+                    elif mutation in ('symlink', 'hardlink'):
+                        outside = directory / 'outside'; outside.write_bytes(contents[filename])
+                        path.unlink()
+                        if mutation == 'symlink':
+                            path.symlink_to(outside.resolve())
+                        else:
+                            deployment.os.link(outside, path)
+                    else:
+                        path.chmod(mutation)
+                    with patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                        deployment.normalize_diagnostics_candidate_modes(release, policy)
+                    chmod.assert_not_called()
+                    for untouched in set(filenames) - {filename}:
+                        self.assertEqual((release / untouched).stat().st_mode & 0o7777, 0o664)
+
+    def test_mode_normalization_cannot_broaden_policy_or_allow_unrelated_archive_changes(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            release, policy, _contents, baseline = self.mode_archive_fixture(Path(name), 0o664)
+            for mutation in ('extra', 'missing', 'old-policy', 'wrong-baseline'):
+                changed = copy.deepcopy(policy)
+                if mutation == 'extra':
+                    changed['candidateSourceSha256']['docs/unapproved.md'] = 'f' * 64
+                elif mutation == 'missing':
+                    changed['candidateSourceSha256'].pop(next(iter(changed['candidateSourceSha256'])))
+                elif mutation == 'old-policy':
+                    changed['id'] = deployment.HISTORY_CONTINUATION_POLICY_ID
+                else:
+                    changed['expectedCurrent'] = deployment.HISTORY_CONTINUATION_BASELINE
+                with self.subTest(mutation=mutation), patch.object(deployment.os, 'fchmod') as chmod, \
+                        self.assertRaises(RuntimeError):
+                    deployment.normalize_diagnostics_candidate_modes(release, changed)
+                chmod.assert_not_called()
+            unapproved = release / 'unapproved.txt'; unapproved.write_bytes(b'unapproved'); unapproved.chmod(0o664)
+            deployment.normalize_diagnostics_candidate_modes(release, policy)
+            self.assertEqual(unapproved.stat().st_mode & 0o7777, 0o664)
+            with tarfile.open(fileobj=io.BytesIO(baseline), mode='r') as archive, \
+                    self.assertRaisesRegex(RuntimeError, 'unrelated source'):
+                deployment.verify_continuation_archive(release, archive, policy,
+                    deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+
+    def test_mode_normalization_ignores_read_atime_but_rejects_a_changed_open_file(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            release, policy, _contents, _baseline = self.mode_archive_fixture(Path(name), 0o664)
+            for filename in policy['candidateSourceSha256']:
+                path = release / filename
+                deployment.os.utime(path, ns=(1, path.stat().st_mtime_ns))
+            deployment.normalize_diagnostics_candidate_modes(release, policy)
+            for filename in policy['candidateSourceSha256']:
+                (release / filename).chmod(0o664)
+            victim = release / next(iter(policy['candidateSourceSha256']))
+            original_sha256 = deployment.hashlib.sha256
+            def changed_during_hash(data):
+                digest = original_sha256(data)
+                victim.write_bytes(data + b'changed during read')
+                return digest
+            with patch.object(deployment.hashlib, 'sha256', side_effect=changed_during_hash), \
+                    patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                deployment.normalize_diagnostics_candidate_modes(release, policy)
+            chmod.assert_not_called()
+
+    def test_mode_normalization_rejects_symlinked_candidate_parent(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            directory = Path(name)
+            release, policy, _contents, _baseline = self.mode_archive_fixture(directory, 0o664)
+            (release / 'apps').rename(directory / 'outside-apps')
+            (release / 'apps').symlink_to((directory / 'outside-apps').resolve())
+            with patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                deployment.normalize_diagnostics_candidate_modes(release, policy)
+            chmod.assert_not_called()
 
     def test_actual_git_archives_freeze_every_other_path_hash_and_full_mode_at_6a(self):
         project = Path(__file__).resolve().parents[2]
@@ -2556,12 +2674,13 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 path.write_bytes(expected)
 
     @staticmethod
-    def archive(commit, files):
+    def archive(commit, files, candidate_mode=0o644):
         data = io.BytesIO()
         with tarfile.open(fileobj=data, mode='w:gz') as archive:
             for name, content in files.items():
                 member = tarfile.TarInfo(f'id-business-system-{commit}/' + name)
-                member.mode = 0o644; member.size = len(content)
+                member.mode = candidate_mode if name in deployment.DIAGNOSTICS_CANDIDATE_FILES else 0o644
+                member.size = len(content)
                 archive.addfile(member, io.BytesIO(content))
         return data.getvalue()
 
@@ -2569,7 +2688,8 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     compose_mutation=False, override_mutation=False,
                     candidate_mutation=False, full_release=False,
                     manifest_mutation=False, legacy_layout=False, running_image_mutation=False,
-                    registration_restarted=False):
+                    registration_restarted=False, manifest_extra_image=False,
+                    repin_override=False, candidate_mode=0o644):
         # Real release orchestration, guards, private receipts, source archive comparison,
         # override writes and mixed-image manifest. All external calls are synthetic.
         with tempfile.TemporaryDirectory(dir='.deploy') as name:
@@ -2589,6 +2709,10 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 'digest': 'sha256:' + deployment.hashlib.sha256(deployment.image_service(service).encode()).hexdigest(),
                 'sourceCommit': deployment.HISTORY_DIAGNOSTICS_BASELINE}
                 for service in (*deployment.SERVICES, 'migrate')}
+            if manifest_extra_image:
+                manifest['images']['synthetic-historical-image'] = {
+                    'reference': 'fixture:historical', 'digest': 'sha256:' + 'f' * 64,
+                    'sourceCommit': 'c' * 40}
             fixture.save_fixture(previous, policy, values)
             manifest_digest = deployment.hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
             proof_digest = deployment.historical_fingerprint(policy['continuation'])
@@ -2612,8 +2736,11 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
             (previous / '.env.aws.production').write_text('APP_PUBLIC_URL=http://synthetic.test\n'
                 'GOOGLE_DRIVE_SYNC_FOLDER_ID=synthetic-existing-folder\n')
             (previous / '.env.aws.production').chmod(0o600)
-            override = {'services': {service: {'image': image['reference'], 'pull_policy': 'never'}
-                        for service, image in manifest['images'].items()}}
+            override = {'services': {service: {'image': manifest['images'][service]['reference'],
+                        'pull_policy': 'never'} for service in (*deployment.SERVICES, 'migrate')}}
+            override_data = json.dumps(override).encode()
+            override_raw_digest = deployment.hashlib.sha256(override_data).hexdigest()
+            override_canonical_digest = deployment.historical_fingerprint(override)
             if override_mutation == 'image':
                 override['services']['auto-registration']['image'] = 'fixture:unreviewed'
             elif override_mutation == 'recharge-role':
@@ -2624,9 +2751,24 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 override['networks'] = {'registration-egress': {'external': True}}
             elif override_mutation == 'top-volumes':
                 override['volumes'] = {'shared-profile': {'external': True}}
+            elif isinstance(override_mutation, str) and override_mutation.startswith('missing:'):
+                override['services'].pop(override_mutation.split(':', 1)[1])
+            elif override_mutation == 'extra-service':
+                override['services']['synthetic-historical-image'] = {
+                    'image': 'fixture:historical', 'pull_policy': 'never'}
+            elif override_mutation == 'pull':
+                override['services']['auto-registration']['pull_policy'] = 'always'
+            elif override_mutation == 'canonical-pin':
+                override_canonical_digest = 'f' * 64
+            elif override_mutation == 'raw':
+                pass
             elif override_mutation:
                 override['services']['auto-registration']['environment'] = {'AUTO_RECHARGE_WORKER_ROLE': 'recharge'}
-            (previous / 'compose.release.json').write_text(json.dumps(override))
+            override_data = json.dumps(override).encode() + (b' ' if override_mutation == 'raw' else b'')
+            if repin_override:
+                override_raw_digest = deployment.hashlib.sha256(override_data).hexdigest()
+                override_canonical_digest = deployment.historical_fingerprint(override)
+            (previous / 'compose.release.json').write_bytes(override_data)
             if compose_mutation:
                 (previous / 'docker-compose.aws-mysql.yml').write_bytes(compose_text.replace(
                     b'AUTO_RECHARGE_WORKER_ROLE: registration', b'AUTO_RECHARGE_WORKER_ROLE: recharge'))
@@ -2637,7 +2779,7 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 for filename in policy['candidateSourceSha256']}}
             if candidate_mutation:
                 candidate['apps/api/unapproved.ts'] = b'unreviewed'
-            candidate_archive = self.archive(commit, candidate)
+            candidate_archive = self.archive(commit, candidate, candidate_mode)
             baseline_archive = self.archive(deployment.HISTORY_DIAGNOSTICS_BASELINE, frozen)
             argv = ['remote-deploy.py', '--commit', commit, '--source-tree', 'b' * 40,
                 '--repository', repository, '--expected-current', deployment.HISTORY_DIAGNOSTICS_BASELINE,
@@ -2699,6 +2841,8 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     (deployment, 'BASE', {'new': base}),
                     (deployment.sys, 'argv', {'new': argv}),
                     (deployment, 'DIAGNOSTICS_MANIFEST_SHA256', {'new': manifest_digest}),
+                    (deployment, 'DIAGNOSTICS_OVERRIDE_RAW_SHA256', {'new': override_raw_digest}),
+                    (deployment, 'DIAGNOSTICS_OVERRIDE_CANONICAL_SHA256', {'new': override_canonical_digest}),
                     (deployment, 'DIAGNOSTICS_PROOF_SHA256', {'new': proof_digest}),
                     (deployment, 'continuation_policy', {'return_value': policy}),
                     (deployment, 'service_state', {'side_effect': state}),
@@ -2779,6 +2923,52 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
             self.assertFalse(any(call.args[1:3] == ('up', '-d') for call in result.compose))
             self.assertEqual(result.rollback, [])
             self.assertNotIn('"unchangedServiceContainersPreserved": true', result.output)
+
+    def test_exact_six_override_preserves_manifest_only_historical_image_records(self):
+        result = self.publication(manifest_extra_image=True)
+        self.assertEqual(result.result, 0, result.output or result.error)
+        self.assertEqual(set(result.override['services']), {*deployment.SERVICES, 'migrate'})
+        self.assertEqual(result.manifest['images']['synthetic-historical-image'],
+                         result.old_manifest['images']['synthetic-historical-image'])
+        self.assertNotIn('synthetic-historical-image', result.override['services'])
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.recharge_calls, 2)
+
+    def test_real_orchestration_accepts_github_0664_candidates_after_verified_baseline(self):
+        result = self.publication(candidate_mode=0o664, manifest_extra_image=True)
+        self.assertEqual(result.result, 0, result.output or result.error)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.recharge_calls, 2)
+        self.assertEqual(result.manifest['servicesUpdated'], ['auto-recharge'])
+
+    def test_fixed_override_pins_match_the_independent_closed_receipt(self):
+        self.assertEqual(deployment.DIAGNOSTICS_OVERRIDE_RAW_SHA256,
+                         '10b7d30b6bd08d356b516d67dd54b39620b9b6fc1ca7e22bb760008a7cd0a635')
+        self.assertEqual(deployment.DIAGNOSTICS_OVERRIDE_CANONICAL_SHA256,
+                         '9437772305ea1d18f790c528c3db05e126970153c77cdbe55d644122fe8b7313')
+
+    def test_override_bytes_and_canonical_pin_are_independently_required(self):
+        for mutation in ('raw', 'canonical-pin'):
+            with self.subTest(mutation=mutation):
+                result = self.publication(override_mutation=mutation)
+                self.assertEqual(result.error, 'Historical diagnostics image override changed')
+                self.assertEqual(result.recharge_calls, 0)
+                self.assertEqual(result.run, [])
+                self.assertEqual(result.compose, [])
+
+    def test_exact_six_structure_rejects_changes_even_with_synthetic_matching_hashes(self):
+        mutations = [*(f'missing:{service}' for service in (*deployment.SERVICES, 'migrate')),
+                     'extra-service', 'image', 'pull', True, 'recharge-role',
+                     'recharge-volume', 'top-networks', 'top-volumes']
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                result = self.publication(override_mutation=mutation, repin_override=True,
+                                          manifest_extra_image=True)
+                self.assertEqual(result.error, 'Historical diagnostics image override changed')
+                self.assertEqual(result.recharge_calls, 0)
+                self.assertEqual(result.registration_calls, 0)
+                self.assertEqual(result.run, [])
+                self.assertEqual(result.compose, [])
 
     def test_shared_tampered_layout_or_override_cannot_skip_protection(self):
         for kwargs in ({'compose_mutation': True}, {'override_mutation': True},
