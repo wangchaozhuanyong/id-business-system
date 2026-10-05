@@ -1404,10 +1404,22 @@ RECHARGE_7F_RUN = 'github-actions-37333706418-1'
 RECHARGE_7F_FILE = 'deploy/aws/' + RECHARGE_7F_ID + '.json'
 RECHARGE_7F_CARRIED = frozenset()
 
+RECHARGE_3CA_ID = 'recharge-pro-region-3ca-20261006'
+RECHARGE_3CA_CURRENT = '3ca300486d0edfadda83c094a48474a63959fce7'
+RECHARGE_3CA_TREE = 'b376704b4039bcc162433c3358205ae60c4dcfa9'
+RECHARGE_3CA_RUN = 'github-actions-37346732072-1'
+RECHARGE_3CA_FILE = 'deploy/aws/' + RECHARGE_3CA_ID + '.json'
+RECHARGE_3CA_CARRIED = frozenset()
+RECHARGE_3CA_ORIGIN_PROFILE_SHA256 = '03cebac085846b04aed051f7df4fe0ec6026670414684c3f64d0950a219b7f8f'
+
 
 def fixed_recharge_binding(profile_id=RECHARGE_SCOPE_ID):
-    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID),
+    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_3CA_ID),
             'Fixed recharge runtime scope unavailable')
+    if profile_id == RECHARGE_3CA_ID:
+        return {'id': RECHARGE_3CA_ID, 'current': RECHARGE_3CA_CURRENT, 'tree': RECHARGE_3CA_TREE,
+            'run': RECHARGE_3CA_RUN, 'file': RECHARGE_3CA_FILE, 'previous': RECHARGE_7F_CURRENT,
+            'imageRun': RECHARGE_3CA_RUN, 'carried': RECHARGE_3CA_CARRIED, 'gate': MAINTENANCE_EXPECTED_GATE}
     if profile_id == RECHARGE_7F_ID:
         return {'id': RECHARGE_7F_ID, 'current': RECHARGE_7F_CURRENT, 'tree': RECHARGE_7F_TREE,
             'run': RECHARGE_7F_RUN, 'file': RECHARGE_7F_FILE, 'previous': RECHARGE_SCOPE_CURRENT,
@@ -1626,8 +1638,124 @@ def check_fixed_recharge_scope(*, require_approved=True, profile_id=RECHARGE_SCO
             require_approved=require_approved)
 
 
+def fixed_recharge_3ca_recharge_state(value, image=None):
+    keys = {'image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256'}
+    require(type(value) is dict and set(value) == keys and value['status'] == 'running'
+        and value['health'] == 'healthy'
+        and type(value['image']) is str and re.fullmatch(r'sha256:[a-f0-9]{64}', value['image'])
+        and type(value['reference']) is str and re.fullmatch(
+            r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+            + RECHARGE_3CA_CURRENT + '-37346732072-1-auto-recharge', value['reference'])
+        and all(type(value[key]) is str and re.fullmatch(r'[a-f0-9]{64}', value[key])
+            for key in ('containerId', 'startedAtSha256')), 'Fixed recharge baseline changed')
+    if image is not None:
+        require(type(image) is dict and image.get('sourceCommit') == RECHARGE_3CA_CURRENT
+            and value['image'] == image.get('digest') and value['reference'] == image.get('reference'),
+            'Fixed recharge baseline changed')
+    return value
+
+
+def fixed_recharge_3ca_baseline(previous, profile, manifest, states):
+    """Bind the native recharge receipt to the unchanged 7f -> b8 -> 6a chain."""
+    baseline = profile['baselineRelease']
+    require(previous.resolve() == previous and previous.parent == BASE / 'releases'
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + RECHARGE_3CA_CURRENT[:12], previous.name)
+        and manifest.get('servicesUpdated') == ['auto-recharge'] and manifest.get('migrationApplied') is False
+        and manifest.get('newMigrations') == []
+        and manifest.get('databaseGrants') == {'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'},
+        'Fixed recharge baseline changed')
+    historical_profile = parse_fixed_recharge_scope(fixed_recharge_bytes(previous / RECHARGE_7F_FILE,
+        modes=(0o644, 0o664), limit=128 * 1024))
+    require(historical_profile['id'] == RECHARGE_7F_ID
+        and historical_fingerprint(historical_profile) == RECHARGE_3CA_ORIGIN_PROFILE_SHA256,
+        'Fixed recharge baseline changed')
+    gates = {}
+    for name, key in (('release-manifest.json', 'manifestSha256'), ('before-audit.json', 'beforeAuditSha256'),
+            ('after-audit.json', 'afterAuditSha256')):
+        raw = private_maintenance_receipt(previous / name)
+        require(hashlib.sha256(raw).hexdigest() == baseline[key], 'Fixed recharge baseline changed')
+        value = fixed_recharge_json(raw)
+        if name == 'release-manifest.json':
+            require(historical_fingerprint(value) == historical_fingerprint(manifest)
+                and all(value.get(key) == expected for key, expected in {
+                    'commit': RECHARGE_3CA_CURRENT, 'sourceTree': RECHARGE_3CA_TREE,
+                    'previousCommit': RECHARGE_7F_CURRENT, 'deploymentRun': RECHARGE_3CA_RUN,
+                    'imageBuildRun': RECHARGE_3CA_RUN}.items()), 'Fixed recharge baseline changed')
+        else:
+            stage = name.split('-', 1)[0]
+            summary = manifest.get('dataAudit' + stage.title())
+            require(type(value) is dict and set(value) == {'ok', 'checkCount', 'violationCount', 'checks', 'gate'}
+                and value.get('ok') is False and type(value.get('checkCount')) is int and value['checkCount'] == 48
+                and type(value.get('violationCount')) is int and value['violationCount'] == 6
+                and type(value.get('checks')) is list and len(value['checks']) == 48
+                and all(type(row) is dict and set(row) == {'code', 'status', 'count'}
+                    and type(row['code']) is str and row['status'] == 'EXECUTED' and type(row['count']) is int
+                    and row['count'] == (6 if row['code'] == 'cash_historical_cost_evidence_mismatch' else 0)
+                    for row in value['checks'])
+                and len({row['code'] for row in value['checks']}) == 48
+                and sum(row['code'] == 'cash_historical_cost_evidence_mismatch' for row in value['checks']) == 1
+                and historical_fingerprint(value.get('gate')) == historical_fingerprint({**MAINTENANCE_EXPECTED_GATE, 'stage': stage})
+                and type(summary) is dict and set(summary) == {'checkCount', 'violationCount', 'historicalException'}
+                and type(summary['checkCount']) is int and summary['checkCount'] == 48
+                and type(summary['violationCount']) is int and summary['violationCount'] == 6
+                and historical_fingerprint(summary['historicalException']) == historical_fingerprint(value['gate']),
+                'Fixed recharge baseline changed')
+            gates[stage] = summary
+    expected_context = fixed_recharge_context(argparse.Namespace(commit=RECHARGE_3CA_CURRENT,
+        source_tree=RECHARGE_3CA_TREE, expected_current=RECHARGE_7F_CURRENT), historical_profile,
+        gates['before'], gates['after'])
+    require(historical_fingerprint(manifest.get('fixedRechargeRelease')) == historical_fingerprint(expected_context),
+        'Fixed recharge baseline changed')
+    compose_raw = fixed_recharge_bytes(previous / 'docker-compose.aws-mysql.yml', modes=(0o400, 0o600, 0o644, 0o664))
+    override_raw = fixed_recharge_bytes(previous / 'compose.release.json', modes=(0o400, 0o600, 0o644))
+    override = fixed_recharge_json(override_raw)
+    require(hashlib.sha256(compose_raw).hexdigest() == baseline['composeSha256'] and has_registration_worker(previous)
+        and hashlib.sha256(override_raw).hexdigest() == baseline['overrideRawSha256']
+        and historical_fingerprint(override) == baseline['overrideCanonicalSha256']
+        and override == {'services': {service: {'image': manifest['images'][service]['reference'], 'pull_policy': 'never'}
+            for service in (*SERVICES, 'migrate')}}, 'Fixed recharge baseline changed')
+    keys = {'image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256'}
+    require(type(states) is dict and set(states) == set(ALL_SERVICES), 'Fixed recharge baseline changed')
+    for service, state in states.items():
+        require(type(state) is dict and set(state) == keys and state['status'] == 'running'
+            and (state['health'] is None if service == 'caddy' else state['health'] == 'healthy')
+            and type(state['image']) is str and re.fullmatch(r'sha256:[a-f0-9]{64}', state['image'])
+            and type(state['reference']) is str and 0 < len(state['reference']) <= 512
+            and all(type(state[key]) is str and re.fullmatch(r'[a-f0-9]{64}', state[key])
+                for key in ('containerId', 'startedAtSha256')), 'Fixed recharge baseline changed')
+    fixed_recharge_3ca_recharge_state(states['auto-recharge'], manifest['images']['auto-recharge'])
+    preserved = manifest.get('fixedRechargePreservedStates')
+    require(type(preserved) is dict and set(preserved) == {'before', 'after'}
+        and historical_fingerprint(preserved['before']) == historical_fingerprint(preserved['after'])
+        and historical_fingerprint(preserved['after']) == historical_fingerprint(fixed_recharge_preserved_states(states)),
+        'Fixed recharge baseline changed')
+    for service in (*SERVICES, 'migrate'):
+        image = manifest['images'][service]
+        source, run_id, attempt = ((RECHARGE_3CA_CURRENT, '37346732072', '1') if service == 'auto-recharge'
+            else MAILBOX_IMAGE_IDENTITY if service == 'api' else (RECHARGE_SCOPE_CURRENT, '37302661631', '1'))
+        require(image.get('sourceCommit') == source and type(image.get('digest')) is str
+            and re.fullmatch(r'sha256:[a-f0-9]{64}', image['digest'])
+            and type(image.get('reference')) is str and re.fullmatch(
+                r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+                + source + '-' + run_id + '-' + attempt + '-' + image_service(service), image['reference'])
+            and (service == 'migrate' or states[service]['image'] == image['digest']
+                and states[service]['reference'] == image['reference']), 'Fixed recharge baseline changed')
+    origin = Path(manifest['previousRelease'])
+    require(origin.is_absolute() and origin.parent == BASE / 'releases' and origin.resolve() == origin
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + RECHARGE_7F_CURRENT[:12], origin.name),
+        'Fixed recharge baseline changed')
+    require(fixed_recharge_bytes(previous / '.env.aws.production') == fixed_recharge_bytes(origin / '.env.aws.production'),
+        'Fixed recharge baseline changed')
+    origin_manifest = fixed_recharge_json(private_maintenance_receipt(origin / 'release-manifest.json'))
+    origin_states = dict(preserved['before'])
+    origin_states['auto-recharge'] = origin_manifest['mailboxPreservedStates']['after']['auto-recharge']
+    return fixed_recharge_baseline(origin, historical_profile, origin_manifest, origin_states)
+
+
 def fixed_recharge_baseline(previous, profile, manifest, states):
     fixed_recharge_scope(profile)
+    if profile['id'] == RECHARGE_3CA_ID:
+        return fixed_recharge_3ca_baseline(previous, profile, manifest, states)
     binding = fixed_recharge_binding(profile['id'])
     baseline = profile['baselineRelease']
     require(previous.resolve() == previous and previous.parent == BASE / 'releases',
@@ -1842,7 +1970,7 @@ def verify_fixed_recharge_finance_source(previous, source):
             'Fixed recharge finance source changed')
 
 
-def fixed_recharge_context(args, profile, before_gate, after_gate):
+def fixed_recharge_context(args, profile, before_gate, after_gate, *, baseline_recharge_state=None):
     fixed_recharge_scope(profile)
     binding = fixed_recharge_binding(profile['id'])
     require(re.fullmatch(r'[a-f0-9]{40}', args.commit) and re.fullmatch(r'[a-f0-9]{40}', args.source_tree)
@@ -1853,7 +1981,7 @@ def fixed_recharge_context(args, profile, before_gate, after_gate):
             and type(gate['violationCount']) is int and gate['violationCount'] == 6
             and historical_fingerprint(gate['historicalException']) == historical_fingerprint({**MAINTENANCE_EXPECTED_GATE, 'stage': stage}),
             'Fixed recharge fresh integrity gate failed')
-    return {'version': 1, 'id': binding['id'], 'profileSha256': historical_fingerprint(profile),
+    context = {'version': 1, 'id': binding['id'], 'profileSha256': historical_fingerprint(profile),
         'expectedCurrent': binding['current'], 'sourceCommit': args.commit, 'sourceTree': args.source_tree,
         'servicesUpdated': ['auto-recharge'], 'financeValidator': 'EXISTING_MAINTENANCE_48',
         'sourceCommitForFinance': RECHARGE_SCOPE_CURRENT, 'originCommitForFinance': HISTORY_MAINTENANCE_BASELINE,
@@ -1861,6 +1989,11 @@ def fixed_recharge_context(args, profile, before_gate, after_gate):
         'afterGateSha256': historical_fingerprint(after_gate['historicalException']),
         'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True,
         'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED'}
+
+    if profile['id'] == RECHARGE_3CA_ID:
+        fixed_recharge_3ca_recharge_state(baseline_recharge_state)
+        context['baselineRechargeStateSha256'] = historical_fingerprint(baseline_recharge_state)
+    return context
 
 
 def fixed_recharge_baseline_archive():
@@ -1934,7 +2067,7 @@ def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha25
         observed = {}
         def read(path, **kwargs):
             raw = fixed_recharge_bytes(path, **kwargs)
-            if profile_id == RECHARGE_7F_ID:
+            if profile_id in (RECHARGE_7F_ID, RECHARGE_3CA_ID):
                 if path in observed:
                     require(raw == observed[path][0], 'Fixed recharge deployment verification unavailable')
                 else:
@@ -1980,7 +2113,9 @@ def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha25
                 'Fixed recharge deployment verification unavailable')
             gates[stage] = summary
         expected_context = fixed_recharge_context(argparse.Namespace(commit=expected_current,
-            source_tree=source_tree, expected_current=binding['current']), profile, gates['before'], gates['after'])
+            source_tree=source_tree, expected_current=binding['current']), profile, gates['before'], gates['after'],
+            **({'baseline_recharge_state': manifest['fixedRechargeBaselineRechargeState']}
+                if profile_id == RECHARGE_3CA_ID else {}))
         require(historical_fingerprint(manifest.get('fixedRechargeRelease')) == historical_fingerprint(expected_context),
                 'Fixed recharge deployment verification unavailable')
         approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
@@ -2033,20 +2168,39 @@ def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha25
             and inspected[0]['Config']['Labels'].get('org.opencontainers.image.revision') == expected_current,
             'Fixed recharge deployment verification unavailable')
         require((BASE / 'current').resolve() == current, 'Fixed recharge deployment verification unavailable')
-        if profile_id == RECHARGE_7F_ID:
+        if profile_id in (RECHARGE_7F_ID, RECHARGE_3CA_ID):
             for name in ('release-manifest.json', 'before-audit.json', 'after-audit.json'):
                 read(previous / name)
             read(previous / 'docker-compose.aws-mysql.yml', modes=(0o400, 0o600, 0o644, 0o664))
             read(previous / 'compose.release.json', modes=(0o400, 0o600, 0o644))
             previous_manifest = fixed_recharge_json(read(previous / 'release-manifest.json'))
             baseline_states = dict(snapshots['before'])
-            baseline_states['auto-recharge'] = previous_manifest['mailboxPreservedStates']['after']['auto-recharge']
+            if profile_id == RECHARGE_3CA_ID:
+                baseline_states['auto-recharge'] = fixed_recharge_3ca_recharge_state(
+                    manifest['fixedRechargeBaselineRechargeState'], previous_manifest['images']['auto-recharge'])
+                read(previous / RECHARGE_7F_FILE, modes=(0o644, 0o664), limit=128 * 1024)
+            else:
+                baseline_states['auto-recharge'] = previous_manifest['mailboxPreservedStates']['after']['auto-recharge']
             fixed_recharge_baseline(previous, profile, previous_manifest, baseline_states)
+            if profile_id == RECHARGE_3CA_ID:
+                ancestor = Path(previous_manifest['previousRelease'])
+                for commit in (RECHARGE_7F_CURRENT, RECHARGE_SCOPE_CURRENT, HISTORY_MAINTENANCE_BASELINE):
+                    require(ancestor.parent == BASE / 'releases' and ancestor.resolve() == ancestor
+                        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + commit[:12], ancestor.name),
+                        'Fixed recharge deployment verification unavailable')
+                    for name in ('release-manifest.json', 'before-audit.json', 'after-audit.json'):
+                        read(ancestor / name)
+                    parent_manifest = fixed_recharge_json(read(ancestor / 'release-manifest.json'))
+                    require(parent_manifest.get('commit') == commit, 'Fixed recharge deployment verification unavailable')
+                    if commit != HISTORY_MAINTENANCE_BASELINE:
+                        ancestor = Path(parent_manifest['previousRelease'])
             run_id, run_attempt = deployment_run.removeprefix('github-actions-').split('-')
             finance_source = BASE / '.staging' / ('oidc-' + expected_current) / ('fixed-b8-finance-' + run_id + '-' + run_attempt)
             finance_archive = fixed_recharge_baseline_archive()
             with tarfile.open(fileobj=io.BytesIO(finance_archive), mode='r:gz') as archive:
                 verify_fixed_recharge_clean_finance_source(finance_source, archive)
+            if profile_id == RECHARGE_3CA_ID:
+                fixed_recharge_baseline(previous, profile, previous_manifest, baseline_states)
             require(all(fixed_recharge_bytes(path, **options) == raw
                 for path, (raw, options) in observed.items()), 'Fixed recharge deployment verification unavailable')
             require({service: service_state(current, service, include_container_id=True)
@@ -2088,16 +2242,19 @@ def main():
     parser.add_argument('--historical-finance-mailbox-batch', action='store_true')
     parser.add_argument('--recharge-pro-menu-b8', action='store_true')
     parser.add_argument('--recharge-pro-menu-7f', action='store_true')
+    parser.add_argument('--recharge-pro-region-3ca', action='store_true')
     args = parser.parse_args()
-    recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f
-    recharge_profile_id = RECHARGE_7F_ID if args.recharge_pro_menu_7f else RECHARGE_SCOPE_ID
+    recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_region_3ca
+    recharge_profile_id = (RECHARGE_3CA_ID if args.recharge_pro_region_3ca else
+        RECHARGE_7F_ID if args.recharge_pro_menu_7f else RECHARGE_SCOPE_ID)
     recharge_binding = fixed_recharge_binding(recharge_profile_id) if recharge_requested else None
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
     require(sum((args.historical_finance_exception, args.historical_finance_continuation,
                  args.historical_finance_recharge_diagnostics, args.historical_finance_maintenance_continuation,
-                 args.historical_finance_mailbox_batch, args.recharge_pro_menu_b8, args.recharge_pro_menu_7f)) <= 1,
+                 args.historical_finance_mailbox_batch, args.recharge_pro_menu_b8, args.recharge_pro_menu_7f,
+                 args.recharge_pro_region_3ca)) <= 1,
             'Historical release selection is ambiguous')
     historical_policy_id = (HISTORY_MAINTENANCE_POLICY_ID if args.historical_finance_maintenance_continuation else
         HISTORY_DIAGNOSTICS_POLICY_ID if args.historical_finance_recharge_diagnostics else
@@ -2159,7 +2316,7 @@ def main():
         finance_origin = fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
         baseline_archive = fixed_recharge_runtime_archive(recharge_profile)
         finance_source = previous
-        if args.recharge_pro_menu_7f:
+        if args.recharge_pro_menu_7f or args.recharge_pro_region_3ca:
             finance_archive = fixed_recharge_baseline_archive()
         else:
             with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as source:
@@ -2179,7 +2336,7 @@ def main():
     step = 'source'
     changed = []
     try:
-        if args.recharge_pro_menu_7f:
+        if args.recharge_pro_menu_7f or args.recharge_pro_region_3ca:
             step = 'finance-source'
             finance_source = prepare_fixed_recharge_finance_source(args, finance_archive)
             verify_maintenance_baseline(finance_origin, maintenance_policy(finance_source))
@@ -2239,7 +2396,7 @@ def main():
             normalize_fixed_recharge_modes(release, recharge_profile)
             with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as source:
                 verify_fixed_recharge_archive(release, source, recharge_profile)
-            if args.recharge_pro_menu_7f:
+            if args.recharge_pro_menu_7f or args.recharge_pro_region_3ca:
                 require(hashlib.sha256(fixed_recharge_bytes(release / 'docker-compose.aws-mysql.yml',
                     modes=(0o644, 0o664))).hexdigest() == recharge_profile['baselineRelease']['composeSha256'],
                     'Fixed recharge baseline changed')
@@ -2345,7 +2502,7 @@ def main():
             require_diagnostics_environment_unchanged(previous, release, original_environment)
             require({service: service_state(previous, service, include_container_id=True)
                 for service in ALL_SERVICES} == before, 'Fixed recharge baseline changed')
-            if args.recharge_pro_menu_7f:
+            if args.recharge_pro_menu_7f or args.recharge_pro_region_3ca:
                 with tarfile.open(fileobj=io.BytesIO(finance_archive), mode='r:gz') as source:
                     verify_fixed_recharge_clean_finance_source(finance_source, source)
         if args.historical_finance_recharge_diagnostics:
@@ -2405,7 +2562,7 @@ def main():
         if recharge_requested:
             fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
             require_diagnostics_environment_unchanged(previous, release, original_environment)
-            if args.recharge_pro_menu_7f:
+            if args.recharge_pro_menu_7f or args.recharge_pro_region_3ca:
                 with tarfile.open(fileobj=io.BytesIO(finance_archive), mode='r:gz') as source:
                     verify_fixed_recharge_clean_finance_source(finance_source, source)
             else:
@@ -2458,9 +2615,13 @@ def main():
         })
         manifest.pop('prCiRunId', None)
         if recharge_requested:
-            if args.recharge_pro_menu_7f:
+            if args.recharge_pro_menu_7f or args.recharge_pro_region_3ca:
                 manifest.pop('mailboxPreservedStates', None)
-            manifest['fixedRechargeRelease'] = fixed_recharge_context(args, recharge_profile, before_audit, after_audit)
+            manifest['fixedRechargeRelease'] = fixed_recharge_context(args, recharge_profile, before_audit, after_audit,
+                **({'baseline_recharge_state': before['auto-recharge']} if args.recharge_pro_region_3ca else {}))
+            if args.recharge_pro_region_3ca:
+                manifest['fixedRechargeBaselineRechargeState'] = dict(fixed_recharge_3ca_recharge_state(
+                    before['auto-recharge'], old_manifest['images']['auto-recharge']))
             manifest['fixedRechargePreservedStates'] = {
                 'before': fixed_recharge_preserved_states(before), 'after': fixed_recharge_preserved_states(after)}
         (release / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -2500,7 +2661,7 @@ if __name__ == '__main__':
             tokens = sys.argv[2:]
             if tokens:
                 require(len(tokens) == 2 and tokens[0] == '--fixed-recharge-profile'
-                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID),
+                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_3CA_ID),
                     'Fixed recharge runtime scope unavailable')
                 check_fixed_recharge_scope(profile_id=tokens[1])
             else:
@@ -2517,7 +2678,7 @@ if __name__ == '__main__':
                     'Fixed recharge deployment verification unavailable')
             values = dict(zip(tokens[::2], tokens[1::2]))
             if '--fixed-recharge-profile' in values:
-                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID),
+                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_3CA_ID),
                         'Fixed recharge deployment verification unavailable')
                 result = check_fixed_recharge_deployment(values['--expected-current'], values['--source-tree'],
                     values['--profile-sha256'], profile_id=values['--fixed-recharge-profile'])

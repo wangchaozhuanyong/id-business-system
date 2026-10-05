@@ -48,6 +48,7 @@ if (part === 'guards') {
   if (
     changed.includes('deploy/aws/recharge-pro-menu-b8-20261005.json') ||
     changed.includes('deploy/aws/recharge-pro-menu-7f-20261005.json') ||
+    changed.includes('deploy/aws/recharge-pro-region-3ca-20261006.json') ||
     changed.some((path) => path.startsWith('scripts/production-release/'))
   )
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);

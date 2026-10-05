@@ -4982,7 +4982,14 @@ class MailboxApiOnlyTests(unittest.TestCase):
         return result.stdout
 
     def fixture_bytes(self, repository, name):
-        return self.fixed_build_control(name) if name in deployment.MAILBOX_REUSE_BUILD_CONTROLS else (repository / name).read_bytes()
+        if name in deployment.MAILBOX_REUSE_BUILD_CONTROLS:
+            return self.fixed_build_control(name)
+        if name in deployment.MAILBOX_CARRIED_SOURCE:
+            result = subprocess.run(['git', 'show', deployment.RECHARGE_7F_CURRENT + ':' + name],
+                cwd=repository, capture_output=True, check=True)
+            self.assertEqual(deployment.hashlib.sha256(result.stdout).hexdigest(), deployment.MAILBOX_CARRIED_SOURCE[name])
+            return result.stdout
+        return (repository / name).read_bytes()
 
     def runtime(self):
         root = Path(__file__).resolve().parents[2] / '.runtime' / 'recharge-pro-7f-baseline-20261005'
@@ -5052,7 +5059,7 @@ class MailboxApiOnlyTests(unittest.TestCase):
 
     def test_only_fixed_worker_source_can_be_carried_without_replacing_its_running_image(self):
         repository = Path(__file__).resolve().parents[2]
-        with self.assertRaisesRegex(RuntimeError, 'build controls'):
+        with self.assertRaisesRegex(RuntimeError, 'worker source carry|build controls'):
             deployment.verify_mailbox_carried_sources(repository)
         names = list(deployment.MAILBOX_CARRIED_SOURCE)
         with tempfile.TemporaryDirectory(dir=self.runtime()) as directory:
@@ -5070,6 +5077,18 @@ class MailboxApiOnlyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'build controls'):
                     deployment.verify_mailbox_carried_sources(root)
                 (root / name).write_bytes(fixed)
+            changed_workers = 0
+            for name in names:
+                current = (repository / name).read_bytes()
+                if deployment.hashlib.sha256(current).hexdigest() == deployment.MAILBOX_CARRIED_SOURCE[name]:
+                    continue
+                changed_workers += 1
+                fixed = (root / name).read_bytes()
+                (root / name).write_bytes(current)
+                with self.assertRaisesRegex(RuntimeError, 'worker source carry'):
+                    deployment.verify_mailbox_carried_sources(root)
+                (root / name).write_bytes(fixed)
+            self.assertGreater(changed_workers, 0)
         deployment.require_reusable_paths(names, mailbox_only=True)
         with self.assertRaises(RuntimeError):
             deployment.require_reusable_paths(names)
@@ -5849,6 +5868,431 @@ class FixedRecharge7fDeploymentReadbackTests(unittest.TestCase):
         self.assertFalse(any(call.args[:2] == ('docker', 'pull') for call in value.run))
         self.assertNotIn('SENTINEL', value.output)
 
+
+
+class FixedRecharge3caRuntimeScopeTests(unittest.TestCase):
+    """Synthetic native recharge receipts exercise the third fixed identity."""
+
+    def setUp(self):
+        self.provider = FixedRecharge7fRuntimeScopeTests()
+        self.provider.setUp()
+        self.addCleanup(self.provider.doCleanups)
+        self.runtime = self.provider.runtime
+        self.profile = copy.deepcopy(self.provider.profile)
+        self.profile.update(id=deployment.RECHARGE_3CA_ID, expectedCurrent=deployment.RECHARGE_3CA_CURRENT)
+        self.profile['baselineRelease'].update(commit=deployment.RECHARGE_3CA_CURRENT,
+            sourceTree=deployment.RECHARGE_3CA_TREE, previousCommit=deployment.RECHARGE_7F_CURRENT,
+            deploymentRun=deployment.RECHARGE_3CA_RUN)
+        self.contents = self.provider.contents
+
+    def gate(self, stage):
+        return self.provider.gate(stage)
+
+    source_archive = staticmethod(FixedRechargeRuntimeScopeTests.source_archive)
+
+    def baseline_fixture(self, root):
+        old = self.provider.baseline_fixture(root)
+        historical_profile = copy.deepcopy(self.provider.profile)
+        historical_raw = json.dumps(historical_profile).encode()
+        pin = patch.object(deployment, 'RECHARGE_3CA_ORIGIN_PROFILE_SHA256', deployment.historical_fingerprint(historical_profile))
+        pin.start(); self.addCleanup(pin.stop)
+        previous = old.base / 'releases' / ('20261006T000001Z-' + deployment.RECHARGE_3CA_CURRENT[:12])
+        previous.mkdir()
+        (old.base / 'current').unlink(); (old.base / 'current').symlink_to(previous)
+        images = copy.deepcopy(old.manifest['images'])
+        images['auto-recharge'] = {'sourceCommit': deployment.RECHARGE_3CA_CURRENT,
+            'reference': old.repository + ':' + deployment.RECHARGE_3CA_CURRENT + '-37346732072-1-auto-recharge',
+            'digest': 'sha256:' + deployment.hashlib.sha256(b'synthetic native 3ca recharge').hexdigest()}
+        states = copy.deepcopy(old.states)
+        states['auto-recharge'].update(image=images['auto-recharge']['digest'], reference=images['auto-recharge']['reference'],
+            containerId='3' * 64, startedAtSha256='4' * 64)
+        gates = {stage: self.gate(stage) for stage in ('before', 'after')}
+        manifest = {'commit': deployment.RECHARGE_3CA_CURRENT, 'sourceTree': deployment.RECHARGE_3CA_TREE,
+            'previousCommit': deployment.RECHARGE_7F_CURRENT, 'previousRelease': str(old.previous),
+            'deploymentRun': deployment.RECHARGE_3CA_RUN, 'imageBuildRun': deployment.RECHARGE_3CA_RUN,
+            'servicesUpdated': ['auto-recharge'], 'migrationApplied': False, 'newMigrations': [],
+            'databaseGrants': {'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'},
+            'images': images, 'googleDriveSyncFolderId': old.manifest['googleDriveSyncFolderId'],
+            'dataAuditBefore': gates['before'], 'dataAuditAfter': gates['after'],
+            'fixedRechargeRelease': deployment.fixed_recharge_context(SimpleNamespace(commit=deployment.RECHARGE_3CA_CURRENT,
+                source_tree=deployment.RECHARGE_3CA_TREE, expected_current=deployment.RECHARGE_7F_CURRENT),
+                historical_profile, gates['before'], gates['after']),
+            'fixedRechargePreservedStates': {'before': deployment.fixed_recharge_preserved_states(states),
+                'after': deployment.fixed_recharge_preserved_states(states)}}
+        native_checks = [{'code': 'cash_historical_cost_evidence_mismatch' if index == 0 else 'synthetic-native-' + str(index),
+            'status': 'EXECUTED', 'count': 6 if index == 0 else 0} for index in range(48)]
+        values = {'release-manifest.json': manifest, **{stage + '-audit.json': {'ok': False,
+            'checkCount': 48, 'violationCount': 6, 'checks': native_checks,
+            'gate': gates[stage]['historicalException']} for stage in ('before', 'after')}}
+        for name, value in values.items():
+            path = previous / name; path.write_text(json.dumps(value)); path.chmod(0o600)
+        frozen = {**old.frozen, deployment.RECHARGE_7F_FILE: (historical_raw, 0o644)}
+        baseline_files = {**frozen, **{name: (('synthetic native 3ca source\n' + name + '\n').encode(), 0o644)
+            for name in self.contents}}
+        for name, (raw, mode) in baseline_files.items():
+            path = previous / name; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw); path.chmod(mode)
+        (previous / '.env.aws.production').write_bytes(old.environment); (previous / '.env.aws.production').chmod(0o600)
+        override = {'services': {service: {'image': images[service]['reference'], 'pull_policy': 'never'}
+            for service in (*deployment.SERVICES, 'migrate')}}
+        (previous / 'compose.release.json').write_text(json.dumps(override)); (previous / 'compose.release.json').chmod(0o600)
+        self.profile['baselineRelease'].update(
+            composeSha256=deployment.hashlib.sha256((previous / 'docker-compose.aws-mysql.yml').read_bytes()).hexdigest(),
+            overrideRawSha256=deployment.hashlib.sha256((previous / 'compose.release.json').read_bytes()).hexdigest(),
+            overrideCanonicalSha256=deployment.historical_fingerprint(override))
+        for name, key in (('release-manifest.json', 'manifestSha256'), ('before-audit.json', 'beforeAuditSha256'), ('after-audit.json', 'afterAuditSha256')):
+            self.profile['baselineRelease'][key] = deployment.hashlib.sha256((previous / name).read_bytes()).hexdigest()
+        # These private synthetic origin files are only stable-read fixtures; the real M11 validator is mocked separately.
+        for name, value in (('release-manifest.json', {'commit': deployment.HISTORY_MAINTENANCE_BASELINE}),
+                ('before-audit.json', {'syntheticOrigin': True}), ('after-audit.json', {'syntheticOrigin': True})):
+            path = old.origin / name; path.write_text(json.dumps(value)); path.chmod(0o600)
+        return SimpleNamespace(base=old.base, previous=previous, mailbox_previous=old.previous, origin=old.origin,
+            finance_previous=old.finance_previous, finance_manifest_sha=old.finance_manifest_sha,
+            finance_data=old.finance_data, finance_files=old.finance_files, finance_policy=old.finance_policy,
+            checks=old.checks, manifest=manifest, values=values, states=states, override=override, frozen=frozen,
+            environment=old.environment, repository=old.repository,
+            archive=self.source_archive(deployment.RECHARGE_3CA_CURRENT, baseline_files))
+
+    def test_third_profile_is_closed_disabled_and_cannot_rebind_old_entries(self):
+        value = copy.deepcopy(self.profile); value.update(enabled=False, approvalStatus='NOT_APPROVED')
+        self.assertEqual(deployment.fixed_recharge_scope(value, require_approved=False), value)
+        with self.assertRaisesRegex(RuntimeError, 'not approved'):
+            deployment.fixed_recharge_scope(value)
+        self.assertEqual(self.profile['financeValidator'], deployment.RECHARGE_SCOPE_FINANCE)
+        self.assertEqual(len(self.profile['controlSourceSha256']), 11)
+        self.assertEqual(len(self.profile['candidateSourceSha256']), 3)
+        for key, wrong in [('id', deployment.RECHARGE_7F_ID), ('expectedCurrent', deployment.RECHARGE_7F_CURRENT)]:
+            changed = copy.deepcopy(value); changed[key] = wrong
+            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.fixed_recharge_scope(changed, require_approved=False)
+        for key, wrong in [('sourceTree', deployment.RECHARGE_7F_TREE), ('deploymentRun', deployment.RECHARGE_7F_RUN)]:
+            changed = copy.deepcopy(value); changed['baselineRelease'][key] = wrong
+            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.fixed_recharge_scope(changed, require_approved=False)
+        with self.assertRaises(RuntimeError): deployment.fixed_recharge_binding('recharge-pro-region-UNKNOWN')
+
+    def test_actual_disabled_third_json_has_complete_baseline_and_fourteen_local_source_pins(self):
+        project = Path(__file__).resolve().parents[2]
+        profile = deployment.parse_fixed_recharge_scope((project / deployment.RECHARGE_3CA_FILE).read_bytes(), require_approved=False)
+        self.assertIs(profile['enabled'], False)
+        self.assertEqual(profile['approvalStatus'], 'NOT_APPROVED')
+        self.assertEqual(len(profile['baselineRelease']), 10)
+        for name, digest in {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}.items():
+            path = project / name
+            self.assertTrue(path.is_file() and not path.is_symlink())
+            self.assertEqual(deployment.hashlib.sha256(path.read_bytes()).hexdigest(), digest, name)
+            self.assertEqual(path.stat().st_mode & 0o7777, profile['sourceModes'][name], name)
+        self.assertEqual(len(profile['candidateSourceSha256']) + len(profile['controlSourceSha256']), 14)
+        for key, value in profile['baselineRelease'].items():
+            if key.endswith('Sha256'):
+                self.assertNotEqual(value, '0' * 64, key)
+
+    def baseline_context(self, fixture):
+        stack = ExitStack()
+        for obj, attr, kwargs in [
+            (deployment, 'BASE', {'new': fixture.base}),
+            (deployment, 'MAILBOX_MANIFEST_SHA256', {'new': fixture.finance_manifest_sha}),
+            (deployment, 'mailbox_policy', {'return_value': {'snapshot': {'checks': fixture.checks}}}),
+            (deployment, 'maintenance_policy', {'return_value': fixture.finance_policy}),
+            (deployment, 'verify_maintenance_baseline', {'return_value': {}})]:
+            stack.enter_context(patch.object(obj, attr, **kwargs))
+        return stack
+
+    def test_native_3ca_uses_maintenance_receipts_and_existing_7f_chain(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            value = self.baseline_fixture(Path(name))
+            with self.baseline_context(value):
+                self.assertEqual(deployment.fixed_recharge_baseline(value.previous, self.profile, value.manifest, value.states), value.origin)
+                for stage in ('before', 'after'):
+                    path = value.previous / (stage + '-audit.json'); original = path.read_bytes()
+                    key = stage + 'AuditSha256'; pin = self.profile['baselineRelease'][key]
+                    for field, wrong in [('checkCount', True), ('checks', []), ('gate', {**deployment.MAILBOX_EXPECTED_GATE, 'stage': stage})]:
+                        changed = json.loads(original); changed[field] = wrong; path.write_text(json.dumps(changed))
+                        self.profile['baselineRelease'][key] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+                        with self.subTest(stage=stage, field=field), self.assertRaises(RuntimeError): deployment.fixed_recharge_baseline(value.previous, self.profile, value.manifest, value.states)
+                    path.write_bytes(original); self.profile['baselineRelease'][key] = pin
+
+    def test_native_3ca_mixed_image_and_origin_profile_are_fixed(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            value = self.baseline_fixture(Path(name))
+            with self.baseline_context(value):
+                path = value.previous / 'release-manifest.json'
+                original = path.read_bytes(); pin = self.profile['baselineRelease']['manifestSha256']
+                for service in (*deployment.SERVICES, 'migrate'):
+                    changed = copy.deepcopy(value.manifest); changed['images'][service]['sourceCommit'] = 'f' * 40
+                    path.write_text(json.dumps(changed)); self.profile['baselineRelease']['manifestSha256'] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+                    with self.subTest(service=service), self.assertRaises(RuntimeError): deployment.fixed_recharge_baseline(value.previous, self.profile, changed, value.states)
+                path.write_bytes(original); self.profile['baselineRelease']['manifestSha256'] = pin
+                path = value.previous / deployment.RECHARGE_7F_FILE; raw = path.read_bytes(); path.write_bytes(raw + b'changed')
+                with self.assertRaises(RuntimeError): deployment.fixed_recharge_baseline(value.previous, self.profile, value.manifest, value.states)
+
+    def test_actual_mocked_third_main_captures_real_fixture_old_recharge_and_preserves_six(self):
+        value = self.publication()
+        self.assertEqual(value.result, 0, value.error or value.output)
+        self.assertEqual(value.recharge_calls, 2); self.assertEqual(value.registration_calls, 0)
+        self.assertEqual(value.drive_calls, 0); self.assertEqual(value.grants_calls, 0)
+        self.assertEqual([call.args[-1] for call in value.compose if call.args[1:3] == ('up', '-d')], ['auto-recharge'])
+        state = value.manifest['fixedRechargeBaselineRechargeState']
+        self.assertEqual(set(state), {'image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256'})
+        self.assertEqual(state['containerId'], '3' * 64)
+        self.assertEqual(value.manifest['fixedRechargeRelease']['baselineRechargeStateSha256'], deployment.historical_fingerprint(state))
+        self.assertEqual(value.manifest['fixedRechargeRelease']['id'], deployment.RECHARGE_3CA_ID)
+        self.assertEqual(value.manifest['fixedRechargePreservedStates']['before'], value.manifest['fixedRechargePreservedStates']['after'])
+        self.assertEqual(len(value.manifest['fixedRechargePreservedStates']['before']), 6)
+        self.assertTrue(all(call.kwargs['source'] == value.finance_source and call.kwargs['origin'] == value.finance_origin for call in value.audits))
+        self.assertFalse(any(call.args[1:2] in (('exec',), ('rm',)) for call in value.compose))
+        self.assertNotIn('SENTINEL_PRIVATE', value.output)
+
+    def publication(self, *, recharge_failure=None, restarted_registration=False, failed_after_audit=False):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            fixture = self.baseline_fixture(Path(name))
+            commit = 'a' * 40; tree = 'b' * 40
+            profile_raw = json.dumps(self.profile).encode()
+            candidate = {**fixture.frozen, **{path: (raw, self.profile['sourceModes'][path] | 0o020)
+                for path, raw in self.contents.items()}, deployment.RECHARGE_3CA_FILE: (profile_raw, 0o664)}
+            candidate_archive = self.source_archive(commit, candidate)
+            new_image = 'sha256:' + deployment.hashlib.sha256(b'synthetic new recharge image').hexdigest()
+            new_reference = fixture.repository + ':' + commit + '-123-1-auto-recharge'
+            argv = ['remote-deploy.py', '--commit', commit, '--source-tree', tree, '--repository', fixture.repository,
+                '--expected-current', deployment.RECHARGE_3CA_CURRENT, '--run-id', '123', '--run-attempt', '1',
+                '--ci-run-id', '111', '--recharge-pro-region-3ca']
+            def state(directory, service, *, include_container_id=False):
+                value = dict(fixture.states[service])
+                if directory != fixture.previous and service == 'auto-recharge':
+                    value.update(image=new_image, reference=new_reference, containerId='c' * 64, startedAtSha256='d' * 64)
+                if directory != fixture.previous and service == 'auto-registration' and restarted_registration:
+                    value['startedAtSha256'] = 'e' * 64
+                if not include_container_id:
+                    value.pop('containerId'); value.pop('startedAtSha256')
+                return value
+            def run(*args, **_kwargs):
+                if args[:3] == ('aws', 'ecr', 'get-login-password'): return 'SENTINEL_PRIVATE_SYNTHETIC_LOGIN'
+                if args[:2] == ('docker', 'pull'): return ''
+                if args[:3] == ('docker', 'image', 'inspect'):
+                    return json.dumps([{'Architecture': 'amd64', 'Id': new_image,
+                        'Config': {'Labels': {'org.opencontainers.image.revision': commit}}}])
+                raise AssertionError('Unexpected synthetic external call')
+            def compose(_directory, *args, **_kwargs):
+                if args == ('config', '--format', 'json'): return json.dumps({'name': 'synthetic-project'})
+                if args[:2] == ('up', '-d'): return ''
+                raise AssertionError('Unexpected compose action')
+            def fetch(url, **_kwargs):
+                if 'raw.githubusercontent.com' in url: return io.BytesIO(profile_raw)
+                if '/archive/' in url: return io.BytesIO(candidate_archive)
+                result = io.BytesIO(b'ready'); result.status = 200; result.headers = {}; return result
+            def original_audit(_directory, receipt, **kwargs):
+                if failed_after_audit and kwargs['stage'] == 'after':
+                    raise RuntimeError('SENTINEL_PRIVATE_AUDIT_FAILURE')
+                value = self.gate(kwargs['stage'])
+                receipt.write_text(json.dumps({'ok': False, 'checkCount': 48, 'violationCount': 6,
+                    'gate': value['historicalException']})); receipt.chmod(0o600)
+                return value
+            output = io.StringIO()
+            with ExitStack() as stack:
+                original_umask = deployment.os.umask(0o077)
+                deployment.os.umask(original_umask)
+                stack.callback(deployment.os.umask, original_umask)
+                original_open = Path.open
+                def track_lock(path, *args, **kwargs):
+                    result = original_open(path, *args, **kwargs)
+                    if path.name == '.deploy.lock': stack.callback(result.close)
+                    return result
+                stack.enter_context(patch.object(Path, 'open', track_lock))
+                for obj, attr, kwargs in [
+                    (deployment, 'BASE', {'new': fixture.base}), (deployment.sys, 'argv', {'new': argv}),
+                    (deployment, 'maintenance_policy', {'return_value': fixture.finance_policy}),
+                    (deployment, 'mailbox_policy', {'return_value': {'snapshot': {'checks': fixture.checks}}}),
+                    (deployment, 'MAILBOX_MANIFEST_SHA256', {'new': fixture.finance_manifest_sha}),
+                    (deployment, 'verify_maintenance_baseline', {'return_value': {}}),
+                    (deployment, 'fixed_recharge_runtime_archive', {'return_value': fixture.archive}),
+                    (deployment, 'fixed_recharge_baseline_archive', {'return_value': fixture.finance_data}),
+                    (deployment, 'service_state', {'side_effect': state}), (deployment, 'run', {'side_effect': run}),
+                    (deployment, 'compose', {'side_effect': compose}),
+                    (deployment.urllib.request, 'urlopen', {'side_effect': fetch}),
+                    (deployment.subprocess, 'run', {'return_value': SimpleNamespace(returncode=0)}),
+                    (deployment.shutil, 'disk_usage', {'return_value': SimpleNamespace(free=3 * 1024 ** 3)}),
+                    (deployment, 'fresh_backup', {'return_value': {'name': 'synthetic verified backup'}}),
+                    (deployment, 'wait_healthy', {'return_value': {}})]:
+                    stack.enter_context(patch.object(obj, attr, **kwargs))
+                audited = stack.enter_context(patch.object(deployment, 'maintenance_audit', side_effect=original_audit))
+                recharge = stack.enter_context(patch.object(deployment, 'assert_no_active_recharge', side_effect=recharge_failure))
+                registration = stack.enter_context(patch.object(deployment, 'assert_no_active_registration',
+                    side_effect=AssertionError('Registration guard must not be called')))
+                guards = stack.enter_context(patch.object(deployment, 'assert_no_active_jobs', wraps=deployment.assert_no_active_jobs))
+                grants = stack.enter_context(patch.object(deployment, 'sync_new_table_grants'))
+                drive = stack.enter_context(patch.object(deployment, 'configure_google_drive_sync'))
+                rollback = stack.enter_context(patch.object(deployment, 'rollback_service'))
+                with redirect_stdout(output):
+                    try: result = deployment.main(); error = None
+                    except RuntimeError as failure: result = None; error = type(failure).__name__
+                targets = [path for path in (fixture.base / 'releases').iterdir() if path not in (fixture.previous, fixture.origin, fixture.finance_previous, fixture.mailbox_previous)]
+                target = targets[0] if targets else None
+                manifest = json.loads((target / 'release-manifest.json').read_text()) if target and (target / 'release-manifest.json').exists() else None
+                override = json.loads((target / 'compose.release.json').read_text()) if target and (target / 'compose.release.json').exists() else None
+                return SimpleNamespace(result=result, error=error, output=output.getvalue(),
+                    guards=guards.call_args_list, recharge_calls=recharge.call_count, registration_calls=registration.call_count,
+                    audits=audited.call_args_list, run=deployment.run.call_args_list, compose=deployment.compose.call_args_list,
+                    grants_calls=grants.call_count, drive_calls=drive.call_count, rollback=rollback.call_args_list,
+                    manifest=manifest, override=override, old_manifest=fixture.manifest, old_override=fixture.override,
+                    previous=fixture.previous, current=(fixture.base / 'current').resolve(), target=target,
+                    finance_source=fixture.base / '.staging' / ('oidc-' + commit) / 'fixed-b8-finance-123-1',
+                    finance_origin=fixture.origin)
+
+
+
+class FixedRecharge3caDeploymentReadbackTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FixedRecharge3caRuntimeScopeTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+
+    def deployment_fixture(self, root):
+        baseline = self.fixture.baseline_fixture(root)
+        commit, tree = 'a' * 40, 'b' * 40
+        current = baseline.base / 'releases' / ('20261006T000002Z-' + commit[:12])
+        current.mkdir()
+        profile = copy.deepcopy(self.fixture.profile)
+        for name, raw in self.fixture.contents.items():
+            path = current / name; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw); path.chmod(profile['sourceModes'][name])
+        path = current / deployment.RECHARGE_3CA_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(profile)); path.chmod(0o644)
+        images = copy.deepcopy(baseline.manifest['images'])
+        images['auto-recharge'] = {'reference': baseline.repository + ':' + commit + '-999-1-auto-recharge',
+            'digest': 'sha256:' + 'f' * 64, 'sourceCommit': commit}
+        live = copy.deepcopy(baseline.states)
+        live['auto-recharge'].update(image=images['auto-recharge']['digest'],
+            reference=images['auto-recharge']['reference'], containerId='f' * 64, startedAtSha256='e' * 64)
+        gates = {stage: self.fixture.gate(stage) for stage in ('before', 'after')}
+        args = SimpleNamespace(commit=commit, source_tree=tree, expected_current=deployment.RECHARGE_3CA_CURRENT)
+        manifest = {'commit': commit, 'sourceTree': tree, 'previousCommit': deployment.RECHARGE_3CA_CURRENT,
+            'previousRelease': str(baseline.previous), 'servicesUpdated': ['auto-recharge'],
+            'migrationApplied': False, 'newMigrations': [],
+            'databaseGrants': {'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}, 'images': images,
+            'deploymentRun': 'github-actions-999-1', 'imageBuildRun': 'github-actions-999-1',
+            'dataAuditBefore': gates['before'], 'dataAuditAfter': gates['after'],
+            'fixedRechargeRelease': deployment.fixed_recharge_context(args, profile, gates['before'], gates['after'], baseline_recharge_state=baseline.states['auto-recharge']),
+            'fixedRechargePreservedStates': {'before': deployment.fixed_recharge_preserved_states(baseline.states),
+                'after': deployment.fixed_recharge_preserved_states(live)}, 'fixedRechargeBaselineRechargeState': copy.deepcopy(baseline.states['auto-recharge']), 'private': 'SENTINEL_PRIVATE_MANIFEST'}
+        (current / 'release-manifest.json').write_text(json.dumps(manifest))
+        (current / 'release-manifest.json').chmod(0o600)
+        for stage in ('before', 'after'):
+            path = current / (stage + '-audit.json')
+            path.write_text(json.dumps({'ok': False, 'checkCount': 48, 'violationCount': 6,
+                'gate': gates[stage]['historicalException'], 'private': 'SENTINEL_PRIVATE_REPORT'}))
+            path.chmod(0o600)
+        path = current / 'docker-compose.aws-mysql.yml'
+        path.write_bytes((baseline.previous / path.name).read_bytes()); path.chmod(0o644)
+        path = current / '.env.aws.production'
+        path.write_bytes(baseline.environment); path.chmod(0o600)
+        override = {'services': {service: {'image': images[service]['reference'], 'pull_policy': 'never'}
+            for service in (*deployment.SERVICES, 'migrate')}}
+        path = current / 'compose.release.json'; path.write_text(json.dumps(override)); path.chmod(0o600)
+        (baseline.base / 'current').unlink(); (baseline.base / 'current').symlink_to(current)
+        with patch.object(deployment, 'BASE', baseline.base), \
+                patch.object(deployment, 'maintenance_policy', return_value=baseline.finance_policy):
+            finance_source = deployment.prepare_fixed_recharge_finance_source(
+                SimpleNamespace(commit=commit, run_id='999', run_attempt='1'), baseline.finance_data)
+        inspected = [{'Id': live['auto-recharge']['image'], 'Architecture': 'amd64',
+            'Config': {'Labels': {'org.opencontainers.image.revision': commit}}}]
+        return SimpleNamespace(baseline=baseline, current=current, profile=profile, manifest=manifest,
+            live=live, inspected=inspected, finance_source=finance_source,
+            args=(commit, tree, deployment.historical_fingerprint(profile)))
+
+
+    def execute_readback(self, value, *, during_scan=None, after_first_baseline=None):
+        original_baseline = deployment.fixed_recharge_baseline
+        native_baseline_calls = 0
+        def baseline(previous, profile, manifest, states):
+            nonlocal native_baseline_calls
+            result = original_baseline(previous, profile, manifest, states)
+            if profile['id'] == deployment.RECHARGE_3CA_ID:
+                native_baseline_calls += 1
+                if native_baseline_calls == 1 and after_first_baseline is not None:
+                    after_first_baseline(value)
+            return result
+        def fetch():
+            if during_scan is not None: during_scan(value)
+            return value.baseline.finance_data
+        output = io.StringIO()
+        with self.fixture.baseline_context(value.baseline), ExitStack() as stack:
+            for obj, attr, kwargs in [
+                (deployment, 'fixed_recharge_baseline', {'side_effect': baseline}),
+                (deployment, 'fixed_recharge_baseline_archive', {'side_effect': fetch}),
+                (deployment, 'service_state', {'side_effect': lambda _directory, service, **_kwargs: copy.deepcopy(value.live[service])}),
+                (deployment, 'run', {'return_value': json.dumps(value.inspected)})]:
+                stack.enter_context(patch.object(obj, attr, **kwargs))
+            compose = stack.enter_context(patch.object(deployment, 'compose'))
+            audit = stack.enter_context(patch.object(deployment, 'maintenance_audit'))
+            try:
+                with redirect_stdout(output):
+                    result = deployment.check_fixed_recharge_deployment(*value.args, profile_id=deployment.RECHARGE_3CA_ID)
+            finally:
+                self.assertEqual(output.getvalue(), ''); compose.assert_not_called(); audit.assert_not_called()
+            self.assertEqual(deployment.service_state.call_count, 14)
+            self.assertEqual(native_baseline_calls, 2)
+            return result
+
+    def test_third_independent_readback_keeps_original_closed_21(self):
+        with tempfile.TemporaryDirectory(dir=self.fixture.runtime) as name:
+            value = self.deployment_fixture(Path(name))
+            result = self.execute_readback(value)
+        self.assertEqual(len(result), 21); self.assertEqual(result['id'], deployment.RECHARGE_3CA_ID)
+        self.assertEqual(result['previousCommit'], deployment.RECHARGE_3CA_CURRENT)
+        self.assertEqual([result[key] for key in ('checkCount', 'executedCheckCount', 'unavailableCheckCount', 'violationCount')], [48,48,0,6])
+        self.assertNotIn('containerId', json.dumps(result)); self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_missing_or_mutated_old_recharge_state_and_context_are_rejected(self):
+        for mutation in ('missing-state', 'unknown-state', 'typed-id', 'valid-other-id', 'changed-source', 'missing-hash', 'changed-hash'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(dir=self.fixture.runtime) as name:
+                value = self.deployment_fixture(Path(name)); manifest = value.manifest
+                if mutation == 'missing-state': manifest.pop('fixedRechargeBaselineRechargeState')
+                elif mutation == 'unknown-state': manifest['fixedRechargeBaselineRechargeState']['unknown'] = 'SENTINEL_PRIVATE'
+                elif mutation == 'typed-id': manifest['fixedRechargeBaselineRechargeState']['containerId'] = True
+                elif mutation == 'valid-other-id': manifest['fixedRechargeBaselineRechargeState']['containerId'] = '8' * 64
+                elif mutation == 'changed-source': manifest['fixedRechargeBaselineRechargeState']['reference'] = 'synthetic:wrong'
+                elif mutation == 'missing-hash': manifest['fixedRechargeRelease'].pop('baselineRechargeStateSha256')
+                else: manifest['fixedRechargeRelease']['baselineRechargeStateSha256'] = '9' * 64
+                (value.current / 'release-manifest.json').write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(RuntimeError, '^Fixed recharge deployment verification unavailable$'):
+                    self.execute_readback(value)
+
+    def test_final_baseline_rejects_7f_receipt_change_after_first_baseline_validation(self):
+        for name in ('release-manifest.json', 'before-audit.json', 'after-audit.json'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory(dir=self.fixture.runtime) as temp:
+                value = self.deployment_fixture(Path(temp))
+                def mutate(item, name=name):
+                    path = item.baseline.mailbox_previous / name
+                    path.write_bytes(path.read_bytes() + b' ')
+                with self.assertRaisesRegex(RuntimeError, '^Fixed recharge deployment verification unavailable$'):
+                    self.execute_readback(value, after_first_baseline=mutate)
+
+    def test_final_baseline_rejects_7f_environment_and_config_changes_during_finance_fetch(self):
+        for name in ('.env.aws.production', 'docker-compose.aws-mysql.yml', 'compose.release.json'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory(dir=self.fixture.runtime) as temp:
+                value = self.deployment_fixture(Path(temp))
+                def mutate(item, name=name):
+                    path = item.baseline.mailbox_previous / name
+                    path.write_bytes(path.read_bytes() + b' ')
+                with self.assertRaisesRegex(RuntimeError, '^Fixed recharge deployment verification unavailable$'):
+                    self.execute_readback(value, during_scan=mutate)
+
+    def test_final_reread_rejects_current_source_environment_native_receipt_and_live_state_changes(self):
+        cases = [('current', 'release-manifest.json'), ('current', '.env.aws.production'),
+            ('current', next(iter(deployment.RECHARGE_SCOPE_CANDIDATES))),
+            ('previous', 'before-audit.json'), ('previous', deployment.RECHARGE_7F_FILE), ('origin', 'after-audit.json')]
+        for directory, name in cases:
+            with self.subTest(directory=directory, name=name), tempfile.TemporaryDirectory(dir=self.fixture.runtime) as temp:
+                value = self.deployment_fixture(Path(temp))
+                def mutate(value, directory=directory, name=name):
+                    path = (value.current if directory == 'current' else value.baseline.previous if directory == 'previous' else value.baseline.origin) / name
+                    path.write_bytes(path.read_bytes() + b' ')
+                with self.assertRaisesRegex(RuntimeError, '^Fixed recharge deployment verification unavailable$'):
+                    self.execute_readback(value, during_scan=mutate)
+        for service in deployment.ALL_SERVICES:
+            with self.subTest(service=service), tempfile.TemporaryDirectory(dir=self.fixture.runtime) as temp:
+                value = self.deployment_fixture(Path(temp))
+                with self.assertRaisesRegex(RuntimeError, '^Fixed recharge deployment verification unavailable$'):
+                    self.execute_readback(value, during_scan=lambda item: item.live[service].update(startedAtSha256='8' * 64))
 
 if __name__ == '__main__':
     unittest.main()

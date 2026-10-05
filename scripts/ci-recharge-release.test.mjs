@@ -607,10 +607,11 @@ function approvedRuntimeTransport(
   return {
     ...env,
     HISTORICAL_EXCEPTION: identity,
-    EXPECTED_CURRENT:
-      identity === 'recharge-pro-menu-b8-20261005'
-        ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
-        : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+    EXPECTED_CURRENT: {
+      'recharge-pro-menu-b8-20261005': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+      'recharge-pro-menu-7f-20261005': '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+      'recharge-pro-region-3ca-20261006': '3ca300486d0edfadda83c094a48474a63959fce7'
+    }[identity],
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
@@ -768,7 +769,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       'overrideRawSha256',
       'overrideCanonicalSha256'
     ])
-      if (key !== 'composeSha256' || identity === 'recharge-pro-menu-7f-20261005')
+      if (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
         profile.baselineRelease[key] = 'd'.repeat(64);
     for (const key of ['candidateSourceSha256', 'carriedSourceOnlySha256', 'controlSourceSha256'])
       for (const name of Object.keys(profile[key])) profile[key][name] = 'e'.repeat(64);
@@ -1132,5 +1133,118 @@ test('fixed 7f actual independent readback binds its own profile and rejects cro
       assert.throws(() => execute(undefined, { FIXED_RECHARGE_PROFILE: profileId }));
       assert.equal(readFileSync(awsLog, 'utf8'), '');
     }
+  }, identity);
+});
+
+test('fixed 3ca mocked transport builds and pushes only recharge through its own approval check', () => {
+  fixture(({ root, env, log }) => {
+    const profileEnv = approvedRuntimeTransport(
+      root,
+      env,
+      false,
+      'recharge-pro-region-3ca-20261006'
+    );
+    execFileSync('bash', ['scripts/production-release/build-images.sh'], { env: profileEnv });
+    execFileSync('bash', ['scripts/production-release/push-images.sh'], { env: profileEnv });
+    const operations = readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(operations.filter((line) => line.startsWith('build ')).length, 1);
+    assert.ok(
+      operations
+        .find((line) => line.startsWith('build '))
+        .includes('auto-recharge/worker/Dockerfile')
+    );
+    assert.equal(operations.filter((line) => line.startsWith('push ')).length, 1);
+    assert.ok(operations.find((line) => line.startsWith('push ')).endsWith('-auto-recharge'));
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+  });
+});
+
+test('fixed 3ca dispatch has one exclusive flag and rejects cross-profile, reuse and missing approval before AWS', () => {
+  const identity = 'recharge-pro-region-3ca-20261006';
+  const current = '3ca300486d0edfadda83c094a48474a63959fce7';
+  dispatchFixture(identity, current, ({ execute, parametersFile, root, env }) => {
+    const transport = approvedRuntimeTransport(root, env, false, identity);
+    execute({
+      TASK_REAL_PYTHON: transport.TASK_REAL_PYTHON,
+      TASK_PROFILE_CHECK_LOG: transport.TASK_PROFILE_CHECK_LOG,
+      TASK_EXPECTED_FIXED_PROFILE: transport.TASK_EXPECTED_FIXED_PROFILE
+    });
+    const command = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1);
+    assert.equal(command.split(' ').filter((arg) => arg === '--recharge-pro-region-3ca').length, 1);
+    assert.equal(command.includes('--recharge-pro-menu-7f'), false);
+    assert.equal(command.includes('--recharge-pro-menu-b8'), false);
+  });
+  for (const overrides of [
+    { EXPECTED_CURRENT: '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '99999' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+    { rejectedApproval: true },
+    { TASK_EXPECTED_FIXED_PROFILE: 'recharge-pro-menu-7f-20261005' }
+  ])
+    dispatchFixture(identity, current, ({ execute, parametersFile, awsLog, root, env }) => {
+      const { rejectedApproval, ...fields } = overrides;
+      const transport = approvedRuntimeTransport(root, env, rejectedApproval, identity);
+      assert.throws(() =>
+        execute({
+          TASK_REAL_PYTHON: transport.TASK_REAL_PYTHON,
+          TASK_PROFILE_CHECK_LOG: transport.TASK_PROFILE_CHECK_LOG,
+          TASK_EXPECTED_FIXED_PROFILE: transport.TASK_EXPECTED_FIXED_PROFILE,
+          ...fields
+        })
+      );
+      assert.equal(existsSync(parametersFile), false);
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+    });
+});
+
+test('fixed 3ca JSON invokes the original control suites and all three fixed identities skip cache', () => {
+  const commands = guardCommands(['deploy/aws/recharge-pro-region-3ca-20261006.json']);
+  assert.equal(
+    commands.filter(
+      (command) => command === 'python3 -B scripts/production-release/remote-deploy.test.py'
+    ).length,
+    1
+  );
+  assert.ok(commands.includes('node --test scripts/v2-release-history-policy.test.mjs'));
+  assert.ok(commands.includes('node --test scripts/v2-release-maintenance-policy.test.mjs'));
+  const workflow = readFileSync('.github/workflows/production-release.yml', 'utf8');
+  const cache = workflow
+    .split('name: Verify or maintain recoverable unused project image cache')[1]
+    .split('env:')[0];
+  for (const id of [
+    'recharge-pro-menu-b8-20261005',
+    'recharge-pro-menu-7f-20261005',
+    'recharge-pro-region-3ca-20261006'
+  ])
+    assert.ok(cache.includes(`inputs.historical_exception != '${id}'`));
+});
+
+test('fixed 3ca actual workflow readback validates its closed profile identity and original 21 fields', () => {
+  const identity = 'recharge-pro-region-3ca-20261006';
+  fixedRechargeReadbackFixture(({ execute, receipt, awsLog }) => {
+    assert.deepEqual(JSON.parse(execute()), receipt);
+    assert.equal(Object.keys(receipt).length, 21);
+    for (const changed of [
+      { id: 'recharge-pro-menu-7f-20261005' },
+      { previousCommit: '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' },
+      { checkCount: true },
+      { cacheStatus: 'CLEANED' },
+      { unexpected: 'PRIVATE_SYNTHETIC_SENTINEL' }
+    ])
+      assert.throws(
+        () =>
+          execute(
+            `FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...changed })}\n`
+          ),
+        (error) =>
+          error.status !== 0 &&
+          error.stdout === '' &&
+          !String(error.stderr).includes('PRIVATE_SYNTHETIC_SENTINEL')
+      );
+    writeFileSync(awsLog, '');
+    assert.throws(() => execute(undefined, { FIXED_RECHARGE_PROFILE: 'unreviewed' }));
+    assert.equal(readFileSync(awsLog, 'utf8'), '');
   }, identity);
 });

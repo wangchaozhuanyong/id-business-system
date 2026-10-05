@@ -573,3 +573,21 @@ test('fixed 7f runtime scope is exact and retains worker checks', () => {
     assert.equal(checkMode([path, other], schema, schema), 'full', other);
   }
 });
+
+test('fixed 3ca region control is an exact third identity and retains worker checks', () => {
+  const path = 'deploy/aws/recharge-pro-region-3ca-20261006.json';
+  assert.equal(isCiOnly([path]), true);
+  assert.equal(checkMode([path], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([path]), ['guards']);
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py';
+  assert.deepEqual(selectedParts([path, worker]), ['guards', 'connector']);
+  for (const other of [
+    'deploy/aws/recharge-pro-region-3ca-20261007.json',
+    path + '.backup',
+    path + '/future.json',
+    'deploy/aws/recharge-pro-region-unapproved.json'
+  ]) {
+    assert.equal(isCiOnly([other]), false, other);
+    assert.equal(checkMode([path, other], schema, schema), 'full', other);
+  }
+});
