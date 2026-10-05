@@ -508,7 +508,7 @@ test('actual source projection preserves exact bytes and modes without a self bi
   assert.throws(() => verifyOrderArchiveSourceBindings(f.input.policy, changed));
 });
 
-test('Git projection algorithm equals actual checked-out HEAD tree using read-only Git object reads', () => {
+function readHeadSourceEntries() {
   const listing = execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD'])
     .toString()
     .split('\0')
@@ -527,16 +527,129 @@ test('Git projection algorithm equals actual checked-out HEAD tree using read-on
   let offset = 0;
   const entries = records.map((record) => {
     const end = contents.indexOf(10, offset);
-    const [, type, length] = contents.subarray(offset, end).toString().split(' ');
+    assert.ok(end >= offset);
+    const [oid, type, length] = contents.subarray(offset, end).toString().split(' ');
+    assert.equal(oid, record.oid);
     assert.equal(type, 'blob');
+    assert.match(length, /^(0|[1-9][0-9]*)$/);
     const bytes = contents.subarray(end + 1, end + 1 + Number(length));
+    assert.equal(bytes.length, Number(length));
+    assert.equal(contents[end + 1 + Number(length)], 10);
     offset = end + 2 + Number(length);
     return { ...record, bytes };
   });
-  assert.equal(
-    computeOrderArchiveSourceTree(entries),
-    execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim()
+  assert.equal(offset, contents.length);
+  return entries;
+}
+
+test('Git projection equals complete actual HEAD subtrees without the policy using read-only Git objects', () => {
+  const entries = readHeadSourceEntries();
+  // Git's real subtree OIDs independently check serialization, ordering and modes.
+  // No tree implementation is duplicated and no Git index or object is written.
+  for (const subtree of ['apps', 'scripts', 'deploy/caddy', 'deploy/nginx', 'deploy/systemd']) {
+    const prefix = subtree + '/';
+    const subtreeEntries = entries
+      .filter((entry) => entry.path.startsWith(prefix))
+      .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }));
+    assert.ok(subtreeEntries.length > 0, subtree);
+    assert.ok(
+      !entries.some(
+        (entry) => entry.path === ORDER_ARCHIVE_POLICY_FILE && entry.path.startsWith(prefix)
+      )
+    );
+    assert.equal(
+      computeOrderArchiveSourceTree(subtreeEntries),
+      execFileSync('git', ['rev-parse', 'HEAD:' + subtree])
+        .toString()
+        .trim(),
+      subtree
+    );
+  }
+  assert.ok(entries.some((entry) => entry.path.startsWith('scripts/') && entry.mode === '100755'));
+});
+
+test('actual HEAD root projection equals raw Git trees with only its policy leaf removed', () => {
+  const entries = readHeadSourceEntries();
+  const policyEntries = entries.filter((entry) => entry.path === ORDER_ARCHIVE_POLICY_FILE);
+  assert.equal(policyEntries.length, 1);
+  const projected = entries.filter((entry) => entry.path !== ORDER_ARCHIVE_POLICY_FILE);
+  assert.equal(projected.length, entries.length - 1);
+  assert.throws(
+    () => computeOrderArchiveSourceTree(entries),
+    /Invalid order archive Git projection entry/
   );
+
+  // Independently alter only the existing Git records along deploy/aws/policy.
+  // All other raw tree bytes and their original ordering stay untouched; there
+  // is no generic tree serializer or frozen historical source-binding assertion.
+  const treeOid = (bytes) =>
+    createHash('sha1')
+      .update(Buffer.from('tree ' + bytes.length + '\0'))
+      .update(bytes)
+      .digest();
+  const readTree = (ref) => {
+    const bytes = execFileSync('git', ['cat-file', 'tree', ref]);
+    assert.equal(
+      treeOid(bytes).toString('hex'),
+      execFileSync('git', ['rev-parse', ref]).toString().trim()
+    );
+    return bytes;
+  };
+  const entryRange = (bytes, target) => {
+    let offset = 0;
+    const matches = [];
+    while (offset < bytes.length) {
+      const space = bytes.indexOf(32, offset);
+      const nul = bytes.indexOf(0, space + 1);
+      assert.ok(space > offset && nul > space);
+      const end = nul + 21;
+      assert.ok(end <= bytes.length);
+      if (bytes.subarray(space + 1, nul).toString() === target) {
+        matches.push({
+          start: offset,
+          oidStart: nul + 1,
+          end,
+          mode: bytes.subarray(offset, space).toString()
+        });
+      }
+      offset = end;
+    }
+    assert.equal(offset, bytes.length);
+    assert.equal(matches.length, 1, target);
+    return matches[0];
+  };
+  const [deployName, awsName, policyName] = ORDER_ARCHIVE_POLICY_FILE.split('/');
+  assert.deepEqual([deployName, awsName], ['deploy', 'aws']);
+  const root = readTree('HEAD^{tree}');
+  const deploy = readTree('HEAD:deploy');
+  const aws = readTree('HEAD:deploy/aws');
+  const rootDeploy = entryRange(root, deployName);
+  const deployAws = entryRange(deploy, awsName);
+  const policy = entryRange(aws, policyName);
+  assert.equal(rootDeploy.mode, '40000');
+  assert.equal(deployAws.mode, '40000');
+  assert.equal(policy.mode, policyEntries[0].mode);
+  assert.equal(
+    root.subarray(rootDeploy.oidStart, rootDeploy.end).toString('hex'),
+    treeOid(deploy).toString('hex')
+  );
+  assert.equal(
+    deploy.subarray(deployAws.oidStart, deployAws.end).toString('hex'),
+    treeOid(aws).toString('hex')
+  );
+  assert.equal(aws.subarray(policy.oidStart, policy.end).toString('hex'), policyEntries[0].oid);
+  const projectedAws = Buffer.concat([aws.subarray(0, policy.start), aws.subarray(policy.end)]);
+  const projectedDeploy = Buffer.concat([
+    deploy.subarray(0, deployAws.oidStart),
+    treeOid(projectedAws),
+    deploy.subarray(deployAws.end)
+  ]);
+  const projectedRoot = Buffer.concat([
+    root.subarray(0, rootDeploy.oidStart),
+    treeOid(projectedDeploy),
+    root.subarray(rootDeploy.end)
+  ]);
+  assert.equal(computeOrderArchiveSourceTree(projected), treeOid(projectedRoot).toString('hex'));
 });
 
 test('schema guard accepts exactly nullable archive field/index and rejects an additional structural change', async () => {
