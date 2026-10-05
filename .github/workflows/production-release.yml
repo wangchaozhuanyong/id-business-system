@@ -64,6 +64,7 @@ on:
           - historical-finance-20261005
           - historical-finance-20261005-registration-continuation
           - historical-finance-20261005-recharge-diagnostics
+          - historical-finance-20261005-maintenance-continuation
 
       diagnostic_command_id:
         description: Optional exact failed SSM command to inspect in verify_access (UUID)
@@ -108,6 +109,17 @@ jobs:
 
       - name: Verify exact source and passing Quality Gate
         run: bash scripts/production-release/check-source.sh
+
+      - name: Verify fixed maintenance continuation selection
+        if: inputs.historical_exception == 'historical-finance-20261005-maintenance-continuation'
+        env:
+          RELEASE_OPERATION: ${{ inputs.operation }}
+          REQUESTED_REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
+        run: |
+          set -Eeuo pipefail
+          test "$RELEASE_OPERATION" = release
+          test "$EXPECTED_CURRENT" = 6a82a774f2a65e00d4f260c629f7152bf7935d1d
+          test -z "$REQUESTED_REUSE_IMAGE_RUN"
 
       - name: Build images on the GitHub runner
         if: inputs.operation == 'release' && inputs.reuse_image_run == ''

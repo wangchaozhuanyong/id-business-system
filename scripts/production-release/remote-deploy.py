@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import urllib.request
 
 
@@ -80,6 +80,39 @@ DIAGNOSTICS_CONTROL_FILES = frozenset({
     'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
     'docs/PRODUCTION_RELEASE_OIDC.md',
 })
+# Independent fixed maintenance entry: original six cost closures, no new exception.
+HISTORY_MAINTENANCE_POLICY_ID = 'historical-finance-20261005-maintenance-continuation'
+HISTORY_MAINTENANCE_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+MAINTENANCE_POLICY_SHA256 = '2103ab9a701fca15af406284874ef70d91004d6b2ac5cdd92fa91a8403399135'
+MAINTENANCE_DATABASE = 'id_business_v2_partial_cleanup_20261005_v1'
+MAINTENANCE_PROOF_CANONICAL_SHA256 = '94e2ec1ba79c0cb2da503ce49b00260c7f8574ff487bf1f24e5002b7908cf1e3'
+MAINTENANCE_EXPECTED_GATE = {'accepted': True, 'status': 'APPROVED_MAINTENANCE_SUBSET', 'policyId': 'historical-finance-20261005-maintenance-continuation', 'expectedCurrent': '6a82a774f2a65e00d4f260c629f7152bf7935d1d', 'fixedCurrent': '6a82a774f2a65e00d4f260c629f7152bf7935d1d', 'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6, 'databaseName': 'id_business_v2_partial_cleanup_20261005_v1', 'policySha256': '2103ab9a701fca15af406284874ef70d91004d6b2ac5cdd92fa91a8403399135', 'rulesSha256': '259332c0c8eb2d3d96d066cecd7cbe294ed5f2bd1e7af0d1c39f6c002859d7f4', 'schemaSha256': '3aef82a77e90f3cb4a2a953d67808193168159aa8983276b67e12f916a0a3655', 'entitySetSha256': 'f23d021df7a2693b4b5ad3de3818ab6ea475a2362e7c71dd39dc489f3eeb2c43', 'closureItemsSha256': '0a917c246769c7bcc16d23859e687ed036c97c6289612ea4efc5f7dc16a0ab83', 'receiptSetSha256': '52839f3b24b7f47897db165a04a22f51d2d5918ad5946cad2f669f53536e831d', 'sourceSha256': '526e724a822540c5f33ddd9e38c71e3079efa1fce9672f8ceef5096e38cc7208'}
+MAINTENANCE_RECEIPT_SHA256 = {'originManifest': '202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866', 'originBefore': 'b54520e73edffbc0a9fcf6592da3733b04564c5b65ff41f1ed8789ea782804d5', 'originAfter': '818e1980ab01bff0eafaca24863601bca8b02aa0e4bcadf64c3a671bc38edf63', 'maintenanceSwitch': 'f8394310c8fe2a91a61c77e7bef4b2b196b68f704131a1fe11b116c2687f4634', 'maintenanceResume': '1692deacad7dc074a3fb2e30ef22d7f5b6fec8dd7930644d8d950f0089c21582', 'maintenanceProof': 'd8b9fae9fb2269d8ae601bdcd7aeaf0f978b4865567723fe5d278de95279ca6b'}
+MAINTENANCE_CANDIDATE_FILES = frozenset(['apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py', 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py', 'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py', 'docs/V2_TASKS.md', 'scripts/ci-recharge-check.mjs', 'scripts/lib/v2-data-integrity-audit.mjs', 'scripts/v2-data-integrity-audit.test.mjs', 'scripts/backup-aws-mysql.sh', 'scripts/aws-mysql-backup.test.mjs'])
+MAINTENANCE_CONTROL_FILES = frozenset(['.github/workflows/production-release.yml', '.github/workflows/quality.yml', 'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-release.test.mjs', 'scripts/production-release/dispatch.sh', 'scripts/production-release/remote-deploy.py', 'scripts/production-release/remote-deploy.test.py', 'scripts/production-release/maintain-image-cache.py', 'scripts/production-release/maintain-image-cache.test.py', 'scripts/lib/v2-release-history-policy.mjs', 'scripts/v2-release-history-policy.test.mjs', 'deploy/aws/historical-finance-20261005-recharge-diagnostics.json', 'scripts/lib/v2-release-maintenance-policy.mjs', 'scripts/v2-release-maintenance-audit.mjs', 'scripts/v2-release-maintenance-policy.test.mjs', 'deploy/aws/historical-finance-20261005-maintenance-continuation.json', 'docs/PRODUCTION_RELEASE_OIDC.md'])
+MAINTENANCE_FIXED_RECEIPT_PATHS = {'maintenanceSwitch': '/opt/id-business-v2/backups/mysql/partial-two-order-authorized-20261005-v1/switch-receipt.json', 'maintenanceResume': '/opt/id-business-v2/backups/mysql/partial-two-order-authorized-20261005-v1/resume-open-receipt.json', 'maintenanceProof': '/opt/id-business-v2/.staging/registration-subset-proof-20261005-f8dbc40100a1/historical-subset-proof.json'}
+MAINTENANCE_STDIN_WRAPPER = """import { readSync } from 'node:fs';
+try {
+  const bytes = Buffer.alloc(16385);
+  let length = 0;
+  while (length < bytes.length) {
+    const count = readSync(0, bytes, length, bytes.length - length, null);
+    if (!count) break;
+    length += count;
+  }
+  if (length < 2 || length > 16384) throw new Error();
+  const input = JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  if (!input || Array.isArray(input) || Object.keys(input).join(',') !== 'auditURL') throw new Error();
+  const { validateAuditUrl } = await import('./scripts/lib/v2-release-maintenance-policy.mjs');
+  process.env.V2_DATA_INTEGRITY_DATABASE_URL = validateAuditUrl(input.auditURL);
+  process.argv = [process.execPath, 'scripts/v2-release-maintenance-audit.mjs', ...process.argv.slice(1)];
+  await import('./scripts/v2-release-maintenance-audit.mjs');
+} catch {
+  console.error('MAINTENANCE_GATE_REJECTED');
+  process.exitCode = 1;
+}
+"""
+
 REUSE_CONTROL_FILES = frozenset({
     '.github/workflows/production-release.yml',
     'scripts/ci-recharge-scope.mjs',
@@ -124,7 +157,8 @@ def historical_fingerprint(value):
 def require_historical_baseline(policy_id, expected_current):
     baselines = {HISTORY_POLICY_ID: HISTORY_BASELINE,
                  HISTORY_CONTINUATION_POLICY_ID: HISTORY_CONTINUATION_BASELINE,
-                 HISTORY_DIAGNOSTICS_POLICY_ID: HISTORY_DIAGNOSTICS_BASELINE}
+                 HISTORY_DIAGNOSTICS_POLICY_ID: HISTORY_DIAGNOSTICS_BASELINE,
+                 HISTORY_MAINTENANCE_POLICY_ID: HISTORY_MAINTENANCE_BASELINE}
     require(policy_id in baselines and expected_current == baselines[policy_id],
             'Historical release exception cannot be reused after publication')
 
@@ -321,6 +355,260 @@ def verify_continuation_running_images(states, manifest):
             'Historical continuation running image changed')
 
 
+def maintenance_policy(source):
+    policy = json.loads((source / 'deploy/aws' /
+                         (HISTORY_MAINTENANCE_POLICY_ID + '.json')).read_text())
+    require(historical_fingerprint(policy) == MAINTENANCE_POLICY_SHA256
+            and policy.get('id') == HISTORY_MAINTENANCE_POLICY_ID
+            and policy.get('expectedCurrent') == HISTORY_MAINTENANCE_BASELINE
+            and policy.get('databaseName') == MAINTENANCE_DATABASE
+            and policy.get('receiptSha256') == MAINTENANCE_RECEIPT_SHA256
+            and set(policy.get('candidateSourceSha256', {})) == MAINTENANCE_CANDIDATE_FILES,
+            'Maintenance continuation policy changed')
+    # Preserve the exact latest source of every prior public policy.
+    for name, expected in (
+        (HISTORY_POLICY_ID, '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca'),
+        (HISTORY_CONTINUATION_POLICY_ID, CONTINUATION_POLICY_SHA256),
+        (HISTORY_DIAGNOSTICS_POLICY_ID, DIAGNOSTICS_POLICY_SHA256),
+    ):
+        original = json.loads((source / 'deploy/aws' / (name + '.json')).read_text())
+        require(historical_fingerprint(original) == expected,
+                'Maintenance continuation changed a prior policy')
+    return policy
+
+
+def maintenance_receipt_paths(previous):
+    return {
+        'originManifest': previous / 'release-manifest.json',
+        'originBefore': previous / 'before-audit.json',
+        'originAfter': previous / 'after-audit.json',
+        **{key: Path(value) for key, value in MAINTENANCE_FIXED_RECEIPT_PATHS.items()},
+    }
+
+
+def private_maintenance_receipt(path):
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        before = os.fstat(descriptor)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and stat.S_IMODE(before.st_mode) in (0o400, 0o600)
+                and before.st_size <= 8 * 1024 * 1024,
+                'Maintenance continuation receipt is not private')
+        with os.fdopen(descriptor, 'rb', closefd=False) as receipt:
+            raw = receipt.read(8 * 1024 * 1024 + 1)
+        after = os.fstat(descriptor)
+        require(len(raw) == before.st_size == after.st_size
+                and before.st_mtime_ns == after.st_mtime_ns
+                and before.st_ctime_ns == after.st_ctime_ns,
+                'Maintenance continuation receipt changed while reading')
+        return raw
+    except OSError:
+        raise RuntimeError('Maintenance continuation receipt unavailable') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def verify_maintenance_baseline(previous, policy):
+    receipts = {}
+    for key, path in maintenance_receipt_paths(previous).items():
+        raw = private_maintenance_receipt(path)
+        require(hashlib.sha256(raw).hexdigest() == MAINTENANCE_RECEIPT_SHA256[key],
+                'Maintenance continuation successful receipt changed')
+        receipts[key] = json.loads(raw)
+    manifest = receipts['originManifest']
+    proof = receipts['maintenanceProof']
+    require(manifest.get('commit') == HISTORY_MAINTENANCE_BASELINE
+            and historical_fingerprint(proof) == MAINTENANCE_PROOF_CANONICAL_SHA256
+            and proof.get('proved') is True and proof.get('releaseAllowed') is False
+            and proof.get('fixedOriginalSixMode') is True
+            and proof.get('candidateCheckCount') == proof.get('candidateExecutedCheckCount') == 48
+            and proof.get('candidateUnavailableCheckCount') == 0
+            and proof.get('candidateViolationCount') == proof.get('candidateCostCount') == 6
+            and proof.get('candidateCashCount') == 0
+            and proof.get('schemaSha256') == policy['schemaSha256']
+            and proof.get('candidateEntitySetSha256') == policy['candidateEntitySetSha256']
+            and proof.get('oldEntitySetSha256') == policy['candidateEntitySetSha256'],
+            'Maintenance continuation successful proof changed')
+    return manifest
+
+
+def normalize_maintenance_candidate_modes(release, policy):
+    # GitHub archive group-write is removed only from the eleven fixed,
+    # newly extracted candidates, after every descriptor and path is verified.
+    require(historical_fingerprint(policy) == MAINTENANCE_POLICY_SHA256
+            and policy.get('id') == HISTORY_MAINTENANCE_POLICY_ID
+            and policy.get('expectedCurrent') == HISTORY_MAINTENANCE_BASELINE
+            and set(policy.get('candidateSourceSha256', {})) == MAINTENANCE_CANDIDATE_FILES,
+            'Maintenance continuation candidate scope changed')
+    opened = []
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    def safe_parents(name):
+        return (not release.is_symlink() and release.is_dir()
+                and all(not (release / Path(*Path(name).parts[:index])).is_symlink()
+                        for index in range(1, len(Path(name).parts))))
+    try:
+        for name, digest in policy['candidateSourceSha256'].items():
+            path = release / name
+            require(safe_parents(name), 'Unsafe maintenance candidate source entry')
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            candidate = os.fdopen(descriptor, 'rb')
+            metadata = os.fstat(candidate.fileno())
+            target = 0o755 if name == 'scripts/backup-aws-mysql.sh' else 0o644
+            opened.append((name, path, candidate, metadata, target))
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                    and metadata.st_size <= 8 * 1024 * 1024
+                    and stat.S_IMODE(metadata.st_mode) in (target, target | 0o020)
+                    and hashlib.sha256(candidate.read()).hexdigest() == digest
+                    and identity(os.fstat(candidate.fileno())) == identity(metadata),
+                    'Maintenance continuation candidate source changed')
+        require(all(safe_parents(name) and not path.is_symlink()
+                    and identity(path.lstat()) == identity(metadata)
+                    and identity(os.fstat(candidate.fileno())) == identity(metadata)
+                    for name, path, candidate, metadata, _target in opened),
+                'Maintenance continuation candidate source changed')
+        for _name, _path, candidate, metadata, target in opened:
+            if stat.S_IMODE(metadata.st_mode) != target:
+                os.fchmod(candidate.fileno(), target)
+    except OSError:
+        raise RuntimeError('Maintenance continuation candidate source changed') from None
+    finally:
+        for _name, _path, candidate, _metadata, _target in opened:
+            candidate.close()
+
+
+def verify_maintenance_archive(release, source, policy):
+    require(set(policy.get('candidateSourceSha256', {})) == MAINTENANCE_CANDIDATE_FILES,
+            'Maintenance continuation candidate scope changed')
+    require(all(not path.is_symlink() and (path.is_file() or path.is_dir())
+                for path in release.rglob('*')), 'Unsafe maintenance candidate source entry')
+    prefix = f'id-business-system-{HISTORY_MAINTENANCE_BASELINE}/'
+    baseline = {}; seen = set()
+    for member in source.getmembers():
+        require((member.name == prefix[:-1] or member.name.startswith(prefix))
+                and '..' not in Path(member.name).parts
+                and (member.isfile() or member.isdir()), 'Unsafe maintenance source archive entry')
+        if not member.isfile():
+            continue
+        name = member.name[len(prefix):]
+        require(name not in seen, 'Duplicate maintenance source archive entry')
+        seen.add(name)
+        if name not in MAINTENANCE_CONTROL_FILES and name not in MAINTENANCE_CANDIDATE_FILES:
+            baseline[name] = (hashlib.sha256(source.extractfile(member).read()).hexdigest(),
+                              member.mode & 0o7777)
+    actual = {str(path.relative_to(release)):
+              (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode & 0o7777)
+              for path in release.rglob('*') if path.is_file()
+              and str(path.relative_to(release)) not in MAINTENANCE_CONTROL_FILES
+              and str(path.relative_to(release)) not in MAINTENANCE_CANDIDATE_FILES}
+    require(actual == baseline, 'Maintenance continuation contains unrelated source changes')
+    require(all((release / name).is_file() and not (release / name).is_symlink()
+                and (release / name).stat().st_mode & 0o7777 ==
+                    (0o755 if name == 'scripts/backup-aws-mysql.sh' else 0o644)
+                and hashlib.sha256((release / name).read_bytes()).hexdigest() == digest
+                for name, digest in policy['candidateSourceSha256'].items()),
+            'Maintenance continuation candidate source changed')
+
+
+def require_maintenance_release_arguments(args, image_commit, image_run, image_attempt):
+    require(not args.admin_only, 'Maintenance continuation requires full publication')
+    require((image_commit, image_run, image_attempt) ==
+                (args.commit, args.run_id, args.run_attempt),
+            'Maintenance continuation forbids image reuse')
+
+
+def require_maintenance_scope(additions, edge_changed):
+    require(not additions and not edge_changed,
+            'Maintenance continuation forbids migrations and edge changes')
+
+
+def require_maintenance_environment_unchanged(previous, release, expected):
+    require((previous / '.env.aws.production').read_bytes() == expected
+            and (release / '.env.aws.production').read_bytes() == expected,
+            'Maintenance continuation production environment changed')
+
+
+def maintenance_container_audit_url(values):
+    try:
+        raw = values['V2_DATA_INTEGRITY_DATABASE_URL']
+        require(isinstance(raw, str) and 0 < len(raw.encode()) <= 12000,
+                'Maintenance continuation audit configuration invalid')
+        parts = urlsplit(raw)
+        query = parse_qsl(parts.query, keep_blank_values=True, strict_parsing=True) if parts.query else []
+        names = [key for key, _value in query]
+        require(parts.scheme == 'mysql' and parts.hostname in ('127.0.0.1', 'localhost')
+                and parts.username == 'id_business_audit' and bool(parts.password)
+                and parts.port in (None, 3306) and not parts.fragment
+                and parts.path == '/' + MAINTENANCE_DATABASE
+                and values.get('MYSQL_DATABASE') == MAINTENANCE_DATABASE
+                and len(names) == len(set(names))
+                and set(names) <= {'connection_limit', 'charset', 'connect_timeout', 'pool_timeout'}
+                and all(value == '1' for key, value in query if key == 'connection_limit'),
+                'Maintenance continuation audit configuration invalid')
+        for key, value in query:
+            require((value == 'utf8mb4' if key == 'charset' else
+                     bool(re.fullmatch(r'[1-9][0-9]{0,2}', value))),
+                    'Maintenance continuation audit configuration invalid')
+        if 'connection_limit' not in names:
+            query.append(('connection_limit', '1'))
+        userinfo, separator, _host = parts.netloc.rpartition('@')
+        require(bool(separator and userinfo), 'Maintenance continuation audit configuration invalid')
+        return urlunsplit(parts._replace(netloc=f'{userinfo}@mysql', query=urlencode(query)))
+    except (KeyError, ValueError):
+        raise RuntimeError('Maintenance continuation audit configuration invalid') from None
+
+
+def maintenance_audit(directory, receipt, *, stage, source, before_receipt=None, origin=None):
+    require(stage in ('before', 'after') and source is not None and origin is not None,
+            'Maintenance continuation audit source missing')
+    policy = maintenance_policy(source)
+    verify_maintenance_baseline(origin, policy)
+    connection_url = maintenance_container_audit_url(
+        environment_values(directory / '.env.aws.production'))
+    profile = json.loads(compose(directory, 'config', '--format', 'json'))['services']['migrate']
+    require(profile.get('read_only') is True
+            and profile.get('security_opt') == ['no-new-privileges:true']
+            and profile.get('cap_drop') == ['ALL']
+            and profile.get('cap_add') in (None, []) and not profile.get('privileged')
+            and not profile.get('devices')
+            and set(profile.get('environment', {})) == {'NODE_ENV', 'DATABASE_URL'},
+            'Maintenance continuation audit profile changed')
+    mounts = ['-v', f'{source / "scripts"}:/app/scripts:ro',
+              '-v', f'{source / "deploy/aws"}:/release-policy:ro']
+    for name in policy['candidateSourceSha256']:
+        mounts.extend(['-v', f'{source / name}:/release-source/{name}:ro'])
+    for key, path in maintenance_receipt_paths(origin).items():
+        mounts.extend(['-v', f'{path}:/release-evidence/{key}.json:ro'])
+    audit_args = ['node', '--input-type=module', '-e', MAINTENANCE_STDIN_WRAPPER, '--',
+                  f'--policy=/release-policy/{HISTORY_MAINTENANCE_POLICY_ID}.json',
+                  f'--expected-current={HISTORY_MAINTENANCE_BASELINE}', f'--stage={stage}']
+    if stage == 'after':
+        require(before_receipt is not None, 'Maintenance continuation before audit missing')
+        private_maintenance_receipt(before_receipt)
+        mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
+        audit_args.append('--before-receipt=/release-before-audit.json')
+    input_data = json.dumps({'auditURL': connection_url})
+    require(len(input_data.encode()) <= 16384, 'Maintenance continuation audit input too large')
+    output = compose(directory, 'run', '--rm', '--no-deps', '-T', '--pull', 'never',
+        '--user', '0:0', '--cap-drop', 'ALL', '--cap-add', 'DAC_READ_SEARCH',
+        *mounts, '-e', 'DATABASE_URL=', 'migrate', *audit_args,
+        input_data=input_data, timeout=240)
+    report = json.loads(output)
+    require(report.get('ok') is False and report.get('checkCount') == 48
+            and report.get('violationCount') == 6
+            and report.get('gate') == {**MAINTENANCE_EXPECTED_GATE, 'stage': stage},
+            'Approved maintenance integrity gate failed')
+    if stage == 'after':
+        before = json.loads(private_maintenance_receipt(before_receipt))
+        require(before.get('gate') == {**MAINTENANCE_EXPECTED_GATE, 'stage': 'before'},
+                'Approved maintenance before integrity gate changed')
+    receipt.write_text(json.dumps(report, indent=2) + '\n')
+    receipt.chmod(0o600)
+    return {'checkCount': 48, 'violationCount': 6, 'historicalException': report['gate']}
+
+
 def command_failure_summary(data):
     error = data.get('StandardErrorContent', '')
     errors = re.findall(r'(?m)^([A-Za-z]+Error):', error)
@@ -328,6 +616,8 @@ def command_failure_summary(data):
     reasons = (
         'Production baseline changed', 'Active recharge jobs prevent release',
         'Active registration jobs prevent release', 'Registration runtime guard unavailable',
+        'Production database configuration invalid', 'Production database identity unavailable',
+        'Production database identity mismatch',
         'A production service is not running', 'A production service is not healthy',
         'Invalid current release path', 'Insufficient free disk after pull',
         'Resource temporarily unavailable', 'No space left on device',
@@ -431,19 +721,21 @@ def rollback_service(previous, release, service, before):
     wait_healthy(previous, service)
 
 
-def run(*args, env=None, timeout=300):
-    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout)
+def run(*args, env=None, timeout=300, input_data=None):
+    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout,
+                            **({'input': input_data} if input_data is not None else {}))
     if result.returncode:
         raise RuntimeError(f'{Path(args[0]).name} failed (exit {result.returncode}); output suppressed')
     return result.stdout.strip()
 
 
-def compose(directory, *args, env=None, timeout=300):
+def compose(directory, *args, env=None, timeout=300, input_data=None):
     return run(
         'docker', 'compose', '--env-file', str(directory / '.env.aws.production'),
         '-f', str(directory / 'docker-compose.aws-mysql.yml'),
         '-f', str(directory / 'compose.release.json'), *args,
         env=env, timeout=timeout,
+        **({'input_data': input_data} if input_data is not None else {}),
     )
 
 
@@ -522,9 +814,14 @@ def prepare_historical_before_receipt(directory, receipt):
 
 
 def audit(directory, receipt, *, historical_exception=False, historical_continuation=False,
-          historical_diagnostics=False, stage=None, source=None, before_receipt=None):
-    require(sum((historical_exception, historical_continuation, historical_diagnostics)) <= 1,
+          historical_diagnostics=False, historical_maintenance=False, stage=None, source=None,
+          before_receipt=None, origin=None):
+    require(sum((historical_exception, historical_continuation, historical_diagnostics,
+                 historical_maintenance)) <= 1,
             'Historical release selection is ambiguous')
+    if historical_maintenance:
+        return maintenance_audit(directory, receipt, stage=stage, source=source,
+                                 before_receipt=before_receipt, origin=origin)
     policy_id = (HISTORY_DIAGNOSTICS_POLICY_ID if historical_diagnostics else
                  HISTORY_CONTINUATION_POLICY_ID if historical_continuation else HISTORY_POLICY_ID)
     baseline = (HISTORY_DIAGNOSTICS_BASELINE if historical_diagnostics else
@@ -596,9 +893,59 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
             **({'historicalException': report['gate']} if historical else {})}
 
 
+def current_job_database(directory):
+    # mysql's initdb environment can still name the old schema after a reviewed
+    # cutover. Verify configuration and the live API connection before any lease read.
+    try:
+        values = environment_values(directory / '.env.aws.production')
+        database = values.get('MYSQL_DATABASE')
+        endpoint = urlsplit(values.get('DATABASE_URL', ''))
+        require(isinstance(database, str) and re.fullmatch(r'[A-Za-z0-9_]{1,64}', database)
+                and endpoint.scheme == 'mysql' and endpoint.hostname == 'mysql'
+                and endpoint.username == 'id_business_app' and bool(endpoint.password)
+                and endpoint.path == '/' + database and not endpoint.fragment
+                and (endpoint.port is None or 1 <= endpoint.port <= 65535),
+                'Production database configuration invalid')
+    except Exception:
+        raise RuntimeError('Production database configuration invalid') from None
+    # Credentials stay inside the running API. Only validated schema names leave it.
+    probe = '''const {PrismaClient}=require('@prisma/client');
+let client;
+(async()=>{
+ try {
+  const endpoint=new URL(process.env.DATABASE_URL);
+  const configuredDatabase=endpoint.pathname.slice(1);
+  if(endpoint.protocol!=='mysql:'||endpoint.hostname!=='mysql'
+     ||endpoint.username!=='id_business_app'||!endpoint.password||endpoint.hash
+     ||! /^[A-Za-z0-9_]{1,64}$/.test(configuredDatabase))throw Error();
+  client=new PrismaClient();
+  const rows=await client.$queryRawUnsafe('SELECT DATABASE() AS databaseName');
+  const actualDatabase=rows.length===1?rows[0].databaseName:null;
+  if(typeof actualDatabase!=='string'||! /^[A-Za-z0-9_]{1,64}$/.test(actualDatabase))throw Error();
+  console.log(JSON.stringify({configuredDatabase,actualDatabase}));
+ } catch {
+  console.error('Production database identity unavailable');process.exitCode=1;
+ } finally {if(client)await client.$disconnect().catch(()=>{});}
+})();'''
+    try:
+        identity = json.loads(compose(directory, 'exec', '-T', 'api', 'node', '-e', probe,
+                                      timeout=30))
+        require(isinstance(identity, dict)
+                and set(identity) == {'configuredDatabase', 'actualDatabase'}
+                and all(isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_]{1,64}', value)
+                        for value in identity.values()),
+                'Production database identity unavailable')
+    except Exception:
+        raise RuntimeError('Production database identity unavailable') from None
+    require(identity['configuredDatabase'] == identity['actualDatabase'] == database,
+            'Production database identity mismatch')
+    return database
+
+
 def assert_no_active_recharge(directory):
+    database = current_job_database(directory)
     count = compose(
-        directory, 'exec', '-T', 'mysql', 'sh', '-c',
+        directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
         "mysql --batch --skip-column-names -u root --password=\"$MYSQL_ROOT_PASSWORD\" "
         "\"$MYSQL_DATABASE\" -e \"SELECT COUNT(*) FROM id_business_v2_recharge_jobs "
         "WHERE state <> 0x66696e6973686564 AND lease_until > UTC_TIMESTAMP(6)\"",
@@ -664,8 +1011,9 @@ def assert_no_active_registration(directory):
     # are protected there. Historical partial rows alone cannot prove occupancy.
     builtin_filter = '' if runtime['supported'] else (
         ' AND LEFT(browser_profile_id, 4) = 0x7265675f')
+    database = current_job_database(directory)
     count = compose(
-        directory, 'exec', '-T', 'mysql', 'sh', '-c',
+        directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
         'mysql --batch --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
         '"$MYSQL_DATABASE" -e "SELECT COUNT(*) FROM id_business_v2_registration_jobs '
         'WHERE state IN (0x72756e6e696e67, 0x6177616974696e675f656d61696c, '
@@ -913,17 +1261,20 @@ def main():
     parser.add_argument('--historical-finance-exception', action='store_true')
     parser.add_argument('--historical-finance-continuation', action='store_true')
     parser.add_argument('--historical-finance-recharge-diagnostics', action='store_true')
+    parser.add_argument('--historical-finance-maintenance-continuation', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
     require(sum((args.historical_finance_exception, args.historical_finance_continuation,
-                 args.historical_finance_recharge_diagnostics)) <= 1,
+                 args.historical_finance_recharge_diagnostics, args.historical_finance_maintenance_continuation)) <= 1,
             'Historical release selection is ambiguous')
-    historical_policy_id = (HISTORY_DIAGNOSTICS_POLICY_ID if args.historical_finance_recharge_diagnostics else
+    historical_policy_id = (HISTORY_MAINTENANCE_POLICY_ID if args.historical_finance_maintenance_continuation else
+        HISTORY_DIAGNOSTICS_POLICY_ID if args.historical_finance_recharge_diagnostics else
         HISTORY_CONTINUATION_POLICY_ID if args.historical_finance_continuation else HISTORY_POLICY_ID)
     if (args.historical_finance_exception or args.historical_finance_continuation
-            or args.historical_finance_recharge_diagnostics):
+            or args.historical_finance_recharge_diagnostics
+            or args.historical_finance_maintenance_continuation):
         require_historical_baseline(historical_policy_id, args.expected_current)
     require(not (args.historical_finance_continuation and args.admin_only),
             'Historical registration continuation requires Worker publication')
@@ -937,6 +1288,8 @@ def main():
     require(re.fullmatch(r'[0-9a-f]{40}', image_commit), 'Invalid image commit')
     require(re.fullmatch(r'[1-9][0-9]*', image_run), 'Invalid image workflow run')
     require(re.fullmatch(r'[1-9][0-9]*', image_attempt), 'Invalid image workflow attempt')
+    if args.historical_finance_maintenance_continuation:
+        require_maintenance_release_arguments(args, image_commit, image_run, image_attempt)
     if args.historical_finance_recharge_diagnostics:
         require_diagnostics_release_arguments(args, image_commit, image_run, image_attempt)
     os.umask(0o077)
@@ -957,6 +1310,8 @@ def main():
         historical_diagnostics=args.historical_finance_recharge_diagnostics)
     if args.historical_finance_recharge_diagnostics:
         require_diagnostics_registration_isolation(previous, old_manifest, before)
+        original_environment = (previous / '.env.aws.production').read_bytes()
+    if args.historical_finance_maintenance_continuation:
         original_environment = (previous / '.env.aws.production').read_bytes()
     assert_no_active_jobs(previous,
         worker_changes=registration_worker_changes(previous, initial_services))
@@ -1002,6 +1357,19 @@ def main():
             require(len(data) <= 64 * 1024 * 1024, 'Continuation source archive is too large')
             with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source:
                 verify_continuation_archive(release, source, policy, historical_policy_id)
+        if args.historical_finance_maintenance_continuation:
+            policy = maintenance_policy(release)
+            require(verify_maintenance_baseline(previous, policy) == old_manifest,
+                    'Maintenance continuation manifest changed')
+            verify_continuation_running_images(before, old_manifest)
+            url = (f'https://github.com/wangchaozhuanyong/id-business-system/archive/'
+                   f'{HISTORY_MAINTENANCE_BASELINE}.tar.gz')
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read(64 * 1024 * 1024 + 1)
+            require(len(data) <= 64 * 1024 * 1024, 'Maintenance source archive is too large')
+            with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source:
+                normalize_maintenance_candidate_modes(release, policy)
+                verify_maintenance_archive(release, source, policy)
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_source_scope(previous, release)
         if image_commit != args.commit:
@@ -1014,7 +1382,10 @@ def main():
                 verify_reusable_archive(release, source, image_commit)
         shutil.copy2(previous / '.env.aws.production', release / '.env.aws.production')
         (release / '.env.aws.production').chmod(0o600)
-        if args.historical_finance_recharge_diagnostics:
+        if args.historical_finance_maintenance_continuation:
+            require_maintenance_environment_unchanged(previous, release, original_environment)
+            google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
+        elif args.historical_finance_recharge_diagnostics:
             require_diagnostics_environment_unchanged(previous, release, original_environment)
             google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
         else:
@@ -1022,6 +1393,8 @@ def main():
         additions = migration_plan(previous, release)
         edge_changed = ((previous / 'deploy/caddy/Caddyfile.aws').read_bytes()
                         != (release / 'deploy/caddy/Caddyfile.aws').read_bytes())
+        if args.historical_finance_maintenance_continuation:
+            require_maintenance_scope(additions, edge_changed)
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_migration_scope(additions, edge_changed)
         updated_services, image_services = release_services(args.admin_only, additions, edge_changed,
@@ -1050,7 +1423,9 @@ def main():
                              historical_exception=args.historical_finance_exception,
                              historical_continuation=args.historical_finance_continuation,
                              historical_diagnostics=args.historical_finance_recharge_diagnostics,
-                             stage='before', source=release)
+                             stage='before', source=release,
+                             **({'historical_maintenance': True, 'origin': previous}
+                                if args.historical_finance_maintenance_continuation else {}))
         step = 'images'
         pulled_images = {}
         registry = args.repository.split('/')[0]
@@ -1079,6 +1454,8 @@ def main():
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_registration_isolation(previous, old_manifest, before)
             require_diagnostics_environment_unchanged(previous, release, original_environment)
+        if args.historical_finance_maintenance_continuation:
+            require_maintenance_environment_unchanged(previous, release, original_environment)
         assert_no_active_jobs(previous,
             worker_changes=registration_worker_changes(previous, updated_services))
 
@@ -1087,7 +1464,13 @@ def main():
         step = 'database-grants'
         database_grants = sync_new_table_grants(release, additions)
         step = 'switch'
+        registration_runtime_service = ('auto-registration' if has_registration_worker(previous)
+                                        else 'auto-recharge')
         for service in updated_services:
+            if service == registration_runtime_service:
+                # Migration/grants and earlier service health waits may outlast
+                # the pre-migration guard. Preserve any newly retained window.
+                assert_no_active_registration(previous)
             changed.append(service)
             compose(release, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
                     '--force-recreate', service, timeout=300)
@@ -1100,7 +1483,9 @@ def main():
                             historical_continuation=args.historical_finance_continuation,
                             historical_diagnostics=args.historical_finance_recharge_diagnostics,
                             stage='after', source=release,
-                            before_receipt=release / 'before-audit.json')
+                            before_receipt=release / 'before-audit.json',
+                            **({'historical_maintenance': True, 'origin': previous}
+                               if args.historical_finance_maintenance_continuation else {}))
         after = {service: service_state(release, service,
             include_container_id=args.historical_finance_recharge_diagnostics)
             for service in production_services(release)}
@@ -1108,6 +1493,8 @@ def main():
                 'Unrelated service changed')
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_environment_unchanged(previous, release, original_environment)
+        if args.historical_finance_maintenance_continuation:
+            require_maintenance_environment_unchanged(previous, release, original_environment)
         require(all(after[s]['image'] == pulled_images[image_service(s)]
                     for s in updated_services if s in SERVICES), 'Running image differs from release')
         public_url = environment_values(release / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')

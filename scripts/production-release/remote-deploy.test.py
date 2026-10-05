@@ -106,6 +106,118 @@ class ReleaseScopeTests(unittest.TestCase):
         health.assert_called_once_with('old', 'auto-registration')
 
 
+class CurrentJobDatabaseTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path('/synthetic-release')
+        self.current = 'id_business_v2_partial_cleanup_20261005_v1'
+        self.old = 'id_business_v2_cutover_20260827_v5'
+        self.values = {'MYSQL_DATABASE': self.current,
+            'DATABASE_URL': 'mysql://id_business_app:synthetic-private-marker@mysql/' + self.current}
+        self.environment = patch.object(deployment, 'environment_values', return_value=self.values)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.identity = {'configuredDatabase': self.current, 'actualDatabase': self.current}
+
+    def test_live_api_and_configuration_agree_without_credentials_in_probe_or_result(self):
+        with patch.object(deployment, 'compose', return_value=json.dumps(self.identity)) as compose:
+            self.assertEqual(deployment.current_job_database(self.directory), self.current)
+        self.assertEqual(compose.call_args.args[:6],
+                         (self.directory, 'exec', '-T', 'api', 'node', '-e'))
+        self.assertEqual(compose.call_args.kwargs, {'timeout': 30})
+        self.assertIn('SELECT DATABASE() AS databaseName', compose.call_args.args[-1])
+        self.assertNotIn('synthetic-private-marker', repr(compose.call_args))
+
+    def test_invalid_configurations_stop_before_live_probe(self):
+        for update in ({'MYSQL_DATABASE': 'new; DROP DATABASE old'},
+                       {'MYSQL_DATABASE': 'a' * 65},
+                       {'DATABASE_URL': 'mysql://id_business_app:synthetic@mysql/' + self.old},
+                       {'DATABASE_URL': 'mysql://root:synthetic@mysql/' + self.current},
+                       {'DATABASE_URL': 'mysql://id_business_app:synthetic@external/' + self.current},
+                       {'DATABASE_URL': 'mysql://id_business_app:synthetic@mysql:bad/' + self.current},
+                       {'DATABASE_URL': 'mysql://id_business_app:synthetic@mysql/' + self.current + '#raw'}):
+            with self.subTest(update=sorted(update)), \
+                    patch.object(deployment, 'environment_values', return_value={**self.values, **update}), \
+                    patch.object(deployment, 'compose') as compose:
+                with self.assertRaisesRegex(RuntimeError, '^Production database configuration invalid$'):
+                    deployment.current_job_database(self.directory)
+                compose.assert_not_called()
+
+    def test_configured_or_actual_live_api_database_mismatch_prevents_every_lease_query(self):
+        for field in self.identity:
+            for guard in (deployment.assert_no_active_recharge, deployment.assert_no_active_registration):
+                with self.subTest(field=field, guard=guard.__name__), \
+                        patch.object(deployment, 'registration_runtime_state', return_value={
+                            'supported': True, 'registrationBusy': False, 'registrationWindowRetained': False}), \
+                        patch.object(deployment, 'compose', return_value=json.dumps({
+                            **self.identity, field: self.old})) as compose:
+                    with self.assertRaisesRegex(RuntimeError, '^Production database identity mismatch$'):
+                        guard(self.directory)
+                    self.assertEqual(compose.call_count, 1)
+                    self.assertEqual(compose.call_args.args[3], 'api')
+
+    def test_missing_malformed_or_extra_live_identity_fails_without_raw_error(self):
+        for value in ('not-json', '[]', '{}', json.dumps({**self.identity, 'private': 'raw-private-marker'}),
+                      json.dumps({**self.identity, 'actualDatabase': 'db;secret'})):
+            with self.subTest(value_type=type(value).__name__), \
+                    patch.object(deployment, 'compose', return_value=value):
+                with self.assertRaisesRegex(RuntimeError, '^Production database identity unavailable$'):
+                    deployment.current_job_database(self.directory)
+        with patch.object(deployment, 'compose', side_effect=RuntimeError('raw-private-marker')):
+            with self.assertRaisesRegex(RuntimeError, '^Production database identity unavailable$') as error:
+                deployment.current_job_database(self.directory)
+            self.assertTrue(error.exception.__suppress_context__)
+
+    def test_active_new_database_lease_cannot_be_hidden_by_idle_mysql_initdb_database(self):
+        for guard in (deployment.assert_no_active_recharge, deployment.assert_no_active_registration):
+            calls = []
+            def compose(directory, *args, **kwargs):
+                calls.append(args)
+                if args[:5] == ('exec', '-T', 'api', 'node', '-e'):
+                    return json.dumps(self.identity)
+                self.assertTrue(args[:7] == ('exec', '-e', 'MYSQL_DATABASE=' + self.current,
+                                            '-T', 'mysql', 'sh', '-c')
+                                or args[:5] == ('exec', '-T', 'mysql', 'sh', '-c'))
+                # The retained mysql container's default would read idle old=0.
+                database = args[2].partition('=')[2] if args[1] == '-e' else self.old
+                return '1' if database == self.current else '0'
+            with self.subTest(guard=guard.__name__), \
+                    patch.object(deployment, 'registration_runtime_state', return_value={
+                        'supported': True, 'registrationBusy': False, 'registrationWindowRetained': False}), \
+                    patch.object(deployment, 'compose', side_effect=compose):
+                with self.assertRaisesRegex(RuntimeError, 'Active .* jobs prevent release'):
+                    guard(self.directory)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[-1][:7], ('exec', '-e', 'MYSQL_DATABASE=' + self.current,
+                                           '-T', 'mysql', 'sh', '-c'))
+            self.assertNotIn('synthetic-private-marker', repr(calls))
+            self.assertIn('$MYSQL_ROOT_PASSWORD', calls[-1][-1])
+
+    def test_actual_container_probe_uses_runtime_configuration_and_connected_database(self):
+        # Execute the real fixed JavaScript with only Prisma's database reads stubbed.
+        import subprocess
+        for actual in (self.current, self.old):
+            def compose(directory, *args, **kwargs):
+                probe = args[-1]
+                wrapper = '''const vm=require('node:vm');
+const actual=''' + json.dumps(actual) + ''';
+vm.runInNewContext(''' + json.dumps(probe) + ''', {URL,console,process,
+require(name){if(name!=='@prisma/client')throw Error();return {PrismaClient:class {
+ async $queryRawUnsafe(sql){if(sql!=='SELECT DATABASE() AS databaseName')throw Error();
+ return [{databaseName:actual}];} async $disconnect(){}
+}};}});'''
+                result = subprocess.run(['node', '-e', wrapper], capture_output=True, text=True,
+                    env={**deployment.os.environ, 'DATABASE_URL': self.values['DATABASE_URL']}, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout
+            with self.subTest(actual_matches=actual == self.current), \
+                    patch.object(deployment, 'compose', side_effect=compose):
+                if actual == self.current:
+                    self.assertEqual(deployment.current_job_database(self.directory), self.current)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, '^Production database identity mismatch$'):
+                        deployment.current_job_database(self.directory)
+
+
 class RegistrationReleaseGuardTests(unittest.TestCase):
     def setUp(self):
         self.database = sqlite3.connect(':memory:')
@@ -118,13 +230,17 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
         self.layout = patch.object(deployment, 'has_registration_worker', return_value=False)
         self.layout.start()
         self.addCleanup(self.layout.stop)
+        self.current_database = patch.object(deployment, 'current_job_database', return_value='synthetic_current')
+        self.current_database.start()
+        self.addCleanup(self.current_database.stop)
 
     def row(self, state, lease='2026-10-03 01:00:00', profile='reg_original'):
         self.database.execute('INSERT INTO id_business_v2_registration_jobs VALUES (?, ?, ?)',
                               (state, lease, profile))
 
     def mysql(self, directory, *args, **kwargs):
-        self.assertEqual(args[:5], ('exec', '-T', 'mysql', 'sh', '-c'))
+        self.assertEqual(args[:7], ('exec', '-e', 'MYSQL_DATABASE=synthetic_current',
+                                    '-T', 'mysql', 'sh', '-c'))
         sql = re.search(r'-e "([^"]+)"$', args[-1]).group(1)
         # Execute the actual gate predicate with only MySQL dialect conversions.
         sql = re.sub(r'0x([0-9a-f]+)',
@@ -2689,7 +2805,8 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     candidate_mutation=False, full_release=False,
                     manifest_mutation=False, legacy_layout=False, running_image_mutation=False,
                     registration_restarted=False, manifest_extra_image=False,
-                    repin_override=False, candidate_mode=0o644):
+                    repin_override=False, candidate_mode=0o644,
+                    late_registration=None, first_split=False):
         # Real release orchestration, guards, private receipts, source archive comparison,
         # override writes and mixed-image manifest. All external calls are synthetic.
         with tempfile.TemporaryDirectory(dir='.deploy') as name:
@@ -2713,6 +2830,8 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 manifest['images']['synthetic-historical-image'] = {
                     'reference': 'fixture:historical', 'digest': 'sha256:' + 'f' * 64,
                     'sourceCommit': 'c' * 40}
+            if first_split:
+                manifest['images'].pop('auto-registration')
             fixture.save_fixture(previous, policy, values)
             manifest_digest = deployment.hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
             proof_digest = deployment.historical_fingerprint(policy['continuation'])
@@ -2732,12 +2851,17 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
             for filename, content in frozen.items():
                 path = previous / filename; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content); path.chmod(0o644)
+            if first_split:
+                (previous / 'docker-compose.aws-mysql.yml').write_text(
+                    deployment.normalize_worker_isolation(compose_text.decode()))
             (previous / 'apps/api/prisma-mysql/migrations').mkdir(parents=True)
             (previous / '.env.aws.production').write_text('APP_PUBLIC_URL=http://synthetic.test\n'
-                'GOOGLE_DRIVE_SYNC_FOLDER_ID=synthetic-existing-folder\n')
+                'GOOGLE_DRIVE_SYNC_FOLDER_ID=synthetic-existing-folder\n'
+                'MYSQL_DATABASE=synthetic_current\n'
+                'DATABASE_URL=mysql://id_business_app:synthetic-private-marker@mysql/synthetic_current\n')
             (previous / '.env.aws.production').chmod(0o600)
             override = {'services': {service: {'image': manifest['images'][service]['reference'],
-                        'pull_policy': 'never'} for service in (*deployment.SERVICES, 'migrate')}}
+                        'pull_policy': 'never'} for service in (*deployment.SERVICES, 'migrate') if service in manifest['images']}}
             override_data = json.dumps(override).encode()
             override_raw_digest = deployment.hashlib.sha256(override_data).hexdigest()
             override_canonical_digest = deployment.historical_fingerprint(override)
@@ -2790,7 +2914,10 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
             def state(directory, service, *, include_container_id=False):
                 value = dict(states[service])
                 if directory != previous:
-                    if service == 'auto-recharge':
+                    if full_release and late_registration is not None and service in deployment.SERVICES:
+                        value.update(image=new_image, reference=repository + ':' + commit +
+                                     '-123-1-' + deployment.image_service(service))
+                    elif service == 'auto-recharge':
                         value.update(image=new_image, reference=new_reference, containerId='c' * 64)
                     elif service == 'auto-registration' and registration_rebuilt:
                         value['containerId'] = 'd' * 64
@@ -2811,11 +2938,30 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                         'Config': {'Labels': {'org.opencontainers.image.revision': commit}}}])
                 raise AssertionError(args)
 
+            switched = []
             def external_compose(directory, *args, **kwargs):
                 if args == ('config', '--format', 'json'):
                     return json.dumps({'name': 'synthetic-project'})
                 if args[:2] == ('up', '-d'):
+                    switched.append(args[-1])
                     return ''
+                if full_release and late_registration is not None:
+                    late = ('media-resolver' if first_split else 'auto-recharge') in switched
+                    runtime_service = 'auto-recharge' if first_split else 'auto-registration'
+                    if args[:5] == ('exec', '-T', runtime_service, 'python', '-c'):
+                        if first_split and 'auto-recharge' in switched:
+                            return json.dumps({'supported': False})  # New recharge role has no registration endpoint.
+                        return json.dumps({'supported': True, 'registrationBusy': False,
+                            'registrationWindowRetained': late and late_registration == 'window'})
+                    if args[:5] == ('exec', '-T', 'api', 'node', '-e'):
+                        return json.dumps({'configuredDatabase': 'synthetic_current',
+                                           'actualDatabase': 'synthetic_current'})
+                    if args[:5] == ('exec', '-e', 'MYSQL_DATABASE=synthetic_current', '-T', 'mysql'):
+                        return '1' if late and late_registration == 'lease' else '0'
+                    if args[:5] == ('exec', '-T', 'mysql', 'sh', '-c'):
+                        return '0'  # Retained initdb schema is idle, even when current is occupied.
+                    if args == ('run', '--rm', '--no-deps', 'migrate'):
+                        return ''
                 raise AssertionError(args)
 
             def response(url, **kwargs):
@@ -2859,7 +3005,8 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 recharge = stack.enter_context(patch.object(deployment, 'assert_no_active_recharge',
                     side_effect=recharge_failure))
                 registration = stack.enter_context(patch.object(deployment, 'assert_no_active_registration',
-                    side_effect=RuntimeError('Active registration jobs prevent release')))
+                    **({'wraps': deployment.assert_no_active_registration} if late_registration is not None
+                       else {'side_effect': RuntimeError('Active registration jobs prevent release')})))
                 guards = stack.enter_context(patch.object(deployment, 'assert_no_active_jobs',
                     wraps=deployment.assert_no_active_jobs))
                 isolation = stack.enter_context(patch.object(deployment, 'require_diagnostics_registration_isolation',
@@ -2883,6 +3030,7 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     guards=guards.call_args_list, recharge_calls=recharge.call_count,
                     registration_calls=registration.call_count, isolation_calls=isolation.call_count,
                     run=run.call_args_list, compose=compose.call_args_list, audits=audited.call_count,
+                    audit_args=audited.call_args_list,
                     rollback=rollback.call_args_list, google_drive_calls=google_drive.call_count,
                     previous=previous, current=(base / 'current').resolve(), manifest=saved,
                     old_manifest=manifest, old_override=override, override=target_override)
@@ -3017,6 +3165,455 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
         self.assertEqual(result.guards[0].kwargs, {'worker_changes': True})
         self.assertEqual(result.run, [])
 
+    def test_new_window_or_dispatched_lease_after_migration_keeps_registration_container(self):
+        for late in ('window', 'lease'):
+            with self.subTest(late=late):
+                result = self.publication(full_release=True, late_registration=late)
+                self.assertEqual(result.result, 1)
+                self.assertEqual(result.registration_calls, 3)
+                self.assertEqual(result.recharge_calls, 2)
+                self.assertEqual(result.current, result.previous)
+                switched = [call.args[-1] for call in result.compose if call.args[1:3] == ('up', '-d')]
+                self.assertEqual(switched, ['media-resolver', 'auto-recharge'])
+                self.assertEqual([call.args[2] for call in result.rollback],
+                                 ['auto-recharge', 'media-resolver'])
+                self.assertNotIn('auto-registration', switched)
+                self.assertIsNone(result.manifest)
+                self.assertIn('"step": "switch"', result.output)
+                self.assertNotIn('synthetic-private-marker', result.output)
+                self.assertIn(('run', '--rm', '--no-deps', 'migrate'),
+                              [call.args[1:] for call in result.compose])
+
+    def test_idle_full_release_retains_normal_migration_audit_and_all_three_registration_guards(self):
+        result = self.publication(full_release=True, late_registration='idle')
+        self.assertEqual(result.result, 0)
+        self.assertEqual(result.registration_calls, 3)
+        self.assertEqual(result.recharge_calls, 2)
+        self.assertEqual(result.audits, 2)
+        for call in result.audit_args:
+            self.assertFalse(any(call.kwargs[field] for field in (
+                'historical_exception', 'historical_continuation', 'historical_diagnostics')))
+        self.assertEqual(result.manifest['servicesUpdated'], list(deployment.SERVICES))
+        self.assertIn(('run', '--rm', '--no-deps', 'migrate'),
+                      [call.args[1:] for call in result.compose])
+
+    def test_first_split_late_window_or_lease_preserves_the_original_shared_registration_runtime(self):
+        for late in ('window', 'lease'):
+            with self.subTest(late=late):
+                result = self.publication(full_release=True, first_split=True, late_registration=late)
+                self.assertEqual(result.result, 1)
+                self.assertEqual(result.registration_calls, 3)
+                self.assertEqual(result.recharge_calls, 2)
+                self.assertEqual(result.current, result.previous)
+                switched = [call.args[-1] for call in result.compose if call.args[1:3] == ('up', '-d')]
+                self.assertEqual(switched, ['media-resolver'])
+                self.assertEqual([call.args[2] for call in result.rollback], ['media-resolver'])
+                probes = [call.args[3] for call in result.compose
+                          if call.args[1:3] == ('exec', '-T') and call.args[4:6] == ('python', '-c')]
+                self.assertEqual(probes, ['auto-recharge'] * 3)
+
+    def test_first_split_idle_shared_runtime_allows_the_new_independent_worker_without_rechecking_new_recharge_role(self):
+        result = self.publication(full_release=True, first_split=True, late_registration='idle')
+        self.assertEqual(result.result, 0)
+        self.assertEqual(result.registration_calls, 3)
+        self.assertEqual(result.recharge_calls, 2)
+        probes = [call.args[3] for call in result.compose
+                  if call.args[1:3] == ('exec', '-T') and call.args[4:6] == ('python', '-c')]
+        self.assertEqual(probes, ['auto-recharge'] * 3)
+        switched = [call.args[-1] for call in result.compose if call.args[1:3] == ('up', '-d')]
+        self.assertEqual(switched, list(deployment.SERVICES))
+        self.assertEqual(result.manifest['rollback']['servicesAdded'], ['auto-registration'])
+
+
+
+class MaintenanceContinuationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.source / '.runtime/maintenance-remote-tests'
+        cls.runtime.mkdir(parents=True, exist_ok=True)
+
+    def policy(self):
+        return json.loads((self.source / 'deploy/aws' /
+            (deployment.HISTORY_MAINTENANCE_POLICY_ID + '.json')).read_text())
+
+    def test_compiled_policy_preserves_all_three_prior_policies(self):
+        policy = deployment.maintenance_policy(self.source)
+        self.assertEqual(deployment.historical_fingerprint(policy), deployment.MAINTENANCE_POLICY_SHA256)
+        self.assertEqual(len(policy['items']), 6)
+        self.assertEqual(len(policy['candidateSourceSha256']), 11)
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
+            for identity in (deployment.HISTORY_POLICY_ID, deployment.HISTORY_CONTINUATION_POLICY_ID,
+                             deployment.HISTORY_DIAGNOSTICS_POLICY_ID, deployment.HISTORY_MAINTENANCE_POLICY_ID):
+                filename = identity + '.json'
+                (root / 'deploy/aws' / filename).write_bytes((self.source / 'deploy/aws' / filename).read_bytes())
+            deployment.maintenance_policy(root)
+            for identity in (deployment.HISTORY_POLICY_ID, deployment.HISTORY_CONTINUATION_POLICY_ID,
+                             deployment.HISTORY_DIAGNOSTICS_POLICY_ID, deployment.HISTORY_MAINTENANCE_POLICY_ID):
+                path = root / 'deploy/aws' / (identity + '.json'); original = path.read_bytes()
+                path.write_text('{}')
+                with self.subTest(identity=identity), self.assertRaises(RuntimeError):
+                    deployment.maintenance_policy(root)
+                path.write_bytes(original)
+
+    def test_exact_current_fresh_images_full_services_and_migrate_check(self):
+        deployment.require_historical_baseline(deployment.HISTORY_MAINTENANCE_POLICY_ID,
+                                               deployment.HISTORY_MAINTENANCE_BASELINE)
+        with self.assertRaises(RuntimeError):
+            deployment.require_historical_baseline(deployment.HISTORY_MAINTENANCE_POLICY_ID, 'a' * 40)
+        args = SimpleNamespace(admin_only=False, commit='a' * 40, run_id='123', run_attempt='1',
+            image_commit='a' * 40, image_run_id='123', image_run_attempt='1')
+        deployment.require_maintenance_release_arguments(args, args.image_commit,
+                                                         args.image_run_id, args.image_run_attempt)
+        for triple in [('b' * 40, '123', '1'), ('a' * 40, '122', '1'), ('a' * 40, '123', '2')]:
+            with self.subTest(triple=triple), self.assertRaisesRegex(RuntimeError, 'reuse'):
+                deployment.require_maintenance_release_arguments(args, *triple)
+        args.admin_only = True
+        with self.assertRaisesRegex(RuntimeError, 'full publication'):
+            deployment.require_maintenance_release_arguments(args, 'a' * 40, '123', '1')
+        deployment.require_maintenance_scope([], False)
+        for additions, edge in [(['new.sql'], False), ([], True)]:
+            with self.assertRaises(RuntimeError):
+                deployment.require_maintenance_scope(additions, edge)
+        services, images = deployment.release_services(False, [])
+        self.assertEqual(services, deployment.SERVICES)
+        self.assertEqual(len(images), 5)
+        self.assertIn('migrate', images)
+        with patch.object(deployment, 'compose') as compose:
+            deployment.run_release_migrations(None, False, False)
+        compose.assert_called_once_with(None, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
+
+    def test_audit_url_adds_single_connection_in_memory_and_rejects_all_conflicts(self):
+        marker = 'synthetic-password-marker'
+        raw = f'mysql://id_business_audit:{marker}@127.0.0.1:3306/{deployment.MAINTENANCE_DATABASE}'
+        values = {'MYSQL_DATABASE': deployment.MAINTENANCE_DATABASE, 'V2_DATA_INTEGRITY_DATABASE_URL': raw}
+        output = deployment.maintenance_container_audit_url(values)
+        self.assertIn('@mysql/', output)
+        self.assertTrue(output.endswith('?connection_limit=1'))
+        self.assertEqual(values['V2_DATA_INTEGRITY_DATABASE_URL'], raw)
+        for changed in [raw + '?connection_limit=2', raw + '?connection_limit=1&connection_limit=1',
+                        raw + '?unknown=1', raw + '?charset=latin1', raw + '?connection_limit=0',
+                        raw.replace('/' + deployment.MAINTENANCE_DATABASE, '/old_initdb'),
+                        raw.replace('id_business_audit:', 'root:'), raw.replace('127.0.0.1', 'external.test'),
+                        raw + '#secret', raw + '?connect_timeout=0']:
+            with self.subTest(changed=changed.replace(marker, 'redacted')):
+                with self.assertRaisesRegex(RuntimeError, '^Maintenance continuation audit configuration invalid$') as error:
+                    deployment.maintenance_container_audit_url({**values, 'V2_DATA_INTEGRITY_DATABASE_URL': changed})
+                self.assertNotIn(marker, str(error.exception))
+        with self.assertRaises(RuntimeError):
+            deployment.maintenance_container_audit_url({**values, 'MYSQL_DATABASE': 'old_initdb'})
+
+    def test_private_fixed_receipts_reject_links_public_modes_and_fifo(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); path = root / 'receipt.json'; path.write_bytes(b'{"fixture":true}')
+            for mode in (0o400, 0o600):
+                path.chmod(mode)
+                self.assertEqual(deployment.private_maintenance_receipt(path), b'{"fixture":true}')
+            for mode in (0o644, 0o444, 0o640, 0o700):
+                path.chmod(mode)
+                with self.assertRaises(RuntimeError):
+                    deployment.private_maintenance_receipt(path)
+            path.chmod(0o600); link = root / 'link'; link.symlink_to(path)
+            with self.assertRaises(RuntimeError):
+                deployment.private_maintenance_receipt(link)
+            hard = root / 'hard'; deployment.os.link(path, hard)
+            with self.assertRaises(RuntimeError):
+                deployment.private_maintenance_receipt(path)
+            hard.unlink(); fifo = root / 'fifo'; deployment.os.mkfifo(fifo, 0o600)
+            with self.assertRaises(RuntimeError):
+                deployment.private_maintenance_receipt(fifo)
+
+    def test_archive_freezes_all_unrelated_content_full_modes_and_exact_candidate_modes(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); policy = self.policy()
+            baseline = io.BytesIO()
+            with tarfile.open(fileobj=baseline, mode='w:gz') as archive:
+                member = tarfile.TarInfo(f'id-business-system-{deployment.HISTORY_MAINTENANCE_BASELINE}/package.json')
+                member.mode = 0o644; member.size = len(b'original')
+                archive.addfile(member, io.BytesIO(b'original'))
+            (root / 'package.json').write_bytes(b'original'); (root / 'package.json').chmod(0o644)
+            for filename in policy['candidateSourceSha256']:
+                path = root / filename; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'synthetic reviewed candidate')
+                path.chmod(0o755 if filename == 'scripts/backup-aws-mysql.sh' else 0o644)
+                policy['candidateSourceSha256'][filename] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+            def verify():
+                with tarfile.open(fileobj=io.BytesIO(baseline.getvalue()), mode='r:gz') as source:
+                    deployment.verify_maintenance_archive(root, source, policy)
+            verify()
+            for filename, mode in [('scripts/backup-aws-mysql.sh', 0o644),
+                                   ('docs/V2_TASKS.md', 0o755), ('docs/V2_TASKS.md', 0o4644),
+                                   ('package.json', 0o600)]:
+                path = root / filename; original = path.stat().st_mode & 0o7777; path.chmod(mode)
+                with self.subTest(filename=filename, mode=mode), self.assertRaises(RuntimeError):
+                    verify()
+                path.chmod(original)
+            (root / 'package.json').write_bytes(b'changed dependencies')
+            with self.assertRaisesRegex(RuntimeError, 'unrelated'):
+                verify()
+
+
+    def github_mode_fixture(self, root, archive_modes=True):
+        release = root / 'release'; release.mkdir()
+        policy = self.policy(); contents = {}
+        for name, digest in policy['candidateSourceSha256'].items():
+            raw = (self.source / name).read_bytes()
+            self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest)
+            path = release / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+            target = 0o755 if name == 'scripts/backup-aws-mysql.sh' else 0o644
+            path.chmod(target | 0o020 if archive_modes else target)
+            contents[name] = raw
+        (release / 'package.json').write_bytes(b'unchanged baseline source')
+        (release / 'package.json').chmod(0o664)
+        baseline = io.BytesIO()
+        with tarfile.open(fileobj=baseline, mode='w:gz') as archive:
+            item = tarfile.TarInfo(f'id-business-system-{deployment.HISTORY_MAINTENANCE_BASELINE}/package.json')
+            item.mode = 0o664; item.size = len(b'unchanged baseline source')
+            archive.addfile(item, io.BytesIO(b'unchanged baseline source'))
+        return release, policy, contents, baseline.getvalue()
+
+    def test_github_modes_normalize_only_eleven_fixed_hashes_then_archive_guard_passes(self):
+        for github_modes in (False, True):
+            with self.subTest(github_modes=github_modes), tempfile.TemporaryDirectory(dir=self.runtime) as name:
+                release, policy, contents, baseline = self.github_mode_fixture(Path(name), github_modes)
+                with patch.object(deployment.os, 'fchmod', wraps=deployment.os.fchmod) as chmod:
+                    deployment.normalize_maintenance_candidate_modes(release, policy)
+                self.assertEqual(chmod.call_count, 11 if github_modes else 0)
+                for filename, raw in contents.items():
+                    path = release / filename
+                    self.assertEqual(path.read_bytes(), raw)
+                    self.assertEqual(path.stat().st_mode & 0o7777,
+                                     0o755 if filename == 'scripts/backup-aws-mysql.sh' else 0o644)
+                self.assertEqual((release / 'package.json').stat().st_mode & 0o7777, 0o664)
+                with tarfile.open(fileobj=io.BytesIO(baseline), mode='r:gz') as archive:
+                    deployment.verify_maintenance_archive(release, archive, policy)
+
+    def test_actual_github_style_tar_extracts_0664_and_0775_without_changing_baseline(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name)
+            original, policy, contents, baseline = self.github_mode_fixture(root)
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w:gz') as archive:
+                for filename in [*contents, 'package.json']:
+                    raw = (original / filename).read_bytes(); item = tarfile.TarInfo(filename)
+                    item.mode = 0o775 if filename == 'scripts/backup-aws-mysql.sh' else 0o664
+                    item.size = len(raw); archive.addfile(item, io.BytesIO(raw))
+            extracted = root / 'extracted'; extracted.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(data.getvalue()), mode='r:gz') as archive:
+                archive.extractall(extracted)
+            self.assertEqual((extracted / 'scripts/backup-aws-mysql.sh').stat().st_mode & 0o7777, 0o775)
+            self.assertEqual((extracted / 'docs/V2_TASKS.md').stat().st_mode & 0o7777, 0o664)
+            deployment.normalize_maintenance_candidate_modes(extracted, policy)
+            with tarfile.open(fileobj=io.BytesIO(baseline), mode='r:gz') as archive:
+                deployment.verify_maintenance_archive(extracted, archive, policy)
+            self.assertEqual((extracted / 'package.json').stat().st_mode & 0o7777, 0o664)
+
+    def test_invalid_candidate_is_rejected_before_any_permission_change(self):
+        for filename in sorted(deployment.MAINTENANCE_CANDIDATE_FILES):
+            for mutation in ('hash', 'missing', 'symlink', 'hardlink', 0o600, 0o444, 0o666, 0o2664):
+                with self.subTest(filename=filename, mutation=mutation), tempfile.TemporaryDirectory(dir=self.runtime) as name:
+                    root = Path(name); release, policy, contents, _baseline = self.github_mode_fixture(root)
+                    path = release / filename
+                    if mutation == 'hash':
+                        path.write_bytes(b'changed source')
+                    elif mutation == 'missing':
+                        path.unlink()
+                    elif mutation in ('symlink', 'hardlink'):
+                        outside = root / 'outside'; outside.write_bytes(contents[filename]); path.unlink()
+                        if mutation == 'symlink':
+                            path.symlink_to(outside)
+                        else:
+                            deployment.os.link(outside, path)
+                    else:
+                        path.chmod(mutation)
+                    with patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                        deployment.normalize_maintenance_candidate_modes(release, policy)
+                    chmod.assert_not_called()
+                    for untouched in set(contents) - {filename}:
+                        mode = 0o775 if untouched == 'scripts/backup-aws-mysql.sh' else 0o664
+                        self.assertEqual((release / untouched).stat().st_mode & 0o7777, mode)
+
+    def test_normalization_cannot_accept_altered_pins_or_symlinked_parent(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); release, policy, _contents, _baseline = self.github_mode_fixture(root)
+            for mutation in ('digest', 'extra', 'missing', 'identity', 'baseline'):
+                changed = copy.deepcopy(policy)
+                if mutation == 'digest': changed['candidateSourceSha256'][next(iter(changed['candidateSourceSha256']))] = 'f' * 64
+                elif mutation == 'extra': changed['candidateSourceSha256']['unapproved.py'] = 'f' * 64
+                elif mutation == 'missing': changed['candidateSourceSha256'].pop(next(iter(changed['candidateSourceSha256'])))
+                elif mutation == 'identity': changed['id'] = deployment.HISTORY_DIAGNOSTICS_POLICY_ID
+                else: changed['expectedCurrent'] = 'f' * 40
+                with self.subTest(mutation=mutation), patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                    deployment.normalize_maintenance_candidate_modes(release, changed)
+                chmod.assert_not_called()
+            (release / 'apps').rename(root / 'outside-apps')
+            (release / 'apps').symlink_to(root / 'outside-apps')
+            with patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                deployment.normalize_maintenance_candidate_modes(release, policy)
+            chmod.assert_not_called()
+
+    def test_changed_descriptor_is_rejected_before_chmod_and_unrelated_modes_are_preserved(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            release, policy, contents, baseline = self.github_mode_fixture(Path(name))
+            filename = next(iter(contents)); victim = release / filename; original = deployment.hashlib.sha256
+            def changed_during_hash(raw):
+                result = original(raw)
+                if raw == contents[filename]: victim.write_bytes(raw + b'changed during verification')
+                return result
+            with patch.object(deployment.hashlib, 'sha256', side_effect=changed_during_hash), \
+                    patch.object(deployment.os, 'fchmod') as chmod, self.assertRaises(RuntimeError):
+                deployment.normalize_maintenance_candidate_modes(release, policy)
+            chmod.assert_not_called()
+            victim.write_bytes(contents[filename])
+            deployment.normalize_maintenance_candidate_modes(release, policy)
+            (release / 'package.json').chmod(0o644)
+            with tarfile.open(fileobj=io.BytesIO(baseline), mode='r:gz') as archive, \
+                    self.assertRaisesRegex(RuntimeError, 'unrelated source'):
+                deployment.verify_maintenance_archive(release, archive, policy)
+
+    @staticmethod
+    def profile():
+        return {'services': {'migrate': {'read_only': True, 'security_opt': ['no-new-privileges:true'],
+            'cap_drop': ['ALL'], 'environment': {'NODE_ENV': 'production', 'DATABASE_URL': 'synthetic-cleared-by-run'}}}}
+
+    def report(self, stage):
+        return {'ok': False, 'checkCount': 48, 'violationCount': 6,
+                'gate': {**deployment.MAINTENANCE_EXPECTED_GATE, 'stage': stage}}
+
+    def test_new_audit_mounts_fixed_six_originals_candidate_parser_and_root_readonly_only(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); output = root / 'before.json'; before = root / 'input-before.json'
+            before.write_text(json.dumps(self.report('before'))); before.chmod(0o600)
+            values = {'MYSQL_DATABASE': deployment.MAINTENANCE_DATABASE,
+                'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic-secret@localhost/' + deployment.MAINTENANCE_DATABASE}
+            with patch.object(deployment, 'maintenance_policy', return_value=self.policy()), \
+                    patch.object(deployment, 'verify_maintenance_baseline'), \
+                    patch.object(deployment, 'environment_values', return_value=values), \
+                    patch.object(deployment, 'compose', side_effect=lambda *_args, **kwargs: json.dumps(
+                        self.profile() if _args[1:] == ('config', '--format', 'json') else self.report(
+                        'after' if '--stage=after' in _args else 'before'))) as compose:
+                deployment.audit(root, output, historical_maintenance=True, stage='before', source=root, origin=root)
+                deployment.audit(root, root / 'after.json', historical_maintenance=True, stage='after',
+                                 source=root, origin=root, before_receipt=before)
+                for call in compose.call_args_list:
+                    argv = call.args
+                    if argv[1:] == ('config', '--format', 'json'):
+                        continue
+                    for value in ('-T', '--pull', 'never', '--cap-drop', 'ALL', '--cap-add', 'DAC_READ_SEARCH', '--user', '0:0', 'DATABASE_URL='):
+                        self.assertIn(value, argv)
+                    self.assertIn(f'{root / "scripts"}:/app/scripts:ro', argv)
+                    self.assertNotIn(f'{root}:/release-source:ro', argv)
+                    self.assertEqual(len([value for value in argv if '/release-source/' in str(value)]), 11)
+                    self.assertFalse(any('.env.aws.production:' in str(value) for value in argv))
+                    self.assertNotIn('--read-only', argv)
+                    self.assertNotIn('--security-opt', argv)
+                    self.assertEqual(len([value for value in argv if '/release-evidence/' in str(value)]), 6)
+                    self.assertIn('scripts/v2-release-maintenance-audit.mjs', deployment.MAINTENANCE_STDIN_WRAPPER)
+                    self.assertEqual(argv[argv.index(deployment.MAINTENANCE_STDIN_WRAPPER) + 1], '--')
+                    self.assertNotIn('synthetic-secret', ' '.join(str(value) for value in argv))
+                    self.assertNotIn('env', call.kwargs)
+                    self.assertTrue(json.loads(call.kwargs['input_data'])['auditURL'].endswith('connection_limit=1'))
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_new_audit_rejects_any_forged_gate_field_and_ambiguous_selection(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name)
+            values = {'MYSQL_DATABASE': deployment.MAINTENANCE_DATABASE,
+                'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/' + deployment.MAINTENANCE_DATABASE}
+            for key in deployment.MAINTENANCE_EXPECTED_GATE:
+                report = self.report('before'); report['gate'][key] = None
+                with self.subTest(key=key), patch.object(deployment, 'maintenance_policy', return_value=self.policy()), \
+                        patch.object(deployment, 'verify_maintenance_baseline'), \
+                        patch.object(deployment, 'environment_values', return_value=values), \
+                        patch.object(deployment, 'compose', side_effect=lambda *_args, **_kw: json.dumps(
+                            self.profile() if _args[1:] == ('config', '--format', 'json') else report)), self.assertRaises(RuntimeError):
+                    deployment.audit(root, root / 'receipt', historical_maintenance=True,
+                                     stage='before', source=root, origin=root)
+            for original in ('historical_exception', 'historical_continuation', 'historical_diagnostics'):
+                with self.subTest(original=original), self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                    deployment.audit(root, root / 'receipt', historical_maintenance=True, **{original: True})
+
+
+    def test_actual_node_wrapper_preserves_args_reads_bounded_stdin_and_never_exposes_url(self):
+        target = "data:text/javascript," + deployment.quote("console.log(JSON.stringify({argv:process.argv,hasAudit:!!process.env.V2_DATA_INTEGRITY_DATABASE_URL}));", safe='')
+        wrapper = deployment.MAINTENANCE_STDIN_WRAPPER.replace("'./scripts/v2-release-maintenance-audit.mjs'", repr(target))
+        arguments = ['--policy=/release-policy/' + deployment.HISTORY_MAINTENANCE_POLICY_ID + '.json',
+                     '--stage=before', '--expected-current=' + deployment.HISTORY_MAINTENANCE_BASELINE]
+        command = ['node', '--input-type=module', '-e', wrapper, '--', *arguments]
+        marker = 'SYNTHETIC_STDIN_SECRET'
+        url = 'mysql://id_business_audit:' + marker + '@mysql/' + deployment.MAINTENANCE_DATABASE + '?connection_limit=1'
+        result = deployment.subprocess.run(command, cwd=self.source, input=json.dumps({'auditURL': url}),
+                                          text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value['argv'][1:], ['scripts/v2-release-maintenance-audit.mjs', *arguments])
+        self.assertTrue(value['hasAudit'])
+        self.assertNotIn(marker, result.stdout + result.stderr + ' '.join(command))
+        for raw in ('{}', '[]', json.dumps({'auditURL': url, 'unreviewed': True}),
+                    json.dumps({'auditURL': url.replace('id_business_audit:', 'root:')}),
+                    json.dumps({'auditURL': url.replace('connection_limit=1', 'connection_limit=2')}),
+                    ' ' * 16385):
+            failed = deployment.subprocess.run(command, cwd=self.source, input=raw,
+                                              text=True, capture_output=True, timeout=30)
+            self.assertEqual(failed.returncode, 1)
+            self.assertEqual(failed.stderr.strip(), 'MAINTENANCE_GATE_REJECTED')
+            self.assertEqual(failed.stdout, '')
+            self.assertNotIn(marker, failed.stderr)
+
+    def test_profile_drift_stops_before_audit_container_or_stdin(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name)
+            values = {'MYSQL_DATABASE': deployment.MAINTENANCE_DATABASE,
+                'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/' + deployment.MAINTENANCE_DATABASE}
+            for key, value in [('read_only', False), ('security_opt', []), ('cap_drop', []),
+                               ('cap_add', ['SYS_ADMIN']), ('privileged', True), ('devices', ['/dev/sda'])]:
+                profile = self.profile(); profile['services']['migrate'][key] = value
+                with self.subTest(key=key), patch.object(deployment, 'maintenance_policy', return_value=self.policy()), \
+                        patch.object(deployment, 'verify_maintenance_baseline'), \
+                        patch.object(deployment, 'environment_values', return_value=values), \
+                        patch.object(deployment, 'compose', return_value=json.dumps(profile)) as compose, \
+                        self.assertRaisesRegex(RuntimeError, 'profile changed'):
+                    deployment.audit(root, root / 'receipt', historical_maintenance=True,
+                                     stage='before', source=root, origin=root)
+                self.assertEqual(compose.call_count, 1)
+                self.assertEqual(compose.call_args.args[1:], ('config', '--format', 'json'))
+
+    def test_actual_main_parser_accepts_dispatch_fresh_image_flags_and_preserves_full_flow(self):
+        original_main = deployment.main
+        def entry():
+            deployment.sys.argv.extend(['--historical-finance-maintenance-continuation',
+                '--image-commit', 'a' * 40, '--image-run-id', '123', '--image-run-attempt', '1'])
+            deployment.audit.side_effect = lambda _directory, _receipt, **kw: {
+                'checkCount': 48, 'violationCount': 6,
+                'historicalException': self.report(kw['stage'])['gate']}
+            old_mask = deployment.os.umask(0o077)
+            try:
+                return original_main()
+            finally:
+                deployment.os.umask(old_mask)
+        with patch.object(deployment, 'main', side_effect=entry), \
+                patch.object(deployment, 'maintenance_policy', return_value=self.policy()), \
+                patch.object(deployment, 'verify_maintenance_baseline', side_effect=lambda previous, _policy:
+                    json.loads((previous / 'release-manifest.json').read_text())), \
+                patch.object(deployment, 'normalize_maintenance_candidate_modes') as normalize, \
+                patch.object(deployment, 'verify_maintenance_archive') as archive:
+            result = RechargeOnlyPublicationTests().publication(full_release=True, late_registration='idle')
+        self.assertEqual(result.result, 0, result.output or result.error)
+        self.assertEqual(archive.call_count, 1)
+        self.assertEqual(normalize.call_count, 1)
+        self.assertEqual(result.manifest['servicesUpdated'], list(deployment.SERVICES))
+        self.assertFalse(result.manifest['migrationApplied'])
+        self.assertEqual(result.manifest['dataAuditBefore']['violationCount'], 6)
+        self.assertEqual(result.manifest['dataAuditAfter']['violationCount'], 6)
+        self.assertEqual(result.registration_calls, 3)
+        self.assertEqual(result.recharge_calls, 2)
+        self.assertEqual(len([call for call in result.run if call.args[:2] == ('docker', 'pull')]), 5)
+        self.assertIn(('run', '--rm', '--no-deps', 'migrate'), [call.args[1:] for call in result.compose])
+        self.assertEqual(result.google_drive_calls, 0)
+        for call in result.audit_args:
+            self.assertTrue(call.kwargs['historical_maintenance'])
+            self.assertEqual(call.kwargs['origin'], result.previous)
 
 if __name__ == '__main__':
     unittest.main()

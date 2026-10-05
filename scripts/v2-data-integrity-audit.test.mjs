@@ -259,6 +259,30 @@ test('audit connection refuses write-capable MySQL accounts', () => {
   );
 });
 
+test('audit accepts the exact integrity helper with paired ANSI_QUOTES identifiers', () => {
+  assert.doesNotThrow(() =>
+    assertV2AuditConnectionReadOnly([
+      {
+        grant:
+          'GRANT SELECT, SHOW VIEW ON "id_business_v2_partial_cleanup_20261005_v1".* TO "audit"@"%"'
+      },
+      {
+        grant:
+          'GRANT EXECUTE ON FUNCTION "id_business_v2_partial_cleanup_20261005_v1"."idv2_integrity_trigger_exists" TO "audit"@"%"'
+      }
+    ])
+  );
+  for (const grant of [
+    'GRANT EXECUTE ON FUNCTION "id_business_v2"."unsafe_function" TO "audit"@"%"',
+    'GRANT EXECUTE ON FUNCTION "id_business_v2"."idv2_integrity_trigger_exists` TO "audit"@"%"',
+    'GRANT EXECUTE ON FUNCTION "id_business_v2".idv2_integrity_trigger_exists" TO "audit"@"%"',
+    'GRANT EXECUTE ON FUNCTION "id_business_v2"."idv2_integrity_trigger_exists" TO "audit"@"%" WITH GRANT OPTION',
+    'GRANT EXECUTE ON FUNCTION "id_business_v2"."idv2_integrity_trigger_exists" TO "audit"@"%"; GRANT UPDATE ON *.* TO "audit"@"%"'
+  ]) {
+    assert.throws(() => assertV2AuditConnectionReadOnly([{ grant }]), /仅具备 SELECT\/SHOW VIEW/);
+  }
+});
+
 test('production auditor provisioning is limited to the dedicated local read-only account', () => {
   const provisioning = buildV2AuditAccountProvisioning({
     V2_DATA_INTEGRITY_DATABASE_URL:

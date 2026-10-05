@@ -25,6 +25,28 @@ HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostic
 HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
 DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
 
+HISTORY_MAINTENANCE_POLICY_ID = 'historical-finance-20261005-maintenance-continuation'
+HISTORY_MAINTENANCE_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+MAINTENANCE_EXPECTED_GATE = {
+    'accepted': True,
+    'status': 'APPROVED_MAINTENANCE_SUBSET',
+    'policyId': HISTORY_MAINTENANCE_POLICY_ID,
+    'expectedCurrent': HISTORY_MAINTENANCE_BASELINE,
+    'fixedCurrent': HISTORY_MAINTENANCE_BASELINE,
+    'checkCount': 48,
+    'executedCheckCount': 48,
+    'unavailableCheckCount': 0,
+    'violationCount': 6,
+    'databaseName': 'id_business_v2_partial_cleanup_20261005_v1',
+    'policySha256': '2103ab9a701fca15af406284874ef70d91004d6b2ac5cdd92fa91a8403399135',
+    'rulesSha256': '259332c0c8eb2d3d96d066cecd7cbe294ed5f2bd1e7af0d1c39f6c002859d7f4',
+    'schemaSha256': '3aef82a77e90f3cb4a2a953d67808193168159aa8983276b67e12f916a0a3655',
+    'entitySetSha256': 'f23d021df7a2693b4b5ad3de3818ab6ea475a2362e7c71dd39dc489f3eeb2c43',
+    'closureItemsSha256': '0a917c246769c7bcc16d23859e687ed036c97c6289612ea4efc5f7dc16a0ab83',
+    'receiptSetSha256': '52839f3b24b7f47897db165a04a22f51d2d5918ad5946cad2f669f53536e831d',
+    'sourceSha256': '526e724a822540c5f33ddd9e38c71e3079efa1fce9672f8ceef5096e38cc7208'
+}
+
 
 def require(condition, reason):
     if not condition:
@@ -161,8 +183,23 @@ def verify_deployment(manifest, deployment_run):
     # A claimed third entry must not fall through the ordinary zero-anomaly path.
     require(not diagnostics_claimed or diagnostics_ok,
             'Post-release diagnostics financial audit is missing or failed')
+    maintenance_claimed = any(gate.get('policyId') == HISTORY_MAINTENANCE_POLICY_ID
+                              for gate in (before, after))
+    maintenance_ok = manifest.get('previousCommit') == HISTORY_MAINTENANCE_BASELINE
+    for stage, gate in (('before', before), ('after', after)):
+        summary = manifest.get('dataAudit' + stage.title(), {})
+        # Canonical equality also rejects extra fields and bool/number substitutions.
+        maintenance_ok = maintenance_ok and (
+            type(summary.get('checkCount')) is int and summary['checkCount'] == 48
+            and type(summary.get('violationCount')) is int and summary['violationCount'] == 6
+            and json.dumps(gate, sort_keys=True, separators=(',', ':'))
+                == json.dumps({**MAINTENANCE_EXPECTED_GATE, 'stage': stage},
+                              sort_keys=True, separators=(',', ':'))
+        )
+    require(not maintenance_claimed or maintenance_ok,
+            'Post-release maintenance financial audit is missing or failed')
     require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0
-            or historical_ok or continuation_ok or diagnostics_ok,
+            or historical_ok or continuation_ok or diagnostics_ok or maintenance_ok,
             'Post-release financial audit is missing or failed')
 
 

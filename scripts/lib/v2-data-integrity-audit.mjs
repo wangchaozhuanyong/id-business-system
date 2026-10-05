@@ -1330,9 +1330,10 @@ export function assertV2AuditConnectionReadOnly(grantRows) {
   for (const grant of grants) {
     if (/^GRANT\s+USAGE\s+ON\s+/i.test(grant)) continue;
     if (
-      /^GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+.+\.`?idv2_integrity_trigger_exists`?\s+TO\s+/i.test(
+      /^GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+(?:`[A-Za-z0-9_]+`|"[A-Za-z0-9_]+"|[A-Za-z0-9_]+)\.(?:`idv2_integrity_trigger_exists`|"idv2_integrity_trigger_exists"|idv2_integrity_trigger_exists)\s+TO\s+[^;\r\n]+$/i.test(
         grant
-      )
+      ) &&
+      !/\bWITH\s+GRANT\s+OPTION\b/i.test(grant)
     ) {
       continue;
     }

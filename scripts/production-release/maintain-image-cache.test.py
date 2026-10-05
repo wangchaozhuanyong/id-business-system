@@ -511,5 +511,147 @@ class HistoricalDiagnosticsRetentionTests(unittest.TestCase):
         cache.verify_deployment(HistoricalContinuationRetentionTests().manifest(), 'github-actions-123-1')
 
 
+class HistoricalMaintenanceRetentionTests(unittest.TestCase):
+    def manifest(self):
+        policy = json.loads((DIRECTORY.parent.parent /
+            'deploy/aws/historical-finance-20261005-maintenance-continuation.json').read_text())
+        gate = {
+            'accepted': True, 'status': 'APPROVED_MAINTENANCE_SUBSET',
+            'policyId': policy['id'], 'expectedCurrent': policy['expectedCurrent'],
+            'fixedCurrent': policy['expectedCurrent'], 'checkCount': 48,
+            'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6,
+            'databaseName': policy['databaseName'], 'policySha256': cache.plan_digest(policy),
+            'rulesSha256': policy['rulesSha256'], 'schemaSha256': policy['schemaSha256'],
+            'entitySetSha256': policy['candidateEntitySetSha256'],
+            'closureItemsSha256': cache.plan_digest(sorted(policy['items'],
+                key=lambda item: item['entitySha256'])),
+            'receiptSetSha256': cache.plan_digest(policy['receiptSha256']),
+            'sourceSha256': cache.plan_digest(policy['candidateSourceSha256'])
+        }
+        return {'deploymentRun': 'github-actions-123-1', 'previousCommit': policy['expectedCurrent'],
+            **{'dataAudit' + stage.title(): {'checkCount': 48, 'violationCount': 6,
+                'historicalException': {**gate, 'stage': stage}} for stage in ('before', 'after')}}
+
+    def test_fourth_entry_matches_tracked_policy_and_both_complete_six_fact_receipts(self):
+        manifest = self.manifest()
+        self.assertEqual(manifest['dataAuditAfter']['historicalException']['policySha256'],
+            '2103ab9a701fca15af406284874ef70d91004d6b2ac5cdd92fa91a8403399135')
+        cache.verify_deployment(manifest, 'github-actions-123-1')
+        with self.assertRaisesRegex(RuntimeError, 'successful release'):
+            cache.verify_deployment(manifest, 'github-actions-124-1')
+
+    def test_each_fixed_gate_field_missing_changed_or_extra_prevents_cleanup(self):
+        import copy
+        for stage in ('before', 'after'):
+            name = 'dataAudit' + stage.title()
+            for field, value in self.manifest()[name]['historicalException'].items():
+                for missing in (True, False):
+                    manifest = self.manifest()
+                    gate = manifest[name]['historicalException']
+                    if missing:
+                        del gate[field]
+                    else:
+                        gate[field] = False if isinstance(value, bool) else (
+                            value + 1 if isinstance(value, int) else 'changed')
+                    # The other stage still claims this entry, even when policyId is removed.
+                    with self.subTest(stage=stage, field=field, missing=missing), \
+                            self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                        cache.verify_deployment(manifest, 'github-actions-123-1')
+            manifest = copy.deepcopy(self.manifest())
+            manifest[name]['historicalException']['rawRows'] = ['unexpected']
+            with self.subTest(stage=stage, extra=True), self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_hashes_changed_identically_on_both_stages_are_not_self_approved(self):
+        for field in ('policySha256', 'rulesSha256', 'schemaSha256', 'entitySetSha256',
+                      'closureItemsSha256', 'receiptSetSha256', 'sourceSha256'):
+            manifest = self.manifest()
+            for stage in ('Before', 'After'):
+                manifest['dataAudit' + stage]['historicalException'][field] = 'f' * 64
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_summary_counts_and_exact_primitive_types_are_required(self):
+        for stage in ('Before', 'After'):
+            for field, values in (('checkCount', (47, 49, 48.0, '48')),
+                                  ('violationCount', (0, 5, 7, 10, 6.0, '6'))):
+                for value in values:
+                    manifest = self.manifest(); manifest['dataAudit' + stage][field] = value
+                    with self.subTest(stage=stage, field=field, value=value), \
+                            self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                        cache.verify_deployment(manifest, 'github-actions-123-1')
+            for field, value in (('accepted', 1), ('checkCount', 48.0), ('violationCount', 6.0),
+                                 ('unavailableCheckCount', False)):
+                manifest = self.manifest()
+                manifest['dataAudit' + stage]['historicalException'][field] = value
+                with self.subTest(stage=stage, gateField=field), \
+                        self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                    cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_missing_stage_receipt_or_summary_is_rejected(self):
+        for stage in ('Before', 'After'):
+            for target in ('summary', 'gate'):
+                manifest = self.manifest()
+                if target == 'summary':
+                    del manifest['dataAudit' + stage]
+                else:
+                    del manifest['dataAudit' + stage]['historicalException']
+                with self.subTest(stage=stage, target=target), \
+                        self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                    cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_new_claim_cannot_fall_through_zero_or_a_different_old_entry(self):
+        old_ids = ('historical-finance-20261005', cache.HISTORY_CONTINUATION_POLICY_ID,
+                   cache.HISTORY_DIAGNOSTICS_POLICY_ID)
+        for stage in ('Before', 'After'):
+            for policy_id in old_ids:
+                manifest = self.manifest()
+                manifest['dataAudit' + stage]['historicalException']['policyId'] = policy_id
+                manifest['dataAuditAfter']['violationCount'] = 0
+                with self.subTest(stage=stage, policy=policy_id), \
+                        self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                    cache.verify_deployment(manifest, 'github-actions-123-1')
+        manifest = self.manifest(); manifest['previousCommit'] = 'f' * 40
+        manifest['dataAuditAfter']['violationCount'] = 0
+        with self.assertRaisesRegex(RuntimeError, 'financial audit'):
+            cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_normal_zero_and_all_three_old_entries_keep_their_behavior(self):
+        cache.verify_deployment({'previousCommit': '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
+            'deploymentRun': 'github-actions-123-1', 'dataAuditBefore': {'checkCount': 48, 'violationCount': 0},
+            'dataAuditAfter': {'checkCount': 48, 'violationCount': 0}}, 'github-actions-123-1')
+        cache.verify_deployment(HistoricalReceiptRetentionTests().manifest(), 'github-actions-123-1')
+        cache.verify_deployment(HistoricalContinuationRetentionTests().manifest(), 'github-actions-123-1')
+        diagnostics = HistoricalDiagnosticsRetentionTests()
+        diagnostics.verify(diagnostics.manifest())
+
+    def test_invalid_new_receipt_stops_automatic_cleanup_before_plan_file_or_delete(self):
+        retention = RetentionTests(); retention.setUp()
+        manifest = self.manifest(); manifest['dataAuditAfter']['historicalException']['sourceSha256'] = 'f' * 64
+        args = SimpleNamespace(expected_current=retention.expected, apply=True,
+            approved_policy=cache.POLICY, deployment_run='github-actions-123-1')
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(cache, 'BASE', Path(root)), \
+                patch.object(cache, 'current', return_value=(manifest, retention.previous)), \
+                patch.object(cache, 'active_images', return_value=set()), \
+                patch.object(cache, 'read', return_value=''), \
+                patch.object(cache, 'make_plan', return_value=retention.plan), \
+                patch.object(cache, 'apply_plan') as apply, \
+                patch.object(cache, 'verify_remote') as remote, \
+                patch.object(cache.shutil, 'disk_usage', return_value=SimpleNamespace(free=100)):
+            with self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                cache.maintain(args)
+            apply.assert_not_called(); remote.assert_not_called()
+            self.assertFalse((Path(root) / 'maintenance').exists())
+
+    def test_valid_new_receipt_allows_existing_automatic_plan_and_cleanup_flow(self):
+        retention = RetentionTests(); retention.setUp()
+        retention.manifest = self.manifest()
+        result, calls = retention.invoke(['--apply', '--approved-policy', cache.POLICY,
+            '--deployment-run', 'github-actions-123-1'])
+        self.assertEqual(result['mode'], 'APPLIED')
+        self.assertEqual(calls, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

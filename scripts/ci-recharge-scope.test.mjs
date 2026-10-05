@@ -511,3 +511,30 @@ test('recharge diagnostics adds only its exact reviewed historical policy path',
     assert.equal(checkMode([...candidate, unreviewed], schema, schema), 'full', unreviewed);
   }
 });
+
+test('maintenance continuation control is exact and preserves full compatibility checks', () => {
+  const policy = 'deploy/aws/historical-finance-20261005-maintenance-continuation.json';
+  for (const path of [
+    policy,
+    'scripts/lib/v2-release-maintenance-policy.mjs',
+    'scripts/v2-release-maintenance-audit.mjs',
+    'scripts/v2-release-maintenance-policy.test.mjs'
+  ]) {
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts([path]), ['guards']);
+  }
+  for (const path of [
+    policy + '.backup',
+    'scripts/lib/v2-release-maintenance-policy-other.mjs',
+    'scripts/v2-release-maintenance-audit-other.mjs',
+    'scripts/v2-release-maintenance-policy-other.test.mjs',
+    'deploy/aws/historical-finance-20261005-maintenance-continuation-other.json',
+    'scripts/lib/v2-data-integrity-audit.mjs',
+    'scripts/v2-data-integrity-audit.test.mjs',
+    'scripts/backup-aws-mysql.sh',
+    'scripts/aws-mysql-backup.test.mjs'
+  ]) {
+    assert.equal(isCiOnly([path]), false, path);
+    assert.equal(checkMode([policy, path], schema, schema), 'full', path);
+  }
+});

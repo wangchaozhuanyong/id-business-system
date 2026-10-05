@@ -33,6 +33,8 @@ if (part === 'guards') {
   ]);
   if (changed.some((path) => historicalReleaseControlPaths.includes(path)))
     run('node', ['--test', 'scripts/v2-release-history-policy.test.mjs']);
+  if (changed.some((path) => historicalReleaseControlPaths.includes(path)))
+    run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/maintain-image-cache')))
