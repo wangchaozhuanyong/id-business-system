@@ -540,7 +540,19 @@ class HistoricalAuditTests(unittest.TestCase):
         self.assertEqual(result['violationCount'], 10)
         self.assertIn('scripts/v2-release-history-audit.mjs', command)
         self.assertIn('--stage=after', command)
-        self.assertIn('--before-receipt=/release-policy/before-audit.json', command)
+        self.assertIn('--before-receipt=/release-before-audit.json', command)
+
+    def test_before_receipt_mount_does_not_require_creation_inside_read_only_policy(self):
+        _result, command = self.audit(self.report())
+        mounts = [command[index + 1] for index, value in enumerate(command) if value == '-v']
+        self.assertEqual(len(mounts), 3)
+        self.assertTrue(all(mount.endswith(':ro') for mount in mounts))
+        targets = [mount.rsplit(':', 2)[1] for mount in mounts]
+        self.assertEqual(targets, ['/app/scripts', '/release-policy', '/release-before-audit.json'])
+        receipt_target = targets[-1]
+        self.assertTrue(mounts[-1].endswith('/before.json:' + receipt_target + ':ro'))
+        self.assertFalse(any(receipt_target.startswith(target + '/') for target in targets[:-1]))
+        self.assertIn('--before-receipt=' + receipt_target, command)
 
     def test_changed_report_count_stage_schema_baseline_or_policy_is_rejected(self):
         mutations = [lambda x: x.update(violationCount=11),

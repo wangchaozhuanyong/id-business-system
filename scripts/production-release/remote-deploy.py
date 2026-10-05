@@ -234,8 +234,9 @@ def audit(directory, receipt, *, historical_exception=False, stage=None,
                       f'--stage={stage}']
         if stage == 'after':
             require(before_receipt is not None, 'Historical before audit missing')
-            mounts.extend(['-v', f'{before_receipt}:/release-policy/before-audit.json:ro'])
-            audit_args.append('--before-receipt=/release-policy/before-audit.json')
+            # A missing child mountpoint cannot be created inside the read-only policy bind.
+            mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
+            audit_args.append('--before-receipt=/release-before-audit.json')
     output = compose(
         directory, 'run', '--rm', '--no-deps',
         *mounts,
