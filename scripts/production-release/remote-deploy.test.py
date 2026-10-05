@@ -2,6 +2,7 @@ import importlib.util
 import ast
 import base64
 import gzip
+import lzma
 from pathlib import Path
 import unittest
 import tempfile
@@ -1963,7 +1964,7 @@ class ReadOnlyFixedIsolationDiagnosticTests(unittest.TestCase):
                 for target in node.targets))
         payload = next(ast.literal_eval(node.args[0]) for node in ast.walk(ast.parse(decoder))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'b64decode')
-        decoded = gzip.decompress(base64.b64decode(payload, validate=True))
+        decoded = lzma.decompress(base64.b64decode(payload, validate=True))
         self.assertEqual(decoded, program.encode('utf-8'))
         self.assertEqual(parameters['executionTimeout'], ['120'])
         self.assertLessEqual(len(json.dumps(parameters).encode('utf-8')), 20 * 1024)
@@ -2007,7 +2008,7 @@ class ReadOnlyFixedIsolationDiagnosticTests(unittest.TestCase):
         namespace = {}
         nodes = [node for node in ast.parse(builder).body if not isinstance(node, ast.ImportFrom)]
         output = io.StringIO()
-        with patch.object(gzip, 'compress', return_value=b'x' * (20 * 1024)), redirect_stdout(output):
+        with patch.object(lzma, 'compress', return_value=b'x' * (20 * 1024)), redirect_stdout(output):
             with self.assertRaisesRegex(SystemExit, '^Read-only command exceeds transfer bound$'):
                 exec(compile(ast.Module(body=nodes, type_ignores=[]), '<oversized-readonly-builder>', 'exec'),
                     {'Path': fixture_path, **namespace})
@@ -3380,6 +3381,14 @@ class MaintenanceContinuationTests(unittest.TestCase):
             archive.addfile(item, io.BytesIO(b'unchanged baseline source'))
         return release, policy, contents, baseline.getvalue()
 
+    def test_historical_tar_fixture_does_not_read_later_changed_candidate_files(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, \
+                patch.object(Path, 'read_bytes', side_effect=AssertionError('Current candidate bytes must not be reused')):
+            _release, policy, contents, _baseline = self.github_mode_fixture(Path(name))
+        self.assertEqual(set(contents), set(policy['candidateSourceSha256']))
+        self.assertTrue(all(deployment.hashlib.sha256(data).hexdigest() == policy['candidateSourceSha256'][path]
+            for path, data in contents.items()))
+
     def test_github_modes_normalize_only_eleven_fixed_hashes_then_archive_guard_passes(self):
         for github_modes in (False, True):
             with self.subTest(github_modes=github_modes), tempfile.TemporaryDirectory(dir=self.runtime) as name:
@@ -3654,8 +3663,11 @@ class ReadOnlyMaintenanceReadbackTests(unittest.TestCase):
                 'checks': [{'privateFixture': 'SENTINEL_PRIVATE_ROW'}]}
         self.manifest = {key: copy.deepcopy(self.raw[key]) for key in ('sourceTree', 'previousCommit',
             'deploymentRun', 'servicesUpdated', 'newMigrations', 'migrationApplied', 'dataAuditBefore', 'dataAuditAfter')}
-        self.manifest.update(commit=self.raw['currentCommit'], images={service: {'digest': state['image'],
-            'reference': 'SENTINEL_PRIVATE_REFERENCE'} for service, state in self.states.items()},
+        self.manifest.update(commit=self.raw['currentCommit'], imageBuildRun=self.raw['deploymentRun'],
+            images={service: {'digest': state['image'], 'sourceCommit': self.raw['currentCommit'],
+                'reference': '000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:'
+                    + self.raw['currentCommit'] + '-37302661631-1-' + ('auto-recharge' if service == 'auto-registration' else service)}
+                for service, state in {**self.states, 'migrate': {'image': 'sha256:' + '6' * 64}}.items()},
             privateFixture='SENTINEL_PRIVATE_MANIFEST')
         self.closed = self.namespace['closed_current_maintenance_readback'](self.raw, False)
 
@@ -3760,6 +3772,8 @@ class ReadOnlyMaintenanceReadbackTests(unittest.TestCase):
                 if mode != 'rb':
                     raise AssertionError('Read-only source mode changed')
                 return io.BytesIO(files[self.name])
+            def lstat(self):
+                raise FileNotFoundError()
             def __str__(self):
                 return '/synthetic-fixed-readonly-path/' + self.name
         calls = []
@@ -3786,7 +3800,10 @@ class ReadOnlyMaintenanceReadbackTests(unittest.TestCase):
         code, output, calls = self.run_actual_embedded_producer(self.private_bytes())
         self.assertEqual(code, 0)
         self.assertEqual(len(calls), 10)
-        self.assertEqual(self.namespace['readonly_maintenance_receipts'](output, True), [self.lock, self.closed])
+        receipts = self.namespace['readonly_maintenance_baseline_receipts'](output, True)
+        self.assertEqual(receipts[:2], [self.lock, self.closed])
+        self.assertFalse(receipts[2]['fixedMaintenanceBaselineProof']['proofComplete'])
+        self.assertEqual(receipts[2]['fixedMaintenanceBaselineProof']['runtimeCompose']['fileStatus'], 'MISSING')
         self.assertNotIn('SENTINEL', output)
         self.assertNotIn('databaseName', output)
         self.assertEqual(self.namespace['readonly_maintenance_receipts'](output, False), [self.lock])
@@ -3921,6 +3938,191 @@ class MailboxApprovalTests(unittest.TestCase):
                     'ok': False, 'checkCount': 48, 'violationCount': 6})):
             with self.assertRaisesRegex(RuntimeError, 'Financial data integrity audit failed'):
                 deployment.audit(Path('.'), Path('not-written.json'))
+
+
+class ReadOnlyMaintenanceBaselineProofTests(unittest.TestCase):
+    private_bytes = ReadOnlyMaintenanceReadbackTests.private_bytes
+    wire = ReadOnlyMaintenanceReadbackTests.wire
+
+    @classmethod
+    def setUpClass(cls):
+        ReadOnlyMaintenanceReadbackTests.setUpClass()
+        cls.namespace = ReadOnlyMaintenanceReadbackTests.namespace
+
+    def setUp(self):
+        ReadOnlyMaintenanceReadbackTests.setUp(self)
+        self.directory = self.root / 'current'; self.directory.mkdir()
+        self.files = self.private_bytes()
+        for name, data in self.files.items():
+            (self.directory / name).write_bytes(data); (self.directory / name).chmod(0o600)
+        project = Path(__file__).resolve().parents[2]
+        self.compose = self.directory / 'docker-compose.aws-mysql.yml'
+        self.compose.write_bytes((project / 'docker-compose.aws-mysql.yml').read_bytes()); self.compose.chmod(0o664)
+        self.override = {'services': {service: {'image': self.manifest['images'][service]['reference'], 'pull_policy': 'never'}
+            for service in (*self.namespace['PROOF_SERVICES'], 'migrate')}}
+        self.override_path = self.directory / 'compose.release.json'
+        self.write_override()
+
+    def write_override(self):
+        self.override_path.write_text(json.dumps(self.override, indent=2) + '\n'); self.override_path.chmod(0o600)
+
+    def proof(self, inspected=None):
+        inspected = inspected or SimpleNamespace(returncode=0,
+            stdout=self.manifest['images']['auto-registration']['reference'] + '\n', stderr='SENTINEL_PRIVATE_STDERR')
+        with patch.object(deployment.subprocess, 'run', return_value=inspected) as command:
+            result = self.namespace['maintenance_baseline_proof'](self.directory, self.manifest, self.states, 'a' * 64)
+        if result['proofComplete']:
+            self.assertEqual(command.call_args.args[0], ('docker', 'inspect', '--format', '{{.Config.Image}}', 'a' * 64))
+        self.assertNotIn('SENTINEL', json.dumps(result))
+        self.assertNotIn('databaseName', json.dumps(result))
+        return result
+
+    def test_actual_safe_private_hashes_public_compose_source_and_exact_six_reference_shape(self):
+        result = self.proof()
+        self.assertTrue(result['proofComplete'])
+        self.assertEqual(result['privateReceipts'], {key: deployment.hashlib.sha256(self.files[name]).hexdigest()
+            for key, name in {'manifest': 'release-manifest.json', 'before': 'before-audit.json', 'after': 'after-audit.json'}.items()})
+        self.assertEqual(result['runtimeCompose'], {'fileStatus': 'READABLE',
+            'sha256': deployment.hashlib.sha256(self.compose.read_bytes()).hexdigest(), 'sourceMatched': True,
+            'registrationDeclared': True})
+        self.assertEqual(result['override']['rawSha256'], deployment.hashlib.sha256(self.override_path.read_bytes()).hexdigest())
+        self.assertEqual(result['override']['canonicalSha256'], self.namespace['proof_fingerprint'](self.override))
+        self.assertEqual(self.namespace['closed_maintenance_baseline_proof'](result), result)
+        self.assertFalse(self.proof(SimpleNamespace(returncode=0, stdout='SENTINEL_PRIVATE_WRONG_REFERENCE', stderr=''))['proofComplete'])
+        self.assertFalse(self.proof(SimpleNamespace(returncode=1, stdout='', stderr='SENTINEL_PRIVATE_ERROR'))['proofComplete'])
+
+    def test_config_link_mode_bounds_unknown_fields_and_source_changes_never_become_complete(self):
+        original = self.override_path.read_bytes()
+        for status in ('MISSING', 'SYMLINK', 'NOT_REGULAR', 'HARDLINK', 'UNSAFE_MODE', 'OVERSIZED'):
+            with self.subTest(status=status):
+                self.override_path.unlink()
+                other = self.directory / 'synthetic-other'
+                if status == 'SYMLINK':
+                    other.write_bytes(original); self.override_path.symlink_to(other)
+                elif status == 'NOT_REGULAR':
+                    self.override_path.mkdir()
+                elif status != 'MISSING':
+                    self.override_path.write_bytes(original); self.override_path.chmod(0o666 if status == 'UNSAFE_MODE' else 0o600)
+                    if status == 'HARDLINK':
+                        deployment.os.link(self.override_path, other)
+                    elif status == 'OVERSIZED':
+                        with self.override_path.open('r+b') as source:
+                            source.truncate(8 * 1024 * 1024 + 1)
+                result = self.proof()
+                self.assertFalse(result['proofComplete'])
+                self.assertEqual(result['override']['fileStatus'], status)
+                self.assertIsNone(result['override']['rawSha256'])
+                if status == 'NOT_REGULAR': self.override_path.rmdir()
+                elif self.override_path.exists() or self.override_path.is_symlink(): self.override_path.unlink()
+                if other.exists(): other.unlink()
+                self.write_override()
+        self.override['services']['auto-registration']['environment'] = {'SENTINEL_PRIVATE_KEY': 'SENTINEL_PRIVATE_VALUE'}
+        self.write_override(); result = self.proof()
+        self.assertFalse(result['override']['shapeMatched']); self.assertFalse(result['proofComplete'])
+        self.override_path.write_text('{"services":{},"services":{}}')
+        result = self.proof(); self.assertFalse(result['proofComplete']); self.assertIsNone(result['override']['canonicalSha256'])
+        self.compose.write_bytes(b'SENTINEL_PRIVATE_SOURCE_CHANGED\n')
+        result = self.proof(); self.assertFalse(result['runtimeCompose']['sourceMatched']); self.assertFalse(result['proofComplete'])
+
+    def test_private_permissions_symlink_and_image_provenance_digest_reject_without_raw_errors(self):
+        path = self.directory / 'before-audit.json'; path.chmod(0o644)
+        with self.assertRaisesRegex(RuntimeError, '^Read-only fixed release proof unavailable$'):
+            self.proof()
+        path.chmod(0o600)
+        raw = path.read_bytes(); path.unlink(); other = self.directory / 'synthetic-private'; other.write_bytes(raw)
+        path.symlink_to(other)
+        with self.assertRaises(OSError):
+            self.proof()
+        path.unlink(); path.write_bytes(raw); path.chmod(0o600)
+        for field, value in (('sourceCommit', '0' * 40), ('reference', 'SENTINEL_PRIVATE_UNTRUSTED_REFERENCE')):
+            original = self.manifest['images']['auto-registration'][field]
+            self.manifest['images']['auto-registration'][field] = value
+            (self.directory / 'release-manifest.json').write_bytes(self.private_bytes()['release-manifest.json'])
+            with self.assertRaises(ValueError): self.proof()
+            self.manifest['images']['auto-registration'][field] = original
+        (self.directory / 'release-manifest.json').write_bytes(self.private_bytes()['release-manifest.json'])
+        wrong = copy.deepcopy(self.states); wrong['api']['image'] = 'sha256:' + 'g' * 64
+        with self.assertRaises(ValueError):
+            self.namespace['maintenance_baseline_proof'](self.directory, self.manifest, wrong, 'a' * 64)
+
+    def test_closed_side_and_generated_lzma_wire_reject_private_extra_duplicate_nan_and_forged_complete(self):
+        proof = self.proof()
+        bad_values = []
+        for key, wrong in (('currentCommit', '0' * 40), ('receiptsMatched', 1), ('proofComplete', 1),
+                ('registrationReferenceMatched', 1)):
+            bad = copy.deepcopy(proof); bad[key] = wrong; bad_values.append(bad)
+        bad = copy.deepcopy(proof); bad['privateReceipts']['manifest'] = 'g' * 64; bad_values.append(bad)
+        bad = copy.deepcopy(proof); bad['runtimeCompose']['sourceMatched'] = 1; bad_values.append(bad)
+        bad = copy.deepcopy(proof); bad['override']['shapeMatched'] = 1; bad_values.append(bad)
+        bad = copy.deepcopy(proof); bad['override']['fileStatus'] = 'SYMLINK'; bad_values.append(bad)
+        bad = copy.deepcopy(proof); bad['registrationReferenceMatched'] = False; bad_values.append(bad)
+        bad = copy.deepcopy(proof); bad['SENTINEL_PRIVATE_EXTRA'] = 'SENTINEL_PRIVATE_VALUE'; bad_values.append(bad)
+        for bad in bad_values:
+            with self.assertRaises(ValueError): self.namespace['closed_maintenance_baseline_proof'](bad)
+        builder, parameters, decoder, filter_path = ReadOnlyFixedIsolationDiagnosticTests.generated_readonly_command(self)
+        program = next(ast.literal_eval(node.value) for node in ast.parse(builder).body
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'program' for target in node.targets))
+        payload = next(ast.literal_eval(node.args[0]) for node in ast.walk(ast.parse(decoder))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'b64decode')
+        self.assertEqual(lzma.decompress(base64.b64decode(payload, validate=True)), program.encode())
+        self.assertLessEqual(len(json.dumps(parameters).encode()), 20 * 1024)
+        def filtered(side, succeeded=True):
+            return deployment.subprocess.run([deployment.sys.executable, str(filter_path), '0' if succeeded else '1'],
+                input=self.wire(self.closed) + side + '\n', capture_output=True, text=True, timeout=30)
+        side = json.dumps({'fixedMaintenanceBaselineProof': proof})
+        result = filtered(side)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([json.loads(line) for line in result.stdout.splitlines()],
+            [self.lock, self.closed, {'fixedMaintenanceBaselineProof': proof}])
+        for bad in bad_values:
+            result = filtered(json.dumps({'fixedMaintenanceBaselineProof': bad}))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [self.lock])
+            self.assertNotIn('SENTINEL', result.stdout + result.stderr)
+        for malformed in (side.replace('"proofComplete": true', '"proofComplete": NaN'),
+                side.replace('"receiptsMatched": true', '"receiptsMatched": true,"receiptsMatched":true'),
+                '{"SENTINEL_PRIVATE_UNKNOWN":true}'):
+            result = filtered(malformed); self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('SENTINEL', result.stdout + result.stderr)
+        result = filtered(side, False)
+        self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [self.lock])
+
+    def test_actual_generated_lzma_producer_and_filter_emit_only_valid_b8_side_with_fixed_read_commands(self):
+        _builder, _parameters, decoder, filter_path = ReadOnlyFixedIsolationDiagnosticTests.generated_readonly_command(self)
+        real_path = Path
+        def fixture_path(value):
+            if value == '/opt/id-business-v2': return self.root
+            if value == '/opt/id-business-v2/.deploy.lock': return self.root / 'synthetic-missing-lock'
+            if value == '/proc': return self.root / 'synthetic-proc'
+            return real_path(value)
+        containers = {service: str(index + 1) * 64 for index, service in enumerate(self.states)}
+        calls = []
+        def command(args, **_kwargs):
+            calls.append(args)
+            if args[:2] == ('docker', 'compose') and args[-3:-1] == ('ps', '-q'):
+                text = containers[args[-1]]
+            elif args[:4] == ('docker', 'inspect', '--format', '{{.Config.Image}}'):
+                text = self.manifest['images']['auto-registration']['reference']
+            elif args[:3] == ('docker', 'inspect', '--format'):
+                service = next(key for key, container in containers.items() if container == args[-1])
+                text = ' '.join(self.states[service][key] for key in ('image', 'status', 'health'))
+            else:
+                raise AssertionError('Unexpected read-only command')
+            return SimpleNamespace(returncode=0, stdout=text + '\n', stderr='SENTINEL_PRIVATE_STDERR')
+        output = io.StringIO()
+        with patch('pathlib.Path', side_effect=fixture_path), patch.object(deployment.subprocess, 'run', side_effect=command), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(compile(decoder, '<generated-lzma-decoder>', 'exec'), {})
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertEqual(len(calls), 11)
+        rows = self.namespace['readonly_maintenance_baseline_receipts'](output.getvalue(), True)
+        self.assertEqual(rows[:2], [self.lock, self.closed])
+        self.assertTrue(rows[2]['fixedMaintenanceBaselineProof']['proofComplete'])
+        self.assertNotIn('SENTINEL', output.getvalue()); self.assertNotIn('databaseName', output.getvalue())
+        result = deployment.subprocess.run([deployment.sys.executable, str(filter_path), '0'],
+            input=output.getvalue(), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], rows)
 
 
 if __name__ == '__main__':
