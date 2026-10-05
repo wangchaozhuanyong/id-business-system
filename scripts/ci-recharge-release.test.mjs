@@ -444,7 +444,7 @@ test('changed recharge mail bridge is exercised by the API CI command', () => {
       mode: 0o755
     });
     execFileSync(process.execPath, ['scripts/ci-recharge-check.mjs', 'api', 'a'.repeat(40)], {
-      env: { ...env, TASK_NPM_LOG: log }
+      env: { ...env, CHECK_MODE: 'recharge', TASK_NPM_LOG: log }
     });
     const command = readFileSync(log, 'utf8')
       .split('\n')

@@ -166,7 +166,7 @@ export class IdBusinessV2VendureMailboxClient {
 
   batchCreateAliases(input: BatchCreateV2VendureMailboxAliasesInput) {
     return this.adminMutation<V2VendureMailboxBatchResult>(
-      `mutation IdBusinessBatchCreateAliases($input: BatchCreateVirtualEmailsInput!) {
+      `mutation IdBusinessBatchCreateAliases($input: BatchCreateIcloudVirtualEmailsInput!) {
         result: batchCreateIcloudVirtualEmails(input: $input) { createdCount skippedCount errors }
       }`,
       { input },

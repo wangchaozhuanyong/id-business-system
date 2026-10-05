@@ -132,6 +132,41 @@ describe('IdBusinessV2VendureMailboxClient', () => {
     expect(headers['vendure-api-key']).toBe('dedicated-mailbox-key');
   });
 
+  it('imports aliases using the upstream batch contract and preserves partial results', async () => {
+    const input = {
+      primaryAccountId: '1',
+      rawInput: 'new@example.com\nexisting@example.com\ninvalid',
+      codeResetIntervalDays: 30
+    };
+    const result = { createdCount: 1, skippedCount: 1, errors: ['第 3 行：邮箱格式无效'] };
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as {
+        query: string;
+        variables: { input: typeof input };
+      };
+      // Vendure rejects unknown input types before executing the batch resolver.
+      const inputType = body.query.match(/\$input:\s*(\w+)!/)?.[1];
+      if (inputType !== 'BatchCreateIcloudVirtualEmailsInput') {
+        return Response.json(
+          { errors: [{ extensions: { code: 'GRAPHQL_VALIDATION_FAILED' } }] },
+          { status: 400 }
+        );
+      }
+      expect(body.variables).toEqual({ input });
+      return Response.json({ data: { result } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new IdBusinessV2VendureMailboxClient(
+      new ConfigService({
+        VENDURE_MAILBOX_ADMIN_API_URL: 'https://vendure.example/admin-api',
+        VENDURE_MAILBOX_API_KEY: 'dedicated-mailbox-key'
+      })
+    );
+
+    await expect(client.batchCreateAliases(input)).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('returns a sanitized service error when Vendure exposes GraphQL details', async () => {
     vi.stubGlobal(
       'fetch',
