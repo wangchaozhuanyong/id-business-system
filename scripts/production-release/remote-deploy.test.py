@@ -1796,6 +1796,7 @@ class ReadOnlyFixedIsolationDiagnosticTests(unittest.TestCase):
 
     def setUp(self):
         output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=output)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
