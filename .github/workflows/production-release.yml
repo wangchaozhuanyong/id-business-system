@@ -275,6 +275,8 @@ jobs:
           mkdir -p .deploy/production-release
           python3 - <<'PY'
           import ast
+          import base64
+          import gzip
           import json
           from pathlib import Path
           import shlex
@@ -1158,7 +1160,12 @@ jobs:
               'containers': containers, 'images': images, 'services': states,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}, False), separators=(',', ':')))
           '''
-          parameters = {'commands': ['python3 -c ' + shlex.quote(program)], 'executionTimeout': ['120']}
+          payload = base64.b64encode(gzip.compress(program.encode('utf-8'), compresslevel=9, mtime=0)).decode('ascii')
+          decoder = ('import base64,gzip;exec(compile(gzip.decompress(base64.b64decode('
+              + repr(payload) + ',validate=True)),"<readonly-diagnostics>","exec"))')
+          parameters = {'commands': ['python3 -c ' + shlex.quote(decoder)], 'executionTimeout': ['120']}
+          if len(json.dumps(parameters).encode('utf-8')) > 20 * 1024:
+              raise SystemExit('Read-only command exceeds transfer bound')
           Path('.deploy/production-release/readonly-diagnostics.json').write_text(json.dumps(parameters))
           receivers = [node for node in ast.parse(program).body
               if isinstance(node, ast.FunctionDef) and node.name in
