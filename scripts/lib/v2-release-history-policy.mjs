@@ -10,7 +10,7 @@ const continuationPolicySha256 = '7407cc7c5676657b3f24b6e5649f1316cd3c64adb5aeb8
 export const HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostics';
 export const HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d';
 // Pinned to the independently verified successful 6a receipts and exact candidate.
-const diagnosticsPolicySha256 = 'a4bdc86d86661aed440921b148e9a95f1516370d3a5394af132e12954e31dd20';
+const diagnosticsPolicySha256 = '0682cb5ec0f95dabc49bcd3ba4d38384d1353ddfe275dd6dcf122f540d1dbcba';
 const historyPolicyIdentities = new Map([
   [HISTORY_POLICY_ID, { baseline: HISTORY_BASELINE, sha256: policySha256, continuation: false }],
   [
@@ -31,6 +31,13 @@ const diagnosticsCandidateSourceSha256 = Object.freeze({
     '9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a',
   'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
     '2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f',
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py':
+    '1734bacb68549f8dcc28a35426d659069b7aefc8070b110adb5c0bfd70c140a9',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py':
+    'ac459b9a00eaeb482efc54cc7eecf23fc003c993e6d5991ecf45034c5e1c0696',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py':
+    '1327c9fdd8e88807e8ba69bbd288c9b2e62edf015352250e2d54f8d4e9a69173',
+  'docs/V2_TASKS.md': 'f2eb5c6520c246b7585934935672af8f328415453286c08fca5e71c5aa8b7449',
   'scripts/ci-recharge-check.mjs':
     '86c143e33a862fc31610b68f013d32236447548c9ee238cf58a3393f088f53cc'
 });
@@ -102,7 +109,7 @@ export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
     policy.id === HISTORY_DIAGNOSTICS_POLICY_ID &&
     fingerprint(policy.candidateSourceSha256) !== fingerprint(diagnosticsCandidateSourceSha256)
   )
-    throw new Error('Historical diagnostics changed the approved three source files');
+    throw new Error('Historical diagnostics changed the approved seven source files');
   const codes = new Set(policy.exceptions.map((item) => item.code));
   if (codes.size !== 2 || [...codes].some((code) => !allowedRules.has(code)))
     throw new Error('Historical release exception scope changed');

@@ -1776,7 +1776,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             deployment.fixed_continuation('unknown')
 
-    def test_third_policy_keeps_original_rules_and_exact_three_candidate_files(self):
+    def test_third_policy_keeps_original_rules_and_exact_seven_candidate_files(self):
         with tempfile.TemporaryDirectory(dir='.deploy') as name:
             root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
             policy = self.policy()
@@ -1790,7 +1790,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(deployment.continuation_policy(root,
                     deployment.HISTORY_DIAGNOSTICS_POLICY_ID), policy)
             mutations = [lambda x: x.update(expectedCurrent='f' * 40),
-                lambda x: x['candidateSourceSha256'].update({'docs/V2_TASKS.md': 'f' * 64}),
+                lambda x: x['candidateSourceSha256'].update({'docs/unapproved-source.md': 'f' * 64}),
                 lambda x: x.update(extraUnapprovedRule=True),
                 lambda x: x['continuation'].update(continuationOf='other'),
                 lambda x: x['continuation']['manifest'].update(previousCommit=deployment.HISTORY_BASELINE)]
@@ -1802,6 +1802,107 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                         'DIAGNOSTICS_PROOF_SHA256', deployment.historical_fingerprint(changed['continuation'])), \
                         self.assertRaises(RuntimeError):
                     deployment.continuation_policy(root, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+
+    def test_seven_source_policy_rejects_each_new_wrong_hash_missing_or_extra_path(self):
+        project = Path(__file__).resolve().parents[2]
+        policy = deployment.continuation_policy(project, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+        added = (
+            'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+            'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py',
+            'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+            'docs/V2_TASKS.md',
+        )
+        self.assertEqual(len(policy['candidateSourceSha256']), 7)
+        self.assertEqual(len(deployment.DIAGNOSTICS_CONTROL_FILES), 13)
+        self.assertTrue(set(added) <= deployment.DIAGNOSTICS_CANDIDATE_FILES)
+        self.assertTrue(set(added).isdisjoint(deployment.DIAGNOSTICS_CONTROL_FILES))
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); target = root / 'deploy/aws' / (policy['id'] + '.json')
+            target.parent.mkdir(parents=True)
+            for filename in added:
+                for mutation in ('wrong-hash', 'missing', 'extra'):
+                    changed = copy.deepcopy(policy); candidates = changed['candidateSourceSha256']
+                    if mutation == 'wrong-hash':
+                        candidates[filename] = 'f' * 64
+                    elif mutation == 'missing':
+                        del candidates[filename]
+                    else:
+                        candidates[filename + '.extra'] = candidates[filename]
+                    target.write_text(json.dumps(changed))
+                    with self.subTest(filename=filename, mutation=mutation), self.assertRaises(RuntimeError):
+                        deployment.continuation_policy(root, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+
+    def test_each_new_candidate_rejects_wrong_hash_missing_extra_mode_and_symlink(self):
+        policy = self.policy()
+        added = (
+            'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+            'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py',
+            'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+            'docs/V2_TASKS.md',
+        )
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            directory = Path(name); root = directory / 'candidate'; root.mkdir()
+            for filename in policy['candidateSourceSha256']:
+                path = root / filename; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('synthetic-diagnostics:' + filename); path.chmod(0o644)
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w') as archive:
+                member = tarfile.TarInfo(f'id-business-system-{deployment.HISTORY_DIAGNOSTICS_BASELINE}/frozen.txt')
+                member.size = 6; member.mode = 0o644; archive.addfile(member, io.BytesIO(b'frozen'))
+            (root / 'frozen.txt').write_bytes(b'frozen'); (root / 'frozen.txt').chmod(0o644)
+            def verify():
+                with tarfile.open(fileobj=io.BytesIO(data.getvalue()), mode='r') as archive:
+                    deployment.verify_continuation_archive(root, archive, policy,
+                        deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+            verify()
+            for index, filename in enumerate(added):
+                path = root / filename; original = path.read_bytes()
+                extra = root / (filename + '.extra')
+                link_target = directory / ('private-link-target-' + str(index))
+                link_target.write_bytes(original); link_target.chmod(0o644)
+                for mutation in ('wrong-hash', 'missing', 'extra', 0o600, 0o444, 0o755, 'symlink'):
+                    if mutation == 'wrong-hash':
+                        path.write_bytes(b'unapproved')
+                    elif mutation == 'missing':
+                        path.unlink()
+                    elif mutation == 'extra':
+                        extra.write_bytes(original)
+                    elif mutation == 'symlink':
+                        path.unlink(); path.symlink_to(link_target.resolve())
+                    else:
+                        path.chmod(mutation)
+                    with self.subTest(filename=filename, mutation=mutation), self.assertRaises(RuntimeError):
+                        verify()
+                    if path.is_symlink():
+                        path.unlink()
+                    if path.exists():
+                        path.chmod(0o644)
+                    path.write_bytes(original); path.chmod(0o644)
+                    if extra.exists():
+                        extra.unlink()
+                    verify()
+
+    def test_actual_git_archives_freeze_every_other_path_hash_and_full_mode_at_6a(self):
+        project = Path(__file__).resolve().parents[2]
+        policy = deployment.continuation_policy(project, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+        excluded = deployment.DIAGNOSTICS_CANDIDATE_FILES | deployment.DIAGNOSTICS_CONTROL_FILES
+        self.assertEqual(len(excluded), 20)
+        def snapshot(revision):
+            result = deployment.subprocess.run(['git', '-c', 'tar.umask=0022', 'archive', '--format=tar', revision],
+                cwd=project, capture_output=True)
+            self.assertEqual(result.returncode, 0, 'Local Git archive unavailable')
+            with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r') as archive:
+                self.assertTrue(all(item.isfile() or item.isdir() for item in archive.getmembers()))
+                return {item.name: (deployment.hashlib.sha256(archive.extractfile(item).read()).hexdigest(),
+                                   item.mode & 0o7777)
+                        for item in archive.getmembers() if item.isfile()}
+        baseline = snapshot(deployment.HISTORY_DIAGNOSTICS_BASELINE); candidate = snapshot('HEAD')
+        self.assertTrue({key: value for key, value in baseline.items() if key not in excluded} ==
+                        {key: value for key, value in candidate.items() if key not in excluded},
+                        'Unapproved path, source hash or full mode changed outside seven candidates and thirteen controls')
+        for filename, digest in policy['candidateSourceSha256'].items():
+            with self.subTest(filename=filename):
+                self.assertEqual(candidate.get(filename), (digest, 0o644))
 
     def test_actual_6a_receipts_must_prove_the_previous_registration_gate_at_d0(self):
         with tempfile.TemporaryDirectory(dir='.deploy') as name:
@@ -1921,7 +2022,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'unrelated source'):
                 verify()
             extra.unlink()
-            policy['candidateSourceSha256']['docs/V2_TASKS.md'] = 'f' * 64
+            policy['candidateSourceSha256']['docs/unapproved-source.md'] = 'f' * 64
             with self.assertRaisesRegex(RuntimeError, 'candidate scope changed'):
                 verify()
 
