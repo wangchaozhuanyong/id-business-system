@@ -1,4 +1,5 @@
 import importlib.util
+import ast
 from pathlib import Path
 import unittest
 import tempfile
@@ -8,6 +9,7 @@ import tarfile
 import copy
 import re
 import sqlite3
+import textwrap
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
@@ -830,6 +832,168 @@ class HistoricalAuditTests(unittest.TestCase):
             report = self.report(); mutate(report)
             with self.subTest(report=report), self.assertRaisesRegex(RuntimeError, 'historical integrity gate failed'):
                 self.audit(report)
+
+class ReadOnlyReleaseProofTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        workflow = Path(__file__).resolve().parents[2] / '.github/workflows/production-release.yml'
+        step = workflow.read_text().split('      - name: Read production release diagnostics\n', 1)[1]
+        program = textwrap.dedent(step.split("program = r'''\n", 1)[1].split("\n          '''", 1)[0])
+        cls.program = ast.parse(program)
+        nodes = [node for node in cls.program.body if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))
+                 or (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                     and node.targets[0].id.startswith('PROOF_'))]
+        cls.namespace = {}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(workflow), 'exec'), cls.namespace)
+
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=output)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.proof = self.namespace['fixed_release_proof']
+        self.fingerprint = self.namespace['proof_fingerprint']
+        self.states = {service: {'image': 'sha256:' + 'a' * 64, 'status': 'running', 'health': 'healthy'}
+                       for service in self.namespace['PROOF_SERVICES']}
+        self.manifest = {'commit': self.namespace['PROOF_CURRENT'],
+            'previousCommit': self.namespace['PROOF_PREVIOUS'],
+            'sourceTree': 'a329e268cf7afcb9967789dcb998e0177cad5ddf',
+            'releaseTag': 'v2-production-20261005T050620Z',
+            'deploymentRun': 'github-actions-37265858979-1',
+            'imageBuildRun': 'github-actions-37265858979-1', 'ciWorkflowRunId': 37265801532,
+            'images': {service: {'digest': state['image']} for service, state in self.states.items()},
+            'privateFixture': 'SENTINEL_PRIVATE_TEXT'}
+        self.reports = {}
+        for stage in ('before', 'after'):
+            gate = {'accepted': True, 'policyId': 'historical-finance-20261005-registration-continuation',
+                'expectedCurrent': self.namespace['PROOF_PREVIOUS'], 'fixedCurrent': self.namespace['PROOF_PREVIOUS'],
+                'stage': stage, 'checkCount': 48, 'executedCheckCount': 48,
+                'unavailableCheckCount': 0, 'violationCount': 10,
+                'metadataSha256': 'b' * 64, 'sources': {'fixture': 'c' * 64},
+                'continuation': {'fixture': 'd' * 64}}
+            self.reports[stage] = {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': gate,
+                'checks': [{'code': 'fixture_' + str(index), 'status': 'EXECUTED',
+                            'count': 10 if index == 0 else 0} for index in range(48)],
+                'privateFixture': 'SENTINEL_PRIVATE_TEXT'}
+            self.manifest['dataAudit' + stage.title()] = {'checkCount': 48, 'violationCount': 10,
+                                                       'historicalException': copy.deepcopy(gate)}
+        original = self.namespace['PROOF_GATE_HASHES']
+        self.namespace['PROOF_GATE_HASHES'] = tuple((stage, self.fingerprint(report['gate']))
+                                                   for stage, report in self.reports.items())
+        self.addCleanup(self.namespace.__setitem__, 'PROOF_GATE_HASHES', original)
+        self.write_fixture()
+
+    def write_fixture(self):
+        for name, value in [('release-manifest.json', self.manifest),
+                            *[(stage + '-audit.json', report) for stage, report in self.reports.items()]]:
+            path = self.root / name
+            path.write_text(json.dumps(value, indent=2))
+            path.chmod(0o600)
+
+    def assert_rejected(self):
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, '^Read-only fixed release proof unavailable$') as error:
+            self.proof(self.root, self.manifest, self.states)
+        self.assertEqual(output.getvalue(), '')
+        self.assertNotIn('SENTINEL_PRIVATE_TEXT', str(error.exception))
+        self.assertTrue(error.exception.__suppress_context__)
+
+    def test_real_private_file_hashes_and_only_safe_compact_projection(self):
+        (self.root / 'before-audit.json').chmod(0o400)
+        result = self.proof(self.root, self.manifest, self.states)
+        for field, name in [('manifestSha256', 'release-manifest.json'),
+                            ('beforeReceiptSha256', 'before-audit.json'), ('afterReceiptSha256', 'after-audit.json')]:
+            self.assertEqual(result[field], deployment.hashlib.sha256((self.root / name).read_bytes()).hexdigest())
+        for stage in ('before', 'after'):
+            self.assertEqual(result[stage + 'GateSha256'], self.fingerprint(self.reports[stage]['gate']))
+        self.assertEqual(result['metadataSha256'], 'b' * 64)
+        self.assertEqual(result['sourcesSha256'], self.fingerprint({'fixture': 'c' * 64}))
+        self.assertEqual(result['continuationSha256'], self.fingerprint({'fixture': 'd' * 64}))
+        serialized = json.dumps(result, separators=(',', ':'))
+        self.assertNotIn('SENTINEL_PRIVATE_TEXT', serialized)
+        self.assertNotIn('privateFixture', serialized)
+        self.assertNotIn('fixture_0', serialized)
+        self.assertLess(len(serialized.encode()), 4000)
+        self.assertTrue(result['receiptsMatchManifest'] and result['sameManifest'] and result['runningImagesMatchManifest'])
+
+    def test_public_permissions_symlink_hardlink_missing_and_oversized_receipts_reject(self):
+        path = self.root / 'before-audit.json'
+        original = path.read_bytes()
+        for mode in (0o644, 0o660, 0o700):
+            path.chmod(mode); self.assert_rejected()
+        path.chmod(0o600)
+        extra = self.root / 'private-original.json'
+        extra.write_bytes(original); extra.chmod(0o600)
+        path.unlink(); path.symlink_to(extra.name); self.assert_rejected()
+        path.unlink(); deployment.os.link(extra, path); self.assert_rejected()
+        path.unlink(); self.assert_rejected()
+        path.write_bytes(b'x' * (8 * 1024 * 1024 + 1)); path.chmod(0o600); self.assert_rejected()
+
+    def test_malformed_private_text_and_unknown_gate_text_never_escape(self):
+        path = self.root / 'before-audit.json'
+        path.write_text('SENTINEL_PRIVATE_TEXT'); self.assert_rejected()
+        self.write_fixture()
+        self.reports['before']['gate']['unknown'] = 'SENTINEL_PRIVATE_TEXT'
+        self.manifest['dataAuditBefore']['historicalException'] = copy.deepcopy(self.reports['before']['gate'])
+        self.write_fixture(); self.assert_rejected()
+
+    def test_manifest_provenance_and_snapshot_mismatch_reject(self):
+        original = copy.deepcopy(self.manifest)
+        for field in ('commit', 'previousCommit', 'sourceTree', 'releaseTag',
+                      'deploymentRun', 'imageBuildRun', 'ciWorkflowRunId'):
+            with self.subTest(field=field):
+                self.manifest = copy.deepcopy(original)
+                self.manifest[field] = 'SENTINEL_PRIVATE_TEXT'
+                self.write_fixture(); self.assert_rejected()
+        self.manifest = copy.deepcopy(original); self.write_fixture()
+        disk = {**self.manifest, 'changed': True}
+        (self.root / 'release-manifest.json').write_text(json.dumps(disk))
+        self.assert_rejected()
+
+    def test_reports_must_match_manifest_and_all_48_checks_execute(self):
+        original = copy.deepcopy(self.reports)
+        mutations = [lambda report: report.update(ok=True), lambda report: report.update(violationCount=0),
+            lambda report: report['gate'].update(accepted=False),
+            lambda report: report['gate'].update(expectedCurrent='f' * 40),
+            lambda report: report['gate'].update(policyId='other'),
+            lambda report: report['checks'].pop(),
+            lambda report: report['checks'][0].update(status='SCHEMA_NOT_DEPLOYED'),
+            lambda report: report['checks'][0].update(count=True),
+            lambda report: report['checks'][0].update(count=11),
+            lambda report: report['checks'][0].update(code='fixture_1')]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                self.reports = copy.deepcopy(original); mutate(self.reports['before'])
+                self.write_fixture(); self.assert_rejected()
+
+    def test_each_current_service_digest_and_healthy_state_required(self):
+        for service in self.states:
+            for field, value in [('image', 'sha256:' + 'f' * 64), ('status', 'exited'), ('health', 'unhealthy')]:
+                with self.subTest(service=service, field=field):
+                    original = self.states[service][field]
+                    self.states[service][field] = value; self.assert_rejected()
+                    self.states[service][field] = original
+        self.states.pop('auto-registration'); self.assert_rejected()
+
+    def test_manifest_changed_during_proof_read_rejects(self):
+        original = self.namespace['proof_private_bytes']
+        count = 0
+        def changed(path):
+            nonlocal count
+            data = original(path)
+            count += 1
+            return data + b' ' if count == 4 else data
+        with patch.dict(self.namespace, {'proof_private_bytes': changed}):
+            self.assert_rejected()
+
+    def test_fixed_baseline_alone_selects_early_compact_output(self):
+        selector = next(node for node in self.program.body if isinstance(node, ast.If)
+                        and isinstance(node.test, ast.Compare))
+        test = compile(ast.Expression(selector.test), '<readonly-selector>', 'eval')
+        self.assertTrue(eval(test, {**self.namespace, 'manifest': self.manifest}))
+        self.assertFalse(eval(test, {**self.namespace, 'manifest': {'commit': 'f' * 40}}))
+        self.assertTrue(any(isinstance(node, ast.Raise) for node in selector.body))
 
 if __name__ == '__main__':
     unittest.main()

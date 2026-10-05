@@ -277,13 +277,138 @@ jobs:
           from pathlib import Path
           import shlex
           program = r'''
+          import hashlib
           import json
           import os
           from pathlib import Path
+          import re
           import shutil
+          import stat
           import subprocess
+          PROOF_CURRENT = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+          PROOF_PREVIOUS = 'd0f359dc78b2d2b166893bfec8545609f5baa16d'
+          PROOF_SERVICES = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')
+          PROOF_GATE_HASHES = (
+              ('before', '73f4bb876129fcb53a6ef7f31873db017b6df245372fcc2c222813018550adb6'),
+              ('after', '6b3d3445796b1dfc840b8e4c0b9d31c663269847181575f3913f0c7eafabe18a'))
+          def proof_fingerprint(value):
+              return hashlib.sha256(json.dumps(value, sort_keys=True,
+                  separators=(',', ':')).encode()).hexdigest()
+          def proof_private_bytes(path):
+              descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              with os.fdopen(descriptor, 'rb') as receipt:
+                  info = os.fstat(receipt.fileno())
+                  if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                          or stat.S_IMODE(info.st_mode) not in (0o400, 0o600)
+                          or info.st_size > 8 * 1024 * 1024):
+                      raise RuntimeError('Read-only fixed release proof unavailable')
+                  data = receipt.read(8 * 1024 * 1024 + 1)
+                  after = os.fstat(receipt.fileno())
+                  if (len(data) > 8 * 1024 * 1024
+                          or (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                          != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                      raise RuntimeError('Read-only fixed release proof unavailable')
+              return data
+          def fixed_release_proof(directory, observed_manifest, states):
+              try:
+                  raw = {name: proof_private_bytes(directory / name) for name in
+                      ('release-manifest.json', 'before-audit.json', 'after-audit.json')}
+                  manifest = json.loads(raw['release-manifest.json'])
+                  expected = {'commit': PROOF_CURRENT, 'previousCommit': PROOF_PREVIOUS,
+                      'sourceTree': 'a329e268cf7afcb9967789dcb998e0177cad5ddf',
+                      'releaseTag': 'v2-production-20261005T050620Z',
+                      'deploymentRun': 'github-actions-37265858979-1',
+                      'imageBuildRun': 'github-actions-37265858979-1',
+                      'ciWorkflowRunId': 37265801532}
+                  if (manifest != observed_manifest or any(manifest.get(key) != value
+                          for key, value in expected.items())
+                          or type(manifest.get('ciWorkflowRunId')) is not int):
+                      raise RuntimeError('Read-only fixed release proof unavailable')
+                  gates = {}
+                  for stage, gate_hash in PROOF_GATE_HASHES:
+                      report = json.loads(raw[stage + '-audit.json'])
+                      gate = report['gate']
+                      summary = manifest['dataAudit' + stage.title()]
+                      checks = report['checks']
+                      if (report.get('ok') is not False or report.get('checkCount') != 48
+                              or report.get('violationCount') != 10 or len(checks) != 48
+                              or any(check.get('status') != 'EXECUTED'
+                                  or type(check.get('count')) is not int or check['count'] < 0
+                                  for check in checks)
+                              or len({check['code'] for check in checks}) != 48
+                              or sum(check['count'] for check in checks) != 10
+                              or summary.get('checkCount') != 48 or summary.get('violationCount') != 10
+                              or summary.get('historicalException') != gate
+                              or proof_fingerprint(gate) != gate_hash
+                              or gate.get('accepted') is not True
+                              or gate.get('policyId') != 'historical-finance-20261005-registration-continuation'
+                              or gate.get('expectedCurrent') != PROOF_PREVIOUS
+                              or gate.get('fixedCurrent') != PROOF_PREVIOUS or gate.get('stage') != stage
+                              or gate.get('checkCount') != 48 or gate.get('executedCheckCount') != 48
+                              or gate.get('unavailableCheckCount') != 0 or gate.get('violationCount') != 10):
+                          raise RuntimeError('Read-only fixed release proof unavailable')
+                      gates[stage] = gate
+                  images = {}
+                  for service in PROOF_SERVICES:
+                      digest = manifest['images'][service]['digest']
+                      state = states[service]
+                      if (not re.fullmatch(r'sha256:[a-f0-9]{64}', digest)
+                              or state.get('image') != digest or state.get('status') != 'running'
+                              or state.get('health') != 'healthy'):
+                          raise RuntimeError('Read-only fixed release proof unavailable')
+                      images[service] = digest
+                  if proof_private_bytes(directory / 'release-manifest.json') != raw['release-manifest.json']:
+                      raise RuntimeError('Read-only fixed release proof unavailable')
+                  return {'manifest': expected, 'manifestSha256': hashlib.sha256(raw['release-manifest.json']).hexdigest(),
+                      'beforeReceiptSha256': hashlib.sha256(raw['before-audit.json']).hexdigest(),
+                      'afterReceiptSha256': hashlib.sha256(raw['after-audit.json']).hexdigest(),
+                      'beforeGateSha256': proof_fingerprint(gates['before']),
+                      'afterGateSha256': proof_fingerprint(gates['after']),
+                      'metadataSha256': gates['after']['metadataSha256'],
+                      'sourcesSha256': proof_fingerprint(gates['after']['sources']),
+                      'continuationSha256': proof_fingerprint(gates['after']['continuation']),
+                      'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0,
+                      'violationCount': 10, 'accepted': True, 'sameManifest': True,
+                      'receiptsMatchManifest': True, 'runningImagesMatchManifest': True,
+                      'images': images}
+              except Exception:
+                  raise RuntimeError('Read-only fixed release proof unavailable') from None
+          def read(*args):
+              result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+              if result.returncode:
+                  raise RuntimeError('Read-only Docker diagnostic failed')
+              return result.stdout.strip()
           base = Path('/opt/id-business-v2')
-          manifest = json.loads((base / 'current' / 'release-manifest.json').read_text())
+          try:
+              with (base / 'current' / 'release-manifest.json').open('rb') as source:
+                  manifest_bytes = source.read(8 * 1024 * 1024 + 1)
+              if len(manifest_bytes) > 8 * 1024 * 1024:
+                  raise ValueError()
+              manifest = json.loads(manifest_bytes)
+              if not isinstance(manifest, dict):
+                  raise ValueError()
+          except Exception:
+              raise SystemExit('Read-only manifest unavailable') from None
+          if manifest.get('commit') == PROOF_CURRENT:
+              try:
+                  states = {}
+                  for service in PROOF_SERVICES:
+                      container = read('docker', 'compose', '--env-file', str(base / 'current' / '.env.aws.production'),
+                          '-f', str(base / 'current' / 'docker-compose.aws-mysql.yml'),
+                          '-f', str(base / 'current' / 'compose.release.json'), 'ps', '-q', service)
+                      if not re.fullmatch(r'[a-f0-9]{12,64}', container):
+                          raise ValueError()
+                      fields = read('docker', 'inspect', '--format',
+                          '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
+                          container).split()
+                      if len(fields) != 3:
+                          raise ValueError()
+                      states[service] = dict(zip(('image', 'status', 'health'), fields))
+                  proof = fixed_release_proof(base / 'current', manifest, states)
+              except Exception:
+                  raise SystemExit('Read-only fixed release proof unavailable') from None
+              print(json.dumps({'currentCommit': PROOF_CURRENT, 'safeProof': proof}, separators=(',', ':')))
+              raise SystemExit(0)
           previous_manifest = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
           protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)
               for image in release.get('images', {}).values()}
@@ -315,11 +440,6 @@ jobs:
                               except FileNotFoundError:
                                   continue
               storage_directories.append({'name': name, 'fileBytes': total})
-          def read(*args):
-              result = subprocess.run(args, capture_output=True, text=True, timeout=30)
-              if result.returncode:
-                  raise RuntimeError('Read-only Docker diagnostic failed')
-              return result.stdout.strip()
           containers = []
           for container in read('docker', 'ps', '-a', '--format', '{{.ID}}').splitlines():
               containers.append(read('docker', 'inspect', '--format',
