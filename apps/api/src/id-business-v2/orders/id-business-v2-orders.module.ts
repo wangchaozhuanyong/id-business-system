@@ -1,3 +1,4 @@
+import { IdBusinessV2OrderArchiveService } from './id-business-v2-order-archive.service';
 import { Module } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2BalancesModule } from '../balances/public-api';
@@ -35,7 +36,8 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
     IdBusinessV2OrderConsumptionService,
     IdBusinessV2OrderBalanceReturnService,
     IdBusinessV2OrderCompletionService,
-    IdBusinessV2OrderLifecycleService
+    IdBusinessV2OrderLifecycleService,
+    IdBusinessV2OrderArchiveService
   ],
   exports: [
     IdBusinessV2OrdersService,
@@ -45,7 +47,8 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
     IdBusinessV2OrderConsumptionService,
     IdBusinessV2OrderBalanceReturnService,
     IdBusinessV2OrderCompletionService,
-    IdBusinessV2OrderLifecycleService
+    IdBusinessV2OrderLifecycleService,
+    IdBusinessV2OrderArchiveService
   ]
 })
 export class IdBusinessV2OrdersModule {}

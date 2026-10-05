@@ -2,6 +2,8 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestj
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2OptionsService } from '../options/public-api';
+import type { ArchiveIdBusinessV2OrderDto } from './dto/archive-id-business-v2-order.dto';
+import { IdBusinessV2OrderArchiveService } from './id-business-v2-order-archive.service';
 import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-order.dto';
 import type { ConsumeIdBusinessV2OrderDto } from './dto/consume-id-business-v2-order.dto';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
@@ -34,7 +36,8 @@ export class IdBusinessV2OrdersController {
     private readonly orderCompletionService: IdBusinessV2OrderCompletionService,
     private readonly orderBalanceReturnService: IdBusinessV2OrderBalanceReturnService,
     private readonly orderLifecycleService: IdBusinessV2OrderLifecycleService,
-    private readonly optionsService: IdBusinessV2OptionsService
+    private readonly optionsService: IdBusinessV2OptionsService,
+    private readonly orderArchiveService: IdBusinessV2OrderArchiveService
   ) {}
 
   @Get()
@@ -54,6 +57,7 @@ export class IdBusinessV2OrdersController {
     @Query('openedTo') openedTo?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
+    @Query('archived') archived?: string,
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.ordersService.list(
@@ -71,7 +75,8 @@ export class IdBusinessV2OrdersController {
         openedFrom,
         openedTo,
         sortBy,
-        sortOrder
+        sortOrder,
+        archived
       },
       operator
     );
@@ -94,6 +99,7 @@ export class IdBusinessV2OrdersController {
     @Query('openedTo') openedTo?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
+    @Query('archived') archived?: string,
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     const [list, optionGroups] = await Promise.all([
@@ -112,7 +118,8 @@ export class IdBusinessV2OrdersController {
           openedFrom,
           openedTo,
           sortBy,
-          sortOrder
+          sortOrder,
+          archived
         },
         operator
       ),
@@ -209,6 +216,26 @@ export class IdBusinessV2OrdersController {
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.orderLifecycleService.update(id, dto, operator);
+  }
+
+  @Post(':id/archive')
+  @RequirePermissions('apple.order.update')
+  archive(
+    @Param('id') id: string,
+    @Body() dto: ArchiveIdBusinessV2OrderDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderArchiveService.archive(id, dto, operator);
+  }
+
+  @Post(':id/unarchive')
+  @RequirePermissions('apple.order.update')
+  unarchive(
+    @Param('id') id: string,
+    @Body() dto: ArchiveIdBusinessV2OrderDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderArchiveService.unarchive(id, dto, operator);
   }
 
   @Post(':id/refund')

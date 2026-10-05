@@ -77,6 +77,7 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     createdAt: openedAt,
     updatedAt: openedAt,
     deletedAt: null,
+    archivedAt: null,
     ...overrides
   };
 }

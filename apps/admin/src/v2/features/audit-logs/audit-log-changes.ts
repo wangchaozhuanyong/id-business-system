@@ -113,7 +113,20 @@ export function auditChangeValue(value: unknown, field: string): string {
 
 export function operationAuditChanges(item: V2AuditLogRecord): V2AuditChange[] {
   const before = collectFields(item.beforeData);
-  const after = collectFields(item.afterData);
+  const afterRecord = asRecord(item.afterData);
+  const isOrderArchive = [
+    'id_business_v2.order.archive',
+    'id_business_v2.order.unarchive'
+  ].includes(item.action);
+  const after = collectFields(
+    isOrderArchive && afterRecord
+      ? Object.fromEntries(
+          Object.entries(afterRecord).filter(
+            ([key]) => !['archiveCommand', 'outcome'].includes(key)
+          )
+        )
+      : item.afterData
+  );
   const keys = [...new Set([...before.keys(), ...after.keys()])];
   const hasBefore = item.beforeData !== undefined && item.beforeData !== null;
   const hasAfter = item.afterData !== undefined && item.afterData !== null;

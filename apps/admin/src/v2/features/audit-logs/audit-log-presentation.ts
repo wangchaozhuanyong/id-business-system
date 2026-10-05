@@ -28,6 +28,8 @@ export const auditActionOptions = [
   { value: '.create', label: '新增资料' },
   { value: '.update', label: '修改资料' },
   { value: '.delete', label: '删除资料' },
+  { value: '.archive', label: '归档订单' },
+  { value: '.unarchive', label: '恢复归档订单' },
   { value: 'restore', label: '恢复资料' },
   { value: 'login', label: '登录' },
   { value: 'password', label: '密码操作' },
@@ -84,6 +86,8 @@ const AUDIT_MODULE_LABELS: Record<string, string> = {
 };
 
 const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'id_business_v2.order.archive': '归档订单',
+  'id_business_v2.order.unarchive': '恢复归档订单',
   'id_business_v2.vendure_mailbox.receive_event': '接收新邮件通知',
   'id_business_v2.auto_recharge.handoff': '操作原付款验证窗口',
   'id_business_v2.auto_recharge.server.quote_verified': '核实报价并等待本人确认',
@@ -161,6 +165,7 @@ const AUDIT_OBJECT_LABELS: Record<string, string> = {
 };
 
 const AUDIT_FIELD_LABELS: Record<string, string> = {
+  archivedat: '归档时间',
   password: '密码',
   security_answer: '密保答案',
   security_answers: '密保答案',

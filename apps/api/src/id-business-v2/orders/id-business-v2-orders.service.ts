@@ -27,6 +27,7 @@ export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
   accountId?: string;
   settlementPlatformOptionId?: string;
   status?: string;
+  archived?: string;
   accountDisposition?: string;
   accountSource?: string;
   openedFrom?: string;
@@ -123,6 +124,7 @@ export class IdBusinessV2OrdersService {
       accountId,
       settlementPlatformOptionId,
       status,
+      archived: this.parseArchived(query.archived),
       accountDisposition,
       accountSource,
       openedAt: this.parseDateRange(query.openedFrom, query.openedTo),
@@ -211,6 +213,13 @@ export class IdBusinessV2OrdersService {
   private parseSortField(value: unknown): IdBusinessV2OrderSortField {
     const normalized = this.normalizeNullableString(value) ?? 'openedAt';
     return ORDER_SORT_FIELDS[normalized] ?? 'openedAt';
+  }
+
+  private parseArchived(value?: string): 'active' | 'archived' | 'all' {
+    if (value === undefined || value === '') return 'active';
+    if (!['active', 'archived', 'all'].includes(value))
+      throw new BadRequestException('订单归档筛选无效');
+    return value as 'active' | 'archived' | 'all';
   }
 
   private parseStatus(value: unknown): IdBusinessV2OrderStatus | null {
@@ -355,6 +364,7 @@ export class IdBusinessV2OrdersService {
       createdBy: order.createdBy,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
+      archivedAt: order.archivedAt?.toISOString() ?? null,
       upgradeBalanceReturn: latestBalanceReturn
         ? {
             id: latestBalanceReturn.id,
@@ -386,24 +396,36 @@ export class IdBusinessV2OrdersService {
           }
         : null,
       operations: {
-        canConsume: order.status === 'pending',
-        canComplete: order.status === 'processing',
-        canEdit: EDITABLE_ORDER_STATUSES.has(order.status),
-        canEditCore: FULLY_EDITABLE_ORDER_STATUSES.has(order.status) && !order.hasFinanceJournal,
+        canArchive:
+          !order.archivedAt &&
+          ['completed', 'refunded', 'cancelled', 'failed'].includes(order.status),
+        canUnarchive: Boolean(order.archivedAt),
+        canConsume: !order.archivedAt && order.status === 'pending',
+        canComplete: !order.archivedAt && order.status === 'processing',
+        canEdit: !order.archivedAt && EDITABLE_ORDER_STATUSES.has(order.status),
+        canEditCore:
+          !order.archivedAt &&
+          FULLY_EDITABLE_ORDER_STATUSES.has(order.status) &&
+          !order.hasFinanceJournal,
         canEditPricing:
-          PRICING_EDITABLE_ORDER_STATUSES.has(order.status) && !order.hasFinanceJournal,
+          !order.archivedAt &&
+          PRICING_EDITABLE_ORDER_STATUSES.has(order.status) &&
+          !order.hasFinanceJournal,
         canEditReceiptAccount:
-          PRICING_EDITABLE_ORDER_STATUSES.has(order.status) && !order.hasFinanceJournal,
-        canRefund: REFUNDABLE_ORDER_STATUSES.has(order.status),
+          !order.archivedAt &&
+          PRICING_EDITABLE_ORDER_STATUSES.has(order.status) &&
+          !order.hasFinanceJournal,
+        canRefund: !order.archivedAt && REFUNDABLE_ORDER_STATUSES.has(order.status),
         canRecordUpgradeBalanceReturn:
+          !order.archivedAt &&
           order.status === 'completed' &&
           Boolean(order.accountId) &&
           balanceAmount.gt(0) &&
           !activeBalanceReturn,
         canReverseUpgradeBalanceReturn:
-          order.status === 'completed' && Boolean(activeBalanceReturn),
-        canCancel: CANCELLABLE_ORDER_STATUSES.has(order.status),
-        canDelete: DELETABLE_ORDER_STATUSES.has(order.status)
+          !order.archivedAt && order.status === 'completed' && Boolean(activeBalanceReturn),
+        canCancel: !order.archivedAt && CANCELLABLE_ORDER_STATUSES.has(order.status),
+        canDelete: !order.archivedAt && DELETABLE_ORDER_STATUSES.has(order.status)
       }
     };
   }

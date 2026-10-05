@@ -340,6 +340,8 @@ describe('IdBusinessV2OrdersService', () => {
       const result = await service.get(orderId);
 
       expect(result.operations).toEqual({
+        canArchive: ['completed', 'refunded', 'cancelled', 'failed'].includes(status),
+        canUnarchive: false,
         canConsume,
         canComplete,
         canEdit,
@@ -354,6 +356,41 @@ describe('IdBusinessV2OrdersService', () => {
       });
     }
   );
+
+  it.each(['active', 'archived', 'all'] as const)(
+    'filters the order list by %s visibility only',
+    async (archived) => {
+      await service.list({ archived });
+      const where = prisma.idBusinessV2Order.findMany.mock.calls.find(
+        ([input]) => input.include
+      )?.[0]?.where;
+      expect(where.deletedAt).toBeNull();
+      if (archived === 'all') expect(where).not.toHaveProperty('archivedAt');
+      else expect(where.archivedAt).toEqual(archived === 'archived' ? { not: null } : null);
+      expect(prisma.idBusinessV2Order.count).toHaveBeenCalledWith({ where });
+    }
+  );
+
+  it('defaults to active visibility and rejects unknown archive filters', async () => {
+    await service.list({});
+    expect(prisma.idBusinessV2Order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ archivedAt: null }) })
+    );
+    await expect(service.list({ archived: 'deleted' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('returns archived source details with every mutation disabled except restoration', async () => {
+    prisma.idBusinessV2Order.findFirst.mockResolvedValue(makeOrder({ archivedAt: createdAt }));
+    const result = await service.get(orderId);
+    expect(result.archivedAt).toBe(createdAt.toISOString());
+    expect(result.operations.canUnarchive).toBe(true);
+    for (const [name, allowed] of Object.entries(result.operations)) {
+      if (name !== 'canUnarchive') expect(allowed).toBe(false);
+    }
+    expect(prisma.idBusinessV2Order.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: orderId, deletedAt: null } })
+    );
+  });
 
   it('returns a whitelisted active lock summary without an internal lock token', async () => {
     prisma.idBusinessV2Order.findFirst.mockResolvedValue(

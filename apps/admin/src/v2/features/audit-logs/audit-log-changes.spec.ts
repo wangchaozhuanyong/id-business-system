@@ -18,6 +18,49 @@ const row: V2AuditLogRecord = {
 };
 
 describe('readable audit changes', () => {
+  it.each(['archive', 'unarchive'])(
+    'shows %s real snapshots without receipt hashes or fictitious status changes',
+    (action) => {
+      const archivedAt = '2026-10-05T02:00:00.000Z';
+      const changes = operationAuditChanges({
+        ...row,
+        action: `id_business_v2.order.${action}`,
+        objectType: 'id_business_v2_order',
+        beforeData: {
+          archivedAt: action === 'archive' ? null : archivedAt,
+          updatedAt: '2026-10-05T01:00:00.000Z',
+          status: 'completed'
+        },
+        afterData: {
+          archivedAt: action === 'archive' ? archivedAt : null,
+          updatedAt: '2026-10-05T03:00:00.000Z',
+          status: 'completed',
+          outcome: { id: 'order-a', archivedAt, idempotentReplay: false },
+          archiveCommand: {
+            idempotencyKey: 'synthetic-key',
+            requestHash: 'synthetic-receipt-hash'
+          },
+          reason: '整理订单列表',
+          dataPreserved: true
+        }
+      });
+      expect(changes.map((change) => change.key)).toEqual([
+        'archivedAt',
+        'reason',
+        'dataPreserved'
+      ]);
+      expect(changes.find((change) => change.key === 'dataPreserved')).toMatchObject({
+        label: '关联账务与资料已保留',
+        after: '是'
+      });
+      expect(JSON.stringify(changes)).not.toMatch(
+        /synthetic-receipt-hash|synthetic-key|idempotentReplay|状态/
+      );
+      expect(
+        operationAuditChanges({ ...row, afterData: { outcome: { amount: '25.50' } } })[0].key
+      ).toBe('outcome.amount');
+    }
+  );
   it('shows only recorded changes and keeps money decimal text intact', () => {
     expect(
       operationAuditChanges({

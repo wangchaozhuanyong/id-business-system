@@ -39,7 +39,8 @@ test('integrity audit covers lifecycle, ledger, finance, and audit invariants', 
     'bank_subscription_projection_mismatch',
     'fx_exchange_principal_fee_mismatch',
     'bank_soft_delete_safety_mismatch',
-    'cash_historical_cost_evidence_mismatch'
+    'cash_historical_cost_evidence_mismatch',
+    'historical_cash_adjustment_integrity_mismatch'
   ]) {
     assert.ok(codes.has(expected), `missing ${expected}`);
   }

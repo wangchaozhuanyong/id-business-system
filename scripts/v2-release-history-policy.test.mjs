@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { V2_DATA_INTEGRITY_CHECKS } from './lib/v2-data-integrity-audit.mjs';
+// The new 49-rule draft guards must run in the existing repository-script CI entry point.
+import './v2-release-post-cleanup-policy.test.mjs';
+import { V2_DATA_INTEGRITY_CHECKS as CURRENT_V2_DATA_INTEGRITY_CHECKS } from './lib/v2-data-integrity-audit.mjs';
 import {
   acceptHistoricalAudit,
   fingerprint,
@@ -14,6 +16,20 @@ import {
 const policy = JSON.parse(
   readFileSync(new URL('../deploy/aws/historical-finance-20261005.json', import.meta.url))
 );
+// The immutable 48-rule policies describe the original release, never the current 49-rule runtime.
+const legacyFixture = JSON.parse(
+  readFileSync(new URL('./lib/v2-release-history-48.test-fixture.json', import.meta.url))
+);
+const V2_DATA_INTEGRITY_CHECKS = legacyFixture.definitions;
+test('frozen historical fixture retains exact 48 rules and rejects current 49 rules', () => {
+  assert.equal(legacyFixture.usage, 'PURE_TEST_FIXTURE_NEVER_EXECUTE');
+  assert.equal(fingerprint(V2_DATA_INTEGRITY_CHECKS), policy.rulesSha256);
+  assert.equal(legacyFixture.rulesSha256, policy.rulesSha256);
+  assert.equal(CURRENT_V2_DATA_INTEGRITY_CHECKS.length, 49);
+  assert.throws(() =>
+    validateHistoryPolicy(policy, CURRENT_V2_DATA_INTEGRITY_CHECKS, policy.expectedCurrent)
+  );
+});
 const fixture = () => ({
   policy: structuredClone(policy),
   definitions: V2_DATA_INTEGRITY_CHECKS,

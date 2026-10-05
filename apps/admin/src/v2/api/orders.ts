@@ -2,6 +2,8 @@ import { http, request, type ApiRequestOptions } from '@/api/client';
 import type { V2FinanceCurrency, V2OrderReceiptFxQuote } from '@apple-business/shared';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
+  ArchiveV2OrderInput,
+  ArchiveV2OrderResult,
   ConsumeV2OrderInput,
   ConsumeV2OrderResult,
   CancelV2OrderInput,
@@ -28,6 +30,18 @@ import type {
 import type { V2OptionSelector } from '@/v2/types/options';
 
 export const idBusinessV2OrdersApi = {
+  archive(id: string, payload: ArchiveV2OrderInput) {
+    return withV2QueryInvalidation(
+      request<ArchiveV2OrderResult>(http.post(`/id-business-v2/orders/${id}/archive`, payload)),
+      ['orders']
+    );
+  },
+  unarchive(id: string, payload: ArchiveV2OrderInput) {
+    return withV2QueryInvalidation(
+      request<ArchiveV2OrderResult>(http.post(`/id-business-v2/orders/${id}/unarchive`, payload)),
+      ['orders']
+    );
+  },
   list(params: V2OrderListQuery, options: ApiRequestOptions = {}) {
     return request<V2OrderListResult>(
       http.get('/id-business-v2/orders', { params, signal: options.signal })

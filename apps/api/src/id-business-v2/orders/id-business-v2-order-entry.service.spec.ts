@@ -466,14 +466,21 @@ describe('IdBusinessV2OrderEntryService', () => {
         deletedAt: null
       }
     });
-    tx.$queryRaw.mockResolvedValueOnce([
-      {
-        id: accountId,
-        purchaseCost: decimal('25'),
-        soldByOrderId: sourceSoldOrderId,
-        lossReportedAt: null
-      }
-    ]);
+    tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = Array.from(strings).join('');
+      if (sql.includes('id_business_v2_orders') && sql.includes('FOR SHARE'))
+        return [{ id: sourceSoldOrderId }];
+      if (sql.includes('id_business_v2_accounts'))
+        return [
+          {
+            id: accountId,
+            purchaseCost: decimal('25'),
+            soldByOrderId: sourceSoldOrderId,
+            lossReportedAt: null
+          }
+        ];
+      return [];
+    });
     tx.idBusinessV2Order.findUniqueOrThrow.mockResolvedValueOnce(
       makeStoredOrder({
         accountSource: 'customer_owned',

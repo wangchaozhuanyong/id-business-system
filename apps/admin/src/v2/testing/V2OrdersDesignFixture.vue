@@ -99,6 +99,7 @@ import {
   statusMeta,
   statusOptions
 } from '@/v2/features/orders/order-presentation';
+import { canArchiveOrder, canUnarchiveOrder } from '@/v2/features/orders/useOrderArchive';
 import type { V2OptionSelector, V2Order, V2OrderStatus } from '@/v2/features/orders/contracts';
 
 type OrdersPage = UnwrapNestedRefs<ReturnType<typeof useOrdersPage>>;
@@ -302,6 +303,26 @@ const page = reactive({
   canConsumeOrders: true,
   canUpdateOrders: true,
   canDeleteOrders: true,
+  archive: {
+    selectedCount: 0,
+    saving: false,
+    canArchive: canArchiveOrder,
+    canUnarchive: canUnarchiveOrder,
+    isSelected: () => false,
+    select: () => {
+      notice.value = '预览操作：已选择订单归档。';
+    },
+    clearSelection: () => undefined,
+    openSelected: () => {
+      notice.value = '预览操作：归档所选订单，保留账务及 ID 来源。';
+    },
+    openArchive: () => {
+      notice.value = '预览操作：归档订单，保留账务及 ID 来源。';
+    },
+    openUnarchive: () => {
+      notice.value = '预览操作：恢复订单列表，不改变账务。';
+    }
+  },
   hasActiveFilters: false,
   activeFilterCount: 0,
   hasLoadedOnce: true,
@@ -310,6 +331,7 @@ const page = reactive({
     page: 1,
     pageSize: 10,
     keyword: '',
+    archived: 'active',
     serviceOptionId: '',
     settlementPlatformOptionId: '',
     status: '' as V2OrderStatus | '',
@@ -326,6 +348,7 @@ const page = reactive({
   handleFilterChange: () => applyFilters(true),
   resetFilters: () => {
     page.query.keyword = '';
+    page.query.archived = 'active';
     page.query.status = '';
     page.query.accountDisposition = '';
     page.query.accountSource = '';

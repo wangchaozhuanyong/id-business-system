@@ -336,6 +336,7 @@
 
   .v2-records-mobile-list {
     display: grid;
+    align-content: start;
   }
 
   .v2-records-mobile-item {

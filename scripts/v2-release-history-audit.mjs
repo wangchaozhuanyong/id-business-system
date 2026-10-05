@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import {
   V2_DATA_INTEGRITY_CHECKS,
@@ -9,21 +10,42 @@ import {
 } from './lib/v2-data-integrity-audit.mjs';
 import {
   acceptHistoricalAudit,
+  acceptSealedPostCleanupAudit,
   fingerprintRows,
+  HISTORY_POST_CLEANUP_POLICY_ID,
   historySourceQueries,
+  postCleanupSourceQueries,
   serializeHistoricalAuditReport,
-  validateHistoryPolicy
+  validateHistoryPolicy,
+  validatePostCleanupPolicyDraft
 } from './lib/v2-release-history-policy.mjs';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((arg) => {
-    const match = arg.match(/^--(policy|stage|expected-current|before-receipt)=(.+)$/);
+    const match = arg.match(
+      /^--(policy|stage|expected-current|before-receipt|post-cleanup-seal|post-cleanup-seal-sha256|cleanup-receipt|candidate-commit|candidate-tree)=(.+)$/
+    );
     if (!match) throw new Error('Unknown historical audit option');
     return [match[1], match[2]];
   })
 );
 const policy = JSON.parse(readFileSync(args.policy, 'utf8'));
-validateHistoryPolicy(policy, V2_DATA_INTEGRITY_CHECKS, args['expected-current']);
+const postCleanup = policy.id === HISTORY_POST_CLEANUP_POLICY_ID;
+if (postCleanup)
+  validatePostCleanupPolicyDraft(policy, V2_DATA_INTEGRITY_CHECKS, args['expected-current']);
+else validateHistoryPolicy(policy, V2_DATA_INTEGRITY_CHECKS, args['expected-current']);
+const sealBytes = postCleanup ? readFileSync(args['post-cleanup-seal']) : null;
+const cleanupReceiptBytes = postCleanup ? readFileSync(args['cleanup-receipt']) : null;
+const releaseSeal = postCleanup ? JSON.parse(sealBytes.toString()) : null;
+if (postCleanup && args.stage === 'after') {
+  for (const [file, expected] of Object.entries(policy.candidateBindings.compiledServiceHashes))
+    if (
+      createHash('sha256')
+        .update(readFileSync('/app/' + file))
+        .digest('hex') !== expected
+    )
+      throw new Error('Post-cleanup compiled candidate changed');
+}
 const before = args['before-receipt']
   ? JSON.parse(readFileSync(args['before-receipt'], 'utf8'))
   : null;
@@ -37,7 +59,11 @@ try {
   const report = await client.$transaction(
     async (tx) => {
       const [identity] = await tx.$queryRawUnsafe(`SELECT CURRENT_USER() AS currentUser,
-      @@transaction_isolation AS transactionIsolation, @@session.foreign_key_checks AS foreignKeyChecks`);
+      @@transaction_isolation AS transactionIsolation, @@session.foreign_key_checks AS foreignKeyChecks${
+        postCleanup
+          ? ', DATABASE() AS databaseName, @@global.read_only AS readOnly, @@global.super_read_only AS superReadOnly, @@session.transaction_read_only AS sessionReadOnly'
+          : ''
+      }`);
       const checks = [];
       for (const definition of V2_DATA_INTEGRITY_CHECKS) {
         try {
@@ -56,6 +82,7 @@ try {
           )?.[1];
           if (
             policy.continuation ||
+            postCleanup ||
             args.stage !== 'before' ||
             databaseCode !== '1054' ||
             field !== 'o.deleted_at' ||
@@ -73,13 +100,16 @@ try {
         }
       }
       const sources = {};
-      for (const [name, query] of Object.entries(historySourceQueries)) {
+      const sourceQueries = postCleanup ? postCleanupSourceQueries : historySourceQueries;
+      for (const [name, query] of Object.entries(sourceQueries)) {
         const ids = policy.sources[name].ids;
         const rows = await tx.$queryRawUnsafe(
-          query.replace('IDS', ids.map(() => '?').join(',')),
+          (postCleanup ? query.sql : query).replace('IDS', ids.map(() => '?').join(',')),
           ...ids
         );
-        sources[name] = fingerprintRows(rows);
+        sources[name] = postCleanup
+          ? { rowCount: rows.length, sha256: fingerprintRows(rows) }
+          : fingerprintRows(rows);
       }
       const ids = policy.sources.journals.ids;
       const metadata = await tx.$queryRawUnsafe(
@@ -88,7 +118,7 @@ try {
       FROM id_business_v2_finance_journals WHERE id IN (${ids.map(() => '?').join(',')})`,
         ...ids
       );
-      const gate = acceptHistoricalAudit({
+      const input = {
         policy,
         definitions: V2_DATA_INTEGRITY_CHECKS,
         expectedCurrent: args['expected-current'],
@@ -98,7 +128,28 @@ try {
         metadata,
         before,
         identity
-      });
+      };
+      let gate;
+      if (postCleanup) {
+        const [scope] = await tx.$queryRawUnsafe(`SELECT
+          (SELECT COUNT(*) FROM id_business_v2_orders WHERE id IN ('c19663b2-7050-427c-b850-819b0e410dfc', 'ed9db3ad-8a60-44b3-ae7c-d4e8f4dd10af')) AS targetOrdersCount,
+          (SELECT COUNT(*) FROM id_business_v2_orders WHERE id = '1d7c164c-2215-4b0e-a6ae-d1e9999d1a8b') AS protectedThirdOrderCount`);
+        gate = acceptSealedPostCleanupAudit(
+          {
+            ...input,
+            scope,
+            cleanupReceiptSha256: createHash('sha256').update(cleanupReceiptBytes).digest('hex')
+          },
+          {
+            seal: releaseSeal,
+            sealSha256: args['post-cleanup-seal-sha256'],
+            sealBytes,
+            cleanupReceiptBytes,
+            candidateCommit: args['candidate-commit'],
+            candidateTree: args['candidate-tree']
+          }
+        );
+      } else gate = acceptHistoricalAudit(input);
       return { ...assessV2DataIntegrity(checks), identity, checks, gate };
     },
     { isolationLevel: 'RepeatableRead', timeout: 120000 }

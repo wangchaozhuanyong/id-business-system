@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   linkSync,
@@ -16,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import * as unbound from './lib/v2-release-maintenance-policy.mjs';
 import {
-  V2_DATA_INTEGRITY_CHECKS,
+  V2_DATA_INTEGRITY_CHECKS as CURRENT_V2_DATA_INTEGRITY_CHECKS,
   buildV2DataIntegrityCheckQueries
 } from './lib/v2-data-integrity-audit.mjs';
 
@@ -27,6 +28,41 @@ const rawSource = readFileSync(join(base, 'lib/v2-release-maintenance-policy.mjs
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const fp = unbound.fingerprint;
 const CURRENT = '6a82a774f2a65e00d4f260c629f7152bf7935d1d';
+// This retired one-use gate remains bound to the exact historical 48 SQL rules.
+// Only test rule data is isolated; current grant and query safety helpers stay live.
+const historicalAuditSource = execFileSync('git', [
+  'show',
+  CURRENT + ':scripts/lib/v2-data-integrity-audit.mjs'
+]);
+assert.equal(
+  hash(historicalAuditSource),
+  'b3d2582859521f23574250ab63e7e546b54aff93b16ee6c4ecb5415da611a6a4'
+);
+const historicalAudit = await import(
+  'data:text/javascript;base64,' + historicalAuditSource.toString('base64')
+);
+const V2_DATA_INTEGRITY_CHECKS = historicalAudit.V2_DATA_INTEGRITY_CHECKS;
+assert.equal(V2_DATA_INTEGRITY_CHECKS.length, 48);
+assert.equal(fp(V2_DATA_INTEGRITY_CHECKS), unbound.MAINTENANCE_RULES_SHA256);
+const historicalRuleDependency =
+  'data:text/javascript;base64,' +
+  Buffer.from(
+    'export const V2_DATA_INTEGRITY_CHECKS = Object.freeze(' +
+      JSON.stringify(V2_DATA_INTEGRITY_CHECKS) +
+      ');\nexport { assertV2AuditConnectionReadOnly, buildV2DataIntegrityCheckQueries } from ' +
+      JSON.stringify(pathToFileURL(resolve(base, 'lib/v2-data-integrity-audit.mjs')).href) +
+      ';\n'
+  ).toString('base64');
+const withHistoricalRules = (source) => {
+  assert.equal(source.split("'./v2-data-integrity-audit.mjs'").length, 2);
+  return source.replace(
+    "'./v2-data-integrity-audit.mjs'",
+    JSON.stringify(historicalRuleDependency)
+  );
+};
+const boundHistoricalPolicy = await import(
+  'data:text/javascript;base64,' + Buffer.from(withHistoricalRules(rawSource)).toString('base64')
+);
 const DATABASE = 'id_business_v2_partial_cleanup_20261005_v1';
 const COST = 'cash_historical_cost_evidence_mismatch';
 const CASH = 'finance_cash_source_currency_mismatch';
@@ -199,15 +235,11 @@ let injected = rawSource
   .replace(
     /export const MAINTENANCE_PROOF_CANONICAL_SHA256 =\s*[\s\S]*?;/,
     'export const MAINTENANCE_PROOF_CANONICAL_SHA256 = ' + JSON.stringify(fp(proof)) + ';'
-  )
-  .replace(
-    "'./v2-data-integrity-audit.mjs'",
-    JSON.stringify(pathToFileURL(resolve(base, 'lib/v2-data-integrity-audit.mjs')).href)
   );
 for (const [key, origin] of Object.entries(actualOriginHashes))
   injected = injected.replace(origin, policy.receiptSha256[key]);
 const gate = await import(
-  'data:text/javascript;base64,' + Buffer.from(injected).toString('base64')
+  'data:text/javascript;base64,' + Buffer.from(withHistoricalRules(injected)).toString('base64')
 );
 const checks = V2_DATA_INTEGRITY_CHECKS.map(({ code }) => ({
   code,
@@ -232,7 +264,7 @@ const input = () => ({
 const rejected = (value) =>
   assert.throws(() => gate.acceptMaintenanceAudit(value), /^Error: MAINTENANCE_GATE_REJECTED$/);
 
-test('compiled independent policy is fixed to the actual v5 proof and source scope', () => {
+test('compiled historical 48-rule policy rejects current changed rules and retains its exact v5 proof and source scope', () => {
   const actual = JSON.parse(
     readFileSync(
       resolve(base, '../deploy/aws/historical-finance-20261005-maintenance-continuation.json'),
@@ -240,12 +272,19 @@ test('compiled independent policy is fixed to the actual v5 proof and source sco
     )
   );
   assert.equal(fp(actual), unbound.MAINTENANCE_POLICY_SHA256);
+  assert.notEqual(fp(CURRENT_V2_DATA_INTEGRITY_CHECKS), unbound.MAINTENANCE_RULES_SHA256);
+  assert.throws(
+    () => unbound.validateMaintenancePolicy(actual, CURRENT, actual.candidateSourceSha256),
+    /MAINTENANCE_GATE_REJECTED/
+  );
+  // Original compiled ROOT/proof/source pins are untouched in this dependency-only
+  // instance; acceptance requires the independently verified real historical rules.
   assert.deepEqual(
-    unbound.validateMaintenancePolicy(actual, CURRENT, actual.candidateSourceSha256),
+    boundHistoricalPolicy.validateMaintenancePolicy(actual, CURRENT, actual.candidateSourceSha256),
     actual
   );
   assert.throws(
-    () => unbound.validateMaintenancePolicy(policy, CURRENT, sourceHashes),
+    () => boundHistoricalPolicy.validateMaintenancePolicy(policy, CURRENT, sourceHashes),
     /MAINTENANCE_GATE_REJECTED/
   );
   assert.equal(actual.items.length, 6);

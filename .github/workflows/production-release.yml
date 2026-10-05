@@ -27,6 +27,8 @@ on:
           - verify_legacy_cache
           - cleanup_legacy_cache
           - release
+          - prepare_post_cleanup_release
+          - prepare_order_archive_release
       commit:
         description: Exact main commit to publish (40 lowercase hex characters)
         required: true
@@ -70,6 +72,21 @@ on:
           - recharge-pro-menu-b8-20261005
           - recharge-pro-menu-7f-20261005
 
+          - historical-finance-20261005-post-cleanup
+          - historical-finance-20261005-order-archive
+
+      post_cleanup_seal_sha256:
+        description: Exact reviewed post-cleanup source proof seal SHA256 (release only)
+        required: false
+        default: ''
+        type: string
+
+      order_archive_seal_sha256:
+        description: Exact independently reviewed order archive release seal SHA256 (release only)
+        required: false
+        default: ''
+        type: string
+
       diagnostic_command_id:
         description: Optional exact failed SSM command to inspect in verify_access (UUID)
         required: false
@@ -104,6 +121,10 @@ jobs:
       RELEASE_COMMIT: ${{ inputs.commit }}
       EXPECTED_CURRENT: ${{ inputs.expected_current }}
       HISTORICAL_EXCEPTION: ${{ inputs.historical_exception }}
+      POST_CLEANUP_SEAL_SHA256: ${{ inputs.post_cleanup_seal_sha256 }}
+      ORDER_ARCHIVE_SEAL_SHA256: ${{ inputs.order_archive_seal_sha256 }}
+      RELEASE_OPERATION: ${{ inputs.operation }}
+      REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out the requested main commit
@@ -152,9 +173,11 @@ jobs:
           esac
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$FIXED_RECHARGE_PROFILE"
+      - name: Validate release policy and reviewed seal selection
+        run: bash scripts/production-release/validate-release-selection.sh
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release' && inputs.reuse_image_run == ''
+        if: (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
 
       - name: Verify reusable build and unchanged application source
@@ -172,6 +195,7 @@ jobs:
           role-duration-seconds: 3600
 
       - name: Check AWS identity and production target
+        if: inputs.operation != 'prepare_post_cleanup_release' && inputs.operation != 'prepare_order_archive_release'
         run: |
           set -Eeuo pipefail
           test "$(aws sts get-caller-identity --query Arn --output text | cut -d/ -f2)" = id-business-v2-github-release
@@ -179,6 +203,7 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Verify read-only SSM command access
+        if: inputs.operation != 'prepare_post_cleanup_release' && inputs.operation != 'prepare_order_archive_release'
         run: |
           set -Eeuo pipefail
           command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
@@ -189,9 +214,43 @@ jobs:
           test "$(aws ssm get-command-invocation --command-id "$command_id" \
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)" = release_access_ok
 
+      - name: Verify build-only ECR target
+        if: inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Arn --output text | cut -d/ -f2)" = id-business-v2-github-release
+          aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
+
       - name: Push immutable images
-        if: inputs.operation == 'release' && inputs.reuse_image_run == ''
+        if: (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
+
+      - name: Record prepared API image source
+        if: inputs.operation == 'prepare_post_cleanup_release'
+        run: python3 scripts/production-release/reuse-images.py --write-prepared-manifest
+
+      - name: Save prepared API image source
+        if: inputs.operation == 'prepare_post_cleanup_release'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: post-cleanup-prepared-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/prepared-images.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record prepared order archive image source
+        if: inputs.operation == 'prepare_order_archive_release'
+        run: python3 scripts/production-release/reuse-images.py --write-prepared-manifest
+
+      - name: Save prepared order archive image source
+        if: inputs.operation == 'prepare_order_archive_release'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: order-archive-prepared-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/prepared-images.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
 
       - name: Verify or apply reviewed local image cache cleanup
         if: inputs.operation == 'verify_cache' || inputs.operation == 'cleanup_cache'
@@ -1596,7 +1655,7 @@ jobs:
         run: bash scripts/production-release/dispatch.sh
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch')
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}

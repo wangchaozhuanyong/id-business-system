@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import orderList from './components/V2OrdersList.vue?raw';
+import rowActions from './components/V2OrderRowActions.vue?raw';
 import topupRecordsTables from '../topup-records/components/V2TopupRecordsTables.vue?raw';
 import tableSchemas from '@/v2/features/tableSchemas.ts?raw';
 import tableColumn from '@/v2/components/V2TableColumn.vue?raw';
@@ -49,10 +50,11 @@ describe('order and gift-card table action UI contract', () => {
     expect(ordersSchema).toContain("'利润率'");
     expect(tableColumn).toContain('props.definition.hideable !== false');
     expect(tableColumnSettings).toContain('column.hideable !== false');
-    expect(ordersSchema).toContain("layout: 'double'");
+    expect(ordersSchema).toContain("layout: 'triple'");
     expect(progressColumn).toContain('page.consumeOrderBalance(row)');
     expect(progressColumn).toContain('page.completeOrder(row)');
-    expect(actionColumn).toContain('page.openDetail(row)');
+    expect(actionColumn).toContain('<V2OrderRowActions :order="row" :page="page"');
+    expect(rowActions).toContain('page.openDetail(order)');
     expect(actionColumn).not.toContain('page.consumeOrderBalance(row)');
     expect(actionColumn).not.toContain('page.completeOrder(row)');
   });
@@ -69,7 +71,7 @@ describe('order and gift-card table action UI contract', () => {
 
     expect(progress).toContain('page.consumeOrderBalance(item)');
     expect(progress).toContain('page.completeOrder(item)');
-    expect(footer).toContain('page.openDetail(item)');
+    expect(footer).toContain('<V2OrderRowActions :order="item" :page="page" mobile');
     expect(footer).not.toContain('page.consumeOrderBalance(item)');
     expect(footer).not.toContain('page.completeOrder(item)');
   });

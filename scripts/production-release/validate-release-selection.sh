@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Selection only; the remote policy still verifies the reviewed source proof.
+validate_release_selection() {
+  local policy="${HISTORICAL_EXCEPTION:-none}"
+  if [[ "$policy" != historical-finance-20261005-order-archive && -n "${ORDER_ARCHIVE_SEAL_SHA256:-}" ]]; then
+    echo 'Order archive seal is valid only with its independent release policy' >&2
+    return 1
+  fi
+  case "$policy" in
+    none|historical-finance-20261005|historical-finance-20261005-registration-continuation|historical-finance-20261005-recharge-diagnostics) ;;
+    historical-finance-20261005-maintenance-continuation)
+      [[ "${EXPECTED_CURRENT:-}" == 6a82a774f2a65e00d4f260c629f7152bf7935d1d ]] || {
+        echo 'Maintenance continuation requires its exact running baseline' >&2
+        return 1
+      }
+      [[ "${RELEASE_OPERATION:-release}" == release ]] || return 1
+      [[ "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}" ]] || {
+        echo 'Maintenance continuation requires a fresh image build and no post-cleanup seal' >&2
+        return 1
+      }
+      return 0 ;;
+    historical-finance-20261005-mailbox-batch)
+      [[ "${EXPECTED_CURRENT:-}" == b8d643450ffa9012ccc09ead15e4681e3dee98d0 ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${POST_CLEANUP_SEAL_SHA256:-}" && "${REUSE_IMAGE_RUN:-}" == 37312405714 ]] || return 1
+      [[ -z "${REUSE_IMAGE_COMMIT:-}" || "${REUSE_IMAGE_COMMIT}" == f5826f9fb4ad0d846d9875c035c913a61eb68290 ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN_ID:-}" || "${REUSE_IMAGE_RUN_ID}" == 37312405714 ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN_ATTEMPT:-}" || "${REUSE_IMAGE_RUN_ATTEMPT}" == 1 ]] || return 1
+      return 0 ;;
+    recharge-pro-menu-b8-20261005)
+      # Its independently approved manifest is validated before build or dispatch.
+      [[ "${EXPECTED_CURRENT:-}" == b8d643450ffa9012ccc09ead15e4681e3dee98d0 ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1
+      return 0 ;;
+    recharge-pro-menu-7f-20261005)
+      [[ "${EXPECTED_CURRENT:-}" == 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1
+      return 0 ;;
+    historical-finance-20261005-order-archive)
+      [[ "${EXPECTED_CURRENT:-}" == 3ca300486d0edfadda83c094a48474a63959fce7 ]] || return 1
+      [[ "${RELEASE_ADMIN_ONLY:-false}" == false && -z "${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1
+      case "${RELEASE_OPERATION:-release}" in
+        prepare_order_archive_release)
+          [[ -z "${ORDER_ARCHIVE_SEAL_SHA256:-}${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}" ]] || return 1 ;;
+        release)
+          [[ "${ORDER_ARCHIVE_SEAL_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || {
+            echo 'Order archive release requires the exact independently reviewed seal SHA256' >&2
+            return 1
+          }
+          [[ "${REUSE_IMAGE_RUN:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+          [[ -z "${REUSE_IMAGE_COMMIT:-}" || "${REUSE_IMAGE_COMMIT}" == "${RELEASE_COMMIT:-}" ]] || return 1
+          [[ -z "${REUSE_IMAGE_RUN_ID:-}" || "${REUSE_IMAGE_RUN_ID}" == "${REUSE_IMAGE_RUN}" ]] || return 1
+          [[ -z "${REUSE_IMAGE_RUN_ATTEMPT:-}" || "${REUSE_IMAGE_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || return 1 ;;
+        *) echo 'Order archive policy supports preparation or release only' >&2; return 1 ;;
+      esac
+      return 0 ;;
+    historical-finance-20261005-post-cleanup)
+      [[ "${EXPECTED_CURRENT:-}" == 6a82a774f2a65e00d4f260c629f7152bf7935d1d ]] || {
+        echo 'Post-cleanup release requires its exact running baseline' >&2
+        return 1
+      }
+      [[ "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      case "${RELEASE_OPERATION:-release}" in
+        prepare_post_cleanup_release)
+          [[ -z "${POST_CLEANUP_SEAL_SHA256:-}${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}" ]] || {
+            echo 'Post-cleanup preparation requires an empty seal and a fresh image build' >&2
+            return 1
+          } ;;
+        release)
+          [[ "${POST_CLEANUP_SEAL_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || {
+            echo 'Post-cleanup release requires the exact reviewed seal SHA256' >&2
+            return 1
+          }
+          [[ "${REUSE_IMAGE_RUN:-}" =~ ^[1-9][0-9]*$ ]] || {
+            echo 'Post-cleanup release requires a completed preparation run for the same commit' >&2
+            return 1
+          }
+          [[ -z "${REUSE_IMAGE_COMMIT:-}" || "${REUSE_IMAGE_COMMIT}" == "${RELEASE_COMMIT:-}" ]] || return 1
+          [[ -z "${REUSE_IMAGE_RUN_ID:-}" || "${REUSE_IMAGE_RUN_ID}" == "${REUSE_IMAGE_RUN}" ]] || return 1
+          [[ -z "${REUSE_IMAGE_RUN_ATTEMPT:-}" || "${REUSE_IMAGE_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || return 1 ;;
+        *)
+          echo 'Post-cleanup policy supports preparation or release only; use the read-only post-cleanup capture CLI for verification' >&2
+          return 1 ;;
+      esac
+      return 0 ;;
+    *) echo 'Unknown historical release policy' >&2; return 1 ;;
+  esac
+  [[ "${RELEASE_OPERATION:-release}" != prepare_order_archive_release ]] || {
+    echo 'Order archive preparation requires its independent policy' >&2
+    return 1
+  }
+  [[ "${RELEASE_OPERATION:-release}" != prepare_post_cleanup_release ]] || {
+    echo 'Post-cleanup preparation requires its independent policy' >&2
+    return 1
+  }
+  [[ -z "${POST_CLEANUP_SEAL_SHA256:-}" ]] || {
+    echo 'Post-cleanup seal is valid only with the post-cleanup release policy' >&2
+    return 1
+  }
+}
+
+validate_release_selection

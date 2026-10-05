@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -70,8 +72,12 @@ const args = process.argv.slice(2);
 const kind = args.includes('--user=root') ? 'routine' : 'data';
 const flags = args.filter(value => value.startsWith('--') && !value.startsWith('--password='));
 fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({ kind, target: args.at(-1), flags }) + '\\n');
-if (kind === 'data') process.stdout.write('CREATE TABLE fixture (id int);\\nINSERT INTO fixture VALUES (1);\\n');
-else process.stdout.write('CREATE FUNCTION idv2_integrity_trigger_exists() RETURNS INTEGER RETURN 1;\\n');
+if (kind === 'data') process.stdout.write(${JSON.stringify(restoreFixtureSql('active_fixture_database', 'missing-function'))});
+else process.stdout.write(${JSON.stringify(
+      '-- Host: 127.0.0.1    Database: active_fixture_database\nDELIMITER ;;\n' +
+        restoreFixtureSql('active_fixture_database').match(/^CREATE DEFINER=.* FUNCTION .*$/m)[0] +
+        '\nDELIMITER ;\n'
+    )});
 if (process.env.FIXTURE_FAILURE === kind) process.exit(7);
 `
   );
@@ -163,8 +169,8 @@ test('backup data and metadata dumps explicitly use the active database despite 
     );
     const restored = spawnSync('gzip', ['-dc', archive], { encoding: 'utf8' });
     assert.equal(restored.status, 0);
-    assert.match(restored.stdout, /INSERT INTO fixture/);
-    assert.match(restored.stdout, /CREATE FUNCTION idv2_integrity_trigger_exists/);
+    assert.match(restored.stdout, /INSERT INTO `users`/);
+    assert.match(restored.stdout, /FUNCTION `idv2_integrity_trigger_exists`/);
     assert.doesNotMatch(restored.stdout, /USE |CREATE DATABASE|GRANT /);
   });
 });
@@ -209,40 +215,265 @@ test('a failed data or metadata dump prevents completion even if a partial archi
     });
 });
 
-test('a two-part active database dump restores in the fixed isolated database without reading production configuration', () => {
-  backupFixture(({ execute, events, root, archive, env }) => {
+test('a two-part active database dump restores in an isolated container with the configured schema', () => {
+  backupFixture(({ execute, archive }) => {
     assert.equal(execute().status, 0);
-    const deployment = join(root, 'deployment');
-    mkdirSync(join(deployment, 'scripts'), { recursive: true });
-    writeFileSync(
-      join(deployment, 'scripts/mysql-dump-restore-normalizer.sed'),
-      readProjectFile('scripts/mysql-dump-restore-normalizer.sed')
-    );
-    const result = spawnSync(
-      'bash',
-      [
-        resolve(projectRoot, 'scripts/verify-aws-mysql-backup.sh'),
-        `--archive=${archive}`,
-        `--deployment-directory=${deployment}`,
-        `--work-directory=${join(root, 'drills')}`
-      ],
-      { env, encoding: 'utf8' }
-    );
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(
-      events().find(({ kind }) => kind === 'restore-run'),
-      { kind: 'restore-run', target: 'id_business_v2_restore', isolated: true }
-    );
-    assert.deepEqual(
-      events().find(({ kind }) => kind === 'restore-import'),
-      { kind: 'restore-import', target: 'id_business_v2_restore', data: true, routine: true }
-    );
-    assert.match(
-      result.stdout,
-      /MySQL isolated restore verified: tables=6, checked=6, migrations=1/
-    );
+    const restored = spawnSync('gzip', ['-dc', archive], { encoding: 'utf8' });
+    assert.equal(restored.status, 0, restored.stderr);
+    const harness = restoreHarness({ database: 'active_fixture_database', sql: restored.stdout });
+    try {
+      const result = harness.run();
+      assert.equal(result.status, 0, result.stderr);
+      const run = harness.calls().find((call) => call.tool === 'docker' && call.args[0] === 'run');
+      assert.ok(run.args.includes('--network') && run.args.includes('none'));
+      assert.ok(run.args.includes('MYSQL_DATABASE=active_fixture_database'));
+      assert.match(
+        result.stdout,
+        /MySQL isolated restore verified: tables=8, checked=8, migrations=1/
+      );
+      assert.match(result.stdout, /rollbackProbes=7/);
+    } finally {
+      harness.cleanup();
+    }
   });
 });
+
+// This fixture is deliberately synthetic. It exercises restore protections,
+// not the business schema or production customer/order records.
+function restoreFixtureSql(database, variant = 'valid') {
+  const definer = variant === 'invalid-definer' ? 'id_business_app' : 'id_business_migrator';
+  const header = variant === 'invalid-schema' ? 'another_database' : database;
+  const tables = [
+    '_prisma_migrations',
+    'users',
+    'audit_logs',
+    'id_business_v2_orders',
+    'id_business_v2_finance_journals',
+    'id_business_v2_balance_ledger',
+    'id_business_v2_finance_journal_lines',
+    'restore_fixture_non_core'
+  ];
+  const guards = [
+    ['idv2_audit_log_no_update', 'audit_logs', 'UPDATE', 'Audit logs are immutable'],
+    ['idv2_audit_log_no_delete', 'audit_logs', 'DELETE', 'Audit logs are immutable'],
+    [
+      'idv2_balance_ledger_no_update',
+      'id_business_v2_balance_ledger',
+      'UPDATE',
+      'V2 balance ledger is immutable'
+    ],
+    [
+      'idv2_balance_ledger_no_delete',
+      'id_business_v2_balance_ledger',
+      'DELETE',
+      'V2 balance ledger is immutable'
+    ],
+    [
+      'idv2_finance_journal_no_delete',
+      'id_business_v2_finance_journals',
+      'DELETE',
+      'Posted finance journals cannot be deleted'
+    ],
+    [
+      'idv2_finance_line_no_update',
+      'id_business_v2_finance_journal_lines',
+      'UPDATE',
+      'Posted finance journal lines are immutable'
+    ],
+    [
+      'idv2_finance_line_no_delete',
+      'id_business_v2_finance_journal_lines',
+      'DELETE',
+      'Posted finance journal lines are immutable'
+    ]
+  ];
+  let sql = `-- Host: 127.0.0.1    Database: ${header}\n`;
+  for (const table of tables) {
+    if (variant === 'missing-non-core-table' && table === 'restore_fixture_non_core') continue;
+    sql +=
+      table === '_prisma_migrations'
+        ? 'CREATE TABLE `_prisma_migrations` (`id` INT PRIMARY KEY, `finished_at` DATETIME, `rolled_back_at` DATETIME);\nINSERT INTO `_prisma_migrations` VALUES (1,UTC_TIMESTAMP(),NULL);\n'
+        : `CREATE TABLE \`${table}\` (\`id\` ${variant === 'schema-drift' && table === 'restore_fixture_non_core' ? 'BIGINT' : 'INT'} PRIMARY KEY);\nINSERT INTO \`${table}\` VALUES (1);\n`;
+  }
+  sql += 'DELIMITER ;;\n';
+  if (variant !== 'missing-function') {
+    sql += `CREATE DEFINER=\`${definer}\`@\`%\` FUNCTION \`idv2_integrity_trigger_exists\`(expected_trigger VARCHAR(64),expected_table VARCHAR(64)) RETURNS TINYINT NOT DETERMINISTIC READS SQL DATA SQL SECURITY DEFINER RETURN EXISTS (SELECT 1 FROM information_schema.triggers trigger_record WHERE trigger_record.trigger_schema=DATABASE() AND trigger_record.event_object_table=expected_table AND trigger_record.trigger_name=expected_trigger);;\n`;
+  }
+  for (const [name, table, operation, message] of guards) {
+    const body =
+      variant === 'missing-protection' && name === 'idv2_audit_log_no_update'
+        ? 'SET NEW.id=NEW.id'
+        : `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='${message}'`;
+    sql += `CREATE DEFINER=\`${definer}\`@\`%\` TRIGGER \`${name}\` BEFORE ${operation} ON \`${table}\` FOR EACH ROW ${body};;\n`;
+  }
+  for (let index = 1; index <= 42; index++) {
+    sql += `CREATE DEFINER=\`${definer}\`@\`%\` TRIGGER \`restore_fixture_extra_${index}\` BEFORE INSERT ON \`users\` FOR EACH ROW SET NEW.id=NEW.id;;\n`;
+  }
+  return sql + 'DELIMITER ;\n';
+}
+
+const fixtureArgument = process.argv.find((argument) =>
+  argument.startsWith('--write-restore-fixture=')
+);
+if (fixtureArgument) {
+  const destination = fixtureArgument.slice('--write-restore-fixture='.length);
+  const databaseArgument = process.argv.find((argument) => argument.startsWith('--database='));
+  const variantArgument = process.argv.find((argument) => argument.startsWith('--variant='));
+  const database =
+    databaseArgument?.slice('--database='.length) ?? 'id_business_v2_restore_fixture';
+  const variant = variantArgument?.slice('--variant='.length) ?? 'valid';
+  assert.match(database, /^[A-Za-z0-9_]{1,64}$/);
+  assert.ok(
+    [
+      'valid',
+      'invalid-definer',
+      'invalid-schema',
+      'missing-function',
+      'missing-protection',
+      'missing-non-core-table',
+      'schema-drift'
+    ].includes(variant)
+  );
+  assert.ok(destination.startsWith(projectRoot + '/') && destination.endsWith('.sql.gz'));
+  mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+  writeFileSync(destination, gzipSync(restoreFixtureSql(database, variant)), {
+    flag: 'wx',
+    mode: 0o600
+  });
+  console.log(JSON.stringify({ synthetic: true, database, variant, archive: destination }));
+  process.exit(0);
+}
+
+function restoreHarness(options = {}) {
+  const harnessRoot = resolve(projectRoot, 'backups/restore-tests');
+  mkdirSync(harnessRoot, { recursive: true, mode: 0o700 });
+  const directory = mkdtempSync(resolve(harnessRoot, 'case-'));
+  const binaryDirectory = resolve(directory, 'bin');
+  const deploymentDirectory = resolve(directory, 'deployment');
+  const workDirectory = resolve(directory, 'work');
+  mkdirSync(binaryDirectory);
+  mkdirSync(resolve(deploymentDirectory, 'scripts'), { recursive: true });
+  writeFileSync(
+    resolve(deploymentDirectory, 'scripts/mysql-dump-restore-normalizer.sed'),
+    readProjectFile('scripts/mysql-dump-restore-normalizer.sed')
+  );
+  const database = options.database ?? 'id_business_v2_restore_fixture';
+  if (!options.noEnvironment) {
+    writeFileSync(
+      resolve(deploymentDirectory, '.env.aws.production'),
+      [
+        `MYSQL_DATABASE=${database}`,
+        'COMPOSE_PROJECT_NAME=restore_fixture',
+        'MYSQL_BACKUP_S3_BUCKET=fixture-backups',
+        'MYSQL_BACKUP_S3_PREFIX=mysql/daily',
+        'MYSQL_BACKUP_S3_REGION=ap-northeast-1',
+        ''
+      ].join('\n'),
+      { mode: 0o600 }
+    );
+  }
+  const archive = resolve(directory, 'fixture.sql.gz');
+  const sql = options.sql ?? restoreFixtureSql('id_business_v2_restore_fixture');
+  const archiveBytes = gzipSync(sql);
+  writeFileSync(archive, archiveBytes, { mode: 0o600 });
+  const calls = resolve(directory, 'calls.jsonl');
+  const state = resolve(directory, 'label');
+  const behavior = options.behavior ?? 'valid';
+  const mockDocker = `#!${process.execPath}
+import fs from 'node:fs';
+const args = process.argv.slice(2);
+const input = fs.readFileSync(0, 'utf8');
+const logArgs = args.map(arg => arg.startsWith('MYSQL_ROOT_PASSWORD=') ? 'MYSQL_ROOT_PASSWORD=[REDACTED]' : arg);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ tool: 'docker', args: logArgs, input })+'\\n');
+const behavior = ${JSON.stringify(behavior)};
+if (args[0] === 'ps') { process.stdout.write(behavior === 'ambiguous-source' ? 'fixture-source\\nfixture-other\\n' : 'fixture-source\\n'); }
+else if (args[0] === 'run') { const label = args[args.indexOf('--label')+1].split('=')[1]; fs.writeFileSync(${JSON.stringify(state)}, label); process.stdout.write('own-container\\n'); }
+else if (args[0] === 'inspect') { process.stdout.write(fs.readFileSync(${JSON.stringify(state)}, 'utf8')+'\\n'); }
+else if (args[0] === 'exec' && args.some(a => a.includes('mysqladmin ping'))) {}
+else if (args[0] === 'exec') {
+  if (input.includes('CREATE USER')) {}
+  else if (input.includes('-- Host:')) {}
+  else if (input.includes("SELECT 'T',TRIGGER_NAME")) {
+    const ownRestore = !args.includes('fixture-source');
+    let changedSource = false;
+    if (!ownRestore && behavior === 'source-changed') {
+      const path = ${JSON.stringify(state + '-source-count')};
+      const count = fs.existsSync(path) ? Number(fs.readFileSync(path, 'utf8'))+1 : 1;
+      fs.writeFileSync(path, String(count)); changedSource = count > 1;
+    }
+    const tables = ['_prisma_migrations','users','audit_logs','id_business_v2_orders','id_business_v2_finance_journals','id_business_v2_balance_ledger','id_business_v2_finance_journal_lines','restore_fixture_non_core'];
+    const metadata = tables.filter(table => !(ownRestore && behavior === 'missing-non-core-table' && table === 'restore_fixture_non_core')).map(table => 'S\\t'+table+'\\t'+(ownRestore && behavior === 'schema-drift' ? 'e' : 'd').repeat(64));
+    metadata.push(...Array.from({length:49},(_,index)=>'T\\ttrigger_'+index+'\\t'+('a'.repeat(64))));
+    metadata.push('F\\tidv2_integrity_trigger_exists\\t'+((behavior === 'definition-drift' && ownRestore) || changedSource ? 'c'.repeat(64) : 'b'.repeat(64)));
+    if (behavior === 'source-incomplete') metadata.pop();
+    process.stdout.write(metadata.join('\\n')+'\\n');
+  }
+  else if (input.includes('SELECT\\n  (SELECT COUNT(*) FROM information_schema.tables')) process.stdout.write('8\\t6\\t1\\n');
+  else if (input.includes('valid_function_marker_never_used')) {}
+  else if (input.includes('FROM mysql.user')) {
+    const values = [49, 1, 0, 0, 1, 0, 1, 7];
+    if (behavior === 'missing-function') values[1] = 0;
+    if (behavior === 'invalid-definer') values[2] = 1;
+    if (behavior === 'invalid-schema') values[3] = 1;
+    if (behavior === 'unlocked-definer') values[4] = 0;
+    if (behavior === 'wrong-grants') values[5] = 1;
+    if (behavior === 'function-drift') values[6] = 0;
+    if (behavior === 'missing-trigger') values[7] = 6;
+    process.stdout.write(values.join('\\t')+'\\n');
+  }
+  else if (input.includes('restore_probe_missing_trigger')) process.stdout.write(behavior === 'bad-function-result' ? '1\\t1\\t0\\t0\\n' : '1\\t1\\t1\\t0\\n');
+  else if (input.includes('SELECT COUNT(*) FROM \\x60')) process.stdout.write('1\\n');
+  else if (input.includes('START TRANSACTION;')) {
+    if (!input.includes('ROLLBACK;') || !args.includes('--force')) process.exit(2);
+    let message = input.includes('audit_logs') ? 'Audit logs are immutable' : input.includes('balance_ledger') ? 'V2 balance ledger is immutable' : input.includes('journal_lines') ? 'Posted finance journal lines are immutable' : 'Posted finance journals cannot be deleted';
+    if (behavior === 'definer-runtime-error') process.stderr.write('ERROR 1449 (HY000) at line 3: PRIVATE_TOKEN\\n');
+    else if (behavior !== 'missing-protection') process.stderr.write('ERROR 1644 (45000) at line 3: '+message+'\\n');
+    process.stdout.write('restore_probe_rolled_back\\n');
+  }
+  else if (input.includes("SELECT CONCAT('CHECK TABLE")) process.stdout.write('CHECK TABLE fixture;\\n');
+  else if (input.startsWith('CHECK TABLE')) process.stdout.write(Array.from({length:8},(_,i)=>'fixture.table'+i+'\\tcheck\\tstatus\\tOK').join('\\n')+'\\n');
+  else { process.stderr.write('ERROR 1000 (HY000): PRIVATE_TOKEN\\n'); process.exit(1); }
+}
+`;
+  writeFileSync(resolve(binaryDirectory, 'docker'), mockDocker, { mode: 0o700 });
+  const checksum = createHash('sha256').update(archiveBytes).digest('base64');
+  const mockAws = `#!${process.execPath}
+import fs from 'node:fs'; const args=process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify({tool:'aws',args})+'\\n');
+if (args.includes('list-objects-v2')) {
+ process.stdout.write('mysql/daily/id-business-v2-20261005T090000Z.sql.gz\\t2026-10-05T09:00:00+00:00\\nmysql/daily/id-business-v2-20261005T100000Z.sql.gz\\t2026-10-05T10:00:00+00:00\\nmysql/daily/id-business-v2-20261005T110000Z.sql.gz/routines.json\\t2026-10-05T11:00:00+00:00\\nmysql/daily/id-business-v2-20261005T120000Z.json\\t2026-10-05T12:00:00+00:00\\n');
+} else if (args.includes('head-object')) {
+ if (${JSON.stringify(Boolean(options.awsHead404))}) { process.stderr.write('An error occurred (404) when calling the HeadObject operation: PRIVATE_TOKEN fixture-backups\\n'); process.exit(254); }
+ process.stdout.write(${JSON.stringify(options.badChecksum ? 'A'.repeat(43) + '=' : checksum)}+'\\t'+${JSON.stringify(options.badSize ? archiveBytes.length + 1 : archiveBytes.length)}+'\\t'+${JSON.stringify(options.badEncryption ? 'aws:kms' : 'AES256')}+'\\n');
+} else if (args.includes('get-object')) fs.copyFileSync(${JSON.stringify(archive)},args[args.length-1]);
+`;
+  writeFileSync(resolve(binaryDirectory, 'aws'), mockAws, { mode: 0o700 });
+  return {
+    run: () =>
+      spawnSync(
+        'bash',
+        [
+          resolve(projectRoot, 'scripts/verify-aws-mysql-backup.sh'),
+          `--deployment-directory=${deploymentDirectory}`,
+          `--work-directory=${workDirectory}`,
+          ...(options.s3 ? [] : [`--archive=${archive}`])
+        ],
+        {
+          env: { ...process.env, PATH: binaryDirectory + ':' + process.env.PATH },
+          encoding: 'utf8',
+          timeout: 20_000
+        }
+      ),
+    calls: () =>
+      existsSync(calls)
+        ? readFileSync(calls, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line))
+        : [],
+    cleanup: () => rmSync(directory, { recursive: true, force: true })
+  };
+}
 
 test('AWS MySQL backup shell scripts pass bash syntax validation', () => {
   for (const script of ['scripts/backup-aws-mysql.sh', 'scripts/verify-aws-mysql-backup.sh']) {
@@ -352,4 +583,149 @@ test('S3 lifecycle expires backup objects instead of retaining them forever', ()
 });
 test('obsolete PostgreSQL production backup workflow is absent', () => {
   assert.equal(existsSync(resolve(projectRoot, '.github/workflows/production-backup.yml')), false);
+});
+
+test('restore binds the configured schema and preserves a locked scoped definer', () => {
+  const harness = restoreHarness();
+  try {
+    const result = harness.run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /rollbackProbes=7/);
+    const calls = harness.calls();
+    const run = calls.find((call) => call.tool === 'docker' && call.args[0] === 'run');
+    assert.ok(run.args.includes('--network') && run.args.includes('none'));
+    assert.ok(run.args.includes('MYSQL_DATABASE=id_business_v2_restore_fixture'));
+    const provisioning = calls.find((call) => call.input?.includes('CREATE USER'));
+    assert.match(provisioning.input, /CREATE USER 'id_business_migrator'@'%' ACCOUNT LOCK/);
+    assert.match(
+      provisioning.input,
+      /GRANT ALL PRIVILEGES ON `id_business_v2_restore_fixture`\.\*/
+    );
+    assert.doesNotMatch(provisioning.input, /GRANT ALL PRIVILEGES ON \*\.\*/);
+    const probes = calls.filter((call) => call.input?.includes('restore_probe_rolled_back'));
+    assert.equal(probes.length, 7);
+    for (const probe of probes) {
+      assert.match(probe.input, /START TRANSACTION;[\s\S]*ROLLBACK;/);
+      assert.ok(probe.args.includes('--force'));
+    }
+    const sourceCaptures = calls.filter(
+      (call) =>
+        call.args.includes('fixture-source') && call.input?.includes("SELECT 'T',TRIGGER_NAME")
+    );
+    assert.equal(sourceCaptures.length, 2);
+    assert.ok(
+      sourceCaptures.every(
+        (call) =>
+          call.input.includes('SET TRANSACTION READ ONLY;') && call.input.includes('ROLLBACK;')
+      )
+    );
+    assert.ok(
+      sourceCaptures.every((call) =>
+        call.args.includes('MYSQL_DATABASE=id_business_v2_restore_fixture')
+      )
+    );
+    assert.ok(calls.some((call) => call.args[0] === 'rm' && call.args.includes('-v')));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('S3 selection excludes newer companions and nested paths before choosing latest archive', () => {
+  const harness = restoreHarness({ s3: true });
+  try {
+    const result = harness.run();
+    assert.equal(result.status, 0, result.stderr);
+    const head = harness
+      .calls()
+      .find((call) => call.tool === 'aws' && call.args.includes('head-object'));
+    assert.equal(
+      head.args[head.args.indexOf('--key') + 1],
+      'mysql/daily/id-business-v2-20261005T100000Z.sql.gz'
+    );
+    assert.doesNotMatch(result.stdout + result.stderr, /s3:\/\/|fixture-backups/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+for (const [description, options] of [
+  ['missing environment', { noEnvironment: true }],
+  ['missing database configuration', { database: '' }],
+  ['unsafe database identifier', { database: 'schema;DROP TABLE users' }],
+  ['missing archive schema header', { sql: 'SELECT 1;\n' }],
+  ['wrong archive schema', { sql: restoreFixtureSql('another_database') }],
+  [
+    'conflicting appended routines schema',
+    {
+      sql:
+        restoreFixtureSql('id_business_v2_restore_fixture') +
+        '-- Host: 127.0.0.1    Database: another_database\n'
+    }
+  ],
+  ['wrong S3 checksum', { s3: true, badChecksum: true }],
+  ['wrong S3 archive size', { s3: true, badSize: true }],
+  ['missing AES256 evidence', { s3: true, badEncryption: true }]
+]) {
+  test(`restore rejects ${description} before starting an own container`, () => {
+    const harness = restoreHarness(options);
+    try {
+      const result = harness.run();
+      assert.notEqual(result.status, 0);
+      assert.equal(
+        harness.calls().filter((call) => call.tool === 'docker' && call.args[0] === 'run').length,
+        0
+      );
+    } finally {
+      harness.cleanup();
+    }
+  });
+}
+
+for (const behavior of [
+  'missing-function',
+  'invalid-definer',
+  'invalid-schema',
+  'unlocked-definer',
+  'wrong-grants',
+  'function-drift',
+  'missing-trigger',
+  'bad-function-result',
+  'missing-protection',
+  'definer-runtime-error',
+  'definition-drift',
+  'schema-drift',
+  'missing-non-core-table',
+  'ambiguous-source',
+  'source-incomplete',
+  'source-changed'
+]) {
+  test(`restore fails closed for ${behavior} and suppresses private errors`, () => {
+    const harness = restoreHarness({ behavior });
+    try {
+      const result = harness.run();
+      assert.notEqual(result.status, 0);
+      assert.doesNotMatch(
+        result.stdout + result.stderr,
+        /PRIVATE_TOKEN|MySQL isolated restore verified/
+      );
+      if (!['ambiguous-source', 'source-incomplete'].includes(behavior)) {
+        assert.ok(harness.calls().some((call) => call.args[0] === 'rm'));
+      }
+    } finally {
+      harness.cleanup();
+    }
+  });
+}
+
+test('AWS HeadObject 404 is classified without exposing logs or object locations', () => {
+  const harness = restoreHarness({ s3: true, awsHead404: true });
+  try {
+    const result = harness.run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /operation=HeadObject, code=404/);
+    assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_TOKEN|fixture-backups/);
+    assert.equal(harness.calls().filter((call) => call.args[0] === 'run').length, 0);
+  } finally {
+    harness.cleanup();
+  }
 });

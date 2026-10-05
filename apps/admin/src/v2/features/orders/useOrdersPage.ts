@@ -41,6 +41,7 @@ import {
 } from './order-presentation';
 import { useOrderUpgradeBalanceReturn } from './useOrderUpgradeBalanceReturn';
 import { useOrderRefund } from './useOrderRefund';
+import { useOrderArchive } from './useOrderArchive';
 
 interface OrdersReferenceOptions {
   services: V2OptionSelector[];
@@ -77,6 +78,14 @@ export function useOrdersPage() {
   const canConsumeOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.create'));
   const canUpdateOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.update'));
   const canDeleteOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.delete'));
+  const archive = useOrderArchive({
+    canUpdateOrders,
+    isOrderActionUnavailable,
+    loadOrders,
+    closeDetail: (id) => {
+      if (detail.value?.id === id) detailVisible.value = false;
+    }
+  });
   const {
     order: refundingOrder,
     visible: refundVisible,
@@ -112,6 +121,7 @@ export function useOrdersPage() {
       page: 1,
       pageSize: 20,
       keyword: '',
+      archived: 'active' as NonNullable<V2OrderListQuery['archived']>,
       serviceOptionId: '',
       settlementPlatformOptionId: '',
       status: '' as V2OrderStatus | '',
@@ -130,6 +140,7 @@ export function useOrdersPage() {
         query.status,
         query.accountDisposition,
         query.accountSource,
+        query.archived !== 'active' ? 'archive-filter' : '',
         openedRange.value.length ? 'opened-range' : ''
       ].filter(Boolean).length
   );
@@ -222,6 +233,7 @@ export function useOrdersPage() {
     query.status = '';
     query.accountDisposition = '';
     query.accountSource = '';
+    query.archived = 'active';
     openedRange.value = [];
     query.page = 1;
     loadCurrentOrders();
@@ -333,6 +345,7 @@ export function useOrdersPage() {
   }
 
   function hasLifecycleActions(order: V2Order) {
+    if (order.archivedAt) return false;
     return (
       (canUpdateOrders.value &&
         (order.operations.canRecordUpgradeBalanceReturn ||
@@ -344,7 +357,9 @@ export function useOrdersPage() {
   }
 
   function handleLifecycleCommand(command: unknown, order: V2Order) {
-    if (command === 'upgrade-balance-return') {
+    if (command === 'archive') {
+      archive.openArchive(order);
+    } else if (command === 'upgrade-balance-return') {
       openUpgradeBalanceReturn(order);
     } else if (command === 'reverse-upgrade-balance-return') {
       void reverseUpgradeBalanceReturn(order);
@@ -511,6 +526,7 @@ export function useOrdersPage() {
   }
 
   return {
+    archive,
     statusOptions,
     accountDispositionOptions,
     items,

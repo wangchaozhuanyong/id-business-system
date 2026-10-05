@@ -19,6 +19,9 @@ from contextlib import ExitStack, redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+TEST_RUNTIME = Path(__file__).resolve().parents[2] / '.deploy'
+TEST_RUNTIME.mkdir(exist_ok=True)
+
 spec = importlib.util.spec_from_file_location('deployment', Path(__file__).with_name('remote-deploy.py'))
 deployment = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deployment)
@@ -733,7 +736,7 @@ class HistoricalContinuationTests(unittest.TestCase):
     def test_continuation_policy_requires_the_pinned_complete_identity(self):
         source = Path(__file__).resolve().parents[2]
         deployment.continuation_policy(source)
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
             policy = self.policy(); policy['expectedCurrent'] = 'f' * 40
             (root / 'deploy/aws' / (deployment.HISTORY_CONTINUATION_POLICY_ID + '.json')).write_text(
@@ -742,7 +745,7 @@ class HistoricalContinuationTests(unittest.TestCase):
                 deployment.continuation_policy(root)
 
     def test_successful_original_private_manifest_and_both_receipts_are_required(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); policy, values = self.fixture(root)
             self.assertEqual(deployment.verify_continuation_baseline(root, policy), values['release-manifest.json'])
             for filename in values:
@@ -766,14 +769,14 @@ class HistoricalContinuationTests(unittest.TestCase):
             lambda x: x['release-manifest.json']['dataAuditAfter'].update(violationCount=0),
         ]
         for index, mutate in enumerate(mutations):
-            with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
                 root = Path(name); policy, values = self.fixture(root)
                 mutate(values); self.save_fixture(root, policy, values)
                 with self.subTest(index=index), self.assertRaises(RuntimeError):
                     deployment.verify_continuation_baseline(root, policy)
 
     def test_receipts_cannot_be_public_symlinks_or_hardlinks(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); path = root / 'private.json'; path.write_text('{}'); path.chmod(0o600)
             link = root / 'link.json'; link.symlink_to(path.name)
             hard = root / 'hard.json'; deployment.os.link(path, hard)
@@ -805,7 +808,7 @@ class HistoricalContinuationTests(unittest.TestCase):
             'continuation': policy['continuation']}}
 
     def audit(self, report, stage):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); before = root / 'before.json'; before.write_text('{}'); before.chmod(0o600)
             source = Path(__file__).resolve().parents[2]
             with patch.object(deployment, 'environment_values', return_value={
@@ -845,7 +848,7 @@ class HistoricalContinuationTests(unittest.TestCase):
 
     def test_candidate_allows_only_the_frozen_registration_files_and_named_controls(self):
         policy = self.policy()
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); (root / 'apps/api').mkdir(parents=True)
             (root / 'apps/api/unrelated.ts').write_text('unchanged')
             for filename in policy['candidateSourceSha256']:
@@ -881,7 +884,7 @@ class HistoricalAuditTests(unittest.TestCase):
             'stage': 'after', 'checkCount': 48, 'violationCount': 10, 'unavailableCheckCount': 0}}
 
     def audit(self, report, historical=True):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); source = root / 'candidate'
             (source / 'deploy/aws').mkdir(parents=True)
             (source / 'scripts').mkdir()
@@ -929,7 +932,7 @@ class HistoricalAuditTests(unittest.TestCase):
                             'Nested mount target must exist inside a read-only parent bind')
             return json.dumps(self.report())
 
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); source = root / 'candidate'
             (source / 'scripts').mkdir(parents=True)
             (source / 'deploy/aws').mkdir(parents=True)
@@ -945,7 +948,7 @@ class HistoricalAuditTests(unittest.TestCase):
                                  stage='after', source=source, before_receipt=before)
 
     def test_private_receipt_is_owned_by_actual_non_root_reader_and_remains_owner_read_only(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); before = root / 'before-audit.json'
             before.write_text('{}'); before.chmod(0o600)
             parent_mode = root.stat().st_mode
@@ -964,7 +967,7 @@ class HistoricalAuditTests(unittest.TestCase):
             {'uid': True, 'gid': 1000, 'user': 'node'}, {'uid': '1000', 'gid': 1000, 'user': 'node'},
             {'uid': -1, 'gid': 1000, 'user': 'node'}, {'uid': 2147483648, 'gid': 1000, 'user': 'node'},
             {**self.reader_identity, 'unexpected': 'fixture-sensitive-value'}]
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             before = Path(name) / 'before-audit.json'; before.write_text('{}'); before.chmod(0o600)
             for identity in invalid:
                 with self.subTest(identity=identity), \
@@ -976,7 +979,7 @@ class HistoricalAuditTests(unittest.TestCase):
                     self.assertEqual(before.stat().st_mode & 0o777, 0o600)
 
     def test_shared_permissions_symlink_or_hardlink_receipt_cannot_be_reowned(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); original = root / 'before-audit.json'; original.write_text('{}')
             original.chmod(0o644)
             symlink_target = root / 'symlink-target-audit.json'
@@ -2287,7 +2290,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             deployment.fixed_continuation('unknown')
 
     def test_third_policy_keeps_original_rules_and_exact_seven_candidate_files(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
             policy = self.policy()
             path = root / 'deploy/aws' / (deployment.HISTORY_DIAGNOSTICS_POLICY_ID + '.json')
@@ -2326,7 +2329,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(deployment.DIAGNOSTICS_CONTROL_FILES), 13)
         self.assertTrue(set(added) <= deployment.DIAGNOSTICS_CANDIDATE_FILES)
         self.assertTrue(set(added).isdisjoint(deployment.DIAGNOSTICS_CONTROL_FILES))
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); target = root / 'deploy/aws' / (policy['id'] + '.json')
             target.parent.mkdir(parents=True)
             for filename in added:
@@ -2350,7 +2353,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
             'docs/V2_TASKS.md',
         )
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             directory = Path(name); root = directory / 'candidate'; root.mkdir()
             for filename in policy['candidateSourceSha256']:
                 path = root / filename; path.parent.mkdir(parents=True, exist_ok=True)
@@ -2537,7 +2540,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(candidate.get(filename), (digest, 0o644))
 
     def test_actual_6a_receipts_must_prove_the_previous_registration_gate_at_d0(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); policy, values = self.fixture(root)
             self.assertEqual(self.verify_fixture(root, policy), values['release-manifest.json'])
             with self.assertRaisesRegex(RuntimeError, 'proof changed'):
@@ -2557,7 +2560,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             lambda x: x['after-audit.json']['gate']['continuation'].update(manifestSha256='f' * 64),
             lambda x: x['release-manifest.json']['dataAuditAfter'].update(violationCount=0)]
         for index, mutate in enumerate(mutations):
-            with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
                 root = Path(name); policy, values = self.fixture(root); mutate(values)
                 self.save_fixture(root, policy, values)
                 with self.subTest(index=index), self.assertRaises(RuntimeError):
@@ -2595,7 +2598,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             compose.assert_called_once_with(Path('.'), 'run', '--rm', '--no-deps', 'migrate', timeout=900)
 
     def test_source_migration_guard_rejects_before_any_candidate_compose_command(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); previous = root / 'previous'; release = root / 'release'
             for directory in (previous, release):
                 (directory / 'apps/api/prisma-mysql/migrations').mkdir(parents=True)
@@ -2619,7 +2622,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             'deploy/caddy/Caddyfile.aws']
         self.assertTrue(all(name not in deployment.DIAGNOSTICS_CONTROL_FILES for name in frozen))
         self.assertNotIn('scripts/ci-recharge-check.mjs', deployment.DIAGNOSTICS_CONTROL_FILES)
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); data = io.BytesIO()
             for filename in frozen + list(policy['candidateSourceSha256']):
                 path = root / filename; path.parent.mkdir(parents=True, exist_ok=True)
@@ -2663,7 +2666,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
         prefix = f'id-business-system-{deployment.HISTORY_DIAGNOSTICS_BASELINE}/'
         cases = [('wrong', f'id-business-system-{deployment.HISTORY_CONTINUATION_BASELINE}/file'),
                  ('symlink', prefix + 'file'), ('duplicate', prefix + 'file')]
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name)
             for kind, path in cases:
                 data = io.BytesIO()
@@ -2692,7 +2695,7 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
             'metadataSha256': policy['continuation']['metadataSha256'], 'continuation': policy['continuation']}}
 
     def audit(self, report, stage):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); before = root / 'before.json'; before.write_text('{}'); before.chmod(0o600)
             with patch.object(deployment, 'environment_values', return_value={
                     'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
@@ -2751,7 +2754,7 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 deployment.release_services(admin, additions, edge, historical_diagnostics=True)
 
     def test_registration_guard_tracks_the_actual_updated_worker_including_legacy_shared_worker(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); compose = root / 'docker-compose.aws-mysql.yml'
             compose.write_text('services:\n  auto-recharge:\n  auto-registration:\n')
             self.assertFalse(deployment.registration_worker_changes(root, ('auto-recharge',)))
@@ -2783,7 +2786,7 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     deployment.service_state(None, 'auto-registration', include_container_id=True)
 
     def test_private_environment_has_to_remain_byte_identical_on_both_releases(self):
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             root = Path(name); old = root / 'old'; new = root / 'new'; old.mkdir(); new.mkdir()
             expected = b'APP_PUBLIC_URL=http://synthetic.test\nGOOGLE_DRIVE_SYNC_FOLDER_ID=synthetic\n'
             for path in (old / '.env.aws.production', new / '.env.aws.production'):
@@ -2812,10 +2815,14 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     manifest_mutation=False, legacy_layout=False, running_image_mutation=False,
                     registration_restarted=False, manifest_extra_image=False,
                     repin_override=False, candidate_mode=0o644,
-                    late_registration=None, first_split=False):
+                    late_registration=None, first_split=False,
+                    post_cleanup=False, environment_mutation=False,
+                    maintenance_failure=False, prepared_run=False, sealed_image_mutation=False,
+                    order_archive=False, archive_after_failure=False, archive_admin_drift=False,
+                    archive_migration_drift=False):
         # Real release orchestration, guards, private receipts, source archive comparison,
         # override writes and mixed-image manifest. All external calls are synthetic.
-        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
             base = Path(name).resolve(); (base / 'releases').mkdir()
             previous = base / 'releases/previous'; previous.mkdir()
             (base / 'current').symlink_to(previous)
@@ -2826,6 +2833,9 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
             commit = 'a' * 40; new_reference = repository + ':' + commit + '-123-1-auto-recharge'
             new_image = 'sha256:' + deployment.hashlib.sha256(b'new-recharge').hexdigest()
             manifest['googleDriveSyncFolderId'] = 'synthetic-existing-folder'
+            if order_archive:
+                manifest.update(commit=deployment.HISTORY_ORDER_ARCHIVE_BASELINE,
+                                sourceTree=deployment.ORDER_ARCHIVE_BASELINE_TREE)
             manifest['images'] = {service: {
                 'reference': repository + ':' + deployment.HISTORY_DIAGNOSTICS_BASELINE +
                     '-122-1-' + deployment.image_service(service),
@@ -2854,6 +2864,13 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
             compose_text = (Path(__file__).resolve().parents[2] / 'docker-compose.aws-mysql.yml').read_bytes()
             frozen = {'docker-compose.aws-mysql.yml': compose_text,
                 'deploy/caddy/Caddyfile.aws': b'unchanged synthetic edge'}
+            if order_archive:
+                frozen['apps/api/prisma-mysql/schema.prisma'] = b'model IdBusinessV2Order {\n  id String @id\n}\n'
+            if post_cleanup:
+                frozen.update({filename: b'unchanged fixture build/protocol source' for filename in (
+                    'package.json', 'package-lock.json', 'apps/api/package.json', 'apps/api/Dockerfile.mysql',
+                    'packages/shared/package.json', 'apps/api/tsconfig.json', 'apps/api/tsconfig.build.json',
+                    'apps/api/src/main.ts', 'packages/shared/src/index.ts')})
             for filename, content in frozen.items():
                 path = previous / filename; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content); path.chmod(0o644)
@@ -2907,28 +2924,64 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     b'  auto-registration:', b'  retired-registration:'))
             candidate = {**frozen, **{filename: ('synthetic-diagnostics:' + filename).encode()
                 for filename in policy['candidateSourceSha256']}}
+            if order_archive:
+                mysql_name = 'apps/api/prisma-mysql/schema.prisma'
+                field = b'  archivedAt                   DateTime?                           @map("archived_at") @db.DateTime(6)\n'
+                index = b'  @@index([deletedAt, archivedAt, createdAt, id], map: "id_business_v2_orders_archive_list_idx")\n'
+                candidate[mysql_name] = frozen[mysql_name].replace(b'}\n', field + index + b'}\n')
+                migration_name = 'apps/api/prisma-mysql/migrations/' + deployment.ORDER_ARCHIVE_MIGRATION + '/migration.sql'
+                candidate[migration_name] = (Path(__file__).resolve().parents[2] / migration_name).read_bytes()
+                if archive_migration_drift:
+                    candidate['apps/api/prisma-mysql/migrations/unreviewed/migration.sql'] = b'CREATE TABLE unreviewed (id INT);'
+                policy = {'candidateBindings': {
+                    'sourceSha256': {filename: deployment.hashlib.sha256(raw).hexdigest() for filename, raw in candidate.items()},
+                    'sourceGitModes': {filename: '100644' for filename in candidate},
+                    'sourceTree': OrderArchivePublicationTests.git_source_tree(base, candidate),
+                    'adminBuildHashes': {'apps/admin/dist/' + filename: deployment.hashlib.sha256(filename.encode()).hexdigest()
+                                         for filename in ('index.html', 'assets/archive.js', 'assets/archive.css')},
+                    'migration': {'name': deployment.ORDER_ARCHIVE_MIGRATION,
+                        'sqlSha256': deployment.ORDER_ARCHIVE_MIGRATION_SHA256,
+                        'mysqlSchemaSha256': deployment.hashlib.sha256(candidate[mysql_name]).hexdigest(),
+                        'baselineMysqlSchemaSha256': deployment.hashlib.sha256(frozen[mysql_name]).hexdigest()}}}
             if candidate_mutation:
-                candidate['apps/api/unapproved.ts'] = b'unreviewed'
+                candidate[{'unbound-finance': 'apps/api/src/id-business-v2/finance/unbound.ts', 'runtime-json': 'apps/api/src/unbound.json', 'runtime-js': 'apps/api/src/unbound.js'}.get(candidate_mutation, 'apps/api/src/main.ts' if post_cleanup else 'apps/api/unapproved.ts')] = b'unreviewed'
             candidate_archive = self.archive(commit, candidate, candidate_mode)
             baseline_archive = self.archive(deployment.HISTORY_DIAGNOSTICS_BASELINE, frozen)
             argv = ['remote-deploy.py', '--commit', commit, '--source-tree', 'b' * 40,
                 '--repository', repository, '--expected-current', deployment.HISTORY_DIAGNOSTICS_BASELINE,
                 '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111']
-            if not full_release:
+            if order_archive:
+                argv[argv.index('--expected-current') + 1] = deployment.HISTORY_ORDER_ARCHIVE_BASELINE
+                argv.extend(['--historical-finance-order-archive', '--order-archive-seal-sha256', 'c' * 64,
+                    '--order-archive-prepared-images-sha256', 'e' * 64,
+                    '--image-commit', commit, '--image-run-id', '120', '--image-run-attempt', '1'])
+            elif post_cleanup:
+                argv.extend(['--historical-finance-post-cleanup', '--post-cleanup-seal-sha256', 'c' * 64])
+                if prepared_run:
+                    argv.extend(['--image-commit', commit, '--image-run-id', '120', '--image-run-attempt', '1'])
+            elif not full_release:
                 argv.append('--historical-finance-recharge-diagnostics')
 
-            def state(directory, service, *, include_container_id=False):
+            def state(directory, service, *, include_container_id=False, include_environment_hash=False):
                 value = dict(states[service])
+                if include_environment_hash:
+                    value['environmentSha256'] = '1' * 64
                 if directory != previous:
                     if full_release and late_registration is not None and service in deployment.SERVICES:
                         value.update(image=new_image, reference=repository + ':' + commit +
                                      '-123-1-' + deployment.image_service(service))
-                    elif service == 'auto-recharge':
-                        value.update(image=new_image, reference=new_reference, containerId='c' * 64)
+                    elif (order_archive and service in ('api', 'admin')) or (
+                            not order_archive and service == ('api' if post_cleanup else 'auto-recharge')):
+                        value.update(image=new_image,
+                            reference=(repository + ':' + commit + '-120-1-' + service if order_archive else
+                                new_reference.replace('-auto-recharge', '-api') if post_cleanup else new_reference),
+                            containerId='c' * 64)
                     elif service == 'auto-registration' and registration_rebuilt:
                         value['containerId'] = 'd' * 64
                     elif service == 'auto-registration' and registration_restarted:
                         value['startedAtSha256'] = 'e' * 64
+                    if service == 'auto-registration' and environment_mutation:
+                        value['environmentSha256'] = '2' * 64
                 if not include_container_id:
                     value.pop('containerId')
                     value.pop('startedAtSha256')
@@ -2951,6 +3004,13 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 if args[:2] == ('up', '-d'):
                     switched.append(args[-1])
                     return ''
+                if order_archive and args == ('run', '--rm', '--no-deps', 'migrate'):
+                    return ''
+                if order_archive and '--entrypoint' in args and args[args.index('--entrypoint') + 1] == 'sh':
+                    entries = {filename.removeprefix('apps/admin/dist/'): digest
+                               for filename, digest in policy['candidateBindings']['adminBuildHashes'].items()}
+                    if archive_admin_drift: entries['assets/unreviewed.js'] = 'f' * 64
+                    return '\n'.join(digest + '  /usr/share/nginx/html/' + filename for filename, digest in entries.items())
                 if full_release and late_registration is not None:
                     late = ('media-resolver' if first_split else 'auto-recharge') in switched
                     runtime_service = 'auto-recharge' if first_split else 'auto-registration'
@@ -2977,11 +3037,21 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 return value
 
             def audit(directory, receipt, **kwargs):
+                if order_archive:
+                    if archive_after_failure and kwargs['stage'] == 'after': raise RuntimeError('Order archive after audit failed')
+                    return {'checkCount': 49, 'violationCount': 5,
+                        'historicalException': {'accepted': True, 'policyId': deployment.HISTORY_ORDER_ARCHIVE_POLICY_ID}}
+                if post_cleanup:
+                    return {'checkCount': 49, 'violationCount': 5,
+                        'historicalException': PostCleanupReleaseTests().report(kwargs['stage'])['gate']}
                 report = fixture.audit_report(kwargs['stage'])
                 return {'checkCount': 48, 'violationCount': 10, 'historicalException': report['gate']}
 
             output = io.StringIO()
             with ExitStack() as stack:
+                original_umask = deployment.os.umask(0o077)
+                deployment.os.umask(original_umask)
+                stack.callback(deployment.os.umask, original_umask)
                 original_open = Path.open
                 def track_release_lock(path, *args, **kwargs):
                     stream = original_open(path, *args, **kwargs)
@@ -3008,6 +3078,18 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                     (deployment, 'sync_new_table_grants', {'return_value': {'ok': True}}),
                     (deployment, 'wait_healthy', {'return_value': {}})]:
                     stack.enter_context(patch.object(obj, attr, **kwargs))
+                if post_cleanup:
+                    synthetic_seal = PostCleanupReleaseTests().seal(PostCleanupReleaseTests().policy())
+                    synthetic_seal['apiImage'] = 'sha256:' + 'f' * 64 if sealed_image_mutation else new_image
+                    stack.enter_context(patch.object(deployment, 'reviewed_post_cleanup_seal',
+                        return_value=(PostCleanupReleaseTests().policy(), synthetic_seal)))
+                    stack.enter_context(patch.object(deployment, 'post_cleanup_retention_maintenance',
+                        return_value={'status': 'RETIRED'},
+                        side_effect=RuntimeError('maintenance refused') if maintenance_failure else None))
+                if order_archive:
+                    stack.enter_context(patch.object(deployment, 'reviewed_order_archive_seal', return_value=(policy,
+                        {'images': {service: new_image for service in ('api', 'admin', 'migrate')},
+                         'migration': policy['candidateBindings']['migration']})))
                 recharge = stack.enter_context(patch.object(deployment, 'assert_no_active_recharge',
                     side_effect=recharge_failure))
                 registration = stack.enter_context(patch.object(deployment, 'assert_no_active_registration',
@@ -3546,7 +3628,8 @@ class MaintenanceContinuationTests(unittest.TestCase):
                             self.profile() if _args[1:] == ('config', '--format', 'json') else report)), self.assertRaises(RuntimeError):
                     deployment.audit(root, root / 'receipt', historical_maintenance=True,
                                      stage='before', source=root, origin=root)
-            for original in ('historical_exception', 'historical_continuation', 'historical_diagnostics'):
+            for original in ('historical_exception', 'historical_continuation',
+                             'historical_diagnostics', 'historical_post_cleanup'):
                 with self.subTest(original=original), self.assertRaisesRegex(RuntimeError, 'ambiguous'):
                     deployment.audit(root, root / 'receipt', historical_maintenance=True, **{original: True})
 
@@ -3891,8 +3974,27 @@ class MailboxApprovalTests(unittest.TestCase):
         deployment.require_reusable_paths(['scripts/v2-release-mailbox-audit.mjs'])
 
     def test_mailbox_gate_cannot_mix_with_another_approval(self):
-        with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
-            deployment.audit(None, None, historical_mailbox=True, historical_maintenance=True)
+        for approval in ('historical_maintenance', 'historical_post_cleanup', 'historical_order_archive'):
+            with self.subTest(approval=approval), patch.object(deployment, 'mailbox_audit') as mailbox, \
+                    patch.object(deployment, 'order_archive_audit') as archive, \
+                    self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                deployment.audit(None, None, historical_mailbox=True, **{approval: True})
+            mailbox.assert_not_called()
+            archive.assert_not_called()
+
+    def test_mailbox_with_archive_or_post_cleanup_stops_before_production_access(self):
+        base = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', deployment.MAILBOX_BASELINE,
+            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111',
+            '--historical-finance-mailbox-batch']
+        for approval in ('--historical-finance-post-cleanup', '--historical-finance-order-archive'):
+            with self.subTest(approval=approval), patch.object(deployment.sys, 'argv', base + [approval]), \
+                    patch.object(deployment.Path, 'open') as opened, patch.object(deployment, 'compose') as compose, \
+                    self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                deployment.main()
+            opened.assert_not_called()
+            compose.assert_not_called()
 
     def test_mailbox_audit_passes_credentials_only_on_stdin_and_writes_safe_private_receipt(self):
         source = Path(__file__).resolve().parents[2]
@@ -5080,12 +5182,561 @@ class MailboxApiOnlyTests(unittest.TestCase):
                 deployment.require_reusable_paths([name], mailbox_only=True)
         with tempfile.TemporaryDirectory(dir=self.runtime()) as directory:
             root = Path(directory)
+            for name in set(names) | set(deployment.MAILBOX_REUSE_BUILD_CONTROLS):
+                file = root / name; file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(self.fixture_bytes(repository, name))
+            deployment.verify_mailbox_carried_sources(root)
             for name in names:
                 file = root / name; file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(b'changed')
             with self.assertRaisesRegex(RuntimeError, 'worker source carry'):
                 deployment.verify_mailbox_carried_sources(root)
 
 
+
+
+
+class OrderArchivePublicationTests(unittest.TestCase):
+    @staticmethod
+    def git_source_tree(root, files):
+        # Independent Git object/tree implementation; no commit or workspace index.
+        objects = root / 'synthetic-source-objects.git'
+        subprocess.run(['git', 'init', '--bare', str(objects)], check=True, capture_output=True)
+        nested = {}
+        for filename, raw in files.items():
+            oid = subprocess.run(['git', '--git-dir=' + str(objects), 'hash-object', '-w', '--stdin'],
+                input=raw, check=True, capture_output=True).stdout.decode().strip()
+            parent = nested; parts = filename.split('/')
+            for part in parts[:-1]: parent = parent.setdefault(part, {})
+            parent[parts[-1]] = oid
+        def tree(entries):
+            lines = []
+            for name, value in entries.items():
+                mode, kind, oid = ('040000', 'tree', tree(value)) if isinstance(value, dict) else ('100644', 'blob', value)
+                lines.append(f'{mode} {kind} {oid}\t{name}\n')
+            return subprocess.run(['git', '--git-dir=' + str(objects), 'mktree'],
+                input=''.join(lines), text=True, check=True, capture_output=True).stdout.strip()
+        return tree(nested)
+
+    def test_archive_switches_only_api_admin_after_unique_migration_and_preserves_live_registration(self):
+        result = RechargeOnlyPublicationTests().publication(order_archive=True)
+        self.assertEqual(result.result, 0, result.error or result.output)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertTrue(all(call.kwargs == {'worker_changes': False} for call in result.guards))
+        self.assertEqual(result.recharge_calls, 2)
+        self.assertEqual(result.google_drive_calls, 0)
+        self.assertEqual(result.manifest['servicesUpdated'], ['api', 'admin'])
+        self.assertTrue(result.manifest['migrationApplied'])
+        self.assertEqual(result.manifest['newMigrations'], [deployment.ORDER_ARCHIVE_MIGRATION + '/migration.sql'])
+        mutations = [call.args[1:] for call in result.compose if call.args[1:3] == ('up', '-d') or call.args[-1] == 'migrate']
+        self.assertEqual(mutations[0], ('run', '--rm', '--no-deps', 'migrate'))
+        self.assertEqual([args[-1] for args in mutations[1:]], ['api', 'admin'])
+        self.assertEqual(len([call for call in result.run if call.args[:2] == ('docker', 'pull')]), 3)
+        self.assertEqual([call.kwargs['stage'] for call in result.audit_args], ['before', 'after'])
+        self.assertTrue(all(call.args[0] != result.previous for call in result.audit_args))
+        for service in deployment.SERVICES:
+            if service not in ('api', 'admin'):
+                self.assertEqual(result.manifest['images'][service], result.old_manifest['images'][service])
+                self.assertEqual(result.override['services'][service], result.old_override['services'][service])
+        self.assertFalse(result.manifest['orderArchivePublication']['workersPublished'])
+        self.assertNotIn('postCleanupFinancialPublication', result.manifest)
+
+    def test_archive_failed_after_audit_rolls_back_only_admin_api_and_keeps_migration(self):
+        result = RechargeOnlyPublicationTests().publication(order_archive=True, archive_after_failure=True)
+        self.assertEqual(result.result, 1)
+        self.assertEqual(result.current, result.previous)
+        self.assertEqual([call.args[2] for call in result.rollback], ['admin', 'api'])
+        self.assertEqual(len([call for call in result.compose if call.args[-1] == 'migrate']), 1)
+        self.assertEqual(result.registration_calls, 0)
+
+    def test_archive_rejects_extra_migration_admin_asset_or_worker_drift(self):
+        for values in ({'archive_migration_drift': True}, {'archive_admin_drift': True},
+                       {'registration_rebuilt': True}, {'registration_restarted': True},
+                       {'environment_mutation': True}, {'running_image_mutation': True}):
+            with self.subTest(values=values):
+                result = RechargeOnlyPublicationTests().publication(order_archive=True, **values)
+                self.assertNotEqual(result.result, 0)
+                self.assertEqual(result.current, result.previous)
+                self.assertTrue(all(call.args[2] in ('api', 'admin') for call in result.rollback))
+                self.assertEqual(result.registration_calls, 0)
+
+    def test_archive_active_recharge_blocks_migration_and_all_service_switches(self):
+        result = RechargeOnlyPublicationTests().publication(order_archive=True,
+            recharge_failure=[None, RuntimeError('Active recharge jobs prevent release')])
+        self.assertEqual(result.result, 1)
+        self.assertEqual(result.current, result.previous)
+        self.assertFalse(any(call.args[-1] == 'migrate' or call.args[1:3] == ('up', '-d') for call in result.compose))
+        self.assertEqual(result.registration_calls, 0)
+
+    def test_archive_scope_rejects_worker_migrations_edge_and_original_api_only_modes(self):
+        self.assertEqual(deployment.release_services(False, [], historical_order_archive=True),
+                         (('api', 'admin'), ('api', 'migrate', 'admin')))
+        for values in ({'admin_only': True, 'additions': []}, {'admin_only': False, 'additions': ['other/migration.sql']},
+                       {'admin_only': False, 'additions': [], 'edge_changed': True},
+                       {'admin_only': False, 'additions': [], 'historical_post_cleanup': True},
+                       {'admin_only': False, 'additions': [], 'historical_diagnostics': True}):
+            with self.subTest(values=values), self.assertRaises(RuntimeError):
+                deployment.release_services(**values, historical_order_archive=True)
+
+    def test_archive_reviewed_seal_is_required_before_production_lock_access(self):
+        argv = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', deployment.HISTORY_ORDER_ARCHIVE_BASELINE,
+            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111', '--historical-finance-order-archive']
+        with patch.object(deployment.sys, 'argv', argv), patch.object(deployment.Path, 'open') as opened, \
+                self.assertRaisesRegex(RuntimeError, 'independent reviewed seal'):
+            deployment.main()
+        opened.assert_not_called()
+
+
+class OrderArchiveBoundaryTests(unittest.TestCase):
+    def test_archive_latest_actual_baseline_rejects_stale_commit_or_tree_before_image_readback(self):
+        manifest = {'commit': '3ca300486d0edfadda83c094a48474a63959fce7',
+                    'sourceTree': 'b376704b4039bcc162433c3358205ae60c4dcfa9'}
+        states = {service: {'reference': 'synthetic:' + service} for service in deployment.SERVICES}
+        override = {'services': {service: {'image': states[service]['reference'], 'pull_policy': 'never'}
+                    for service in deployment.SERVICES}}
+        override['services']['migrate'] = {'image': 'synthetic:migrate', 'pull_policy': 'never'}
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            previous = Path(name)
+            (previous / 'compose.release.json').write_text(json.dumps(override))
+            with patch.object(deployment, 'has_registration_worker', return_value=True), \
+                    patch.object(deployment, 'verify_continuation_running_images') as images:
+                deployment.require_order_archive_baseline(previous, manifest, states)
+                images.assert_called_once_with(states, manifest)
+                for field, value in (('commit', 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'),
+                                     ('sourceTree', '410f1db22deb8629ab88da27fc0b93fd32987b2f'),
+                                     ('commit', '7f70688b9bf53a071a0a324ca558aeabc4ced2e3'),
+                                     ('sourceTree', '1dc54c20227dd713d61d4651882e5d73a47b9010')):
+                    images.reset_mock()
+                    with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'runtime baseline changed'):
+                        deployment.require_order_archive_baseline(previous, {**manifest, field: value}, states)
+                    images.assert_not_called()
+
+    def fixture(self):
+        policy = {'sourceAnchorSha256': 'a' * 64, 'metadataSha256': 'b' * 64,
+            'sources': {'preserved': {'rowCount': 5, 'sha256': 'c' * 64}},
+            'candidateBindings': {'sourceTree': 'd' * 40}}
+        seal = {'images': {name: 'sha256:' + 'e' * 64 for name in ('api', 'admin', 'migrate')},
+            'migration': {'name': deployment.ORDER_ARCHIVE_MIGRATION}}
+        gate = {'accepted': True, 'policyId': deployment.HISTORY_ORDER_ARCHIVE_POLICY_ID,
+            'status': 'APPROVED_ORDER_ARCHIVE_HISTORICAL_EXCEPTIONS', 'scope': 'API_ADMIN_ORDER_ARCHIVE',
+            'stage': 'before', 'checkCount': 49, 'executedCheckCount': 49, 'unavailableCheckCount': 0,
+            'violationCount': 5, 'candidateCommit': '1' * 40, 'candidateTree': '2' * 40,
+            'sourceTree': policy['candidateBindings']['sourceTree'], 'releaseSealSha256': '3' * 64,
+            'images': seal['images'], 'expectedCurrent': deployment.HISTORY_ORDER_ARCHIVE_BASELINE,
+            'historicalSourceBaseline': deployment.HISTORY_POST_CLEANUP_BASELINE,
+            'sourceAnchorSha256': policy['sourceAnchorSha256'], 'sources': policy['sources'],
+            'metadataSha256': policy['metadataSha256'],
+            'cleanupReceiptSha256': deployment.HISTORY_POST_CLEANUP_RECEIPT_SHA256,
+            'migration': seal['migration'], 'preparedImagesSha256': '4' * 64,
+            'preparationRunId': 120, 'preparationRunAttempt': 1}
+        return policy, seal, {'ok': False, 'checkCount': 49, 'violationCount': 5, 'gate': gate}
+
+    def test_audit_uses_sealed_candidate_api_readonly_and_rejects_any_changed_gate_fact(self):
+        policy, seal, report = self.fixture()
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            root = Path(name)
+            (root / 'compose.release.json').write_text(json.dumps({'services': {'api': {'image': 'fixture:candidate-api'}}}))
+            values = {'MYSQL_DATABASE': deployment.HISTORY_POST_CLEANUP_DATABASE,
+                'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:SYNTHETIC_PRIVATE_MARKER@localhost/' + deployment.HISTORY_POST_CLEANUP_DATABASE}
+            seal_original = root / 'external-seal.json'; seal_original.write_bytes(b'{"syntheticSeal":true}')
+            cleanup_original = root / 'cleanup-receipt.json'; cleanup_original.write_bytes(b'{"syntheticCleanup":true}')
+            for original in (seal_original, cleanup_original): original.chmod(0o600)
+            seal_digest = deployment.hashlib.sha256(seal_original.read_bytes()).hexdigest()
+            cleanup_digest = deployment.hashlib.sha256(cleanup_original.read_bytes()).hexdigest()
+            report['gate'].update(releaseSealSha256=seal_digest, cleanupReceiptSha256=cleanup_digest)
+            arguments = dict(stage='before', source=root, before_receipt=None, seal_sha=seal_digest,
+                candidate_commit='1' * 40, candidate_tree='2' * 40, prepared_sha='4' * 64,
+                image_run='120', image_attempt='1')
+            identity = {'uid': deployment.os.geteuid(), 'gid': deployment.os.getegid()}
+            with patch.object(deployment, 'reviewed_order_archive_seal', return_value=(policy, seal)), \
+                    patch.object(deployment, 'environment_values', return_value=values), \
+                    patch.object(deployment, 'historical_audit_reader', return_value=identity), \
+                    patch.object(deployment, 'ORDER_ARCHIVE_SEAL', seal_original), \
+                    patch.object(deployment, 'POST_CLEANUP_RECEIPT', cleanup_original), \
+                    patch.object(deployment, 'HISTORY_POST_CLEANUP_RECEIPT_SHA256', cleanup_digest), \
+                    patch.object(deployment, 'run', return_value=json.dumps([{'Id': seal['images']['api']}])), \
+                    patch.object(deployment, 'compose', return_value=json.dumps(report)) as compose:
+                accepted = deployment.order_archive_audit(root, root / 'receipt.json', **arguments)
+                self.assertEqual(accepted['checkCount'], 49)
+                argv = compose.call_args.args
+                self.assertIn('api', argv); self.assertNotIn('migrate', argv)
+                self.assertIn('scripts/v2-order-archive-release-audit.mjs', argv)
+                self.assertNotIn('SYNTHETIC_PRIVATE_MARKER', str(argv))
+                self.assertIn('@mysql/', compose.call_args.kwargs['env']['V2_DATA_INTEGRITY_DATABASE_URL'])
+                self.assertEqual((root / 'receipt.json').stat().st_mode & 0o777, 0o600)
+                for filename, original, target in (
+                        ('order-archive-seal.reader.json', seal_original, '/release-order-archive-seal.json:ro'),
+                        ('order-archive-cleanup.reader.json', cleanup_original, '/release-cleanup-receipt.json:ro')):
+                    reader = root / filename
+                    self.assertIn(str(reader) + ':' + target, argv)
+                    self.assertEqual(reader.read_bytes(), original.read_bytes())
+                    self.assertEqual(reader.stat().st_mode & 0o777, 0o400)
+                    self.assertEqual((reader.stat().st_uid, reader.stat().st_gid), (identity['uid'], identity['gid']))
+                    self.assertEqual(reader.stat().st_nlink, 1)
+                    self.assertNotEqual(reader.stat().st_ino, original.stat().st_ino)
+                    self.assertEqual(original.stat().st_mode & 0o777, 0o600)
+                for key in report['gate']:
+                    bad = copy.deepcopy(report); bad['gate'][key] = None
+                    compose.return_value = json.dumps(bad)
+                    with self.subTest(key=key), self.assertRaises(RuntimeError):
+                        deployment.order_archive_audit(root, root / 'denied.json', **arguments)
+                self.assertFalse((root / 'denied.json').exists())
+
+    def test_archive_cannot_use_mailbox_exemption_and_active_recharge_still_blocks(self):
+        for extra in ({'historical_order_archive': True}, {'historical_post_cleanup': True}):
+            with self.subTest(extra=extra), self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                deployment.release_services(False, [], historical_mailbox=True, **extra)
+        with patch.object(deployment, 'verify_mailbox_baseline') as baseline, \
+                patch.object(deployment, 'assert_no_active_jobs', side_effect=RuntimeError('Active recharge jobs prevent release')) as idle:
+            with self.assertRaisesRegex(RuntimeError, 'Active recharge jobs'):
+                deployment.assert_release_jobs_idle('current', ('api', 'admin'), mailbox_only=False)
+            idle.assert_called_once_with('current', worker_changes=False)
+            baseline.assert_not_called()
+            idle.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, 'cannot restart a test executor'):
+                deployment.assert_release_jobs_idle('current', ('api', 'admin'), mailbox_only=True)
+            idle.assert_not_called(); baseline.assert_not_called()
+
+    def test_archive_reader_rejects_owner_mode_links_changed_bytes_and_preserves_original(self):
+        for filename in ('order-archive-seal.reader.json', 'order-archive-cleanup.reader.json'):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+                root = Path(name); original = root / 'private.json'
+                content = b'{"syntheticPrivateEvidence":true}'
+                original.write_bytes(content); original.chmod(0o600)
+                digest = deployment.hashlib.sha256(content).hexdigest()
+                identity = {'uid': deployment.os.geteuid(), 'gid': deployment.os.getegid()}
+                def prepare():
+                    return deployment.prepare_post_cleanup_reader_copy(root, original, digest, filename, identity)
+                reader = prepare(); self.assertEqual(prepare(), reader)
+                for key in ('uid', 'gid'):
+                    identity[key] += 1
+                    with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+                    identity[key] -= 1
+                reader.chmod(0o600)
+                with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+                reader.write_bytes(b'changed'); reader.chmod(0o400)
+                with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+                reader.chmod(0o600); reader.write_bytes(content); reader.chmod(0o400)
+                hard = root / 'hardlink'; deployment.os.link(reader, hard)
+                with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+                hard.unlink(); reader.unlink(); reader.symlink_to(original)
+                with self.assertRaisesRegex(RuntimeError, 'reader evidence unavailable'): prepare()
+                reader.unlink(); original.chmod(0o644)
+                with self.assertRaisesRegex(RuntimeError, 'original evidence is not private'): prepare()
+                original.chmod(0o600); deployment.os.link(original, hard)
+                with self.assertRaisesRegex(RuntimeError, 'original evidence is not private'): prepare()
+                hard.unlink()
+                self.assertEqual(original.read_bytes(), content)
+                self.assertEqual(original.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(original.stat().st_nlink, 1)
+                self.assertFalse(reader.exists())
+
+    def test_reader_whitelist_is_exact_and_other_names_reject_before_open(self):
+        allowed = ('post-cleanup-seal.reader.json', 'post-cleanup-receipt.reader.json',
+                   'order-archive-seal.reader.json', 'order-archive-cleanup.reader.json')
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            root = Path(name); original = root / 'private.json'; original.write_bytes(b'synthetic-evidence'); original.chmod(0o600)
+            digest = deployment.hashlib.sha256(original.read_bytes()).hexdigest()
+            identity = {'uid': deployment.os.geteuid(), 'gid': deployment.os.getegid()}
+            for filename in allowed:
+                reader = deployment.prepare_post_cleanup_reader_copy(root, original, digest, filename, identity)
+                self.assertEqual(reader.name, filename)
+            for filename in ('unknown.reader.json', 'order-archive-receipt.reader.json',
+                             '../order-archive-seal.reader.json', '/order-archive-cleanup.reader.json', ''):
+                with self.subTest(filename=filename), patch.object(deployment.os, 'open') as opened, \
+                        self.assertRaisesRegex(RuntimeError, 'reader filename changed'):
+                    deployment.prepare_post_cleanup_reader_copy(root, original, digest, filename, identity)
+                opened.assert_not_called()
+
+    def test_fixed_recharge_cannot_mix_with_archive_post_cleanup_or_mailbox_before_access(self):
+        base = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', deployment.HISTORY_ORDER_ARCHIVE_BASELINE,
+            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111', '--recharge-pro-menu-b8']
+        for approval in ('--historical-finance-post-cleanup', '--historical-finance-order-archive',
+                         '--historical-finance-mailbox-batch'):
+            with self.subTest(approval=approval), patch.object(deployment.sys, 'argv', base + [approval]), \
+                    patch.object(deployment.urllib.request, 'urlopen') as fetch, \
+                    patch.object(deployment.os, 'umask') as umask, self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                deployment.main()
+            fetch.assert_not_called(); umask.assert_not_called()
+
+    def test_schema_and_actual_git_source_projection_allow_only_declared_nullable_archive_change(self):
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            root = Path(name); old = root / 'old'; new = root / 'new'; old.mkdir(); new.mkdir()
+            field = b'  archivedAt                   DateTime?                           @map("archived_at") @db.DateTime(6)\n'
+            index = b'  @@index([deletedAt, archivedAt, createdAt, id], map: "id_business_v2_orders_archive_list_idx")\n'
+            baseline = b'model IdBusinessV2Order {\n  id String @id\n}\n'
+            candidate = baseline.replace(b'}\n', field + index + b'}\n')
+            schema_name = 'apps/api/prisma-mysql/schema.prisma'
+            sql_name = 'apps/api/prisma-mysql/migrations/' + deployment.ORDER_ARCHIVE_MIGRATION + '/migration.sql'
+            (old / schema_name).parent.mkdir(parents=True); (old / schema_name).write_bytes(baseline)
+            files = {schema_name: candidate, sql_name: (Path(__file__).resolve().parents[2] / sql_name).read_bytes(),
+                     'README.md': b'independent source fixture'}
+            for filename, raw in files.items():
+                path = new / filename; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw); path.chmod(0o664)
+            policy = {'candidateBindings': {'sourceTree': OrderArchivePublicationTests.git_source_tree(root, files),
+                'sourceSha256': {filename: deployment.hashlib.sha256(raw).hexdigest() for filename, raw in files.items()},
+                'sourceGitModes': {filename: '100644' for filename in files},
+                'migration': {'name': deployment.ORDER_ARCHIVE_MIGRATION,
+                    'sqlSha256': deployment.ORDER_ARCHIVE_MIGRATION_SHA256,
+                    'mysqlSchemaSha256': deployment.hashlib.sha256(candidate).hexdigest(),
+                    'baselineMysqlSchemaSha256': deployment.hashlib.sha256(baseline).hexdigest()}}}
+            deployment.require_order_archive_source_scope(new, policy)
+            deployment.require_order_archive_schema_change(old, new, policy)
+            (new / 'unexpected.js').write_text('unreviewed')
+            with self.assertRaisesRegex(RuntimeError, 'projection'): deployment.require_order_archive_source_scope(new, policy)
+            (new / 'unexpected.js').unlink()
+            changed = candidate.replace(b'id String', b'id Int')
+            (new / schema_name).write_bytes(changed)
+            fake = copy.deepcopy(policy); fake['candidateBindings']['migration']['mysqlSchemaSha256'] = deployment.hashlib.sha256(changed).hexdigest()
+            with self.assertRaisesRegex(RuntimeError, 'beyond'): deployment.require_order_archive_schema_change(old, new, fake)
+            (new / schema_name).write_bytes(candidate)
+            (new / 'README.md').chmod(0o775)
+            with self.assertRaisesRegex(RuntimeError, 'mode'): deployment.require_order_archive_source_scope(new, policy)
+
+    def test_admin_requires_complete_actual_assets_and_never_accepts_unbound_css_js_or_links(self):
+        policy = {'candidateBindings': {'adminBuildHashes': {'apps/admin/dist/index.html': 'a' * 64,
+            'apps/admin/dist/assets/archive.js': 'b' * 64, 'apps/admin/dist/assets/archive.css': 'c' * 64}}}
+        lines = ['a' * 64 + '  /usr/share/nginx/html/index.html',
+                 'b' * 64 + '  /usr/share/nginx/html/assets/archive.js',
+                 'c' * 64 + '  /usr/share/nginx/html/assets/archive.css']
+        with patch.object(deployment, 'compose', return_value='\n'.join(lines)) as compose:
+            self.assertEqual(deployment.verify_order_archive_admin_build(Path('.'), policy)['verifiedFiles'], 3)
+            self.assertIn('find /usr/share/nginx/html', compose.call_args.args[-1])
+            compose.return_value = '\n'.join([*lines, 'd' * 64 + '  /usr/share/nginx/html/50x.html'])
+            deployment.verify_order_archive_admin_build(Path('.'), policy)
+            for result in ('\n'.join(lines[:-1]), '\n'.join([*lines, 'd' * 64 + '  /usr/share/nginx/html/assets/50x.html']),
+                           '\n'.join([*lines, 'd' * 64 + '  /usr/share/nginx/html/assets/unapproved.js']),
+                           '\n'.join([*lines, '/usr/share/nginx/html/assets/symlink'])):
+                compose.return_value = result
+                with self.subTest(result=result), self.assertRaises(RuntimeError):
+                    deployment.verify_order_archive_admin_build(Path('.'), policy)
+
+
+class PostCleanupReleaseTests(unittest.TestCase):
+    commit = 'a' * 40
+    tree = 'b' * 40
+    seal_sha = 'c' * 64
+    image = 'sha256:' + 'd' * 64
+
+    def test_maintenance_and_post_cleanup_cli_selection_stops_before_production_access(self):
+        argv = ['remote-deploy.py', '--commit', self.commit, '--source-tree', self.tree,
+            '--repository', '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', deployment.HISTORY_POST_CLEANUP_BASELINE,
+            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111',
+            '--historical-finance-maintenance-continuation',
+            '--historical-finance-post-cleanup', '--post-cleanup-seal-sha256', self.seal_sha]
+        with patch.object(deployment.sys, 'argv', argv), patch.object(deployment.Path, 'open') as opened, \
+                patch.object(deployment, 'compose') as compose, \
+                self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+            deployment.main()
+        opened.assert_not_called()
+        compose.assert_not_called()
+
+    def test_api_only_scope_rejects_schema_edge_admin_and_ambiguous_modes(self):
+        self.assertEqual(deployment.release_services(False, [], historical_post_cleanup=True),
+                         (('api',), ('api', 'migrate')))
+        for admin, additions, edge in ((True, [], False), (False, ['new.sql'], False), (False, [], True)):
+            with self.assertRaises(RuntimeError):
+                deployment.release_services(admin, additions, edge, historical_post_cleanup=True)
+        with self.assertRaises(RuntimeError):
+            deployment.release_services(False, [], historical_post_cleanup=True, historical_diagnostics=True)
+
+    def test_real_api_only_orchestration_preserves_original_registration_and_every_non_api_image(self):
+        result = RechargeOnlyPublicationTests().publication(post_cleanup=True)
+        self.assertEqual(result.result, 0, result.output or result.error)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.recharge_calls, 2)
+        self.assertEqual(result.google_drive_calls, 0)
+        self.assertEqual(result.manifest['servicesUpdated'], ['api'])
+        self.assertFalse(result.manifest['migrationApplied'])
+        self.assertFalse(result.manifest['postCleanupFinancialPublication']['workersPublished'])
+        self.assertEqual(result.manifest['postCleanupFinancialPublication']['retentionMaintenance'], {'status': 'RETIRED'})
+        for service in result.old_manifest['images']:
+            if service not in ('api', 'migrate'):
+                self.assertEqual(result.manifest['images'][service], result.old_manifest['images'][service])
+                self.assertEqual(result.override['services'][service], result.old_override['services'][service])
+        self.assertEqual([call.args[-1] for call in result.compose if call.args[1:3] == ('up', '-d')], ['api'])
+        pulls = [call.args[-1] for call in result.run if call.args[:2] == ('docker', 'pull')]
+        self.assertEqual(len(pulls), 2)
+        self.assertTrue(any(value.endswith('-api') for value in pulls))
+        self.assertTrue(any(value.endswith('-migrate') for value in pulls))
+        self.assertFalse(any('migrate' in call.args for call in result.compose))
+
+    def test_api_only_source_or_preserved_container_environment_drift_fails_and_rolls_back_only_api(self):
+        for kwargs in ({'candidate_mutation': True}, {'candidate_mutation': 'unbound-finance'},
+                       {'candidate_mutation': 'runtime-json'}, {'candidate_mutation': 'runtime-js'}, {'registration_rebuilt': True},
+                       {'registration_restarted': True}, {'environment_mutation': True}, {'maintenance_failure': True},
+                       {'sealed_image_mutation': True}):
+            result = RechargeOnlyPublicationTests().publication(post_cleanup=True, **kwargs)
+            self.assertEqual(result.result, 1, result.output or result.error)
+            self.assertEqual(result.registration_calls, 0)
+            self.assertEqual(result.current, result.previous)
+            self.assertTrue(all(call.args[2] == 'api' for call in result.rollback))
+            self.assertNotIn('auto-registration', [call.args[-1] for call in result.compose
+                if call.args[1:3] == ('up', '-d')])
+
+    def test_same_candidate_prepared_run_images_can_be_used_after_independent_seal_review(self):
+        result = RechargeOnlyPublicationTests().publication(post_cleanup=True, prepared_run=True)
+        self.assertEqual(result.result, 0, result.output or result.error)
+        self.assertEqual(result.manifest['imageBuildRun'], 'github-actions-120-1')
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.manifest['servicesUpdated'], ['api'])
+
+    def policy(self):
+        return {'version': 1, 'id': deployment.HISTORY_POST_CLEANUP_POLICY_ID,
+            'activation': 'EXTERNAL_REVIEWED_SEAL_REQUIRED', 'userApproved': False,
+            'expectedCurrent': deployment.HISTORY_POST_CLEANUP_BASELINE,
+            'activeDatabase': deployment.HISTORY_POST_CLEANUP_DATABASE, 'checkCount': 49,
+            'cleanupReceiptSha256': deployment.HISTORY_POST_CLEANUP_RECEIPT_SHA256,
+            'sourceAnchorSha256': 'e' * 64, 'metadataSha256': 'f' * 64,
+            'sources': {'accounts': {'rowCount': 2, 'sha256': '1' * 64}},
+            'candidateBindings': {'sourceSha256': {'scripts/fixture.mjs': '2' * 64},
+                'compiledServiceHashes': {'apps/api/dist/fixture.js': '3' * 64}}}
+
+    def seal(self, policy):
+        return {'version': 1, 'policyId': policy['id'], 'userApproved': True,
+            'approvalReference': 'human-review:fixture-only',
+            'expectedCurrent': policy['expectedCurrent'], 'activeDatabase': policy['activeDatabase'],
+            'candidateCommit': self.commit, 'candidateTree': self.tree, 'apiImage': self.image,
+            'policySha256': deployment.historical_fingerprint(policy),
+            'sourceAnchorSha256': policy['sourceAnchorSha256'],
+            'candidateBindingsSha256': deployment.historical_fingerprint(policy['candidateBindings'])}
+
+    def report(self, stage):
+        policy = self.policy()
+        return {'ok': False, 'checkCount': 49, 'violationCount': 5,
+            'identity': {'databaseName': policy['activeDatabase'], 'readOnly': '0', 'superReadOnly': '0',
+                'sessionReadOnly': '1', 'currentUser': 'id_business_audit@%',
+                'transactionIsolation': 'REPEATABLE-READ', 'foreignKeyChecks': '1'},
+            'gate': {'accepted': True, 'status': 'APPROVED_POST_CLEANUP_HISTORICAL_EXCEPTIONS',
+                'policyId': policy['id'], 'expectedCurrent': policy['expectedCurrent'],
+                'stage': stage, 'checkCount': 49, 'executedCheckCount': 49,
+                'unavailableCheckCount': 0, 'violationCount': 5, 'releaseSealSha256': self.seal_sha,
+                'candidateCommit': self.commit, 'candidateTree': self.tree, 'apiImage': self.image,
+                'sourceAnchorSha256': policy['sourceAnchorSha256'],
+                'sources': policy['sources'], 'metadataSha256': policy['metadataSha256'],
+                'cleanupReceiptSha256': policy['cleanupReceiptSha256']}}
+
+    def audit(self, report, stage, image=None):
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            root = Path(name); before = root / 'before.json'; before.write_text('{}'); before.chmod(0o600)
+            policy = self.policy()
+            (root / 'compose.release.json').write_text(json.dumps({'services': {'api': {'image': 'fixture:api'}}}))
+            with patch.object(deployment, 'reviewed_post_cleanup_seal', return_value=(policy, self.seal(policy))), \
+                    patch.object(deployment, 'environment_values', return_value={
+                        'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
+                    patch.object(deployment, 'prepare_post_cleanup_reader_copy',
+                        side_effect=lambda directory, original, digest, filename, identity: directory / filename), \
+                    patch.object(deployment.os, 'fchown'), \
+                    patch.object(deployment, 'service_state', return_value={'image': image or self.image, 'reference': 'fixture:api'}), \
+                    patch.object(deployment, 'run', return_value=json.dumps([{'Id': image or self.image}])), \
+                    patch.object(deployment, 'compose', side_effect=lambda directory, *args, **kwargs:
+                        json.dumps({'uid':1000,'gid':1000,'user':'node'} if '--entrypoint' in args else report)) as compose:
+                result = deployment.audit(root, root / 'receipt.json', historical_post_cleanup=True,
+                    post_cleanup_seal_sha256=self.seal_sha, candidate_commit=self.commit, candidate_tree=self.tree,
+                    stage=stage, source=root, before_receipt=before)
+                self.assertEqual((root / 'receipt.json').stat().st_mode & 0o777, 0o600)
+                return result, compose.call_args.args
+
+    def test_independent_49_gate_preserves_real_findings_and_read_only_reader_mounts(self):
+        for stage in ('before', 'after'):
+            result, command = self.audit(self.report(stage), stage)
+            self.assertEqual(result['violationCount'], 5)
+            self.assertEqual(result['historicalException']['checkCount'], 49)
+            self.assertIn('--post-cleanup-seal-sha256=' + self.seal_sha, command)
+            self.assertIn('--candidate-commit=' + self.commit, command)
+            self.assertIn('--candidate-tree=' + self.tree, command)
+            self.assertTrue(all(command[index + 1].endswith(':ro')
+                for index, part in enumerate(command) if part == '-v'))
+            self.assertTrue(any('post-cleanup-seal.reader.json:' in str(part) for part in command))
+            self.assertFalse(any(str(deployment.POST_CLEANUP_SEAL) + ':' in str(part) for part in command))
+            self.assertIn('api', command)
+            self.assertNotIn('migrate', command)
+
+    def test_49_gate_rejects_false_zero_stale_identity_and_any_changed_evidence(self):
+        mutations = [lambda r: r.update(ok=True), lambda r: r.update(checkCount=48),
+            lambda r: r.update(violationCount=0), lambda r: r['gate'].update(accepted=False),
+            lambda r: r['gate'].update(checkCount=48), lambda r: r['gate'].update(executedCheckCount=48),
+            lambda r: r['gate'].update(unavailableCheckCount=1), lambda r: r['gate'].update(violationCount=6),
+            lambda r: r['gate'].update(policyId=deployment.HISTORY_POLICY_ID),
+            lambda r: r['gate'].update(status='POST_CLEANUP_DRAFT_VERIFIED_NOT_ACTIVATED'),
+            lambda r: r['gate'].update(expectedCurrent='0'*40), lambda r: r['gate'].update(stage='other'),
+            lambda r: r['gate'].update(releaseSealSha256='0'*64), lambda r: r['gate'].update(candidateCommit='0'*40),
+            lambda r: r['gate'].update(candidateTree='0'*40), lambda r: r['gate'].update(sourceAnchorSha256='0'*64),
+            lambda r: r['gate'].update(sources={}), lambda r: r['gate'].update(metadataSha256='0'*64),
+            lambda r: r['gate'].update(cleanupReceiptSha256='0'*64), lambda r: r['gate'].update(apiImage='other'),
+            lambda r: r['identity'].update(databaseName='old'), lambda r: r['identity'].update(readOnly='1'),
+            lambda r: r['identity'].update(superReadOnly='1'), lambda r: r['identity'].update(sessionReadOnly='0'),
+            lambda r: r['identity'].update(currentUser='root@localhost'),
+            lambda r: r['identity'].update(foreignKeyChecks='0'),
+            lambda r: r['identity'].update(transactionIsolation='READ-COMMITTED')]
+        for stage in ('before', 'after'):
+            for index, mutate in enumerate(mutations):
+                report = self.report(stage); mutate(report)
+                with self.subTest(stage=stage, index=index), self.assertRaises(RuntimeError):
+                    self.audit(report, stage)
+        with self.assertRaisesRegex(RuntimeError, 'API image changed'):
+            self.audit(self.report('after'), 'after', 'sha256:' + '0'*64)
+
+    def test_external_seal_requires_real_candidate_source_and_private_fixed_evidence(self):
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            root = Path(name); policy = self.policy(); code = root / 'scripts/fixture.mjs'
+            code.parent.mkdir(); code.write_text('pure fixture')
+            policy['candidateBindings']['sourceSha256']['scripts/fixture.mjs'] = deployment.hashlib.sha256(code.read_bytes()).hexdigest()
+            receipt = root / 'operation-receipt.json'; receipt.write_text('{}'); receipt.chmod(0o600)
+            digest = deployment.hashlib.sha256(receipt.read_bytes()).hexdigest()
+            policy['cleanupReceiptSha256'] = digest
+            policy_file = root / 'deploy/aws' / (policy['id'] + '.json'); policy_file.parent.mkdir(parents=True)
+            seal_file = root / 'external-seal.json'
+            def verify(mutate=lambda p,s: None):
+                proposal = copy.deepcopy(policy); seal = self.seal(proposal); mutate(proposal, seal)
+                policy_file.write_text(json.dumps(proposal)); seal_file.write_text(json.dumps(seal)); seal_file.chmod(0o600)
+                seal_sha = deployment.hashlib.sha256(seal_file.read_bytes()).hexdigest()
+                with patch.object(deployment, 'POST_CLEANUP_SEAL', seal_file), \
+                        patch.object(deployment, 'POST_CLEANUP_RECEIPT', receipt), \
+                        patch.object(deployment, 'HISTORY_POST_CLEANUP_RECEIPT_SHA256', digest):
+                    return deployment.reviewed_post_cleanup_seal(root, seal_sha, self.commit, self.tree)
+            self.assertEqual(verify()[0]['userApproved'], False)
+            for mutate in [lambda p,s:s.update(userApproved=False), lambda p,s:s.update(approvalReference=''),
+                lambda p,s:s.update(candidateCommit='0'*40), lambda p,s:s.update(candidateTree='0'*40),
+                lambda p,s:s.update(apiImage='tag'), lambda p,s:s.update(policySha256='0'*64),
+                lambda p,s:s.update(candidateBindingsSha256='0'*64), lambda p,s:p.update(userApproved=True),
+                lambda p,s:p.update(checkCount=48), lambda p,s:p.update(activation='AUTO')]:
+                with self.assertRaises(RuntimeError): verify(mutate)
+            code.write_text('changed')
+            with self.assertRaisesRegex(RuntimeError, 'candidate source changed'): verify()
+            code.write_text('pure fixture'); receipt.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'private sealed evidence changed'): verify()
+            receipt.chmod(0o600); hard = root / 'hardlink'; deployment.os.link(receipt, hard)
+            with self.assertRaisesRegex(RuntimeError, 'private sealed evidence changed'): verify()
+            hard.unlink(); receipt.unlink(); receipt.symlink_to(code)
+            with self.assertRaisesRegex(RuntimeError, 'private sealed evidence changed'): verify()
+
+    def test_reader_copy_preserves_original_and_rejects_links_wrong_modes_owner_or_bytes(self):
+        with tempfile.TemporaryDirectory(dir=TEST_RUNTIME) as name:
+            root = Path(name); original = root / 'original.json'; original.write_bytes(b'private-fixture'); original.chmod(0o600)
+            digest = deployment.hashlib.sha256(original.read_bytes()).hexdigest()
+            identity = {'uid': deployment.os.geteuid(), 'gid': deployment.os.getegid(), 'user': 'node'}
+            def prepare():
+                return deployment.prepare_post_cleanup_reader_copy(root, original, digest, 'post-cleanup-seal.reader.json', identity)
+            reader = prepare(); self.assertEqual(prepare(), reader)
+            self.assertEqual(original.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(reader.stat().st_mode & 0o777, 0o400)
+            self.assertNotEqual(original.stat().st_ino, reader.stat().st_ino)
+            self.assertEqual(reader.read_bytes(), original.read_bytes())
+            reader.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+            reader.chmod(0o400); identity['uid'] += 1
+            with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+            identity['uid'] -= 1; hard = root / 'hardlink'; deployment.os.link(reader, hard)
+            with self.assertRaisesRegex(RuntimeError, 'reader evidence changed'): prepare()
+            hard.unlink(); reader.unlink(); reader.symlink_to(original)
+            with self.assertRaisesRegex(RuntimeError, 'reader evidence unavailable'): prepare()
+            reader.unlink(); original.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'original evidence is not private'): prepare()
 class FixedRecharge7fRuntimeScopeTests(unittest.TestCase):
     """The fixed 7f entry has independent runtime proof and original b8 finance."""
 
