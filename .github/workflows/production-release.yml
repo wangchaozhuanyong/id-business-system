@@ -300,7 +300,7 @@ jobs:
           python3 - <<'PY'
           import ast
           import base64
-          import gzip
+          import lzma
           import json
           from pathlib import Path
           import shlex
@@ -1074,6 +1074,160 @@ jobs:
               if any(proof_private_bytes(directory / name) != data for name, data in raw.items()):
                   raise ValueError()
               return result
+          PROOF_BASELINE_FILE_STATUSES = ('READABLE', 'MISSING', 'SYMLINK', 'NOT_REGULAR', 'HARDLINK',
+              'UNSAFE_MODE', 'OVERSIZED', 'CHANGED_DURING_READ', 'NOT_MEASURED')
+          def closed_maintenance_baseline_proof(value):
+              if (not isinstance(value, dict) or set(value) != {'currentCommit', 'privateReceipts', 'receiptsMatched',
+                      'runtimeCompose', 'override', 'registrationReferenceMatched', 'proofComplete'}
+                      or value['currentCommit'] != PROOF_MAINTENANCE_CURRENT or value['receiptsMatched'] is not True
+                      or type(value['proofComplete']) is not bool):
+                  raise ValueError()
+              def hashed(item):
+                  return isinstance(item, str) and re.fullmatch(r'[a-f0-9]{64}', item) is not None
+              def flag(item):
+                  return item is None or type(item) is bool
+              receipts = value['privateReceipts']
+              if not isinstance(receipts, dict) or set(receipts) != {'manifest', 'before', 'after'} or not all(hashed(item) for item in receipts.values()):
+                  raise ValueError()
+              for key, hashes, flags in (('runtimeCompose', ('sha256',), ('sourceMatched', 'registrationDeclared')),
+                      ('override', ('rawSha256', 'canonicalSha256'), ('shapeMatched',))):
+                  row = value[key]
+                  if (not isinstance(row, dict) or set(row) != {'fileStatus', *hashes, *flags}
+                          or row['fileStatus'] not in PROOF_BASELINE_FILE_STATUSES
+                          or any(item is not None and not hashed(item) for item in (row[name] for name in hashes))
+                          or not all(flag(row[name]) for name in flags)):
+                      raise ValueError()
+                  if row['fileStatus'] != 'READABLE':
+                      if any(row[name] is not None for name in (*hashes, *flags)):
+                          raise ValueError()
+                  elif not hashed(row[hashes[0]]):
+                      raise ValueError()
+              compose, override = value['runtimeCompose'], value['override']
+              if (compose['fileStatus'] == 'READABLE' and (type(compose['sourceMatched']) is not bool
+                      or compose['sourceMatched'] != (compose['sha256'] == PROOF_ISOLATION_COMPOSE_SHA256)
+                      or compose['sourceMatched'] and compose['registrationDeclared'] is not True)
+                      or override['fileStatus'] == 'READABLE' and (type(override['shapeMatched']) is not bool
+                          or override['shapeMatched'] and not hashed(override['canonicalSha256']))
+                      or not flag(value['registrationReferenceMatched'])):
+                  raise ValueError()
+              complete = (compose['fileStatus'] == override['fileStatus'] == 'READABLE'
+                  and compose['sourceMatched'] is True and compose['registrationDeclared'] is True
+                  and override['shapeMatched'] is True and value['registrationReferenceMatched'] is True)
+              if value['proofComplete'] != complete:
+                  raise ValueError()
+              return value
+          def readonly_maintenance_baseline_receipts(output, succeeded):
+              if not succeeded:
+                  return readonly_maintenance_receipts(output, False)
+              try:
+                  lines = output.strip().splitlines()
+                  observed = json.loads(lines[1])
+                  if not isinstance(observed, dict) or observed.get('currentCommit') != PROOF_MAINTENANCE_CURRENT or len(lines) == 2:
+                      return readonly_maintenance_receipts(output, True)
+                  if len(lines) != 3 or len(output.encode()) > 24000:
+                      raise ValueError()
+                  def unique(items):
+                      result = {}
+                      for key, item in items:
+                          if key in result:
+                              raise ValueError()
+                          result[key] = item
+                      return result
+                  def invalid(_value):
+                      raise ValueError()
+                  side = json.loads(lines[2], object_pairs_hook=unique, parse_constant=invalid)
+                  if not isinstance(side, dict) or set(side) != {'fixedMaintenanceBaselineProof'}:
+                      raise ValueError()
+                  return readonly_maintenance_receipts('\n'.join(lines[:2]), True) + [
+                      {'fixedMaintenanceBaselineProof': closed_maintenance_baseline_proof(side['fixedMaintenanceBaselineProof'])}]
+              except Exception:
+                  raise RuntimeError('Read-only diagnostic output unavailable') from None
+          def maintenance_baseline_proof(directory, manifest, states, registration_container):
+              names = {'manifest': 'release-manifest.json', 'before': 'before-audit.json', 'after': 'after-audit.json'}
+              raw = {key: proof_private_bytes(directory / name) for key, name in names.items()}
+              current_maintenance_readback(directory, manifest, states)
+              if (manifest.get('imageBuildRun') != PROOF_MAINTENANCE_RUN
+                      or any(image.get('sourceCommit') != PROOF_MAINTENANCE_CURRENT
+                          or not isinstance(image.get('reference'), str) or not re.fullmatch(
+                              r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+                              + PROOF_MAINTENANCE_CURRENT + '-37302661631-1-' + ('auto-recharge' if service == 'auto-registration' else service),
+                              image['reference']) for service in (*PROOF_SERVICES, 'migrate')
+                          for image in (manifest.get('images', {}).get(service, {}),))
+                      or any(proof_private_bytes(directory / name) != raw[key] for key, name in names.items())):
+                  raise ValueError()
+              def config(name):
+                  path = directory / name
+                  identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                  initial = None
+                  try:
+                      initial = path.lstat()
+                      if stat.S_ISLNK(initial.st_mode):
+                          return 'SYMLINK', None
+                      if not stat.S_ISREG(initial.st_mode):
+                          return 'NOT_REGULAR', None
+                      if initial.st_nlink != 1:
+                          return 'HARDLINK', None
+                      if stat.S_IMODE(initial.st_mode) not in ((0o400, 0o600, 0o644, 0o664) if name == 'docker-compose.aws-mysql.yml' else (0o400, 0o600, 0o644)):
+                          return 'UNSAFE_MODE', None
+                      if initial.st_size > 8 * 1024 * 1024:
+                          return 'OVERSIZED', None
+                      with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+                          info = os.fstat(source.fileno())
+                          if identity(info) != identity(initial):
+                              return 'CHANGED_DURING_READ', None
+                          data = source.read(8 * 1024 * 1024 + 1)
+                          if identity(os.fstat(source.fileno())) != identity(info) or identity(path.lstat()) != identity(info):
+                              return 'CHANGED_DURING_READ', None
+                      return ('READABLE', data) if len(data) <= 8 * 1024 * 1024 else ('OVERSIZED', None)
+                  except FileNotFoundError:
+                      return ('MISSING' if initial is None else 'CHANGED_DURING_READ'), None
+                  except Exception:
+                      return 'NOT_MEASURED', None
+              result = {'currentCommit': PROOF_MAINTENANCE_CURRENT,
+                  'privateReceipts': {key: hashlib.sha256(data).hexdigest() for key, data in raw.items()}, 'receiptsMatched': True,
+                  'runtimeCompose': {'fileStatus': 'NOT_MEASURED', 'sha256': None, 'sourceMatched': None, 'registrationDeclared': None},
+                  'override': {'fileStatus': 'NOT_MEASURED', 'rawSha256': None, 'canonicalSha256': None, 'shapeMatched': None},
+                  'registrationReferenceMatched': None, 'proofComplete': False}
+              status, data = config('docker-compose.aws-mysql.yml')
+              result['runtimeCompose']['fileStatus'] = status
+              if data is not None:
+                  digest = hashlib.sha256(data).hexdigest()
+                  result['runtimeCompose'].update(sha256=digest, sourceMatched=digest == PROOF_ISOLATION_COMPOSE_SHA256,
+                      registrationDeclared=bool(re.search(rb'(?m)^  auto-registration:$', data)))
+              status, data = config('compose.release.json')
+              result['override']['fileStatus'] = status
+              if data is not None:
+                  result['override'].update(rawSha256=hashlib.sha256(data).hexdigest(), shapeMatched=False)
+                  try:
+                      def unique(items):
+                          value = {}
+                          for key, item in items:
+                              if key in value:
+                                  raise ValueError()
+                              value[key] = item
+                          return value
+                      def invalid(_value):
+                          raise ValueError()
+                      override = json.loads(data, object_pairs_hook=unique, parse_constant=invalid)
+                      expected = {'services': {service: {'image': manifest['images'][service]['reference'], 'pull_policy': 'never'}
+                          for service in (*PROOF_SERVICES, 'migrate')}}
+                      result['override'].update(canonicalSha256=proof_fingerprint(override), shapeMatched=override == expected)
+                  except Exception:
+                      pass
+              if result['runtimeCompose']['sourceMatched'] is True and result['override']['shapeMatched'] is True:
+                  if not isinstance(registration_container, str) or not re.fullmatch(r'[a-f0-9]{12,64}', registration_container):
+                      raise ValueError()
+                  try:
+                      inspected = subprocess.run(('docker', 'inspect', '--format', '{{.Config.Image}}', registration_container),
+                          capture_output=True, text=True, timeout=30)
+                      if inspected.returncode == 0 and isinstance(inspected.stdout, str) and len(inspected.stdout.encode()) <= 4096:
+                          result['registrationReferenceMatched'] = inspected.stdout.strip() == manifest['images']['auto-registration']['reference']
+                  except Exception:
+                      pass
+              result['proofComplete'] = (result['runtimeCompose']['sourceMatched'] is True
+                  and result['runtimeCompose']['registrationDeclared'] is True and result['override']['shapeMatched'] is True
+                  and result['registrationReferenceMatched'] is True)
+              return closed_maintenance_baseline_proof(result)
           def proof_fingerprint(value):
               return hashlib.sha256(json.dumps(value, sort_keys=True,
                   separators=(',', ':')).encode()).hexdigest()
@@ -1211,23 +1365,28 @@ jobs:
           if manifest.get('commit') == PROOF_MAINTENANCE_CURRENT:
               try:
                   states = {}
+                  registration_container = None
                   for service in PROOF_SERVICES:
                       container = read('docker', 'compose', '--env-file', str(base / 'current' / '.env.aws.production'),
                           '-f', str(base / 'current' / 'docker-compose.aws-mysql.yml'),
                           '-f', str(base / 'current' / 'compose.release.json'), 'ps', '-q', service)
                       if not re.fullmatch(r'[a-f0-9]{12,64}', container):
                           raise ValueError()
+                      if service == 'auto-registration':
+                          registration_container = container
                       fields = read('docker', 'inspect', '--format',
                           '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container).split()
                       if len(fields) != 3:
                           raise ValueError()
                       states[service] = dict(zip(('image', 'status', 'health'), fields))
                   result = current_maintenance_readback(base / 'current', manifest, states)
+                  side = maintenance_baseline_proof(base / 'current', manifest, states, registration_container)
               except Exception as error:
                   if not (isinstance(error, RuntimeError) and error.args == ('Read-only Docker diagnostic failed',)):
                       print(json.dumps({'readOnlyFailure': 'MANIFEST_UNAVAILABLE'}), flush=True)
                   raise SystemExit('Read-only manifest unavailable') from None
               print(json.dumps(result, separators=(',', ':')))
+              print(json.dumps({'fixedMaintenanceBaselineProof': side}, separators=(',', ':')))
               raise SystemExit(0)
           previous_manifest = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
           protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)
@@ -1329,8 +1488,8 @@ jobs:
               'containers': containers, 'images': images, 'services': states,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}, False), separators=(',', ':')))
           '''
-          payload = base64.b64encode(gzip.compress(program.encode('utf-8'), compresslevel=9, mtime=0)).decode('ascii')
-          decoder = ('import base64,gzip;exec(compile(gzip.decompress(base64.b64decode('
+          payload = base64.b64encode(lzma.compress(program.encode('utf-8'), preset=6)).decode('ascii')
+          decoder = ('import base64,lzma;exec(compile(lzma.decompress(base64.b64decode('
               + repr(payload) + ',validate=True)),"<readonly-diagnostics>","exec"))')
           parameters = {'commands': ['python3 -c ' + shlex.quote(decoder)], 'executionTimeout': ['120']}
           if len(json.dumps(parameters).encode('utf-8')) > 20 * 1024:
@@ -1339,14 +1498,15 @@ jobs:
           receivers = [node for node in ast.parse(program).body
               if isinstance(node, ast.FunctionDef) and node.name in
                   ('readonly_receipts', 'project_readonly_diagnostics', 'closed_fixed_proof_diagnostic', 'closed_fixed_isolation_diagnostic',
-                      'closed_current_maintenance_readback', 'readonly_maintenance_receipts')
+                      'closed_current_maintenance_readback', 'readonly_maintenance_receipts',
+                      'closed_maintenance_baseline_proof', 'readonly_maintenance_baseline_receipts')
               or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
           filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n'
           filter_program += ('output=sys.stdin.read(24001)\n'
-              'for receipt in readonly_maintenance_receipts(output, False):\n'
+              'for receipt in readonly_maintenance_baseline_receipts(output, False):\n'
               '    print(json.dumps(receipt, separators=(",", ":")), flush=True)\n'
               'if sys.argv[1] == "0":\n'
-              '    for receipt in readonly_maintenance_receipts(output, True)[1:]:\n'
+              '    for receipt in readonly_maintenance_baseline_receipts(output, True)[1:]:\n'
               '        print(json.dumps(receipt, separators=(",", ":")), flush=True)\n')
           Path('.deploy/production-release/readonly-diagnostics-filter.py').write_text(filter_program)
           PY
