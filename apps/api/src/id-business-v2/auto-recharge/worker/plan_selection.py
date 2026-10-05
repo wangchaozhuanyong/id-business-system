@@ -17,6 +17,8 @@ PLUS = re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Pl
 GO = re.compile(r"^\s*(?:Get Go|Try Go|Upgrade to Go|Get ChatGPT Go|获取\s*Go|试用\s*Go|升级至\s*Go|升级到\s*Go|订阅\s*Go|获得\s*Go)\s*$", re.I)
 PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro(?:\s*版本)?)\s*$", re.I)
 PRO_UPGRADE = re.compile(r"^\s*(?:Upgrade to Pro|升级至\s*Pro|升级到\s*Pro)\s*$", re.I)
+ALL_PLANS = re.compile(r"^\s*查看所有套餐\s*$")
+PRO_DETAILS_CARD = '[data-testid="pro-pricing-modal-column-top-half"]'
 PLAN_HEADINGS = re.compile(r"^\s*(?:Free|Go|Plus|Pro)\s*$", re.I)
 PLUS_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Plus\s*$", re.I)
 GO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Go\s*$", re.I)
@@ -58,10 +60,66 @@ def price_pattern(price):
                       rf"(?:\s*(?:\/\s*(?:mo(?:nth)?|月)|per month|每月))?)\s*$", re.I)
 
 
+def pro_groups(scope):
+    return scope.get_by_role('radiogroup', name=PRO_GROUP).or_(
+        scope.get_by_role('group', name=PRO_GROUP)).filter(visible=True)
+
+
+def pro_cards(scope):
+    return scope.locator(PRO_DETAILS_CARD).filter(visible=True)
+
+
+async def marked_pro_cards(scope):
+    if await scope.count() == 1 and await scope.get_attribute('data-testid') == 'pro-pricing-modal-column-top-half':
+        return scope
+    return pro_cards(scope)
+
+
+def pro_detail_groups(card):
+    return card.get_by_role('radiogroup').filter(visible=True)
+
+
+async def pro_card(scope, *, details=False):
+    """新入口/详情只使用官网已观察的 Pro 专属标记，不能扩大到卡片外。"""
+    card = await marked_pro_cards(scope)
+    count = await card.count()
+    if count != 1:
+        raise Stop('official_plan_region_ambiguous' if count > 1 else 'official_plan_option_not_found')
+    product = card.get_by_text('Pro', exact=True).filter(visible=True)
+    if (await card.get_by_role('heading').filter(visible=True).count() != 1
+            or await product.count() != 1
+            or not await product.evaluate("""node => {
+                const heading = node.closest('h1,h2,h3,h4,h5,h6,[role=heading]');
+                const card = node.closest('[data-testid="pro-pricing-modal-column-top-half"]');
+                return Boolean(heading && card && card.contains(heading));
+            }""")):
+        raise Stop('official_plan_region_ambiguous')
+    if details:
+        groups = pro_detail_groups(card)
+        count = await groups.count()
+        if count != 1:
+            raise Stop('official_plan_region_ambiguous' if count > 1 else 'official_plan_tier_not_found')
+        if not (await groups.get_attribute('aria-label') or '').strip():
+            raise Stop('official_plan_tier_not_found')
+    return card
+
+
+async def pro_button(scope, target_plan, require_upgrade=False):
+    if await (await marked_pro_cards(scope)).count():
+        card = await pro_card(scope, details=True)
+        choice = await pro_control(card, target_plan)
+        groups = pro_detail_groups(card)
+        if (await choice.count() != 1 or await choice.get_attribute('aria-checked') != 'true'
+                or await groups.locator('[role="radio"][aria-checked="true"]').filter(visible=True).count() != 1):
+            raise Stop('selected_plan_changed', stage='plan_selection')
+        return card.get_by_role('button').filter(visible=True)
+    return buttons(scope, PRO_UPGRADE if require_upgrade else PRO)
+
+
 async def pro_control(scope, target_plan):
     spec = selection_spec(target_plan)
-    groups = scope.get_by_role('radiogroup', name=PRO_GROUP).or_(
-        scope.get_by_role('group', name=PRO_GROUP)).filter(visible=True)
+    marked = bool(await (await marked_pro_cards(scope)).count())
+    groups = pro_detail_groups(await pro_card(scope, details=True)) if marked else pro_groups(scope)
     count = await groups.count()
     if count > 1:
         raise Stop('official_plan_region_ambiguous')
@@ -76,12 +134,14 @@ async def pro_control(scope, target_plan):
         numeric = groups.get_by_role('radio', name=re.compile(r'^\s*(?:100|200|500)\s*$'))
         if await numeric.filter(visible=True).count():
             return groups.get_by_role('radio', name=re.compile(rf'^\s*{spec["price_usd"]}\s*$')).filter(visible=True)
-    prices = scope.get_by_role('radio', name=price_pattern(100))
+    # 新卡片的所有选档路径都必须留在已验证组内，包括显式价格/倍数回退。
+    options = groups if marked else scope
+    prices = options.get_by_role('radio', name=price_pattern(100))
     for price in (200, 500):
-        prices = prices.or_(scope.get_by_role('radio', name=price_pattern(price)))
+        prices = prices.or_(options.get_by_role('radio', name=price_pattern(price)))
     if await prices.filter(visible=True).count() or spec['tier'] is None:
-        return scope.get_by_role('radio', name=price_pattern(spec['price_usd'])).filter(visible=True)
-    return scope.get_by_role('radio', name=tier_pattern(spec['tier'])).filter(visible=True)
+        return options.get_by_role('radio', name=price_pattern(spec['price_usd'])).filter(visible=True)
+    return options.get_by_role('radio', name=tier_pattern(spec['tier'])).filter(visible=True)
 
 
 def buttons(scope, name):
@@ -125,7 +185,11 @@ class Selection:
             plans.append('go')
         if await buttons(scope, PLUS).count():
             plans.append('plus')
-        if await buttons(scope, PRO).count():
+        card = await marked_pro_cards(scope)
+        count = await card.count()
+        pro_available = (count == 1 and await pro_detail_groups(card).count() == 1
+                         if count else bool(await buttons(scope, PRO).count()))
+        if pro_available:
             for plan in PRO_PRICE_PLANS.values():
                 if await (await pro_control(scope, plan)).count():
                     plans.append(plan)
@@ -133,7 +197,8 @@ class Selection:
 
     async def wait_for_plan_scope(self):
         """先在整页等待异步弹窗控件出现，再重新确定唯一套餐区域。"""
-        cue = personal_control(self.page).or_(buttons(self.page, GO)).or_(buttons(self.page, PLUS)).or_(buttons(self.page, PRO))
+        cue = (personal_control(self.page).or_(buttons(self.page, GO)).or_(buttons(self.page, PLUS))
+               .or_(buttons(self.page, PRO)).or_(pro_cards(self.page)))
         try:
             await cue.first.wait_for(state='visible', timeout=self.timeout())
         except Exception as exc:
@@ -146,7 +211,8 @@ class Selection:
                 pass
             raise Stop('official_plan_menu_timeout') from None
         scope = await plan_scope(self.page)
-        scoped_cue = personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
+        scoped_cue = (personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS))
+                      .or_(buttons(scope, PRO)).or_(pro_cards(scope)))
         if not await scoped_cue.count():
             self.diagnostics.update(role='region', matched_count=0)
             raise Stop('official_plan_menu_timeout')
@@ -211,7 +277,8 @@ class Selection:
     async def open_menu(self, target_plan):
         self.step('open_menu')
         scope = await plan_scope(self.page)
-        visible_options = personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
+        visible_options = (personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS))
+                           .or_(buttons(scope, PRO)).or_(pro_cards(scope)))
         if not await visible_options.count():
             upgrade = buttons(self.page, UPGRADE)
             # 官网首页同时存在顶部和侧栏 Upgrade；两者均只打开菜单。
@@ -245,10 +312,39 @@ class Selection:
                 await expect(personal).to_have_attribute('aria-selected', 'true', timeout=self.timeout())
         return await plan_scope(self.page)
 
+    async def open_pro_details(self, scope):
+        if (not await pro_cards(scope).count()
+                and not await buttons(scope, PRO).count()
+                and await buttons(scope, ALL_PLANS).count()):
+            self.step('choose_tier')
+            navigation = buttons(scope, ALL_PLANS)
+            await self.ready(navigation, 'official_plan_option_not_found')
+            await navigation.click(timeout=self.timeout())
+            scope = await plan_scope(self.page)
+            cue = pro_cards(scope).or_(buttons(scope, PRO))
+            # 只等待菜单出现；卡片和它的旧名称入口可同时匹配，实际控件仍逐一严格核验。
+            await self.ready(cue.first, 'official_plan_tier_not_found')
+            scope = await plan_scope(self.page)
+        if await pro_cards(scope).count():
+            card = await pro_card(scope)
+            if not await pro_detail_groups(card).count():
+                self.step('choose_tier')
+                entry = card.get_by_role('button').filter(visible=True)
+                await self.ready(entry, 'official_plan_option_not_found')
+                await entry.click(timeout=self.timeout())
+                scope = await plan_scope(self.page)
+                self.diagnostics['role'] = 'region'
+                await self.ready(pro_detail_groups(pro_cards(scope)), 'official_plan_tier_not_found')
+                scope = await plan_scope(self.page)
+            return await pro_card(scope, details=True)
+        return scope
+
     async def run(self, target_plan, require_upgrade=False):
         scope = await self.open_menu(target_plan)
-        await self.observe(scope)
         pro = selection_spec(target_plan)['price_usd'] is not None
+        if pro:
+            scope = await self.open_pro_details(scope)
+        await self.observe(scope)
         if pro:
             self.step('choose_tier', 'radio')
             choice = await pro_control(scope, target_plan)
@@ -258,7 +354,8 @@ class Selection:
             await expect(choice).to_have_attribute('aria-checked', 'true', timeout=self.timeout())
             self.diagnostics['selected'] = True
         self.step('choose_plan')
-        button = buttons(scope, GO if target_plan == 'go' else PRO_UPGRADE if require_upgrade and pro else PRO if pro else PLUS)
+        button = (await pro_button(scope, target_plan, require_upgrade) if pro else
+                  buttons(scope, GO if target_plan == 'go' else PLUS))
         await self.ready(button, 'official_plan_option_not_found')
         await self.observe(scope)
         self.report('plan_selection', diagnostics=safe_diagnostics(self.diagnostics))
@@ -294,14 +391,15 @@ async def select_plan(page, target_plan, report, *, require_upgrade=False):
 async def verify_selected_plan(page, target_plan, *, require_upgrade=False):
     scope = await plan_scope(page)
     pro = selection_spec(target_plan)['price_usd'] is not None
-    button = buttons(scope, GO if target_plan == 'go' else PRO_UPGRADE if require_upgrade and pro else PRO if pro else PLUS)
+    button = (await pro_button(scope, target_plan, require_upgrade) if pro else
+              buttons(scope, GO if target_plan == 'go' else PLUS))
     if await button.count() != 1 or not await button.is_enabled():
         raise Stop('selected_plan_changed', stage='plan_selection')
     if pro:
         choice = await pro_control(scope, target_plan)
         if await choice.count() != 1 or await choice.get_attribute('aria-checked') != 'true':
             raise Stop('selected_plan_changed', stage='plan_selection')
-        groups = scope.get_by_role('radiogroup', name=PRO_GROUP).or_(
-            scope.get_by_role('group', name=PRO_GROUP)).filter(visible=True)
+        groups = (pro_detail_groups(await pro_card(scope, details=True))
+                  if await (await marked_pro_cards(scope)).count() else pro_groups(scope))
         if await groups.count() == 1 and await groups.locator('[role="radio"][aria-checked="true"]').filter(visible=True).count() != 1:
             raise Stop('selected_plan_changed', stage='plan_selection')

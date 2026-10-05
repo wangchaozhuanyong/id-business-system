@@ -339,6 +339,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.missing_500 = False
         self.duplicate_500 = False
         self.numeric_controls = False
+        self.current_pro_card = False
         self.usage_controls = False
         self.usage_english = False
         self.subscription_plan = None
@@ -441,6 +442,15 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                     html = html.replace(old, f'>{amount}<br>{label}</button>')
                 html = html.replace('<button id="five"', '<div role="radiogroup" aria-label="Pro 套餐"><button id="five"')
                 html = html.replace('<p id="usage">', '</div><button role="radio">MYR 2,100 最高使用额度</button><p id="usage">')
+            if self.current_pro_card:
+                html = html.replace('<section role="dialog" hidden><button>Get Plus</button>',
+                    '''<section role="dialog" hidden><button role="radio" aria-checked="true">个人</button>
+                    <div id="pro-card" data-testid="pro-pricing-modal-column-top-half"><h3>Pro</h3><button onclick="document.querySelector('#pro-card').hidden=true;
+                      document.querySelector('#pro-details').hidden=false">升级订阅，获取更高使用额度</button></div>''')
+                html = html.replace('<div role="radiogroup" aria-label="选择 Pro 套餐档位">',
+                    '<div id="pro-details" data-testid="pro-pricing-modal-column-top-half" hidden><h3>Pro</h3><div role="radiogroup" aria-label="Pro 用量">')
+                html = html.replace('<button onclick="create()">升级至 Pro</button></section>',
+                    '<button onclick="create()">升级订阅</button></div></section>')
             await route.fulfill(content_type="text/html; charset=utf-8", body=html)
         else:
             await route.abort()
@@ -618,6 +628,24 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(self.payments, 0)
 
+    async def test_current_pro_card_500_preserves_official_request_and_quote_binding(self):
+        self.plan = 'pro-500'
+        self.price_controls = self.numeric_controls = self.current_pro_card = True
+        result = await self.create()
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        self.assertEqual(result['quote']['plan'], 'pro-500')
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.creates[0]['plan_name'], 'chatgptpromax')
+        self.assertEqual(self.payments, 0)
+
+    async def test_current_pro_card_wrong_request_is_blocked_before_sending(self):
+        self.plan = 'pro-500'
+        self.price_controls = self.numeric_controls = self.current_pro_card = self.wrong_request = True
+        result = await self.create()
+        self.assertEqual(result['reason'], 'checkout_plan_mismatch', result)
+        self.assertEqual(self.creates, [])
+        self.assertEqual(self.payments, 0)
+
     async def test_pro500_wrong_request_is_blocked_before_sending(self):
         self.plan, self.price_controls, self.wrong_request = "pro-500", True, True
         result = await self.create()
@@ -769,6 +797,298 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             result = await self.pay_original()
         self.assertEqual(result["reason"], "payment_quote_changed", result)
         self.assertEqual(self.payments, 0)
+
+
+class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
+    """当前卡片/用量控件夹具；全部网络请求终止于本机。"""
+    async def asyncSetUp(self):
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
+        self.p = await async_playwright().start()
+        self.browser = await self.p.chromium.launch(headless=True)
+        self.context = await self.browser.new_context(service_workers="block")
+        self.requests = []
+        async def block(route):
+            self.requests.append(route.request.method)
+            await route.abort()
+        await self.context.route("**/*", block)
+        self.page = await self.context.new_page()
+        await self.page.set_content('''<html><body><section role="dialog" aria-label="升级套餐">
+            <button role="radio" aria-checked="true">个人</button>
+            <div id="cards">
+              <article><h3>Go</h3><button>Get Go</button></article>
+              <article><h3>Plus</h3><button>Get Plus</button></article>
+              <article id="pro-card" data-testid="pro-pricing-modal-column-top-half"><div><h3>Pro</h3></div>
+                <button id="entry" onclick="openPro()">升级订阅，获取更高使用额度</button></article>
+            </div>
+            <div id="pro-details" data-testid="pro-pricing-modal-column-top-half" hidden>
+              <div><h3>Pro</h3></div>
+              <div role="radiogroup" aria-label="Pro 用量" id="usage-group">
+                <button role="radio" id="tier100" aria-checked="false" onclick="choose(100)">100</button>
+                <button role="radio" id="tier200" aria-checked="true" onclick="choose(200)">200</button>
+                <button role="radio" id="tier500" aria-checked="false" onclick="choose(500)">500</button>
+              </div>
+              <div><div><button id="final" onclick="finalClick()">升级订阅</button></div></div>
+            </div>
+            <aside><button role="radio" id="unrelated500" aria-checked="false"
+                onclick="this.setAttribute('aria-checked','true')">500</button>
+              <button id="unrelated-final" onclick="finalClick()">升级订阅</button></aside>
+            </section><script>
+              window.entryClicks=0;window.finalClicks=0;
+              function openPro(){window.entryClicks++;document.querySelector('#cards').hidden=true;
+                document.querySelector('#pro-details').hidden=false;}
+              function choose(n){document.querySelectorAll('#usage-group [role=radio]').forEach(
+                node=>node.setAttribute('aria-checked',node.textContent.trim()===String(n)));}
+              function finalClick(){window.finalClicks++;fetch('https://chatgpt.com/backend-api/payments/checkout',
+                {method:'POST',body:'synthetic'});}
+            </script></body></html>''')
+
+    async def asyncTearDown(self):
+        await self.context.close()
+        await self.browser.close()
+        await self.p.stop()
+
+    async def select(self, *, require_upgrade=False):
+        with patch('plan_selection.STEP_SECONDS', .3), patch('plan_selection.SELECTION_SECONDS', 3):
+            return await select_plan(self.page, 'pro-500', lambda *_args, **_kwargs: None,
+                                     require_upgrade=require_upgrade)
+
+    async def assert_unsubmitted(self):
+        self.assertEqual(await self.page.evaluate('window.finalClicks'), 0)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(await self.page.locator('#unrelated500').get_attribute('aria-checked'), 'false')
+
+    async def assert_blocked(self, reason):
+        with self.assertRaises(Stop) as stopped:
+            await self.select()
+        self.assertEqual(stopped.exception.report['reason'], reason)
+        await self.assert_unsubmitted()
+        return stopped.exception.report
+
+    async def test_card_expands_before_maximum_selection_and_returns_only_scoped_cta(self):
+        button = await self.select()
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'), 'true')
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'false')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_existing_pro_details_and_plus_upgrade_reuse_only_verified_pro_scope(self):
+        await self.page.evaluate('openPro()')
+        button = await self.select(require_upgrade=True)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        await verify_selected_plan(self.page, 'pro-500', require_upgrade=True)
+        await self.assert_unsubmitted()
+
+    async def test_recommended_pro_heading_is_accepted_only_within_pro_marker(self):
+        await self.page.locator('#pro-card h3').evaluate('''node => {
+            node.innerHTML='<span>Pro</span><span>推荐</span>';
+        }''')
+        button = await self.select()
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_synthetic_locale_labels_use_only_observed_marker_structure(self):
+        await self.page.locator('#entry').evaluate('node=>node.textContent="Synthetic details action"')
+        await self.page.locator('#final').evaluate('node=>node.textContent="Synthetic final action"')
+        await self.page.locator('#usage-group').evaluate('node=>node.setAttribute("aria-label","Synthetic usage group")')
+        await self.page.locator('#pro-card h3').evaluate('node=>node.innerHTML="<span>Pro</span><span>Synthetic badge</span>"')
+        button = await self.select()
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_view_all_plans_reveals_card_before_expanding_pro(self):
+        await self.page.evaluate('''() => {
+            document.querySelector('#cards').hidden=true;
+            const navigation=document.createElement('button');navigation.textContent='查看所有套餐';
+            navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
+              document.querySelector('#cards').hidden=false;navigation.remove();};
+            document.querySelector('section').append(navigation);
+        }''')
+        button = await self.select()
+        self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_view_all_with_legacy_named_entry_still_requires_unique_card(self):
+        async def navigation(entry_name, duplicate=False):
+            await self.page.evaluate('''options => {
+                document.querySelector('#cards').hidden=true;
+                document.querySelector('#pro-details').hidden=true;
+                document.querySelector('#entry').textContent=options.entryName;
+                choose(200);window.entryClicks=0;window.navigationClicks=0;
+                const button=document.createElement('button');button.textContent='查看所有套餐';
+                button.onclick=()=>{window.navigationClicks++;
+                  document.querySelector('#cards').hidden=false;
+                  if(options.duplicate){const copy=document.querySelector('#pro-card').cloneNode(true);
+                    copy.id='duplicate-pro-card';document.querySelector('#cards').append(copy);}
+                  button.remove();};
+                document.querySelector('section').append(button);
+            }''', {'entryName': entry_name, 'duplicate': duplicate})
+
+        for entry_name in ('Get Pro', 'Upgrade to Pro'):
+            with self.subTest(entry_name=entry_name):
+                await navigation(entry_name)
+                button = await self.select()
+                self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
+                self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+                self.assertEqual(await button.get_attribute('id'), 'final')
+                await verify_selected_plan(self.page, 'pro-500')
+                await self.assert_unsubmitted()
+
+        await navigation('Get Pro', duplicate=True)
+        await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+
+    async def test_nested_pro_header_and_group_use_sibling_cta_in_same_card(self):
+        await self.page.locator('#pro-details').evaluate('''node => {
+            const header=document.createElement('div');
+            header.append(node.querySelector('h3'),node.querySelector('#usage-group'));
+            node.prepend(header);
+        }''')
+        button = await self.select()
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_duplicate_view_all_navigation_is_not_used(self):
+        await self.page.evaluate('''() => {
+            document.querySelector('#cards').hidden=true;
+            for(let n=0;n<2;n++){const button=document.createElement('button');
+              button.textContent='查看所有套餐';document.querySelector('section').append(button);}
+        }''')
+        await self.assert_blocked('official_plan_option_ambiguous')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+
+    async def test_duplicate_or_disabled_expansion_entry_stops_without_final_click(self):
+        await self.page.locator('#entry').evaluate('node=>node.after(node.cloneNode(true))')
+        await self.assert_blocked('official_plan_option_ambiguous')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+        await self.page.locator('#pro-card #entry').last.evaluate('node=>node.remove()')
+        await self.page.locator('#entry').evaluate('node=>node.disabled=true')
+        await self.assert_blocked('official_plan_option_disabled')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+
+    async def test_missing_maximum_cannot_use_unrelated_500_or_lower_tier(self):
+        await self.page.locator('#tier500').evaluate('node=>node.remove()')
+        report = await self.assert_blocked('official_plan_tier_not_found')
+        self.assertEqual(report['diagnostics']['step'], 'choose_tier')
+        self.assertEqual(report['diagnostics']['matched_count'], 0)
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
+
+    async def test_explicit_price_outside_pro_group_cannot_supply_missing_tier(self):
+        await self.page.locator('#usage-group').evaluate('''node => {
+            node.innerHTML='<button role="radio" aria-checked="true">Unknown</button>';
+            const outside=document.createElement('button');outside.id='outside-price';
+            outside.setAttribute('role','radio');outside.setAttribute('aria-checked','true');
+            node.after(outside);
+        }''')
+        for label in ('$500', 'Pro 500'):
+            await self.page.locator('#outside-price').evaluate('(node,label)=>node.textContent=label', label)
+            report = await self.assert_blocked('official_plan_tier_not_found')
+            self.assertEqual(report['diagnostics']['matched_count'], 0)
+
+    async def test_go_and_plus_do_not_expand_pro_or_require_its_tiers(self):
+        for entry_label in ('升级订阅，获取更高使用额度', 'Get Pro', 'Upgrade to Pro'):
+            await self.page.locator('#entry').evaluate('(node,label)=>node.textContent=label', entry_label)
+            for target, label in (('go', 'Get Go'), ('plus', 'Get Plus')):
+                button = await select_plan(self.page, target, lambda *_args, **_kwargs: None)
+                self.assertEqual(await button.inner_text(), label)
+                await verify_selected_plan(self.page, target)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+        await self.assert_unsubmitted()
+
+    async def test_duplicate_or_disabled_maximum_stops_without_selecting_another_tier(self):
+        await self.page.locator('#tier500').evaluate('node=>node.after(node.cloneNode(true))')
+        await self.assert_blocked('official_plan_option_ambiguous')
+        await self.page.locator('#usage-group #tier500').last.evaluate('node=>node.remove()')
+        await self.page.locator('#tier500').evaluate('node=>node.disabled=true')
+        await self.assert_blocked('official_plan_option_disabled')
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
+
+    async def test_unnamed_group_never_authorizes_bare_numbers(self):
+        await self.page.locator('#usage-group').evaluate('node=>node.removeAttribute("aria-label")')
+        await self.assert_blocked('official_plan_tier_not_found')
+
+    async def test_duplicate_pro_group_is_rejected(self):
+        await self.page.locator('#usage-group').evaluate('node=>node.after(node.cloneNode(true))')
+        await self.assert_blocked('official_plan_option_ambiguous')
+
+    async def test_missing_or_duplicate_pro_card_marker_is_rejected(self):
+        await self.page.locator('#pro-details').evaluate('node=>node.removeAttribute("data-testid")')
+        await self.assert_blocked('official_plan_tier_not_found')
+        await self.page.locator('#pro-details').evaluate('''node => {
+            node.setAttribute('data-testid','pro-pricing-modal-column-top-half');
+            node.after(node.cloneNode(true));
+        }''')
+        await self.assert_blocked('official_plan_region_ambiguous')
+
+    async def test_pro_marker_cannot_include_another_plan_heading(self):
+        await self.page.locator('#pro-details').evaluate('''node => {
+            const heading=document.createElement('h3');heading.id='other-heading';heading.textContent='Plus';node.append(heading);
+        }''')
+        await self.assert_blocked('official_plan_region_ambiguous')
+        await self.page.locator('#other-heading').evaluate('node=>node.textContent="ChatGPT Plus"')
+        await self.assert_blocked('official_plan_region_ambiguous')
+
+    async def test_missing_pro_cta_cannot_fall_back_to_outside_generic_cta(self):
+        await self.page.locator('#final').evaluate('node=>node.remove()')
+        await self.assert_blocked('official_plan_option_not_found')
+
+    async def test_duplicate_or_disabled_final_cta_stops_before_checkout(self):
+        await self.page.locator('#final').evaluate('node=>node.after(node.cloneNode(true))')
+        await self.assert_blocked('official_plan_option_ambiguous')
+        await self.page.locator('#pro-details #final').last.evaluate('node=>node.remove()')
+        await self.page.locator('#final').evaluate('node=>node.disabled=true')
+        await self.assert_blocked('official_plan_option_disabled')
+
+    async def test_multiple_visible_pro_headings_never_assign_generic_cta(self):
+        await self.page.locator('#pro-card').evaluate('node=>node.after(node.cloneNode(true))')
+        await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+
+    async def test_generic_cta_cannot_escape_nearest_pro_heading_and_group_container(self):
+        await self.page.locator('#final').evaluate('node=>document.querySelector("section").append(node)')
+        await self.assert_blocked('official_plan_option_not_found')
+
+    async def test_generic_cta_in_other_plan_card_is_not_owned_by_pro(self):
+        await self.page.locator('#final').evaluate('''node => {
+            const other=document.createElement('article');other.innerHTML='<h3>Plus</h3>';
+            other.append(node);document.querySelector('section').append(other);
+        }''')
+        await self.assert_blocked('official_plan_option_not_found')
+
+    async def test_changed_tier_or_multiple_checked_radios_blocks_reverification(self):
+        await self.select()
+        await self.page.locator('#tier200').evaluate('node=>node.setAttribute("aria-checked","true")')
+        with self.assertRaises(Stop) as stopped:
+            await verify_selected_plan(self.page, 'pro-500')
+        self.assertEqual(stopped.exception.report['reason'], 'selected_plan_changed')
+        await self.page.evaluate('choose(200)')
+        with self.assertRaises(Stop) as stopped:
+            await verify_selected_plan(self.page, 'pro-500')
+        self.assertEqual(stopped.exception.report['reason'], 'selected_plan_changed')
+        await self.assert_unsubmitted()
+
+    async def test_legacy_get_pro_is_not_accepted_as_plus_upgrade_entry(self):
+        await self.page.evaluate('''() => {
+            openPro();document.querySelector('#usage-group').setAttribute('aria-label','选择 Pro 套餐档位');
+            document.querySelector('#final').textContent='Get Pro';
+            document.querySelectorAll('[data-testid]').forEach(node=>node.removeAttribute('data-testid'));
+        }''')
+        button = await self.select()
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        with self.assertRaises(Stop) as stopped:
+            await self.select(require_upgrade=True)
+        self.assertEqual(stopped.exception.report['reason'], 'official_plan_option_not_found')
+        await self.assert_unsubmitted()
 
 
 if __name__ == "__main__":
