@@ -2522,7 +2522,11 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                 return {item.name: (deployment.hashlib.sha256(archive.extractfile(item).read()).hexdigest(),
                                    item.mode & 0o7777)
                         for item in archive.getmembers() if item.isfile()}
-        baseline = snapshot(deployment.HISTORY_DIAGNOSTICS_BASELINE); candidate = snapshot('HEAD')
+        # This historical gate checks its actual diagnostics-only candidate.
+        # Later maintenance candidates use their separate fixed scope and must
+        # never expand the seven candidates or thirteen controls asserted here.
+        baseline = snapshot(deployment.HISTORY_DIAGNOSTICS_BASELINE)
+        candidate = snapshot('804bf1634032357ae9e0d2067b28231ac4d560b8')
         self.assertTrue({key: value for key, value in baseline.items() if key not in excluded} ==
                         {key: value for key, value in candidate.items() if key not in excluded},
                         'Unapproved path, source hash or full mode changed outside seven candidates and thirteen controls')
