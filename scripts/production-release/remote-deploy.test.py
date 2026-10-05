@@ -512,6 +512,31 @@ class GoogleDriveReleaseConfigTests(unittest.TestCase):
 
 
 
+class ReleaseCommandInputTests(unittest.TestCase):
+    def test_commands_without_input_keep_default_stdin(self):
+        with patch.object(deployment.subprocess, 'run', return_value=MagicMock(
+                returncode=0, stdout='ready\n')) as command:
+            self.assertEqual(deployment.run('fixture-command'), 'ready')
+        self.assertIsNone(command.call_args.kwargs['input'])
+
+    def test_compose_forwards_receipt_on_stdin_without_putting_it_in_arguments(self):
+        private_receipt = '{"fixturePrivateReceipt":true}'
+        with patch.object(deployment.subprocess, 'run', return_value=MagicMock(
+                returncode=0, stdout='ready\n')) as command:
+            deployment.compose(Path('fixture'), 'run', '--interactive', '-T', 'migrate',
+                               input_data=private_receipt)
+        self.assertEqual(command.call_args.kwargs['input'], private_receipt)
+        self.assertNotIn(private_receipt, command.call_args.args[0])
+
+    def test_failed_command_never_exposes_private_input_or_output(self):
+        private_receipt = 'fixture-private-receipt'
+        with patch.object(deployment.subprocess, 'run', return_value=MagicMock(
+                returncode=1, stdout=private_receipt, stderr=private_receipt)):
+            with self.assertRaisesRegex(RuntimeError, 'output suppressed') as error:
+                deployment.run('fixture-command', input_data=private_receipt)
+        self.assertNotIn(private_receipt, str(error.exception))
+
+
 class HistoricalAuditTests(unittest.TestCase):
     def report(self):
         return {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': {
@@ -519,40 +544,56 @@ class HistoricalAuditTests(unittest.TestCase):
             'expectedCurrent': 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
             'stage': 'after', 'checkCount': 48, 'violationCount': 10, 'unavailableCheckCount': 0}}
 
-    def audit(self, report, historical=True):
+    def audit(self, report, historical=True, stage='after'):
         with tempfile.TemporaryDirectory(dir='.deploy') as name:
             root = Path(name); source = root / 'candidate'
+            before_receipt = root / 'before.json'
+            before_receipt.write_text(json.dumps({'fixture': True, 'gate': {'accepted': True}}))
+            before_receipt.chmod(0o600)
             with patch.object(deployment, 'environment_values', return_value={
                     'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
                     patch.object(deployment, 'compose', return_value=json.dumps(report)) as compose:
                 result = deployment.audit(root, root / 'receipt.json', historical_exception=historical,
-                    stage='after', source=source, before_receipt=root / 'before.json')
+                    stage=stage, source=source, before_receipt=before_receipt)
                 saved = json.loads((root / 'receipt.json').read_text())
                 self.assertEqual(saved['ok'], report['ok'])
-                return result, compose.call_args.args
+                self.assertEqual(before_receipt.stat().st_mode & 0o777, 0o600)
+                return result, compose.call_args.args, compose.call_args.kwargs
 
     def test_regular_audit_never_accepts_legacy_exception(self):
         with self.assertRaisesRegex(RuntimeError, 'Financial data integrity audit failed'):
             self.audit(self.report(), False)
 
     def test_special_audit_preserves_actual_violation_count_and_mounts_exact_source(self):
-        result, command = self.audit(self.report())
+        result, command, _options = self.audit(self.report())
         self.assertEqual(result['violationCount'], 10)
         self.assertIn('scripts/v2-release-history-audit.mjs', command)
         self.assertIn('--stage=after', command)
-        self.assertIn('--before-receipt=/release-before-audit.json', command)
+        self.assertIn('--before-receipt=/dev/stdin', command)
 
-    def test_before_receipt_mount_does_not_require_creation_inside_read_only_policy(self):
-        _result, command = self.audit(self.report())
+    def test_private_before_receipt_uses_stdin_and_has_no_mount_or_user_override(self):
+        _result, command, options = self.audit(self.report())
         mounts = [command[index + 1] for index, value in enumerate(command) if value == '-v']
-        self.assertEqual(len(mounts), 3)
+        self.assertEqual(len(mounts), 2)
         self.assertTrue(all(mount.endswith(':ro') for mount in mounts))
         targets = [mount.rsplit(':', 2)[1] for mount in mounts]
-        self.assertEqual(targets, ['/app/scripts', '/release-policy', '/release-before-audit.json'])
-        receipt_target = targets[-1]
-        self.assertTrue(mounts[-1].endswith('/before.json:' + receipt_target + ':ro'))
-        self.assertFalse(any(receipt_target.startswith(target + '/') for target in targets[:-1]))
-        self.assertIn('--before-receipt=' + receipt_target, command)
+        self.assertEqual(targets, ['/app/scripts', '/release-policy'])
+        self.assertFalse(any('/before.json:' in mount for mount in mounts))
+        self.assertIn('--interactive', command)
+        self.assertIn('-T', command)
+        self.assertIn('--before-receipt=/dev/stdin', command)
+        self.assertNotIn('--user', command)
+        self.assertTrue(json.loads(options['input_data'])['fixture'])
+        self.assertNotIn(options['input_data'], command)
+
+    def test_before_audit_does_not_enable_or_send_stdin(self):
+        report = self.report()
+        report['gate']['stage'] = 'before'
+        _result, command, options = self.audit(report, stage='before')
+        self.assertNotIn('--interactive', command)
+        self.assertNotIn('-T', command)
+        self.assertNotIn('--before-receipt=/dev/stdin', command)
+        self.assertIsNone(options['input_data'])
 
     def test_changed_report_count_stage_schema_baseline_or_policy_is_rejected(self):
         mutations = [lambda x: x.update(violationCount=11),
