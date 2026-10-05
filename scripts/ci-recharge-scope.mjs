@@ -7,6 +7,7 @@ export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'secur
 export const auditRetentionMigration =
   'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
 export const historicalReleaseControlPaths = Object.freeze([
+  'deploy/aws/recharge-pro-menu-b8-20261005.json',
   'scripts/v2-release-mailbox-audit.mjs',
   'scripts/v2-release-mailbox-audit.test.mjs',
   'deploy/aws/historical-finance-20261005-mailbox-batch.json',

@@ -13,6 +13,14 @@ build_image() {
   echo "Built image: $service"
 }
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 ]]; then
+  test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0
+  python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile ''
+  exit 0
+fi
+
 admin_only="$(node --input-type=module - <<'JS'
 import { execFileSync } from 'node:child_process';
 import { isAdminOnly } from './scripts/ci-recharge-scope.mjs';

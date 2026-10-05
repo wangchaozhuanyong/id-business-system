@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "kind": "FIXED_RECHARGE_RUNTIME_SCOPE",
+  "id": "recharge-pro-menu-b8-20261005",
+  "enabled": false,
+  "approvalStatus": "NOT_APPROVED",
+  "expectedCurrent": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+  "baselineRelease": {
+    "commit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+    "sourceTree": "410f1db22deb8629ab88da27fc0b93fd32987b2f",
+    "previousCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "deploymentRun": "github-actions-37302661631-1",
+    "manifestSha256": "a0c248295509397e1862b13bd3aa41f46f32955ad8862226de56e63f868be9d8",
+    "beforeAuditSha256": "11424280ddfbc6abc51afe7f8355cafe0dccd90f3949daa773da532f649bd353",
+    "afterAuditSha256": "86bb5c0b7c958bdf0eedd71528ccee4a8237c45a3c882df2e623bb84d17545e2",
+    "composeSha256": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
+    "overrideRawSha256": "c4a0c1e8d884798e892aba3563ef91b5810e7e1937ddc624b984eef0b254ab21",
+    "overrideCanonicalSha256": "4894a05fc4102a960ec11b8266cec8ea30d13a23bc4af76869974c57de97f55b"
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "f63eeb60d191aeb535c96bcd13cdbca8bbf040119ef08ca259875f621f283972",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "a7becf0fc1d17dd6e843dbdf0c7ecb138a739ca6d9e8979767846e9b31d07d88",
+    "docs/V2_TASKS.md": "9e46d41212d9fc0f027c12b1e408428fbeb0e07f59a3bfcbf6a22d1a02a7e9e8"
+  },
+  "carriedSourceOnlySha256": {
+    "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.spec.ts": "4a9b6f82aafce8a5e9790107965666ea949d11362b7477220c2ac1c07e436a91",
+    "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.ts": "f98d0c9c912f5c4c29f90c119d3f338ffbc778608604e451db79d57c1177771b",
+    "deploy/aws/historical-finance-20261005-mailbox-batch.json": "52c875861326e20bc4cc5042bf0ac3890f3e78a4511091c155eea228b82d497f",
+    "scripts/production-release/maintain-image-cache.py": "50b5ea8eaba94082b37c900d5267158ed2899639541c2c0581e19d3a6e1c40bb",
+    "scripts/production-release/maintain-image-cache.test.py": "432dac74c6097e3ad371f6c3ed2b411d48a0f94de668e672759a5720e4e28e8f",
+    "scripts/v2-release-mailbox-audit.mjs": "dd2c696dafedb03bb5f5903547553c4ebdaba331543fc96eefe03d288019ac1b",
+    "scripts/v2-release-mailbox-audit.test.mjs": "1c85ece2271e764532de2e67f99a7d25a9113d9bfc20f8e1c36bc205ef716b90"
+  },
+  "controlSourceSha256": {
+    ".github/workflows/production-release.yml": "88913bf9f4b924e3c84f6eba40edf3e2f88d4b05e1d7489d573a10569db47528",
+    "scripts/production-release/build-images.sh": "91e8dd6e59ff0bf45407e621d73063a0f63f663710828e8e4c727c4913b8536b",
+    "scripts/production-release/push-images.sh": "f39a459a6da9fb0bfc00a0b83624b4a6767bb888a4b58de9a091ff4b3d89eb40",
+    "scripts/production-release/dispatch.sh": "79e677c64c9afa149613e4c84bf758dccefe6a42112da5115e575cc30d6ce1d5",
+    "scripts/production-release/remote-deploy.py": "121a0fe89383e0985564a269694c51695cb4e6ef9bc0cff4941714e5b8578edd",
+    "scripts/production-release/remote-deploy.test.py": "3b854889db075d968f54bad457dde51ef80ee00b39035b2f6ff72f57d9c5d6c9",
+    "scripts/ci-recharge-scope.mjs": "cff60fd1469d196988d7760571189fb99a18ee4f15b5a47d8de2392c76bc75fa",
+    "scripts/ci-recharge-scope.test.mjs": "3af225eaadcfae0919921e499e6f6051ecacd9c1b0a7ce88d10d54aaa1bdba3a",
+    "scripts/ci-recharge-release.test.mjs": "cf0b0f7bdd0c7a23d97e5d19196589ab41e0fbc3ee5aca9086bc38a5656af838",
+    "docs/PRODUCTION_RELEASE_OIDC.md": "1a37754b55403a24cd5374a0b94e89974cb187367c231c6b547e71cbbbd1d21a",
+    "scripts/ci-recharge-check.mjs": "c111bea7b903e4e51c0a4da4e8a7e074b75e3ec57bbe995ccf74f2ed8bfd97e6"
+  },
+  "sourceModes": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": 420,
+    "docs/V2_TASKS.md": 420,
+    "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.spec.ts": 420,
+    "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.ts": 420,
+    "deploy/aws/historical-finance-20261005-mailbox-batch.json": 420,
+    "scripts/ci-recharge-check.mjs": 420,
+    "scripts/production-release/maintain-image-cache.py": 420,
+    "scripts/production-release/maintain-image-cache.test.py": 420,
+    "scripts/v2-release-mailbox-audit.mjs": 420,
+    "scripts/v2-release-mailbox-audit.test.mjs": 420,
+    ".github/workflows/production-release.yml": 420,
+    "scripts/production-release/build-images.sh": 420,
+    "scripts/production-release/push-images.sh": 420,
+    "scripts/production-release/dispatch.sh": 420,
+    "scripts/production-release/remote-deploy.py": 420,
+    "scripts/production-release/remote-deploy.test.py": 420,
+    "scripts/ci-recharge-scope.mjs": 420,
+    "scripts/ci-recharge-scope.test.mjs": 420,
+    "scripts/ci-recharge-release.test.mjs": 420,
+    "docs/PRODUCTION_RELEASE_OIDC.md": 420
+  },
+  "scope": {
+    "servicesUpdated": ["auto-recharge"],
+    "imageServices": ["auto-recharge"],
+    "preservedServices": ["auto-registration", "api", "admin", "media-resolver", "mysql", "caddy"],
+    "imageReuseAllowed": false,
+    "cacheCleanupAllowed": false,
+    "migrationDeploymentAllowed": false,
+    "financialWritesAllowed": false,
+    "registrationRestartAllowed": false,
+    "googleDriveConfigAllowed": false,
+    "databaseGrantSyncAllowed": false
+  },
+  "financeValidator": {
+    "kind": "EXISTING_MAINTENANCE_48",
+    "sourceCommit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+    "originCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "policyId": "historical-finance-20261005-maintenance-continuation",
+    "checkCount": 48,
+    "executedCheckCount": 48,
+    "unavailableCheckCount": 0,
+    "violationCount": 6
+  }
+}
