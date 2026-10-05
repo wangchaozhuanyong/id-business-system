@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { isCiOnly } from './ci-recharge-scope.mjs';
 
 function fixture(run) {
   mkdirSync('.deploy', { recursive: true });
@@ -534,4 +535,55 @@ test('full Quality Gate includes the release guards alongside unchanged business
     'npm run acceptance:v2-rollback-integrity'
   ])
     assert.ok(full.includes(command), command);
+});
+
+test('mailbox release dispatch pins its independent approval and immutable existing build', () => {
+  const image = {
+    REUSE_IMAGE_COMMIT: 'f5826f9fb4ad0d846d9875c035c913a61eb68290',
+    REUSE_IMAGE_RUN_ID: '37312405714',
+    REUSE_IMAGE_RUN_ATTEMPT: '1'
+  };
+  dispatchFixture(
+    'historical-finance-20261005-mailbox-batch',
+    'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+    ({ execute, parametersFile }) => {
+      execute();
+      const command = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1);
+      assert.ok(command.includes('--historical-finance-mailbox-batch'));
+      assert.ok(command.includes('--image-run-id 37312405714'));
+      assert.ok(command.includes('--image-commit ' + image.REUSE_IMAGE_COMMIT));
+      assert.equal(command.includes('--historical-finance-maintenance-continuation'), false);
+    },
+    image
+  );
+  for (const changed of [
+    { REUSE_IMAGE_RUN_ID: '123' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '2' },
+    { REUSE_IMAGE_COMMIT: 'a'.repeat(40) },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { EXPECTED_CURRENT: 'a'.repeat(40) }
+  ])
+    dispatchFixture(
+      'historical-finance-20261005-mailbox-batch',
+      'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+      ({ execute, parametersFile, awsLog }) => {
+        assert.throws(execute);
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      },
+      { ...image, ...changed }
+    );
+});
+
+test('mailbox audit, approval and tests remain control-only and always invoke the gate tests', () => {
+  for (const path of [
+    'scripts/v2-release-mailbox-audit.mjs',
+    'scripts/v2-release-mailbox-audit.test.mjs',
+    'deploy/aws/historical-finance-20261005-mailbox-batch.json'
+  ]) {
+    assert.equal(isCiOnly([path]), true);
+    assert.ok(
+      guardCommands([path]).includes('node --test scripts/v2-release-mailbox-audit.test.mjs')
+    );
+  }
 });

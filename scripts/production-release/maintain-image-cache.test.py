@@ -653,5 +653,27 @@ class HistoricalMaintenanceRetentionTests(unittest.TestCase):
         self.assertEqual(calls, 1)
 
 
+class MailboxRetentionGateTests(unittest.TestCase):
+    def manifest(self):
+        return {'deploymentRun': 'github-actions-123-1', 'previousCommit': cache.MAILBOX_BASELINE,
+            'dataAuditBefore': {'checkCount': 48, 'violationCount': 6,
+                'historicalException': {**cache.MAILBOX_EXPECTED_GATE, 'stage': 'before'}},
+            'dataAuditAfter': {'checkCount': 48, 'violationCount': 6,
+                'historicalException': {**cache.MAILBOX_EXPECTED_GATE, 'stage': 'after'}}}
+
+    def test_fixed_mailbox_receipts_admit_retention_only_after_verified_deployment(self):
+        cache.verify_deployment(self.manifest(), 'github-actions-123-1')
+        for key in ['policySha256', 'snapshotSha256', 'imageCommit', 'imageRun', 'stage']:
+            value = self.manifest(); value['dataAuditAfter']['historicalException'][key] = 'changed'
+            with self.assertRaisesRegex(RuntimeError, 'mailbox financial audit'):
+                cache.verify_deployment(value, 'github-actions-123-1')
+        value = self.manifest(); value['previousCommit'] = 'a' * 40
+        with self.assertRaises(RuntimeError):
+            cache.verify_deployment(value, 'github-actions-123-1')
+        value = self.manifest(); value['dataAuditBefore']['historicalException']['executedCheckCount'] = 47
+        with self.assertRaises(RuntimeError):
+            cache.verify_deployment(value, 'github-actions-123-1')
+
+
 if __name__ == '__main__':
     unittest.main()

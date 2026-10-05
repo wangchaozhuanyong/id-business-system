@@ -48,6 +48,14 @@ MAINTENANCE_EXPECTED_GATE = {
 }
 
 
+
+MAILBOX_POLICY_ID = 'historical-finance-20261005-mailbox-batch'
+MAILBOX_BASELINE = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
+MAILBOX_IMAGE_IDENTITY = ('f5826f9fb4ad0d846d9875c035c913a61eb68290', '37312405714', '1')
+MAILBOX_POLICY_SHA256 = '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95'
+MAILBOX_MANIFEST_SHA256 = 'a0c248295509397e1862b13bd3aa41f46f32955ad8862226de56e63f868be9d8'
+MAILBOX_EXPECTED_GATE = {'accepted': True, 'status': 'APPROVED_MAILBOX_FROZEN_EXCEPTIONS', 'policyId': 'historical-finance-20261005-mailbox-batch', 'policySha256': '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95', 'expectedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'fixedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'imageCommit': 'f5826f9fb4ad0d846d9875c035c913a61eb68290', 'imageRun': '37312405714', 'imageAttempt': '1', 'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6, 'snapshotSha256': '03c3c6c494f7c5878441813814d3dc0fac9ad9d4b3480b0e81835129c97c76df'}
+
 def require(condition, reason):
     if not condition:
         raise RuntimeError(reason)
@@ -198,8 +206,19 @@ def verify_deployment(manifest, deployment_run):
         )
     require(not maintenance_claimed or maintenance_ok,
             'Post-release maintenance financial audit is missing or failed')
+    mailbox_claimed = any(gate.get('policyId') == MAILBOX_POLICY_ID for gate in (before, after))
+    mailbox_ok = manifest.get('previousCommit') == MAILBOX_BASELINE
+    for stage, gate in (('before', before), ('after', after)):
+        summary = manifest.get('dataAudit' + stage.title(), {})
+        mailbox_ok = mailbox_ok and (
+            type(summary.get('checkCount')) is int and summary['checkCount'] == 48
+            and type(summary.get('violationCount')) is int and summary['violationCount'] == 6
+            and json.dumps(gate, sort_keys=True, separators=(',', ':'))
+                == json.dumps({**MAILBOX_EXPECTED_GATE, 'stage': stage}, sort_keys=True, separators=(',', ':'))
+        )
+    require(not mailbox_claimed or mailbox_ok, 'Post-release mailbox financial audit is missing or failed')
     require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0
-            or historical_ok or continuation_ok or diagnostics_ok or maintenance_ok,
+            or historical_ok or continuation_ok or diagnostics_ok or maintenance_ok or mailbox_ok,
             'Post-release financial audit is missing or failed')
 
 

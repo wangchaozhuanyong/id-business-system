@@ -28,7 +28,8 @@ history_policy = os.environ.get('HISTORICAL_EXCEPTION', 'none')
 assert history_policy in ('none', 'historical-finance-20261005',
                          'historical-finance-20261005-registration-continuation',
                          'historical-finance-20261005-recharge-diagnostics',
-                         'historical-finance-20261005-maintenance-continuation')
+                         'historical-finance-20261005-maintenance-continuation',
+                         'historical-finance-20261005-mailbox-batch')
 if history_policy == 'historical-finance-20261005':
     assert previous == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
     scope_flag += ' --historical-finance-exception'
@@ -54,6 +55,10 @@ import re
 assert re.fullmatch(r'[0-9a-f]{40}', image_commit)
 assert re.fullmatch(r'[1-9][0-9]*', image_run)
 assert re.fullmatch(r'[1-9][0-9]*', image_attempt)
+if history_policy == 'historical-finance-20261005-mailbox-batch':
+    assert previous == 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' and admin_only == 'false'
+    assert (image_commit, image_run, image_attempt) == ('f5826f9fb4ad0d846d9875c035c913a61eb68290', '37312405714', '1')
+    scope_flag += ' --historical-finance-mailbox-batch'
 image_flags = f' --image-commit {image_commit} --image-run-id {image_run} --image-run-attempt {image_attempt}'
 script_path = f'/opt/id-business-v2/.staging/oidc-{sha}/remote-deploy.py'
 url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/remote-deploy.py'

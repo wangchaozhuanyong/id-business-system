@@ -8,6 +8,7 @@ import tempfile
 import json
 import io
 import tarfile
+import subprocess
 import copy
 import re
 import sqlite3
@@ -3362,7 +3363,9 @@ class MaintenanceContinuationTests(unittest.TestCase):
         release = root / 'release'; release.mkdir()
         policy = self.policy(); contents = {}
         for name, digest in policy['candidateSourceSha256'].items():
-            raw = (self.source / name).read_bytes()
+            # Historical mode fixtures use the approved immutable source, not current WIP.
+            raw = subprocess.check_output(['git', 'show',
+                'b8d643450ffa9012ccc09ead15e4681e3dee98d0:' + name], cwd=self.source)
             self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest)
             path = release / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
             target = 0o755 if name == 'scripts/backup-aws-mysql.sh' else 0o644
@@ -3819,6 +3822,105 @@ class ReadOnlyMaintenanceReadbackTests(unittest.TestCase):
         result = filtered(self.wire(self.closed), False)
         self.assertEqual(result.returncode, 0)
         self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [self.lock])
+
+
+class MailboxApprovalTests(unittest.TestCase):
+    def test_frozen_image_identity_baseline_and_full_scope(self):
+        args = SimpleNamespace(expected_current=deployment.MAILBOX_BASELINE, admin_only=False,
+                               commit='a' * 40)
+        deployment.require_mailbox_release_arguments(args, *deployment.MAILBOX_IMAGE_IDENTITY)
+        for identity in [('b' * 40, '37312405714', '1'),
+                         (deployment.MAILBOX_IMAGE_IDENTITY[0], '123', '1'),
+                         (deployment.MAILBOX_IMAGE_IDENTITY[0], '37312405714', '2')]:
+            with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+                deployment.require_mailbox_release_arguments(args, *identity)
+        args.admin_only = True
+        with self.assertRaises(RuntimeError):
+            deployment.require_mailbox_release_arguments(args, *deployment.MAILBOX_IMAGE_IDENTITY)
+        args.admin_only = False; args.expected_current = 'b' * 40
+        with self.assertRaises(RuntimeError):
+            deployment.require_mailbox_release_arguments(args, *deployment.MAILBOX_IMAGE_IDENTITY)
+
+    def test_no_migration_edge_or_environment_change(self):
+        with tempfile.TemporaryDirectory() as name:
+            previous = Path(name) / 'previous'; previous.mkdir()
+            release = Path(name) / 'release'; release.mkdir()
+            for directory in (previous, release):
+                (directory / '.env.aws.production').write_bytes(b'fixture')
+            deployment.require_mailbox_scope(previous, release, [], False, b'fixture')
+            for additions, edge in [(['new'], False), ([], True)]:
+                with self.assertRaises(RuntimeError):
+                    deployment.require_mailbox_scope(previous, release, additions, edge, b'fixture')
+            (release / '.env.aws.production').write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError, 'environment changed'):
+                deployment.require_mailbox_scope(previous, release, [], False, b'fixture')
+
+    def test_independent_policy_matches_node_and_cannot_change(self):
+        source = Path(__file__).resolve().parents[2]
+        policy = deployment.mailbox_policy(source)
+        self.assertEqual(policy['id'], deployment.MAILBOX_POLICY_ID)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
+            policy['snapshot']['checks'][0]['count'] = 1
+            (root / 'deploy/aws' / (deployment.MAILBOX_POLICY_ID + '.json')).write_text(json.dumps(policy))
+            with self.assertRaisesRegex(RuntimeError, 'approval changed'):
+                deployment.mailbox_policy(root)
+        # Image reuse still cannot admit application, schema, dependencies or audit helper changes.
+        for path in ['apps/api/src/main.ts', 'apps/api/prisma-mysql/schema.prisma',
+                     'package-lock.json', 'scripts/lib/v2-data-integrity-audit.mjs',
+                     'scripts/lib/v2-release-maintenance-policy.mjs']:
+            with self.assertRaises(RuntimeError):
+                deployment.require_reusable_paths([path])
+        deployment.require_reusable_paths(['scripts/v2-release-mailbox-audit.mjs'])
+
+    def test_mailbox_gate_cannot_mix_with_another_approval(self):
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+            deployment.audit(None, None, historical_mailbox=True, historical_maintenance=True)
+
+    def test_mailbox_audit_passes_credentials_only_on_stdin_and_writes_safe_private_receipt(self):
+        source = Path(__file__).resolve().parents[2]
+        policy = deployment.mailbox_policy(source)
+        report = {'ok': False, 'checkCount': 48, 'violationCount': 6,
+            'checks': policy['snapshot']['checks'],
+            'gate': {**deployment.MAILBOX_EXPECTED_GATE, 'stage': 'before'}}
+        profile = {'read_only': True, 'security_opt': ['no-new-privileges:true'],
+            'cap_drop': ['ALL'], 'environment': {'NODE_ENV': 'production', 'DATABASE_URL': ''}}
+        calls = []
+        def compose(_directory, *args, **kwargs):
+            if args[0] == 'config': return json.dumps({'services': {'migrate': profile}})
+            calls.append((args, kwargs)); return json.dumps(report)
+        with tempfile.TemporaryDirectory() as name, \
+                patch.object(deployment, 'verify_mailbox_baseline'), \
+                patch.object(deployment, 'environment_values', return_value={}), \
+                patch.object(deployment, 'maintenance_container_audit_url', return_value='fixture-audit-placeholder'), \
+                patch.object(deployment, 'compose', side_effect=compose):
+            receipt = Path(name) / 'before.json'
+            result = deployment.mailbox_audit(source, receipt, stage='before', source=source, origin=source)
+            self.assertEqual(result['violationCount'], 6)
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            args, kwargs = calls[0]
+            self.assertNotIn('fixture-audit-placeholder', ' '.join(args))
+            self.assertEqual(json.loads(kwargs['input_data']), {'auditURL': 'fixture-audit-placeholder'})
+            self.assertIn('--policy=/release-policy/' + deployment.MAILBOX_POLICY_ID + '.json', args)
+            self.assertIn('-T', args)
+            self.assertNotIn('samples', receipt.read_text())
+            report['gate']['snapshotSha256'] = 'changed'
+            with self.assertRaisesRegex(RuntimeError, 'integrity gate failed'):
+                deployment.mailbox_audit(source, receipt, stage='before', source=source, origin=source)
+            profile['read_only'] = False
+            with self.assertRaisesRegex(RuntimeError, 'profile changed'):
+                deployment.mailbox_audit(source, receipt, stage='before', source=source, origin=source)
+        with patch.object(deployment, 'compose') as command:
+            deployment.run_release_migrations(None, False, True)
+        command.assert_not_called()
+
+    def test_normal_financial_gate_remains_strict(self):
+        with patch.object(deployment, 'environment_values', return_value={
+            'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://fixture:placeholder@localhost/db'}), \
+                patch.object(deployment, 'compose', return_value=json.dumps({
+                    'ok': False, 'checkCount': 48, 'violationCount': 6})):
+            with self.assertRaisesRegex(RuntimeError, 'Financial data integrity audit failed'):
+                deployment.audit(Path('.'), Path('not-written.json'))
 
 
 if __name__ == '__main__':

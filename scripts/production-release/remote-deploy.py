@@ -113,7 +113,18 @@ try {
 }
 """
 
+
+MAILBOX_POLICY_ID = 'historical-finance-20261005-mailbox-batch'
+MAILBOX_BASELINE = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
+MAILBOX_IMAGE_IDENTITY = ('f5826f9fb4ad0d846d9875c035c913a61eb68290', '37312405714', '1')
+MAILBOX_POLICY_SHA256 = '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95'
+MAILBOX_MANIFEST_SHA256 = 'a0c248295509397e1862b13bd3aa41f46f32955ad8862226de56e63f868be9d8'
+MAILBOX_EXPECTED_GATE = {'accepted': True, 'status': 'APPROVED_MAILBOX_FROZEN_EXCEPTIONS', 'policyId': 'historical-finance-20261005-mailbox-batch', 'policySha256': '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95', 'expectedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'fixedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'imageCommit': 'f5826f9fb4ad0d846d9875c035c913a61eb68290', 'imageRun': '37312405714', 'imageAttempt': '1', 'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6, 'snapshotSha256': '03c3c6c494f7c5878441813814d3dc0fac9ad9d4b3480b0e81835129c97c76df'}
+
 REUSE_CONTROL_FILES = frozenset({
+    'scripts/v2-release-mailbox-audit.mjs',
+    'scripts/v2-release-mailbox-audit.test.mjs',
+    'deploy/aws/historical-finance-20261005-mailbox-batch.json',
     '.github/workflows/production-release.yml',
     'scripts/ci-recharge-scope.mjs',
     'scripts/ci-recharge-check.mjs',
@@ -609,6 +620,81 @@ def maintenance_audit(directory, receipt, *, stage, source, before_receipt=None,
     return {'checkCount': 48, 'violationCount': 6, 'historicalException': report['gate']}
 
 
+def require_mailbox_release_arguments(args, image_commit, image_run, image_attempt):
+    require(args.expected_current == MAILBOX_BASELINE and not args.admin_only
+            and (image_commit, image_run, image_attempt) == MAILBOX_IMAGE_IDENTITY
+            and args.commit != image_commit,
+            'Mailbox release approval or immutable image identity changed')
+
+
+def mailbox_policy(source):
+    policy = json.loads((source / 'deploy/aws' / (MAILBOX_POLICY_ID + '.json')).read_text())
+    require(hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            == MAILBOX_POLICY_SHA256, 'Mailbox release approval changed')
+    return policy
+
+
+def verify_mailbox_baseline(previous):
+    raw = (previous / 'release-manifest.json').read_bytes()
+    require(hashlib.sha256(raw).hexdigest() == MAILBOX_MANIFEST_SHA256
+            and json.loads(raw).get('commit') == MAILBOX_BASELINE,
+            'Mailbox production baseline changed')
+
+
+def require_mailbox_scope(previous, release, additions, edge_changed, original_environment):
+    require(not additions and not edge_changed, 'Mailbox release cannot migrate or change edge configuration')
+    require((previous / '.env.aws.production').read_bytes() == original_environment
+            and (release / '.env.aws.production').read_bytes() == original_environment,
+            'Mailbox release environment changed')
+
+
+def mailbox_audit(directory, receipt, *, stage, source, before_receipt=None, origin=None):
+    require(stage in ('before', 'after') and source is not None and origin is not None,
+            'Mailbox audit source missing')
+    mailbox_policy(source)
+    verify_mailbox_baseline(origin)
+    connection_url = maintenance_container_audit_url(environment_values(directory / '.env.aws.production'))
+    profile = json.loads(compose(directory, 'config', '--format', 'json'))['services']['migrate']
+    require(profile.get('read_only') is True
+            and profile.get('security_opt') == ['no-new-privileges:true']
+            and profile.get('cap_drop') == ['ALL']
+            and profile.get('cap_add') in (None, []) and not profile.get('privileged')
+            and not profile.get('devices')
+            and set(profile.get('environment', {})) == {'NODE_ENV', 'DATABASE_URL'},
+            'Mailbox audit profile changed')
+    mounts = ['-v', f'{source / "scripts"}:/app/scripts:ro',
+              '-v', f'{source / "deploy/aws"}:/release-policy:ro']
+    wrapper = MAINTENANCE_STDIN_WRAPPER.replace('v2-release-maintenance-audit.mjs',
+                                               'v2-release-mailbox-audit.mjs').replace(
+                                                   'MAINTENANCE_GATE_REJECTED', 'MAILBOX_GATE_REJECTED')
+    audit_args = ['node', '--input-type=module', '-e', wrapper, '--',
+                  f'--policy=/release-policy/{MAILBOX_POLICY_ID}.json',
+                  f'--expected-current={MAILBOX_BASELINE}', f'--stage={stage}']
+    if stage == 'after':
+        require(before_receipt is not None, 'Mailbox before audit missing')
+        before = json.loads(private_maintenance_receipt(before_receipt))
+        require(json.dumps(before.get('gate'), sort_keys=True, separators=(',', ':'))
+                == json.dumps({**MAILBOX_EXPECTED_GATE, 'stage': 'before'}, sort_keys=True, separators=(',', ':')),
+                'Mailbox before audit changed')
+        mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
+        audit_args.append('--before-receipt=/release-before-audit.json')
+    output = compose(directory, 'run', '--rm', '--no-deps', '-T', '--pull', 'never',
+        '--user', '0:0', '--cap-drop', 'ALL', '--cap-add', 'DAC_READ_SEARCH',
+        *mounts, '-e', 'DATABASE_URL=', 'migrate', *audit_args,
+        input_data=json.dumps({'auditURL': connection_url}), timeout=240)
+    report = json.loads(output)
+    policy = mailbox_policy(source)
+    require(report.get('ok') is False and type(report.get('checkCount')) is int
+            and report['checkCount'] == 48 and type(report.get('violationCount')) is int
+            and report['violationCount'] == 6 and report.get('checks') == policy['snapshot']['checks']
+            and json.dumps(report.get('gate'), sort_keys=True, separators=(',', ':'))
+            == json.dumps({**MAILBOX_EXPECTED_GATE, 'stage': stage}, sort_keys=True, separators=(',', ':')),
+            'Approved mailbox financial integrity gate failed')
+    receipt.write_text(json.dumps(report, indent=2) + '\n')
+    receipt.chmod(0o600)
+    return {'checkCount': 48, 'violationCount': 6, 'historicalException': report['gate']}
+
+
 def command_failure_summary(data):
     error = data.get('StandardErrorContent', '')
     errors = re.findall(r'(?m)^([A-Za-z]+Error):', error)
@@ -814,11 +900,14 @@ def prepare_historical_before_receipt(directory, receipt):
 
 
 def audit(directory, receipt, *, historical_exception=False, historical_continuation=False,
-          historical_diagnostics=False, historical_maintenance=False, stage=None, source=None,
+          historical_diagnostics=False, historical_maintenance=False, historical_mailbox=False, stage=None, source=None,
           before_receipt=None, origin=None):
     require(sum((historical_exception, historical_continuation, historical_diagnostics,
-                 historical_maintenance)) <= 1,
+                 historical_maintenance, historical_mailbox)) <= 1,
             'Historical release selection is ambiguous')
+    if historical_mailbox:
+        return mailbox_audit(directory, receipt, stage=stage, source=source,
+                             before_receipt=before_receipt, origin=origin)
     if historical_maintenance:
         return maintenance_audit(directory, receipt, stage=stage, source=source,
                                  before_receipt=before_receipt, origin=origin)
@@ -1262,12 +1351,14 @@ def main():
     parser.add_argument('--historical-finance-continuation', action='store_true')
     parser.add_argument('--historical-finance-recharge-diagnostics', action='store_true')
     parser.add_argument('--historical-finance-maintenance-continuation', action='store_true')
+    parser.add_argument('--historical-finance-mailbox-batch', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
     require(sum((args.historical_finance_exception, args.historical_finance_continuation,
-                 args.historical_finance_recharge_diagnostics, args.historical_finance_maintenance_continuation)) <= 1,
+                 args.historical_finance_recharge_diagnostics, args.historical_finance_maintenance_continuation,
+                 args.historical_finance_mailbox_batch)) <= 1,
             'Historical release selection is ambiguous')
     historical_policy_id = (HISTORY_MAINTENANCE_POLICY_ID if args.historical_finance_maintenance_continuation else
         HISTORY_DIAGNOSTICS_POLICY_ID if args.historical_finance_recharge_diagnostics else
@@ -1288,6 +1379,8 @@ def main():
     require(re.fullmatch(r'[0-9a-f]{40}', image_commit), 'Invalid image commit')
     require(re.fullmatch(r'[1-9][0-9]*', image_run), 'Invalid image workflow run')
     require(re.fullmatch(r'[1-9][0-9]*', image_attempt), 'Invalid image workflow attempt')
+    if args.historical_finance_mailbox_batch:
+        require_mailbox_release_arguments(args, image_commit, image_run, image_attempt)
     if args.historical_finance_maintenance_continuation:
         require_maintenance_release_arguments(args, image_commit, image_run, image_attempt)
     if args.historical_finance_recharge_diagnostics:
@@ -1299,6 +1392,8 @@ def main():
     require(previous.parent == BASE / 'releases', 'Invalid current release path')
     old_manifest = json.loads((previous / 'release-manifest.json').read_text())
     require(old_manifest['commit'] == args.expected_current, 'Production baseline changed')
+    if args.historical_finance_mailbox_batch:
+        verify_mailbox_baseline(previous)
     before = {service: service_state(previous, service,
         include_container_id=args.historical_finance_recharge_diagnostics)
         for service in production_services(previous)}
@@ -1311,7 +1406,7 @@ def main():
     if args.historical_finance_recharge_diagnostics:
         require_diagnostics_registration_isolation(previous, old_manifest, before)
         original_environment = (previous / '.env.aws.production').read_bytes()
-    if args.historical_finance_maintenance_continuation:
+    if args.historical_finance_maintenance_continuation or args.historical_finance_mailbox_batch:
         original_environment = (previous / '.env.aws.production').read_bytes()
     assert_no_active_jobs(previous,
         worker_changes=registration_worker_changes(previous, initial_services))
@@ -1370,6 +1465,8 @@ def main():
             with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source:
                 normalize_maintenance_candidate_modes(release, policy)
                 verify_maintenance_archive(release, source, policy)
+        if args.historical_finance_mailbox_batch:
+            mailbox_policy(release)
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_source_scope(previous, release)
         if image_commit != args.commit:
@@ -1382,7 +1479,10 @@ def main():
                 verify_reusable_archive(release, source, image_commit)
         shutil.copy2(previous / '.env.aws.production', release / '.env.aws.production')
         (release / '.env.aws.production').chmod(0o600)
-        if args.historical_finance_maintenance_continuation:
+        if args.historical_finance_mailbox_batch:
+            require_mailbox_scope(previous, release, [], False, original_environment)
+            google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
+        elif args.historical_finance_maintenance_continuation:
             require_maintenance_environment_unchanged(previous, release, original_environment)
             google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
         elif args.historical_finance_recharge_diagnostics:
@@ -1393,6 +1493,8 @@ def main():
         additions = migration_plan(previous, release)
         edge_changed = ((previous / 'deploy/caddy/Caddyfile.aws').read_bytes()
                         != (release / 'deploy/caddy/Caddyfile.aws').read_bytes())
+        if args.historical_finance_mailbox_batch:
+            require_mailbox_scope(previous, release, additions, edge_changed, original_environment)
         if args.historical_finance_maintenance_continuation:
             require_maintenance_scope(additions, edge_changed)
         if args.historical_finance_recharge_diagnostics:
@@ -1425,7 +1527,9 @@ def main():
                              historical_diagnostics=args.historical_finance_recharge_diagnostics,
                              stage='before', source=release,
                              **({'historical_maintenance': True, 'origin': previous}
-                                if args.historical_finance_maintenance_continuation else {}))
+                                if args.historical_finance_maintenance_continuation else {}),
+                             **({'historical_mailbox': True, 'origin': previous}
+                                if args.historical_finance_mailbox_batch else {}))
         step = 'images'
         pulled_images = {}
         registry = args.repository.split('/')[0]
@@ -1460,7 +1564,10 @@ def main():
             worker_changes=registration_worker_changes(previous, updated_services))
 
         step = 'migration'
-        run_release_migrations(release, args.admin_only, args.historical_finance_recharge_diagnostics)
+        if args.historical_finance_mailbox_batch:
+            require_mailbox_scope(previous, release, additions, edge_changed, original_environment)
+        run_release_migrations(release, args.admin_only,
+            args.historical_finance_recharge_diagnostics or args.historical_finance_mailbox_batch)
         step = 'database-grants'
         database_grants = sync_new_table_grants(release, additions)
         step = 'switch'
@@ -1485,7 +1592,11 @@ def main():
                             stage='after', source=release,
                             before_receipt=release / 'before-audit.json',
                             **({'historical_maintenance': True, 'origin': previous}
-                               if args.historical_finance_maintenance_continuation else {}))
+                               if args.historical_finance_maintenance_continuation else {}),
+                             **({'historical_mailbox': True, 'origin': previous}
+                                if args.historical_finance_mailbox_batch else {}))
+        if args.historical_finance_mailbox_batch:
+            require_mailbox_scope(previous, release, additions, edge_changed, original_environment)
         after = {service: service_state(release, service,
             include_container_id=args.historical_finance_recharge_diagnostics)
             for service in production_services(release)}
