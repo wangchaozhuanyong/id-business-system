@@ -1,5 +1,7 @@
 import importlib.util
 import ast
+import base64
+import gzip
 from pathlib import Path
 import unittest
 import tempfile
@@ -1819,6 +1821,81 @@ class ReadOnlyFixedIsolationDiagnosticTests(unittest.TestCase):
     def write_override(self):
         self.path.write_text(json.dumps(self.override, indent=2) + '\n')
         self.path.chmod(0o644)
+
+    def generated_readonly_command(self):
+        workflow = Path(__file__).resolve().parents[2] / '.github/workflows/production-release.yml'
+        step = workflow.read_text().split('      - name: Read production release diagnostics\n', 1)[1]
+        shell = textwrap.dedent(step.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0])
+        builder = shell.split("python3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        destination = self.root / '.deploy/production-release'
+        destination.mkdir(parents=True, exist_ok=True)
+        result = deployment.subprocess.run([deployment.sys.executable, '-c', builder], cwd=self.root,
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, 'Read-only command builder failed')
+        self.assertEqual(result.stdout + result.stderr, '')
+        parameters = json.loads((destination / 'readonly-diagnostics.json').read_text())
+        command = shlex.split(parameters['commands'][0])
+        self.assertEqual(command[:2], ['python3', '-c'])
+        self.assertEqual(len(command), 3)
+        return builder, parameters, command[2], destination / 'readonly-diagnostics-filter.py'
+
+    def test_real_generated_compressed_command_decodes_exact_trusted_program_and_is_bounded(self):
+        builder, parameters, decoder, _filter = self.generated_readonly_command()
+        program = next(ast.literal_eval(node.value) for node in ast.parse(builder).body
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'program'
+                for target in node.targets))
+        payload = next(ast.literal_eval(node.args[0]) for node in ast.walk(ast.parse(decoder))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'b64decode')
+        decoded = gzip.decompress(base64.b64decode(payload, validate=True))
+        self.assertEqual(decoded, program.encode('utf-8'))
+        self.assertEqual(parameters['executionTimeout'], ['120'])
+        self.assertLessEqual(len(json.dumps(parameters).encode('utf-8')), 20 * 1024)
+        self.assertLess(len(json.dumps(parameters).encode('utf-8')), len(program.encode('utf-8')))
+        compile(decoded, '<decoded-trusted-program>', 'exec')
+
+    def test_actual_compressed_producer_and_generated_filter_suppress_sensitive_failed_manifest(self):
+        _builder, _parameters, decoder, filter_path = self.generated_readonly_command()
+        current = self.root / 'current'; current.mkdir()
+        (current / 'release-manifest.json').write_text('SENTINEL_PRIVATE_MANIFEST_CONTENT')
+        real_path = Path
+        def fixture_path(value):
+            if value == '/opt/id-business-v2':
+                return self.root
+            if value == '/opt/id-business-v2/.deploy.lock':
+                return self.root / 'missing-lock'
+            if value == '/proc':
+                return self.root / 'synthetic-proc'
+            return real_path(value)
+        output = io.StringIO()
+        with patch('pathlib.Path', side_effect=fixture_path), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(compile(decoder, '<generated-readonly-decoder>', 'exec'), {})
+        self.assertEqual(str(stopped.exception), 'Read-only manifest unavailable')
+        expected = [self.lock, {'readOnlyFailure': 'MANIFEST_UNAVAILABLE'}]
+        self.assertEqual([json.loads(line) for line in output.getvalue().splitlines()], expected)
+        self.assertNotIn('SENTINEL', output.getvalue())
+        filtered = deployment.subprocess.run([deployment.sys.executable, str(filter_path), '1'],
+            input=output.getvalue() + 'SENTINEL_PRIVATE_UNKNOWN_TRAILING_OUTPUT\n',
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(filtered.returncode, 0)
+        self.assertEqual([json.loads(line) for line in filtered.stdout.splitlines()], expected)
+        self.assertNotIn('SENTINEL', filtered.stdout + filtered.stderr)
+
+    def test_actual_builder_rejects_oversized_parameters_before_writing_payload(self):
+        builder, _parameters, _decoder, _filter = self.generated_readonly_command()
+        destination = self.root / 'oversized'
+        destination.mkdir()
+        def fixture_path(value):
+            return destination / Path(value).name
+        namespace = {}
+        nodes = [node for node in ast.parse(builder).body if not isinstance(node, ast.ImportFrom)]
+        output = io.StringIO()
+        with patch.object(gzip, 'compress', return_value=b'x' * (20 * 1024)), redirect_stdout(output):
+            with self.assertRaisesRegex(SystemExit, '^Read-only command exceeds transfer bound$'):
+                exec(compile(ast.Module(body=nodes, type_ignores=[]), '<oversized-readonly-builder>', 'exec'),
+                    {'Path': fixture_path, **namespace})
+        self.assertEqual(output.getvalue(), '')
+        self.assertFalse((destination / 'readonly-diagnostics.json').exists())
 
     def summary(self, response=None):
         response = response or SimpleNamespace(returncode=0,
