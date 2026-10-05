@@ -290,6 +290,12 @@ def command_failure_summary(data):
         'Invalid current release path', 'Insufficient free disk after pull',
         'Resource temporarily unavailable', 'No space left on device',
         'Permission denied', 'invalid syntax',
+        'Historical diagnostics running manifest changed',
+        'Historical diagnostics requires the fixed independent worker layout',
+        'Historical continuation running image changed',
+        'Historical diagnostics image override changed',
+        'Production container identity unavailable',
+        'Production container start identity unavailable',
     )
     status = data.get('Status')
     return {
