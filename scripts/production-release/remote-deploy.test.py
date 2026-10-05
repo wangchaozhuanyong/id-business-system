@@ -995,5 +995,287 @@ class ReadOnlyReleaseProofTests(unittest.TestCase):
         self.assertFalse(eval(test, {**self.namespace, 'manifest': {'commit': 'f' * 40}}))
         self.assertTrue(any(isinstance(node, ast.Raise) for node in selector.body))
 
+class HistoricalDiagnosticsTests(unittest.TestCase):
+    def policy(self):
+        policy = HistoricalContinuationTests().policy()
+        policy['id'] = deployment.HISTORY_DIAGNOSTICS_POLICY_ID
+        policy['expectedCurrent'] = deployment.HISTORY_DIAGNOSTICS_BASELINE
+        policy['candidateSourceSha256'] = {name: deployment.hashlib.sha256(
+            ('synthetic-diagnostics:' + name).encode()).hexdigest()
+            for name in deployment.DIAGNOSTICS_CANDIDATE_FILES}
+        proof = policy['continuation']
+        proof['fixedCurrent'] = deployment.HISTORY_DIAGNOSTICS_BASELINE
+        proof['manifest']['commit'] = deployment.HISTORY_DIAGNOSTICS_BASELINE
+        proof['manifest']['previousCommit'] = deployment.HISTORY_CONTINUATION_BASELINE
+        return policy
+
+    def save_fixture(self, root, policy, values):
+        for stage in ('before', 'after'):
+            policy['continuation'][stage + 'GateSha256'] = deployment.historical_fingerprint(
+                values[stage + '-audit.json']['gate'])
+        HistoricalContinuationTests.save_fixture(self, root, policy, values)
+
+    def fixture(self, root):
+        policy = self.policy()
+        reports = {stage: HistoricalContinuationTests().audit_report(stage)
+                   for stage in ('before', 'after')}
+        manifest = {**policy['continuation']['manifest'], **{
+            'dataAudit' + stage.title(): {'checkCount': 48, 'violationCount': 10,
+                'historicalException': report['gate']} for stage, report in reports.items()}}
+        values = {'release-manifest.json': manifest,
+                  **{stage + '-audit.json': report for stage, report in reports.items()}}
+        self.save_fixture(root, policy, values)
+        return policy, values
+
+    def verify_fixture(self, root, policy):
+        with patch.object(deployment, 'DIAGNOSTICS_PROOF_SHA256',
+                          deployment.historical_fingerprint(policy['continuation'])):
+            return deployment.verify_continuation_baseline(root, policy,
+                deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+
+    def test_third_policy_only_accepts_the_fixed_6a_baseline(self):
+        deployment.require_historical_baseline(deployment.HISTORY_DIAGNOSTICS_POLICY_ID,
+                                               deployment.HISTORY_DIAGNOSTICS_BASELINE)
+        for policy, baseline in [
+            (deployment.HISTORY_DIAGNOSTICS_POLICY_ID, deployment.HISTORY_BASELINE),
+            (deployment.HISTORY_DIAGNOSTICS_POLICY_ID, deployment.HISTORY_CONTINUATION_BASELINE),
+            (deployment.HISTORY_DIAGNOSTICS_POLICY_ID, 'f' * 40),
+            (deployment.HISTORY_POLICY_ID, deployment.HISTORY_DIAGNOSTICS_BASELINE),
+            (deployment.HISTORY_CONTINUATION_POLICY_ID, deployment.HISTORY_DIAGNOSTICS_BASELINE),
+            ('unknown', deployment.HISTORY_DIAGNOSTICS_BASELINE)]:
+            with self.subTest(policy=policy, baseline=baseline), self.assertRaises(RuntimeError):
+                deployment.require_historical_baseline(policy, baseline)
+        with self.assertRaises(RuntimeError):
+            deployment.fixed_continuation('unknown')
+
+    def test_third_policy_keeps_original_rules_and_exact_three_candidate_files(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
+            policy = self.policy()
+            path = root / 'deploy/aws' / (deployment.HISTORY_DIAGNOSTICS_POLICY_ID + '.json')
+            path.write_text(json.dumps(policy))
+            with self.assertRaisesRegex(RuntimeError, 'policy changed'):
+                deployment.continuation_policy(root, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+            with patch.object(deployment, 'DIAGNOSTICS_POLICY_SHA256',
+                    deployment.historical_fingerprint(policy)), patch.object(deployment,
+                    'DIAGNOSTICS_PROOF_SHA256', deployment.historical_fingerprint(policy['continuation'])):
+                self.assertEqual(deployment.continuation_policy(root,
+                    deployment.HISTORY_DIAGNOSTICS_POLICY_ID), policy)
+            mutations = [lambda x: x.update(expectedCurrent='f' * 40),
+                lambda x: x['candidateSourceSha256'].update({'docs/V2_TASKS.md': 'f' * 64}),
+                lambda x: x.update(extraUnapprovedRule=True),
+                lambda x: x['continuation'].update(continuationOf='other'),
+                lambda x: x['continuation']['manifest'].update(previousCommit=deployment.HISTORY_BASELINE)]
+            for index, mutate in enumerate(mutations):
+                changed = copy.deepcopy(policy); mutate(changed); path.write_text(json.dumps(changed))
+                # Even a re-pinned complete new-policy hash cannot broaden the approved origin.
+                with self.subTest(index=index), patch.object(deployment, 'DIAGNOSTICS_POLICY_SHA256',
+                        deployment.historical_fingerprint(changed)), patch.object(deployment,
+                        'DIAGNOSTICS_PROOF_SHA256', deployment.historical_fingerprint(changed['continuation'])), \
+                        self.assertRaises(RuntimeError):
+                    deployment.continuation_policy(root, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+
+    def test_actual_6a_receipts_must_prove_the_previous_registration_gate_at_d0(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); policy, values = self.fixture(root)
+            self.assertEqual(self.verify_fixture(root, policy), values['release-manifest.json'])
+            with self.assertRaisesRegex(RuntimeError, 'proof changed'):
+                deployment.verify_continuation_baseline(root, policy, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+            path = root / 'after-audit.json'; path.write_bytes(path.read_bytes() + b' ')
+            with self.assertRaisesRegex(RuntimeError, 'receipt changed'):
+                self.verify_fixture(root, policy)
+
+    def test_self_consistent_rehashed_previous_receipts_cannot_change_the_registration_origin(self):
+        mutations = [lambda x: x['release-manifest.json'].update(commit='f' * 40),
+            lambda x: x['release-manifest.json'].update(previousCommit=deployment.HISTORY_BASELINE),
+            lambda x: x['before-audit.json']['gate'].update(policyId=deployment.HISTORY_POLICY_ID),
+            lambda x: x['after-audit.json']['gate'].update(expectedCurrent=deployment.HISTORY_DIAGNOSTICS_BASELINE),
+            lambda x: x['after-audit.json']['gate'].update(fixedCurrent=deployment.HISTORY_DIAGNOSTICS_BASELINE),
+            lambda x: x['after-audit.json']['gate'].update(executedCheckCount=46, unavailableCheckCount=2),
+            lambda x: x['after-audit.json']['gate'].update(continuationOf='other'),
+            lambda x: x['after-audit.json']['gate']['continuation'].update(manifestSha256='f' * 64),
+            lambda x: x['release-manifest.json']['dataAuditAfter'].update(violationCount=0)]
+        for index, mutate in enumerate(mutations):
+            with tempfile.TemporaryDirectory(dir='.deploy') as name:
+                root = Path(name); policy, values = self.fixture(root); mutate(values)
+                self.save_fixture(root, policy, values)
+                with self.subTest(index=index), self.assertRaises(RuntimeError):
+                    self.verify_fixture(root, policy)
+
+    def test_runtime_rejects_all_flag_pairs_wrong_baseline_admin_only_and_every_reused_image_dimension(self):
+        base = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', deployment.HISTORY_DIAGNOSTICS_BASELINE,
+            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111']
+        flags = ['--historical-finance-exception', '--historical-finance-continuation',
+                 '--historical-finance-recharge-diagnostics']
+        cases = [[flags[0], flags[1]], [flags[0], flags[2]], [flags[1], flags[2]],
+                 [flags[2], '--admin-only'], [flags[2], '--image-commit', 'c' * 40],
+                 [flags[2], '--image-run-id', '122'], [flags[2], '--image-run-attempt', '2']]
+        for index, extra in enumerate(cases):
+            with self.subTest(index=index), patch.object(deployment.sys, 'argv', base + extra), \
+                    patch.object(deployment.os, 'umask') as umask, self.assertRaises(RuntimeError):
+                deployment.main()
+            umask.assert_not_called()
+        wrong = list(base); wrong[wrong.index('--expected-current') + 1] = deployment.HISTORY_CONTINUATION_BASELINE
+        with patch.object(deployment.sys, 'argv', wrong + [flags[2]]), self.assertRaises(RuntimeError):
+            deployment.main()
+
+    def test_diagnostics_forbids_new_migrations_edge_changes_and_never_executes_migrate(self):
+        deployment.require_diagnostics_migration_scope([], False)
+        for additions, edge in [(['20261005_unreviewed/migration.sql'], False), ([], True)]:
+            with self.assertRaises(RuntimeError):
+                deployment.require_diagnostics_migration_scope(additions, edge)
+        with patch.object(deployment, 'compose') as compose:
+            deployment.run_release_migrations(Path('.'), False, True)
+            deployment.run_release_migrations(Path('.'), True)
+            compose.assert_not_called()
+            deployment.run_release_migrations(Path('.'), False)
+            compose.assert_called_once_with(Path('.'), 'run', '--rm', '--no-deps', 'migrate', timeout=900)
+
+    def test_source_migration_guard_rejects_before_any_candidate_compose_command(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); previous = root / 'previous'; release = root / 'release'
+            for directory in (previous, release):
+                (directory / 'apps/api/prisma-mysql/migrations').mkdir(parents=True)
+                caddy = directory / 'deploy/caddy/Caddyfile.aws'; caddy.parent.mkdir(parents=True)
+                caddy.write_text('unchanged edge')
+            with patch.object(deployment, 'compose') as compose:
+                deployment.require_diagnostics_source_scope(previous, release)
+                new = release / 'apps/api/prisma-mysql/migrations/20261005_unapproved/migration.sql'
+                new.parent.mkdir(); new.write_text('CREATE TABLE unapproved (id INT);')
+                with self.assertRaisesRegex(RuntimeError, 'forbids migrations'):
+                    deployment.require_diagnostics_source_scope(previous, release)
+                compose.assert_not_called()
+
+    def test_fixed_6a_archive_freezes_old_policies_sql_and_modes_and_pins_ci_candidate(self):
+        policy = self.policy()
+        frozen = ['apps/api/unrelated.ts', 'apps/api/prisma-mysql/schema.prisma',
+            'apps/api/prisma-mysql/migrations/20261001_existing/migration.sql',
+            'deploy/aws/historical-finance-20261005.json',
+            'deploy/aws/historical-finance-20261005-registration-continuation.json',
+            'scripts/v2-data-integrity-audit.mjs', 'docker-compose.aws-mysql.yml',
+            'deploy/caddy/Caddyfile.aws']
+        self.assertTrue(all(name not in deployment.DIAGNOSTICS_CONTROL_FILES for name in frozen))
+        self.assertNotIn('scripts/ci-recharge-check.mjs', deployment.DIAGNOSTICS_CONTROL_FILES)
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); data = io.BytesIO()
+            for filename in frozen + list(policy['candidateSourceSha256']):
+                path = root / filename; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(('synthetic-diagnostics:' if filename in policy['candidateSourceSha256']
+                                 else 'frozen:') + filename); path.chmod(0o644)
+            control = root / 'scripts/production-release/remote-deploy.py'; control.parent.mkdir(parents=True)
+            control.write_text('reviewed control')
+            with tarfile.open(fileobj=data, mode='w') as archive:
+                for filename in frozen:
+                    content = (root / filename).read_bytes()
+                    item = tarfile.TarInfo(f'id-business-system-{deployment.HISTORY_DIAGNOSTICS_BASELINE}/' + filename)
+                    item.size = len(content); item.mode = 0o644; archive.addfile(item, io.BytesIO(content))
+            def verify():
+                with tarfile.open(fileobj=io.BytesIO(data.getvalue()), mode='r') as archive:
+                    deployment.verify_continuation_archive(root, archive, policy,
+                        deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+            verify()
+            for filename in frozen + ['scripts/ci-recharge-check.mjs']:
+                path = root / filename; original = path.read_bytes(); path.write_text('unapproved')
+                with self.subTest(filename=filename), self.assertRaises(RuntimeError):
+                    verify()
+                path.write_bytes(original)
+            path = root / frozen[0]; path.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, 'unrelated source'):
+                verify()
+            path.chmod(0o644)
+            link = root / 'unapproved-link'; link.symlink_to(frozen[0])
+            with self.assertRaisesRegex(RuntimeError, 'Unsafe diagnostics candidate'):
+                verify()
+            link.unlink()
+            extra = root / 'new-unapproved.ts'; extra.write_text('unapproved')
+            with self.assertRaisesRegex(RuntimeError, 'unrelated source'):
+                verify()
+            extra.unlink()
+            policy['candidateSourceSha256']['docs/V2_TASKS.md'] = 'f' * 64
+            with self.assertRaisesRegex(RuntimeError, 'candidate scope changed'):
+                verify()
+
+    def test_archive_rejects_wrong_baseline_unsafe_types_and_duplicates(self):
+        policy = self.policy()
+        prefix = f'id-business-system-{deployment.HISTORY_DIAGNOSTICS_BASELINE}/'
+        cases = [('wrong', f'id-business-system-{deployment.HISTORY_CONTINUATION_BASELINE}/file'),
+                 ('symlink', prefix + 'file'), ('duplicate', prefix + 'file')]
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name)
+            for kind, path in cases:
+                data = io.BytesIO()
+                with tarfile.open(fileobj=data, mode='w') as archive:
+                    item = tarfile.TarInfo(path); item.mode = 0o644
+                    if kind == 'symlink':
+                        item.type = tarfile.SYMTYPE; item.linkname = '/unrelated'
+                        archive.addfile(item)
+                    else:
+                        item.size = 1; archive.addfile(item, io.BytesIO(b'x'))
+                        if kind == 'duplicate':
+                            archive.addfile(item, io.BytesIO(b'x'))
+                with self.subTest(kind=kind), tarfile.open(fileobj=io.BytesIO(data.getvalue()), mode='r') as archive, \
+                        self.assertRaises(RuntimeError):
+                    deployment.verify_continuation_archive(root, archive, policy,
+                        deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+    def audit_report(self, stage):
+        policy = self.policy()
+        return {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': {
+            'accepted': True, 'status': 'APPROVED_HISTORICAL_EXCEPTIONS',
+            'policyId': policy['id'], 'expectedCurrent': policy['expectedCurrent'],
+            'fixedCurrent': policy['expectedCurrent'], 'continuationOf': deployment.HISTORY_POLICY_ID,
+            'stage': stage, 'checkCount': 48, 'violationCount': 10, 'executedCheckCount': 48,
+            'unavailableCheckCount': 0, 'sources': {
+                name: group['sha256'] for name, group in policy['sources'].items()},
+            'metadataSha256': policy['continuation']['metadataSha256'], 'continuation': policy['continuation']}}
+
+    def audit(self, report, stage):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); before = root / 'before.json'; before.write_text('{}'); before.chmod(0o600)
+            with patch.object(deployment, 'environment_values', return_value={
+                    'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
+                    patch.object(deployment, 'continuation_policy', return_value=self.policy()) as policy_loader, \
+                    patch.object(deployment.os, 'fchown'), \
+                    patch.object(deployment, 'compose', side_effect=lambda directory, *args, **kwargs:
+                        json.dumps({'uid':1000,'gid':1000,'user':'node'} if '--entrypoint' in args else report)) as compose:
+                result = deployment.audit(root, root / 'receipt.json', historical_diagnostics=True,
+                    stage=stage, source=root, before_receipt=before)
+                policy_loader.assert_called_once_with(root, deployment.HISTORY_DIAGNOSTICS_POLICY_ID)
+                self.assertEqual((root / 'receipt.json').stat().st_mode & 0o777, 0o600)
+                return result, compose.call_args.args
+
+    def test_audit_selects_exact_new_policy_6a_and_retains_private_independent_ro_receipt(self):
+        for stage in ('before', 'after'):
+            result, command = self.audit(self.audit_report(stage), stage)
+            self.assertEqual(result['violationCount'], 10)
+            self.assertEqual(result['historicalException']['continuationOf'], deployment.HISTORY_POLICY_ID)
+            self.assertIn('--expected-current=' + deployment.HISTORY_DIAGNOSTICS_BASELINE, command)
+            self.assertIn('--policy=/release-policy/' + deployment.HISTORY_DIAGNOSTICS_POLICY_ID + '.json', command)
+            self.assertNotIn('--user', command)
+            self.assertTrue(all(command[index + 1].endswith(':ro')
+                for index, part in enumerate(command) if part == '-v'))
+            if stage == 'after':
+                self.assertIn('--before-receipt=/release-before-audit.json', command)
+                self.assertTrue(any(isinstance(value, str) and
+                    value.endswith(':/release-before-audit.json:ro') for value in command))
+
+    def test_new_gate_rejects_partial_false_zero_changed_sources_metadata_and_proof(self):
+        mutations = [lambda x: x.update(ok=True), lambda x: x.update(checkCount=46),
+            lambda x: x.update(violationCount=0), lambda x: x['gate'].update(executedCheckCount=46),
+            lambda x: x['gate'].update(unavailableCheckCount=2),
+            lambda x: x['gate'].update(expectedCurrent=deployment.HISTORY_CONTINUATION_BASELINE),
+            lambda x: x['gate'].update(fixedCurrent=deployment.HISTORY_CONTINUATION_BASELINE),
+            lambda x: x['gate'].update(continuationOf=deployment.HISTORY_CONTINUATION_POLICY_ID),
+            lambda x: x['gate'].update(metadataSha256='f' * 64),
+            lambda x: x['gate'].update(sources={'unknown': 'f' * 64}),
+            lambda x: x['gate']['continuation'].update(manifestSha256='f' * 64)]
+        for stage in ('before', 'after'):
+            for index, mutate in enumerate(mutations):
+                report = self.audit_report(stage); mutate(report)
+                with self.subTest(stage=stage, index=index), self.assertRaises(RuntimeError):
+                    self.audit(report, stage)
+
+
 if __name__ == '__main__':
     unittest.main()

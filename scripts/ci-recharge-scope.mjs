@@ -8,6 +8,7 @@ export const auditRetentionMigration =
   'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
 export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/historical-finance-20261005-registration-continuation.json',
+  'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
   'scripts/lib/v2-release-history-policy.mjs',
   'scripts/v2-release-history-audit.mjs',
   'scripts/v2-release-history-policy.test.mjs',

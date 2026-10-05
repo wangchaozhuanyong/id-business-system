@@ -434,5 +434,82 @@ class HistoricalContinuationRetentionTests(unittest.TestCase):
                 cache.verify_deployment(manifest, 'github-actions-123-1')
 
 
+class HistoricalDiagnosticsRetentionTests(unittest.TestCase):
+    def manifest(self):
+        import copy
+        manifest = HistoricalContinuationRetentionTests().manifest()
+        manifest['previousCommit'] = cache.HISTORY_DIAGNOSTICS_BASELINE
+        for stage in ('before', 'after'):
+            gate = manifest['dataAudit' + stage.title()]['historicalException']
+            gate['policyId'] = cache.HISTORY_DIAGNOSTICS_POLICY_ID
+            gate['expectedCurrent'] = gate['fixedCurrent'] = cache.HISTORY_DIAGNOSTICS_BASELINE
+            gate['continuation'] = copy.deepcopy(gate['continuation'])
+            gate['continuation']['fixedCurrent'] = cache.HISTORY_DIAGNOSTICS_BASELINE
+            gate['continuation']['manifest']['commit'] = cache.HISTORY_DIAGNOSTICS_BASELINE
+            gate['continuation']['manifest']['previousCommit'] = cache.HISTORY_CONTINUATION_BASELINE
+        return manifest
+
+    def verify(self, manifest):
+        proof = self.manifest()['dataAuditAfter']['historicalException']['continuation']
+        with patch.object(cache, 'DIAGNOSTICS_PROOF_SHA256', cache.plan_digest(proof)):
+            cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_third_entry_requires_the_exact_successful_fixed_proof(self):
+        manifest = self.manifest()
+        with self.assertRaisesRegex(RuntimeError, 'financial audit'):
+            cache.verify_deployment(manifest, 'github-actions-123-1')
+        self.verify(manifest)
+        with self.assertRaisesRegex(RuntimeError, 'successful release'):
+            cache.verify_deployment(manifest, 'github-actions-124-1')
+
+    def test_claimed_new_entry_cannot_fall_through_zero_anomalies_or_other_policy(self):
+        cases = [lambda x: x['dataAuditAfter'].update(violationCount=0),
+            lambda x: x['dataAuditBefore']['historicalException'].update(policyId=cache.HISTORY_CONTINUATION_POLICY_ID),
+            lambda x: x['dataAuditAfter']['historicalException'].update(policyId=cache.HISTORY_CONTINUATION_POLICY_ID),
+            lambda x: x.update(previousCommit=cache.HISTORY_CONTINUATION_BASELINE),
+            lambda x: x['dataAuditAfter']['historicalException'].update(accepted=False)]
+        for index, mutate in enumerate(cases):
+            manifest = self.manifest(); mutate(manifest)
+            # Zero summary must not bypass a claimed third entry on either stage.
+            manifest['dataAuditAfter']['violationCount'] = 0
+            with self.subTest(index=index), self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                self.verify(manifest)
+
+    def test_default_none_on_6a_with_all_checks_and_zero_anomalies_remains_valid(self):
+        manifest = {'previousCommit': cache.HISTORY_DIAGNOSTICS_BASELINE,
+            'deploymentRun': 'github-actions-123-1',
+            'dataAuditBefore': {'checkCount': 48, 'violationCount': 0},
+            'dataAuditAfter': {'checkCount': 48, 'violationCount': 0}}
+        cache.verify_deployment(manifest, 'github-actions-123-1')
+
+    def test_partial_rehashed_changed_or_wrong_stage_new_gate_prevents_cleanup(self):
+        mutations = [lambda x: x.update(previousCommit='f' * 40),
+            lambda x: x['dataAuditBefore'].update(checkCount=46),
+            lambda x: x['dataAuditBefore']['historicalException'].update(executedCheckCount=46),
+            lambda x: x['dataAuditBefore']['historicalException'].update(unavailableCheckCount=2),
+            lambda x: x['dataAuditAfter']['historicalException'].update(stage='before'),
+            lambda x: x['dataAuditAfter']['historicalException'].update(expectedCurrent=cache.HISTORY_CONTINUATION_BASELINE),
+            lambda x: x['dataAuditAfter']['historicalException'].update(fixedCurrent=cache.HISTORY_CONTINUATION_BASELINE),
+            lambda x: x['dataAuditAfter']['historicalException'].update(continuationOf='other'),
+            lambda x: x['dataAuditAfter']['historicalException'].update(status='UNKNOWN'),
+            lambda x: x['dataAuditAfter']['historicalException']['continuation'].update(manifestSha256='f' * 64)]
+        for stage in ('before', 'after'):
+            mutations.extend([
+                lambda x, stage=stage: x['dataAudit' + stage.title()]['historicalException'].update(
+                    sources={'accounts': 'f' * 64}),
+                lambda x, stage=stage: x['dataAudit' + stage.title()]['historicalException'].update(
+                    metadataSha256='f' * 64)])
+        for index, mutate in enumerate(mutations):
+            manifest = self.manifest(); mutate(manifest)
+            with self.subTest(index=index), self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                self.verify(manifest)
+
+    def test_default_zero_audit_and_both_old_fixed_entries_keep_their_existing_behavior(self):
+        cache.verify_deployment({'deploymentRun': 'github-actions-123-1',
+            'dataAuditAfter': {'violationCount': 0}}, 'github-actions-123-1')
+        cache.verify_deployment(HistoricalReceiptRetentionTests().manifest(), 'github-actions-123-1')
+        cache.verify_deployment(HistoricalContinuationRetentionTests().manifest(), 'github-actions-123-1')
+
+
 if __name__ == '__main__':
     unittest.main()

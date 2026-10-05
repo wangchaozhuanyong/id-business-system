@@ -482,3 +482,32 @@ test('keeps shared layout changes in the admin release and runs both layout regr
   );
   assert.ok(commands.some((command) => command.includes('scripts/acceptance-v2-page-layout.mjs')));
 });
+
+test('recharge diagnostics adds only its exact reviewed historical policy path', () => {
+  const path = 'deploy/aws/historical-finance-20261005-recharge-diagnostics.json';
+  assert.equal(isCiOnly([path]), true);
+  assert.equal(checkMode([path], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([path]), ['guards']);
+  const candidate = [
+    path,
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-policy.test.mjs',
+    'scripts/production-release/dispatch.sh'
+  ];
+  assert.equal(checkMode(candidate, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(candidate), ['guards', 'admin', 'api', 'connector']);
+  for (const unreviewed of [
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics-other.json',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics.json.backup',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics/future.json',
+    'deploy/aws/historical-finance-20261005.json',
+    'deploy/aws/historical-finance-unreviewed.json'
+  ]) {
+    assert.equal(isCiOnly([unreviewed]), false, unreviewed);
+    assert.equal(checkMode([unreviewed], schema, schema), 'full', unreviewed);
+    assert.equal(checkMode([...candidate, unreviewed], schema, schema), 'full', unreviewed);
+  }
+});

@@ -47,6 +47,31 @@ CONTINUATION_CANDIDATE_FILES = frozenset({
     'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
     'docs/V2_TASKS.md',
 })
+# A third, fixed one-use entry pinned to independently verified successful 6a receipts.
+HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostics'
+HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+DIAGNOSTICS_POLICY_SHA256 = 'a4bdc86d86661aed440921b148e9a95f1516370d3a5394af132e12954e31dd20'
+DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
+REGISTRATION_PROOF_SHA256 = '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768cab8945cb21ba'
+DIAGNOSTICS_CANDIDATE_FILES = frozenset({
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py',
+    'scripts/ci-recharge-check.mjs',
+})
+DIAGNOSTICS_CONTROL_FILES = frozenset({
+    '.github/workflows/production-release.yml',
+    'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/maintain-image-cache.test.py',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-policy.test.mjs',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
+    'docs/PRODUCTION_RELEASE_OIDC.md',
+})
 REUSE_CONTROL_FILES = frozenset({
     '.github/workflows/production-release.yml',
     'scripts/ci-recharge-scope.mjs',
@@ -90,24 +115,46 @@ def historical_fingerprint(value):
 
 def require_historical_baseline(policy_id, expected_current):
     baselines = {HISTORY_POLICY_ID: HISTORY_BASELINE,
-                 HISTORY_CONTINUATION_POLICY_ID: HISTORY_CONTINUATION_BASELINE}
+                 HISTORY_CONTINUATION_POLICY_ID: HISTORY_CONTINUATION_BASELINE,
+                 HISTORY_DIAGNOSTICS_POLICY_ID: HISTORY_DIAGNOSTICS_BASELINE}
     require(policy_id in baselines and expected_current == baselines[policy_id],
             'Historical release exception cannot be reused after publication')
 
 
-def continuation_policy(source):
-    policy = json.loads((source / 'deploy/aws' /
-        (HISTORY_CONTINUATION_POLICY_ID + '.json')).read_text())
-    require(historical_fingerprint(policy) == CONTINUATION_POLICY_SHA256
-            and policy.get('id') == HISTORY_CONTINUATION_POLICY_ID
-            and policy.get('expectedCurrent') == HISTORY_CONTINUATION_BASELINE
-            and set(policy.get('candidateSourceSha256', {})) == CONTINUATION_CANDIDATE_FILES,
+def fixed_continuation(policy_id=HISTORY_CONTINUATION_POLICY_ID):
+    # Only these two compiled identities can select continuation behavior.
+    if policy_id == HISTORY_CONTINUATION_POLICY_ID:
+        return (HISTORY_CONTINUATION_BASELINE, CONTINUATION_POLICY_SHA256,
+                CONTINUATION_CANDIDATE_FILES, CONTINUATION_CONTROL_FILES)
+    require(policy_id == HISTORY_DIAGNOSTICS_POLICY_ID,
+            'Unknown fixed historical continuation')
+    return (HISTORY_DIAGNOSTICS_BASELINE, DIAGNOSTICS_POLICY_SHA256,
+            DIAGNOSTICS_CANDIDATE_FILES, DIAGNOSTICS_CONTROL_FILES)
+
+
+def continuation_policy(source, policy_id=HISTORY_CONTINUATION_POLICY_ID):
+    baseline, policy_sha256, candidate_files, _controls = fixed_continuation(policy_id)
+    policy = json.loads((source / 'deploy/aws' / (policy_id + '.json')).read_text())
+    require(historical_fingerprint(policy) == policy_sha256
+            and policy.get('id') == policy_id
+            and policy.get('expectedCurrent') == baseline
+            and set(policy.get('candidateSourceSha256', {})) == candidate_files,
             'Historical continuation policy changed')
     original = {**policy, 'id': HISTORY_POLICY_ID, 'expectedCurrent': HISTORY_BASELINE}
     original.pop('continuation', None); original.pop('candidateSourceSha256', None)
     require(historical_fingerprint(original) ==
             '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca',
             'Historical continuation changed the original approved scope')
+    if policy_id == HISTORY_DIAGNOSTICS_POLICY_ID:
+        proof = policy.get('continuation', {})
+        require(historical_fingerprint(proof) == DIAGNOSTICS_PROOF_SHA256
+                and proof.get('originPolicySha256') ==
+                    '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca'
+                and proof.get('continuationOf') == HISTORY_POLICY_ID
+                and proof.get('fixedCurrent') == HISTORY_DIAGNOSTICS_BASELINE
+                and proof.get('manifest', {}).get('commit') == HISTORY_DIAGNOSTICS_BASELINE
+                and proof.get('manifest', {}).get('previousCommit') == HISTORY_CONTINUATION_BASELINE,
+                'Historical diagnostics successful proof changed')
     return policy
 
 
@@ -126,8 +173,16 @@ def private_historical_receipt(path):
         raise RuntimeError('Historical continuation receipt unavailable') from None
 
 
-def verify_continuation_baseline(previous, policy):
+def verify_continuation_baseline(previous, policy, policy_id=HISTORY_CONTINUATION_POLICY_ID):
+    baseline, _policy_sha256, _candidates, _controls = fixed_continuation(policy_id)
+    diagnostics = policy_id == HISTORY_DIAGNOSTICS_POLICY_ID
+    previous_commit = HISTORY_CONTINUATION_BASELINE if diagnostics else HISTORY_BASELINE
+    previous_policy = HISTORY_CONTINUATION_POLICY_ID if diagnostics else HISTORY_POLICY_ID
+    previous_expected = HISTORY_CONTINUATION_BASELINE if diagnostics else HISTORY_BASELINE
     proof = policy['continuation']
+    if diagnostics:
+        require(historical_fingerprint(proof) == DIAGNOSTICS_PROOF_SHA256,
+                'Historical diagnostics successful proof changed')
     files = [('release-manifest.json', 'manifestSha256'),
              ('before-audit.json', 'beforeReceiptSha256'),
              ('after-audit.json', 'afterReceiptSha256')]
@@ -139,10 +194,10 @@ def verify_continuation_baseline(previous, policy):
         receipts[name] = json.loads(data)
     manifest = receipts['release-manifest.json']
     require(all(manifest.get(key) == value for key, value in proof['manifest'].items())
-            and manifest.get('commit') == HISTORY_CONTINUATION_BASELINE
-            and manifest.get('previousCommit') == HISTORY_BASELINE
+            and manifest.get('commit') == baseline
+            and manifest.get('previousCommit') == previous_commit
             and proof['continuationOf'] == HISTORY_POLICY_ID
-            and proof['fixedCurrent'] == HISTORY_CONTINUATION_BASELINE,
+            and proof['fixedCurrent'] == baseline,
             'Historical continuation successful manifest changed')
     sources = {name: group['sha256'] for name, group in policy['sources'].items()}
     for stage in ('before', 'after'):
@@ -154,18 +209,33 @@ def verify_continuation_baseline(previous, policy):
                 and summary.get('checkCount') == 48 and summary.get('violationCount') == 10
                 and gate == summary.get('historicalException')
                 and historical_fingerprint(gate) == proof[stage + 'GateSha256']
-                and gate.get('accepted') is True and gate.get('policyId') == HISTORY_POLICY_ID
-                and gate.get('expectedCurrent') == HISTORY_BASELINE and gate.get('stage') == stage
+                and gate.get('accepted') is True and gate.get('policyId') == previous_policy
+                and gate.get('expectedCurrent') == previous_expected and gate.get('stage') == stage
                 and gate.get('checkCount') == gate.get('executedCheckCount') == 48
                 and gate.get('unavailableCheckCount') == 0 and gate.get('violationCount') == 10
                 and gate.get('sources') == sources
                 and gate.get('metadataSha256') == proof['metadataSha256'],
                 'Historical continuation successful audit changed')
+        if diagnostics:
+            require(gate.get('status') == 'APPROVED_HISTORICAL_EXCEPTIONS'
+                    and gate.get('fixedCurrent') == HISTORY_CONTINUATION_BASELINE
+                    and gate.get('continuationOf') == HISTORY_POLICY_ID
+                    and historical_fingerprint(gate.get('continuation')) == REGISTRATION_PROOF_SHA256
+                    and gate.get('metadataSha256') == gate.get('continuation', {}).get('metadataSha256'),
+                    'Historical diagnostics previous registration gate changed')
     return manifest
 
 
-def verify_continuation_archive(release, source, policy):
-    prefix = f'id-business-system-{HISTORY_CONTINUATION_BASELINE}/'
+def verify_continuation_archive(release, source, policy, policy_id=HISTORY_CONTINUATION_POLICY_ID):
+    baseline_sha, _policy_sha256, candidates, controls = fixed_continuation(policy_id)
+    require(set(policy.get('candidateSourceSha256', {})) == candidates,
+            'Historical continuation candidate scope changed')
+    mode_mask = 0o7777 if policy_id == HISTORY_DIAGNOSTICS_POLICY_ID else 0o111
+    if policy_id == HISTORY_DIAGNOSTICS_POLICY_ID:
+        require(all(not path.is_symlink() and (path.is_file() or path.is_dir())
+                    for path in release.rglob('*')),
+                'Unsafe diagnostics candidate source entry')
+    prefix = f'id-business-system-{baseline_sha}/'
     baseline = {}; seen = set()
     for member in source.getmembers():
         require((member.name == prefix[:-1] or member.name.startswith(prefix))
@@ -176,19 +246,21 @@ def verify_continuation_archive(release, source, policy):
         name = member.name[len(prefix):]
         require(name not in seen, 'Duplicate continuation source archive entry')
         seen.add(name)
-        if name not in CONTINUATION_CONTROL_FILES and name not in CONTINUATION_CANDIDATE_FILES:
+        if name not in controls and name not in candidates:
             baseline[name] = (hashlib.sha256(source.extractfile(member).read()).hexdigest(),
-                              member.mode & 0o111)
+                              member.mode & mode_mask)
     actual = {str(path.relative_to(release)):
-              (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode & 0o111)
+              (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode & mode_mask)
               for path in release.rglob('*') if path.is_file()
-              and str(path.relative_to(release)) not in CONTINUATION_CONTROL_FILES
-              and str(path.relative_to(release)) not in CONTINUATION_CANDIDATE_FILES}
+              and str(path.relative_to(release)) not in controls
+              and str(path.relative_to(release)) not in candidates}
     require(actual == baseline, 'Historical continuation contains unrelated source changes')
     require(all((release / name).is_file() and not (release / name).is_symlink()
                 and (release / name).stat().st_mode & 0o111 == 0
                 and hashlib.sha256((release / name).read_bytes()).hexdigest() == digest
                 for name, digest in policy['candidateSourceSha256'].items()),
+            'Historical diagnostics candidate source changed'
+            if policy_id == HISTORY_DIAGNOSTICS_POLICY_ID else
             'Historical continuation registration source changed')
 
 
@@ -380,14 +452,16 @@ def prepare_historical_before_receipt(directory, receipt):
         os.close(descriptor)
 
 
-def audit(directory, receipt, *, historical_exception=False, historical_continuation=False, stage=None,
-          source=None, before_receipt=None):
-    require(not (historical_exception and historical_continuation),
+def audit(directory, receipt, *, historical_exception=False, historical_continuation=False,
+          historical_diagnostics=False, stage=None, source=None, before_receipt=None):
+    require(sum((historical_exception, historical_continuation, historical_diagnostics)) <= 1,
             'Historical release selection is ambiguous')
-    policy_id = HISTORY_CONTINUATION_POLICY_ID if historical_continuation else HISTORY_POLICY_ID
-    baseline = HISTORY_CONTINUATION_BASELINE if historical_continuation else HISTORY_BASELINE
-    historical = historical_exception or historical_continuation
-    policy = continuation_policy(source) if historical_continuation else None
+    policy_id = (HISTORY_DIAGNOSTICS_POLICY_ID if historical_diagnostics else
+                 HISTORY_CONTINUATION_POLICY_ID if historical_continuation else HISTORY_POLICY_ID)
+    baseline = (HISTORY_DIAGNOSTICS_BASELINE if historical_diagnostics else
+                HISTORY_CONTINUATION_BASELINE if historical_continuation else HISTORY_BASELINE)
+    historical = historical_exception or historical_continuation or historical_diagnostics
+    policy = continuation_policy(source, policy_id) if historical_continuation or historical_diagnostics else None
     values = environment_values(directory / '.env.aws.production')
     audit_url = values.get('V2_DATA_INTEGRITY_DATABASE_URL')
     require(bool(audit_url), 'Read-only audit database URL missing')
@@ -432,13 +506,13 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
                 and report.get('violationCount') == gate.get('violationCount') == 10
                 and (stage != 'after' or gate.get('unavailableCheckCount') == 0),
                 'Approved historical integrity gate failed')
-        if historical_continuation:
+        if historical_continuation or historical_diagnostics:
             require(report.get('ok') is False and report.get('checkCount') == 48
                     and gate.get('status') == 'APPROVED_HISTORICAL_EXCEPTIONS'
                     and gate.get('executedCheckCount') == 48
                     and gate.get('unavailableCheckCount') == 0
                     and gate.get('continuationOf') == HISTORY_POLICY_ID
-                    and gate.get('fixedCurrent') == HISTORY_CONTINUATION_BASELINE
+                    and gate.get('fixedCurrent') == baseline
                     and gate.get('continuation') == policy['continuation']
                     and gate.get('metadataSha256') == policy['continuation']['metadataSha256']
                     and gate.get('sources') == {
@@ -690,6 +764,29 @@ def point_current(directory, suffix):
     os.replace(link, BASE / 'current')
 
 
+def require_diagnostics_release_arguments(args, image_commit, image_run, image_attempt):
+    require(not args.admin_only, 'Historical diagnostics requires Worker publication')
+    require((image_commit, image_run, image_attempt) ==
+            (args.commit, args.run_id, args.run_attempt),
+            'Historical diagnostics forbids image reuse')
+
+
+def require_diagnostics_migration_scope(additions, edge_changed):
+    require(not additions and not edge_changed,
+            'Historical diagnostics forbids migrations and edge changes')
+
+
+def require_diagnostics_source_scope(previous, release):
+    require_diagnostics_migration_scope(migration_plan(previous, release),
+        (previous / 'deploy/caddy/Caddyfile.aws').read_bytes() !=
+        (release / 'deploy/caddy/Caddyfile.aws').read_bytes())
+
+
+def run_release_migrations(release, admin_only, historical_diagnostics=False):
+    if not admin_only and not historical_diagnostics:
+        compose(release, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
@@ -705,15 +802,19 @@ def main():
     parser.add_argument('--admin-only', action='store_true')
     parser.add_argument('--historical-finance-exception', action='store_true')
     parser.add_argument('--historical-finance-continuation', action='store_true')
+    parser.add_argument('--historical-finance-recharge-diagnostics', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
-    require(not (args.historical_finance_exception and args.historical_finance_continuation),
+    require(sum((args.historical_finance_exception, args.historical_finance_continuation,
+                 args.historical_finance_recharge_diagnostics)) <= 1,
             'Historical release selection is ambiguous')
-    if args.historical_finance_exception or args.historical_finance_continuation:
-        require_historical_baseline(HISTORY_CONTINUATION_POLICY_ID
-            if args.historical_finance_continuation else HISTORY_POLICY_ID, args.expected_current)
+    historical_policy_id = (HISTORY_DIAGNOSTICS_POLICY_ID if args.historical_finance_recharge_diagnostics else
+        HISTORY_CONTINUATION_POLICY_ID if args.historical_finance_continuation else HISTORY_POLICY_ID)
+    if (args.historical_finance_exception or args.historical_finance_continuation
+            or args.historical_finance_recharge_diagnostics):
+        require_historical_baseline(historical_policy_id, args.expected_current)
     require(not (args.historical_finance_continuation and args.admin_only),
             'Historical registration continuation requires Worker publication')
     require(re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository), 'Invalid image repository')
@@ -726,6 +827,8 @@ def main():
     require(re.fullmatch(r'[0-9a-f]{40}', image_commit), 'Invalid image commit')
     require(re.fullmatch(r'[1-9][0-9]*', image_run), 'Invalid image workflow run')
     require(re.fullmatch(r'[1-9][0-9]*', image_attempt), 'Invalid image workflow attempt')
+    if args.historical_finance_recharge_diagnostics:
+        require_diagnostics_release_arguments(args, image_commit, image_run, image_attempt)
     os.umask(0o077)
     lock = (BASE / '.deploy.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -767,18 +870,20 @@ def main():
             item.rename(release / item.name)
         extracted.rmdir()
         archive.unlink()
-        if args.historical_finance_continuation:
-            policy = continuation_policy(release)
-            verified_manifest = verify_continuation_baseline(previous, policy)
+        if args.historical_finance_continuation or args.historical_finance_recharge_diagnostics:
+            policy = continuation_policy(release, historical_policy_id)
+            verified_manifest = verify_continuation_baseline(previous, policy, historical_policy_id)
             require(verified_manifest == old_manifest, 'Historical continuation manifest changed')
             verify_continuation_running_images(before, old_manifest)
             url = (f'https://github.com/wangchaozhuanyong/id-business-system/archive/'
-                   f'{HISTORY_CONTINUATION_BASELINE}.tar.gz')
+                   f'{fixed_continuation(historical_policy_id)[0]}.tar.gz')
             with urllib.request.urlopen(url, timeout=60) as response:
                 data = response.read(64 * 1024 * 1024 + 1)
             require(len(data) <= 64 * 1024 * 1024, 'Continuation source archive is too large')
             with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source:
-                verify_continuation_archive(release, source, policy)
+                verify_continuation_archive(release, source, policy, historical_policy_id)
+        if args.historical_finance_recharge_diagnostics:
+            require_diagnostics_source_scope(previous, release)
         if image_commit != args.commit:
             url = f'https://github.com/wangchaozhuanyong/id-business-system/archive/{image_commit}.tar.gz'
             with urllib.request.urlopen(url, timeout=60) as response:
@@ -793,6 +898,8 @@ def main():
         additions = migration_plan(previous, release)
         edge_changed = ((previous / 'deploy/caddy/Caddyfile.aws').read_bytes()
                         != (release / 'deploy/caddy/Caddyfile.aws').read_bytes())
+        if args.historical_finance_recharge_diagnostics:
+            require_diagnostics_migration_scope(additions, edge_changed)
         updated_services, image_services = release_services(args.admin_only, additions, edge_changed)
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
@@ -817,6 +924,7 @@ def main():
         before_audit = audit(previous, release / 'before-audit.json',
                              historical_exception=args.historical_finance_exception,
                              historical_continuation=args.historical_finance_continuation,
+                             historical_diagnostics=args.historical_finance_recharge_diagnostics,
                              stage='before', source=release)
         step = 'images'
         pulled_images = {}
@@ -846,8 +954,7 @@ def main():
         assert_no_active_jobs(previous, worker_changes=not args.admin_only)
 
         step = 'migration'
-        if not args.admin_only:
-            compose(release, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
+        run_release_migrations(release, args.admin_only, args.historical_finance_recharge_diagnostics)
         step = 'database-grants'
         database_grants = sync_new_table_grants(release, additions)
         step = 'switch'
@@ -862,6 +969,7 @@ def main():
         after_audit = audit(release, release / 'after-audit.json',
                             historical_exception=args.historical_finance_exception,
                             historical_continuation=args.historical_finance_continuation,
+                            historical_diagnostics=args.historical_finance_recharge_diagnostics,
                             stage='after', source=release,
                             before_receipt=release / 'before-audit.json')
         after = {service: service_state(release, service) for service in production_services(release)}

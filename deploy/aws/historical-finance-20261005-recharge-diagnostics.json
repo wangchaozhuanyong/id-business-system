@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "id": "historical-finance-20261005-recharge-diagnostics",
+  "userApproved": true,
+  "approvalDate": "2026-10-05",
+  "expectedCurrent": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+  "checkCount": 48,
+  "rulesSha256": "259332c0c8eb2d3d96d066cecd7cbe294ed5f2bd1e7af0d1c39f6c002859d7f4",
+  "exceptions": [
+    {
+      "code": "cash_historical_cost_evidence_mismatch",
+      "entityIds": [
+        "0e095178-8455-4f1d-8e45-d12b09064702:c6866d24-097b-44c5-b3a7-f3a3dcc11b23",
+        "10eb0ed7-3ce4-42a7-93e1-b83a898efe15:02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e:02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "5a9ca0f0-2855-48e6-a50f-690dc64ebb65:c6866d24-097b-44c5-b3a7-f3a3dcc11b23",
+        "c40dff47-93f4-4651-bad2-edf35c727298:02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "eb3f0d75-3802-49ab-8f3f-86fae65d8514:02d8080d-68d8-4095-8b60-a30d5cd6c4e0"
+      ]
+    },
+    {
+      "code": "finance_cash_source_currency_mismatch",
+      "entityIds": [
+        "0aa666b9-6dbe-450e-987e-32c7fd7bc180",
+        "9c59390d-eba8-4c8a-880b-e91353eb85ec",
+        "a160fcbb-b5e0-4c43-8512-02f54a3d3d35",
+        "d093d779-3659-4266-aa4a-7f1fd9c5813b"
+      ]
+    }
+  ],
+  "sources": {
+    "accounts": {
+      "ids": [
+        "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "723b7183-e56e-4487-8f19-49f1bee14bc8",
+        "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
+      ],
+      "sha256": "9f4acd900992193968abc6d931a79c2f81503e869422fdec6def9ab5ea3b1280"
+    },
+    "journals": {
+      "ids": [
+        "0e095178-8455-4f1d-8e45-d12b09064702",
+        "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+        "3898495b-e61d-4fee-b5b8-42baf52993b9",
+        "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+        "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+        "83e51212-9b05-49ea-bf9e-efffd78c3bb5",
+        "c40dff47-93f4-4651-bad2-edf35c727298",
+        "e00418dd-c6e9-44c7-ab54-61c36e0d2439",
+        "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+      ],
+      "sha256": "3f39001ff42347b161a581d363771ad4169f6ecdabfd13345d730492b8f4f120"
+    },
+    "lines": {
+      "ids": [
+        "0e095178-8455-4f1d-8e45-d12b09064702",
+        "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+        "3898495b-e61d-4fee-b5b8-42baf52993b9",
+        "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+        "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+        "83e51212-9b05-49ea-bf9e-efffd78c3bb5",
+        "c40dff47-93f4-4651-bad2-edf35c727298",
+        "e00418dd-c6e9-44c7-ab54-61c36e0d2439",
+        "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+      ],
+      "sha256": "6303b51fbfd4e46e3f2242e0687964e034032a19641873b8df3e7fa64bda96d5"
+    },
+    "expenses": {
+      "ids": [
+        "15d6851b-2c7c-47b2-9308-bcc7c0d0997a",
+        "5f470679-9b40-4449-bdf5-9b259d3e179c",
+        "a1055b04-9b02-48b1-8bbd-1dea853a466a",
+        "d7e4e35a-5a30-4678-a786-0e85a057e0e5",
+        "f047f59b-36c8-4aa0-8a11-929040ec9cc7",
+        "f3ad1bc9-6b81-461a-a56d-5450e7efa461"
+      ],
+      "sha256": "cefe2e0c45666dd4e6fedd2e3a3d113e5573073f1e16bf77e89a9373b409e157"
+    },
+    "orders": {
+      "ids": ["c19663b2-7050-427c-b850-819b0e410dfc", "ed9db3ad-8a60-44b3-ae7c-d4e8f4dd10af"],
+      "sha256": "0d57b6a4b05accd260fa59392459f6b07f6059559c7d89e899c210dbaed51c2b"
+    }
+  },
+  "continuation": {
+    "continuationOf": "historical-finance-20261005",
+    "originPolicySha256": "58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca",
+    "fixedCurrent": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "manifestSha256": "202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866",
+    "beforeReceiptSha256": "b54520e73edffbc0a9fcf6592da3733b04564c5b65ff41f1ed8789ea782804d5",
+    "afterReceiptSha256": "818e1980ab01bff0eafaca24863601bca8b02aa0e4bcadf64c3a671bc38edf63",
+    "beforeGateSha256": "73f4bb876129fcb53a6ef7f31873db017b6df245372fcc2c222813018550adb6",
+    "afterGateSha256": "6b3d3445796b1dfc840b8e4c0b9d31c663269847181575f3913f0c7eafabe18a",
+    "metadataSha256": "b1648d5e5f832b0c540e88ea1ca4117eee664d8e6d84d06dca90d2ea0e146a6e",
+    "manifest": {
+      "commit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+      "previousCommit": "d0f359dc78b2d2b166893bfec8545609f5baa16d",
+      "sourceTree": "a329e268cf7afcb9967789dcb998e0177cad5ddf",
+      "releaseTag": "v2-production-20261005T050620Z",
+      "deploymentRun": "github-actions-37265858979-1",
+      "imageBuildRun": "github-actions-37265858979-1",
+      "ciWorkflowRunId": 37265801532
+    }
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f",
+    "scripts/ci-recharge-check.mjs": "86c143e33a862fc31610b68f013d32236447548c9ee238cf58a3393f088f53cc"
+  }
+}

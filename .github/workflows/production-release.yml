@@ -63,6 +63,7 @@ on:
           - none
           - historical-finance-20261005
           - historical-finance-20261005-registration-continuation
+          - historical-finance-20261005-recharge-diagnostics
 
       diagnostic_command_id:
         description: Optional exact failed SSM command to inspect in verify_access (UUID)
