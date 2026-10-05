@@ -1596,6 +1596,22 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
             capture_output=True, text=True, timeout=30)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual([json.loads(line) for line in accepted.stdout.splitlines()], [lock, diagnostics])
+        side = {'fixedIsolationDiagnostic': self.namespace['fixed_isolation_diagnostic'](
+            self.root / 'missing-current', {'images': {}}, None)}
+        output_path.write_text('\n'.join(json.dumps(item) for item in (lock, diagnostics, side)) + '\n')
+        accepted_side = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
+            env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(accepted_side.returncode, 0, accepted_side.stderr)
+        self.assertEqual([json.loads(line) for line in accepted_side.stdout.splitlines()], [lock, diagnostics, side])
+        side['fixedIsolationDiagnostic']['private'] = 'SENTINEL_PRIVATE_ISOLATION'
+        output_path.write_text('\n'.join(json.dumps(item) for item in (lock, diagnostics, side)) + '\n')
+        rejected_side = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
+            env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
+            capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(rejected_side.returncode, 0)
+        self.assertEqual(rejected_side.stdout.splitlines(), [json.dumps(lock, separators=(',', ':'))])
+        self.assertNotIn('SENTINEL', rejected_side.stdout + rejected_side.stderr)
 
 
 class ReadOnlyFixedProofDiagnosticTests(unittest.TestCase):
@@ -1770,6 +1786,255 @@ class ReadOnlyFixedProofDiagnosticTests(unittest.TestCase):
             with self.subTest(path=path):
                 receipts = self.namespace['readonly_receipts']('\n'.join(json.dumps(item) for item in (lock, failure, bad)), False)
                 self.assertEqual(receipts, [lock, failure])
+
+
+class ReadOnlyFixedIsolationDiagnosticTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        ReadOnlyReleaseProofTests.setUpClass()
+        cls.namespace = dict(ReadOnlyReleaseProofTests.namespace)
+
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        self.temporary = tempfile.TemporaryDirectory(dir=output)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.diagnostic = self.namespace['fixed_isolation_diagnostic']
+        self.compose = self.root / 'docker-compose.aws-mysql.yml'
+        self.compose.write_text('services:\n' + ''.join('  ' + service + ':\n'
+            for service in self.namespace['PROOF_ISOLATION_SERVICES']))
+        self.compose.chmod(0o644)
+        self.path = self.root / 'compose.release.json'
+        self.manifest = {'commit': self.namespace['PROOF_CURRENT'], 'images': {
+            service: {'reference': 'SENTINEL_PRIVATE_REFERENCE_' + service}
+            for service in self.namespace['PROOF_ISOLATION_SERVICES']}}
+        self.override = {'services': {service: {'image': image['reference'], 'pull_policy': 'never'}
+            for service, image in self.manifest['images'].items()}}
+        self.write_override()
+        self.lock = {'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}
+        self.proof = {'currentCommit': self.namespace['PROOF_CURRENT'],
+                      'safeProof': copy.deepcopy(self.namespace['PROOF_RECEIPT'])}
+
+    def write_override(self):
+        self.path.write_text(json.dumps(self.override, indent=2) + '\n')
+        self.path.chmod(0o644)
+
+    def summary(self, response=None):
+        response = response or SimpleNamespace(returncode=0,
+            stdout=self.manifest['images']['auto-registration']['reference'] + '\n')
+        with patch.object(self.namespace['subprocess'], 'run', return_value=response) as command:
+            result = self.diagnostic(self.root, self.manifest, 'a' * 64)
+        self.assertEqual(command.call_args.args[0], ('docker', 'inspect', '--format', '{{.Config.Image}}', 'a' * 64))
+        self.assertEqual(self.namespace['closed_fixed_isolation_diagnostic'](result), result)
+        self.assertNotIn('SENTINEL', json.dumps(result))
+        return result
+
+    def test_config_644_reads_real_hashes_and_only_boolean_reference(self):
+        result = self.summary()
+        self.assertEqual(result['runtimeCompose'], {'fileStatus': 'READABLE',
+            'sha256': deployment.hashlib.sha256(self.compose.read_bytes()).hexdigest(),
+            'pinMatched': False, 'registrationDeclared': True})
+        self.assertEqual(result['override'], {'fileStatus': 'READABLE',
+            'rawSha256': deployment.hashlib.sha256(self.path.read_bytes()).hexdigest(),
+            'canonicalSha256': self.namespace['proof_fingerprint'](self.override),
+            'topLevelExact': True, 'topLevelKeyCount': 1, 'servicesExact': True, 'serviceCount': 6})
+        self.assertTrue(result['registrationReferenceMatched'])
+        self.assertTrue(all(row == {'present': True, 'declared': True, 'imageMatched': True,
+            'pullPolicyMatched': True, 'extraFieldCount': 0, 'extraKnownKeys': [],
+            'roleOverrideStatus': 'ABSENT' if service in ('auto-recharge', 'auto-registration') else None}
+            for service, row in result['services'].items()))
+        self.path.write_text(json.dumps(self.override, sort_keys=True))
+        reordered = self.summary()['override']
+        self.assertNotEqual(reordered['rawSha256'], result['override']['rawSha256'])
+        self.assertEqual(reordered['canonicalSha256'], result['override']['canonicalSha256'])
+        with self.assertRaisesRegex(RuntimeError, '^Read-only fixed release proof unavailable$'):
+            self.namespace['proof_private_bytes'](self.path)
+
+    def test_top_service_extra_and_reference_differences_never_print_values_or_unknown_names(self):
+        self.override['SENTINEL_PRIVATE_TOP_KEY'] = {'value': 'SENTINEL_PRIVATE_TOP_VALUE'}
+        registration = self.override['services']['auto-registration']
+        registration.update(environment={'SECRET': 'SENTINEL_PRIVATE_ENV'},
+            labels={'secret': 'SENTINEL_PRIVATE_LABEL'}, volumes=['SENTINEL_PRIVATE_VOLUME'],
+            SENTINEL_PRIVATE_UNKNOWN_KEY='SENTINEL_PRIVATE_UNKNOWN_VALUE', image='SENTINEL_PRIVATE_DIFFERENT_REF')
+        registration['pull_policy'] = 'always'
+        self.override['services']['SENTINEL_PRIVATE_UNKNOWN_SERVICE'] = {'secret': 'SENTINEL_PRIVATE_VALUE'}
+        self.write_override()
+        result = self.summary(SimpleNamespace(returncode=0, stdout='SENTINEL_PRIVATE_ACTUAL_REF\n'))
+        self.assertFalse(result['override']['topLevelExact'])
+        self.assertEqual(result['override']['topLevelKeyCount'], 2)
+        self.assertFalse(result['override']['servicesExact'])
+        self.assertEqual(result['override']['serviceCount'], 7)
+        row = result['services']['auto-registration']
+        self.assertEqual(row['extraFieldCount'], 4)
+        self.assertEqual(row['extraKnownKeys'], ['environment', 'labels', 'volumes'])
+        self.assertFalse(row['imageMatched'])
+        self.assertFalse(row['pullPolicyMatched'])
+        self.assertFalse(result['registrationReferenceMatched'])
+
+    def test_safe_config_metadata_rejections_never_open_body(self):
+        original = self.path.read_bytes()
+        original_open = deployment.os.open
+        for status in ('MISSING', 'SYMLINK', 'NOT_REGULAR', 'HARDLINK', 'UNSAFE_MODE', 'OVERSIZED'):
+            with self.subTest(status=status):
+                self.path.unlink()
+                other = self.root / 'other'
+                if status == 'SYMLINK':
+                    other.write_bytes(original); self.path.symlink_to(other)
+                elif status == 'NOT_REGULAR':
+                    self.path.mkdir()
+                elif status != 'MISSING':
+                    self.path.write_bytes(original); self.path.chmod(0o666 if status == 'UNSAFE_MODE' else 0o644)
+                    if status == 'HARDLINK':
+                        deployment.os.link(self.path, other)
+                    elif status == 'OVERSIZED':
+                        with self.path.open('r+b') as source:
+                            source.truncate(8 * 1024 * 1024 + 1)
+                opened = []
+                def observed(path, flags, *args, **kwargs):
+                    opened.append(Path(path))
+                    return original_open(path, flags, *args, **kwargs)
+                with patch.object(deployment.os, 'open', side_effect=observed):
+                    row = self.summary()['override']
+                self.assertEqual(row['fileStatus'], status)
+                self.assertTrue(all(value is None for key, value in row.items() if key != 'fileStatus'))
+                self.assertNotIn(self.path, opened)
+                if self.path.is_dir():
+                    self.path.rmdir()
+                elif self.path.exists() or self.path.is_symlink():
+                    self.path.unlink()
+                if other.exists():
+                    other.unlink()
+                self.path.write_bytes(original); self.path.chmod(0o644)
+
+    def test_permission_and_changed_read_have_no_hash_or_fake_success(self):
+        original_open = deployment.os.open
+        def denied(path, flags, *args, **kwargs):
+            if Path(path) == self.path:
+                raise PermissionError('SENTINEL_PRIVATE_PERMISSION')
+            return original_open(path, flags, *args, **kwargs)
+        with patch.object(deployment.os, 'open', side_effect=denied):
+            self.assertEqual(self.summary()['override']['fileStatus'], 'NOT_MEASURED')
+        original_fstat = deployment.os.fstat
+        descriptor = None
+        calls = 0
+        def observed_open(path, flags, *args, **kwargs):
+            nonlocal descriptor
+            result = original_open(path, flags, *args, **kwargs)
+            if Path(path) == self.path:
+                descriptor = result
+            return result
+        def changed(fd):
+            nonlocal calls
+            if fd == descriptor:
+                calls += 1
+                if calls == 2:
+                    with self.path.open('ab') as source:
+                        source.write(b' ')
+            return original_fstat(fd)
+        with patch.object(deployment.os, 'open', side_effect=observed_open), \
+                patch.object(deployment.os, 'fstat', side_effect=changed):
+            row = self.summary()['override']
+        self.assertEqual(row['fileStatus'], 'CHANGED_DURING_READ')
+        self.assertIsNone(row['rawSha256'])
+
+    def test_malformed_configuration_and_failed_docker_remain_unmeasured(self):
+        self.path.write_text('SENTINEL_PRIVATE_INVALID_JSON')
+        result = self.summary(SimpleNamespace(returncode=1, stdout='SENTINEL_PRIVATE_ERROR'))
+        self.assertEqual(result['override']['fileStatus'], 'READABLE')
+        self.assertIsNone(result['override']['canonicalSha256'])
+        self.assertIsNone(result['override']['topLevelExact'])
+        self.assertIsNone(result['registrationReferenceMatched'])
+        self.assertTrue(all(row['present'] is None for row in result['services'].values()))
+
+    def test_only_worker_role_override_status_is_classified_without_environment_values(self):
+        key = 'AUTO_RECHARGE_WORKER_ROLE'
+        for service, expected in (('auto-recharge', 'recharge'), ('auto-registration', 'registration')):
+            for environment, status in (
+                ({key: expected, 'SECRET': 'SENTINEL_PRIVATE_NEIGHBOUR'}, 'EXPECTED'),
+                ([key + '=' + expected, 'SECRET=SENTINEL_PRIVATE_NEIGHBOUR'], 'EXPECTED'),
+                ({key: 'SENTINEL_PRIVATE_WRONG_ROLE'}, 'DIFFERENT'),
+                ({key: None}, 'NOT_MEASURED'), ({key: '${SENTINEL_PRIVATE_INHERITED}'}, 'NOT_MEASURED'),
+                ([key], 'NOT_MEASURED'), ([key + '=${SENTINEL_PRIVATE_INHERITED}'], 'NOT_MEASURED'),
+                ([key + '=' + expected, key + '=' + expected], 'INVALID'),
+                ({key: True}, 'INVALID'), (None, 'NOT_MEASURED'),
+                ({'SECRET': 'SENTINEL_PRIVATE_NEIGHBOUR'}, 'ABSENT'),
+            ):
+                with self.subTest(service=service, status=status):
+                    self.override['services'][service]['environment'] = environment
+                    self.write_override()
+                    result = self.summary()
+                    self.assertEqual(result['services'][service]['roleOverrideStatus'], status)
+                    self.assertTrue(all(result['services'][other]['roleOverrideStatus'] is None
+                        for other in ('api', 'admin', 'media-resolver', 'migrate')))
+
+    def test_optional_success_side_is_closed_and_cannot_replace_or_weaken_original_proof(self):
+        side = {'fixedIsolationDiagnostic': self.summary()}
+        def wire(item, proof=None):
+            return '\n'.join(json.dumps(value) for value in (self.lock, proof or self.proof, item))
+        self.assertEqual(self.namespace['readonly_receipts'](wire(side), True), [self.lock, self.proof, side])
+        bad_proof = copy.deepcopy(self.proof); bad_proof['safeProof']['accepted'] = False
+        with self.assertRaises(RuntimeError):
+            self.namespace['readonly_receipts'](wire(side, bad_proof), True)
+        generic = ReadOnlyReleaseLockTests.generic_diagnostics(self)
+        with self.assertRaises(RuntimeError):
+            self.namespace['readonly_receipts'](wire(side, generic), True)
+        mutations = [(('private',), 'SENTINEL'), (('currentCommit',), 'a' * 40),
+            (('registrationReferenceMatched',), 1), (('override', 'rawSha256'), 'SENTINEL'),
+            (('override', 'topLevelKeyCount'), True), (('override', 'private'), 'SENTINEL'),
+            (('runtimeCompose', 'pinMatched'), True), (('runtimeCompose', 'sha256'), None),
+            (('services', 'api', 'extraKnownKeys'), ['SENTINEL']),
+            (('services', 'api', 'extraKnownKeys'), ['volumes', 'labels']),
+            (('services', 'api', 'extraKnownKeys'), ['labels', 'labels']),
+            (('services', 'api', 'extraFieldCount'), -1),
+            (('services', 'api', 'extraKnownKeys'), ['labels']),
+            (('services', 'api', 'imageMatched'), 'SENTINEL'),
+            (('services', 'api', 'roleOverrideStatus'), 'EXPECTED'),
+            (('services', 'auto-registration', 'roleOverrideStatus'), 'SENTINEL')]
+        for path, value in mutations:
+            bad = copy.deepcopy(side); target = bad['fixedIsolationDiagnostic']
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, '^Read-only diagnostic output unavailable$'):
+                self.namespace['readonly_receipts'](wire(bad), True)
+        for bad in ({'private': 'SENTINEL'}, {'fixedIsolationDiagnostic': {}},
+                    {'fixedIsolationDiagnostic': side['fixedIsolationDiagnostic'], 'private': 'SENTINEL'}):
+            with self.assertRaises(RuntimeError):
+                self.namespace['readonly_receipts'](wire(bad), True)
+        self.assertLess(len(wire(side).encode()), 24000)
+
+    def test_actual_embedded_fixed_success_emits_independent_third_receipt(self):
+        current = self.root / 'current'; current.mkdir()
+        for path in (self.compose, self.path):
+            path.rename(current / path.name)
+        (current / 'release-manifest.json').write_text(json.dumps(self.manifest))
+        def fixture_path(value):
+            return self.root if value == '/opt/id-business-v2' else Path(value)
+        def docker(*args, **kwargs):
+            command = args[0]
+            if 'compose' in command:
+                return SimpleNamespace(returncode=0, stdout='a' * 64)
+            if '{{.Config.Image}}' in command:
+                return SimpleNamespace(returncode=0, stdout=self.manifest['images']['auto-registration']['reference'])
+            return SimpleNamespace(returncode=0, stdout='sha256:' + 'b' * 64 + ' running healthy')
+        tree = ReadOnlyReleaseProofTests.program
+        selector = next(index for index, node in enumerate(tree.body) if isinstance(node, ast.If)
+                        and isinstance(node.test, ast.Compare))
+        nodes = [node for node in tree.body[:selector + 1]
+            if not isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))
+            and not (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id.startswith('PROOF_'))]
+        namespace = {**self.namespace, 'Path': fixture_path, 'release_lock_summary': lambda: self.lock['releaseLock'],
+                     'fixed_release_proof': lambda *args: copy.deepcopy(self.proof['safeProof'])}
+        output = io.StringIO()
+        with redirect_stdout(output), patch.object(self.namespace['subprocess'], 'run', side_effect=docker):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(compile(ast.Module(body=nodes, type_ignores=[]), '<fixed-isolation-server>', 'exec'), namespace)
+        self.assertEqual(stopped.exception.code, 0)
+        receipts = self.namespace['readonly_receipts'](output.getvalue(), True)
+        self.assertEqual(receipts[:2], [self.lock, self.proof])
+        self.assertTrue(receipts[2]['fixedIsolationDiagnostic']['registrationReferenceMatched'])
+        self.assertNotIn('SENTINEL', output.getvalue())
 
 
 class HistoricalDiagnosticsTests(unittest.TestCase):

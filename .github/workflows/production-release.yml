@@ -324,6 +324,10 @@ jobs:
                   '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'}
           PROOF_FAILURES = ('MANIFEST_UNAVAILABLE', 'FIXED_PROOF_UNAVAILABLE',
               'DOCKER_DIAGNOSTIC_FAILED', 'IMAGE_INVENTORY_BOUND')
+          PROOF_ISOLATION_COMPOSE_SHA256 = '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8'
+          PROOF_ISOLATION_SERVICES = (*PROOF_SERVICES, 'migrate')
+          PROOF_ISOLATION_KEYS = ('build', 'command', 'configs', 'depends_on', 'entrypoint', 'env_file',
+              'environment', 'extends', 'labels', 'networks', 'ports', 'secrets', 'volumes')
           def release_lock_summary(lock_path=Path('/opt/id-business-v2/.deploy.lock'), proc=Path('/proc')):
               unknown = {'status': 'NOT_MEASURED', 'holders': []}
               flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -544,6 +548,172 @@ jobs:
                   projection['dataAudit' + stage.title()] = {'checkCount': 48, 'executedCheckCount': 48,
                       'unavailableCheckCount': 0, 'violationCount': 10, 'historicalException': safe_gate}
               return projection
+          def fixed_isolation_diagnostic(directory, manifest, registration_container):
+              result = {'currentCommit': PROOF_CURRENT,
+                  'runtimeCompose': {'fileStatus': 'NOT_MEASURED', 'sha256': None,
+                      'pinMatched': None, 'registrationDeclared': None},
+                  'override': {'fileStatus': 'NOT_MEASURED', 'rawSha256': None, 'canonicalSha256': None,
+                      'topLevelExact': None, 'topLevelKeyCount': None, 'servicesExact': None, 'serviceCount': None},
+                  'services': {service: {'present': None, 'declared': None, 'imageMatched': None,
+                      'pullPolicyMatched': None, 'extraFieldCount': None, 'extraKnownKeys': [],
+                      'roleOverrideStatus': 'NOT_MEASURED' if service in ('auto-recharge', 'auto-registration') else None}
+                      for service in PROOF_ISOLATION_SERVICES}, 'registrationReferenceMatched': None}
+              def identity(info):
+                  return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                      info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+              def config_bytes(name):
+                  path = directory / name
+                  initial = None
+                  try:
+                      initial = path.lstat()
+                      if stat.S_ISLNK(initial.st_mode):
+                          return 'SYMLINK', None
+                      if not stat.S_ISREG(initial.st_mode):
+                          return 'NOT_REGULAR', None
+                      if initial.st_nlink != 1:
+                          return 'HARDLINK', None
+                      if stat.S_IMODE(initial.st_mode) not in (0o400, 0o600, 0o644):
+                          return 'UNSAFE_MODE', None
+                      if initial.st_size > 8 * 1024 * 1024:
+                          return 'OVERSIZED', None
+                      with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+                          before = os.fstat(source.fileno())
+                          if identity(before) != identity(initial):
+                              return 'CHANGED_DURING_READ', None
+                          raw = source.read(8 * 1024 * 1024 + 1)
+                          after = os.fstat(source.fileno())
+                          if identity(after) != identity(before) or identity(path.lstat()) != identity(before):
+                              return 'CHANGED_DURING_READ', None
+                      if len(raw) > 8 * 1024 * 1024:
+                          return 'OVERSIZED', None
+                      return 'READABLE', raw
+                  except FileNotFoundError:
+                      return 'CHANGED_DURING_READ' if initial is not None else 'MISSING', None
+                  except Exception:
+                      return 'NOT_MEASURED', None
+              status, compose_raw = config_bytes('docker-compose.aws-mysql.yml')
+              result['runtimeCompose']['fileStatus'] = status
+              if compose_raw is not None:
+                  result['runtimeCompose'].update(sha256=hashlib.sha256(compose_raw).hexdigest(),
+                      pinMatched=hashlib.sha256(compose_raw).hexdigest() == PROOF_ISOLATION_COMPOSE_SHA256)
+                  try:
+                      text = compose_raw.decode('utf-8')
+                      for service in PROOF_ISOLATION_SERVICES:
+                          result['services'][service]['declared'] = bool(re.search(r'(?m)^  ' + re.escape(service) + r':$', text))
+                      result['runtimeCompose']['registrationDeclared'] = result['services']['auto-registration']['declared']
+                  except Exception:
+                      pass
+              status, override_raw = config_bytes('compose.release.json')
+              result['override']['fileStatus'] = status
+              def role_status(definition, service):
+                  if 'environment' not in definition:
+                      return 'ABSENT'
+                  environment = definition['environment']
+                  key = 'AUTO_RECHARGE_WORKER_ROLE'
+                  if isinstance(environment, dict):
+                      if key not in environment:
+                          return 'ABSENT'
+                      value = environment[key]
+                  elif isinstance(environment, list):
+                      if len(environment) > 10000 or any(not isinstance(item, str) for item in environment):
+                          return 'INVALID'
+                      bindings = [item for item in environment if item == key or item.startswith(key + '=')]
+                      if len(bindings) > 1:
+                          return 'INVALID'
+                      if not bindings:
+                          return 'NOT_MEASURED' if any(item.startswith('$') for item in environment) else 'ABSENT'
+                      value = bindings[0].split('=', 1)[1] if '=' in bindings[0] else None
+                  else:
+                      return 'NOT_MEASURED' if environment is None or isinstance(environment, str) and '$' in environment else 'INVALID'
+                  if value is None or isinstance(value, str) and '$' in value:
+                      return 'NOT_MEASURED'
+                  if not isinstance(value, str):
+                      return 'INVALID'
+                  expected = 'recharge' if service == 'auto-recharge' else 'registration'
+                  return 'EXPECTED' if value == expected else 'DIFFERENT'
+              if override_raw is not None:
+                  result['override']['rawSha256'] = hashlib.sha256(override_raw).hexdigest()
+                  try:
+                      override = json.loads(override_raw)
+                      result['override']['canonicalSha256'] = proof_fingerprint(override)
+                      if isinstance(override, dict) and len(override) <= 10000:
+                          result['override'].update(topLevelExact=set(override) == {'services'}, topLevelKeyCount=len(override))
+                          services = override.get('services')
+                          if isinstance(services, dict) and len(services) <= 10000:
+                              images = manifest.get('images', {})
+                              result['override'].update(servicesExact=set(services) == set(images), serviceCount=len(services))
+                              for service in PROOF_ISOLATION_SERVICES:
+                                  row = result['services'][service]
+                                  row['present'] = service in services
+                                  definition = services.get(service, {})
+                                  expected = images.get(service, {}).get('reference')
+                                  if isinstance(definition, dict) and len(definition) <= 10000:
+                                      extras = set(definition) - {'image', 'pull_policy'}
+                                      row.update(imageMatched=definition.get('image') == expected if isinstance(expected, str) else None,
+                                          pullPolicyMatched=definition.get('pull_policy') == 'never', extraFieldCount=len(extras),
+                                          extraKnownKeys=sorted(extras.intersection(PROOF_ISOLATION_KEYS)))
+                                      if service in ('auto-recharge', 'auto-registration'):
+                                          row['roleOverrideStatus'] = role_status(definition, service)
+                  except Exception:
+                      pass
+              try:
+                  expected = manifest['images']['auto-registration']['reference']
+                  if (isinstance(expected, str) and expected and isinstance(registration_container, str)
+                          and re.fullmatch(r'[a-f0-9]{12,64}', registration_container)):
+                      response = subprocess.run(('docker', 'inspect', '--format', '{{.Config.Image}}', registration_container),
+                          capture_output=True, text=True, timeout=30)
+                      if response.returncode == 0 and len(response.stdout.encode()) <= 4096:
+                          result['registrationReferenceMatched'] = response.stdout.strip() == expected
+              except Exception:
+                  pass
+              return result
+          def closed_fixed_isolation_diagnostic(value):
+              def nullable_boolean(item):
+                  return item is None or type(item) is bool
+              def nullable_count(item):
+                  return item is None or type(item) is int and 0 <= item <= 10000
+              def nullable_hash(item):
+                  return item is None or isinstance(item, str) and re.fullmatch(r'[a-f0-9]{64}', item)
+              statuses = ('MISSING', 'SYMLINK', 'NOT_REGULAR', 'HARDLINK', 'UNSAFE_MODE', 'OVERSIZED',
+                  'CHANGED_DURING_READ', 'READABLE', 'NOT_MEASURED')
+              if (not isinstance(value, dict) or set(value) != {'currentCommit', 'runtimeCompose', 'override',
+                      'services', 'registrationReferenceMatched'} or value['currentCommit'] != PROOF_CURRENT
+                      or not nullable_boolean(value['registrationReferenceMatched'])):
+                  raise ValueError()
+              compose = value['runtimeCompose']
+              if (not isinstance(compose, dict) or set(compose) != {'fileStatus', 'sha256', 'pinMatched', 'registrationDeclared'}
+                      or compose['fileStatus'] not in statuses or not nullable_hash(compose['sha256'])
+                      or not all(nullable_boolean(compose[key]) for key in ('pinMatched', 'registrationDeclared'))
+                      or (compose['fileStatus'] == 'READABLE') != (compose['sha256'] is not None)
+                      or compose['fileStatus'] == 'READABLE' and compose['pinMatched'] != (compose['sha256'] == PROOF_ISOLATION_COMPOSE_SHA256)
+                      or compose['fileStatus'] != 'READABLE' and any(compose[key] is not None
+                          for key in ('sha256', 'pinMatched', 'registrationDeclared'))):
+                  raise ValueError()
+              override = value['override']
+              if (not isinstance(override, dict) or set(override) != {'fileStatus', 'rawSha256', 'canonicalSha256',
+                      'topLevelExact', 'topLevelKeyCount', 'servicesExact', 'serviceCount'}
+                      or override['fileStatus'] not in statuses
+                      or not all(nullable_hash(override[key]) for key in ('rawSha256', 'canonicalSha256'))
+                      or not all(nullable_boolean(override[key]) for key in ('topLevelExact', 'servicesExact'))
+                      or not all(nullable_count(override[key]) for key in ('topLevelKeyCount', 'serviceCount'))
+                      or (override['fileStatus'] == 'READABLE') != (override['rawSha256'] is not None)
+                      or override['fileStatus'] != 'READABLE' and any(item is not None
+                          for key, item in override.items() if key != 'fileStatus')
+                      or not isinstance(value['services'], dict) or set(value['services']) != set(PROOF_ISOLATION_SERVICES)):
+                  raise ValueError()
+              for service, row in value['services'].items():
+                  if (not isinstance(row, dict) or set(row) != {'present', 'declared', 'imageMatched',
+                          'pullPolicyMatched', 'extraFieldCount', 'extraKnownKeys', 'roleOverrideStatus'}
+                          or not all(nullable_boolean(row[key]) for key in ('present', 'declared', 'imageMatched', 'pullPolicyMatched'))
+                          or not nullable_count(row['extraFieldCount']) or not isinstance(row['extraKnownKeys'], list)
+                          or any(not isinstance(key, str) or key not in PROOF_ISOLATION_KEYS for key in row['extraKnownKeys'])
+                          or row['extraKnownKeys'] != sorted(set(row['extraKnownKeys']))
+                          or (row['extraFieldCount'] is None and row['extraKnownKeys'])
+                          or row['extraFieldCount'] is not None and len(row['extraKnownKeys']) > row['extraFieldCount']
+                          or (row['roleOverrideStatus'] not in (None, 'ABSENT', 'EXPECTED', 'DIFFERENT', 'INVALID', 'NOT_MEASURED')
+                              if service in ('auto-recharge', 'auto-registration') else row['roleOverrideStatus'] is not None)):
+                      raise ValueError()
+              return value
           def fixed_proof_diagnostic(directory, observed_manifest, states):
               def sha(value):
                   return isinstance(value, str) and re.fullmatch(r'[a-f0-9]{40}', value) is not None
@@ -728,7 +898,7 @@ jobs:
                       pass
                   return receipts
               try:
-                  if len(lines) != 2 or first is unknown:
+                  if len(lines) not in (2, 3) or first is unknown:
                       raise ValueError()
                   diagnostics = json.loads(lines[1])
                   if not isinstance(diagnostics, dict) or not re.fullmatch(r'[a-f0-9]{40}', diagnostics['currentCommit']):
@@ -742,9 +912,16 @@ jobs:
                           return actual == expected
                       if not exact(diagnostics, {'currentCommit': PROOF_CURRENT, 'safeProof': PROOF_RECEIPT}):
                           raise ValueError()
+                      if len(lines) == 3:
+                          side = json.loads(lines[2])
+                          if not isinstance(side, dict) or set(side) != {'fixedIsolationDiagnostic'}:
+                              raise ValueError()
+                          side = {'fixedIsolationDiagnostic': closed_fixed_isolation_diagnostic(side['fixedIsolationDiagnostic'])}
                   else:
+                      if len(lines) != 2:
+                          raise ValueError()
                       diagnostics = project_readonly_diagnostics(diagnostics)
-                  return [first, diagnostics]
+                  return [first, diagnostics] + ([side] if len(lines) == 3 else [])
               except Exception:
                   raise RuntimeError('Read-only diagnostic output unavailable') from None
           def proof_fingerprint(value):
@@ -855,12 +1032,15 @@ jobs:
           if manifest.get('commit') == PROOF_CURRENT:
               try:
                   states = {}
+                  registration_container = None
                   for service in PROOF_SERVICES:
                       container = read('docker', 'compose', '--env-file', str(base / 'current' / '.env.aws.production'),
                           '-f', str(base / 'current' / 'docker-compose.aws-mysql.yml'),
                           '-f', str(base / 'current' / 'compose.release.json'), 'ps', '-q', service)
                       if not re.fullmatch(r'[a-f0-9]{12,64}', container):
                           raise ValueError()
+                      if service == 'auto-registration':
+                          registration_container = container
                       fields = read('docker', 'inspect', '--format',
                           '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
                           container).split()
@@ -875,6 +1055,8 @@ jobs:
                       separators=(',', ':')), flush=True)
                   raise SystemExit('Read-only fixed release proof unavailable') from None
               print(json.dumps({'currentCommit': PROOF_CURRENT, 'safeProof': proof}, separators=(',', ':')))
+              print(json.dumps({'fixedIsolationDiagnostic': fixed_isolation_diagnostic(base / 'current', manifest, registration_container)},
+                  separators=(',', ':')))
               raise SystemExit(0)
           previous_manifest = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
           protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)
@@ -980,7 +1162,7 @@ jobs:
           Path('.deploy/production-release/readonly-diagnostics.json').write_text(json.dumps(parameters))
           receivers = [node for node in ast.parse(program).body
               if isinstance(node, ast.FunctionDef) and node.name in
-                  ('readonly_receipts', 'project_readonly_diagnostics', 'closed_fixed_proof_diagnostic')
+                  ('readonly_receipts', 'project_readonly_diagnostics', 'closed_fixed_proof_diagnostic', 'closed_fixed_isolation_diagnostic')
               or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
           filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n'
           filter_program += ('output=sys.stdin.read(24001)\n'
