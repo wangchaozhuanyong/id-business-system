@@ -442,17 +442,20 @@ jobs:
                               comm, state, started, parent_pid = process(pid)
                               script = invocation(pid)
                               cwd, command_uuid = location(pid)
-                              parent = {'pid': parent_pid if parent_pid > 0 else None,
-                                  'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'}
+                              parent = {'pid': None, 'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'}
                               if parent_pid > 0:
                                   try:
-                                      parent_comm, parent_state, _start, _parent = process(parent_pid)
-                                      parent.update(comm=parent_comm, state=parent_state)
+                                      parent_comm, parent_state, parent_started, _parent = process(parent_pid)
+                                      if process(parent_pid)[::2] != (parent_comm, parent_started):
+                                          raise ValueError()
+                                      parent.update(pid=parent_pid, comm=parent_comm, state=parent_state)
                                   except Exception:
                                       pass
                               # Process age; /proc/locks has no acquisition timestamp.
                               elapsed = int(float(uptime) - started / ticks)
-                              if elapsed < 0 or elapsed > 2 ** 31 - 1 or process(pid)[::2] != (comm, started):
+                              final_comm, _state, final_started, final_parent_pid = process(pid)
+                              if (elapsed < 0 or elapsed > 2 ** 31 - 1
+                                      or (final_comm, final_started, final_parent_pid) != (comm, started, parent_pid)):
                                   raise ValueError()
                               holder.update(comm=comm, state=state, elapsedSeconds=elapsed, script=script,
                                   cwd=cwd, commandUuid=command_uuid, parent=parent)

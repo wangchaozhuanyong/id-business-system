@@ -1022,8 +1022,8 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
         self.write_stat()
         (self.proc / 'locks').write_text(self.lock_line())
 
-    def write_stat(self, comm='python3', started=10000, state='S'):
-        tail = [state, *(['0'] * 18), str(started), '0']
+    def write_stat(self, comm='python3', started=10000, state='S', parent=0):
+        tail = [state, str(parent), *(['0'] * 17), str(started), '0']
         (self.process_directory / 'stat').write_text(f'{self.pid} ({comm}) ' + ' '.join(tail) + '\n')
 
     def lock_line(self, *, inode=None, pid=None, waiting=False):
@@ -1074,6 +1074,68 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
         self.assertNotIn('/var/', json.dumps(holder))
         self.assertEqual(self.namespace['readonly_receipts'](json.dumps({'releaseLock': self.summary()}), False),
                          [{'releaseLock': self.summary()}])
+
+    def test_reparented_holder_during_read_is_unmeasured(self):
+        self.write_stat(parent=23456)
+        parent = self.proc / '23456'
+        parent.mkdir()
+        (parent / 'stat').write_text('23456 (bash) S ' + ' '.join(['0', *(['0'] * 17), '10000', '0']) + '\n')
+        original_open = deployment.os.open
+        reads = 0
+        def changed(path, flags, *args, **kwargs):
+            nonlocal reads
+            if Path(path) == self.process_directory / 'stat':
+                reads += 1
+                if reads == 2:
+                    self.write_stat(parent=34567)
+            return original_open(path, flags, *args, **kwargs)
+        with patch.object(deployment.os, 'open', side_effect=changed):
+            self.assert_unknown()
+        self.assertEqual(reads, 2)
+
+    def test_reused_parent_during_read_is_unmeasured_without_losing_holder(self):
+        self.write_stat(parent=23456)
+        parent = self.proc / '23456'
+        parent.mkdir()
+        path = parent / 'stat'
+        path.write_text('23456 (bash) S ' + ' '.join(['0', *(['0'] * 17), '10000', '0']) + '\n')
+        original_open = deployment.os.open
+        reads = 0
+        def changed(candidate, flags, *args, **kwargs):
+            nonlocal reads
+            if Path(candidate) == path:
+                reads += 1
+                if reads == 2:
+                    path.write_text('23456 (bash) S ' + ' '.join(['0', *(['0'] * 17), '10001', '0']) + '\n')
+            return original_open(candidate, flags, *args, **kwargs)
+        with patch.object(deployment.os, 'open', side_effect=changed):
+            result = self.summary()
+        self.assertEqual(result['status'], 'HELD')
+        self.assertEqual(result['holders'][0]['pid'], self.pid)
+        self.assertEqual(result['holders'][0]['parent'], {'pid': None, 'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'})
+        self.assertEqual(reads, 2)
+
+    def test_disappearing_parent_during_read_is_unmeasured_without_losing_holder(self):
+        self.write_stat(parent=23456)
+        parent = self.proc / '23456'
+        parent.mkdir()
+        path = parent / 'stat'
+        path.write_text('23456 (bash) S ' + ' '.join(['0', *(['0'] * 17), '10000', '0']) + '\n')
+        original_open = deployment.os.open
+        reads = 0
+        def changed(candidate, flags, *args, **kwargs):
+            nonlocal reads
+            if Path(candidate) == path:
+                reads += 1
+                if reads == 2:
+                    path.unlink()
+            return original_open(candidate, flags, *args, **kwargs)
+        with patch.object(deployment.os, 'open', side_effect=changed):
+            result = self.summary()
+        self.assertEqual(result['status'], 'HELD')
+        self.assertEqual(result['holders'][0]['pid'], self.pid)
+        self.assertEqual(result['holders'][0]['parent'], {'pid': None, 'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'})
+        self.assertEqual(reads, 2)
 
     def test_cwd_parent_and_new_owner_unknown_text_never_escape(self):
         cwd = self.process_directory / 'cwd'
