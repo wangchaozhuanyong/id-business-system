@@ -95,6 +95,12 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit
 
+      - name: Verify affected release entry and maintenance controls
+        env:
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+          CHECK_MODE: full
+        run: node scripts/ci-recharge-check.mjs release-controls "$CHECK_BASE"
+
       - name: Verify changed browser worker
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
@@ -138,6 +144,9 @@ jobs:
 
       - name: Verify V2 button color contrast
         run: npm run acceptance:v2-color-contrast
+
+      - name: Verify ordinary-order archive and restore layouts
+        run: node scripts/acceptance-v2-order-archive-ui.mjs .artifacts/order-archive-ui
 
       - name: Verify single-account recharge confirmation flow
         run: npm run acceptance:v2-auto-recharge

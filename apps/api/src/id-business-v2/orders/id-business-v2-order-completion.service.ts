@@ -1,3 +1,4 @@
+import { assertOrderNotArchived } from './id-business-v2-order-lock-support';
 import {
   BadRequestException,
   ConflictException,
@@ -363,6 +364,7 @@ export class IdBusinessV2OrderCompletionService {
     if (!order || order.deletedAt) {
       throw new NotFoundException('订单不存在或已删除');
     }
+    assertOrderNotArchived(order);
     return order;
   }
 

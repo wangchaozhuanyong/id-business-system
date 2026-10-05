@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { isCiOnly } from './ci-recharge-scope.mjs';
+import { load as loadYaml } from 'js-yaml';
+import { adminCheckCommands, checkMode, isCiOnly, selectedParts } from './ci-recharge-scope.mjs';
 
 function fixture(run) {
   mkdirSync('.deploy', { recursive: true });
@@ -21,7 +22,7 @@ function fixture(run) {
   );
   writeFileSync(
     join(bin, 'aws'),
-    '#!/bin/sh\ncase "$*" in\n*get-login-password*) printf "test-fixture-only\\n" ;;\n*describe-images*) printf "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n" ;;\nesac\n',
+    '#!/bin/sh\nprintf "aws %s\\n" "$*" >> "$TASK_DOCKER_LOG"\ncase "$*" in\n*get-login-password*) printf "test-fixture-only\\n" ;;\n*describe-images*) printf "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n" ;;\nesac\n',
     { mode: 0o755 }
   );
   const env = {
@@ -35,7 +36,13 @@ function fixture(run) {
     GITHUB_ENV: join(root, 'github.env'),
     TASK_CHANGED_PATHS: join(root, 'changed.txt'),
     TASK_DOCKER_LOG: log,
-    AWS_REGION: 'ap-northeast-1'
+    AWS_REGION: 'ap-northeast-1',
+    HISTORICAL_EXCEPTION: 'none',
+    POST_CLEANUP_SEAL_SHA256: '',
+    ORDER_ARCHIVE_SEAL_SHA256: '',
+    ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: '',
+    RELEASE_OPERATION: 'release',
+    REUSE_IMAGE_RUN: ''
   };
   try {
     run({ root, env, log });
@@ -44,7 +51,18 @@ function fixture(run) {
   }
 }
 
-function guardCommands(paths, { failHistory = false, failMaintenance = false } = {}) {
+function guardCommands(
+  paths,
+  {
+    failHistory = false,
+    failMaintenance = false,
+    failMailbox = false,
+    failArchivePolicy = false,
+    failRetirement = false,
+    failPrepared = false,
+    part = 'guards'
+  } = {}
+) {
   let commands;
   fixture(({ root, env }) => {
     const log = join(root, 'guard-commands.txt');
@@ -55,27 +73,33 @@ function guardCommands(paths, { failHistory = false, failMaintenance = false } =
         join(root, 'bin', file),
         `#!/bin/sh\nprintf "%s\\n" "${file} $*" >> "$TASK_GUARD_LOG"\n${
           file === 'node'
-            ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\nif [ "$TASK_FAIL_MAINTENANCE" = true ] && [ "$*" = "--test scripts/v2-release-maintenance-policy.test.mjs" ]; then exit 24; fi\n'
-            : ''
+            ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\nif [ "$TASK_FAIL_MAINTENANCE" = true ] && [ "$*" = "--test scripts/v2-release-maintenance-policy.test.mjs" ]; then exit 24; fi\nif [ "$TASK_FAIL_MAILBOX" = true ] && [ "$*" = "--test scripts/v2-release-mailbox-audit.test.mjs" ]; then exit 27; fi\nif [ "$TASK_FAIL_ARCHIVE_POLICY" = true ] && [ "$*" = "--test scripts/v2-order-archive-release-policy.test.mjs" ]; then exit 26; fi\n'
+            : file === 'python3'
+              ? 'if [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\n'
+              : ''
         }`,
         { mode: 0o755 }
       );
     execFileSync(
       process.execPath,
-      [join(process.cwd(), 'scripts/ci-recharge-check.mjs'), 'guards', 'a'.repeat(40)],
+      [join(process.cwd(), 'scripts/ci-recharge-check.mjs'), part, 'a'.repeat(40)],
       {
         cwd: root,
         env: {
           ...env,
-          CHECK_MODE: 'ci-only',
+          CHECK_MODE: part === 'release-controls' ? 'full' : 'ci-only',
           TASK_GUARD_LOG: log,
           TASK_FAIL_HISTORY: String(failHistory),
-          TASK_FAIL_MAINTENANCE: String(failMaintenance)
+          TASK_FAIL_MAINTENANCE: String(failMaintenance),
+          TASK_FAIL_MAILBOX: String(failMailbox),
+          TASK_FAIL_ARCHIVE_POLICY: String(failArchivePolicy),
+          TASK_FAIL_RETIREMENT: String(failRetirement),
+          TASK_FAIL_PREPARED: String(failPrepared)
         },
         stdio: 'pipe'
       }
     );
-    commands = readFileSync(log, 'utf8').trim().split('\n');
+    commands = readFileSync(log, 'utf8').trim().split('\n').filter(Boolean);
   });
   return commands;
 }
@@ -110,6 +134,81 @@ function dispatchFixture(historyPolicy, current, run, extraEnv = {}) {
     run({ execute, parametersFile, awsLog, root, env });
   });
 }
+
+test('actual source entry rejects failed evidence on Bash before emitting reusable proof and remains control-only', () => {
+  const path = 'scripts/production-release/check-source.sh';
+  assert.equal(checkMode([path], '', ''), 'ci-only');
+  assert.deepEqual(selectedParts([path]), ['guards']);
+  for (const alias of [path + '.backup', 'scripts/production-release/check-source-other.sh'])
+    assert.equal(checkMode([alias], '', ''), 'full', alias);
+  assert.deepEqual(guardCommands([path], { part: 'release-controls' }), [
+    'node --test scripts/ci-recharge-release.test.mjs',
+    'node --test scripts/v2-order-archive-release-policy.test.mjs'
+  ]);
+  for (const changed of [
+    null,
+    { RELEASE_COMMIT: 'invalid' },
+    { EXPECTED_CURRENT: 'invalid' },
+    { GITHUB_REF: 'refs/heads/feature' },
+    { TASK_SOURCE_HEAD: 'c'.repeat(40) },
+    { TASK_SOURCE_REMOTE_MAIN: 'c'.repeat(40) },
+    { TASK_SOURCE_QUALITY_RUN: '' },
+    { TASK_SOURCE_QUALITY_RUN: 'null' },
+    { TASK_SOURCE_QUALITY_RUN: '0' },
+    { TASK_SOURCE_QUALITY_RUN: '123-invalid' }
+  ])
+    fixture(({ root, env }) => {
+      const sourceLog = join(root, 'source-commands.txt');
+      writeFileSync(sourceLog, '');
+      writeFileSync(
+        join(root, 'bin', 'git'),
+        '#!/bin/sh\nprintf "git %s\\n" "$*" >> "$TASK_SOURCE_LOG"\ncase "$*" in\n"rev-parse HEAD") printf "%s\\n" "$TASK_SOURCE_HEAD" ;;\n"rev-parse HEAD^{tree}") printf "%s\\n" "$TASK_SOURCE_TREE" ;;\n"ls-remote origin refs/heads/main") printf "%s\\trefs/heads/main\\n" "$TASK_SOURCE_REMOTE_MAIN" ;;\n*) exit 2 ;;\nesac\n',
+        { mode: 0o755 }
+      );
+      writeFileSync(
+        join(root, 'bin', 'gh'),
+        '#!/bin/sh\nprintf "gh %s\\n" "$*" >> "$TASK_SOURCE_LOG"\nprintf "%s\\n" "$TASK_SOURCE_QUALITY_RUN"\n',
+        { mode: 0o755 }
+      );
+      const execute = () =>
+        execFileSync('/bin/bash', [join(process.cwd(), path)], {
+          cwd: root,
+          env: {
+            ...env,
+            GITHUB_REF: 'refs/heads/main',
+            GITHUB_REPOSITORY: 'fixture/project-only',
+            TASK_SOURCE_LOG: sourceLog,
+            TASK_SOURCE_HEAD: env.RELEASE_COMMIT,
+            TASK_SOURCE_REMOTE_MAIN: env.RELEASE_COMMIT,
+            TASK_SOURCE_TREE: 'd'.repeat(40),
+            TASK_SOURCE_QUALITY_RUN: '12345',
+            ...changed
+          },
+          encoding: 'utf8',
+          stdio: 'pipe'
+        });
+      if (changed) {
+        assert.throws(execute, (error) => error.status === 1, JSON.stringify(changed));
+        assert.equal(existsSync(env.GITHUB_ENV), false, JSON.stringify(changed));
+      } else {
+        assert.match(execute(), /Source and main Quality Gate verified/);
+        assert.equal(
+          readFileSync(env.GITHUB_ENV, 'utf8'),
+          `QUALITY_RUN_ID=12345\nSOURCE_TREE=${'d'.repeat(40)}\n`
+        );
+        const commands = readFileSync(sourceLog, 'utf8');
+        assert.ok(commands.includes(`--workflow quality.yml --commit ${env.RELEASE_COMMIT}`));
+        for (const filter of [
+          '.headSha == env.RELEASE_COMMIT',
+          '.event == "push"',
+          '.status == "completed"',
+          '.conclusion == "success"'
+        ])
+          assert.ok(commands.includes(filter), filter);
+        assert.equal(commands.includes('aws '), false);
+      }
+    });
+});
 
 test('actual CI guards run historical tests for each exact control path, including deleted files', () => {
   for (const path of [
@@ -146,6 +245,537 @@ test('actual CI guards run historical tests for each exact control path, includi
     assert.equal(
       commands.some((command) => command.startsWith('python3 ')),
       false
+    );
+  }
+});
+
+const postCleanupPolicy = 'historical-finance-20261005-post-cleanup';
+const postCleanupBaseline = '6a82a774f2a65e00d4f260c629f7152bf7935d1d';
+const fixtureSeal = 'e'.repeat(64);
+const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
+const workflowInputs = workflow.on.workflow_dispatch.inputs;
+const workflowSteps = workflow.jobs.release.steps;
+const postCleanupEnv = {
+  HISTORICAL_EXCEPTION: postCleanupPolicy,
+  EXPECTED_CURRENT: postCleanupBaseline,
+  POST_CLEANUP_SEAL_SHA256: fixtureSeal,
+  REUSE_IMAGE_RUN: '222'
+};
+const preparePostCleanupEnv = {
+  ...postCleanupEnv,
+  RELEASE_OPERATION: 'prepare_post_cleanup_release',
+  POST_CLEANUP_SEAL_SHA256: '',
+  REUSE_IMAGE_RUN: ''
+};
+
+test('workflow wires a separate empty-by-default seal and rejects all non-release operations before AWS', () => {
+  assert.equal(workflowInputs.historical_exception.default, 'none');
+  assert.ok(workflowInputs.historical_exception.options.includes(postCleanupPolicy));
+  assert.equal(workflowInputs.post_cleanup_seal_sha256.default, '');
+  assert.equal(workflowInputs.post_cleanup_seal_sha256.required, false);
+  assert.equal(
+    workflow.jobs.release.env.POST_CLEANUP_SEAL_SHA256,
+    '${{ inputs.post_cleanup_seal_sha256 }}'
+  );
+  assert.equal(workflow.jobs.release.env.RELEASE_OPERATION, '${{ inputs.operation }}');
+  assert.equal(workflow.jobs.release.env.REUSE_IMAGE_RUN, '${{ inputs.reuse_image_run }}');
+  const selection = workflowSteps.find(
+    (step) => step.name === 'Validate release policy and reviewed seal selection'
+  );
+  assert.equal(selection.run, 'bash scripts/production-release/validate-release-selection.sh');
+  assert.ok(
+    workflowSteps.indexOf(selection) <
+      workflowSteps.findIndex((step) => step.name === 'Build images on the GitHub runner')
+  );
+  assert.ok(
+    workflowSteps.indexOf(selection) <
+      workflowSteps.findIndex((step) => step.uses?.startsWith('aws-actions/'))
+  );
+  for (const operation of workflowInputs.operation.options.filter(
+    (value) => !['release', 'prepare_post_cleanup_release'].includes(value)
+  )) {
+    fixture(({ env, log }) => {
+      assert.throws(
+        () =>
+          execFileSync('bash', ['-c', selection.run], {
+            env: { ...env, ...postCleanupEnv, RELEASE_OPERATION: operation },
+            stdio: 'pipe'
+          }),
+        (error) =>
+          error.status === 1 &&
+          String(error.stderr).includes('supports preparation or release only')
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    });
+  }
+});
+
+test('actual post-cleanup build and push create only this run API and migrate images', () => {
+  fixture(({ env, log }) => {
+    writeFileSync(env.TASK_CHANGED_PATHS, 'apps/api/src/id-business-v2/finance/example.ts');
+    const selectedEnv = { ...env, ...preparePostCleanupEnv };
+    execFileSync('bash', ['scripts/production-release/build-images.sh'], { env: selectedEnv });
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+    const built = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('build '));
+    assert.equal(built.length, 2);
+    assert.ok(built[0].includes('--target runtime') && built[0].endsWith('-api .'));
+    assert.ok(built[1].includes('--target migration') && built[1].endsWith('-migrate .'));
+    execFileSync('bash', ['scripts/production-release/push-images.sh'], { env: selectedEnv });
+    const pushed = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('push '));
+    assert.deepEqual(
+      pushed.map((line) => line.split('-').at(-1)),
+      ['api', 'migrate']
+    );
+    for (const line of [...built, ...pushed])
+      assert.ok(line.includes(`${env.RELEASE_COMMIT}-999999-1-`));
+  });
+});
+
+test('post-cleanup dispatch carries only its independent flag and exact reviewed seal', () => {
+  dispatchFixture(
+    postCleanupPolicy,
+    postCleanupBaseline,
+    ({ execute, parametersFile, awsLog }) => {
+      execute();
+      const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
+      assert.equal(args.filter((arg) => arg === '--historical-finance-post-cleanup').length, 1);
+      assert.equal(args[args.indexOf('--post-cleanup-seal-sha256') + 1], fixtureSeal);
+      assert.equal(args.includes('--admin-only'), false);
+      assert.equal(
+        args.some((arg) =>
+          [
+            '--historical-finance-exception',
+            '--historical-finance-continuation',
+            '--historical-finance-recharge-diagnostics'
+          ].includes(arg)
+        ),
+        false
+      );
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1
+      );
+    },
+    {
+      POST_CLEANUP_SEAL_SHA256: fixtureSeal,
+      REUSE_IMAGE_RUN: '222',
+      REUSE_IMAGE_COMMIT: 'b'.repeat(40),
+      REUSE_IMAGE_RUN_ID: '222',
+      REUSE_IMAGE_RUN_ATTEMPT: '2'
+    }
+  );
+});
+
+const rejectedPostCleanupSelections = [
+  { EXPECTED_CURRENT: 'a'.repeat(40) },
+  { POST_CLEANUP_SEAL_SHA256: '' },
+  { POST_CLEANUP_SEAL_SHA256: 'F'.repeat(64) },
+  { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(63) },
+  { POST_CLEANUP_SEAL_SHA256: fixtureSeal + ' --admin-only' },
+  { RELEASE_ADMIN_ONLY: 'true' },
+  { RELEASE_ADMIN_ONLY: 'unexpected' },
+  { REUSE_IMAGE_RUN: '' },
+  { REUSE_IMAGE_RUN: '0' },
+  { REUSE_IMAGE_COMMIT: 'd'.repeat(40) },
+  { REUSE_IMAGE_RUN_ID: '333' },
+  { REUSE_IMAGE_RUN_ATTEMPT: '0' },
+  { RELEASE_OPERATION: 'verify_access' },
+  { RELEASE_OPERATION: 'cleanup_audit' },
+  { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
+  { HISTORICAL_EXCEPTION: 'none' },
+  { HISTORICAL_EXCEPTION: 'historical-finance-20261005-recharge-diagnostics' }
+];
+
+test('all actual build push and dispatch entries reject unsafe selections before Docker AWS or parameters', () => {
+  for (const rejected of rejectedPostCleanupSelections) {
+    for (const entry of ['build-images', 'push-images'])
+      fixture(({ env, log }) => {
+        writeFileSync(env.TASK_CHANGED_PATHS, 'apps/api/src/id-business-v2/finance/example.ts');
+        assert.throws(
+          () =>
+            execFileSync('bash', [`scripts/production-release/${entry}.sh`], {
+              env: { ...env, ...postCleanupEnv, ...rejected },
+              stdio: 'pipe'
+            }),
+          (error) => error.status === 1
+        );
+        assert.equal(readFileSync(log, 'utf8'), '', `${entry}: mutation attempted`);
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+    const selected = { ...postCleanupEnv, ...rejected };
+    dispatchFixture(
+      selected.HISTORICAL_EXCEPTION,
+      selected.EXPECTED_CURRENT,
+      ({ execute, parametersFile, awsLog }) => {
+        assert.throws(execute, (error) => error.status === 1);
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      },
+      selected
+    );
+  }
+});
+
+test('workflow skips legacy automatic cache mutation for the new release policy', () => {
+  const step = workflowSteps.find(
+    (value) => value.name === 'Verify or maintain recoverable unused project image cache'
+  );
+  const selected = (operation, historical_exception) =>
+    new Function('inputs', `return (${step.if});`)({ operation, historical_exception });
+  assert.equal(selected('release', postCleanupPolicy), false);
+  assert.equal(selected('release', 'historical-finance-20261005-order-archive'), false);
+  assert.equal(selected('release', 'recharge-pro-menu-b8-20261005'), false);
+  assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
+  for (const policy of workflowInputs.historical_exception.options.filter(
+    (value) =>
+      ![
+        postCleanupPolicy,
+        'historical-finance-20261005-order-archive',
+        'recharge-pro-menu-b8-20261005',
+        'historical-finance-20261005-mailbox-batch'
+      ].includes(value)
+  ))
+    assert.equal(selected('release', policy), true);
+  for (const operation of [
+    'verify_unused_cache',
+    'cleanup_unused_cache',
+    'verify_unused_legacy_cache',
+    'cleanup_unused_legacy_cache',
+    'verify_unused_builder_cache',
+    'cleanup_unused_builder_cache'
+  ])
+    assert.equal(selected(operation, 'none'), true);
+  assert.equal(selected('verify_access', 'none'), false);
+});
+
+test('preparation permits only build push and evidence and cannot reach dispatch SSM or maintenance', () => {
+  const inputs = {
+    operation: 'prepare_post_cleanup_release',
+    historical_exception: postCleanupPolicy,
+    reuse_image_run: '',
+    diagnostic_command_id: ''
+  };
+  const enabled = workflowSteps
+    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(inputs))
+    .map((step) => step.name);
+  assert.deepEqual(enabled, [
+    'Check out the requested main commit',
+    'Verify exact source and passing Quality Gate',
+    'Validate release policy and reviewed seal selection',
+    'Build images on the GitHub runner',
+    'Obtain short-lived AWS credentials through OIDC',
+    'Verify build-only ECR target',
+    'Push immutable images',
+    'Record prepared API image source',
+    'Save prepared API image source'
+  ]);
+  assert.equal(
+    workflowSteps.find((step) => step.name === 'Save prepared API image source').with[
+      'if-no-files-found'
+    ],
+    'error'
+  );
+  fixture(({ env, log }) => {
+    const validation = workflowSteps.find(
+      (step) => step.name === 'Validate release policy and reviewed seal selection'
+    );
+    execFileSync('bash', ['-c', validation.run], {
+      env: { ...env, ...preparePostCleanupEnv },
+      stdio: 'pipe'
+    });
+    assert.equal(readFileSync(log, 'utf8'), '');
+  });
+  for (const rejected of [
+    { POST_CLEANUP_SEAL_SHA256: fixtureSeal },
+    { REUSE_IMAGE_RUN: '222' },
+    { HISTORICAL_EXCEPTION: 'none' },
+    { EXPECTED_CURRENT: 'a'.repeat(40) },
+    { RELEASE_ADMIN_ONLY: 'true' }
+  ]) {
+    fixture(({ env, log }) => {
+      assert.throws(() =>
+        execFileSync('bash', ['scripts/production-release/build-images.sh'], {
+          env: { ...env, ...preparePostCleanupEnv, ...rejected },
+          stdio: 'pipe'
+        })
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    });
+  }
+  dispatchFixture(
+    postCleanupPolicy,
+    postCleanupBaseline,
+    ({ execute, parametersFile, awsLog }) => {
+      assert.throws(execute);
+      assert.equal(existsSync(parametersFile), false);
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+    },
+    preparePostCleanupEnv
+  );
+});
+
+test('post-cleanup release requires preparation reuse and cannot build unreviewed replacement images', () => {
+  const inputs = {
+    operation: 'release',
+    historical_exception: postCleanupPolicy,
+    reuse_image_run: '222',
+    diagnostic_command_id: ''
+  };
+  const enabled = workflowSteps
+    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(inputs))
+    .map((step) => step.name);
+  assert.ok(enabled.includes('Verify reusable build and unchanged application source'));
+  assert.ok(enabled.includes('Deploy through the production instance'));
+  assert.equal(enabled.includes('Build images on the GitHub runner'), false);
+  assert.equal(enabled.includes('Push immutable images'), false);
+  for (const entry of ['build-images', 'push-images'])
+    fixture(({ env, log }) => {
+      assert.throws(
+        () =>
+          execFileSync('bash', [`scripts/production-release/${entry}.sh`], {
+            env: { ...env, ...postCleanupEnv },
+            stdio: 'pipe'
+          }),
+        `${entry} must reject release`
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    });
+});
+
+test('full quality runs the missing controls before tests while finite and remote suites retain their existing npm entry', () => {
+  const quality = loadYaml(readFileSync('.github/workflows/quality.yml', 'utf8'));
+  const steps = quality.jobs['full-quality'].steps;
+  const selected = steps.filter(
+    (step) => step.name === 'Verify affected release entry and maintenance controls'
+  );
+  assert.equal(selected.length, 1);
+  assert.equal(
+    selected[0].run,
+    'node scripts/ci-recharge-check.mjs release-controls "$CHECK_BASE"'
+  );
+  assert.equal(selected[0].env.CHECK_MODE, 'full');
+  assert.equal(selected[0].env.CHECK_BASE, '${{ needs.change-scope.outputs.base }}');
+  assert.ok(
+    steps.indexOf(selected[0]) > steps.findIndex((step) => step.name === 'Install dependencies')
+  );
+  assert.ok(steps.indexOf(selected[0]) < steps.findIndex((step) => step.name === 'Test'));
+  assert.equal(steps.find((step) => step.name === 'Test').run, 'npm run test');
+  const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts;
+  assert.equal(
+    scripts.test,
+    'npm run test:repository-scripts && npm run test --workspaces --if-present'
+  );
+  assert.equal(
+    scripts['test:repository-scripts']
+      .split(' ')
+      .filter((arg) => arg === 'scripts/v2-release-history-policy.test.mjs').length,
+    1
+  );
+  assert.match(
+    readFileSync('scripts/v2-release-history-policy.test.mjs', 'utf8'),
+    /import '\.\/v2-release-post-cleanup-policy\.test\.mjs'/
+  );
+  assert.match(
+    readFileSync('scripts/v2-release-history-policy.test.mjs', 'utf8'),
+    /'scripts\/production-release\/remote-deploy\.test\.py'/
+  );
+});
+
+test('actual full-mode release controls select each missing suite once without repeating repository or business checks', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/finance/example.ts',
+    'apps/api/src/id-business-v2/orders/example.ts',
+    '.github/workflows/production-release.yml',
+    '.github/workflows/quality.yml',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/retire-orphan-retention.py',
+    'scripts/production-release/prepared-images.test.py',
+    'scripts/production-release/dispatch.sh',
+    'scripts/backup-aws-mysql.sh',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  assert.equal(checkMode(paths, '', ''), 'full');
+  assert.deepEqual(guardCommands(paths, { part: 'release-controls' }), [
+    'node --test scripts/ci-recharge-release.test.mjs',
+    'python3 -B scripts/production-release/retire-orphan-retention.test.py',
+    'python3 -B scripts/production-release/prepared-images.test.py',
+    'node --test scripts/v2-order-archive-release-policy.test.mjs'
+  ]);
+  const recharge = guardCommands(paths);
+  for (const command of [
+    'python3 -B scripts/production-release/retire-orphan-retention.test.py',
+    'python3 -B scripts/production-release/prepared-images.test.py'
+  ])
+    assert.equal(recharge.filter((actual) => actual === command).length, 1);
+});
+
+test('actual full-mode release controls preserve exact maintenance selection and skip unrelated changes', () => {
+  for (const paths of [
+    ['apps/api/src/id-business-v2/finance/example.ts'],
+    ['docs/V2_TASKS.md'],
+    ['scripts/backup-aws-mysql.sh'],
+    ['scripts/ci-recharge-check-other.mjs']
+  ])
+    assert.deepEqual(guardCommands(paths, { part: 'release-controls' }), [
+      'node --test scripts/v2-order-archive-release-policy.test.mjs'
+    ]);
+  for (const path of [
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/retire-orphan-retention-other.py',
+    'scripts/production-release/prepared-images.test.py.backup'
+  ]) {
+    assert.deepEqual(guardCommands([path], { part: 'release-controls' }), [
+      'node --test scripts/ci-recharge-release.test.mjs',
+      'node --test scripts/v2-order-archive-release-policy.test.mjs'
+    ]);
+  }
+  assert.deepEqual(
+    guardCommands(['scripts/production-release/retire-orphan-retention.py'], {
+      part: 'release-controls'
+    }),
+    [
+      'node --test scripts/ci-recharge-release.test.mjs',
+      'python3 -B scripts/production-release/retire-orphan-retention.test.py',
+      'node --test scripts/v2-order-archive-release-policy.test.mjs'
+    ]
+  );
+  assert.deepEqual(
+    guardCommands(['scripts/production-release/reuse-images.py'], { part: 'release-controls' }),
+    [
+      'node --test scripts/ci-recharge-release.test.mjs',
+      'python3 -B scripts/production-release/prepared-images.test.py',
+      'node --test scripts/v2-order-archive-release-policy.test.mjs'
+    ]
+  );
+});
+
+test('actual full-mode maintenance failures stop the release control gate', () => {
+  for (const [path, option, expected] of [
+    [
+      'scripts/production-release/retire-orphan-retention.py',
+      'failRetirement',
+      'retire-orphan-retention.test.py'
+    ],
+    [
+      'scripts/production-release/prepared-images.test.py',
+      'failPrepared',
+      'prepared-images.test.py'
+    ]
+  ])
+    assert.throws(
+      () => guardCommands([path], { part: 'release-controls', [option]: true }),
+      (error) => error.status === 1 && String(error.stderr).includes(expected)
+    );
+});
+
+test('maintenance and post-cleanup controls select guards and run their exact tests once', () => {
+  for (const path of [
+    'scripts/production-release/retire-orphan-retention.py',
+    'scripts/production-release/retire-orphan-retention.test.py',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/prepared-images.test.py',
+    'deploy/aws/historical-finance-20261005-post-cleanup.json',
+    'scripts/v2-release-post-cleanup-policy.test.mjs',
+    'scripts/lib/v2-release-history-48.test-fixture.json'
+  ]) {
+    assert.equal(checkMode([path], '', ''), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+  }
+  for (const path of [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/retire-orphan-retention.py',
+    'scripts/production-release/retire-orphan-retention.test.py'
+  ]) {
+    const commands = guardCommands([path]);
+    assert.equal(
+      commands.filter(
+        (command) =>
+          command === 'python3 -B scripts/production-release/retire-orphan-retention.test.py'
+      ).length,
+      1,
+      path
+    );
+    assert.equal(
+      commands.filter(
+        (command) => command === 'node --test scripts/v2-release-history-policy.test.mjs'
+      ).length,
+      1,
+      path
+    );
+  }
+  for (const path of [
+    'scripts/backup-aws-mysql.sh',
+    'scripts/verify-aws-mysql-backup.sh',
+    'scripts/mysql-dump-restore-normalizer.sed',
+    'scripts/aws-mysql-backup.test.mjs'
+  ]) {
+    assert.equal(checkMode([path], '', ''), 'full', path);
+    assert.equal(
+      checkMode(
+        ['deploy/aws/historical-finance-20261005-maintenance-continuation.json', path],
+        '',
+        ''
+      ),
+      'full',
+      path
+    );
+    const commands = guardCommands([path]);
+    assert.equal(
+      commands.filter((command) => command === 'node --test scripts/aws-mysql-backup.test.mjs')
+        .length,
+      1,
+      path
+    );
+    assert.equal(
+      commands.some((command) => command.startsWith('npm ') || command.startsWith('python3 ')),
+      false,
+      path
+    );
+  }
+  for (const path of [
+    'docs/V2_TASKS.md',
+    'scripts/production-release/retire-orphan-retention-other.py',
+    'scripts/verify-aws-mysql-backup.sh.backup'
+  ]) {
+    const commands = guardCommands([path]);
+    assert.equal(
+      commands.includes('python3 -B scripts/production-release/retire-orphan-retention.test.py'),
+      false,
+      path
+    );
+    assert.equal(commands.includes('node --test scripts/aws-mysql-backup.test.mjs'), false, path);
+  }
+  assert.throws(
+    () =>
+      guardCommands(['scripts/production-release/retire-orphan-retention.py'], {
+        failRetirement: true
+      }),
+    (error) =>
+      error.status === 1 && String(error.stderr).includes('retire-orphan-retention.test.py')
+  );
+  for (const path of [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/reuse-images.py',
+    'scripts/production-release/prepared-images.test.py'
+  ]) {
+    assert.equal(
+      guardCommands([path]).filter(
+        (command) => command === 'python3 -B scripts/production-release/prepared-images.test.py'
+      ).length,
+      1,
+      path
     );
   }
 });
@@ -390,10 +1020,7 @@ test('real historical dispatch rejects reused or wrong baselines before paramete
     ['historical-finance-20261005', 'd0f359dc78b2d2b166893bfec8545609f5baa16d']
   ])
     dispatchFixture(policy, current, ({ execute, parametersFile, awsLog }) => {
-      assert.throws(
-        execute,
-        (error) => error.status === 1 && String(error.stderr).includes('AssertionError')
-      );
+      assert.throws(execute, (error) => error.status === 1);
       assert.equal(existsSync(parametersFile), false, `${policy}: parameters generated`);
       assert.equal(readFileSync(awsLog, 'utf8'), '', `${policy}: AWS called`);
     });
@@ -501,9 +1128,11 @@ test('a rejected maintenance proof test stops actual CI guards', () => {
 test('maintenance dispatch refuses partial publication and reused images before AWS', () => {
   for (const extraEnv of [
     { RELEASE_ADMIN_ONLY: 'true' },
+    { REUSE_IMAGE_RUN: '222' },
     { REUSE_IMAGE_COMMIT: 'd'.repeat(40) },
     { REUSE_IMAGE_RUN_ID: '222' },
-    { REUSE_IMAGE_RUN_ATTEMPT: '2' }
+    { REUSE_IMAGE_RUN_ATTEMPT: '2' },
+    { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) }
   ]) {
     dispatchFixture(
       'historical-finance-20261005-maintenance-continuation',
@@ -511,12 +1140,38 @@ test('maintenance dispatch refuses partial publication and reused images before 
       ({ execute, parametersFile, awsLog }) => {
         assert.throws(
           execute,
-          (error) => error.status === 1 && String(error.stderr).includes('AssertionError')
+          (error) =>
+            error.status === 1 &&
+            (extraEnv.RELEASE_ADMIN_ONLY === 'true' ||
+              String(error.stderr).includes(
+                'Maintenance continuation requires a fresh image build and no post-cleanup seal'
+              ))
         );
         assert.equal(existsSync(parametersFile), false);
         assert.equal(readFileSync(awsLog, 'utf8'), '');
       },
       extraEnv
+    );
+  }
+});
+
+test('ordinary archive mutations and their migration retain full checks alongside maintenance controls', () => {
+  for (const path of [
+    'apps/api/src/id-business-v2/orders/id-business-v2-order-archive.service.ts',
+    'apps/api/src/id-business-v2/orders/dto/archive-id-business-v2-order.dto.ts',
+    'apps/api/prisma-mysql/migrations/20261005193000_order_independent_archive/migration.sql',
+    'scripts/lib/v2-data-integrity-audit.mjs',
+    'scripts/v2-data-integrity-audit.test.mjs'
+  ]) {
+    assert.equal(checkMode([path], '', ''), 'full', path);
+    assert.equal(
+      checkMode(
+        ['deploy/aws/historical-finance-20261005-maintenance-continuation.json', path],
+        '',
+        ''
+      ),
+      'full',
+      path
     );
   }
 });
@@ -541,6 +1196,7 @@ test('full Quality Gate includes the release guards alongside unchanged business
 
 test('mailbox release dispatch pins its independent approval and immutable existing build', () => {
   const image = {
+    REUSE_IMAGE_RUN: '37312405714',
     REUSE_IMAGE_COMMIT: 'f5826f9fb4ad0d846d9875c035c913a61eb68290',
     REUSE_IMAGE_RUN_ID: '37312405714',
     REUSE_IMAGE_RUN_ATTEMPT: '1'
@@ -559,6 +1215,7 @@ test('mailbox release dispatch pins its independent approval and immutable exist
     image
   );
   for (const changed of [
+    { REUSE_IMAGE_RUN: '123' },
     { REUSE_IMAGE_RUN_ID: '123' },
     { REUSE_IMAGE_RUN_ATTEMPT: '2' },
     { REUSE_IMAGE_COMMIT: 'a'.repeat(40) },
@@ -584,10 +1241,378 @@ test('mailbox audit, approval and tests remain control-only and always invoke th
     'deploy/aws/historical-finance-20261005-mailbox-batch.json'
   ]) {
     assert.equal(isCiOnly([path]), true);
-    assert.ok(
-      guardCommands([path]).includes('node --test scripts/v2-release-mailbox-audit.test.mjs')
+    const commands = guardCommands([path]);
+    assert.equal(
+      commands.filter(
+        (command) => command === 'node --test scripts/v2-release-mailbox-audit.test.mjs'
+      ).length,
+      1,
+      path
+    );
+    assert.equal(
+      commands.some((command) => command.startsWith('npm ') || command.startsWith('python3 ')),
+      false
+    );
+    assert.throws(
+      () => guardCommands([path], { failMailbox: true }),
+      (error) =>
+        error.status === 1 && String(error.stderr).includes('v2-release-mailbox-audit.test.mjs')
     );
   }
+  for (const path of [
+    'scripts/v2-release-mailbox-audit-other.mjs',
+    'scripts/v2-release-mailbox-audit.test.mjs.backup',
+    'deploy/aws/historical-finance-20261005-mailbox-batch.json.backup'
+  ]) {
+    assert.equal(isCiOnly([path]), false, path);
+    assert.equal(
+      guardCommands([path]).includes('node --test scripts/v2-release-mailbox-audit.test.mjs'),
+      false,
+      path
+    );
+  }
+});
+
+test('archive release pure policy is mandatory for CI-only and full controls and rejects failure', () => {
+  const policyPaths = [
+    'deploy/aws/historical-finance-20261005-order-archive.json',
+    'scripts/lib/v2-order-archive-release-policy.mjs',
+    'scripts/v2-order-archive-release-audit.mjs',
+    'scripts/v2-order-archive-release-policy.test.mjs'
+  ];
+  for (const path of policyPaths) {
+    assert.equal(checkMode([path], '', ''), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+  }
+  for (const part of ['guards', 'release-controls']) {
+    const paths =
+      part === 'guards' ? policyPaths : ['apps/api/src/id-business-v2/orders/example.ts'];
+    const commands = guardCommands(paths, { part });
+    assert.equal(
+      commands.filter(
+        (command) => command === 'node --test scripts/v2-order-archive-release-policy.test.mjs'
+      ).length,
+      1
+    );
+    assert.throws(
+      () => guardCommands(paths, { part, failArchivePolicy: true }),
+      (error) =>
+        error.status === 1 &&
+        String(error.stderr).includes('v2-order-archive-release-policy.test.mjs')
+    );
+  }
+  assert.equal(checkMode([policyPaths[0] + '.backup'], '', ''), 'full');
+});
+
+test('archive UI acceptance runs in full CI and exact frontend scope without API or database checks', () => {
+  const quality = loadYaml(readFileSync('.github/workflows/quality.yml', 'utf8'));
+  assert.ok(
+    quality.jobs['full-quality'].steps.some(
+      (step) =>
+        step.run === 'node scripts/acceptance-v2-order-archive-ui.mjs' ||
+        step.run === 'node scripts/acceptance-v2-order-archive-ui.mjs .artifacts/order-archive-ui'
+    ),
+    'full CI must execute the actual 48-scenario archive UI script'
+  );
+  const archiveCommand = ['exec', '--', 'node', 'scripts/acceptance-v2-order-archive-ui.mjs'];
+  for (const path of [
+    'apps/admin/src/v2/features/orders/useOrderArchive.ts',
+    'apps/admin/src/v2/api/orders.ts',
+    'apps/admin/src/v2/types/orders.ts',
+    'apps/admin/src/v2/styles/records.css',
+    'apps/admin/src/v2/styles/base.css',
+    'apps/admin/src/v2/styles/layout.css',
+    'scripts/acceptance-v2-order-archive-ui.mjs'
+  ]) {
+    assert.equal(checkMode([path], '', ''), 'admin', path);
+    const commands = adminCheckCommands('admin', [path]);
+    assert.equal(
+      commands.filter((command) => JSON.stringify(command) === JSON.stringify(archiveCommand))
+        .length,
+      1
+    );
+    assert.equal(
+      commands.some((command) =>
+        command.some((arg) => /financial-integrity|@apple-business\/api/.test(arg))
+      ),
+      false
+    );
+  }
+  assert.equal(
+    adminCheckCommands('admin', ['apps/admin/src/v2/features/customers/CustomerList.vue']).some(
+      (command) => command.includes('scripts/acceptance-v2-order-archive-ui.mjs')
+    ),
+    false
+  );
+  const selector = readFileSync('scripts/ci-recharge-scope.mjs', 'utf8');
+  assert.match(
+    selector.slice(selector.indexOf('const adminAcceptance =')),
+    /arg === 'scripts\/acceptance-v2-order-archive-ui\.mjs'/
+  );
+});
+
+function archiveHarnessFixture({ skipped = false, missing = false, runFails = false } = {}) {
+  let outcome;
+  fixture(({ root, env }) => {
+    const calls = join(root, 'archive-harness-calls.jsonl');
+    writeFileSync(calls, '');
+    const createdId = 'f'.repeat(64);
+    for (const file of ['docker', 'npm', 'npx']) {
+      const script = `#!${process.execPath}
+import fs from 'node:fs';
+const args = process.argv.slice(2);
+const database = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).pathname : null;
+fs.appendFileSync(process.env.TASK_HARNESS_CALLS, JSON.stringify({tool:${JSON.stringify(file)},args:args.map((arg)=>arg.startsWith('--password=')||arg.startsWith('MYSQL_ROOT_PASSWORD=')?'[local-fixture]':arg),database})+'\\n');
+if (${JSON.stringify(file)} === 'docker') {
+  if (args[0] === 'run') {
+    if (process.env.TASK_DOCKER_FAIL === 'true') process.exit(7);
+    process.stdout.write(${JSON.stringify(createdId)}+'\\n');
+  }
+  if (args[0] === 'port') process.stdout.write('127.0.0.1:54321\\n');
+}
+if (${JSON.stringify(file)} === 'npm' && args.includes('test')) {
+  const target = args.find((arg)=>arg.startsWith('--outputFile='));
+  if (process.env.TASK_REPORT_MISSING !== 'true') fs.writeFileSync(target.slice('--outputFile='.length),JSON.stringify({numTotalTests:10,numPassedTests:process.env.TASK_REPORT_SKIPPED==='true'?0:10,numFailedTests:0,numPendingTests:process.env.TASK_REPORT_SKIPPED==='true'?10:0,numTodoTests:0}));
+}
+`;
+      writeFileSync(join(root, 'bin', file), script, { mode: 0o755 });
+    }
+    let error;
+    let stdout;
+    try {
+      stdout = execFileSync(
+        process.execPath,
+        [
+          join(process.cwd(), 'scripts/acceptance-v2-financial-integrity.mjs'),
+          '--order-archive-only'
+        ],
+        {
+          cwd: root,
+          env: {
+            ...env,
+            TASK_HARNESS_CALLS: calls,
+            TASK_REPORT_SKIPPED: String(skipped),
+            TASK_REPORT_MISSING: String(missing),
+            TASK_DOCKER_FAIL: String(runFails)
+          },
+          encoding: 'utf8',
+          stdio: 'pipe'
+        }
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    outcome = {
+      error,
+      stdout,
+      createdId,
+      calls: readFileSync(calls, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    };
+  });
+  return outcome;
+}
+
+test('actual archive-only harness routes one owned 512MB container to a fresh migrated schema and requires ten executed tests', () => {
+  const proof = archiveHarnessFixture();
+  assert.equal(proof.error, undefined);
+  const created = proof.calls.filter((call) => call.tool === 'docker' && call.args[0] === 'run');
+  assert.equal(created.length, 1);
+  assert.ok(created[0].args.includes('--memory=512m'));
+  const migration = proof.calls.filter(
+    (call) => call.tool === 'npx' && call.args.includes('migrate')
+  );
+  assert.equal(migration.length, 1);
+  assert.match(migration[0].database, /^\/id_business_v2_order_archive_integrity_[0-9]+$/);
+  const tests = proof.calls.filter((call) => call.tool === 'npm' && call.args.includes('test'));
+  assert.equal(tests.length, 1);
+  assert.equal(tests[0].database, migration[0].database);
+  assert.ok(
+    tests[0].args.includes('src/id-business-v2/orders/order-archive-mysql.integration.spec.ts')
+  );
+  assert.ok(tests[0].args.includes('--maxWorkers=2'));
+  assert.ok(tests[0].args.includes('--reporter=json'));
+  const receipt = JSON.parse(proof.stdout.trim());
+  assert.equal(receipt.archiveProof.executedTests, 10);
+  assert.equal(receipt.archiveProof.skippedTests, 0);
+  assert.deepEqual(
+    proof.calls
+      .filter((call) => call.tool === 'docker' && call.args[0] === 'rm')
+      .map((call) => call.args),
+    [['rm', '--force', proof.createdId]]
+  );
+});
+
+test('archive harness rejects skipped or missing reports and only cleans its successfully created container', () => {
+  for (const options of [{ skipped: true }, { missing: true }]) {
+    const proof = archiveHarnessFixture(options);
+    assert.equal(proof.error.status, 1);
+    assert.equal(
+      proof.calls.filter((call) => call.tool === 'docker' && call.args[0] === 'rm').length,
+      1
+    );
+    assert.equal(
+      proof.calls.some(
+        (call) =>
+          call.tool === 'docker' && call.args[0] === 'rm' && call.args[2] !== proof.createdId
+      ),
+      false
+    );
+  }
+  const failedCreation = archiveHarnessFixture({ runFails: true });
+  assert.equal(failedCreation.error.status, 1);
+  assert.equal(
+    failedCreation.calls.some((call) => call.tool === 'docker' && call.args[0] === 'rm'),
+    false
+  );
+});
+
+test('actual independent archive preparation builds and pushes exactly API migrate and Admin with no worker', () => {
+  const preparationInputs = {
+    operation: 'prepare_order_archive_release',
+    historical_exception: 'historical-finance-20261005-order-archive',
+    reuse_image_run: '',
+    diagnostic_command_id: ''
+  };
+  const enabled = workflowSteps
+    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(preparationInputs))
+    .map((step) => step.name);
+  assert.deepEqual(enabled, [
+    'Check out the requested main commit',
+    'Verify exact source and passing Quality Gate',
+    'Validate release policy and reviewed seal selection',
+    'Build images on the GitHub runner',
+    'Obtain short-lived AWS credentials through OIDC',
+    'Verify build-only ECR target',
+    'Push immutable images',
+    'Record prepared order archive image source',
+    'Save prepared order archive image source'
+  ]);
+  assert.equal(
+    workflowSteps.find((step) => step.name === 'Save prepared order archive image source').with[
+      'if-no-files-found'
+    ],
+    'error'
+  );
+  fixture(({ root, env, log }) => {
+    // Source verification uses real Node/Git in prepared-images.test.py; this
+    // transport fixture checks the verified value reaches only the Admin image.
+    const buildId = `v2-${'c'.repeat(40)}`;
+    const projectionBody = join(root, 'archive-projection-body.mjs');
+    writeFileSync(
+      join(root, 'bin', 'node'),
+      '#!/bin/sh\n[ "$*" = "--input-type=module -" ] || exit 93\ncat > "$TASK_ARCHIVE_PROJECTION_BODY"\nprintf "%s" "$TASK_ARCHIVE_BUILD_ID"\n',
+      { mode: 0o755 }
+    );
+    const selected = {
+      ...env,
+      HISTORICAL_EXCEPTION: 'historical-finance-20261005-order-archive',
+      EXPECTED_CURRENT: '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+      RELEASE_OPERATION: 'prepare_order_archive_release',
+      TASK_ARCHIVE_PROJECTION_BODY: projectionBody,
+      TASK_ARCHIVE_BUILD_ID: buildId
+    };
+    execFileSync('bash', ['scripts/production-release/build-images.sh'], { env: selected });
+    const built = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('build '));
+    assert.equal(built.length, 3);
+    assert.ok(built[0].includes('--target runtime') && built[0].endsWith('-api .'));
+    assert.ok(built[1].includes('--target migration') && built[1].endsWith('-migrate .'));
+    assert.ok(built[2].includes('apps/admin/Dockerfile') && built[2].endsWith('-admin .'));
+    assert.ok(built[2].includes(`--build-arg V2_BUILD_ID=${buildId}`));
+    assert.equal(
+      built.slice(0, 2).some((line) => line.includes('V2_BUILD_ID=')),
+      false
+    );
+    assert.ok(
+      readFileSync(projectionBody, 'utf8').includes(
+        'verifyOrderArchiveSourceBindings(policy, entries)'
+      )
+    );
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+    execFileSync('bash', ['scripts/production-release/push-images.sh'], { env: selected });
+    const pushed = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('push '));
+    assert.deepEqual(
+      pushed.map((line) => line.split('-').at(-1)),
+      ['api', 'migrate', 'admin']
+    );
+    assert.equal(
+      [...built, ...pushed].some((line) => /media-resolver|auto-recharge/.test(line)),
+      false
+    );
+    assert.equal(readFileSync(log, 'utf8').includes('ssm '), false);
+  });
+});
+
+test('actual independent archive dispatch binds the same candidate preparation attempt and both external hashes', () => {
+  const valid = {
+    REUSE_IMAGE_RUN: '222',
+    REUSE_IMAGE_COMMIT: 'b'.repeat(40),
+    REUSE_IMAGE_RUN_ID: '222',
+    REUSE_IMAGE_RUN_ATTEMPT: '3',
+    ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64),
+    ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'f'.repeat(64)
+  };
+  const policy = 'historical-finance-20261005-order-archive';
+  const baseline = '7f70688b9bf53a071a0a324ca558aeabc4ced2e3';
+  dispatchFixture(
+    policy,
+    baseline,
+    ({ execute, parametersFile }) => {
+      execute();
+      const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
+      assert.equal(args.filter((arg) => arg === '--historical-finance-order-archive').length, 1);
+      for (const [flag, value] of [
+        ['--expected-current', baseline],
+        ['--order-archive-seal-sha256', valid.ORDER_ARCHIVE_SEAL_SHA256],
+        ['--order-archive-prepared-images-sha256', valid.ORDER_ARCHIVE_PREPARED_IMAGES_SHA256],
+        ['--image-commit', valid.REUSE_IMAGE_COMMIT],
+        ['--image-run-id', '222'],
+        ['--image-run-attempt', '3']
+      ])
+        assert.equal(args[args.indexOf(flag) + 1], value);
+      assert.equal(args.includes('--admin-only'), false);
+      assert.equal(
+        args.some((arg) =>
+          [
+            '--historical-finance-post-cleanup',
+            '--post-cleanup-seal-sha256',
+            '--historical-finance-maintenance-continuation'
+          ].includes(arg)
+        ),
+        false
+      );
+    },
+    valid
+  );
+  for (const invalid of [
+    { EXPECTED_CURRENT: 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' },
+    { REUSE_IMAGE_COMMIT: 'd'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '999' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '' },
+    { REUSE_IMAGE_RUN: '' },
+    { ORDER_ARCHIVE_SEAL_SHA256: '' },
+    { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: '' },
+    { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { RELEASE_OPERATION: 'prepare_order_archive_release' }
+  ])
+    dispatchFixture(
+      policy,
+      baseline,
+      ({ execute, parametersFile, awsLog }) => {
+        assert.throws(execute, (error) => error.status === 1);
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      },
+      { ...valid, ...invalid }
+    );
 });
 
 function approvedRuntimeTransport(root, env, reject = false) {
@@ -607,6 +1632,91 @@ function approvedRuntimeTransport(root, env, reject = false) {
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
   };
 }
+
+test('fixed recharge selection permits only its exact release scope and preserves the independent approval gate', () => {
+  const baseline = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0';
+  const policy = 'recharge-pro-menu-b8-20261005';
+  for (const override of [
+    null,
+    { EXPECTED_CURRENT: 'a'.repeat(40) },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { RELEASE_ADMIN_ONLY: 'unexpected' },
+    { RELEASE_OPERATION: 'prepare_order_archive_release' },
+    { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
+    { RELEASE_OPERATION: 'verify_access' },
+    { REUSE_IMAGE_RUN: '222' },
+    { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '222' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+    { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+    { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) }
+  ])
+    fixture(({ root, env, log }) => {
+      const execute = () =>
+        execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+          env: {
+            ...env,
+            HISTORICAL_EXCEPTION: policy,
+            EXPECTED_CURRENT: baseline,
+            RELEASE_ADMIN_ONLY: 'false',
+            ...override
+          },
+          stdio: 'pipe'
+        });
+      if (override) assert.throws(execute, (error) => error.status === 1);
+      else execute();
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+      assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+    });
+
+  // Exercise actual entries with an unapproved synthetic profile without
+  // reversing a separately approved repository profile or running that scope.
+  for (const entry of ['build-images', 'push-images', 'dispatch'])
+    fixture(({ root, env, log }) => {
+      const scripts = join(root, 'scripts/production-release');
+      mkdirSync(scripts, { recursive: true });
+      for (const name of [
+        'build-images.sh',
+        'push-images.sh',
+        'dispatch.sh',
+        'validate-release-selection.sh',
+        'remote-deploy.py'
+      ])
+        writeFileSync(
+          join(scripts, name),
+          readFileSync(join(process.cwd(), 'scripts/production-release', name))
+        );
+      mkdirSync(join(root, 'deploy/aws'), { recursive: true });
+      const manifest = JSON.parse(readFileSync(`deploy/aws/${policy}.json`, 'utf8'));
+      manifest.enabled = false;
+      manifest.approvalStatus = 'NOT_APPROVED';
+      writeFileSync(join(root, `deploy/aws/${policy}.json`), JSON.stringify(manifest));
+      assert.throws(
+        () =>
+          execFileSync('bash', [join(scripts, `${entry}.sh`)], {
+            cwd: root,
+            env: {
+              ...env,
+              HISTORICAL_EXCEPTION: policy,
+              EXPECTED_CURRENT: baseline,
+              RELEASE_ADMIN_ONLY: 'false',
+              SOURCE_TREE: 'c'.repeat(40),
+              QUALITY_RUN_ID: '111'
+            },
+            stdio: 'pipe'
+          }),
+        (error) =>
+          error.status === 1 &&
+          String(error.stderr).includes(
+            'Fixed recharge runtime scope unavailable; raw output suppressed'
+          )
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+      assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+    });
+});
 
 test('fixed b8 approved transport builds and pushes only recharge', () => {
   fixture(({ root, env, log }) => {
@@ -680,10 +1790,15 @@ test('fixed b8 workflow checks approval before builds and credentials, then skip
   assert.ok(check > 0);
   assert.ok(check < workflow.indexOf('- name: Build images on the GitHub runner'));
   assert.ok(check < workflow.indexOf('- name: Obtain short-lived AWS credentials through OIDC'));
-  assert.ok(
-    workflow.includes(
-      "inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005'"
-    )
+  const cache = workflowSteps.find(
+    (step) => step.name === 'Verify or maintain recoverable unused project image cache'
+  );
+  assert.equal(
+    new Function('inputs', `return (${cache.if});`)({
+      operation: 'release',
+      historical_exception: 'recharge-pro-menu-b8-20261005'
+    }),
+    false
   );
   assert.ok(workflow.includes('RECHARGE_ONLY_CACHE_SKIPPED'));
 });

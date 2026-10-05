@@ -17,11 +17,24 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/lib/v2-release-maintenance-policy.mjs',
   'scripts/v2-release-maintenance-audit.mjs',
   'scripts/v2-release-maintenance-policy.test.mjs',
+  'deploy/aws/historical-finance-20261005-order-archive.json',
+  'scripts/lib/v2-order-archive-release-policy.mjs',
+  'scripts/v2-order-archive-release-audit.mjs',
+  'scripts/v2-order-archive-release-policy.test.mjs',
+  'deploy/aws/historical-finance-20261005-post-cleanup.json',
   'scripts/lib/v2-release-history-policy.mjs',
   'scripts/v2-release-history-audit.mjs',
   'scripts/v2-release-history-policy.test.mjs',
+  'scripts/v2-release-post-cleanup-policy.test.mjs',
+  'scripts/lib/v2-release-history-48.test-fixture.json',
   '.github/workflows/production-release.yml',
   'scripts/production-release/dispatch.sh',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/retire-orphan-retention.py',
+  'scripts/production-release/retire-orphan-retention.test.py',
+  'scripts/production-release/prepared-images.test.py',
   'scripts/production-release/remote-deploy.py',
   'scripts/production-release/remote-deploy.test.py',
   'scripts/production-release/maintain-image-cache.py',
@@ -33,7 +46,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         historicalReleaseControlPaths.includes(p) ||
-        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
           p
         )
     )
@@ -42,12 +55,18 @@ export function isCiOnly(paths) {
 const adminPublicDocument = /^apps\/admin\/public\/[^/]+\.(?:html|css)$/;
 export function isAdminOnly(paths) {
   return (
-    paths.some((p) => p.startsWith('apps/admin/src/v2/') || adminPublicDocument.test(p)) &&
+    paths.some(
+      (p) =>
+        p.startsWith('apps/admin/src/v2/') ||
+        adminPublicDocument.test(p) ||
+        p === 'scripts/acceptance-v2-order-archive-ui.mjs'
+    ) &&
     paths.every(
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
         adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-table-layout.mjs' ||
+        p === 'scripts/acceptance-v2-order-archive-ui.mjs' ||
         /^scripts\/(?:admin-layout-rules(?:\.test)?|check-admin-ui-guardrails|acceptance-v2-(?:filter|page)-layout)\.mjs$/.test(
           p
         ) ||
@@ -128,6 +147,14 @@ export function adminCheckCommands(mode, paths) {
         ])
   ]);
   commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
+  if (
+    paths.some((path) =>
+      /^(?:apps\/admin\/src\/v2\/features\/orders\/|apps\/admin\/src\/v2\/(?:api|types)\/orders\.ts$|apps\/admin\/src\/v2\/styles\/(?:base|layout|records)\.css$|scripts\/acceptance-v2-order-archive-ui\.mjs$)/.test(
+        path
+      )
+    )
+  )
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-order-archive-ui.mjs']);
   if (
     paths.some((path) =>
       /^(?:apps\/admin\/src\/v2\/styles\/records\.css|apps\/admin\/src\/v2\/features\/auto-recharge\/vendure-mailbox\.css|scripts\/acceptance-v2-table-layout\.mjs)$/.test(
@@ -353,7 +380,11 @@ async function main() {
   const adminAcceptance =
     checkParts.includes('admin') &&
     adminCheckCommands(mode, paths).some((args) =>
-      args.some((arg) => /^acceptance:v2-(?:auto-recharge|table-layout)$/.test(arg))
+      args.some(
+        (arg) =>
+          /^acceptance:v2-(?:auto-recharge|table-layout)$/.test(arg) ||
+          arg === 'scripts/acceptance-v2-order-archive-ui.mjs'
+      )
     );
   appendFileSync(
     process.env.GITHUB_OUTPUT,

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { V2CommandTransactionManager, type V2CommandTransaction } from '../runtime/public-api';
 import {
+  assertOrderNotArchived,
   assertReservableOrder,
   assertReservationReplayMatches,
   buildConsumptionIdempotencyKey,
@@ -304,6 +305,7 @@ export class IdBusinessV2OrderLockService {
     if (!order) {
       throw new NotFoundException('订单不存在或已删除');
     }
+    assertOrderNotArchived(order);
     return order;
   }
 

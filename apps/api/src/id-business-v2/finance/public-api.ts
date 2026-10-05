@@ -30,6 +30,20 @@ export {
 } from './id-business-v2-finance-input';
 export { IdBusinessV2FinanceModule } from './id-business-v2-finance.module';
 export { lockFinanceAccount } from './persistence/id-business-v2-finance-posting.repository';
+export { IdBusinessV2HistoricalCashService } from './id-business-v2-historical-cash.service';
+export {
+  historicalCashBatchFingerprint,
+  historicalCashSourceFingerprint,
+  historicalCashSourceLineFingerprint,
+  normalizeHistoricalCashBatch,
+  type HistoricalCashAccountExpectation,
+  type HistoricalCashAdjustment,
+  type HistoricalCashBatch,
+  type HistoricalCashBatchResult,
+  type HistoricalCashOrderAttribution,
+  type HistoricalCashSourceJournal,
+  type HistoricalCashSourceLine
+} from './id-business-v2-historical-cash.types';
 export {
   IdBusinessV2FinancePostingService,
   type FinancePostingInput,

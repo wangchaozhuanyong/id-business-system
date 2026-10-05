@@ -694,6 +694,81 @@ describe('IdBusinessV2FinanceReportsService full reconciliation scan', () => {
   });
 });
 
+describe('IdBusinessV2FinanceReportsService after-sales soft-delete history', () => {
+  it('retains posted refund history after source deletion and excludes deleted pending estimates', async () => {
+    const sources = [
+      {
+        id: orderId,
+        accountSource: 'customer_owned',
+        status: 'refunded',
+        deletedAt: null as Date | null
+      },
+      {
+        id: pendingOrderId,
+        accountSource: 'customer_owned',
+        status: 'processing',
+        deletedAt: new Date('2026-10-05T00:00:00.000Z')
+      }
+    ];
+    const journals = [
+      {
+        id: 'completion-history',
+        sourceId: orderId,
+        journalType: 'order_completed',
+        reversalOf: null,
+        lines: [line('sales_revenue', 'credit', '100'), line('platform_fee', 'debit', '10')]
+      },
+      {
+        id: 'refund-history',
+        sourceId: orderId,
+        journalType: 'order_refund',
+        reversalOf: null,
+        lines: [line('sales_revenue', 'debit', '100')]
+      }
+    ];
+    const prisma = {
+      idBusinessV2Order: {
+        findMany: vi.fn(
+          async ({
+            where
+          }: {
+            where: {
+              accountSource?: unknown;
+              deletedAt?: unknown;
+              status?: { in?: readonly string[] };
+            };
+          }) =>
+            sources.filter(
+              (row) =>
+                row.accountSource === where.accountSource &&
+                (where.deletedAt === undefined || row.deletedAt === where.deletedAt) &&
+                (!where.status || where.status.in?.includes(row.status))
+            )
+        )
+      },
+      idBusinessV2FinanceJournal: {
+        findMany: vi.fn().mockResolvedValue(journals)
+      }
+    };
+    const service = createReportsService(prisma);
+    const before = await service.afterSales({});
+    sources[0]!.deletedAt = new Date('2026-10-05T01:00:00.000Z');
+    const after = await service.afterSales({});
+
+    expect(before).toMatchObject({
+      grossRevenueCny: '100',
+      refundedRevenueCny: '100',
+      platformFeeCny: '10',
+      netProfitCny: '-10',
+      pendingOrderCount: 0,
+      pendingRevenueCny: '0',
+      pendingProfitCny: '0'
+    });
+    expect(after).toEqual(before);
+    expect(journals[0]!.lines[1]!.amountCny.toString()).toBe('10');
+  });
+});
+
 function createReportsService(prisma: object) {
   return new IdBusinessV2FinanceReportsService(
     new V2CommandTransactionManager(prisma as never),

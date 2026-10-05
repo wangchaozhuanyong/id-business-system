@@ -32,6 +32,7 @@ import {
   toUpgradeBalanceReturnResponse
 } from './id-business-v2-order-balance-return-support';
 import {
+  assertOrderNotArchived,
   normalizeIdempotencyKey,
   normalizeRequiredReason,
   normalizeUuid
@@ -67,6 +68,7 @@ export class IdBusinessV2OrderBalanceReturnService {
     const idempotencyKey = `upgrade_return:${orderId}:${requestIdempotencyKey}`;
 
     const replay = async (tx: V2CommandTransaction) => {
+      await this.lockActionableOrder(tx, orderId);
       const saved = await this.repository.findBalanceReturnReplay(tx, idempotencyKey);
       if (!saved) throw new ConflictException('升级退币请求已处理，请刷新后核对');
       assertUpgradeBalanceReturnReplay(saved, orderId, returnedBalanceAmount, reason);
@@ -75,14 +77,13 @@ export class IdBusinessV2OrderBalanceReturnService {
 
     const result = await this.transactionManager.execute(
       async (tx, context) => {
+        const order = await this.lockActionableOrder(tx, orderId);
         const existingReplay = await this.repository.findBalanceReturnReplay(tx, idempotencyKey);
         if (existingReplay) {
           assertUpgradeBalanceReturnReplay(existingReplay, orderId, returnedBalanceAmount, reason);
           return { orderId, balanceReturn: existingReplay, idempotentReplay: true };
         }
 
-        const order = await this.repository.lockOrder(tx, orderId);
-        if (!order) throw new NotFoundException('订单不存在或已删除');
         if (order.status !== 'completed') {
           throw new ConflictException('只有已完成订单可以登记升级退币');
         }
@@ -334,6 +335,13 @@ export class IdBusinessV2OrderBalanceReturnService {
     };
   }
 
+  private async lockActionableOrder(tx: V2CommandTransaction, orderId: string) {
+    const order = await this.repository.lockOrder(tx, orderId);
+    if (!order) throw new NotFoundException('订单不存在或已删除');
+    assertOrderNotArchived(order);
+    return order;
+  }
+
   async reverse(
     orderIdValue: string,
     dto: ReverseUpgradeBalanceReturnIdBusinessV2OrderDto,
@@ -345,6 +353,7 @@ export class IdBusinessV2OrderBalanceReturnService {
     const reversalIdempotencyKey = `upgrade_return_reverse:${orderId}:${requestIdempotencyKey}`;
 
     const replay = async (tx: V2CommandTransaction) => {
+      await this.lockActionableOrder(tx, orderId);
       const saved = await this.repository.findBalanceReturnReversalReplay(
         tx,
         reversalIdempotencyKey
@@ -356,6 +365,7 @@ export class IdBusinessV2OrderBalanceReturnService {
 
     const result = await this.transactionManager.execute(
       async (tx, context) => {
+        const order = await this.lockActionableOrder(tx, orderId);
         const existingReplay = await this.repository.findBalanceReturnReversalReplay(
           tx,
           reversalIdempotencyKey
@@ -365,8 +375,6 @@ export class IdBusinessV2OrderBalanceReturnService {
           return { orderId, balanceReturn: existingReplay, idempotentReplay: true };
         }
 
-        const order = await this.repository.lockOrder(tx, orderId);
-        if (!order) throw new NotFoundException('订单不存在或已删除');
         if (order.status !== 'completed') {
           throw new ConflictException('只有已完成订单可以撤销升级退币');
         }

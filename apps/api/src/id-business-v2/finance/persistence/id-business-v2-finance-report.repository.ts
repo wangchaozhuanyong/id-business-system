@@ -52,7 +52,7 @@ export class IdBusinessV2FinanceReportRepository {
   }) {
     const [orders, pendingOrders] = await Promise.all([
       this.prisma.idBusinessV2Order.findMany({
-        where: { accountSource: 'customer_owned', deletedAt: null },
+        where: { accountSource: 'customer_owned' },
         select: { id: true }
       }),
       this.prisma.idBusinessV2Order.findMany({

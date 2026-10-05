@@ -22,6 +22,7 @@ import {
 } from '../runtime/public-api';
 import { toIdBusinessV2BusinessDate } from './id-business-v2-finance-input';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
+import { findHistoricalCashCostCorrections } from './persistence/id-business-v2-finance-historical-reversal.repository';
 import {
   findLockedFinancePeriodStatus,
   findLockedJournalReplay,
@@ -249,6 +250,7 @@ export class IdBusinessV2FinancePostingService {
     if (claimed.count !== 1) {
       throw new ConflictException('该财务日记已被其他操作冲销，请刷新后核对');
     }
+    const historicalCorrections = await findHistoricalCashCostCorrections(tx, original);
     const reversal = await this.post(tx, {
       journalType: 'reversal',
       sourceType: original.sourceType,
@@ -273,6 +275,15 @@ export class IdBusinessV2FinancePostingService {
         memo: `冲销 ${original.journalNo}`
       }))
     });
+    for (const correction of historicalCorrections) {
+      await this.reverse(
+        tx,
+        correction.id,
+        `随原开支冲销历史现金成本补偿：${reason}`,
+        `historical_cash:reverse:${correction.id}`,
+        operator
+      );
+    }
     return this.repository.findJournalWithLinesOrThrow(tx, reversal.id);
   }
 

@@ -41,7 +41,9 @@ export default defineConfig(({ mode }) => {
     process.env.VITE_DEV_API_PROXY_TARGET ||
     env.VITE_DEV_API_PROXY_TARGET ||
     'http://localhost:3000';
-  const buildId = String(`v2-${Date.now().toString(36)}`)
+  const buildId = String(
+    process.env.V2_BUILD_ID || env.V2_BUILD_ID || `v2-${Date.now().toString(36)}`
+  )
     .replace(/[^a-zA-Z0-9._-]/g, '')
     .slice(0, 96);
   return {

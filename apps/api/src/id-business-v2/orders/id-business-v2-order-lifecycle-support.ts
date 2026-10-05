@@ -1,3 +1,4 @@
+import { assertOrderNotArchived } from './id-business-v2-order-lock-support';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -68,8 +69,12 @@ export class IdBusinessV2OrderLifecycleSupport {
             idempotentReplay: true
           };
         }
+        assertOrderNotArchived(order);
         if (!DELETABLE_STATUSES.has(order.status)) {
           throw new ConflictException('只有已退款、已取消或失败订单可以删除');
+        }
+        if (await this.repository.findSourceOrderReference(tx, order.id)) {
+          throw new ConflictException('订单仍被后续订单引用，不能删除；请保留来源记录');
         }
 
         const release = await this.orderLockService.releaseOrderLockInTransaction(
@@ -237,6 +242,7 @@ export class IdBusinessV2OrderLifecycleSupport {
     if (!order || (!includeDeleted && order.deletedAt)) {
       throw new NotFoundException('订单不存在或已删除');
     }
+    if (!includeDeleted) assertOrderNotArchived(order);
     return order;
   }
 

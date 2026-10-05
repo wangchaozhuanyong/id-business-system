@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
+[[ "${RELEASE_OPERATION:-release}" == release ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]]
@@ -37,7 +39,9 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'historical-finance-20261005-recharge-diagnostics',
                          'historical-finance-20261005-maintenance-continuation',
                          'historical-finance-20261005-mailbox-batch',
-                         'recharge-pro-menu-b8-20261005')
+                         'recharge-pro-menu-b8-20261005',
+                         'historical-finance-20261005-order-archive',
+                         'historical-finance-20261005-post-cleanup')
 if history_policy == 'historical-finance-20261005':
     assert previous == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
     scope_flag += ' --historical-finance-exception'
@@ -59,6 +63,23 @@ elif history_policy == 'historical-finance-20261005-maintenance-continuation':
 elif history_policy == 'recharge-pro-menu-b8-20261005':
     assert previous == 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' and admin_only == 'false'
     scope_flag += ' --recharge-pro-menu-b8'
+elif history_policy == 'historical-finance-20261005-post-cleanup':
+    # The shared entry guard has already verified the baseline, scope and seal.
+    assert os.environ.get('RELEASE_OPERATION', 'release') == 'release'
+    assert os.environ.get('REUSE_IMAGE_COMMIT') == sha
+    assert os.environ.get('REUSE_IMAGE_RUN_ID') == os.environ['REUSE_IMAGE_RUN']
+    assert __import__('re').fullmatch(r'[1-9][0-9]*', os.environ.get('REUSE_IMAGE_RUN_ATTEMPT', ''))
+    scope_flag += ' --historical-finance-post-cleanup --post-cleanup-seal-sha256 ' + os.environ['POST_CLEANUP_SEAL_SHA256']
+elif history_policy == 'historical-finance-20261005-order-archive':
+    assert previous == '7f70688b9bf53a071a0a324ca558aeabc4ced2e3'
+    assert os.environ.get('RELEASE_OPERATION', 'release') == 'release'
+    assert admin_only == 'false' and os.environ.get('REUSE_IMAGE_COMMIT') == sha
+    assert os.environ.get('REUSE_IMAGE_RUN_ID') == os.environ['REUSE_IMAGE_RUN']
+    assert __import__('re').fullmatch(r'[1-9][0-9]*', os.environ.get('REUSE_IMAGE_RUN_ATTEMPT', ''))
+    assert __import__('re').fullmatch(r'[a-f0-9]{64}', os.environ.get('ORDER_ARCHIVE_PREPARED_IMAGES_SHA256', ''))
+    scope_flag += (' --historical-finance-order-archive --order-archive-seal-sha256 '
+                   + os.environ['ORDER_ARCHIVE_SEAL_SHA256']
+                   + ' --order-archive-prepared-images-sha256 ' + os.environ['ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'])
 image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)
 image_run = os.environ.get('REUSE_IMAGE_RUN_ID', run_id)
 image_attempt = os.environ.get('REUSE_IMAGE_RUN_ATTEMPT', attempt)

@@ -11,9 +11,11 @@ RUN npm ci --no-audit
 COPY . .
 ARG AUTH_PROVIDER=local
 ARG VITE_API_BASE_URL=/api
+ARG V2_BUILD_ID
 ARG VITE_APP_TITLE="ID 业务管理系统"
 ENV AUTH_PROVIDER=${AUTH_PROVIDER}
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV V2_BUILD_ID=${V2_BUILD_ID}
 ENV VITE_APP_TITLE=${VITE_APP_TITLE}
 RUN npm run build --workspace @apple-business/shared
 RUN npm exec --workspace @apple-business/admin -- vite build

@@ -28,6 +28,11 @@ export interface LockedOrderRow {
   refundCostAmount: Amount4 | null;
   profitAmount: Amount4 | null;
   status: IdBusinessV2OrderStatus;
+  archivedAt?: Date | null;
+}
+
+export function assertOrderNotArchived(order: { archivedAt?: Date | null }) {
+  if (order.archivedAt) throw new ConflictException('订单已归档，请先恢复到业务列表再操作');
 }
 
 export interface LockedAccountRow {

@@ -13,6 +13,21 @@
       <header class="v2-orders-list__header">
         <V2SectionHeading title="订单列表" help="可横向查看完整字段，固定操作列始终保留在右侧。">
           <template #actions>
+            <AppButton
+              v-if="page.canUpdateOrders && page.archive.selectedCount"
+              variant="primary"
+              :disabled="page.isParameterTransition || page.archive.saving"
+              @click="page.archive.openSelected"
+            >
+              归档所选（{{ page.archive.selectedCount }}）
+            </AppButton>
+            <AppButton
+              v-if="page.archive.selectedCount"
+              variant="ghost"
+              :disabled="page.archive.saving"
+              @click="page.archive.clearSelection"
+              >清除选择</AppButton
+            >
             <V2TableColumnSettings inline :schema="v2TableSchemas.orders.main" />
             <span>本页 {{ page.items.length }} 条</span>
             <span aria-hidden="true">·</span>
@@ -52,6 +67,17 @@
           sortable="custom"
         >
           <template #default="{ row }">
+            <el-checkbox
+              v-if="
+                page.canUpdateOrders &&
+                (page.archive.canArchive(row) || page.archive.isSelected(row))
+              "
+              :model-value="page.archive.isSelected(row)"
+              :disabled="page.isParameterTransition || page.archive.saving"
+              :aria-label="`选择归档订单 ${row.orderNo}`"
+              @change="page.archive.select(row, $event)"
+              ><span class="visually-hidden">选择归档订单 {{ row.orderNo }}</span></el-checkbox
+            >
             <strong class="v2-order-number v2-table-cell">{{ row.orderNo }}</strong>
           </template>
         </V2TableColumn>
@@ -161,11 +187,12 @@
         >
           <template #default="{ row }">
             <div class="v2-order-progress">
+              <el-tag v-if="row.archivedAt" type="info" effect="plain">已归档</el-tag>
               <el-tag :type="page.statusMeta(row.status).type" effect="plain">
                 {{ page.statusMeta(row.status).label }}
               </el-tag>
               <AppButton
-                v-if="page.canConsumeOrders && row.operations.canConsume"
+                v-if="!row.archivedAt && page.canConsumeOrders && row.operations.canConsume"
                 size="small"
                 variant="primary"
                 :loading="page.consumingOrderId === row.id"
@@ -176,7 +203,7 @@
                 扣减
               </AppButton>
               <AppButton
-                v-if="page.canUpdateOrders && row.operations.canComplete"
+                v-if="!row.archivedAt && page.canUpdateOrders && row.operations.canComplete"
                 size="small"
                 variant="primary"
                 :loading="page.completingOrderId === row.id"
@@ -191,73 +218,7 @@
         </V2TableColumn>
         <V2TableActionColumn :definition="v2TableSchemas.orders.main.columns[16]">
           <template #default="{ row }">
-            <AppButton size="small" variant="ghost" @click="page.openDetail(row)">
-              <el-icon><View /></el-icon>
-              详情
-            </AppButton>
-            <AppButton
-              v-if="page.canUpdateOrders && row.operations.canEdit"
-              size="small"
-              variant="ghost"
-              icon-only
-              title="修改订单"
-              :disabled="page.isParameterTransition"
-              @click="page.openEdit(row)"
-            >
-              <el-icon><Edit /></el-icon>
-            </AppButton>
-            <el-dropdown
-              v-if="page.hasLifecycleActions(row)"
-              trigger="click"
-              :disabled="page.isParameterTransition"
-              @command="page.handleLifecycleCommand($event, row)"
-            >
-              <AppButton
-                size="small"
-                variant="ghost"
-                icon-only
-                title="更多订单操作"
-                :loading="page.lifecycleBusyOrderId === row.id"
-              >
-                <el-icon><MoreFilled /></el-icon>
-              </AppButton>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item
-                    v-if="page.canUpdateOrders && row.operations.canRecordUpgradeBalanceReturn"
-                    command="upgrade-balance-return"
-                  >
-                    登记升级退币
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="page.canUpdateOrders && row.operations.canReverseUpgradeBalanceReturn"
-                    command="reverse-upgrade-balance-return"
-                  >
-                    撤销升级退币
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="page.canUpdateOrders && row.operations.canRefund"
-                    command="refund"
-                  >
-                    退款
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="page.canUpdateOrders && row.operations.canCancel"
-                    command="cancel"
-                  >
-                    取消订单
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    v-if="page.canDeleteOrders && row.operations.canDelete"
-                    command="delete"
-                    divided
-                    class="v2-order-action-danger"
-                  >
-                    删除记录
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
+            <V2OrderRowActions :order="row" :page="page" />
           </template>
         </V2TableActionColumn>
       </V2Table>
@@ -266,6 +227,17 @@
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
+              <el-checkbox
+                v-if="
+                  page.canUpdateOrders &&
+                  (page.archive.canArchive(item) || page.archive.isSelected(item))
+                "
+                :model-value="page.archive.isSelected(item)"
+                :disabled="page.isParameterTransition || page.archive.saving"
+                :aria-label="`选择归档订单 ${item.orderNo}`"
+                @change="page.archive.select(item, $event)"
+                ><span class="visually-hidden">选择归档订单 {{ item.orderNo }}</span></el-checkbox
+              >
               <strong v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'orderNo']">
                 {{ item.orderNo }}
               </strong>
@@ -280,6 +252,7 @@
               </span>
             </div>
             <div class="v2-order-mobile-progress">
+              <el-tag v-if="item.archivedAt" type="info" effect="plain">已归档</el-tag>
               <el-tag
                 class="v2-status-tag"
                 :type="page.statusMeta(item.status).type"
@@ -288,7 +261,7 @@
                 {{ page.statusMeta(item.status).label }}
               </el-tag>
               <AppButton
-                v-if="page.canConsumeOrders && item.operations.canConsume"
+                v-if="!item.archivedAt && page.canConsumeOrders && item.operations.canConsume"
                 size="small"
                 variant="primary"
                 :loading="page.consumingOrderId === item.id"
@@ -299,7 +272,7 @@
                 扣减余额
               </AppButton>
               <AppButton
-                v-if="page.canUpdateOrders && item.operations.canComplete"
+                v-if="!item.archivedAt && page.canUpdateOrders && item.operations.canComplete"
                 size="small"
                 variant="primary"
                 :loading="page.completingOrderId === item.id"
@@ -384,68 +357,7 @@
           </dl>
           <footer>
             <div class="v2-order-row-actions">
-              <AppButton size="small" variant="ghost" @click="page.openDetail(item)"
-                >查看详情</AppButton
-              >
-              <AppButton
-                v-if="page.canUpdateOrders && item.operations.canEdit"
-                size="small"
-                variant="ghost"
-                :disabled="page.isParameterTransition"
-                @click="page.openEdit(item)"
-              >
-                修改
-              </AppButton>
-              <el-dropdown
-                v-if="page.hasLifecycleActions(item)"
-                trigger="click"
-                :disabled="page.isParameterTransition"
-                @command="page.handleLifecycleCommand($event, item)"
-              >
-                <AppButton
-                  size="small"
-                  variant="soft"
-                  :loading="page.lifecycleBusyOrderId === item.id"
-                >
-                  更多
-                </AppButton>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item
-                      v-if="page.canUpdateOrders && item.operations.canRecordUpgradeBalanceReturn"
-                      command="upgrade-balance-return"
-                    >
-                      登记升级退币
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="page.canUpdateOrders && item.operations.canReverseUpgradeBalanceReturn"
-                      command="reverse-upgrade-balance-return"
-                    >
-                      撤销升级退币
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="page.canUpdateOrders && item.operations.canRefund"
-                      command="refund"
-                    >
-                      退款
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="page.canUpdateOrders && item.operations.canCancel"
-                      command="cancel"
-                    >
-                      取消订单
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="page.canDeleteOrders && item.operations.canDelete"
-                      command="delete"
-                      divided
-                      class="v2-order-action-danger"
-                    >
-                      删除记录
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <V2OrderRowActions :order="item" :page="page" mobile />
             </div>
           </footer>
         </article>
@@ -486,7 +398,7 @@
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import { CircleCheck, Coin, Edit, MoreFilled, View } from '@element-plus/icons-vue';
+import { CircleCheck, Coin } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
@@ -496,6 +408,7 @@ import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { operatorUsername } from '@/v2/utils/operator';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useOrdersPage } from '../useOrdersPage';
+import V2OrderRowActions from './V2OrderRowActions.vue';
 
 type OrdersPage = UnwrapNestedRefs<ReturnType<typeof useOrdersPage>>;
 

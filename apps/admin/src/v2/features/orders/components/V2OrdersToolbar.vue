@@ -14,6 +14,15 @@
       @clear="page.handleSearch"
     />
     <el-select
+      v-model="page.query.archived"
+      aria-label="筛选订单归档状态"
+      @change="page.handleFilterChange"
+    >
+      <el-option label="当前订单" value="active" />
+      <el-option label="已归档" value="archived" />
+      <el-option label="全部订单" value="all" />
+    </el-select>
+    <el-select
       v-model="page.query.status"
       clearable
       placeholder="全部状态"

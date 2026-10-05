@@ -1,6 +1,13 @@
 export function getOrCreateOrderActionKey(
   keys: Map<string, string>,
-  action: 'consume' | 'cancel' | 'refund' | 'upgrade-return' | 'upgrade-return-reverse',
+  action:
+    | 'consume'
+    | 'cancel'
+    | 'refund'
+    | 'upgrade-return'
+    | 'upgrade-return-reverse'
+    | 'archive'
+    | 'unarchive',
   orderId: string
 ) {
   const name = `${action}:${orderId}`;
