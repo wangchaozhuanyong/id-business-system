@@ -512,88 +512,126 @@ class GoogleDriveReleaseConfigTests(unittest.TestCase):
 
 
 
-class ReleaseCommandInputTests(unittest.TestCase):
-    def test_commands_without_input_keep_default_stdin(self):
-        with patch.object(deployment.subprocess, 'run', return_value=MagicMock(
-                returncode=0, stdout='ready\n')) as command:
-            self.assertEqual(deployment.run('fixture-command'), 'ready')
-        self.assertIsNone(command.call_args.kwargs['input'])
-
-    def test_compose_forwards_receipt_on_stdin_without_putting_it_in_arguments(self):
-        private_receipt = '{"fixturePrivateReceipt":true}'
-        with patch.object(deployment.subprocess, 'run', return_value=MagicMock(
-                returncode=0, stdout='ready\n')) as command:
-            deployment.compose(Path('fixture'), 'run', '--interactive', '-T', 'migrate',
-                               input_data=private_receipt)
-        self.assertEqual(command.call_args.kwargs['input'], private_receipt)
-        self.assertNotIn(private_receipt, command.call_args.args[0])
-
-    def test_failed_command_never_exposes_private_input_or_output(self):
-        private_receipt = 'fixture-private-receipt'
-        with patch.object(deployment.subprocess, 'run', return_value=MagicMock(
-                returncode=1, stdout=private_receipt, stderr=private_receipt)):
-            with self.assertRaisesRegex(RuntimeError, 'output suppressed') as error:
-                deployment.run('fixture-command', input_data=private_receipt)
-        self.assertNotIn(private_receipt, str(error.exception))
-
-
 class HistoricalAuditTests(unittest.TestCase):
+    reader_identity = {'uid': 1000, 'gid': 1000, 'user': 'node'}
+
     def report(self):
         return {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': {
             'accepted': True, 'policyId': 'historical-finance-20261005',
             'expectedCurrent': 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
             'stage': 'after', 'checkCount': 48, 'violationCount': 10, 'unavailableCheckCount': 0}}
 
-    def audit(self, report, historical=True, stage='after'):
+    def audit(self, report, historical=True):
         with tempfile.TemporaryDirectory(dir='.deploy') as name:
             root = Path(name); source = root / 'candidate'
-            before_receipt = root / 'before.json'
-            before_receipt.write_text(json.dumps({'fixture': True, 'gate': {'accepted': True}}))
-            before_receipt.chmod(0o600)
+            (source / 'deploy/aws').mkdir(parents=True)
+            (source / 'scripts').mkdir()
+            (source / 'deploy/aws/historical-finance-20261005.json').write_text('{}')
+            (root / 'before.json').write_text('{}')
+            (root / 'before.json').chmod(0o600)
             with patch.object(deployment, 'environment_values', return_value={
                     'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
-                    patch.object(deployment, 'compose', return_value=json.dumps(report)) as compose:
+                    patch.object(deployment.os, 'fchown'), \
+                    patch.object(deployment, 'compose', side_effect=lambda directory, *command, **kwargs:
+                        json.dumps(self.reader_identity if '--entrypoint' in command else report)) as compose:
                 result = deployment.audit(root, root / 'receipt.json', historical_exception=historical,
-                    stage=stage, source=source, before_receipt=before_receipt)
+                    stage='after', source=source, before_receipt=root / 'before.json')
                 saved = json.loads((root / 'receipt.json').read_text())
                 self.assertEqual(saved['ok'], report['ok'])
-                self.assertEqual(before_receipt.stat().st_mode & 0o777, 0o600)
-                return result, compose.call_args.args, compose.call_args.kwargs
+                return result, compose.call_args.args
 
     def test_regular_audit_never_accepts_legacy_exception(self):
         with self.assertRaisesRegex(RuntimeError, 'Financial data integrity audit failed'):
             self.audit(self.report(), False)
 
     def test_special_audit_preserves_actual_violation_count_and_mounts_exact_source(self):
-        result, command, _options = self.audit(self.report())
+        result, command = self.audit(self.report())
         self.assertEqual(result['violationCount'], 10)
         self.assertIn('scripts/v2-release-history-audit.mjs', command)
         self.assertIn('--stage=after', command)
-        self.assertIn('--before-receipt=/dev/stdin', command)
+        self.assertIn('--before-receipt=/release-before-audit.json', command)
+        self.assertTrue(any(str(mount).endswith(':/release-before-audit.json:ro') for mount in command))
 
-    def test_private_before_receipt_uses_stdin_and_has_no_mount_or_user_override(self):
-        _result, command, options = self.audit(self.report())
-        mounts = [command[index + 1] for index, value in enumerate(command) if value == '-v']
-        self.assertEqual(len(mounts), 2)
-        self.assertTrue(all(mount.endswith(':ro') for mount in mounts))
-        targets = [mount.rsplit(':', 2)[1] for mount in mounts]
-        self.assertEqual(targets, ['/app/scripts', '/release-policy'])
-        self.assertFalse(any('/before.json:' in mount for mount in mounts))
-        self.assertIn('--interactive', command)
-        self.assertIn('-T', command)
-        self.assertIn('--before-receipt=/dev/stdin', command)
-        self.assertNotIn('--user', command)
-        self.assertTrue(json.loads(options['input_data'])['fixture'])
-        self.assertNotIn(options['input_data'], command)
+    def test_receipt_mount_does_not_need_a_missing_target_inside_read_only_policy_directory(self):
+        def inspect_mounts(directory, *command, **kwargs):
+            if '--entrypoint' in command:
+                return json.dumps(self.reader_identity)
+            mounts = [command[index + 1].rsplit(':', 2)
+                      for index, part in enumerate(command) if part == '-v']
+            for parent_host, parent_target, parent_mode in mounts:
+                if parent_mode != 'ro' or not Path(parent_host).is_dir():
+                    continue
+                for _child_host, child_target, _child_mode in mounts:
+                    parent = Path(parent_target)
+                    child = Path(child_target)
+                    if parent != child and parent in child.parents:
+                        target = Path(parent_host) / child.relative_to(parent)
+                        self.assertTrue(target.exists(),
+                            'Nested mount target must exist inside a read-only parent bind')
+            return json.dumps(self.report())
 
-    def test_before_audit_does_not_enable_or_send_stdin(self):
-        report = self.report()
-        report['gate']['stage'] = 'before'
-        _result, command, options = self.audit(report, stage='before')
-        self.assertNotIn('--interactive', command)
-        self.assertNotIn('-T', command)
-        self.assertNotIn('--before-receipt=/dev/stdin', command)
-        self.assertIsNone(options['input_data'])
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); source = root / 'candidate'
+            (source / 'scripts').mkdir(parents=True)
+            (source / 'deploy/aws').mkdir(parents=True)
+            before = root / 'before-audit.json'
+            before.write_text('{}')
+            before.chmod(0o600)
+            self.assertFalse((source / 'deploy/aws/before-audit.json').exists())
+            with patch.object(deployment, 'environment_values', return_value={
+                    'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
+                    patch.object(deployment.os, 'fchown'), \
+                    patch.object(deployment, 'compose', side_effect=inspect_mounts):
+                deployment.audit(root, root / 'receipt.json', historical_exception=True,
+                                 stage='after', source=source, before_receipt=before)
+
+    def test_private_receipt_is_owned_by_actual_non_root_reader_and_remains_owner_read_only(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); before = root / 'before-audit.json'
+            before.write_text('{}'); before.chmod(0o600)
+            parent_mode = root.stat().st_mode
+            with patch.object(deployment, 'compose', return_value=json.dumps(self.reader_identity)) as compose, \
+                    patch.object(deployment.os, 'fchown') as ownership:
+                deployment.prepare_historical_before_receipt(root, before)
+            self.assertEqual(ownership.call_args.args[1:], (1000, 1000))
+            self.assertEqual(before.stat().st_mode & 0o777, 0o400)
+            self.assertEqual(root.stat().st_mode, parent_mode)
+            self.assertEqual(compose.call_args.args[:8],
+                (root, 'run', '--rm', '--no-deps', '--entrypoint', 'node', 'migrate', '-e'))
+
+    def test_root_malformed_or_unexpected_reader_identity_cannot_change_the_private_receipt(self):
+        invalid = [None, [], {'uid': 0, 'gid': 1000, 'user': 'node'},
+            {'uid': 1000, 'gid': 0, 'user': 'node'}, {'uid': 1000, 'gid': 1000, 'user': 'root'},
+            {'uid': True, 'gid': 1000, 'user': 'node'}, {'uid': '1000', 'gid': 1000, 'user': 'node'},
+            {'uid': -1, 'gid': 1000, 'user': 'node'}, {'uid': 2147483648, 'gid': 1000, 'user': 'node'},
+            {**self.reader_identity, 'unexpected': 'fixture-sensitive-value'}]
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            before = Path(name) / 'before-audit.json'; before.write_text('{}'); before.chmod(0o600)
+            for identity in invalid:
+                with self.subTest(identity=identity), \
+                        patch.object(deployment, 'compose', return_value=json.dumps(identity)), \
+                        patch.object(deployment.os, 'fchown') as ownership:
+                    with self.assertRaisesRegex(RuntimeError, '^Historical audit reader identity unavailable$'):
+                        deployment.prepare_historical_before_receipt(Path(name), before)
+                    ownership.assert_not_called()
+                    self.assertEqual(before.stat().st_mode & 0o777, 0o600)
+
+    def test_shared_permissions_symlink_or_hardlink_receipt_cannot_be_reowned(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); original = root / 'before-audit.json'; original.write_text('{}')
+            original.chmod(0o644)
+            symlink_target = root / 'symlink-target-audit.json'
+            symlink_target.write_text('{}'); symlink_target.chmod(0o600)
+            link = root / 'linked-audit.json'; link.symlink_to(symlink_target.name)
+            private = root / 'private-audit.json'; private.write_text('{}'); private.chmod(0o600)
+            hardlink = root / 'hardlinked-audit.json'; deployment.os.link(private, hardlink)
+            for receipt in (original, link, hardlink):
+                with self.subTest(receipt=receipt.name), \
+                        patch.object(deployment, 'compose', return_value=json.dumps(self.reader_identity)), \
+                        patch.object(deployment.os, 'fchown') as ownership:
+                    with self.assertRaisesRegex(RuntimeError, '^Historical before audit receipt'):
+                        deployment.prepare_historical_before_receipt(root, receipt)
+                    ownership.assert_not_called()
 
     def test_changed_report_count_stage_schema_baseline_or_policy_is_rejected(self):
         mutations = [lambda x: x.update(violationCount=11),

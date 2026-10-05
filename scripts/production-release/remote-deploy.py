@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -158,20 +159,19 @@ def rollback_service(previous, release, service, before):
     wait_healthy(previous, service)
 
 
-def run(*args, env=None, timeout=300, input_data=None):
-    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout,
-                            input=input_data)
+def run(*args, env=None, timeout=300):
+    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f'{Path(args[0]).name} failed (exit {result.returncode}); output suppressed')
     return result.stdout.strip()
 
 
-def compose(directory, *args, env=None, timeout=300, input_data=None):
+def compose(directory, *args, env=None, timeout=300):
     return run(
         'docker', 'compose', '--env-file', str(directory / '.env.aws.production'),
         '-f', str(directory / 'docker-compose.aws-mysql.yml'),
         '-f', str(directory / 'compose.release.json'), *args,
-        env=env, timeout=timeout, input_data=input_data,
+        env=env, timeout=timeout,
     )
 
 
@@ -208,6 +208,38 @@ def wait_healthy(directory, service):
     raise RuntimeError(f'{service} did not become healthy')
 
 
+def prepare_historical_before_receipt(directory, receipt):
+    # The previous root-owned 0600 receipt must remain private while its existing
+    # non-root audit reader can read the bind mount. Never change directory modes.
+    probe = ("const os=require('node:os'); const user=os.userInfo(); "
+             "console.log(JSON.stringify({uid:process.getuid(),gid:process.getgid(),user:user.username}));")
+    try:
+        identity = json.loads(compose(directory, 'run', '--rm', '--no-deps',
+            '--entrypoint', 'node', 'migrate', '-e', probe, timeout=30))
+    except Exception:
+        raise RuntimeError('Historical audit reader identity unavailable') from None
+    require(isinstance(identity, dict) and set(identity) == {'uid', 'gid', 'user'}
+            and identity['user'] == 'node'
+            and all(type(identity[key]) is int and 0 < identity[key] <= 2147483647
+                    for key in ('uid', 'gid')), 'Historical audit reader identity unavailable')
+    try:
+        descriptor = os.open(receipt, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise RuntimeError('Historical before audit receipt unavailable') from None
+    try:
+        metadata = os.fstat(descriptor)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                and stat.S_IMODE(metadata.st_mode) in (0o600, 0o400)
+                and metadata.st_uid in (os.geteuid(), identity['uid']),
+                'Historical before audit receipt is not private')
+        os.fchown(descriptor, identity['uid'], identity['gid'])
+        os.fchmod(descriptor, 0o400)
+    except OSError:
+        raise RuntimeError('Historical before audit ownership unavailable') from None
+    finally:
+        os.close(descriptor)
+
+
 def audit(directory, receipt, *, historical_exception=False, stage=None,
           source=None, before_receipt=None):
     values = environment_values(directory / '.env.aws.production')
@@ -224,8 +256,6 @@ def audit(directory, receipt, *, historical_exception=False, stage=None,
     env['V2_DATA_INTEGRITY_DATABASE_URL'] = container_url
     audit_args = ['node', 'scripts/v2-data-integrity-audit.mjs']
     mounts = ['-v', f'{directory / "scripts"}:/app/scripts:ro']
-    input_data = None
-    input_options = []
     if historical_exception:
         require(stage in ('before', 'after') and source is not None,
                 'Historical exception audit source missing')
@@ -237,17 +267,15 @@ def audit(directory, receipt, *, historical_exception=False, stage=None,
                       f'--stage={stage}']
         if stage == 'after':
             require(before_receipt is not None, 'Historical before audit missing')
-            # Root reads the private receipt; the existing node user receives it only on stdin.
-            input_data = before_receipt.read_text()
-            input_options = ['--interactive', '-T']
-            audit_args.append('--before-receipt=/dev/stdin')
+            prepare_historical_before_receipt(directory, before_receipt)
+            mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
+            audit_args.append('--before-receipt=/release-before-audit.json')
     output = compose(
         directory, 'run', '--rm', '--no-deps',
-        *input_options,
         *mounts,
         '-e', 'V2_DATA_INTEGRITY_DATABASE_URL',
         'migrate', *audit_args,
-        env=env, timeout=240, input_data=input_data,
+        env=env, timeout=240,
     )
     report = json.loads(output)
     if historical_exception:
