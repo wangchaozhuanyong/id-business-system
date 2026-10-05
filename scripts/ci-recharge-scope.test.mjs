@@ -555,3 +555,21 @@ test('fixed b8 runtime scope uses one exact control path without business checks
     assert.equal(checkMode([other], schema, schema), 'full', other);
   }
 });
+
+test('fixed 7f runtime scope is exact and retains worker checks', () => {
+  const path = 'deploy/aws/recharge-pro-menu-7f-20261005.json';
+  assert.equal(isCiOnly([path]), true);
+  assert.equal(checkMode([path], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([path]), ['guards']);
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py';
+  assert.deepEqual(selectedParts([path, worker]), ['guards', 'connector']);
+  for (const other of [
+    'deploy/aws/recharge-pro-menu-7f-20261006.json',
+    path + '.backup',
+    path + '/future.json',
+    'deploy/aws/recharge-pro-menu-other-20261005.json'
+  ]) {
+    assert.equal(isCiOnly([other]), false, other);
+    assert.equal(checkMode([path, other], schema, schema), 'full', other);
+  }
+});

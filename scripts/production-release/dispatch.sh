@@ -7,11 +7,15 @@ set -Eeuo pipefail
 [[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
 [[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]]
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 ]]; then
-  test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 ]]; then
+  case "$HISTORICAL_EXCEPTION" in
+    recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
+    recharge-pro-menu-7f-20261005) test "$EXPECTED_CURRENT" = 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ;;
+    *) exit 1 ;;
+  esac
   test "${RELEASE_ADMIN_ONLY:-false}" = false
   test -z "${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
-  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
 fi
 
 mkdir -p .deploy/production-release
@@ -37,7 +41,8 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'historical-finance-20261005-recharge-diagnostics',
                          'historical-finance-20261005-maintenance-continuation',
                          'historical-finance-20261005-mailbox-batch',
-                         'recharge-pro-menu-b8-20261005')
+                         'recharge-pro-menu-b8-20261005',
+                         'recharge-pro-menu-7f-20261005')
 if history_policy == 'historical-finance-20261005':
     assert previous == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
     scope_flag += ' --historical-finance-exception'
@@ -59,6 +64,9 @@ elif history_policy == 'historical-finance-20261005-maintenance-continuation':
 elif history_policy == 'recharge-pro-menu-b8-20261005':
     assert previous == 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' and admin_only == 'false'
     scope_flag += ' --recharge-pro-menu-b8'
+elif history_policy == 'recharge-pro-menu-7f-20261005':
+    assert previous == '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' and admin_only == 'false'
+    scope_flag += ' --recharge-pro-menu-7f'
 image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)
 image_run = os.environ.get('REUSE_IMAGE_RUN_ID', run_id)
 image_attempt = os.environ.get('REUSE_IMAGE_RUN_ATTEMPT', attempt)

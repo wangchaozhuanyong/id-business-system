@@ -590,19 +590,28 @@ test('mailbox audit, approval and tests remain control-only and always invoke th
   }
 });
 
-function approvedRuntimeTransport(root, env, reject = false) {
+function approvedRuntimeTransport(
+  root,
+  env,
+  reject = false,
+  identity = 'recharge-pro-menu-b8-20261005'
+) {
   const interpreter = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {
     encoding: 'utf8'
   }).trim();
   writeFileSync(
     join(root, 'bin', 'python3'),
-    `#!/bin/sh\nif [ "$2" = --check-fixed-recharge-scope ]; then\n  printf '%s\\n' checked >> "$TASK_PROFILE_CHECK_LOG"\n  exit ${reject ? 31 : 0}\nfi\nexec "$TASK_REAL_PYTHON" "$@"\n`,
+    `#!/bin/sh\nif [ "$2" = --check-fixed-recharge-scope ]; then\n  [ "$3" = --fixed-recharge-profile ] && [ "$4" = "$TASK_EXPECTED_FIXED_PROFILE" ] || exit 32\n  printf '%s\\n' checked >> "$TASK_PROFILE_CHECK_LOG"\n  exit ${reject ? 31 : 0}\nfi\nexec "$TASK_REAL_PYTHON" "$@"\n`,
     { mode: 0o755 }
   );
   return {
     ...env,
-    HISTORICAL_EXCEPTION: 'recharge-pro-menu-b8-20261005',
-    EXPECTED_CURRENT: 'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+    HISTORICAL_EXCEPTION: identity,
+    EXPECTED_CURRENT:
+      identity === 'recharge-pro-menu-b8-20261005'
+        ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
+        : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+    TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
   };
@@ -656,6 +665,7 @@ test('fixed b8 dispatch passes only its runtime flag after approval precheck', (
       // separately validate the complete approval and source bindings.
       execute({
         TASK_REAL_PYTHON: transport.TASK_REAL_PYTHON,
+        TASK_EXPECTED_FIXED_PROFILE: transport.TASK_EXPECTED_FIXED_PROFILE,
         TASK_PROFILE_CHECK_LOG: transport.TASK_PROFILE_CHECK_LOG
       });
       const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
@@ -682,7 +692,7 @@ test('fixed b8 workflow checks approval before builds and credentials, then skip
   assert.ok(check < workflow.indexOf('- name: Obtain short-lived AWS credentials through OIDC'));
   assert.ok(
     workflow.includes(
-      "inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005'"
+      "inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005'"
     )
   );
   assert.ok(workflow.includes('RECHARGE_ONLY_CACHE_SKIPPED'));
@@ -706,6 +716,7 @@ test('fixed b8 dispatch rejects wrong baseline, reuse, admin scope and failed ap
         assert.throws(() =>
           execute({
             TASK_REAL_PYTHON: transport.TASK_REAL_PYTHON,
+            TASK_EXPECTED_FIXED_PROFILE: transport.TASK_EXPECTED_FIXED_PROFILE,
             TASK_PROFILE_CHECK_LOG: transport.TASK_PROFILE_CHECK_LOG,
             ...fields
           })
@@ -729,7 +740,7 @@ test('fixed b8 scope approval JSON alone still runs actual remote profile behavi
   assert.ok(commands.includes('node --test scripts/v2-release-maintenance-policy.test.mjs'));
 });
 
-function fixedRechargeReadbackFixture(run) {
+function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-20261005') {
   const workflow = readFileSync('.github/workflows/production-release.yml', 'utf8');
   const step = workflow.split('      - name: Verify fixed recharge deployment independently\n')[1];
   assert.ok(step);
@@ -744,22 +755,24 @@ function fixedRechargeReadbackFixture(run) {
     mkdirSync(join(root, 'deploy/aws'), { recursive: true });
     const remoteSource = readFileSync('scripts/production-release/remote-deploy.py');
     writeFileSync(join(root, 'scripts/production-release/remote-deploy.py'), remoteSource);
-    const profile = JSON.parse(
-      readFileSync('deploy/aws/recharge-pro-menu-b8-20261005.json', 'utf8')
-    );
+    const profile = JSON.parse(readFileSync(`deploy/aws/${identity}.json`, 'utf8'));
     profile.enabled = true;
     profile.approvalStatus = 'APPROVED';
+    if (identity === 'recharge-pro-menu-7f-20261005')
+      profile.baselineRelease.deploymentRun = 'github-actions-37333706418-1';
     for (const key of [
       'manifestSha256',
       'beforeAuditSha256',
       'afterAuditSha256',
+      'composeSha256',
       'overrideRawSha256',
       'overrideCanonicalSha256'
     ])
-      profile.baselineRelease[key] = 'd'.repeat(64);
+      if (key !== 'composeSha256' || identity === 'recharge-pro-menu-7f-20261005')
+        profile.baselineRelease[key] = 'd'.repeat(64);
     for (const key of ['candidateSourceSha256', 'carriedSourceOnlySha256', 'controlSourceSha256'])
       for (const name of Object.keys(profile[key])) profile[key][name] = 'e'.repeat(64);
-    const profileFile = join(root, 'deploy/aws/recharge-pro-menu-b8-20261005.json');
+    const profileFile = join(root, `deploy/aws/${identity}.json`);
     writeFileSync(profileFile, JSON.stringify(profile));
     const digest = execFileSync(
       'python3',
@@ -772,11 +785,11 @@ function fixedRechargeReadbackFixture(run) {
     ).trim();
     const receipt = {
       version: 1,
-      id: 'recharge-pro-menu-b8-20261005',
+      id: identity,
       status: 'VERIFIED',
       currentCommit: env.RELEASE_COMMIT,
       sourceTree: 'c'.repeat(40),
-      previousCommit: 'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+      previousCommit: profile.expectedCurrent,
       profileSha256: digest,
       servicesUpdated: ['auto-recharge'],
       preservedServiceCount: 6,
@@ -812,6 +825,7 @@ function fixedRechargeReadbackFixture(run) {
           ...env,
           SOURCE_TREE: receipt.sourceTree,
           RELEASE_OPERATION: 'verify_recharge_release',
+          FIXED_RECHARGE_PROFILE: identity,
           EXPECTED_CURRENT: receipt.currentCommit,
           PRODUCTION_INSTANCE_ID: 'i-test-fixture-only',
           TASK_READBACK_AWS_LOG: awsLog,
@@ -952,4 +966,171 @@ test('mailbox API-only release does not run unrelated cache cleanup', () => {
   assert.ok(
     condition.includes("inputs.historical_exception != 'historical-finance-20261005-mailbox-batch'")
   );
+});
+
+test('fixed 7f builds and pushes only recharge using its own approval precheck', () => {
+  fixture(({ root, env, log }) => {
+    const profileEnv = approvedRuntimeTransport(root, env, false, 'recharge-pro-menu-7f-20261005');
+    execFileSync('bash', ['scripts/production-release/build-images.sh'], { env: profileEnv });
+    execFileSync('bash', ['scripts/production-release/push-images.sh'], { env: profileEnv });
+    const operations = readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(operations.filter((line) => line.startsWith('build ')).length, 1);
+    assert.ok(
+      operations
+        .find((line) => line.startsWith('build '))
+        .includes('auto-recharge/worker/Dockerfile')
+    );
+    const pushes = operations.filter((line) => line.startsWith('push '));
+    assert.equal(pushes.length, 1);
+    assert.ok(pushes[0].endsWith('-auto-recharge'));
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+    assert.deepEqual(readFileSync(profileEnv.TASK_PROFILE_CHECK_LOG, 'utf8').trim().split('\n'), [
+      'checked',
+      'checked'
+    ]);
+  });
+});
+
+test('fixed 7f prevents Docker work for a different baseline, reuse or failed approval', () => {
+  for (const overrides of [
+    { EXPECTED_CURRENT: 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' },
+    { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '99999' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+    { rejectedApproval: true }
+  ]) {
+    fixture(({ root, env, log }) => {
+      const { rejectedApproval, ...fields } = overrides;
+      const profileEnv = approvedRuntimeTransport(
+        root,
+        env,
+        rejectedApproval,
+        'recharge-pro-menu-7f-20261005'
+      );
+      for (const file of ['build-images.sh', 'push-images.sh'])
+        assert.throws(() =>
+          execFileSync('bash', [`scripts/production-release/${file}`], {
+            env: { ...profileEnv, ...fields },
+            stdio: 'pipe'
+          })
+        );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+    });
+  }
+});
+
+test('fixed 7f dispatch selects its exclusive runtime flag and rejects changes before AWS', () => {
+  const identity = 'recharge-pro-menu-7f-20261005';
+  const current = '7f70688b9bf53a071a0a324ca558aeabc4ced2e3';
+  dispatchFixture(identity, current, ({ execute, parametersFile, root, env }) => {
+    const transport = approvedRuntimeTransport(root, env, false, identity);
+    execute({
+      TASK_REAL_PYTHON: transport.TASK_REAL_PYTHON,
+      TASK_PROFILE_CHECK_LOG: transport.TASK_PROFILE_CHECK_LOG,
+      TASK_EXPECTED_FIXED_PROFILE: transport.TASK_EXPECTED_FIXED_PROFILE
+    });
+    const command = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1);
+    assert.equal(command.split(' ').filter((arg) => arg === '--recharge-pro-menu-7f').length, 1);
+    assert.equal(command.includes('--recharge-pro-menu-b8'), false);
+    assert.equal(command.includes('--historical-finance-'), false);
+  });
+  for (const overrides of [
+    { EXPECTED_CURRENT: 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '99999' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+    { rejectedApproval: true },
+    { TASK_EXPECTED_FIXED_PROFILE: 'recharge-pro-menu-b8-20261005' }
+  ])
+    dispatchFixture(identity, current, ({ execute, parametersFile, awsLog, root, env }) => {
+      const { rejectedApproval, ...fields } = overrides;
+      const transport = approvedRuntimeTransport(root, env, rejectedApproval, identity);
+      assert.throws(() =>
+        execute({
+          TASK_REAL_PYTHON: transport.TASK_REAL_PYTHON,
+          TASK_PROFILE_CHECK_LOG: transport.TASK_PROFILE_CHECK_LOG,
+          TASK_EXPECTED_FIXED_PROFILE: transport.TASK_EXPECTED_FIXED_PROFILE,
+          ...fields
+        })
+      );
+      assert.equal(existsSync(parametersFile), false);
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+    });
+});
+
+test('fixed 7f approval JSON alone invokes actual profile checks and both profiles skip cache', () => {
+  const commands = guardCommands(['deploy/aws/recharge-pro-menu-7f-20261005.json']);
+  assert.equal(
+    commands.filter(
+      (command) => command === 'python3 -B scripts/production-release/remote-deploy.test.py'
+    ).length,
+    1
+  );
+  assert.ok(commands.includes('node --test scripts/v2-release-history-policy.test.mjs'));
+  assert.ok(commands.includes('node --test scripts/v2-release-maintenance-policy.test.mjs'));
+  const workflow = readFileSync('.github/workflows/production-release.yml', 'utf8');
+  const cacheStep = workflow
+    .split('name: Verify or maintain recoverable unused project image cache')[1]
+    .split('env:')[0];
+  for (const identity of ['recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005'])
+    assert.ok(cacheStep.includes(`inputs.historical_exception != '${identity}'`));
+  assert.ok(workflow.includes('--fixed-recharge-profile "$FIXED_RECHARGE_PROFILE"'));
+});
+
+test('fixed 7f actual independent readback binds its own profile and rejects cross-wired receipts', () => {
+  const identity = 'recharge-pro-menu-7f-20261005';
+  fixedRechargeReadbackFixture(({ root, execute, receipt, digest, awsLog }) => {
+    assert.deepEqual(JSON.parse(execute()), receipt);
+    const file = join(root, '.deploy/production-release/fixed-recharge-readback.json');
+    const parameters = JSON.parse(readFileSync(file, 'utf8'));
+    assert.ok(Buffer.byteLength(JSON.stringify(parameters)) < 20 * 1024);
+    const literals = JSON.parse(
+      execFileSync(
+        'python3',
+        [
+          '-B',
+          '-c',
+          'import ast,json,shlex,sys; p=shlex.split(json.load(open(sys.argv[1]))["commands"][0]); assert p[:2]==["python3","-c"] and len(p)==3; print(json.dumps([n.value for n in ast.walk(ast.parse(p[2])) if isinstance(n,ast.Constant) and isinstance(n.value,str)]))',
+          file
+        ],
+        { encoding: 'utf8' }
+      )
+    );
+    for (const binding of [
+      identity,
+      '--fixed-recharge-profile',
+      '--check-fixed-recharge-deployment',
+      digest,
+      receipt.currentCommit,
+      receipt.sourceTree
+    ])
+      assert.ok(literals.includes(binding), binding);
+    for (const changed of [
+      { id: 'recharge-pro-menu-b8-20261005' },
+      { previousCommit: 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' },
+      { preservedServiceCount: 5 },
+      { environmentUnchanged: false },
+      { checkCount: true },
+      { cacheStatus: 'CLEANED' },
+      { unexpected: 'PRIVATE_SYNTHETIC_SENTINEL' }
+    ])
+      assert.throws(
+        () =>
+          execute(
+            `FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...changed })}\n`
+          ),
+        (error) =>
+          error.status !== 0 &&
+          error.stdout === '' &&
+          String(error.stderr).includes('raw output suppressed') &&
+          !String(error.stderr).includes('PRIVATE_SYNTHETIC_SENTINEL')
+      );
+    writeFileSync(awsLog, '');
+    for (const profileId of ['recharge-pro-menu-b8-20261005', 'unreviewed']) {
+      assert.throws(() => execute(undefined, { FIXED_RECHARGE_PROFILE: profileId }));
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+    }
+  }, identity);
 });
