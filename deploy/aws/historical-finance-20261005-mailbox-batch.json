@@ -255,5 +255,11 @@
         "count": 0
       }
     ]
+  },
+  "servicesUpdated": ["api"],
+  "externalTestAcknowledged": true,
+  "carriedWorkerSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "f63eeb60d191aeb535c96bcd13cdbca8bbf040119ef08ca259875f621f283972",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "a7becf0fc1d17dd6e843dbdf0c7ecb138a739ca6d9e8979767846e9b31d07d88"
   }
 }

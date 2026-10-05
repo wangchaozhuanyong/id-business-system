@@ -45,7 +45,10 @@ def main():
     release = os.environ['RELEASE_COMMIT']
     command('git', 'merge-base', '--is-ancestor', commit, release)
     paths = command('git', 'diff', '--name-only', commit, release).splitlines()
-    deployment.require_reusable_paths(paths)
+    mailbox_only = os.environ.get('HISTORICAL_EXCEPTION') == deployment.MAILBOX_POLICY_ID
+    deployment.require_reusable_paths(paths, mailbox_only=mailbox_only)
+    if mailbox_only:
+        deployment.verify_mailbox_carried_sources(Path('.'))
     scope = command('node', '--input-type=module', '-e',
         "import {execFileSync} from 'node:child_process';"
         "import {isAdminOnly} from './scripts/ci-recharge-scope.mjs';"
@@ -58,7 +61,8 @@ def main():
                   f'REUSE_IMAGE_RUN_ATTEMPT={attempt}\nRELEASE_ADMIN_ONLY={scope}\n')
     print(json.dumps({'imageCommit': commit, 'imageBuildRun': run_id,
                       'imageBuildAttempt': attempt, 'releaseCommit': release,
-                      'applicationSourceUnchanged': True, 'adminOnly': scope == 'true'}))
+                      'applicationSourceUnchanged': not mailbox_only, 'apiSourceUnchanged': True,
+                      'servicesUpdated': ['api'] if mailbox_only else None, 'adminOnly': scope == 'true'}))
 
 
 if __name__ == '__main__':

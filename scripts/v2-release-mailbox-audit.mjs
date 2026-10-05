@@ -17,7 +17,7 @@ export const MAILBOX_POLICY_ID = 'historical-finance-20261005-mailbox-batch';
 export const MAILBOX_BASELINE = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0';
 export const MAILBOX_IMAGE_COMMIT = 'f5826f9fb4ad0d846d9875c035c913a61eb68290';
 export const MAILBOX_POLICY_SHA256 =
-  '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95';
+  'f3051a718cdbd55840d50affe6e5e1ddc62f187ff231f309679998608189481c';
 const COST = 'cash_historical_cost_evidence_mismatch';
 const requireFact = (value) => {
   if (!value) throw new Error('MAILBOX_GATE_REJECTED');
@@ -102,6 +102,8 @@ export function acceptMailboxSnapshot(policy, snapshot, stage, before) {
       policy.imageCommit === MAILBOX_IMAGE_COMMIT &&
       policy.imageRun === '37312405714' &&
       policy.imageAttempt === '1' &&
+      policy.externalTestAcknowledged === true &&
+      fingerprint(policy.servicesUpdated) === fingerprint(['api']) &&
       fingerprint(snapshot) === fingerprint(policy.snapshot) &&
       ['before', 'after'].includes(stage)
   );
@@ -115,6 +117,7 @@ export function acceptMailboxSnapshot(policy, snapshot, stage, before) {
     imageCommit: MAILBOX_IMAGE_COMMIT,
     imageRun: '37312405714',
     imageAttempt: '1',
+    servicesUpdated: ['api'],
     stage,
     checkCount: 48,
     executedCheckCount: 48,

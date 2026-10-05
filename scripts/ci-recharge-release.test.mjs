@@ -943,3 +943,13 @@ test('fixed recharge readonly rejects unapproved profile and failed SSM before r
     assert.equal(readFileSync(awsLog, 'utf8'), '');
   });
 });
+
+test('mailbox API-only release does not run unrelated cache cleanup', () => {
+  const workflow = readFileSync('.github/workflows/production-release.yml', 'utf8');
+  const start = workflow.indexOf('name: Verify or maintain recoverable unused project image cache');
+  assert.ok(start > 0);
+  const condition = workflow.slice(start, workflow.indexOf('env:', start));
+  assert.ok(
+    condition.includes("inputs.historical_exception != 'historical-finance-20261005-mailbox-batch'")
+  );
+});
