@@ -260,3 +260,141 @@ test('production Python deployment and cache controls retain their safety checks
   ])
     execFileSync('python3', ['-B', path], { stdio: 'pipe' });
 });
+
+const diagnosticsPolicy = JSON.parse(
+  readFileSync(
+    new URL('../deploy/aws/historical-finance-20261005-recharge-diagnostics.json', import.meta.url)
+  )
+);
+const diagnosticsFixture = () => ({
+  ...fixture(),
+  policy: structuredClone(diagnosticsPolicy),
+  expectedCurrent: diagnosticsPolicy.expectedCurrent,
+  // Irreversible frozen-row hashes are fixtures; no prior receipt hash is reused as 6a proof.
+  metadata: continuationFixture().metadata
+});
+test('recharge diagnostics preserves the original frozen scope and exactly PR292 sources', () => {
+  const restored = {
+    ...diagnosticsPolicy,
+    id: policy.id,
+    expectedCurrent: policy.expectedCurrent
+  };
+  delete restored.continuation;
+  delete restored.candidateSourceSha256;
+  assert.equal(fingerprint(restored), fingerprint(policy));
+  assert.equal(diagnosticsPolicy.expectedCurrent, '6a82a774f2a65e00d4f260c629f7152bf7935d1d');
+  assert.deepEqual(diagnosticsPolicy.candidateSourceSha256, {
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py':
+      '9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
+      '2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f',
+    'scripts/ci-recharge-check.mjs':
+      '86c143e33a862fc31610b68f013d32236447548c9ee238cf58a3393f088f53cc'
+  });
+  const input = diagnosticsFixture();
+  assert.equal(fingerprintRows(input.metadata), diagnosticsPolicy.continuation.metadataSha256);
+  const before = { ok: false, violationCount: 10, gate: acceptHistoricalAudit(input) };
+  const after = acceptHistoricalAudit({ ...input, stage: 'after', before });
+  assert.equal(after.policyId, diagnosticsPolicy.id);
+  assert.equal(after.fixedCurrent, diagnosticsPolicy.expectedCurrent);
+  assert.equal(after.continuationOf, policy.id);
+  assert.equal(after.accepted, true);
+  assert.equal(after.checkCount, 48);
+  assert.equal(after.executedCheckCount, 48);
+  assert.equal(after.unavailableCheckCount, 0);
+  assert.equal(after.violationCount, 10);
+});
+for (const [name, mutate] of [
+  ['unknown policy', (x) => (x.policy.id = 'historical-finance-unreviewed')],
+  ['lookalike policy', (x) => (x.policy.id += '-other')],
+  ['prototype policy', (x) => (x.policy.id = 'constructor')],
+  ['original baseline', (x) => (x.expectedCurrent = policy.expectedCurrent)],
+  ['registration baseline', (x) => (x.expectedCurrent = continuationPolicy.expectedCurrent)],
+  ['future baseline', (x) => (x.expectedCurrent = 'f'.repeat(40))],
+  ['changed fixed baseline', (x) => (x.policy.expectedCurrent = 'f'.repeat(40))],
+  ['missing rule', (x) => x.checks.pop()],
+  ['duplicated rule', (x) => (x.checks[0] = x.checks[1])],
+  [
+    'changed rule SQL',
+    (x) => (x.definitions = x.definitions.map((d, i) => (i ? d : { ...d, sql: 'SELECT 1' })))
+  ],
+  ['nonexecuted rule', (x) => (x.checks[0].status = 'NOT_EXECUTED')],
+  ['missing execution status', (x) => delete x.checks[0].status],
+  [
+    'legacy unavailable rule',
+    (x) =>
+      Object.assign(
+        x.checks.find((c) => c.code === 'bank_soft_delete_safety_mismatch'),
+        {
+          status: 'SCHEMA_NOT_DEPLOYED',
+          databaseCode: '1054',
+          field: 'o.deleted_at'
+        }
+      )
+  ],
+  [
+    'false zero violations',
+    (x) => x.checks.forEach((c) => Object.assign(c, { count: 0, samples: [] }))
+  ],
+  [
+    'same count different exception',
+    (x) => (x.checks.find((c) => c.count === 4).samples[0].entityId = 'other')
+  ],
+  ['changed frozen scope', (x) => (x.policy.exceptions[0].entityIds[0] = 'other')],
+  ['missing frozen source', (x) => delete x.sources.lines],
+  ['extra frozen source', (x) => (x.sources.extra = 'f'.repeat(64))],
+  ['changed frozen source', (x) => (x.sources.accounts = 'f'.repeat(64))],
+  ['missing metadata row', (x) => x.metadata.pop()],
+  ['duplicated metadata row', (x) => (x.metadata[0] = x.metadata[1])],
+  ['changed frozen metadata', (x) => (x.metadata[0].metadataSha256 = 'f'.repeat(64))],
+  ['unknown stage', (x) => (x.stage = 'unknown')],
+  [
+    'old d0 proof',
+    (x) => (x.policy.continuation = structuredClone(continuationPolicy.continuation))
+  ],
+  ['changed raw manifest proof', (x) => (x.policy.continuation.manifestSha256 = 'f'.repeat(64))],
+  ['changed raw before proof', (x) => (x.policy.continuation.beforeReceiptSha256 = 'f'.repeat(64))],
+  ['changed raw after proof', (x) => (x.policy.continuation.afterReceiptSha256 = 'f'.repeat(64))],
+  [
+    'missing approved source file',
+    (x) => delete x.policy.candidateSourceSha256['scripts/ci-recharge-check.mjs']
+  ],
+  ['extra approved source file', (x) => (x.policy.candidateSourceSha256.extra = 'f'.repeat(64))],
+  [
+    'changed approved CI source',
+    (x) => (x.policy.candidateSourceSha256['scripts/ci-recharge-check.mjs'] = 'f'.repeat(64))
+  ]
+])
+  test('recharge diagnostics rejects ' + name, () => {
+    const input = diagnosticsFixture();
+    mutate(input);
+    assert.throws(() => acceptHistoricalAudit(input));
+  });
+for (const [name, mutate] of [
+  ['other policy', (x) => (x.policyId = continuationPolicy.id)],
+  ['different expected baseline', (x) => (x.expectedCurrent = continuationPolicy.expectedCurrent)],
+  ['after-stage receipt', (x) => (x.stage = 'after')],
+  ['rejected receipt', (x) => (x.accepted = false)],
+  ['missing rule coverage', (x) => (x.checkCount = 47)],
+  ['partial execution', (x) => (x.executedCheckCount = 46)],
+  ['unavailable rules', (x) => (x.unavailableCheckCount = 2)],
+  ['false zero violations', (x) => (x.violationCount = 0)],
+  ['unknown acceptance', (x) => (x.status = 'UNKNOWN')],
+  ['changed origin', (x) => (x.continuationOf = 'other')],
+  ['changed fixed baseline', (x) => (x.fixedCurrent = continuationPolicy.expectedCurrent)],
+  ['changed continuation proof', (x) => (x.continuation.manifestSha256 = 'f'.repeat(64))],
+  ['changed sources', (x) => (x.sources.accounts = 'f'.repeat(64))],
+  ['changed metadata', (x) => (x.metadataSha256 = 'f'.repeat(64))]
+])
+  test('recharge diagnostics after audit rejects before receipt with ' + name, () => {
+    const input = diagnosticsFixture();
+    const before = { gate: structuredClone(acceptHistoricalAudit(input)) };
+    mutate(before.gate);
+    assert.throws(() => acceptHistoricalAudit({ ...input, stage: 'after', before }));
+  });
+test('recharge diagnostics after audit requires its own same-proof before receipt', () => {
+  const input = diagnosticsFixture();
+  assert.throws(() => acceptHistoricalAudit({ ...input, stage: 'after' }));
+  const before = { gate: acceptHistoricalAudit(continuationFixture()) };
+  assert.throws(() => acceptHistoricalAudit({ ...input, stage: 'after', before }));
+});

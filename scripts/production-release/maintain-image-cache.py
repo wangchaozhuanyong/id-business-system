@@ -21,6 +21,10 @@ HISTORY_CONTINUATION_BASELINE = 'd0f359dc78b2d2b166893bfec8545609f5baa16d'
 CONTINUATION_PROOF_SHA256 = '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768cab8945cb21ba'
 CONTINUATION_SOURCES_SHA256 = 'db943f1852946a475b43940cd6db62abcc4e78b7a8345f141633106a1399d884'
 
+HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostics'
+HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
+
 
 def require(condition, reason):
     if not condition:
@@ -134,8 +138,31 @@ def verify_deployment(manifest, deployment_run):
                 separators=(',', ':')).encode()).hexdigest() == CONTINUATION_SOURCES_SHA256
             and gate.get('metadataSha256') == gate.get('continuation', {}).get('metadataSha256')
         )
+    diagnostics_claimed = any(gate.get('policyId') == HISTORY_DIAGNOSTICS_POLICY_ID
+                              for gate in (before, after))
+    diagnostics_ok = manifest.get('previousCommit') == HISTORY_DIAGNOSTICS_BASELINE
+    for stage, gate in (('before', before), ('after', after)):
+        summary = manifest.get('dataAudit' + stage.title(), {})
+        diagnostics_ok = diagnostics_ok and (
+            gate.get('accepted') is True and gate.get('policyId') == HISTORY_DIAGNOSTICS_POLICY_ID
+            and gate.get('status') == 'APPROVED_HISTORICAL_EXCEPTIONS'
+            and gate.get('expectedCurrent') == gate.get('fixedCurrent') == HISTORY_DIAGNOSTICS_BASELINE
+            and gate.get('continuationOf') == 'historical-finance-20261005'
+            and gate.get('stage') == stage
+            and summary.get('checkCount') == gate.get('checkCount') == gate.get('executedCheckCount') == 48
+            and gate.get('unavailableCheckCount') == 0
+            and summary.get('violationCount') == gate.get('violationCount') == 10
+            and hashlib.sha256(json.dumps(gate.get('continuation'), sort_keys=True,
+                separators=(',', ':')).encode()).hexdigest() == DIAGNOSTICS_PROOF_SHA256
+            and hashlib.sha256(json.dumps(gate.get('sources'), sort_keys=True,
+                separators=(',', ':')).encode()).hexdigest() == CONTINUATION_SOURCES_SHA256
+            and gate.get('metadataSha256') == gate.get('continuation', {}).get('metadataSha256')
+        )
+    # A claimed third entry must not fall through the ordinary zero-anomaly path.
+    require(not diagnostics_claimed or diagnostics_ok,
+            'Post-release diagnostics financial audit is missing or failed')
     require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0
-            or historical_ok or continuation_ok,
+            or historical_ok or continuation_ok or diagnostics_ok,
             'Post-release financial audit is missing or failed')
 
 

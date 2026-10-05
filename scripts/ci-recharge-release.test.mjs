@@ -77,7 +77,7 @@ function guardCommands(paths, { failHistory = false } = {}) {
   return commands;
 }
 
-function dispatchFixture(historyPolicy, current, run) {
+function dispatchFixture(historyPolicy, current, run, extraEnv = {}) {
   fixture(({ root, env }) => {
     const awsLog = join(root, 'dispatch-aws.txt');
     const parametersFile = join(root, '.deploy/production-release/ssm-999999.json');
@@ -98,7 +98,8 @@ function dispatchFixture(historyPolicy, current, run) {
           SOURCE_TREE: 'c'.repeat(40),
           QUALITY_RUN_ID: '111',
           PRODUCTION_INSTANCE_ID: 'i-test-fixture-only',
-          TASK_DISPATCH_AWS_LOG: awsLog
+          TASK_DISPATCH_AWS_LOG: awsLog,
+          ...extraEnv
         },
         stdio: 'pipe'
       });
@@ -109,6 +110,7 @@ function dispatchFixture(historyPolicy, current, run) {
 test('actual CI guards run historical tests for each exact control path, including deleted files', () => {
   for (const path of [
     'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
     'scripts/lib/v2-release-history-policy.mjs',
     'scripts/v2-release-history-audit.mjs',
     'scripts/v2-release-history-policy.test.mjs'
@@ -136,6 +138,7 @@ test('actual CI guards run historical tests for each exact control path, includi
 test('historical CI selection preserves existing deployment and cache control checks', () => {
   const commands = guardCommands([
     'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics.json',
     'scripts/production-release/remote-deploy.py',
     'scripts/production-release/maintain-image-cache.py',
     'scripts/production-release/cleanup-reviewed-cache.py',
@@ -162,6 +165,8 @@ test('historical CI test selection is exact and a rejected historical test stops
     'docs/V2_TASKS.md',
     'deploy/aws/historical-finance-20261005.json',
     'deploy/aws/historical-finance-unreviewed.json',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics-other.json',
+    'deploy/aws/historical-finance-20261005-recharge-diagnostics.json.backup',
     'scripts/v2-release-history-audit-other.mjs',
     'scripts/lib/v2-data-integrity-audit.mjs'
   ])
@@ -282,6 +287,12 @@ test('recovery dispatch keeps deployment run and reused image run separate', () 
 test('real historical dispatch selects only the flag approved for its exact baseline', () => {
   for (const [policy, current, selected, rejected] of [
     [
+      'historical-finance-20261005-recharge-diagnostics',
+      '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
+      '--historical-finance-recharge-diagnostics',
+      '--historical-finance-continuation'
+    ],
+    [
       'historical-finance-20261005-registration-continuation',
       'd0f359dc78b2d2b166893bfec8545609f5baa16d',
       '--historical-finance-continuation',
@@ -301,6 +312,17 @@ test('real historical dispatch selects only the flag approved for its exact base
       assert.equal(args.filter((arg) => arg === selected).length, 1, policy);
       assert.equal(args.includes(rejected), false, policy);
       assert.equal(
+        args.filter((arg) =>
+          [
+            '--historical-finance-exception',
+            '--historical-finance-continuation',
+            '--historical-finance-recharge-diagnostics'
+          ].includes(arg)
+        ).length,
+        1,
+        policy
+      );
+      assert.equal(
         readFileSync(awsLog, 'utf8')
           .split('\n')
           .filter((line) => line.startsWith('ssm send-command ')).length,
@@ -312,6 +334,20 @@ test('real historical dispatch selects only the flag approved for its exact base
 
 test('real historical dispatch rejects reused or wrong baselines before parameters and AWS', () => {
   for (const [policy, current] of [
+    ['historical-finance-20261005-recharge-diagnostics', 'f'.repeat(40)],
+    [
+      'historical-finance-20261005-recharge-diagnostics',
+      'd0f359dc78b2d2b166893bfec8545609f5baa16d'
+    ],
+    [
+      'historical-finance-20261005-recharge-diagnostics',
+      'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+    ],
+    ['historical-finance-unreviewed', '6a82a774f2a65e00d4f260c629f7152bf7935d1d'],
+    [
+      'historical-finance-20261005-recharge-diagnostics --historical-finance-continuation',
+      '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+    ],
     [
       'historical-finance-20261005-registration-continuation',
       'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
@@ -390,4 +426,26 @@ test('changed recharge mail bridge is exercised by the API CI command', () => {
       )
     );
   });
+});
+
+test('diagnostics dispatch refuses admin-only and image reuse before parameters and AWS', () => {
+  for (const extraEnv of [
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { REUSE_IMAGE_COMMIT: 'd'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '222' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '2' }
+  ])
+    dispatchFixture(
+      'historical-finance-20261005-recharge-diagnostics',
+      '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
+      ({ execute, parametersFile, awsLog }) => {
+        assert.throws(
+          execute,
+          (error) => error.status === 1 && String(error.stderr).includes('AssertionError')
+        );
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      },
+      extraEnv
+    );
 });

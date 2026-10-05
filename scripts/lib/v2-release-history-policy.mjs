@@ -7,6 +7,38 @@ export const HISTORY_CONTINUATION_POLICY_ID =
 export const HISTORY_CONTINUATION_BASELINE = 'd0f359dc78b2d2b166893bfec8545609f5baa16d';
 const policySha256 = '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca';
 const continuationPolicySha256 = '7407cc7c5676657b3f24b6e5649f1316cd3c64adb5aeb8f47006cfda58124137';
+export const HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostics';
+export const HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d';
+// Pinned to the independently verified successful 6a receipts and exact candidate.
+const diagnosticsPolicySha256 = 'a4bdc86d86661aed440921b148e9a95f1516370d3a5394af132e12954e31dd20';
+const historyPolicyIdentities = new Map([
+  [HISTORY_POLICY_ID, { baseline: HISTORY_BASELINE, sha256: policySha256, continuation: false }],
+  [
+    HISTORY_CONTINUATION_POLICY_ID,
+    {
+      baseline: HISTORY_CONTINUATION_BASELINE,
+      sha256: continuationPolicySha256,
+      continuation: true
+    }
+  ],
+  [
+    HISTORY_DIAGNOSTICS_POLICY_ID,
+    { baseline: HISTORY_DIAGNOSTICS_BASELINE, sha256: diagnosticsPolicySha256, continuation: true }
+  ]
+]);
+const diagnosticsCandidateSourceSha256 = Object.freeze({
+  'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py':
+    '9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
+    '2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f',
+  'scripts/ci-recharge-check.mjs':
+    '86c143e33a862fc31610b68f013d32236447548c9ee238cf58a3393f088f53cc'
+});
+function historyPolicyIdentity(policy) {
+  const identity = historyPolicyIdentities.get(policy?.id);
+  if (!identity) throw new Error('Unknown historical release policy');
+  return identity;
+}
 const allowedRules = new Set([
   'finance_cash_source_currency_mismatch',
   'cash_historical_cost_evidence_mismatch'
@@ -41,11 +73,9 @@ export function serializeHistoricalAuditReport(report) {
 }
 
 export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
-  const continuation = policy?.id === HISTORY_CONTINUATION_POLICY_ID;
-  const baseline = continuation ? HISTORY_CONTINUATION_BASELINE : HISTORY_BASELINE;
+  const { continuation, baseline, sha256 } = historyPolicyIdentity(policy);
   if (
-    fingerprint(policy) !== (continuation ? continuationPolicySha256 : policySha256) ||
-    policy?.id !== (continuation ? HISTORY_CONTINUATION_POLICY_ID : HISTORY_POLICY_ID) ||
+    fingerprint(policy) !== sha256 ||
     policy.version !== 1 ||
     policy.expectedCurrent !== baseline ||
     expectedCurrent !== baseline ||
@@ -68,6 +98,11 @@ export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
     )
       throw new Error('Historical continuation changed the original approved scope');
   }
+  if (
+    policy.id === HISTORY_DIAGNOSTICS_POLICY_ID &&
+    fingerprint(policy.candidateSourceSha256) !== fingerprint(diagnosticsCandidateSourceSha256)
+  )
+    throw new Error('Historical diagnostics changed the approved three source files');
   const codes = new Set(policy.exceptions.map((item) => item.code));
   if (codes.size !== 2 || [...codes].some((code) => !allowedRules.has(code)))
     throw new Error('Historical release exception scope changed');
@@ -100,7 +135,7 @@ export function acceptHistoricalAudit({
   identity
 }) {
   validateHistoryPolicy(policy, definitions, expectedCurrent);
-  const continuation = policy.id === HISTORY_CONTINUATION_POLICY_ID;
+  const { continuation } = historyPolicyIdentity(policy);
   if (
     !['before', 'after'].includes(stage) ||
     !/^id_business_audit@/.test(identity.currentUser) ||
