@@ -158,6 +158,8 @@ class RegistrationBrowser:
             return 'verification', None
         code = await self.field(self.page, CODE_INPUT)
         if code:
+            if await self.challenge():
+                return 'verification', None
             return 'code', code
         profile = await self.profile_fields()
         if profile:
@@ -336,11 +338,40 @@ class RegistrationBrowser:
                 await self.end_recovery()
                 self.job.event('progress', step='email')
                 self.operation('email_submit')
-                await field.fill(self.data['email'])
+                budget = SessionBudget(REGISTRATION_OBSERVE_SECONDS,
+                                       cancelled=self.job.cancelled.is_set)
+                async def prepare_email_submit():
+                    await field.fill(self.data['email'])
+                    submit = await self.button(self.page, r'^(continue|继续)$')
+                    while submit and not await submit.is_enabled():
+                        await self.settle(.5)
+                        submit = await self.button(self.page, r'^(continue|继续)$')
+                    current_email = await self.field(self.page, EMAIL_INPUT)
+                    if (not submit or not await submit.is_enabled() or not current_email
+                            or await current_email.input_value() != self.data['email']):
+                        return None, 'form_unrecognized'
+                    if await self.challenge():
+                        return None, 'verification_required'
+                    return submit, None
+                try:
+                    submit, reason = await budget.run(prepare_email_submit, 'email_submit_observe')
+                    budget.remaining_ms()
+                except Stop as exc:
+                    if exc.report.get('reason') != 'session_load_timeout':
+                        raise
+                    self.job.registration_observation_error = {
+                        key: exc.report[key] for key in ('reason', 'error_type', 'browser_error_code')
+                        if key in exc.report}
+                    reason = 'form_unrecognized'
+                if reason:
+                    await self.manual_registration(reason)
+                    observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                    continue
                 # Timestamp the expected mail BEFORE submission triggers sending.
+                self.operation('email_submit')
                 self.job.prepare_mail('email_code', new_request=True)
                 email_submitted = True
-                await field.press('Enter')
+                await submit.click(timeout=budget.remaining_ms())
                 await self.settle(3)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue

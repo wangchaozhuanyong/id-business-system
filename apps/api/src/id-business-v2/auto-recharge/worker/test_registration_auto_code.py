@@ -113,28 +113,34 @@ class AutoMailEventTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(job.pending_code)
                 self.assertEqual(api.events, [])
 
-    async def test_resumed_email_form_marks_a_new_request_before_enter(self):
+    async def test_resumed_email_form_marks_a_new_request_before_continue_click(self):
         job, api, stack = fixture([], prepare=False)
         job.step = 'email_code'
-        field = SimpleNamespace(fill=AsyncMock())
-        async def submit(key):
-            self.assertEqual(key, 'Enter')
+        field = SimpleNamespace(fill=AsyncMock(), press=AsyncMock(),
+                                input_value=AsyncMock(return_value=job.payload['email']))
+        async def submit(*, timeout):
+            self.assertGreater(timeout, 0)
             waiting = [event for event in api.events if event['type'] == 'waiting_email']
             self.assertEqual(len(waiting), 1)
             self.assertIs(waiting[0]['newMailRequest'], True)
             self.assertEqual(waiting[0]['step'], 'email_code')
             self.assertEqual(api.polls, 0)
             raise Stop('operation_cancelled')
-        field.press = AsyncMock(side_effect=submit)
+        button = SimpleNamespace(is_enabled=AsyncMock(return_value=True),
+                                 click=AsyncMock(side_effect=submit))
         flow = RegistrationBrowser(job, None)
         flow.page = SimpleNamespace(url='https://auth.openai.com/email-verification')
         flow.registration_view = AsyncMock(return_value=('email', field))
+        flow.button = AsyncMock(return_value=button)
+        flow.field = AsyncMock(return_value=field)
+        flow.challenge = AsyncMock(return_value=False)
         with stack:
             with self.assertRaises(Stop) as stopped:
                 await asyncio.wait_for(flow.register(), 3)
         self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
         field.fill.assert_awaited_once_with(job.payload['email'])
-        field.press.assert_awaited_once_with('Enter')
+        button.click.assert_awaited_once()
+        field.press.assert_not_awaited()
         self.assertEqual([event['type'] for event in api.events], ['progress', 'waiting_email'])
 
     async def test_existing_code_page_restores_the_original_request_then_submits_once(self):
