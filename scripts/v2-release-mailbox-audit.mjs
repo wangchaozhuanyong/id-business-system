@@ -1,7 +1,6 @@
 // One-use mailbox release approval; shared helpers below only collect read-only facts.
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { PrismaClient } from '@prisma/client';
 import {
   V2_DATA_INTEGRITY_CHECKS,
   assertV2AuditConnectionReadOnly,
@@ -153,6 +152,7 @@ async function main() {
       args.stage === 'after'
         ? JSON.parse(readFileSync(args['before-receipt'], 'utf8')).gate
         : undefined;
+    const { PrismaClient } = await import('@prisma/client');
     const url = validateAuditUrl(process.env.V2_DATA_INTEGRITY_DATABASE_URL);
     const snapshot = await collectMailboxSnapshot(
       new PrismaClient({ datasources: { db: { url } }, log: [] })
