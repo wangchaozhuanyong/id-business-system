@@ -2,8 +2,8 @@
   "version": 1,
   "kind": "FIXED_RECHARGE_RUNTIME_SCOPE",
   "id": "recharge-pro-menu-b8-20261005",
-  "enabled": false,
-  "approvalStatus": "NOT_APPROVED",
+  "enabled": true,
+  "approvalStatus": "APPROVED",
   "expectedCurrent": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
   "baselineRelease": {
     "commit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
