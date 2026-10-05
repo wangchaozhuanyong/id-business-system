@@ -874,6 +874,22 @@ async function main() {
       env: { ...process.env, V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl }
     });
 
+    // The CLI runner imports compiled fixtures; CI may have no dist yet.
+    // Always build from this source in dependency order instead of reusing dist.
+    const buildDatabase = new URL(rootUrl);
+    assert.equal(buildDatabase.protocol, 'mysql:');
+    assert.equal(buildDatabase.hostname, '127.0.0.1');
+    assert.match(buildDatabase.pathname, /^\/id_business_v2_financial_integrity_\d+$/);
+    const buildEnv = { ...process.env, DATABASE_URL: rootUrl };
+    run('npm', ['run', 'build', '--workspace', '@apple-business/shared'], {
+      stdio: 'inherit',
+      env: buildEnv
+    });
+    run('npm', ['run', 'build', '--workspace', '@apple-business/api'], {
+      stdio: 'inherit',
+      env: buildEnv
+    });
+
     run('node', ['--test', 'scripts/historical-cash-runner-mysql.test.mjs'], {
       stdio: 'inherit',
       env: {
