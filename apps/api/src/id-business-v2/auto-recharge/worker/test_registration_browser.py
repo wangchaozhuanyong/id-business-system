@@ -2,6 +2,7 @@
 import asyncio
 import os
 import json
+import time
 from urllib.parse import urlsplit
 import unittest
 import threading
@@ -1041,6 +1042,156 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+        def prepare_mail(_step, *, new_request=False):
+            self.job.awaiting_code = True
+        self.job.prepare_mail = MagicMock(side_effect=prepare_mail)
+
+    async def asyncTearDown(self):
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def email_fixture(self, mode):
+        button = '<button id="continue" type="button"' + (' disabled' if mode in {'delay', 'disabled'} else '') + '>Continue</button>'
+        if mode == 'ambiguous': button += '<button type="button">继续</button>'
+        html = '<!doctype html><html><head><meta charset="utf-8"></head><body><form><input type="email">' + button + '''</form><script>
+        const input=document.querySelector('input'),button=document.querySelector('#continue');
+        window.enterPresses=0;input.addEventListener('keydown',event=>{if(event.key==='Enter')window.enterPresses++;});
+        document.querySelector('form').onsubmit=event=>event.preventDefault();
+        __ENABLE__
+        button.onclick=async()=>{
+          await fetch('/fixture/email',{method:'POST',body:JSON.stringify({email:input.value,enterPresses:window.enterPresses})});
+          __AFTER__
+        }; </script></body></html>'''
+        enable = "input.oninput=()=>setTimeout(()=>button.disabled=false,800);" if mode == 'delay' else ''
+        if mode == 'changed':
+            enable = '''input.oninput=()=>{document.body.innerHTML=`<form><input name="code" autocomplete="one-time-code"><button type="button" onclick="fetch('/fixture/code',{method:'POST'})">Continue</button></form>`;};'''
+        html = html.replace('__ENABLE__', enable)
+        html = html.replace('__AFTER__', '' if mode == 'unknown' else "window.location.assign('/welcome');")
+        async def local(route):
+            self.navigation_methods.append(route.request.method)
+            if urlsplit(route.request.url).path == '/fixture/email':
+                self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+                self.assertEqual(self.job.registration_operation, 'email_submit')
+                self.submissions.append(json.loads(route.request.post_data))
+                await route.fulfill(content_type='application/json', body='{}')
+            else:
+                body = '<main>Welcome</main>' if urlsplit(route.request.url).path == '/welcome' else html
+                await route.fulfill(content_type='text/html', body=body)
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+
+    async def register_fixture(self):
+        async def identity(page, _email, **_kwargs):
+            return ('fixture', 'identity') if urlsplit(page.url).path == '/welcome' else None
+        with patch('registration_browser.official_identity', identity):
+            await asyncio.wait_for(self.flow.register(), timeout=15)
+
+    async def test_email_onclick_only_continue_submits_once_without_enter(self):
+        await self.email_fixture('click')
+        await self.register_fixture()
+        self.assertTrue(self.flow.data['registered'])
+        self.assertEqual(self.submissions, [{'email': self.job.payload['email'], 'enterPresses': 0}])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        self.job.manual.assert_not_awaited()
+        self.assertFalse(self.flow.registration_refreshed)
+        self.assertEqual(self.page_errors, [])
+
+    async def test_email_continue_waits_for_delayed_validation_enable(self):
+        await self.email_fixture('delay')
+        await self.register_fixture()
+        self.assertEqual(self.submissions, [{'email': self.job.payload['email'], 'enterPresses': 0}])
+        self.job.manual.assert_not_awaited()
+        self.assertEqual(self.page_errors, [])
+
+    async def test_ambiguous_email_continue_never_prepares_or_submits_mail(self):
+        await self.email_fixture('ambiguous')
+        with self.assertRaises(Stop): await self.register_fixture()
+        self.job.prepare_mail.assert_not_called()
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertEqual(self.submissions, [])
+        self.assertFalse(self.flow.registration_refreshed)
+
+    async def test_disabled_email_continue_exhausts_budget_without_mail_submission(self):
+        await self.email_fixture('disabled')
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop): await self.register_fixture()
+        self.job.prepare_mail.assert_not_called()
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertEqual(self.submissions, [])
+        self.assertFalse(self.flow.registration_refreshed)
+
+    async def test_email_page_change_never_clicks_a_code_continue_control(self):
+        await self.email_fixture('changed')
+        with self.assertRaises(Stop): await self.register_fixture()
+        self.job.prepare_mail.assert_not_called()
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertEqual(self.navigation_methods.count('POST'), 0)
+        self.assertFalse(self.flow.data['registered'])
+
+    async def test_unknown_email_submission_after_manual_continue_never_repeats(self):
+        await self.email_fixture('unknown')
+        self.job.manual.side_effect = [None, Stop('fixture_paused')]
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop): await self.register_fixture()
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertEqual(self.submissions, [{'email': self.job.payload['email'], 'enterPresses': 0}])
+        self.assertEqual(self.job.manual.await_count, 2)
+        self.assertTrue(self.flow.registration_refreshed)
+        self.assertFalse(self.flow.data['registered'])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        self.assertEqual(self.page_errors, [])
+
+    async def bounded_email_read_fixture(self, missing):
+        await self.email_fixture('click')
+        self.page.set_default_timeout(10000)
+        removed = False
+        if missing == 'button':
+            button = self.flow.button
+            async def disappearing_button(page, pattern, role='button'):
+                nonlocal removed
+                result = await button(page, pattern, role)
+                if result and not removed:
+                    await page.locator('#continue').evaluate('(node) => node.remove()')
+                    removed = True
+                return result
+            self.flow.button = disappearing_button
+        else:
+            from registration_browser import EMAIL_INPUT
+            field = self.flow.field
+            async def disappearing_email(page, selector):
+                nonlocal removed
+                result = await field(page, selector)
+                if (result and not removed and selector == EMAIL_INPUT
+                        and self.job.registration_operation == 'email_submit'):
+                    await result.evaluate('(node) => node.remove()')
+                    removed = True
+                return result
+            self.flow.field = disappearing_email
+        started = time.monotonic()
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop):
+                await asyncio.wait_for(self.register_fixture(), timeout=4)
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertTrue(removed)
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertEqual(self.job.registration_observation_error,
+                         {'reason': 'session_load_timeout', 'error_type': 'TimeoutError'})
+        self.job.prepare_mail.assert_not_called()
+        self.assertEqual(self.navigation_methods.count('POST'), 0)
+        self.assertEqual(self.submissions, [])
+        self.assertFalse(self.flow.data['registered'])
+        self.assertFalse(self.flow.registration_refreshed)
+
+    async def test_disappearing_continue_read_is_bounded_before_mail_request(self):
+        await self.bounded_email_read_fixture('button')
+
+    async def test_disappearing_email_value_read_is_bounded_before_mail_request(self):
+        await self.bounded_email_read_fixture('email')
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
 class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await ProfileBrowserTests.asyncSetUp(self)
@@ -1071,7 +1222,7 @@ class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*self.tasks, return_exceptions=True)
         await ProfileBrowserTests.asyncTearDown(self)
 
-    async def resume_mail_fixture(self, arrival):
+    async def resume_mail_fixture(self, arrival, *, gate_navigation=False):
         async def complete_manual():
             await asyncio.sleep(.02)
             if arrival == 'paused':
@@ -1127,6 +1278,8 @@ class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
           event.preventDefault();await fetch('/fixture/email',{method:'POST'});
           window.location.assign('/email-verification');
         }; </script>'''
+        if gate_navigation:
+            email = email.replace("window.location.assign('/email-verification');", '')
         code = '''<h1 id="human-challenge">Verify you are human</h1>
         <form><input name="code" autocomplete="one-time-code"><button>Continue</button></form><script>
         document.querySelector('form').onsubmit=async event=>{
@@ -1193,6 +1346,39 @@ class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([path for path, _body in self.submissions], ['/fixture/email'])
             self.job.wait_code.assert_not_awaited()
             self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+            self.assertEqual(self.page_errors, [])
+
+    async def test_code_navigation_after_old_body_read_pauses_for_stable_human_challenge(self):
+        await self.resume_mail_fixture('challenge', gate_navigation=True)
+        from registration_browser import CODE_INPUT
+        challenge, field = self.flow.challenge, self.flow.field
+        ready = crossed = False
+        async def observe_old_body():
+            nonlocal ready
+            result = await challenge()
+            if self.submissions and not crossed:
+                ready = True
+            return result
+        async def cross_before_code(page, selector):
+            nonlocal crossed
+            if ready and not crossed and selector == CODE_INPUT:
+                crossed = True
+                await page.goto('https://chatgpt.com/email-verification', wait_until='domcontentloaded')
+            return await field(page, selector)
+        self.flow.challenge = observe_old_body
+        self.flow.field = cross_before_code
+        with patch('registration_browser.official_identity', AsyncMock(return_value=None)):
+            task = asyncio.create_task(self.flow.register())
+            self.tasks.append(task)
+            await asyncio.wait_for(self.second_pause.wait(), timeout=5)
+            self.assertTrue(crossed)
+            self.assertTrue(await self.page.locator('#human-challenge').is_visible())
+            self.assertTrue(self.job.waiting_for_user)
+            self.assertEqual(self.api_state, 'awaiting_user')
+            self.assertEqual([data['newMailRequest'] for name, data in self.events if name == 'waiting_email'], [True])
+            self.assertEqual([path for path, _body in self.submissions], ['/fixture/email'])
+            self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+            self.job.wait_code.assert_not_awaited()
             self.assertEqual(self.page_errors, [])
 
 
