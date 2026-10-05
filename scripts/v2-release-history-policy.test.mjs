@@ -273,7 +273,7 @@ const diagnosticsFixture = () => ({
   // Irreversible frozen-row hashes are fixtures; no prior receipt hash is reused as 6a proof.
   metadata: continuationFixture().metadata
 });
-test('recharge diagnostics preserves the original frozen scope and exactly PR292 sources', () => {
+test('recharge diagnostics preserves the original frozen scope and exactly the seven approved sources', () => {
   const restored = {
     ...diagnosticsPolicy,
     id: policy.id,
@@ -288,6 +288,13 @@ test('recharge diagnostics preserves the original frozen scope and exactly PR292
       '9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a',
     'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
       '2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f',
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py':
+      '1734bacb68549f8dcc28a35426d659069b7aefc8070b110adb5c0bfd70c140a9',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py':
+      'ac459b9a00eaeb482efc54cc7eecf23fc003c993e6d5991ecf45034c5e1c0696',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py':
+      '1327c9fdd8e88807e8ba69bbd288c9b2e62edf015352250e2d54f8d4e9a69173',
+    'docs/V2_TASKS.md': 'f2eb5c6520c246b7585934935672af8f328415453286c08fca5e71c5aa8b7449',
     'scripts/ci-recharge-check.mjs':
       '86c143e33a862fc31610b68f013d32236447548c9ee238cf58a3393f088f53cc'
   });
@@ -304,6 +311,25 @@ test('recharge diagnostics preserves the original frozen scope and exactly PR292
   assert.equal(after.unavailableCheckCount, 0);
   assert.equal(after.violationCount, 10);
 });
+const newlyApprovedDiagnosticSources = [
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+  'docs/V2_TASKS.md'
+];
+for (const path of newlyApprovedDiagnosticSources)
+  for (const [name, mutate] of [
+    ['wrong hash', (map) => (map[path] = 'f'.repeat(64))],
+    ['missing path', (map) => delete map[path]],
+    ['extra path', (map) => (map[path + '.extra'] = map[path])]
+  ])
+    test(`recharge diagnostics rejects ${name} for newly approved ${path}`, () => {
+      const input = diagnosticsFixture();
+      mutate(input.policy.candidateSourceSha256);
+      assert.throws(() =>
+        validateHistoryPolicy(input.policy, input.definitions, input.expectedCurrent)
+      );
+    });
 for (const [name, mutate] of [
   ['unknown policy', (x) => (x.policy.id = 'historical-finance-unreviewed')],
   ['lookalike policy', (x) => (x.policy.id += '-other')],

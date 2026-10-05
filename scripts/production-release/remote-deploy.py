@@ -50,7 +50,7 @@ CONTINUATION_CANDIDATE_FILES = frozenset({
 # A third, fixed one-use entry pinned to independently verified successful 6a receipts.
 HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostics'
 HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
-DIAGNOSTICS_POLICY_SHA256 = 'a4bdc86d86661aed440921b148e9a95f1516370d3a5394af132e12954e31dd20'
+DIAGNOSTICS_POLICY_SHA256 = '0682cb5ec0f95dabc49bcd3ba4d38384d1353ddfe275dd6dcf122f540d1dbcba'
 DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
 DIAGNOSTICS_MANIFEST_SHA256 = '202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866'
 DIAGNOSTICS_COMPOSE_SHA256 = '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8'
@@ -58,6 +58,10 @@ REGISTRATION_PROOF_SHA256 = '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768
 DIAGNOSTICS_CANDIDATE_FILES = frozenset({
     'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
     'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+    'docs/V2_TASKS.md',
     'scripts/ci-recharge-check.mjs',
 })
 DIAGNOSTICS_CONTROL_FILES = frozenset({
@@ -258,7 +262,9 @@ def verify_continuation_archive(release, source, policy, policy_id=HISTORY_CONTI
               and str(path.relative_to(release)) not in candidates}
     require(actual == baseline, 'Historical continuation contains unrelated source changes')
     require(all((release / name).is_file() and not (release / name).is_symlink()
-                and (release / name).stat().st_mode & 0o111 == 0
+                and ((release / name).stat().st_mode & 0o7777 == 0o644
+                     if policy_id == HISTORY_DIAGNOSTICS_POLICY_ID else
+                     (release / name).stat().st_mode & 0o111 == 0)
                 and hashlib.sha256((release / name).read_bytes()).hexdigest() == digest
                 for name, digest in policy['candidateSourceSha256'].items()),
             'Historical diagnostics candidate source changed'
