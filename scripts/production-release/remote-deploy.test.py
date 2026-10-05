@@ -9,6 +9,7 @@ import tarfile
 import copy
 import re
 import sqlite3
+import shlex
 import textwrap
 from contextlib import ExitStack, redirect_stdout
 from types import SimpleNamespace
@@ -995,6 +996,420 @@ class ReadOnlyReleaseProofTests(unittest.TestCase):
         self.assertTrue(eval(test, {**self.namespace, 'manifest': self.manifest}))
         self.assertFalse(eval(test, {**self.namespace, 'manifest': {'commit': 'f' * 40}}))
         self.assertTrue(any(isinstance(node, ast.Raise) for node in selector.body))
+
+class ReadOnlyReleaseLockTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        ReadOnlyReleaseProofTests.setUpClass()
+        cls.program = ReadOnlyReleaseProofTests.program
+        cls.namespace = dict(ReadOnlyReleaseProofTests.namespace)
+
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=output)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.lock = self.root / '.deploy.lock'
+        self.lock.touch()
+        self.proc = self.root / 'proc'
+        self.proc.mkdir()
+        self.pid = 12345
+        self.process_directory = self.proc / str(self.pid)
+        self.process_directory.mkdir()
+        (self.proc / 'uptime').write_text('1000.00 400.00\n')
+        (self.process_directory / 'cmdline').write_bytes(b'/usr/bin/python3\0-c\0SENTINEL_PRIVATE_SOURCE\0')
+        self.write_stat()
+        (self.proc / 'locks').write_text(self.lock_line())
+
+    def write_stat(self, comm='python3', started=10000, state='S'):
+        tail = [state, *(['0'] * 18), str(started), '0']
+        (self.process_directory / 'stat').write_text(f'{self.pid} ({comm}) ' + ' '.join(tail) + '\n')
+
+    def lock_line(self, *, inode=None, pid=None, waiting=False):
+        info = self.lock.stat()
+        device = f'{deployment.os.major(info.st_dev):02x}:{deployment.os.minor(info.st_dev):02x}'
+        return (f'1: {"-> " if waiting else ""}FLOCK ADVISORY WRITE {pid or self.pid} '
+                f'{device}:{info.st_ino if inode is None else inode} 0 EOF\n')
+
+    def summary(self):
+        with patch.object(self.namespace['os'], 'sysconf', return_value=100):
+            return self.namespace['release_lock_summary'](self.lock, self.proc)
+
+    def assert_unknown(self):
+        result = self.summary()
+        self.assertEqual(result, {'status': 'NOT_MEASURED', 'holders': []})
+        self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_holder_identity_and_elapsed_use_only_controlled_fields(self):
+        self.assertEqual(self.summary(), {'status': 'HELD', 'holders': [{
+            'kind': 'FLOCK', 'mode': 'WRITE', 'pid': self.pid, 'comm': 'python3',
+            'state': 'S', 'elapsedSeconds': 900, 'script': 'PYTHON_INLINE'}]})
+
+    def test_only_readonly_nofollow_nonblocking_opens_and_first_two_arguments_are_read(self):
+        original_open, original_read = deployment.os.open, deployment.os.read
+        opened, argument_bytes = [], bytearray()
+        argument_descriptor = None
+        def opened_file(path, flags, *args, **kwargs):
+            nonlocal argument_descriptor
+            opened.append(flags)
+            descriptor = original_open(path, flags, *args, **kwargs)
+            if Path(path).name == 'cmdline':
+                argument_descriptor = descriptor
+            return descriptor
+        def read_file(descriptor, count):
+            data = original_read(descriptor, count)
+            if descriptor == argument_descriptor:
+                argument_bytes.extend(data)
+            return data
+        with patch.object(deployment.os, 'open', side_effect=opened_file), \
+                patch.object(deployment.os, 'read', side_effect=read_file):
+            self.assertEqual(self.summary()['status'], 'HELD')
+        self.assertEqual(set(opened), {deployment.os.O_RDONLY | deployment.os.O_NOFOLLOW | deployment.os.O_NONBLOCK})
+        self.assertEqual(bytes(argument_bytes), b'/usr/bin/python3\0-c\0')
+
+    def test_no_holder_or_different_inode_is_unlocked_and_waiter_is_not_an_owner(self):
+        for content in ('', self.lock_line(inode=self.lock.stat().st_ino + 1)):
+            with self.subTest(content=bool(content)):
+                (self.proc / 'locks').write_text(content)
+                self.assertEqual(self.summary(), {'status': 'UNLOCKED', 'holders': []})
+        (self.proc / 'locks').write_text(self.lock_line() + self.lock_line(pid=23456, waiting=True))
+        self.assertEqual([holder['pid'] for holder in self.summary()['holders']], [self.pid])
+
+    def test_malicious_comm_and_arguments_never_escape_the_projection(self):
+        self.write_stat(comm='SENTINEL_PRIVATE_COMM\nwith injected text')
+        (self.process_directory / 'cmdline').write_bytes(b'SENTINEL_PRIVATE_ARG\0SECRET_SECOND_ARGUMENT\0')
+        result = self.summary()
+        self.assertEqual(result['status'], 'HELD')
+        self.assertEqual(result['holders'][0]['comm'], 'OTHER')
+        self.assertEqual(result['holders'][0]['script'], 'UNKNOWN')
+        self.assertNotIn('SENTINEL', json.dumps(result))
+        self.assertNotIn('SECRET', json.dumps(result))
+
+    def test_only_the_exact_staged_remote_script_path_is_identified(self):
+        staged = b'/opt/id-business-v2/.staging/oidc-' + b'a' * 40 + b'/remote-deploy.py'
+        for path, expected in ((staged, 'REMOTE_DEPLOY'), (staged + b'.evil', 'UNKNOWN'),
+                               (staged.replace(b'oidc-', b'SENTINEL-'), 'UNKNOWN'),
+                               (b'/tmp/remote-deploy.py', 'UNKNOWN')):
+            with self.subTest(expected=expected):
+                (self.process_directory / 'cmdline').write_bytes(b'python3\0' + path + b'\0SENTINEL_PRIVATE_ARG\0')
+                result = self.summary()
+                self.assertEqual(result['holders'][0]['script'], expected)
+                self.assertNotIn('SENTINEL', json.dumps(result))
+
+    def test_missing_lock_or_proc_data_is_unknown_not_unlocked(self):
+        for path in (self.lock, self.proc / 'locks', self.process_directory / 'stat',
+                     self.process_directory / 'cmdline', self.proc / 'uptime'):
+            with self.subTest(path=path.name):
+                data = path.read_bytes()
+                path.unlink()
+                self.assert_unknown()
+                path.write_bytes(data)
+                (self.proc / 'locks').write_text(self.lock_line())
+
+    def test_permission_error_is_unknown_and_does_not_print_exception_text(self):
+        with patch.object(deployment.os, 'open', side_effect=PermissionError('SENTINEL_PRIVATE_ERROR')):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assert_unknown()
+            self.assertEqual(output.getvalue(), '')
+
+    def test_symlink_hardlink_and_nonregular_lock_are_unknown(self):
+        saved = self.root / 'saved-lock'
+        self.lock.rename(saved)
+        self.lock.symlink_to(saved)
+        self.assert_unknown()
+        self.lock.unlink()
+        deployment.os.link(saved, self.lock)
+        self.assert_unknown()
+        self.lock.unlink()
+        self.lock.mkdir()
+        self.assert_unknown()
+
+    def test_read_bounds_and_malformed_proc_data_are_unknown(self):
+        for path, content in ((self.proc / 'locks', b' ' * (256 * 1024 + 1)),
+                              (self.proc / 'locks', b'SENTINEL_PRIVATE_LOCK\n'),
+                              (self.process_directory / 'stat', b'SENTINEL_PRIVATE_STAT'),
+                              (self.proc / 'uptime', b'SENTINEL_PRIVATE_UPTIME')):
+            with self.subTest(path=path.name, length=len(content)):
+                original = path.read_bytes()
+                path.write_bytes(content)
+                self.assert_unknown()
+                path.write_bytes(original)
+
+    def test_lock_holder_changes_during_read_are_unknown(self):
+        original_open = deployment.os.open
+        count = 0
+        def changed(path, flags, *args, **kwargs):
+            nonlocal count
+            if Path(path) == self.proc / 'locks':
+                count += 1
+                if count == 2:
+                    (self.proc / 'locks').write_text('')
+            return original_open(path, flags, *args, **kwargs)
+        with patch.object(deployment.os, 'open', side_effect=changed):
+            self.assert_unknown()
+
+    def test_replaced_lock_inode_and_reused_process_are_unknown(self):
+        original_open = deployment.os.open
+        for change in ('inode', 'process'):
+            count = 0
+            def changed(path, flags, *args, **kwargs):
+                nonlocal count
+                if Path(path) == self.process_directory / 'stat':
+                    count += 1
+                    if count == 2:
+                        if change == 'inode':
+                            self.lock.rename(self.root / 'old-lock')
+                            self.lock.touch()
+                        else:
+                            self.write_stat(started=10001)
+                return original_open(path, flags, *args, **kwargs)
+            with self.subTest(change=change), patch.object(deployment.os, 'open', side_effect=changed):
+                self.assert_unknown()
+            self.write_stat()
+            (self.proc / 'locks').write_text(self.lock_line())
+
+    def test_manifest_and_fixed_proof_failures_still_emit_real_lock_snapshot(self):
+        selector = next(index for index, node in enumerate(self.program.body)
+                        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare))
+        nodes = [node for node in self.program.body[:selector + 1]
+                 if not isinstance(node, (ast.Import, ast.ImportFrom))]
+        for manifest in ('SENTINEL_PRIVATE_MANIFEST', json.dumps({'commit': self.namespace['PROOF_CURRENT']})):
+            current = self.root / 'current'
+            current.mkdir(exist_ok=True)
+            (current / 'release-manifest.json').write_text(manifest)
+            def fixture_path(value):
+                if value == '/proc':
+                    return self.proc
+                if value.startswith('/opt/id-business-v2'):
+                    return self.root / value.removeprefix('/opt/id-business-v2').lstrip('/')
+                return Path(value)
+            def docker(*args, **kwargs):
+                command = args[0]
+                return SimpleNamespace(returncode=0, stdout='a' * 64 if 'compose' in command
+                    else 'sha256:' + 'b' * 64 + ' running healthy')
+            namespace = {**self.namespace, 'Path': fixture_path}
+            output = io.StringIO()
+            with self.subTest(fixed=manifest.startswith('{')), redirect_stdout(output), \
+                    patch.object(deployment.os, 'sysconf', return_value=100), \
+                    patch.object(self.namespace['subprocess'], 'run', side_effect=docker):
+                with self.assertRaises(SystemExit):
+                    exec(compile(ast.Module(body=nodes, type_ignores=[]), '<readonly-failure>', 'exec'), namespace)
+            receipts = self.namespace['readonly_receipts'](output.getvalue(), False)
+            self.assertEqual(receipts[0]['releaseLock']['status'], 'HELD')
+            self.assertEqual(receipts[1], {'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'
+                             if manifest.startswith('{') else 'MANIFEST_UNAVAILABLE'})
+            self.assertNotIn('SENTINEL', output.getvalue())
+
+    def test_failed_stdout_filter_suppresses_unknown_text_and_extra_receipts(self):
+        lock = {'releaseLock': self.summary()}
+        output = json.dumps(lock) + '\n' + json.dumps({'secret': 'SENTINEL_PRIVATE_RECEIPT'})
+        self.assertEqual(self.namespace['readonly_receipts'](output, False), [lock])
+        for value in ('SENTINEL_PRIVATE_OUTPUT', json.dumps({'releaseLock': {'status': 'SENTINEL', 'holders': []}}),
+                      json.dumps({'releaseLock': {'status': 'UNLOCKED', 'holders': [], 'secret': 'SENTINEL'}})):
+            with self.subTest(length=len(value)):
+                self.assertEqual(self.namespace['readonly_receipts'](value, False),
+                    [{'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}])
+
+    def test_success_filter_preserves_existing_proof_object_and_rejects_truncation(self):
+        lock = {'releaseLock': self.summary()}
+        diagnostics = {'currentCommit': self.namespace['PROOF_CURRENT'],
+                       'safeProof': copy.deepcopy(self.namespace['PROOF_RECEIPT'])}
+        output = json.dumps(lock) + '\n' + json.dumps(diagnostics)
+        self.assertEqual(self.namespace['readonly_receipts'](output, True), [lock, diagnostics])
+        with self.assertRaisesRegex(RuntimeError, '^Read-only diagnostic output unavailable$'):
+            self.namespace['readonly_receipts'](output[:-1], True)
+
+    def test_fixed_success_rejects_unknown_missing_false_wrong_hash_and_wrong_types(self):
+        good = {'currentCommit': self.namespace['PROOF_CURRENT'],
+                'safeProof': copy.deepcopy(self.namespace['PROOF_RECEIPT'])}
+        candidates = []
+        for path, value in ((('private',), 'SENTINEL_PRIVATE_TOP'),
+                            (('safeProof', 'private'), 'SENTINEL_PRIVATE_PROOF'),
+                            (('safeProof', 'manifest', 'private'), 'SENTINEL_PRIVATE_MANIFEST'),
+                            (('safeProof', 'images', 'private'), 'SENTINEL_PRIVATE_IMAGE'),
+                            (('safeProof', 'accepted'), False), (('safeProof', 'sameManifest'), 1),
+                            (('safeProof', 'checkCount'), True), (('safeProof', 'checkCount'), '48'),
+                            (('safeProof', 'manifest', 'ciWorkflowRunId'), str(37265801532))):
+            bad = copy.deepcopy(good)
+            target = bad
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            candidates.append(bad)
+        for key in good['safeProof']:
+            bad = copy.deepcopy(good)
+            del bad['safeProof'][key]
+            candidates.append(bad)
+            if key.endswith('Sha256'):
+                bad = copy.deepcopy(good)
+                bad['safeProof'][key] = '0' * 64
+                candidates.append(bad)
+        candidates.extend(({'currentCommit': good['currentCommit']},
+                           {'currentCommit': good['currentCommit'], 'safeProof': {}}))
+        for bad in candidates:
+            with self.subTest(keys=sorted(bad)):
+                with self.assertRaisesRegex(RuntimeError, '^Read-only diagnostic output unavailable$'):
+                    self.namespace['readonly_receipts'](json.dumps({'releaseLock': self.summary()})
+                        + '\n' + json.dumps(bad), True)
+
+    def generic_diagnostics(self):
+        policy = 'historical-finance-20261005-recharge-diagnostics'
+        value = {'currentCommit': 'a' * 40, 'sourceTree': 'b' * 40, 'previousCommit': self.namespace['PROOF_CURRENT'],
+            'releaseTag': 'v2-production-20261005T120000Z', 'servicesUpdated': ['auto-recharge'], 'newMigrations': [],
+            'backupBeforeRelease': 'id-business-v2-20261005T120000Z.sql.gz',
+            'services': {service: {'image': 'sha256:' + 'c' * 64, 'status': 'running', 'health': 'healthy'}
+                         for service in self.namespace['PROOF_SERVICES']}}
+        for stage in ('before', 'after'):
+            gate = {'accepted': True, 'status': 'APPROVED_HISTORICAL_EXCEPTIONS', 'policyId': policy, 'stage': stage,
+                'expectedCurrent': self.namespace['PROOF_CURRENT'], 'fixedCurrent': self.namespace['PROOF_CURRENT'],
+                'continuationOf': 'historical-finance-20261005', 'checkCount': 48, 'executedCheckCount': 48,
+                'unavailableCheckCount': 0, 'violationCount': 10, 'gateSha256': 'd' * 64,
+                'sourcesSha256': self.namespace['PROOF_RECEIPT']['sourcesSha256'],
+                'metadataSha256': self.namespace['PROOF_RECEIPT']['metadataSha256'],
+                'continuationSha256': self.namespace['PROOF_CONTINUATIONS'][policy]}
+            value['dataAudit' + stage.title()] = {'checkCount': 48, 'executedCheckCount': 48,
+                'unavailableCheckCount': 0, 'violationCount': 10, 'historicalException': gate}
+        return value
+
+    def test_generic_projection_is_closed_without_raw_audit_or_inventory(self):
+        value = self.generic_diagnostics()
+        lock = {'releaseLock': self.summary()}
+        self.assertEqual(self.namespace['readonly_receipts'](json.dumps(lock) + '\n' + json.dumps(value), True),
+                         [lock, value])
+        changes = [(('private',), 'SENTINEL_PRIVATE'), (('newMigrations',), ['../../SENTINEL']),
+                   (('newMigrations',), ['20261005120000_unapproved']),
+                   (('servicesUpdated',), ['auto-registration']), (('previousCommit',), '0' * 40),
+                   (('backupBeforeRelease',), '/private/SENTINEL.sql.gz'),
+                   (('services', 'auto-registration', 'private'), 'SENTINEL'),
+                   (('services', 'auto-registration', 'image'), 'SENTINEL'),
+                   (('services', 'auto-registration', 'health'), 'SENTINEL'),
+                   (('dataAuditBefore', 'ok'), False),
+                   (('dataAuditBefore', 'historicalException', 'accepted'), False),
+                   (('dataAuditBefore', 'historicalException', 'sources'), {'private': 'SENTINEL'}),
+                   (('dataAuditBefore', 'historicalException', 'metadataSha256'), '0' * 64),
+                   (('dataAuditBefore', 'historicalException', 'expectedCurrent'), '0' * 40)]
+        for path, item in changes:
+            bad = copy.deepcopy(value)
+            target = bad
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = item
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, '^Read-only diagnostic output unavailable$'):
+                self.namespace['readonly_receipts'](json.dumps(lock) + '\n' + json.dumps(bad), True)
+
+    def test_raw_generic_audit_projection_hashes_private_data_without_emitting_it(self):
+        raw = self.generic_diagnostics()
+        sources = {'fixture': 'SENTINEL_PRIVATE_SOURCE'}
+        continuation = {'fixture': 'SENTINEL_PRIVATE_CONTINUATION'}
+        fingerprint = self.namespace['proof_fingerprint']
+        pins = {**self.namespace['PROOF_RECEIPT'], 'sourcesSha256': fingerprint(sources)}
+        continuations = {**self.namespace['PROOF_CONTINUATIONS'],
+            'historical-finance-20261005-recharge-diagnostics': fingerprint(continuation)}
+        for stage in ('before', 'after'):
+            audit = raw['dataAudit' + stage.title()]
+            gate = audit['historicalException']
+            for key in ('gateSha256', 'sourcesSha256', 'continuationSha256'):
+                del gate[key]
+            gate.update(sources=sources, continuation=continuation, private='SENTINEL_PRIVATE_GATE')
+            raw['dataAudit' + stage.title()] = {'checkCount': 48, 'violationCount': 10, 'historicalException': gate}
+        raw['privateInventory'] = 'SENTINEL_PRIVATE_INVENTORY'
+        function = self.namespace['project_readonly_diagnostics']
+        with patch.dict(function.__globals__, {'PROOF_RECEIPT': pins, 'PROOF_CONTINUATIONS': continuations}):
+            projected = function(raw, False)
+            self.assertEqual(function(projected), projected)
+        self.assertNotIn('SENTINEL', json.dumps(projected))
+        self.assertNotIn('ok', projected['dataAuditBefore'])
+
+    def test_only_exact_controlled_second_failure_receipt_is_returned(self):
+        lock = {'releaseLock': self.summary()}
+        for reason in self.namespace['PROOF_FAILURES']:
+            failure = {'readOnlyFailure': reason}
+            self.assertEqual(self.namespace['readonly_receipts'](json.dumps(lock) + '\n' + json.dumps(failure), False),
+                             [lock, failure])
+        for failure in ({'readOnlyFailure': 'SENTINEL'}, {'readOnlyFailure': 'MANIFEST_UNAVAILABLE', 'raw': 'SENTINEL'}):
+            self.assertEqual(self.namespace['readonly_receipts'](json.dumps(lock) + '\n' + json.dumps(failure), False), [lock])
+
+    def test_docker_failure_and_timeout_emit_only_controlled_enum(self):
+        for result in (SimpleNamespace(returncode=1, stdout='SENTINEL_PRIVATE_DOCKER'),
+                       TimeoutError('SENTINEL_PRIVATE_TIMEOUT')):
+            output = io.StringIO()
+            options = {'side_effect': result} if isinstance(result, Exception) else {'return_value': result}
+            with self.subTest(timeout=isinstance(result, Exception)), redirect_stdout(output), \
+                    patch.object(self.namespace['subprocess'], 'run', **options):
+                with self.assertRaisesRegex(RuntimeError, '^Read-only Docker diagnostic failed$'):
+                    self.namespace['read']('docker', 'ps')
+            self.assertEqual(json.loads(output.getvalue()), {'readOnlyFailure': 'DOCKER_DIAGNOSTIC_FAILED'})
+            self.assertNotIn('SENTINEL', output.getvalue())
+
+    def test_image_inventory_bound_emits_controlled_enum_without_image_text(self):
+        limit = next(node for node in self.program.body if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Call)
+            and isinstance(node.test.left.args[0], ast.Name) and node.test.left.args[0].id == 'image_ids')
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaisesRegex(RuntimeError, '^Read-only image inventory exceeds bound$'):
+            exec(compile(ast.Module(body=[limit], type_ignores=[]), '<inventory-bound>', 'exec'),
+                 {**self.namespace, 'image_ids': ['SENTINEL_PRIVATE_IMAGE'] * 501})
+        self.assertEqual(json.loads(output.getvalue()), {'readOnlyFailure': 'IMAGE_INVENTORY_BOUND'})
+        self.assertNotIn('SENTINEL', output.getvalue())
+
+    def test_real_workflow_wait_failure_returns_only_lock_and_existing_redacted_summary(self):
+        project = Path(__file__).resolve().parents[2]
+        workflow = project / '.github/workflows/production-release.yml'
+        step = workflow.read_text().split('      - name: Read production release diagnostics\n', 1)[1]
+        shell = textwrap.dedent(step.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0])
+        executable_directory = self.root / 'bin'
+        executable_directory.mkdir()
+        lock = {'releaseLock': self.summary()}
+        output_path = self.root / 'fake-stdout.jsonl'
+        output_path.write_text(json.dumps(lock) + '\n' + json.dumps({'secret': 'SENTINEL_PRIVATE_STDOUT'}) + '\n')
+        result_path = self.root / 'fake-invocation.json'
+        result_path.write_text(json.dumps({'Status': 'Failed', 'ResponseCode': 1,
+            'StandardErrorContent': 'BlockingIOError: Resource temporarily unavailable SENTINEL_PRIVATE_STDERR'}))
+        aws = executable_directory / 'aws'
+        aws.write_text('#!/bin/sh\ncase "$1 $2" in\n'
+            '  "ssm send-command") echo "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" ;;\n'
+            '  "ssm wait") exit 1 ;;\n'
+            '  "ssm get-command-invocation") case "$*" in\n'
+            '    *StandardOutputContent*) cat ' + shlex.quote(str(output_path)) + ' ;;\n'
+            '    *) cat ' + shlex.quote(str(result_path)) + ' ;; esac ;;\n'
+            '  *) exit 99 ;;\nesac\n')
+        python = executable_directory / 'python3'
+        python.write_text('#!/bin/sh\nif [ "$1" = "scripts/production-release/remote-deploy.py" ]; then\n'
+            '  shift\n  exec ' + shlex.quote(deployment.sys.executable) + ' '
+            + shlex.quote(str(project / 'scripts/production-release/remote-deploy.py')) + ' "$@"\nfi\n'
+            'exec ' + shlex.quote(deployment.sys.executable) + ' "$@"\n')
+        aws.chmod(0o700)
+        python.chmod(0o700)
+        result = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
+            env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(json.loads(lines[0]), lock)
+        summary = json.loads(lines[1].removeprefix('RELEASE_FAILURE_DIAGNOSTIC '))
+        self.assertEqual(summary['errorType'], 'BlockingIOError')
+        self.assertEqual(summary['reason'], 'Resource temporarily unavailable')
+        self.assertNotIn('SENTINEL', result.stdout + result.stderr)
+        self.assertFalse((self.root / '.deploy/production-release/readonly-diagnostics-result.json').exists())
+        aws.write_text(aws.read_text().replace('"ssm wait") exit 1 ;;', '"ssm wait") exit 0 ;;'))
+        rejected = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
+            env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
+            capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(rejected.stdout.splitlines(), [json.dumps(lock, separators=(',', ':'))])
+        self.assertIn('Read-only diagnostic output unavailable', rejected.stderr)
+        self.assertNotIn('SENTINEL', rejected.stdout + rejected.stderr)
+        diagnostics = {'currentCommit': self.namespace['PROOF_CURRENT'],
+                       'safeProof': copy.deepcopy(self.namespace['PROOF_RECEIPT'])}
+        output_path.write_text(json.dumps(lock) + '\n' + json.dumps(diagnostics) + '\n')
+        accepted = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
+            env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual([json.loads(line) for line in accepted.stdout.splitlines()], [lock, diagnostics])
+
 
 class HistoricalDiagnosticsTests(unittest.TestCase):
     def policy(self):
