@@ -52,6 +52,8 @@ HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostic
 HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
 DIAGNOSTICS_POLICY_SHA256 = 'a4bdc86d86661aed440921b148e9a95f1516370d3a5394af132e12954e31dd20'
 DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
+DIAGNOSTICS_MANIFEST_SHA256 = '202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866'
+DIAGNOSTICS_COMPOSE_SHA256 = '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8'
 REGISTRATION_PROOF_SHA256 = '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768cab8945cb21ba'
 DIAGNOSTICS_CANDIDATE_FILES = frozenset({
     'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
@@ -325,7 +327,11 @@ def verify_reusable_archive(release, source, commit):
     require(actual == hashes, 'Reusable image source differs from release application source')
 
 
-def release_services(admin_only, additions, edge_changed=False):
+def release_services(admin_only, additions, edge_changed=False, *, historical_diagnostics=False):
+    if historical_diagnostics:
+        require(not admin_only, 'Historical diagnostics requires Worker publication')
+        require_diagnostics_migration_scope(additions, edge_changed)
+        return ('auto-recharge',), ('auto-recharge',)
     require(not (admin_only and additions), 'Admin-only release contains migrations')
     services = ('admin',) if admin_only else SERVICES
     require(not (admin_only and edge_changed), 'Admin-only release contains edge configuration changes')
@@ -396,15 +402,24 @@ def environment_values(path):
     return values
 
 
-def service_state(directory, service):
+def service_state(directory, service, *, include_container_id=False):
     container = compose(directory, 'ps', '-q', service)
     require(bool(container), f'{service} container missing')
     data = json.loads(run('docker', 'inspect', container))[0]
+    if include_container_id:
+        require(isinstance(data.get('Id'), str) and re.fullmatch(r'[0-9a-f]{64}', data['Id']),
+                'Production container identity unavailable')
+        started_at = data['State'].get('StartedAt')
+        require(isinstance(started_at, str) and 0 < len(started_at) <= 128,
+                'Production container start identity unavailable')
     return {
         'image': data['Image'],
         'reference': data['Config']['Image'],
         'status': data['State']['Status'],
         'health': data['State'].get('Health', {}).get('Status'),
+        **({'containerId': data['Id'],
+            'startedAtSha256': hashlib.sha256(started_at.encode()).hexdigest()}
+           if include_container_id else {}),
     }
 
 
@@ -610,6 +625,39 @@ def assert_no_active_jobs(directory, *, worker_changes):
     assert_no_active_recharge(directory)
     if worker_changes:
         assert_no_active_registration(directory)
+
+
+def registration_worker_changes(directory, services):
+    return ('auto-registration' in services
+            or ('auto-recharge' in services and not has_registration_worker(directory)))
+
+
+def require_diagnostics_registration_isolation(previous, manifest, states):
+    # Only the immutable successful split baseline can skip the registration idle
+    # guard before candidate extraction. Full candidate source proof is still required.
+    data = private_historical_receipt(previous / 'release-manifest.json')
+    require(hashlib.sha256(data).hexdigest() == DIAGNOSTICS_MANIFEST_SHA256
+            and json.loads(data) == manifest
+            and manifest.get('commit') == HISTORY_DIAGNOSTICS_BASELINE,
+            'Historical diagnostics running manifest changed')
+    require(hashlib.sha256((previous / 'docker-compose.aws-mysql.yml').read_bytes()).hexdigest()
+            == DIAGNOSTICS_COMPOSE_SHA256 and has_registration_worker(previous),
+            'Historical diagnostics requires the fixed independent worker layout')
+    verify_continuation_running_images(states, manifest)
+    registration = manifest.get('images', {}).get('auto-registration', {})
+    override = json.loads((previous / 'compose.release.json').read_text())
+    expected_override = {'services': {service: {
+        'image': image.get('reference'), 'pull_policy': 'never'}
+        for service, image in manifest['images'].items()}}
+    require(override == expected_override and bool(registration.get('reference'))
+        and states.get('auto-registration', {}).get('reference') == registration['reference'],
+        'Historical diagnostics image override changed')
+
+
+def require_diagnostics_environment_unchanged(previous, release, expected):
+    require((previous / '.env.aws.production').read_bytes() == expected
+            and (release / '.env.aws.production').read_bytes() == expected,
+            'Historical diagnostics production environment changed')
 
 
 def migration_plan(previous, release):
@@ -836,12 +884,20 @@ def main():
     require(previous.parent == BASE / 'releases', 'Invalid current release path')
     old_manifest = json.loads((previous / 'release-manifest.json').read_text())
     require(old_manifest['commit'] == args.expected_current, 'Production baseline changed')
-    before = {service: service_state(previous, service) for service in production_services(previous)}
+    before = {service: service_state(previous, service,
+        include_container_id=args.historical_finance_recharge_diagnostics)
+        for service in production_services(previous)}
     require(all(state['status'] == 'running' for state in before.values()),
             'A production service is not running')
     require(all(state['health'] == 'healthy' for service, state in before.items()
                 if service != 'caddy'), 'A production service is not healthy')
-    assert_no_active_jobs(previous, worker_changes=not args.admin_only)
+    initial_services, _ = release_services(args.admin_only, [],
+        historical_diagnostics=args.historical_finance_recharge_diagnostics)
+    if args.historical_finance_recharge_diagnostics:
+        require_diagnostics_registration_isolation(previous, old_manifest, before)
+        original_environment = (previous / '.env.aws.production').read_bytes()
+    assert_no_active_jobs(previous,
+        worker_changes=registration_worker_changes(previous, initial_services))
 
     stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     release = BASE / 'releases' / f'{stamp}-{args.commit[:12]}'
@@ -894,13 +950,18 @@ def main():
                 verify_reusable_archive(release, source, image_commit)
         shutil.copy2(previous / '.env.aws.production', release / '.env.aws.production')
         (release / '.env.aws.production').chmod(0o600)
-        google_drive_folder = configure_google_drive_sync(previous, release)
+        if args.historical_finance_recharge_diagnostics:
+            require_diagnostics_environment_unchanged(previous, release, original_environment)
+            google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
+        else:
+            google_drive_folder = configure_google_drive_sync(previous, release)
         additions = migration_plan(previous, release)
         edge_changed = ((previous / 'deploy/caddy/Caddyfile.aws').read_bytes()
                         != (release / 'deploy/caddy/Caddyfile.aws').read_bytes())
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_migration_scope(additions, edge_changed)
-        updated_services, image_services = release_services(args.admin_only, additions, edge_changed)
+        updated_services, image_services = release_services(args.admin_only, additions, edge_changed,
+            historical_diagnostics=args.historical_finance_recharge_diagnostics)
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
                       for service in image_services}
@@ -951,7 +1012,11 @@ def main():
         (release / 'backup-verification.json').write_text(json.dumps(backup, indent=2) + '\n')
         (release / 'backup-verification.json').chmod(0o600)
         require((BASE / 'current').resolve() == previous, 'Production changed before switch')
-        assert_no_active_jobs(previous, worker_changes=not args.admin_only)
+        if args.historical_finance_recharge_diagnostics:
+            require_diagnostics_registration_isolation(previous, old_manifest, before)
+            require_diagnostics_environment_unchanged(previous, release, original_environment)
+        assert_no_active_jobs(previous,
+            worker_changes=registration_worker_changes(previous, updated_services))
 
         step = 'migration'
         run_release_migrations(release, args.admin_only, args.historical_finance_recharge_diagnostics)
@@ -972,9 +1037,13 @@ def main():
                             historical_diagnostics=args.historical_finance_recharge_diagnostics,
                             stage='after', source=release,
                             before_receipt=release / 'before-audit.json')
-        after = {service: service_state(release, service) for service in production_services(release)}
+        after = {service: service_state(release, service,
+            include_container_id=args.historical_finance_recharge_diagnostics)
+            for service in production_services(release)}
         require(all(after[s] == before[s] for s in before if s not in updated_services),
                 'Unrelated service changed')
+        if args.historical_finance_recharge_diagnostics:
+            require_diagnostics_environment_unchanged(previous, release, original_environment)
         require(all(after[s]['image'] == pulled_images[image_service(s)]
                     for s in updated_services if s in SERVICES), 'Running image differs from release')
         public_url = environment_values(release / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
@@ -1021,7 +1090,9 @@ def main():
                           'servicesUpdated': list(updated_services),
                           'migrationApplied': bool(additions),
                           'backupVerified': True,
-                          'auditViolations': after_audit['violationCount']}), flush=True)
+                          'auditViolations': after_audit['violationCount'],
+                          **({'unchangedServiceContainersPreserved': True}
+                             if args.historical_finance_recharge_diagnostics else {})}), flush=True)
     except Exception as error:
         rollback_ok = True
         if (BASE / 'current').resolve() == release:

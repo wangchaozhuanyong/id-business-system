@@ -10,7 +10,8 @@ import copy
 import re
 import sqlite3
 import textwrap
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location('deployment', Path(__file__).with_name('remote-deploy.py'))
@@ -1275,6 +1276,336 @@ class HistoricalDiagnosticsTests(unittest.TestCase):
                 report = self.audit_report(stage); mutate(report)
                 with self.subTest(stage=stage, index=index), self.assertRaises(RuntimeError):
                     self.audit(report, stage)
+
+
+class RechargeOnlyPublicationTests(unittest.TestCase):
+    def test_fixed_diagnostics_selects_only_the_recharge_runtime_and_image(self):
+        services, images = deployment.release_services(False, [], historical_diagnostics=True)
+        self.assertEqual(services, ('auto-recharge',))
+        self.assertEqual(images, ('auto-recharge',))
+        references = deployment.release_image_references(services, images, 'fixture-registry',
+            {'auto-recharge': 'new-recharge'})
+        self.assertEqual(references, {'auto-recharge': 'fixture-registry:new-recharge'})
+        for admin, additions, edge in [(True, [], False), (False, ['new.sql'], False), (False, [], True)]:
+            with self.subTest(admin=admin, additions=additions, edge=edge), self.assertRaises(RuntimeError):
+                deployment.release_services(admin, additions, edge, historical_diagnostics=True)
+
+    def test_registration_guard_tracks_the_actual_updated_worker_including_legacy_shared_worker(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); compose = root / 'docker-compose.aws-mysql.yml'
+            compose.write_text('services:\n  auto-recharge:\n  auto-registration:\n')
+            self.assertFalse(deployment.registration_worker_changes(root, ('auto-recharge',)))
+            self.assertTrue(deployment.registration_worker_changes(root, ('auto-registration',)))
+            self.assertTrue(deployment.registration_worker_changes(root, deployment.SERVICES))
+            self.assertFalse(deployment.registration_worker_changes(root, ('admin',)))
+            compose.write_text('services:\n  auto-recharge:\n')
+            self.assertTrue(deployment.registration_worker_changes(root, ('auto-recharge',)))
+
+    def test_container_identity_is_opt_in_and_must_be_the_real_full_identity(self):
+        value = {'Id': 'a' * 64, 'Image': 'sha256:fixture', 'Config': {'Image': 'fixture:old'},
+            'State': {'Status': 'running', 'Health': {'Status': 'healthy'},
+                'StartedAt': '2026-10-05T14:00:00.000000000Z'}}
+        with patch.object(deployment, 'compose', return_value='a' * 64), \
+                patch.object(deployment, 'run', side_effect=lambda *args: json.dumps([value])):
+            regular = deployment.service_state(None, 'auto-registration')
+            self.assertNotIn('containerId', regular)
+            self.assertEqual(deployment.service_state(None, 'auto-registration',
+                include_container_id=True), {**regular, 'containerId': 'a' * 64,
+                    'startedAtSha256': deployment.hashlib.sha256(value['State']['StartedAt'].encode()).hexdigest()})
+            for identity in (None, '', 'a' * 12):
+                value['Id'] = identity
+                with self.subTest(identity=identity), self.assertRaisesRegex(RuntimeError, 'identity unavailable'):
+                    deployment.service_state(None, 'auto-registration', include_container_id=True)
+            value['Id'] = 'a' * 64
+            for started in (None, '', 'a' * 129):
+                value['State']['StartedAt'] = started
+                with self.subTest(started=started), self.assertRaisesRegex(RuntimeError, 'start identity unavailable'):
+                    deployment.service_state(None, 'auto-registration', include_container_id=True)
+
+    def test_private_environment_has_to_remain_byte_identical_on_both_releases(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); old = root / 'old'; new = root / 'new'; old.mkdir(); new.mkdir()
+            expected = b'APP_PUBLIC_URL=http://synthetic.test\nGOOGLE_DRIVE_SYNC_FOLDER_ID=synthetic\n'
+            for path in (old / '.env.aws.production', new / '.env.aws.production'):
+                path.write_bytes(expected)
+            deployment.require_diagnostics_environment_unchanged(old, new, expected)
+            for path in (old / '.env.aws.production', new / '.env.aws.production'):
+                path.write_bytes(expected + b'UNREVIEWED=changed\n')
+                with self.assertRaisesRegex(RuntimeError, 'environment changed'):
+                    deployment.require_diagnostics_environment_unchanged(old, new, expected)
+                path.write_bytes(expected)
+
+    @staticmethod
+    def archive(commit, files):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w:gz') as archive:
+            for name, content in files.items():
+                member = tarfile.TarInfo(f'id-business-system-{commit}/' + name)
+                member.mode = 0o644; member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
+        return data.getvalue()
+
+    def publication(self, *, recharge_failure=None, registration_rebuilt=False,
+                    compose_mutation=False, override_mutation=False,
+                    candidate_mutation=False, full_release=False,
+                    manifest_mutation=False, legacy_layout=False, running_image_mutation=False,
+                    registration_restarted=False):
+        # Real release orchestration, guards, private receipts, source archive comparison,
+        # override writes and mixed-image manifest. All external calls are synthetic.
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            base = Path(name).resolve(); (base / 'releases').mkdir()
+            previous = base / 'releases/previous'; previous.mkdir()
+            (base / 'current').symlink_to(previous)
+            fixture = HistoricalDiagnosticsTests()
+            policy, values = fixture.fixture(previous)
+            manifest = values['release-manifest.json']
+            repository = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+            commit = 'a' * 40; new_reference = repository + ':' + commit + '-123-1-auto-recharge'
+            new_image = 'sha256:' + deployment.hashlib.sha256(b'new-recharge').hexdigest()
+            manifest['googleDriveSyncFolderId'] = 'synthetic-existing-folder'
+            manifest['images'] = {service: {
+                'reference': repository + ':' + deployment.HISTORY_DIAGNOSTICS_BASELINE +
+                    '-122-1-' + deployment.image_service(service),
+                'digest': 'sha256:' + deployment.hashlib.sha256(deployment.image_service(service).encode()).hexdigest(),
+                'sourceCommit': deployment.HISTORY_DIAGNOSTICS_BASELINE}
+                for service in (*deployment.SERVICES, 'migrate')}
+            fixture.save_fixture(previous, policy, values)
+            manifest_digest = deployment.hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
+            proof_digest = deployment.historical_fingerprint(policy['continuation'])
+            if manifest_mutation:
+                path = previous / 'release-manifest.json'; path.write_bytes(path.read_bytes() + b' ')
+            states = {service: {'image': manifest['images'].get(service, {}).get('digest', 'sha256:' + service),
+                'reference': manifest['images'].get(service, {}).get('reference', 'fixture:' + service),
+                'status': 'running', 'health': None if service == 'caddy' else 'healthy',
+                'containerId': deployment.hashlib.sha256(service.encode()).hexdigest(),
+                'startedAtSha256': deployment.hashlib.sha256(('old-start:' + service).encode()).hexdigest()}
+                for service in deployment.ALL_SERVICES}
+            if running_image_mutation:
+                states['auto-registration']['image'] = 'sha256:' + 'f' * 64
+            compose_text = (Path(__file__).resolve().parents[2] / 'docker-compose.aws-mysql.yml').read_bytes()
+            frozen = {'docker-compose.aws-mysql.yml': compose_text,
+                'deploy/caddy/Caddyfile.aws': b'unchanged synthetic edge'}
+            for filename, content in frozen.items():
+                path = previous / filename; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content); path.chmod(0o644)
+            (previous / 'apps/api/prisma-mysql/migrations').mkdir(parents=True)
+            (previous / '.env.aws.production').write_text('APP_PUBLIC_URL=http://synthetic.test\n'
+                'GOOGLE_DRIVE_SYNC_FOLDER_ID=synthetic-existing-folder\n')
+            (previous / '.env.aws.production').chmod(0o600)
+            override = {'services': {service: {'image': image['reference'], 'pull_policy': 'never'}
+                        for service, image in manifest['images'].items()}}
+            if override_mutation == 'image':
+                override['services']['auto-registration']['image'] = 'fixture:unreviewed'
+            elif override_mutation == 'recharge-role':
+                override['services']['auto-recharge']['environment'] = {'AUTO_RECHARGE_WORKER_ROLE': 'registration'}
+            elif override_mutation == 'recharge-volume':
+                override['services']['auto-recharge']['volumes'] = ['shared-profile:/tmp/profile']
+            elif override_mutation == 'top-networks':
+                override['networks'] = {'registration-egress': {'external': True}}
+            elif override_mutation == 'top-volumes':
+                override['volumes'] = {'shared-profile': {'external': True}}
+            elif override_mutation:
+                override['services']['auto-registration']['environment'] = {'AUTO_RECHARGE_WORKER_ROLE': 'recharge'}
+            (previous / 'compose.release.json').write_text(json.dumps(override))
+            if compose_mutation:
+                (previous / 'docker-compose.aws-mysql.yml').write_bytes(compose_text.replace(
+                    b'AUTO_RECHARGE_WORKER_ROLE: registration', b'AUTO_RECHARGE_WORKER_ROLE: recharge'))
+            if legacy_layout:
+                (previous / 'docker-compose.aws-mysql.yml').write_bytes(compose_text.replace(
+                    b'  auto-registration:', b'  retired-registration:'))
+            candidate = {**frozen, **{filename: ('synthetic-diagnostics:' + filename).encode()
+                for filename in policy['candidateSourceSha256']}}
+            if candidate_mutation:
+                candidate['apps/api/unapproved.ts'] = b'unreviewed'
+            candidate_archive = self.archive(commit, candidate)
+            baseline_archive = self.archive(deployment.HISTORY_DIAGNOSTICS_BASELINE, frozen)
+            argv = ['remote-deploy.py', '--commit', commit, '--source-tree', 'b' * 40,
+                '--repository', repository, '--expected-current', deployment.HISTORY_DIAGNOSTICS_BASELINE,
+                '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111']
+            if not full_release:
+                argv.append('--historical-finance-recharge-diagnostics')
+
+            def state(directory, service, *, include_container_id=False):
+                value = dict(states[service])
+                if directory != previous:
+                    if service == 'auto-recharge':
+                        value.update(image=new_image, reference=new_reference, containerId='c' * 64)
+                    elif service == 'auto-registration' and registration_rebuilt:
+                        value['containerId'] = 'd' * 64
+                    elif service == 'auto-registration' and registration_restarted:
+                        value['startedAtSha256'] = 'e' * 64
+                if not include_container_id:
+                    value.pop('containerId')
+                    value.pop('startedAtSha256')
+                return value
+
+            def external_run(*args, **kwargs):
+                if args[:3] == ('aws', 'ecr', 'get-login-password'):
+                    return 'synthetic-login'
+                if args[:2] == ('docker', 'pull'):
+                    return ''
+                if args[:3] == ('docker', 'image', 'inspect'):
+                    return json.dumps([{'Architecture': 'amd64', 'Id': new_image,
+                        'Config': {'Labels': {'org.opencontainers.image.revision': commit}}}])
+                raise AssertionError(args)
+
+            def external_compose(directory, *args, **kwargs):
+                if args == ('config', '--format', 'json'):
+                    return json.dumps({'name': 'synthetic-project'})
+                if args[:2] == ('up', '-d'):
+                    return ''
+                raise AssertionError(args)
+
+            def response(url, **kwargs):
+                if '/archive/' in url:
+                    return io.BytesIO(candidate_archive if commit in url else baseline_archive)
+                value = io.BytesIO(b'ready'); value.status = 200; value.headers = {}
+                return value
+
+            def audit(directory, receipt, **kwargs):
+                report = fixture.audit_report(kwargs['stage'])
+                return {'checkCount': 48, 'violationCount': 10, 'historicalException': report['gate']}
+
+            output = io.StringIO()
+            with ExitStack() as stack:
+                original_open = Path.open
+                def track_release_lock(path, *args, **kwargs):
+                    stream = original_open(path, *args, **kwargs)
+                    if path.name == '.deploy.lock':
+                        stack.callback(stream.close)
+                    return stream
+                stack.enter_context(patch.object(Path, 'open', new=track_release_lock))
+                for obj, attr, kwargs in [
+                    (deployment, 'BASE', {'new': base}),
+                    (deployment.sys, 'argv', {'new': argv}),
+                    (deployment, 'DIAGNOSTICS_MANIFEST_SHA256', {'new': manifest_digest}),
+                    (deployment, 'DIAGNOSTICS_PROOF_SHA256', {'new': proof_digest}),
+                    (deployment, 'continuation_policy', {'return_value': policy}),
+                    (deployment, 'service_state', {'side_effect': state}),
+                    (deployment, 'run', {'side_effect': external_run}),
+                    (deployment, 'compose', {'side_effect': external_compose}),
+                    (deployment.urllib.request, 'urlopen', {'side_effect': response}),
+                    (deployment.subprocess, 'run', {'return_value': SimpleNamespace(returncode=0)}),
+                    (deployment.shutil, 'disk_usage', {'return_value': SimpleNamespace(free=3 * 1024 ** 3)}),
+                    (deployment, 'fresh_backup', {'return_value': {'name': 'synthetic-verified-backup'}}),
+                    (deployment, 'audit', {'side_effect': audit}),
+                    (deployment, 'sync_new_table_grants', {'return_value': {'ok': True}}),
+                    (deployment, 'wait_healthy', {'return_value': {}})]:
+                    stack.enter_context(patch.object(obj, attr, **kwargs))
+                recharge = stack.enter_context(patch.object(deployment, 'assert_no_active_recharge',
+                    side_effect=recharge_failure))
+                registration = stack.enter_context(patch.object(deployment, 'assert_no_active_registration',
+                    side_effect=RuntimeError('Active registration jobs prevent release')))
+                guards = stack.enter_context(patch.object(deployment, 'assert_no_active_jobs',
+                    wraps=deployment.assert_no_active_jobs))
+                isolation = stack.enter_context(patch.object(deployment, 'require_diagnostics_registration_isolation',
+                    wraps=deployment.require_diagnostics_registration_isolation))
+                rollback = stack.enter_context(patch.object(deployment, 'rollback_service'))
+                google_drive = stack.enter_context(patch.object(deployment, 'configure_google_drive_sync',
+                    wraps=deployment.configure_google_drive_sync))
+                with redirect_stdout(output):
+                    try:
+                        result = deployment.main(); error = None
+                    except RuntimeError as failure:
+                        result = None; error = str(failure)
+                run = deployment.run; compose = deployment.compose; audited = deployment.audit
+                releases = [path for path in (base / 'releases').iterdir() if path != previous]
+                target = releases[0] if releases else None
+                saved = json.loads((target / 'release-manifest.json').read_text()) if target and (
+                    target / 'release-manifest.json').exists() else None
+                target_override = json.loads((target / 'compose.release.json').read_text()) if target and (
+                    target / 'compose.release.json').exists() else None
+                return SimpleNamespace(result=result, error=error, output=output.getvalue(),
+                    guards=guards.call_args_list, recharge_calls=recharge.call_count,
+                    registration_calls=registration.call_count, isolation_calls=isolation.call_count,
+                    run=run.call_args_list, compose=compose.call_args_list, audits=audited.call_count,
+                    rollback=rollback.call_args_list, google_drive_calls=google_drive.call_count,
+                    previous=previous, current=(base / 'current').resolve(), manifest=saved,
+                    old_manifest=manifest, old_override=override, override=target_override)
+
+    def test_real_orchestration_preserves_live_registration_and_writes_mixed_image_manifest(self):
+        result = self.publication()
+        self.assertEqual(result.result, 0, result.output or result.error)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.recharge_calls, 2)
+        self.assertEqual(result.isolation_calls, 2)
+        self.assertTrue(all(call.kwargs == {'worker_changes': False} for call in result.guards))
+        self.assertEqual(result.google_drive_calls, 0)
+        self.assertEqual(result.manifest['servicesUpdated'], ['auto-recharge'])
+        self.assertFalse(result.manifest['migrationApplied'])
+        self.assertEqual(result.manifest['newMigrations'], [])
+        self.assertEqual(result.manifest['googleDriveSyncFolderId'], result.old_manifest['googleDriveSyncFolderId'])
+        for service in result.old_manifest['images']:
+            if service != 'auto-recharge':
+                self.assertEqual(result.manifest['images'][service], result.old_manifest['images'][service])
+                self.assertEqual(result.override['services'][service], result.old_override['services'][service])
+        self.assertEqual(result.manifest['images']['auto-recharge']['sourceCommit'], 'a' * 40)
+        self.assertNotEqual(result.manifest['images']['auto-recharge']['digest'],
+                            result.manifest['images']['auto-registration']['digest'])
+        self.assertEqual([call.args[-1] for call in result.compose if call.args[1:3] == ('up', '-d')],
+                         ['auto-recharge'])
+        pulls = [call.args[-1] for call in result.run if call.args[:2] == ('docker', 'pull')]
+        self.assertEqual(len(pulls), 1); self.assertTrue(pulls[0].endswith('-auto-recharge'))
+        self.assertFalse(any('migrate' in call.args or 'caddy' in call.args for call in result.compose))
+        self.assertIn('"unchangedServiceContainersPreserved": true', result.output)
+
+    def test_active_recharge_at_either_guard_prevents_switch_without_touching_registration(self):
+        failure = RuntimeError('Active recharge jobs prevent release')
+        for index, failures in enumerate(([failure], [None, failure])):
+            result = self.publication(recharge_failure=failures)
+            self.assertEqual(result.registration_calls, 0)
+            self.assertEqual(result.recharge_calls, index + 1)
+            self.assertEqual(result.current, result.previous)
+            self.assertFalse(any(call.args[1:3] == ('up', '-d') for call in result.compose))
+            self.assertEqual(result.rollback, [])
+            self.assertNotIn('"unchangedServiceContainersPreserved": true', result.output)
+
+    def test_shared_tampered_layout_or_override_cannot_skip_protection(self):
+        for kwargs in ({'compose_mutation': True}, {'override_mutation': True},
+                       {'override_mutation': 'image'}, {'manifest_mutation': True},
+                       {'legacy_layout': True}, {'running_image_mutation': True},
+                       {'override_mutation': 'recharge-role'}, {'override_mutation': 'recharge-volume'},
+                       {'override_mutation': 'top-networks'}, {'override_mutation': 'top-volumes'}):
+            result = self.publication(**kwargs)
+            self.assertIsNotNone(result.error)
+            self.assertEqual(result.recharge_calls, 0)
+            self.assertEqual(result.registration_calls, 0)
+            self.assertEqual(result.run, [])
+            self.assertEqual(result.compose, [])
+
+    def test_unreviewed_source_stops_before_audit_and_switch_despite_live_registration(self):
+        result = self.publication(candidate_mutation=True)
+        self.assertEqual(result.result, 1)
+        self.assertEqual(result.audits, 0)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.current, result.previous)
+        self.assertEqual(result.compose, [])
+
+    def test_same_image_but_recreated_registration_container_fails_and_rolls_back_only_recharge(self):
+        result = self.publication(registration_rebuilt=True)
+        self.assertEqual(result.result, 1)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.current, result.previous)
+        self.assertEqual([call.args[2] for call in result.rollback], ['auto-recharge'])
+        self.assertNotIn('"unchangedServiceContainersPreserved": true', result.output)
+        self.assertNotIn('auto-registration', [call.args[-1] for call in result.compose
+            if call.args[1:3] == ('up', '-d')])
+
+    def test_same_container_id_but_restarted_registration_fails_without_claiming_preservation(self):
+        result = self.publication(registration_restarted=True)
+        self.assertEqual(result.result, 1)
+        self.assertEqual(result.registration_calls, 0)
+        self.assertEqual(result.current, result.previous)
+        self.assertEqual([call.args[2] for call in result.rollback], ['auto-recharge'])
+        self.assertNotIn('"unchangedServiceContainersPreserved": true', result.output)
+
+    def test_ordinary_full_release_still_requires_registration_idle_before_source(self):
+        result = self.publication(full_release=True)
+        self.assertEqual(result.error, 'Active registration jobs prevent release')
+        self.assertEqual(result.recharge_calls, 1)
+        self.assertEqual(result.registration_calls, 1)
+        self.assertEqual(result.guards[0].kwargs, {'worker_changes': True})
+        self.assertEqual(result.run, [])
 
 
 if __name__ == '__main__':
