@@ -1382,5 +1382,260 @@ class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.page_errors, [])
 
 
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class OriginalAttemptBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Actual form writes across expired attempts in one retained browser context."""
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+        from test_registration_builtin import server_payload
+        self.payload = server_payload()
+        self.payload['browserProfileId'] = 'reg_' + 'a' * 64
+        self.registration_state = {}
+        self.jobs = []
+        self.events = []
+        self.mail_requests = []
+        self.mail_fence = 1
+        self.api_step = 'email_code'
+        self.last_mail_id = None
+        self.auto_delivery = False
+        self.expire_on_post = False
+        self.post_seen = asyncio.Event()
+
+    async def asyncTearDown(self):
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    def new_attempt(self, attempt):
+        from registration_builtin import RegistrationServerJob
+        from registration_job import STEPS
+        body = {**self.payload, 'attempt': attempt, 'step': self.api_step}
+        job = RegistrationServerJob(body['id'], body,
+            'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+        job.registration_state = self.registration_state
+        self.jobs.append(job)
+        def event(name, **data):
+            previous_step = self.api_step
+            requested = data.get('step', job.step)
+            if STEPS.index(requested) < STEPS.index(job.step):
+                requested = job.step
+            job.step = self.api_step = requested
+            self.events.append((attempt, name, data))
+            if name == 'waiting_email':
+                # Match the existing callback's same-profile email request fence.
+                if data.get('newMailRequest') or previous_step != 'email_code':
+                    self.mail_fence += 1
+                self.mail_requests.append((attempt, data.get('newMailRequest'), self.mail_fence))
+                if self.auto_delivery:
+                    job.signal_code('123456', job.attempt, 'email_code', f'fixture-mail-{attempt}')
+            elif name == 'mail_accepted':
+                self.last_mail_id = data['mailId']
+        job.event = event
+        job.wait_code = AsyncMock(wraps=job.wait_code)
+        job.prepare_mail = MagicMock(wraps=job.prepare_mail)
+        job.manual = AsyncMock(side_effect=Stop('fixture_paused'))
+        flow = RegistrationBrowser(job, self.context)
+        flow.page = self.page
+        async def settle(_seconds=2):
+            job.check()
+            await asyncio.sleep(_seconds if _seconds <= .5 else .02)
+        flow.settle = settle
+        flow.registration_country = AsyncMock(return_value='US')
+        self.job, self.flow = job, flow
+        return job, flow
+
+    async def serve_form(self, kind, *, auto_navigation=False, auto_submit=False):
+        field = '<input type="email">' if kind == 'email' else '<input name="code" autocomplete="one-time-code">'
+        html = '''<!doctype html><html><body><form>__FIELD__<button>Continue</button></form><script>
+        window.enterPresses=0;
+        document.querySelector('input').addEventListener('keydown',event=>{
+          if(event.key==='Enter')window.enterPresses++;
+        });
+        window.releaseNavigation=()=>window.location.assign('/welcome');
+        document.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();__BUSY__
+          await fetch('/fixture/__KIND__',{method:'POST',body:JSON.stringify({
+            value:event.target.querySelector('input').value,enterPresses:window.enterPresses})});
+          __NAVIGATE__
+        };
+        __AUTO_SUBMIT__
+        </script></body></html>'''.replace('__FIELD__', field).replace('__KIND__', kind).replace(
+            '__BUSY__', "event.target.setAttribute('aria-busy','true');" if kind == 'code' else '').replace(
+            '__NAVIGATE__', 'window.releaseNavigation();' if auto_navigation else '').replace('__AUTO_SUBMIT__',
+            '''window.autoSent=false;document.querySelector('input').addEventListener('input',event=>{
+              if(event.target.value&&!window.autoSent){window.autoSent=true;event.target.form.requestSubmit();}
+            });''' if auto_submit else '')
+        async def local(route):
+            request = route.request
+            self.navigation_methods.append(request.method)
+            path = urlsplit(request.url).path
+            if path == '/api/auth/session':
+                self.assertEqual(request.method, 'GET')
+                await route.fulfill(content_type='application/json', body='{}')
+                return
+            if request.method == 'POST':
+                self.assertEqual(path, '/fixture/' + kind)
+                self.submissions.append((path, json.loads(request.post_data)))
+                await route.fulfill(content_type='application/json', body='{}')
+                self.post_seen.set()
+                if self.expire_on_post and self.job.attempt == 1:
+                    self.job.deadline = time.monotonic() - 1
+            else:
+                self.assertEqual(request.method, 'GET')
+                self.assertIn(path, {'/auth/login', '/email-verification', '/welcome'})
+                body = '<main>Welcome</main>' if path == '/welcome' else html
+                await route.fulfill(content_type='text/html', body=body)
+        await self.context.route('**/*', local)
+        url = 'https://chatgpt.com/auth/login' if kind == 'email' else 'https://chatgpt.com/email-verification'
+        await self.page.goto(url, wait_until='domcontentloaded')
+
+    async def register_attempt(self, flow, *, reason=None):
+        async def identity(page, _email, **_kwargs):
+            return ('fixture', 'identity') if urlsplit(page.url).path == '/welcome' else None
+        with patch('registration_browser.official_identity', identity):
+            if reason:
+                with self.assertRaises(Stop) as stopped:
+                    await asyncio.wait_for(flow.register(), timeout=45)
+                self.assertEqual(stopped.exception.report['reason'], reason)
+            else:
+                await asyncio.wait_for(flow.register(), timeout=45)
+
+    async def test_expired_email_attempt_never_resubmits_unknown_original_result(self):
+        self.api_step = 'queued'
+        self.expire_on_post = True
+        await self.serve_form('email')
+        original_page, original_context = self.page, self.context
+        first, flow = self.new_attempt(1)
+        await self.register_attempt(flow, reason='mailbox_timeout')
+        self.assertEqual(len(self.submissions), 1)
+        first.wait_code.assert_not_awaited()
+        fence = self.mail_fence
+        second, flow = self.new_attempt(2)
+        self.assertTrue(await self.page.locator('input[type="email"]').is_visible())
+        self.assertEqual(await self.page.locator('[aria-busy="true"]').count(), 0)
+        self.assertEqual((await flow.registration_view())[0], 'email')
+        await self.register_attempt(flow, reason='fixture_paused')
+        self.assertEqual(self.submissions, [('/fixture/email', {'value': self.payload['email'], 'enterPresses': 0})])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        self.assertEqual(self.mail_fence, fence)
+        self.assertEqual(self.mail_requests, [(1, True, fence)])
+        second.prepare_mail.assert_not_called()
+        second.wait_code.assert_not_awaited()
+        self.assertIs(flow.page, original_page)
+        self.assertIs(flow.context, original_context)
+        self.assertFalse(flow.data['registered'])
+        self.assertEqual(self.page_errors, [])
+
+    async def test_expired_submitted_code_waits_for_late_navigation_without_new_mail_or_enter(self):
+        self.auto_delivery = self.expire_on_post = True
+        await self.serve_form('code')
+        first, flow = self.new_attempt(1)
+        await self.register_attempt(flow, reason='mailbox_timeout')
+        self.assertEqual(self.submissions, [('/fixture/code', {'value': '123456', 'enterPresses': 1})])
+        first.wait_code.assert_awaited_once()
+        self.assertEqual(self.last_mail_id, 'fixture-mail-1')
+        fence = self.mail_fence
+        second, flow = self.new_attempt(2)
+        settles = 0
+        async def delayed_navigation(_seconds=2):
+            nonlocal settles
+            second.check()
+            settles += 1
+            if settles == 2:
+                # Keep the old submitted code DOM until the resumed flow observes it.
+                await self.page.goto('https://chatgpt.com/welcome', wait_until='domcontentloaded')
+            await asyncio.sleep(.02)
+        flow.settle = delayed_navigation
+        await self.register_attempt(flow)
+        self.assertEqual(self.submissions, [('/fixture/code', {'value': '123456', 'enterPresses': 1})])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        second.wait_code.assert_not_awaited()
+        second.prepare_mail.assert_not_called()
+        self.assertEqual(self.mail_fence, fence)
+        self.assertEqual(self.last_mail_id, 'fixture-mail-1')
+        self.assertTrue(flow.data['registered'])
+        self.assertIs(flow.page, self.page)
+        self.assertIs(flow.context, self.context)
+        self.assertEqual(self.page_errors, [])
+
+    async def test_expired_wait_before_code_submission_still_automatically_delivers_once(self):
+        await self.serve_form('code', auto_navigation=True)
+        first, flow = self.new_attempt(1)
+        wait_entered = asyncio.Event()
+        original_wait = first.wait_code
+        async def wait_then_mark():
+            wait_entered.set()
+            return await original_wait()
+        first.wait_code = AsyncMock(side_effect=wait_then_mark)
+        async def expire_wait():
+            await asyncio.wait_for(wait_entered.wait(), timeout=10)
+            first.deadline = time.monotonic() - 1
+        expiration = asyncio.create_task(expire_wait())
+        try:
+            await self.register_attempt(flow, reason='mailbox_timeout')
+        finally:
+            await expiration
+        self.assertEqual(self.submissions, [])
+        first.wait_code.assert_awaited_once()
+        self.assertIsNone(self.last_mail_id)
+        self.assertFalse(self.registration_state.get('code_submitted', False))
+        fence = self.mail_fence
+        self.auto_delivery = True
+        second, flow = self.new_attempt(2)
+        await self.register_attempt(flow)
+        self.assertEqual(self.submissions, [('/fixture/code', {'value': '123456', 'enterPresses': 1})])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        second.wait_code.assert_awaited_once()
+        second.prepare_mail.assert_called_once_with('email_code')
+        self.assertEqual(self.last_mail_id, 'fixture-mail-2')
+        self.assertEqual(self.mail_fence, fence)
+        self.assertTrue(flow.data['registered'])
+        self.assertIs(flow.context, self.context)
+        self.assertEqual(self.page_errors, [])
+
+    async def test_auto_submitted_code_interrupted_fill_never_replays_on_new_attempt(self):
+        from playwright.async_api import Error
+        from registration_browser import CODE_INPUT
+        self.auto_delivery = True
+        await self.serve_form('code', auto_submit=True)
+        first, flow = self.new_attempt(1)
+        original_field = flow.field
+        async def navigation_interrupt(page, selector):
+            field = await original_field(page, selector)
+            if field and selector == CODE_INPUT:
+                async def fill_and_interrupt(value):
+                    await field.fill(value)  # Native oninput sends a real fixture POST.
+                    await asyncio.wait_for(self.post_seen.wait(), timeout=5)
+                    await page.goto('https://chatgpt.com/email-verification', wait_until='domcontentloaded')
+                    # Deterministic fault after real submission/navigation, before fill returns.
+                    raise Error('Execution context was destroyed during fixture navigation')
+                return SimpleNamespace(fill=fill_and_interrupt, press=field.press)
+            return field
+        flow.field = navigation_interrupt
+        with self.assertRaises(Error):
+            await self.register_attempt(flow)
+        self.assertEqual(self.submissions, [('/fixture/code', {'value': '123456', 'enterPresses': 0})])
+        self.assertEqual(self.last_mail_id, 'fixture-mail-1')
+        first.deadline = time.monotonic() - 1
+        first.wait_code.assert_awaited_once()
+        second, flow = self.new_attempt(2)
+        settles = 0
+        async def delayed_navigation(_seconds=2):
+            nonlocal settles
+            second.check()
+            settles += 1
+            if settles == 2:
+                await self.page.goto('https://chatgpt.com/welcome', wait_until='domcontentloaded')
+            await asyncio.sleep(.02)
+        flow.settle = delayed_navigation
+        await self.register_attempt(flow)
+        self.assertEqual(self.submissions, [('/fixture/code', {'value': '123456', 'enterPresses': 0})])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        second.wait_code.assert_not_awaited()
+        second.prepare_mail.assert_not_called()
+        self.assertEqual(self.last_mail_id, 'fixture-mail-1')
+        self.assertTrue(flow.data['registered'])
+        self.assertIs(flow.context, self.context)
+        self.assertEqual(self.page_errors, [])
+
+
 if __name__ == '__main__':
     unittest.main()
