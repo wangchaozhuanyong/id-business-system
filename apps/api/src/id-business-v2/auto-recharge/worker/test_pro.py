@@ -10,7 +10,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlsplit
 
-from playwright.async_api import async_playwright
+from playwright._impl._errors import TargetClosedError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from attempt_ledger import AttemptLedger, existing_checkout
 from browser_checkout import NetworkGuard, quote_from_page, quote_from_text, workflow
@@ -19,7 +20,7 @@ from pay import choose_plan, run_payment, verify_identity_again
 from payment_state import PaymentLedger, outcome, quote_digest
 from payment_recovery import recheck_in_context
 from plans import checkout_option_plan, checkout_text_plan, plan_spec, selection_spec
-from plan_selection import select_plan, verify_selected_plan, price_pattern
+from plan_selection import Selection, select_plan, verify_selected_plan, price_pattern
 from test_payment import details
 from test_subscribe import fixture, account
 
@@ -204,6 +205,117 @@ class ProStateTests(unittest.TestCase):
         for number, label in ((1, "Go"), (2, "Plus"), (3, "Pro（标准）"), (4, "Pro（更多使用额度）"), (5, "Pro（最高使用额度）")):
             self.assertIn(f"{number}. {label}", output.getvalue())
         self.assertNotIn("美元", output.getvalue())
+
+
+class ProMenuDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.page = MagicMock(name='menu-page')
+        self.scope = MagicMock(name='plan-scope')
+        self.cue = MagicMock(name='page-cue')
+        self.cue.first = self.cue
+        self.cue.or_.return_value = self.cue
+        self.cue.wait_for = AsyncMock()
+        self.cue.count = AsyncMock(return_value=0)
+        self.scoped_cue = MagicMock(name='scoped-cue')
+        self.scoped_cue.or_.return_value = self.scoped_cue
+        self.scoped_cue.count = AsyncMock(return_value=1)
+        self.report = MagicMock()
+        self.selection = Selection(self.page, self.report)
+        self.enterContext(patch.object(self.selection, 'timeout', return_value=1234))
+        self.enterContext(patch('plan_selection.personal_control', side_effect=
+            lambda scope: self.cue if scope is self.page else self.scoped_cue))
+        self.enterContext(patch('plan_selection.buttons', side_effect=
+            lambda scope, _name: self.cue if scope is self.page else self.scoped_cue))
+        self.plan_scope = self.enterContext(patch('plan_selection.plan_scope',
+            new=AsyncMock(return_value=self.scope)))
+
+    async def test_menu_timeout_preserves_error_type_and_observed_zero(self):
+        self.cue.wait_for.side_effect = PlaywrightTimeoutError('synthetic menu timeout')
+        with self.assertRaises(Stop) as blocked:
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(self.selection.diagnostics, {
+            'step': 'open_menu', 'available_plans': [],
+            'error_type': 'TimeoutError', 'matched_count': 0,
+        })
+        self.cue.count.assert_awaited_once_with()
+        self.plan_scope.assert_not_awaited()
+
+    async def test_closed_page_preserves_existing_stop_and_error_type(self):
+        self.cue.wait_for.side_effect = TargetClosedError()
+        with self.assertRaises(Stop) as blocked:
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(self.selection.diagnostics['error_type'], 'TargetClosedError')
+        self.cue.count.assert_awaited_once_with()
+        self.plan_scope.assert_not_awaited()
+
+    async def test_arbitrary_exception_body_does_not_enter_diagnostics(self):
+        private_message = 'synthetic sessionToken=private; card=private; html=<input>'
+        self.cue.wait_for.side_effect = RuntimeError(private_message)
+        with self.assertRaises(Stop) as blocked:
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(self.selection.diagnostics, {
+            'step': 'open_menu', 'available_plans': [],
+            'error_type': 'UnexpectedError', 'matched_count': 0,
+        })
+        public_values = json.dumps({'result': blocked.exception.report,
+                                   'diagnostics': self.selection.diagnostics})
+        self.assertNotIn(private_message, public_values)
+        self.assertNotIn('sessionToken', public_values)
+        self.assertNotIn('html', public_values)
+
+    async def test_failed_count_query_keeps_original_error_without_fabricated_zero(self):
+        self.cue.wait_for.side_effect = TargetClosedError()
+        self.cue.count.side_effect = RuntimeError('synthetic diagnostic query failed')
+        with self.assertRaises(Stop) as blocked:
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(self.selection.diagnostics['error_type'], 'TargetClosedError')
+        self.assertNotIn('matched_count', self.selection.diagnostics)
+        self.cue.count.assert_awaited_once_with()
+        self.plan_scope.assert_not_awaited()
+
+    async def test_failed_count_query_drops_a_previous_measurement(self):
+        self.selection.diagnostics['matched_count'] = 1
+        self.cue.wait_for.side_effect = PlaywrightTimeoutError('synthetic menu timeout')
+        self.cue.count.side_effect = TargetClosedError()
+        with self.assertRaises(Stop) as blocked:
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(self.selection.diagnostics['error_type'], 'TimeoutError')
+        self.assertNotIn('matched_count', self.selection.diagnostics)
+
+    async def test_observed_menu_count_is_bounded(self):
+        self.cue.wait_for.side_effect = PlaywrightTimeoutError('synthetic menu timeout')
+        self.cue.count.return_value = 125
+        with self.assertRaises(Stop):
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(self.selection.diagnostics['matched_count'], 100)
+
+    async def test_visible_page_cue_without_scoped_cue_preserves_stop_and_region_count(self):
+        self.scoped_cue.count.return_value = 0
+        with self.assertRaises(Stop) as blocked:
+            await self.selection.wait_for_plan_scope()
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(self.selection.diagnostics, {
+            'step': 'open_menu', 'available_plans': [], 'role': 'region', 'matched_count': 0,
+        })
+        self.cue.wait_for.assert_awaited_once_with(state='visible', timeout=1234)
+        self.cue.count.assert_not_awaited()
+        self.plan_scope.assert_awaited_once_with(self.page)
+        self.scoped_cue.count.assert_awaited_once_with()
+
+    async def test_ready_menu_returns_existing_scope_without_extra_diagnostics_or_calls(self):
+        original = dict(self.selection.diagnostics)
+        self.assertIs(await self.selection.wait_for_plan_scope(), self.scope)
+        self.assertEqual(self.selection.diagnostics, original)
+        self.cue.wait_for.assert_awaited_once_with(state='visible', timeout=1234)
+        self.cue.count.assert_not_awaited()
+        self.plan_scope.assert_awaited_once_with(self.page)
+        self.scoped_cue.count.assert_awaited_once_with()
+        self.report.assert_not_called()
 
 
 class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
