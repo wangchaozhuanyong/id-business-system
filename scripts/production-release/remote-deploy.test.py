@@ -1044,7 +1044,57 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
     def test_holder_identity_and_elapsed_use_only_controlled_fields(self):
         self.assertEqual(self.summary(), {'status': 'HELD', 'holders': [{
             'kind': 'FLOCK', 'mode': 'WRITE', 'pid': self.pid, 'comm': 'python3',
-            'state': 'S', 'elapsedSeconds': 900, 'script': 'PYTHON_INLINE'}]})
+            'state': 'S', 'elapsedSeconds': 900, 'script': 'PYTHON_INLINE', 'cwd': 'NOT_MEASURED',
+            'commandUuid': None, 'parent': {'pid': None, 'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'}}]})
+
+    def test_stdin_owner_ssm_cwd_and_only_one_parent_are_closed(self):
+        command = '12345678-1234-1234-1234-123456789abc'
+        (self.process_directory / 'cmdline').write_bytes(b'python3\0-\0SENTINEL_PRIVATE_THIRD_ARG\0')
+        cwd = self.process_directory / 'cwd'
+        cwd.symlink_to('/var/lib/amazon/ssm/i-123456789abcdef01/document/orchestration/' + command
+                       + '/awsrunShellScript/0.awsrunShellScript')
+        data = (self.process_directory / 'stat').read_text().replace(') S 0 ', ') S 23456 ', 1)
+        (self.process_directory / 'stat').write_text(data)
+        parent = self.proc / '23456'
+        parent.mkdir()
+        (parent / 'stat').write_text('23456 (bash) S ' + ' '.join(['34567', *(['0'] * 17), '10000', '0']) + '\n')
+        original_open = deployment.os.open
+        paths = []
+        def opened(path, flags, *args, **kwargs):
+            paths.append(str(path))
+            return original_open(path, flags, *args, **kwargs)
+        with patch.object(deployment.os, 'open', side_effect=opened):
+            holder = self.summary()['holders'][0]
+        self.assertEqual(holder['script'], 'PYTHON_STDIN')
+        self.assertEqual(holder['cwd'], 'SSM_ORCHESTRATION')
+        self.assertEqual(holder['commandUuid'], command)
+        self.assertEqual(holder['parent'], {'pid': 23456, 'comm': 'bash', 'state': 'S'})
+        self.assertFalse(any('/34567/' in path for path in paths))
+        self.assertNotIn('SENTINEL', json.dumps(holder))
+        self.assertNotIn('/var/', json.dumps(holder))
+        self.assertEqual(self.namespace['readonly_receipts'](json.dumps({'releaseLock': self.summary()}), False),
+                         [{'releaseLock': self.summary()}])
+
+    def test_cwd_parent_and_new_owner_unknown_text_never_escape(self):
+        cwd = self.process_directory / 'cwd'
+        for path, expected in (('/private/SENTINEL_PRIVATE_PATH', 'OTHER'),
+                               ('/opt/id-business-v2/releases/SENTINEL_PRIVATE_PATH', 'PROJECT')):
+            cwd.symlink_to(path)
+            holder = self.summary()['holders'][0]
+            self.assertEqual(holder['cwd'], expected)
+            self.assertIsNone(holder['commandUuid'])
+            self.assertNotIn('SENTINEL', json.dumps(holder))
+            cwd.unlink()
+        lock = {'releaseLock': self.summary()}
+        for path, value in ((('cwd',), 'SENTINEL'), (('commandUuid',), 'SENTINEL'),
+                            (('parent', 'comm'), 'SENTINEL'), (('parent', 'private'), 'SENTINEL')):
+            bad = copy.deepcopy(lock)
+            row = bad['releaseLock']['holders'][0]
+            for key in path[:-1]:
+                row = row[key]
+            row[path[-1]] = value
+            self.assertEqual(self.namespace['readonly_receipts'](json.dumps(bad), False),
+                             [{'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}])
 
     def test_only_readonly_nofollow_nonblocking_opens_and_first_two_arguments_are_read(self):
         original_open, original_read = deployment.os.open, deployment.os.read
@@ -1200,6 +1250,14 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
             self.assertEqual(receipts[0]['releaseLock']['status'], 'HELD')
             self.assertEqual(receipts[1], {'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'
                              if manifest.startswith('{') else 'MANIFEST_UNAVAILABLE'})
+            if manifest.startswith('{'):
+                self.assertEqual(len(receipts), 3)
+                detail = receipts[2]['fixedProofDiagnostic']
+                self.assertFalse(detail['proofAccepted'])
+                self.assertEqual(detail['currentCommit'], self.namespace['PROOF_CURRENT'])
+                self.assertEqual(detail['receipts']['release-manifest.json']['fileStatus'], 'UNSAFE_MODE')
+            else:
+                self.assertEqual(len(receipts), 2)
             self.assertNotIn('SENTINEL', output.getvalue())
 
     def test_failed_stdout_filter_suppresses_unknown_text_and_extra_receipts(self):
@@ -1393,6 +1451,24 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
         self.assertEqual(summary['reason'], 'Resource temporarily unavailable')
         self.assertNotIn('SENTINEL', result.stdout + result.stderr)
         self.assertFalse((self.root / '.deploy/production-release/readonly-diagnostics-result.json').exists())
+        detail = self.namespace['fixed_proof_diagnostic'](self.root / 'missing-current',
+            {'commit': self.namespace['PROOF_CURRENT']}, {})
+        failure = {'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'}
+        envelope = {'fixedProofDiagnostic': detail}
+        output_path.write_text('\n'.join(json.dumps(item) for item in (lock, failure, envelope))
+            + '\nSENTINEL_PRIVATE_TRAILING_OUTPUT\n')
+        failed_proof = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
+            env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(failed_proof.returncode, 1, failed_proof.stderr)
+        proof_lines = failed_proof.stdout.splitlines()
+        self.assertEqual([json.loads(line) for line in proof_lines[:3]], [lock, failure, envelope])
+        self.assertFalse(json.loads(proof_lines[2])['fixedProofDiagnostic']['proofAccepted'])
+        self.assertEqual(json.loads(proof_lines[3].removeprefix('RELEASE_FAILURE_DIAGNOSTIC '))['errorType'],
+                         'BlockingIOError')
+        self.assertNotIn('SENTINEL', failed_proof.stdout + failed_proof.stderr)
+        self.assertLess(len(failed_proof.stdout.encode()), 24000)
+        output_path.write_text(json.dumps(lock) + '\n' + json.dumps({'secret': 'SENTINEL_PRIVATE_STDOUT'}) + '\n')
         aws.write_text(aws.read_text().replace('"ssm wait") exit 1 ;;', '"ssm wait") exit 0 ;;'))
         rejected = deployment.subprocess.run(['bash', '-c', shell], cwd=self.root,
             env={'PATH': str(executable_directory) + ':/bin:/usr/bin', 'PRODUCTION_INSTANCE_ID': 'i-fixture'},
@@ -1409,6 +1485,180 @@ class ReadOnlyReleaseLockTests(unittest.TestCase):
             capture_output=True, text=True, timeout=30)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual([json.loads(line) for line in accepted.stdout.splitlines()], [lock, diagnostics])
+
+
+class ReadOnlyFixedProofDiagnosticTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        ReadOnlyReleaseProofTests.setUpClass()
+        cls.namespace = dict(ReadOnlyReleaseProofTests.namespace)
+
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=output)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.diagnostic = self.namespace['fixed_proof_diagnostic']
+        self.manifest = copy.deepcopy(self.namespace['PROOF_RECEIPT']['manifest'])
+        self.manifest['private'] = 'SENTINEL_PRIVATE_MANIFEST'
+        self.files = {}
+        gates = []
+        for stage in ('before', 'after'):
+            gate = {'stage': stage, 'checkCount': 48, 'executedCheckCount': 48,
+                    'unavailableCheckCount': 0, 'violationCount': 10}
+            report = {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': gate,
+                'checks': [{'code': f'fixture-{index}', 'status': 'EXECUTED', 'count': 10 if index == 0 else 0}
+                           for index in range(48)], 'private': 'SENTINEL_PRIVATE_AUDIT'}
+            self.files[stage + '-audit.json'] = report
+            self.manifest['dataAudit' + stage.title()] = {'checkCount': 48, 'violationCount': 10,
+                                                        'historicalException': gate}
+            gates.append((stage, self.namespace['proof_fingerprint'](gate)))
+        self.files['release-manifest.json'] = self.manifest
+        pins = copy.deepcopy(self.namespace['PROOF_RECEIPT'])
+        for name, value in self.files.items():
+            path = self.root / name
+            path.write_text(json.dumps(value))
+            path.chmod(0o600)
+            key = {'release-manifest.json': 'manifestSha256', 'before-audit.json': 'beforeReceiptSha256',
+                   'after-audit.json': 'afterReceiptSha256'}[name]
+            pins[key] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+        self.patcher = patch.dict(self.diagnostic.__globals__, {'PROOF_RECEIPT': pins, 'PROOF_GATE_HASHES': tuple(gates)})
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+        self.states = {service: {'image': image, 'status': 'running', 'health': 'healthy'}
+                       for service, image in pins['images'].items()}
+
+    def summary(self):
+        result = self.diagnostic(self.root, self.manifest, self.states)
+        self.assertNotIn('SENTINEL', json.dumps(result))
+        self.assertIs(result['proofAccepted'], False)
+        self.assertEqual(self.namespace['closed_fixed_proof_diagnostic'](result), result)
+        return result
+
+    def test_matching_receipts_are_diagnostic_only_without_acceptance(self):
+        result = self.summary()
+        self.assertTrue(result['provenanceMatched'])
+        self.assertEqual(result['currentCommit'], self.namespace['PROOF_CURRENT'])
+        for row in result['receipts'].values():
+            self.assertEqual(row['fileStatus'], 'READABLE')
+            self.assertTrue(row['readable'])
+            self.assertTrue(row['rawHashMatched'])
+            self.assertTrue(row['gateHashMatched'])
+            self.assertTrue(row['countersMatched'])
+
+    def test_file_metadata_statuses_do_not_read_rejected_body(self):
+        path = self.root / 'before-audit.json'
+        original = path.read_bytes()
+        for status in ('MISSING', 'SYMLINK', 'NOT_REGULAR', 'HARDLINK', 'UNSAFE_MODE', 'OVERSIZED'):
+            with self.subTest(status=status):
+                path.unlink()
+                other = self.root / 'other'
+                if status == 'SYMLINK':
+                    other.write_bytes(original)
+                    path.symlink_to(other)
+                elif status == 'NOT_REGULAR':
+                    path.mkdir()
+                elif status != 'MISSING':
+                    path.write_bytes(original)
+                    path.chmod(0o644 if status == 'UNSAFE_MODE' else 0o600)
+                    if status == 'HARDLINK':
+                        deployment.os.link(path, other)
+                    elif status == 'OVERSIZED':
+                        with path.open('r+b') as source:
+                            source.truncate(8 * 1024 * 1024 + 1)
+                reader = self.diagnostic.__globals__['proof_private_bytes']
+                reads = []
+                def observed(candidate):
+                    reads.append(candidate)
+                    return reader(candidate)
+                with patch.dict(self.diagnostic.__globals__, {'proof_private_bytes': observed}):
+                    row = self.summary()['receipts']['before-audit.json']
+                self.assertEqual(row['fileStatus'], status)
+                self.assertFalse(row['readable'])
+                self.assertIsNone(row['actualSha256'])
+                self.assertNotIn(path, reads)
+                if path.is_dir():
+                    path.rmdir()
+                elif path.exists() or path.is_symlink():
+                    path.unlink()
+                if other.exists():
+                    other.unlink()
+                path.write_bytes(original)
+                path.chmod(0o600)
+
+    def test_permission_failure_and_changed_read_remain_unmeasured(self):
+        reader = self.diagnostic.__globals__['proof_private_bytes']
+        path = self.root / 'before-audit.json'
+        def denied(candidate):
+            if candidate == path:
+                raise PermissionError('SENTINEL_PRIVATE_PERMISSION')
+            return reader(candidate)
+        with patch.dict(self.diagnostic.__globals__, {'proof_private_bytes': denied}):
+            row = self.summary()['receipts'][path.name]
+            self.assertEqual(row['fileStatus'], 'NOT_MEASURED')
+            self.assertFalse(row['readable'])
+        def changed(candidate):
+            raw = reader(candidate)
+            if candidate == path:
+                with candidate.open('ab') as source:
+                    source.write(b' ')
+            return raw
+        with patch.dict(self.diagnostic.__globals__, {'proof_private_bytes': changed}):
+            row = self.summary()['receipts'][path.name]
+            self.assertEqual(row['fileStatus'], 'CHANGED_DURING_READ')
+            self.assertFalse(row['readable'])
+            self.assertIsNone(row['rawHashMatched'])
+
+    def test_hash_gate_and_counter_failures_are_distinct_without_financial_values(self):
+        path = self.root / 'before-audit.json'
+        value = copy.deepcopy(self.files[path.name])
+        value['checks'][0]['count'] = 11
+        path.write_text(json.dumps(value))
+        row = self.summary()['receipts'][path.name]
+        self.assertFalse(row['rawHashMatched'])
+        self.assertTrue(row['gateHashMatched'])
+        self.assertFalse(row['countersMatched'])
+        value['gate']['stage'] = 'SENTINEL_PRIVATE_STAGE'
+        path.write_text(json.dumps(value))
+        row = self.summary()['receipts'][path.name]
+        self.assertFalse(row['gateHashMatched'])
+        path.write_text('SENTINEL_PRIVATE_BAD_JSON')
+        row = self.summary()['receipts'][path.name]
+        self.assertEqual(row['fileStatus'], 'READABLE')
+        self.assertFalse(row['gateHashMatched'])
+        self.assertFalse(row['countersMatched'])
+
+    def test_service_missing_or_unknown_values_are_not_filled_with_health(self):
+        self.states['api'] = {'image': 'SENTINEL_PRIVATE_IMAGE', 'status': 'SENTINEL', 'health': None}
+        del self.states['admin']
+        result = self.summary()
+        for service in ('api', 'admin'):
+            self.assertEqual(result['services'][service], {'image': None, 'status': 'NOT_MEASURED', 'health': 'NOT_MEASURED'})
+
+    def test_failed_third_receipt_is_closed_and_never_accepted_on_success(self):
+        lock = {'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}
+        failure = {'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'}
+        detail = {'fixedProofDiagnostic': self.summary()}
+        wire = '\n'.join(json.dumps(item) for item in (lock, failure, detail))
+        self.assertEqual(self.namespace['readonly_receipts'](wire, False), [lock, failure, detail])
+        with self.assertRaisesRegex(RuntimeError, '^Read-only diagnostic output unavailable$'):
+            self.namespace['readonly_receipts'](wire, True)
+        for path, value in ((('private',), 'SENTINEL'), (('proofAccepted',), True),
+                            (('currentCommit',), 'SENTINEL'), (('provenanceMatched',), 1),
+                            (('services', 'api', 'image'), 'SENTINEL'),
+                            (('receipts', 'before-audit.json', 'fileStatus'), 'SENTINEL'),
+                            (('receipts', 'before-audit.json', 'private'), 'SENTINEL'),
+                            (('receipts', 'before-audit.json', 'actualSha256'), 'SENTINEL'),
+                            (('receipts', 'before-audit.json', 'rawHashMatched'), 1)):
+            bad = copy.deepcopy(detail)
+            target = bad['fixedProofDiagnostic']
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            with self.subTest(path=path):
+                receipts = self.namespace['readonly_receipts']('\n'.join(json.dumps(item) for item in (lock, failure, bad)), False)
+                self.assertEqual(receipts, [lock, failure])
 
 
 class HistoricalDiagnosticsTests(unittest.TestCase):
