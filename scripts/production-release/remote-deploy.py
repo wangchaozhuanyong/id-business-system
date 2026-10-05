@@ -1176,8 +1176,309 @@ def main():
     return 0
 
 
+def fixed_probe_regular_bytes(path, modes=None):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as source:
+        before = os.fstat(source.fileno())
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                                 info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and (modes is None or stat.S_IMODE(before.st_mode) in modes),
+                'Fixed audit probe file rejected')
+        data = source.read(8 * 1024 * 1024 + 1)
+        require(len(data) <= 8 * 1024 * 1024
+                and identity(before) == identity(os.fstat(source.fileno()))
+                and identity(before) == identity(path.lstat()), 'Fixed audit probe file rejected')
+    return data, stat.S_IMODE(before.st_mode), identity(before)
+
+
+def fixed_probe_tree_snapshot(source):
+    snapshot = {}
+    for path in (source, *source.rglob('*')):
+        metadata = path.lstat(); name = str(path.relative_to(source))
+        require(not path.is_symlink() and (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)),
+                'Fixed audit probe source rejected')
+        if stat.S_ISREG(metadata.st_mode):
+            content, mode, identity = fixed_probe_regular_bytes(path)
+            snapshot[name] = ('file', hashlib.sha256(content).hexdigest(), mode, identity)
+        else:
+            snapshot[name] = ('directory', metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                             metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+    return snapshot
+
+
+def fixed_probe_source(previous, manifest):
+    commit = '804bf1634032357ae9e0d2067b28231ac4d560b8'
+    candidates = [path for path in (BASE / 'releases').iterdir()
+                  if re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + commit[:12], path.name)]
+    require(len(candidates) == 1 and candidates[0] != previous
+            and candidates[0].is_dir() and not candidates[0].is_symlink(),
+            'Fixed audit probe source rejected')
+    source = candidates[0]
+    url = f'https://github.com/wangchaozhuanyong/id-business-system/archive/{commit}.tar.gz'
+    with urllib.request.urlopen(url, timeout=60) as response:
+        data = response.read(64 * 1024 * 1024 + 1)
+    require(len(data) <= 64 * 1024 * 1024, 'Fixed audit probe source rejected')
+    prefix = 'id-business-system-' + commit + '/'
+    expected = {}; directories = set()
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+        for member in archive.getmembers():
+            require((member.name == prefix[:-1] or member.name.startswith(prefix))
+                    and '..' not in Path(member.name).parts
+                    and (member.isfile() or member.isdir()), 'Fixed audit probe source rejected')
+            name = member.name[len(prefix):]
+            if not name:
+                continue
+            directories.update(str(parent) for parent in Path(name).parents if str(parent) != '.')
+            if member.isdir():
+                directories.add(name.rstrip('/')); continue
+            require(name not in expected, 'Fixed audit probe source rejected')
+            mode = member.mode & 0o7777
+            require(name not in DIAGNOSTICS_CANDIDATE_FILES or mode in (0o644, 0o664),
+                    'Fixed audit probe source rejected')
+            expected[name] = (hashlib.sha256(archive.extractfile(member).read()).hexdigest(),
+                              0o644 if name in DIAGNOSTICS_CANDIDATE_FILES else mode)
+    actual = {}; actual_directories = {'.'}
+    for path in source.rglob('*'):
+        name = str(path.relative_to(source)); metadata = path.lstat()
+        require(not path.is_symlink() and (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)),
+                'Fixed audit probe source rejected')
+        if stat.S_ISDIR(metadata.st_mode):
+            require(name in directories, 'Fixed audit probe source rejected')
+            actual_directories.add(name); continue
+        content, mode, identity = fixed_probe_regular_bytes(path)
+        actual[name] = (hashlib.sha256(content).hexdigest(), mode, identity)
+    extra = {'.env.aws.production', 'compose.release.json'}
+    require(set(actual) == set(expected) | extra
+            and all(actual[name][:2] == value for name, value in expected.items()),
+            'Fixed audit probe source rejected')
+    environment, _mode, _identity = fixed_probe_regular_bytes(source / '.env.aws.production', (0o600,))
+    require(environment == fixed_probe_regular_bytes(previous / '.env.aws.production', (0o400, 0o600))[0],
+            'Fixed audit probe source rejected')
+    override = json.loads(fixed_probe_regular_bytes(source / 'compose.release.json', (0o400, 0o600, 0o644))[0])
+    require(isinstance(override, dict) and set(override) == {'services'}
+            and isinstance(override['services'], dict)
+            and set(override['services']) == {*SERVICES, 'migrate'}, 'Fixed audit probe source rejected')
+    repository = manifest['images']['auto-recharge']['reference'].rsplit(':', 1)[0]
+    for service, value in override['services'].items():
+        require(isinstance(value, dict) and set(value) == {'image', 'pull_policy'}
+                and value['pull_policy'] == 'never' and isinstance(value['image'], str)
+                and (value['image'] == repository + ':' + commit + '-37298848626-1-auto-recharge'
+                     if service == 'auto-recharge' else
+                     value['image'] == manifest['images'][service]['reference']),
+                'Fixed audit probe source rejected')
+    policy = continuation_policy(source, HISTORY_DIAGNOSTICS_POLICY_ID)
+    require(all(actual[name][0] == digest for name, digest in policy['candidateSourceSha256'].items()),
+            'Fixed audit probe source rejected')
+    snapshot = fixed_probe_tree_snapshot(source)
+    require({name for name, value in snapshot.items() if value[0] == 'file'} == set(actual)
+            and {name for name, value in snapshot.items() if value[0] == 'directory'} == actual_directories
+            and all(snapshot[name][1:] == value for name, value in actual.items()),
+            'Fixed audit probe source rejected')
+    return source, policy, snapshot
+
+
+def fixed_probe_failure(stdout, stderr):
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('Duplicate fixed probe field')
+            value[key] = item
+        return value
+    def reject_constant(_value):
+        raise ValueError('Invalid fixed probe constant')
+    try:
+        value = json.loads(stdout, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        if (isinstance(value, dict) and set(value) == {'ok', 'gate', 'reason'}
+                and value['ok'] is False and value['gate'] == {'accepted': False}
+                and type(value['gate'].get('accepted')) is bool
+                and value['reason'] == 'Historical release audit rejected; raw data suppressed'):
+            return 'HISTORICAL_AUDIT_REJECTED'
+    except (ValueError, TypeError):
+        pass
+    if len(stderr) <= 64 * 1024:
+        for line in stderr.splitlines():
+            match = re.fullmatch(r"\s*code: ['\"](ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|EACCES)['\"],?\s*", line)
+            if match:
+                return 'NODE_PERMISSION_DENIED' if match[1] == 'EACCES' else 'NODE_MODULE_NOT_FOUND'
+            if line in ('SyntaxError: Unexpected token', 'SyntaxError: Unexpected identifier'):
+                return 'NODE_SYNTAX_ERROR'
+            if line in ('Error: Historical release policy identity, baseline or rules changed',
+                        'Error: Historical continuation changed the original approved scope',
+                        'Error: Historical diagnostics changed the approved seven source files',
+                        'Error: Historical release exception scope changed',
+                        'Error: Historical release entity set changed',
+                        'Error: Invalid frozen historical source'):
+                return 'HISTORICAL_POLICY_REJECTED'
+    return 'SUPPRESSED'
+
+
+def probe_fixed_failed_audit():
+    result = {key: None for key in ('sourceMatched', 'baselineMatched', 'imagePresent',
+        'bootstrapAccessible', 'auditPassed', 'exitCode', 'knownFailureEnum',
+        'checkCount', 'executedCount', 'unavailableCount', 'violationCount', 'unchangedServices')}
+    result.update(status='NOT_MEASURED', receiptsWritten=False)
+    descriptor = None; previous = None; before = None; snapshot_files = None
+    source = None; source_snapshot = None
+    original_compose = globals()['compose']; phase = 'LOCK_UNAVAILABLE'
+    class MemoryReceipt:
+        def write_text(self, content):
+            value = json.loads(content); gate = value['gate']
+            for target, raw in (('checkCount', value.get('checkCount')),
+                                ('executedCount', gate.get('executedCheckCount')),
+                                ('unavailableCount', gate.get('unavailableCheckCount')),
+                                ('violationCount', value.get('violationCount'))):
+                bound = 1000000 if target == 'violationCount' else 48
+                if type(raw) is int and 0 <= raw <= bound:
+                    result[target] = raw
+            return len(content)
+        def chmod(self, mode):
+            require(mode == 0o600, 'Fixed audit probe receipt rejected')
+    try:
+        descriptor = os.open(BASE / '.deploy.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        metadata = os.fstat(descriptor)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+                'Fixed audit probe lock rejected')
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            phase = 'LOCK_HELD'; raise
+        phase = 'BASELINE_REJECTED'
+        previous = (BASE / 'current').resolve(strict=True)
+        require(previous.parent == BASE / 'releases' and previous.is_dir(), 'Fixed audit probe baseline rejected')
+        manifest = json.loads(private_historical_receipt(previous / 'release-manifest.json'))
+        require(manifest.get('commit') == HISTORY_DIAGNOSTICS_BASELINE, 'Fixed audit probe baseline rejected')
+        phase = 'SNAPSHOT_UNAVAILABLE'
+        before = {service: service_state(previous, service, include_container_id=True)
+                  for service in production_services(previous)}
+        require(all(value['status'] == 'running' and (service == 'caddy' or value['health'] == 'healthy')
+                    for service, value in before.items()), 'Fixed audit probe snapshot rejected')
+        phase = 'BASELINE_REJECTED'
+        require_diagnostics_registration_isolation(previous, manifest, before)
+        snapshot_files = {name: hashlib.sha256(fixed_probe_regular_bytes(previous / name,
+            (0o400, 0o600) if name in ('release-manifest.json', '.env.aws.production') else None)[0]).hexdigest()
+            for name in ('release-manifest.json', '.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml')}
+        phase = 'SOURCE_REJECTED'; source, policy, source_snapshot = fixed_probe_source(previous, manifest)
+        result['sourceMatched'] = True
+        phase = 'BASELINE_REJECTED'
+        require(verify_continuation_baseline(previous, policy, HISTORY_DIAGNOSTICS_POLICY_ID) == manifest,
+                'Fixed audit probe baseline rejected')
+        result['baselineMatched'] = True
+        phase = 'SUPPRESSED'
+        try:
+            assert_no_active_recharge(previous)
+        except RuntimeError as error:
+            if str(error) == 'Active recharge jobs prevent release':
+                phase = 'RECHARGE_ACTIVE'
+            raise
+        phase = 'IMAGE_INSPECT_UNAVAILABLE'
+        image = manifest['images']['migrate']['reference']
+        inspected = subprocess.run(('docker', 'image', 'inspect', image, '--format', '{{.Id}}'),
+            capture_output=True, text=True, timeout=30)
+        if inspected.returncode != 0:
+            if inspected.stderr.strip() == 'Error response from daemon: No such image: ' + image:
+                result['imagePresent'] = False; phase = 'IMAGE_MISSING'
+            raise RuntimeError('Fixed audit probe image rejected')
+        require(bool(re.fullmatch(r'sha256:[a-f0-9]{64}', inspected.stdout.strip())),
+                'Fixed audit probe image rejected')
+        result['imagePresent'] = True
+        phase = 'IMAGE_DIGEST_MISMATCH'
+        require(bool(re.fullmatch(r'sha256:[a-f0-9]{64}', str(manifest['images']['migrate'].get('digest', ''))))
+                and inspected.stdout.strip() == manifest['images']['migrate']['digest'],
+                'Fixed audit probe image rejected')
+        phase = 'SUPPRESSED'
+        expected = ('run', '--rm', '--no-deps', '-v', str(source / 'scripts') + ':/app/scripts:ro',
+            '-v', str(source / 'deploy/aws') + ':/release-policy:ro',
+            '-e', 'V2_DATA_INTEGRITY_DATABASE_URL', 'migrate', 'node', 'scripts/v2-release-history-audit.mjs',
+            '--policy=/release-policy/' + HISTORY_DIAGNOSTICS_POLICY_ID + '.json',
+            '--expected-current=' + HISTORY_DIAGNOSTICS_BASELINE, '--stage=before')
+        calls = []
+        def capture(directory, *args, env=None, timeout=300):
+            require(directory == previous and args == expected and timeout == 240 and not calls,
+                    'Fixed audit probe command rejected')
+            calls.append(True)
+            value = subprocess.run(('docker', 'compose', '--env-file', str(previous / '.env.aws.production'),
+                '-f', str(previous / 'docker-compose.aws-mysql.yml'),
+                '-f', str(previous / 'compose.release.json'), *args),
+                env=env, capture_output=True, text=True, timeout=timeout)
+            if type(value.returncode) is int and 0 <= value.returncode <= 255:
+                result['exitCode'] = value.returncode
+            if value.returncode:
+                result['knownFailureEnum'] = fixed_probe_failure(value.stdout, value.stderr)
+                if result['knownFailureEnum'] == 'HISTORICAL_AUDIT_REJECTED':
+                    result['bootstrapAccessible'] = True
+                result['auditPassed'] = False
+                raise RuntimeError('Fixed audit probe audit rejected')
+            require(len(value.stdout) <= 8 * 1024 * 1024, 'Fixed audit probe output rejected')
+            return value.stdout.strip()
+        globals()['compose'] = capture
+        try:
+            audit(previous, MemoryReceipt(), historical_diagnostics=True, stage='before', source=source)
+            result['auditPassed'] = True; result['bootstrapAccessible'] = True
+        except Exception as error:
+            if result['knownFailureEnum'] is None:
+                result['knownFailureEnum'] = ('AUDIT_COMMAND_BOUNDARY_REJECTED'
+                    if isinstance(error, RuntimeError) and str(error) == 'Fixed audit probe command rejected' else
+                    'HISTORICAL_GATE_REJECTED' if isinstance(error, RuntimeError) and str(error) in (
+                        'Approved historical integrity gate failed',
+                        'Approved historical continuation integrity gate failed') else
+                    'AUDIT_OUTPUT_REJECTED' if isinstance(error, (ValueError, TypeError)) else 'SUPPRESSED')
+            if result['exitCode'] is not None:
+                result['auditPassed'] = False
+            raise
+        finally:
+            globals()['compose'] = original_compose
+    except Exception:
+        result['status'] = 'REJECTED'
+        if result['knownFailureEnum'] is None:
+            result['knownFailureEnum'] = phase
+    finally:
+        globals()['compose'] = original_compose
+        if source is not None and source_snapshot is not None:
+            try:
+                if fixed_probe_tree_snapshot(source) != source_snapshot:
+                    result['sourceMatched'] = False; result['status'] = 'REJECTED'
+                    result['knownFailureEnum'] = result['knownFailureEnum'] or 'SOURCE_REJECTED'
+            except Exception:
+                result['sourceMatched'] = None; result['status'] = 'REJECTED'
+                result['knownFailureEnum'] = result['knownFailureEnum'] or 'SOURCE_REJECTED'
+        if before is not None and previous is not None and snapshot_files is not None:
+            try:
+                after = {service: service_state(previous, service, include_container_id=True)
+                         for service in production_services(previous)}
+                files_unchanged = snapshot_files is not None and all(hashlib.sha256(fixed_probe_regular_bytes(
+                    previous / name, (0o400, 0o600) if name in ('release-manifest.json', '.env.aws.production') else None
+                    )[0]).hexdigest() == digest for name, digest in snapshot_files.items())
+                result['unchangedServices'] = (after == before and files_unchanged
+                    and (BASE / 'current').resolve(strict=True) == previous
+                    and (BASE / '.deploy.lock').lstat().st_ino == os.fstat(descriptor).st_ino
+                    and (BASE / '.deploy.lock').lstat().st_dev == os.fstat(descriptor).st_dev)
+                if not result['unchangedServices']:
+                    result['status'] = 'REJECTED'
+                    result['knownFailureEnum'] = result['knownFailureEnum'] or 'UNCHANGED_SERVICES_REJECTED'
+            except Exception:
+                result['knownFailureEnum'] = result['knownFailureEnum'] or 'SNAPSHOT_UNAVAILABLE'
+        if descriptor is not None:
+            os.close(descriptor)
+    if (result['auditPassed'] is True and result['unchangedServices'] is True
+            and result['sourceMatched'] is True and result['baselineMatched'] is True
+            and result['imagePresent'] is True and result['bootstrapAccessible'] is True
+            and result['exitCode'] == 0 and result['checkCount'] == result['executedCount'] == 48
+            and result['unavailableCount'] == 0 and result['violationCount'] == 10
+            and result['knownFailureEnum'] is None):
+        result['status'] = 'PASSED'
+    elif result['status'] == 'NOT_MEASURED':
+        result['status'] = 'REJECTED'; result['knownFailureEnum'] = result['knownFailureEnum'] or 'SUPPRESSED'
+    return result
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['--summarize-command-result']:
         print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_failure_summary(json.load(sys.stdin))))
+    elif sys.argv[1:] == ['--probe-fixed-failed-audit']:
+        result = probe_fixed_failed_audit()
+        print('FIXED_FAILED_AUDIT_PROBE_JSON ' + json.dumps(result, separators=(',', ':')))
+        sys.exit(0 if result['status'] == 'PASSED' else 1)
     else:
         sys.exit(main())

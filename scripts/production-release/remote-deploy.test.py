@@ -3018,5 +3018,365 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
         self.assertEqual(result.run, [])
 
 
+class FixedFailedAuditProbeTests(unittest.TestCase):
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=output); self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name); (self.root / 'releases').mkdir()
+        self.previous = self.root / 'releases/previous'; self.previous.mkdir()
+        self.source = self.root / 'releases/20261005T000000Z-804bf1634032'; self.source.mkdir()
+        (self.root / 'current').symlink_to(self.previous)
+        (self.root / '.deploy.lock').write_bytes(b''); (self.root / '.deploy.lock').chmod(0o600)
+        fixture = HistoricalDiagnosticsTests(); self.policy, values = fixture.fixture(self.previous)
+        self.manifest = values['release-manifest.json']
+        self.manifest['images'] = {service: {'reference': 'fixture-registry:' + deployment.HISTORY_DIAGNOSTICS_BASELINE +
+            '-1-1-' + service, 'digest': 'sha256:' + deployment.hashlib.sha256(service.encode()).hexdigest()}
+            for service in (*deployment.SERVICES, 'migrate')}
+        fixture.save_fixture(self.previous, self.policy, values)
+        compose = (Path(__file__).resolve().parents[2] / 'docker-compose.aws-mysql.yml').read_bytes()
+        (self.previous / 'docker-compose.aws-mysql.yml').write_bytes(compose)
+        override = {'services': {name: {'image': image['reference'], 'pull_policy': 'never'}
+                                for name, image in self.manifest['images'].items()}}
+        previous_override = json.dumps(override).encode()
+        (self.previous / 'compose.release.json').write_bytes(previous_override)
+        environment = b'V2_DATA_INTEGRITY_DATABASE_URL=mysql://synthetic:synthetic@127.0.0.1/synthetic\n'
+        for directory in (self.previous, self.source):
+            (directory / '.env.aws.production').write_bytes(environment)
+            (directory / '.env.aws.production').chmod(0o600)
+        override['services']['auto-recharge']['image'] = 'fixture-registry:804bf1634032357ae9e0d2067b28231ac4d560b8-37298848626-1-auto-recharge'
+        (self.source / 'compose.release.json').write_text(json.dumps(override))
+        (self.source / 'compose.release.json').chmod(0o600)
+        self.files = {name: ('synthetic-diagnostics:' + name).encode()
+                      for name in self.policy['candidateSourceSha256']}
+        self.files['deploy/aws/' + deployment.HISTORY_DIAGNOSTICS_POLICY_ID + '.json'] = json.dumps(self.policy).encode()
+        self.files['scripts/v2-release-history-audit.mjs'] = b'synthetic fixed audited script'
+        for name, content in self.files.items():
+            path = self.source / name; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content); path.chmod(0o644 if name in deployment.DIAGNOSTICS_CANDIDATE_FILES else 0o664)
+        self.response = {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': {
+            'accepted': True, 'policyId': deployment.HISTORY_DIAGNOSTICS_POLICY_ID,
+            'expectedCurrent': deployment.HISTORY_DIAGNOSTICS_BASELINE, 'stage': 'before',
+            'checkCount': 48, 'violationCount': 10, 'status': 'APPROVED_HISTORICAL_EXCEPTIONS',
+            'executedCheckCount': 48, 'unavailableCheckCount': 0,
+            'continuationOf': deployment.HISTORY_POLICY_ID, 'fixedCurrent': deployment.HISTORY_DIAGNOSTICS_BASELINE,
+            'continuation': self.policy['continuation'], 'metadataSha256': self.policy['continuation']['metadataSha256'],
+            'sources': {name: group['sha256'] for name, group in self.policy['sources'].items()}}}
+        self.commands = []; self.inspections = 0; self.audit_exit = 0; self.audit_stderr = ''
+        self.restarted = False; self.sql_count = '0'; self.archive_mode = None; self.image_digest = None
+        for name, value in (
+            ('BASE', self.root), ('DIAGNOSTICS_MANIFEST_SHA256', self.policy['continuation']['manifestSha256']),
+            ('DIAGNOSTICS_POLICY_SHA256', deployment.historical_fingerprint(self.policy)),
+            ('DIAGNOSTICS_PROOF_SHA256', deployment.historical_fingerprint(self.policy['continuation'])),
+            ('DIAGNOSTICS_OVERRIDE_RAW_SHA256', deployment.hashlib.sha256(previous_override).hexdigest()),
+            ('DIAGNOSTICS_OVERRIDE_CANONICAL_SHA256', deployment.historical_fingerprint(json.loads(previous_override)))):
+            context = patch.object(deployment, name, value); context.start(); self.addCleanup(context.stop)
+        context = patch.object(deployment.urllib.request, 'urlopen', side_effect=self.download)
+        context.start(); self.addCleanup(context.stop)
+        context = patch.object(deployment.subprocess, 'run', side_effect=self.command)
+        self.process = context.start(); self.addCleanup(context.stop)
+
+    def download(self, url, **kwargs):
+        self.assertEqual(url, 'https://github.com/wangchaozhuanyong/id-business-system/archive/804bf1634032357ae9e0d2067b28231ac4d560b8.tar.gz')
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w:gz') as archive:
+            for name, content in self.files.items():
+                item = tarfile.TarInfo('id-business-system-804bf1634032357ae9e0d2067b28231ac4d560b8/' + name)
+                item.size = len(content); item.mode = self.archive_mode or 0o664
+                archive.addfile(item, io.BytesIO(content))
+        return io.BytesIO(data.getvalue())
+
+    def command(self, command, **kwargs):
+        command = tuple(command); self.commands.append(command)
+        stdout = ''; stderr = ''; code = 0
+        if command[:3] == ('docker', 'image', 'inspect'):
+            stdout = self.image_digest or self.manifest['images']['migrate']['digest']
+        elif command[:2] == ('docker', 'inspect'):
+            self.inspections += 1
+            service = next(name for name in deployment.ALL_SERVICES
+                if deployment.hashlib.sha256(name.encode()).hexdigest() == command[-1])
+            image = self.manifest['images'].get(service, {'reference': 'fixture:' + service,
+                                                        'digest': 'sha256:' + 'e' * 64})
+            stdout = json.dumps([{'Id': command[-1], 'Image': image['digest'], 'Config': {'Image': image['reference']},
+                'State': {'Status': 'running', 'Health': {'Status': 'healthy'} if service != 'caddy' else {},
+                          'StartedAt': 'changed' if self.restarted and self.inspections > 7 else 'fixed-start'}}])
+        elif command[:2] == ('docker', 'compose') and command[-3:-1] == ('ps', '-q'):
+            stdout = deployment.hashlib.sha256(command[-1].encode()).hexdigest()
+        elif command[:2] == ('docker', 'compose') and 'exec' in command:
+            self.assertIn('SELECT COUNT(*) FROM id_business_v2_recharge_jobs', command[-1])
+            stdout = self.sql_count
+        elif command[:2] == ('docker', 'compose') and 'run' in command:
+            self.assertIn('--stage=before', command)
+            self.assertNotIn('--before-receipt', ' '.join(command))
+            stdout = self.response if isinstance(self.response, str) else json.dumps(self.response)
+            code = self.audit_exit; stderr = self.audit_stderr
+        else:
+            raise AssertionError('Unexpected probe command')
+        return SimpleNamespace(returncode=code, stdout=stdout, stderr=stderr)
+
+    def probe(self):
+        before = {str(path.relative_to(self.root)): (path.read_bytes(), path.stat().st_mode)
+                  for path in self.root.rglob('*') if path.is_file() and not path.is_symlink()}
+        original_compose = deployment.compose
+        with redirect_stdout(io.StringIO()) as output:
+            result = deployment.probe_fixed_failed_audit()
+        self.assertEqual(output.getvalue(), '')
+        self.assertIs(deployment.compose, original_compose)
+        after = {str(path.relative_to(self.root)): (path.read_bytes(), path.stat().st_mode)
+                 for path in self.root.rglob('*') if path.is_file() and not path.is_symlink()}
+        self.assertTrue(before == after, 'Probe changed a source or receipt file')
+        self.assertFalse(result['receiptsWritten'])
+        self.assertNotIn('SYNTHETIC_SECRET_SENTINEL', json.dumps(result))
+        return result
+
+    def test_real_probe_passes_original_gate_without_writing_or_touching_registration(self):
+        result = self.probe()
+        self.assertEqual(result['status'], 'PASSED')
+        self.assertEqual((result['checkCount'], result['executedCount'], result['unavailableCount'], result['violationCount']), (48,48,0,10))
+        self.assertEqual(len(self.commands), 31)
+        self.assertEqual(self.inspections, 14)
+        self.assertEqual(sum('run' in command for command in self.commands), 1)
+        self.assertTrue(all(not any(value in command for value in ('up', 'pull', 'login', 'migrate', 'deploy'))
+                            for command in self.commands if 'run' not in command))
+
+    def test_nonzero_exact_rejection_is_closed_and_unknown_private_content_is_suppressed(self):
+        self.audit_exit = 1
+        self.response = {'ok':False,'gate':{'accepted':False},'reason':'Historical release audit rejected; raw data suppressed'}
+        self.audit_stderr = 'SYNTHETIC_SECRET_SENTINEL'
+        result = self.probe()
+        self.assertEqual(result['knownFailureEnum'], 'HISTORICAL_AUDIT_REJECTED')
+        self.assertTrue(result['bootstrapAccessible']); self.assertFalse(result['auditPassed'])
+        self.assertIsNone(result['checkCount']); self.assertTrue(result['unchangedServices'])
+        self.response['private'] = 'SYNTHETIC_SECRET_SENTINEL'
+        result = self.probe()
+        self.assertEqual(result['knownFailureEnum'], 'SUPPRESSED')
+        self.assertIsNone(result['bootstrapAccessible'])
+
+    def test_stderr_whitelist_uses_only_exact_lines_and_preserves_unknown(self):
+        for error, expected in (("  code: 'ERR_MODULE_NOT_FOUND',", 'NODE_MODULE_NOT_FOUND'),
+                ("  code: 'EACCES',", 'NODE_PERMISSION_DENIED'),
+                ('Error: Historical diagnostics changed the approved seven source files', 'HISTORICAL_POLICY_REJECTED'),
+                ("SYNTHETIC_SECRET_SENTINEL code: 'EACCES',", 'SUPPRESSED')):
+            self.assertEqual(deployment.fixed_probe_failure('SYNTHETIC_SECRET_SENTINEL', error), expected)
+
+    def test_gate_false_cannot_pass_and_snapshot_restart_cannot_pass(self):
+        self.response['gate']['accepted'] = False
+        result = self.probe()
+        self.assertEqual(result['status'], 'REJECTED'); self.assertEqual(result['knownFailureEnum'], 'HISTORICAL_GATE_REJECTED')
+        self.response['gate']['accepted'] = True; self.restarted = True; self.inspections = 0
+        result = self.probe()
+        self.assertEqual(result['status'], 'REJECTED'); self.assertFalse(result['unchangedServices'])
+        self.assertEqual(result['knownFailureEnum'], 'UNCHANGED_SERVICES_REJECTED')
+
+    def test_private_snapshot_mutation_cannot_claim_unchanged(self):
+        original = self.command
+        def mutated(command, **kwargs):
+            value = original(command, **kwargs)
+            if 'run' in command:
+                (self.previous / '.env.aws.production').write_bytes(b'SYNTHETIC_SECRET_SENTINEL=changed\n')
+            return value
+        self.process.side_effect = mutated
+        with redirect_stdout(io.StringIO()) as output:
+            result = deployment.probe_fixed_failed_audit()
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(result['status'], 'REJECTED'); self.assertFalse(result['unchangedServices'])
+        self.assertEqual(result['knownFailureEnum'], 'UNCHANGED_SERVICES_REJECTED')
+        self.assertNotIn('SYNTHETIC_SECRET_SENTINEL', json.dumps(result))
+
+    def test_duplicate_rejection_keys_or_nonfinite_constants_never_classify_as_closed_rejection(self):
+        for payload in ('{"ok":true,"ok":false,"gate":{"accepted":false},"reason":"Historical release audit rejected; raw data suppressed"}',
+                '{"ok":false,"gate":{"accepted":true,"accepted":false},"reason":"Historical release audit rejected; raw data suppressed"}',
+                '{"ok":false,"gate":{"accepted":false},"reason":NaN}'):
+            self.assertEqual(deployment.fixed_probe_failure(payload, 'SYNTHETIC_SECRET_SENTINEL'), 'SUPPRESSED')
+
+    def test_present_migrate_digest_mismatch_cannot_run_the_audit(self):
+        self.image_digest = 'sha256:' + 'f' * 64
+        result = self.probe()
+        self.assertTrue(result['imagePresent']); self.assertEqual(result['knownFailureEnum'], 'IMAGE_DIGEST_MISMATCH')
+        self.assertFalse(any('run' in command for command in self.commands))
+        self.assertIsNone(result['auditPassed'])
+
+    def test_failed_source_change_during_audit_cannot_claim_success(self):
+        original = self.command
+        def mutated(command, **kwargs):
+            value = original(command, **kwargs)
+            if 'run' in command:
+                (self.source / next(iter(deployment.DIAGNOSTICS_CANDIDATE_FILES))).write_bytes(b'SYNTHETIC_SECRET_SENTINEL')
+            return value
+        self.process.side_effect = mutated
+        with redirect_stdout(io.StringIO()) as output:
+            result = deployment.probe_fixed_failed_audit()
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(result['status'], 'REJECTED'); self.assertFalse(result['sourceMatched'])
+        self.assertTrue(result['unchangedServices']); self.assertEqual(result['knownFailureEnum'], 'SOURCE_REJECTED')
+        self.assertNotIn('SYNTHETIC_SECRET_SENTINEL', json.dumps(result))
+
+    def test_fixed_source_rejects_hash_mode_link_and_extra_before_audit(self):
+        filename = next(iter(deployment.DIAGNOSTICS_CANDIDATE_FILES)); path = self.source / filename
+        content = path.read_bytes()
+        for mutation in ('hash', 'mode', 'symlink', 'hardlink', 'extra'):
+            self.commands.clear()
+            if mutation == 'hash': path.write_bytes(b'unapproved')
+            elif mutation == 'mode': path.chmod(0o664)
+            elif mutation in ('symlink', 'hardlink'):
+                target = self.root / 'outside'; target.write_bytes(content); path.unlink()
+                if mutation == 'symlink': path.symlink_to(target.resolve())
+                else: deployment.os.link(target, path)
+            else: (self.source / 'unapproved.txt').write_bytes(b'no')
+            result = self.probe()
+            self.assertEqual(result['knownFailureEnum'], 'SOURCE_REJECTED')
+            self.assertFalse(any('run' in command for command in self.commands))
+            if path.is_symlink() or mutation == 'hardlink': path.unlink()
+            path.write_bytes(content); path.chmod(0o644)
+            if (self.source / 'unapproved.txt').exists(): (self.source / 'unapproved.txt').unlink()
+
+    def test_fixed_probe_rejects_missing_or_held_existing_lock_without_creating_it(self):
+        path = self.root / '.deploy.lock'; path.unlink()
+        result = self.probe(); self.assertEqual(result['knownFailureEnum'], 'LOCK_UNAVAILABLE')
+        self.assertFalse(path.exists()); self.assertEqual(self.commands, [])
+        path.write_bytes(b'')
+        with path.open('rb') as stream:
+            deployment.fcntl.flock(stream.fileno(), deployment.fcntl.LOCK_EX | deployment.fcntl.LOCK_NB)
+            result = self.probe(); self.assertEqual(result['knownFailureEnum'], 'LOCK_HELD')
+            self.assertEqual(self.commands, [])
+
+    def test_active_recharge_blocks_audit_and_ambiguous_failed_source_is_rejected(self):
+        self.sql_count = '1'; result = self.probe()
+        self.assertEqual(result['knownFailureEnum'], 'RECHARGE_ACTIVE')
+        self.assertFalse(any('run' in command for command in self.commands))
+        (self.root / 'releases/20261005T000001Z-804bf1634032').mkdir()
+        self.sql_count = '0'; self.commands.clear(); result = self.probe()
+        self.assertEqual(result['knownFailureEnum'], 'SOURCE_REJECTED')
+        self.assertFalse(any('run' in command for command in self.commands))
+
+    def test_fixed_failed_run_image_tag_cannot_be_replaced_by_other_run_or_attempt(self):
+        path = self.source / 'compose.release.json'
+        value = json.loads(path.read_text())
+        for tag in ('804bf1634032357ae9e0d2067b28231ac4d560b8-1-1-auto-recharge',
+                    '804bf1634032357ae9e0d2067b28231ac4d560b8-37298848626-2-auto-recharge'):
+            value['services']['auto-recharge']['image'] = 'fixture-registry:' + tag
+            path.write_text(json.dumps(value))
+            result = self.probe(); self.assertEqual(result['knownFailureEnum'], 'SOURCE_REJECTED')
+            self.assertFalse(any('run' in command for command in self.commands))
+
+    def test_recharge_query_error_is_unknown_not_an_active_job_claim(self):
+        original = self.command
+        def failed_query(command, **kwargs):
+            if 'exec' in command:
+                return SimpleNamespace(returncode=1,stdout='',stderr='SYNTHETIC_SECRET_SENTINEL')
+            return original(command, **kwargs)
+        self.process.side_effect = failed_query
+        result = self.probe(); self.assertEqual(result['knownFailureEnum'], 'SUPPRESSED')
+        self.assertIsNone(result['auditPassed'])
+
+    def test_new_unknown_source_entry_before_first_snapshot_is_rejected(self):
+        original = deployment.fixed_probe_tree_snapshot
+        for kind in ('file', 'directory'):
+            path = self.source / 'unknown-new-entry'
+            def changed(source):
+                if kind == 'file': path.write_bytes(b'SYNTHETIC_SECRET_SENTINEL')
+                else: path.mkdir()
+                return original(source)
+            with self.subTest(kind=kind), patch.object(deployment,'fixed_probe_tree_snapshot',side_effect=changed), \
+                    redirect_stdout(io.StringIO()) as output:
+                result = deployment.probe_fixed_failed_audit()
+            self.assertEqual(output.getvalue(), '')
+            self.assertEqual(result['knownFailureEnum'], 'SOURCE_REJECTED')
+            self.assertFalse(any('run' in command for command in self.commands))
+            if path.is_dir(): path.rmdir()
+            else: path.unlink()
+
+
+class FixedFailedAuditWorkflowContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        workflow = Path(__file__).resolve().parents[2] / '.github/workflows/production-release.yml'
+        step = workflow.read_text().split('      - name: Read fixed failed audit diagnosis\n', 1)[1]
+        cls.builder = textwrap.dedent(step.split("python3 - <<'PY'\n", 1)[1].split('\n          PY\n', 1)[0])
+        cls.filter = textwrap.dedent(next(ast.literal_eval(node.value) for node in ast.parse(cls.builder).body
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == 'filter_program'))
+        compile(cls.filter, '<fixed-audit-filter>', 'exec')
+
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=output); self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.filter_path = self.root / 'filter.py'; self.filter_path.write_text(self.filter)
+        self.passed = dict(status='PASSED',sourceMatched=True,baselineMatched=True,imagePresent=True,
+            bootstrapAccessible=True,auditPassed=True,exitCode=0,knownFailureEnum=None,checkCount=48,
+            executedCount=48,unavailableCount=0,violationCount=10,receiptsWritten=False,unchangedServices=True)
+
+    def filtered(self, value=None, raw=None):
+        text = raw if raw is not None else 'FIXED_FAILED_AUDIT_PROBE_JSON ' + json.dumps(value)
+        result = deployment.subprocess.run([deployment.sys.executable, '-B', str(self.filter_path)],
+            input=text, text=True, capture_output=True)
+        self.assertNotIn('SYNTHETIC_SECRET_SENTINEL', result.stdout + result.stderr)
+        return result
+
+    def generated(self):
+        destination = self.root / 'scripts/production-release'; destination.mkdir(parents=True)
+        (self.root / '.deploy/production-release').mkdir(parents=True)
+        source = ('def probe_fixed_failed_audit():\n    return ' + repr(self.passed) + '\n'
+                  'if __name__ == "__main__":\n    raise RuntimeError("SYNTHETIC_SECRET_SENTINEL")\n').encode()
+        (destination / 'remote-deploy.py').write_bytes(source)
+        env = {**deployment.os.environ, 'RELEASE_COMMIT':'a' * 40}
+        result = deployment.subprocess.run([deployment.sys.executable, '-B', '-c', self.builder],
+            cwd=self.root, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, 'Fixed probe builder failed')
+        parameters = json.loads((self.root / '.deploy/production-release/fixed-audit-probe.json').read_text())
+        self.assertLessEqual(len(json.dumps(parameters).encode()), 20 * 1024)
+        command = shlex.split(parameters['commands'][0]); self.assertEqual(command[:2], ['python3','-c'])
+        self.assertEqual(parameters['executionTimeout'], ['300'])
+        compile(command[2], '<fixed-probe-command>', 'exec')
+        return command[2], source
+
+    def test_closed_success_and_rejection_print_once_with_correct_exit_semantics(self):
+        result = self.filtered(self.passed); self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout.split(' ',1)[1]), self.passed)
+        for status in ('REJECTED', 'NOT_MEASURED'):
+            rejected = {key:None for key in self.passed}; rejected.update(status=status,receiptsWritten=False,
+                                                                         knownFailureEnum='SUPPRESSED')
+            result = self.filtered(rejected); self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout.split(' ',1)[1]), rejected)
+
+    def test_actual_receiver_rejects_private_unknown_duplicate_nan_bool_and_false_success(self):
+        mutations = [lambda x:x.update(private='SYNTHETIC_SECRET_SENTINEL'),
+            lambda x:x.update(knownFailureEnum='SYNTHETIC_SECRET_SENTINEL'),
+            lambda x:x.update(knownFailureEnum=[]),lambda x:x.update(knownFailureEnum={}),
+            lambda x:x.update(checkCount=True),lambda x:x.update(checkCount=47),
+            lambda x:x.update(checkCount=float('nan')),lambda x:x.update(exitCode=True),
+            lambda x:x.update(sourceMatched=False),lambda x:x.update(receiptsWritten=True),
+            lambda x:x.update(auditPassed=None),lambda x:x.update(status='SYNTHETIC_SECRET_SENTINEL')]
+        for index, mutate in enumerate(mutations):
+            value = dict(self.passed); mutate(value)
+            with self.subTest(index=index):
+                result = self.filtered(value); self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+        raw = 'FIXED_FAILED_AUDIT_PROBE_JSON ' + json.dumps(self.passed).replace('"status": "PASSED"',
+            '"status":"SYNTHETIC_SECRET_SENTINEL","status":"PASSED"')
+        self.assertNotEqual(self.filtered(raw=raw).returncode, 0)
+
+    def test_actual_generated_program_checks_download_hash_size_and_library_before_probe(self):
+        program, source = self.generated()
+        def download(url, **kwargs):
+            self.assertEqual(url, 'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/' +
+                'a' * 40 + '/scripts/production-release/remote-deploy.py')
+            return io.BytesIO(source)
+        with patch.object(deployment.urllib.request, 'urlopen', side_effect=download), redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(SystemExit) as stopped:
+                exec(compile(program, '<fixed-probe-command>', 'exec'), {})
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertEqual(self.filtered(raw=output.getvalue()).returncode, 0)
+        for content in (source+b'SYNTHETIC_SECRET_SENTINEL', b'SYNTHETIC_SECRET_SENTINEL'*(128*1024)):
+            with self.subTest(length=len(content)), patch.object(deployment.urllib.request, 'urlopen',
+                    return_value=io.BytesIO(content)), redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit) as stopped:
+                    exec(compile(program, '<fixed-probe-command>', 'exec'), {})
+                self.assertEqual(str(stopped.exception), 'Fixed audit probe source verification failed')
+                self.assertEqual(output.getvalue(), '')
+
+
 if __name__ == '__main__':
     unittest.main()

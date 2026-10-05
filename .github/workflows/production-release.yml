@@ -71,6 +71,12 @@ on:
         default: ''
         type: string
 
+      fixed_failed_audit:
+        description: Read-only audit diagnosis for the fixed failed 804 release on the unchanged 6a baseline
+        required: false
+        default: false
+        type: boolean
+
       cache_plan_sha256:
         description: Exact verified unused image cache plan digest (cleanup_unused_cache only)
         required: false
@@ -108,6 +114,18 @@ jobs:
 
       - name: Verify exact source and passing Quality Gate
         run: bash scripts/production-release/check-source.sh
+
+      - name: Validate fixed failed audit diagnosis inputs
+        if: inputs.fixed_failed_audit
+        env:
+          PROBE_OPERATION: ${{ inputs.operation }}
+          PROBE_FAILED_COMMAND: ${{ inputs.diagnostic_command_id }}
+        run: |
+          set -Eeuo pipefail
+          test "$PROBE_OPERATION" = verify_access
+          test "$EXPECTED_CURRENT" = 6a82a774f2a65e00d4f260c629f7152bf7935d1d
+          test "$HISTORICAL_EXCEPTION" = historical-finance-20261005-recharge-diagnostics
+          test "$PROBE_FAILED_COMMAND" = abac6064-ba38-43b0-8ea8-d6d75d6c7dc5
 
       - name: Build images on the GitHub runner
         if: inputs.operation == 'release' && inputs.reuse_image_run == ''
@@ -1194,6 +1212,98 @@ jobs:
               --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
               | python3 scripts/production-release/remote-deploy.py --summarize-command-result
           fi
+          exit "$wait_status"
+
+      - name: Read fixed failed audit diagnosis
+        if: inputs.operation == 'verify_access' && inputs.fixed_failed_audit
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shlex
+          commit = os.environ['RELEASE_COMMIT']
+          if not re.fullmatch(r'[0-9a-f]{40}', commit):
+              raise SystemExit('Invalid fixed audit probe source')
+          source_hash = hashlib.sha256(Path('scripts/production-release/remote-deploy.py').read_bytes()).hexdigest()
+          url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/remote-deploy.py'
+          program = ('import hashlib,json,urllib.request\n'
+              + 'with urllib.request.urlopen(' + repr(url) + ',timeout=30) as source:\n'
+              + '    data=source.read(128*1024+1)\n'
+              + 'if len(data)>128*1024 or hashlib.sha256(data).hexdigest()!=' + repr(source_hash) + ':\n'
+              + '    raise SystemExit("Fixed audit probe source verification failed")\n'
+              + 'namespace={"__name__":"fixed_audit_probe_library"}\n'
+              + 'exec(compile(data,"<fixed-audit-probe>","exec"),namespace)\n'
+              + 'result=namespace["probe_fixed_failed_audit"]()\n'
+              + 'print("FIXED_FAILED_AUDIT_PROBE_JSON "+json.dumps(result,separators=(",",":")))\n'
+              + 'raise SystemExit(0 if result["status"]=="PASSED" else 1)\n')
+          parameters = {'commands': ['python3 -c ' + shlex.quote(program)], 'executionTimeout': ['300']}
+          if len(json.dumps(parameters).encode('utf-8')) > 20 * 1024:
+              raise SystemExit('Fixed audit probe exceeds transfer bound')
+          Path('.deploy/production-release/fixed-audit-probe.json').write_text(json.dumps(parameters))
+          filter_program = r'''
+          import json,sys
+          def require(condition):
+              if not condition:
+                  raise SystemExit('Invalid controlled fixed audit probe receipt')
+          def unique_object(pairs):
+              value={}
+              for key,item in pairs:
+                  require(key not in value)
+                  value[key]=item
+              return value
+          def reject_constant(_value):
+              raise SystemExit('Invalid controlled fixed audit probe receipt')
+          output=sys.stdin.read(8193)
+          require(len(output)<=8192)
+          rows=[row for row in output.splitlines() if row.strip()]
+          prefix='FIXED_FAILED_AUDIT_PROBE_JSON '
+          require(len(rows)==1 and rows[0].startswith(prefix))
+          try:
+              value=json.loads(rows[0][len(prefix):],object_pairs_hook=unique_object,parse_constant=reject_constant)
+          except (TypeError,ValueError):
+              raise SystemExit('Invalid controlled fixed audit probe receipt') from None
+          keys={'status','sourceMatched','baselineMatched','imagePresent','bootstrapAccessible','auditPassed',
+              'exitCode','knownFailureEnum','checkCount','executedCount','unavailableCount','violationCount',
+              'receiptsWritten','unchangedServices'}
+          require(type(value) is dict and set(value)==keys)
+          require(type(value['status']) is str and value['status'] in ('PASSED','REJECTED','NOT_MEASURED'))
+          booleans=('sourceMatched','baselineMatched','imagePresent','bootstrapAccessible','auditPassed','unchangedServices')
+          require(all(value[key] is None or type(value[key]) is bool for key in booleans))
+          require(value['receiptsWritten'] is False)
+          for key,bound in (('exitCode',255),('checkCount',48),('executedCount',48),('unavailableCount',48),('violationCount',1000000)):
+              require(value[key] is None or type(value[key]) is int and 0<=value[key]<=bound)
+          failures={'LOCK_UNAVAILABLE','LOCK_HELD','BASELINE_REJECTED','SOURCE_REJECTED','SNAPSHOT_UNAVAILABLE',
+              'RECHARGE_ACTIVE','IMAGE_MISSING','IMAGE_INSPECT_UNAVAILABLE','IMAGE_DIGEST_MISMATCH','AUDIT_COMMAND_BOUNDARY_REJECTED',
+              'HISTORICAL_AUDIT_REJECTED','NODE_MODULE_NOT_FOUND','NODE_PERMISSION_DENIED','NODE_SYNTAX_ERROR',
+              'HISTORICAL_POLICY_REJECTED','HISTORICAL_GATE_REJECTED','AUDIT_OUTPUT_REJECTED',
+              'UNCHANGED_SERVICES_REJECTED','SUPPRESSED'}
+          require(value['knownFailureEnum'] is None or type(value['knownFailureEnum']) is str
+              and value['knownFailureEnum'] in failures)
+          if value['status']=='PASSED':
+              require(all(value[key] is True for key in booleans) and value['exitCode']==0
+                  and (value['checkCount'],value['executedCount'],value['unavailableCount'],value['violationCount'])==(48,48,0,10)
+                  and value['knownFailureEnum'] is None)
+          print(prefix+json.dumps(value,separators=(',',':')))
+          if value['status']!='PASSED':
+              raise SystemExit('Fixed historical audit probe did not pass')
+          '''
+          import textwrap
+          Path('.deploy/production-release/fixed-audit-probe-filter.py').write_text(textwrap.dedent(filter_program))
+          PY
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/fixed-audit-probe.json \
+            --query 'Command.CommandId' --output text)"
+          wait_status=0
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
+            | python3 .deploy/production-release/fixed-audit-probe-filter.py
           exit "$wait_status"
 
       - name: Verify fixed read-only mailbox queries in the running API
