@@ -1,0 +1,259 @@
+{
+  "version": 1,
+  "id": "historical-finance-20261005-mailbox-batch",
+  "userApproved": true,
+  "expectedCurrent": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+  "imageCommit": "f5826f9fb4ad0d846d9875c035c913a61eb68290",
+  "imageRun": "37312405714",
+  "imageAttempt": "1",
+  "manifestSha256": "a0c248295509397e1862b13bd3aa41f46f32955ad8862226de56e63f868be9d8",
+  "snapshot": {
+    "databaseName": "id_business_v2_partial_cleanup_20261005_v1",
+    "rulesSha256": "259332c0c8eb2d3d96d066cecd7cbe294ed5f2bd1e7af0d1c39f6c002859d7f4",
+    "schemaSha256": "3aef82a77e90f3cb4a2a953d67808193168159aa8983276b67e12f916a0a3655",
+    "entitySetSha256": "f23d021df7a2693b4b5ad3de3818ab6ea475a2362e7c71dd39dc489f3eeb2c43",
+    "closedFactsSha256": "1d06e7efa477d1e6647f50891a0a7d236e5a1d23e4fe6cfebcad5584a9005f8c",
+    "checks": [
+      {
+        "code": "auth_user_phone_storage_invalid",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_expense_display_snapshot_missing",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_expense_display_snapshot_not_protected",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "pending_or_failed_migrations",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "foreign_key_enforcement_disabled",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "order_display_snapshot_missing",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "deleted_option_key_not_namespaced",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "live_option_has_delete_snapshot",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "option_cascade_marker_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "live_service_under_inactive_master",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "active_account_inactive_master",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "open_order_inactive_entity",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "activation_order_dimension_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "customer_owned_order_source_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "sold_account_ownership_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "customer_owned_order_duplicate_id_cost",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "customer_service_aggregate_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "account_balance_latest_ledger_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "balance_ledger_chain_discontinuity",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "balance_ledger_reversal_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "gift_card_ledger_state_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "order_consumption_state_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "sold_account_order_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "unsafe_active_account_lock",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "account_loss_state_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "supplier_balance_latest_ledger_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "supplier_ledger_chain_discontinuity",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "supplier_ledger_reversal_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "supplier_wallet_delete_marker_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_inflow_reference_integrity",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_inflow_receipt_integrity",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_inflow_posting_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "completed_order_finance_reconciliation_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_journal_unbalanced",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_reversal_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_account_balance_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "soft_delete_audit_missing",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "supplier_wallet_gl_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "gift_card_refund_frozen_source_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "finance_cash_source_currency_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "order_financial_snapshot_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "bank_paid_job_order_missing",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "bank_order_financial_reconciliation_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "bank_subscription_projection_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "fx_exchange_principal_fee_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "cash_historical_cost_evidence_mismatch",
+        "status": "EXECUTED",
+        "count": 6
+      },
+      {
+        "code": "bank_soft_delete_safety_mismatch",
+        "status": "EXECUTED",
+        "count": 0
+      },
+      {
+        "code": "audit_immutability_trigger_missing",
+        "status": "EXECUTED",
+        "count": 0
+      }
+    ]
+  }
+}
