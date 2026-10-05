@@ -305,6 +305,55 @@ class CommandFailureSummaryTests(unittest.TestCase):
             self.assertEqual(result['reason'], reason)
             self.assertNotIn('fixture-sensitive', json.dumps(result))
 
+    def test_diagnostics_preflight_reports_only_six_existing_guard_reasons(self):
+        reasons = (
+            'Historical diagnostics running manifest changed',
+            'Historical diagnostics requires the fixed independent worker layout',
+            'Historical continuation running image changed',
+            'Historical diagnostics image override changed',
+            'Production container identity unavailable',
+            'Production container start identity unavailable',
+        )
+        expected_keys = {'status', 'responseCode', 'errorType', 'sourceLine', 'reason'}
+        for reason in reasons:
+            with self.subTest(reason=reason):
+                result = deployment.command_failure_summary({
+                    'Status': 'Failed', 'ResponseCode': 1,
+                    'StandardErrorContent': '  File "/fixture-sensitive-path/remote-deploy.py", line 114\n'
+                        'RuntimeError: ' + reason + '\nfixture-sensitive-token-and-password',
+                    'StandardOutputContent': 'fixture-sensitive-private-receipt',
+                    'Private': 'fixture-sensitive-private-field'})
+                self.assertEqual(set(result), expected_keys)
+                self.assertEqual(result, {'status': 'Failed', 'responseCode': 1,
+                    'errorType': 'RuntimeError', 'sourceLine': 114, 'reason': reason})
+                self.assertNotIn('fixture-sensitive', json.dumps(result))
+
+    def test_real_summary_cli_returns_fixed_preflight_labels_without_sensitive_body(self):
+        script = Path(__file__).with_name('remote-deploy.py')
+        for reason in (
+            'Historical diagnostics running manifest changed',
+            'Historical diagnostics requires the fixed independent worker layout',
+            'Historical continuation running image changed',
+            'Historical diagnostics image override changed',
+            'Production container identity unavailable',
+            'Production container start identity unavailable',
+        ):
+            with self.subTest(reason=reason):
+                result = deployment.subprocess.run([deployment.sys.executable, str(script),
+                    '--summarize-command-result'], input=json.dumps({
+                        'Status': 'Failed', 'ResponseCode': 1,
+                        'StandardErrorContent': '  File "/fixture-sensitive-source/remote-deploy.py", line 114\n'
+                            'RuntimeError: ' + reason + '\nfixture-sensitive-private-error',
+                        'StandardOutputContent': 'fixture-sensitive-private-output'}),
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(len(result.stdout.splitlines()), 1)
+                self.assertTrue(result.stdout.startswith('RELEASE_FAILURE_DIAGNOSTIC '))
+                summary = json.loads(result.stdout.removeprefix('RELEASE_FAILURE_DIAGNOSTIC '))
+                self.assertEqual(summary, {'status': 'Failed', 'responseCode': 1,
+                    'errorType': 'RuntimeError', 'sourceLine': 114, 'reason': reason})
+                self.assertNotIn('fixture-sensitive', result.stdout + result.stderr)
+
     def test_untrusted_status_and_response_fields_are_filtered(self):
         result = deployment.command_failure_summary({
             'Status': 'fixture-sensitive-token', 'ResponseCode': 'fixture-sensitive-token'})
