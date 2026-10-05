@@ -136,11 +136,19 @@ class Selection:
         cue = personal_control(self.page).or_(buttons(self.page, GO)).or_(buttons(self.page, PLUS)).or_(buttons(self.page, PRO))
         try:
             await cue.first.wait_for(state='visible', timeout=self.timeout())
-        except Exception:
+        except Exception as exc:
+            self.diagnostics['error_type'] = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
+            self.diagnostics.pop('matched_count', None)
+            try:
+                self.diagnostics['matched_count'] = min(await cue.count(), 100)
+            except Exception:
+                # 页面关闭时不能读取数量；保留原异常分类，不把未测量伪写为零。
+                pass
             raise Stop('official_plan_menu_timeout') from None
         scope = await plan_scope(self.page)
         scoped_cue = personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
         if not await scoped_cue.count():
+            self.diagnostics.update(role='region', matched_count=0)
             raise Stop('official_plan_menu_timeout')
         return scope
 
