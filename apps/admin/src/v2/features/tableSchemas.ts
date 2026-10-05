@@ -982,7 +982,7 @@ export const v2TableSchemas = {
           pin: 'end',
           hideable: false
         },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
       ]
     })
   },

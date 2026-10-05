@@ -1,5 +1,5 @@
 import { legacyFinanceCurrency } from '@apple-business/shared';
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import type {
   IdBusinessV2BalanceLedger,
   IdBusinessV2Order,
@@ -120,6 +120,7 @@ export interface IdBusinessV2OrderListCriteria {
   status: IdBusinessV2OrderStatus | null;
   accountDisposition: IdBusinessV2OrderAccountDisposition | null;
   accountSource: IdBusinessV2OrderAccountSource | null;
+  archived?: 'active' | 'archived' | 'all';
   openedAt?: { gte?: Date; lte?: Date };
   sortField: IdBusinessV2OrderSortField;
   sortDirection: 'asc' | 'desc';
@@ -163,6 +164,7 @@ interface LockedOrderPersistenceRow {
   refundCostAmount: unknown | null;
   profitAmount: unknown | null;
   status: IdBusinessV2OrderStatus;
+  archivedAt?: Date | null;
 }
 
 interface LockedAccountPersistenceRow {
@@ -695,6 +697,7 @@ export class IdBusinessV2OrdersRepository {
   }
 
   async createOrder(tx: V2CommandTransaction, data: Prisma.IdBusinessV2OrderUncheckedCreateInput) {
+    await this.assertSourceOrderAvailable(tx, data.sourceSoldOrderId);
     return tx.idBusinessV2Order.create({ data }).then(mapOrderRow);
   }
 
@@ -703,7 +706,32 @@ export class IdBusinessV2OrdersRepository {
     orderId: string,
     data: Prisma.IdBusinessV2OrderUncheckedUpdateInput
   ) {
+    await this.assertSourceOrderAvailable(tx, data.sourceSoldOrderId);
     return tx.idBusinessV2Order.update({ where: { id: orderId }, data }).then(mapOrderRow);
+  }
+
+  async findSourceOrderReference(tx: V2CommandTransaction, sourceOrderId: string) {
+    // Current read under the source row lock includes failed and soft-deleted children.
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "id_business_v2_orders"
+      WHERE "source_sold_order_id" = ${sourceOrderId}
+      ORDER BY "id" LIMIT 1 FOR SHARE
+    `;
+    return rows[0] ?? null;
+  }
+
+  private async assertSourceOrderAvailable(
+    tx: V2CommandTransaction,
+    source: Prisma.IdBusinessV2OrderUncheckedUpdateInput['sourceSoldOrderId']
+  ) {
+    const sourceOrderId = typeof source === 'string' ? source : source?.set;
+    if (!sourceOrderId) return;
+    // The source SHARE lock lasts through child creation/update and serializes with deletion.
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "id_business_v2_orders"
+      WHERE "id" = ${sourceOrderId} AND "deleted_at" IS NULL FOR SHARE
+    `;
+    if (!rows.length) throw new ConflictException('来源销售订单不存在或已删除，不能关联后续订单');
   }
 
   async updateAccount(
@@ -779,6 +807,18 @@ export class IdBusinessV2OrdersRepository {
 
   appendAudit(tx: V2CommandTransaction, data: Prisma.AuditLogUncheckedCreateInput) {
     return tx.auditLog.create({ data });
+  }
+
+  findArchiveCommand(tx: V2CommandTransaction, orderId: string, idempotencyKey: string) {
+    return tx.auditLog.findFirst({
+      where: {
+        objectType: 'id_business_v2_order',
+        objectId: orderId,
+        action: { in: ['id_business_v2.order.archive', 'id_business_v2.order.unarchive'] },
+        afterData: { path: '$.archiveCommand.idempotencyKey', equals: idempotencyKey }
+      },
+      select: { afterData: true }
+    });
   }
 
   async findActivationByOrder(tx: V2CommandTransaction, orderId: string) {
@@ -1222,6 +1262,9 @@ export class IdBusinessV2OrdersRepository {
   ): Prisma.IdBusinessV2OrderWhereInput {
     return {
       deletedAt: null,
+      ...(criteria.archived === 'all'
+        ? {}
+        : { archivedAt: criteria.archived === 'archived' ? { not: null } : null }),
       customerId: criteria.customerId ?? undefined,
       serviceOptionId: criteria.serviceOptionId ?? undefined,
       accountId: criteria.accountId ?? undefined,
@@ -1321,6 +1364,7 @@ export class IdBusinessV2OrdersRepository {
         "applied_balance_cost_amount" AS "appliedBalanceCostAmount",
         "refund_cost_amount" AS "refundCostAmount",
         "profit_amount" AS "profitAmount",
+        "archived_at" AS "archivedAt",
         "status"
       FROM "id_business_v2_orders"
       WHERE

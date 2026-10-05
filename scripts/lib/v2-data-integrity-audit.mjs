@@ -1,3 +1,5 @@
+import { HISTORICAL_CASH_ADJUSTMENT_CTES } from './v2-historical-cash-adjustment-audit.mjs';
+
 export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   check(
     'auth_user_phone_storage_invalid',
@@ -1067,7 +1069,8 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   check(
     'finance_cash_source_currency_mismatch',
     '现金分录未绑定真实账户、账户币种不符或供应商预付款币种/来源不符',
-    `SELECT CAST(line.id AS CHAR) AS entity_id,
+    `WITH ${HISTORICAL_CASH_ADJUSTMENT_CTES}
+     SELECT CAST(line.id AS CHAR) AS entity_id,
             JSON_OBJECT('accountCode', line.account_code, 'currency', line.currency,
                         'financeAccountId', line.finance_account_id,
                         'supplierAccountId', line.supplier_account_id) AS detail
@@ -1077,7 +1080,10 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      LEFT JOIN id_business_v2_topup_supplier_accounts wallet ON wallet.id = line.supplier_account_id
      WHERE (line.account_code = 'cash' AND journal.journal_type <> 'opening_balance'
             AND (line.amount_original <> 0 OR line.amount_cny <> 0)
-            AND (cash.id IS NULL OR cash.currency <> line.currency))
+            AND (cash.id IS NULL OR cash.currency <> line.currency)
+            AND NOT (line.finance_account_id IS NULL AND EXISTS (
+              SELECT 1 FROM historical_cash_attributions resolved
+              WHERE resolved.source_line_id = line.id OR resolved.contra_line_id = line.id)))
         OR (line.account_code = 'supplier_prepayment'
             AND (wallet.id IS NULL OR wallet.currency <> line.currency))`
   ),
@@ -1195,7 +1201,7 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   check(
     'cash_historical_cost_evidence_mismatch',
     '外币现金支出缺少冻结成本依据、成本分摊/对应账户汇兑差额不守恒',
-    `WITH credit AS (
+    `WITH ${HISTORICAL_CASH_ADJUSTMENT_CTES}, credit AS (
        SELECT journal.id AS journal_id, line.finance_account_id,
          SUM(line.amount_original) AS quantity, SUM(line.amount_cny) AS cost, COUNT(*) AS line_count
        FROM id_business_v2_finance_journals journal
@@ -1241,7 +1247,7 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      LEFT JOIN evidence ON evidence.journal_id = credit.journal_id AND BINARY evidence.account_id = BINARY credit.finance_account_id
      LEFT JOIN allocation_total ON allocation_total.journal_id = credit.journal_id AND BINARY allocation_total.account_id = BINARY credit.finance_account_id
      LEFT JOIN fx ON fx.journal_id = credit.journal_id AND fx.finance_account_id = credit.finance_account_id
-     WHERE NOT (JSON_UNQUOTE(JSON_EXTRACT(journal.metadata, '$.cashHistoricalCost.version')) <=> '1')
+     WHERE (NOT (JSON_UNQUOTE(JSON_EXTRACT(journal.metadata, '$.cashHistoricalCost.version')) <=> '1')
        OR evidence.account_id IS NULL OR NOT (credit.quantity <=> evidence.quantity)
        OR NOT (credit.cost <=> evidence.carrying_cost)
        OR NOT (allocation_total.line_count <=> credit.line_count)
@@ -1259,7 +1265,29 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
            ON line.journal_id = allocation.journal_id AND line.line_no = allocation.line_no
          WHERE allocation.journal_id = credit.journal_id AND BINARY allocation.account_id = BINARY credit.finance_account_id
            AND (line.id IS NULL OR line.account_code <> 'cash' OR line.direction <> 'credit'
-             OR NOT (BINARY line.finance_account_id <=> BINARY allocation.account_id) OR line.amount_cny <> allocation.book_cost))`
+             OR NOT (BINARY line.finance_account_id <=> BINARY allocation.account_id) OR line.amount_cny <> allocation.book_cost)))
+       AND NOT EXISTS (SELECT 1 FROM historical_cash_cost_adjustments resolved
+         WHERE resolved.source_journal_id = credit.journal_id AND resolved.source_account_id = credit.finance_account_id
+           AND resolved.correction_status = 'posted' AND resolved.source_status = 'posted')
+       AND NOT EXISTS (SELECT 1 FROM historical_cash_cost_verifications verified
+         WHERE verified.source_journal_id = credit.journal_id AND verified.source_account_id = credit.finance_account_id)
+       AND NOT EXISTS (SELECT 1 FROM historical_exact_reversals mirrored
+         WHERE mirrored.original_journal_id = credit.journal_id)`
+  ),
+  check(
+    'historical_cash_adjustment_integrity_mismatch',
+    '历史现金补偿缺原行、精确分录、已提交批次审计或后续冲销链不完整',
+    `WITH ${HISTORICAL_CASH_ADJUSTMENT_CTES}
+     SELECT CAST(c.id AS CHAR) AS entity_id,
+       JSON_OBJECT('kind', c.adjustment_kind, 'originalLineId', c.original_line_id) AS detail
+     FROM historical_adjustment_candidates c
+     LEFT JOIN historical_cash_attributions assigned ON assigned.correction_journal_id = c.id
+     LEFT JOIN historical_cash_cost_adjustments cost ON cost.correction_journal_id = c.id
+     WHERE assigned.correction_journal_id IS NULL AND (
+       cost.correction_journal_id IS NULL
+       OR (cost.source_status = 'reversed' AND (cost.correction_status <> 'reversed' OR NOT EXISTS (
+         SELECT 1 FROM historical_exact_reversals mirrored WHERE mirrored.original_journal_id = c.id)))
+       OR (cost.source_status = 'posted' AND cost.correction_status <> 'posted'))`
   ),
   check(
     'bank_soft_delete_safety_mismatch',

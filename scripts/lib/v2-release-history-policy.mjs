@@ -80,6 +80,8 @@ export function serializeHistoricalAuditReport(report) {
 }
 
 export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
+  if (policy?.id === HISTORY_POST_CLEANUP_POLICY_ID)
+    throw new Error('Post-cleanup history policy requires a separately reviewed release seal');
   const { continuation, baseline, sha256 } = historyPolicyIdentity(policy);
   if (
     fingerprint(policy) !== sha256 ||
@@ -264,3 +266,351 @@ export const historySourceQueries = {
     CAST(profit_amount AS CHAR) AS profitAmount, CAST(refund_cost_amount AS CHAR) AS refundCostAmount,
     created_at AS createdAt, updated_at AS updatedAt FROM id_business_v2_orders WHERE id IN (IDS)`
 };
+
+export const HISTORY_POST_CLEANUP_POLICY_ID = 'historical-finance-20261005-post-cleanup';
+export const HISTORY_POST_CLEANUP_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d';
+export const HISTORY_POST_CLEANUP_DATABASE = 'id_business_v2_partial_cleanup_20261005_v1';
+export const HISTORY_POST_CLEANUP_RECEIPT_SHA256 =
+  'f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f';
+// Independently captured source anchor; activation still requires an external reviewed runtime seal.
+export const HISTORY_POST_CLEANUP_SOURCE_ANCHOR_SHA256 =
+  '39dd801292f081560fdaf7db2feb6cdd6f3c1bc8b730ca9add4d33a472466920';
+export const POST_CLEANUP_CAPTURE_EVIDENCE = Object.freeze({
+  ssmCommandId: '2fd1410d-3e61-43a3-a150-5bbaa4e1ca14',
+  captureReportSha256: 'd2fcba5524314e6ba8ce04444945fff16edbb3e3241626e67b050c2f4a082104',
+  captureBundleSha256: 'b42f27e5506593441b893d3e213a3b366b8cf28c9fcd17b9eabce4694a024031',
+  captureHelperSha256: '4c79b00c5f43283e3cdf53bccd0fc3aa9fffb970cc2b2d4c50cdb8674d1d5ca7',
+  captureSpecSha256: 'dea961fde0502d7fe9a21eda9ba6acfd0722d11f3400a408f2df2b4ee9d52973',
+  captureAuditModuleSha256: '2f248582dc54d96d25cea6b065312b6dc7fc8497da9b0886ce77ede411c5811e'
+});
+export const POST_CLEANUP_REQUIRED_SOURCE_FILES = Object.freeze([
+  'apps/api/src/id-business-v2/finance/id-business-v2-historical-cash.types.ts',
+  'apps/api/src/id-business-v2/finance/id-business-v2-historical-cash.service.ts',
+  'apps/api/src/id-business-v2/finance/id-business-v2-historical-cash.service.spec.ts',
+  'apps/api/src/id-business-v2/finance/persistence/id-business-v2-historical-cash.repository.ts',
+  'apps/api/src/id-business-v2/finance/id-business-v2-finance.module.ts',
+  'apps/api/src/id-business-v2/finance/public-api.ts',
+  'apps/api/src/id-business-v2/finance/id-business-v2-finance-posting.service.ts',
+  'apps/api/src/id-business-v2/finance/persistence/id-business-v2-finance-historical-reversal.repository.ts',
+  'apps/api/src/id-business-v2/finance/historical-cash-mysql.integration.spec.ts',
+  'apps/api/src/id-business-v2/finance/persistence/historical-cash-mysql.fixtures.ts',
+  'scripts/lib/v2-data-integrity-audit.mjs',
+  'scripts/lib/v2-historical-cash-adjustment-audit.mjs',
+  'scripts/v2-data-integrity-audit.test.mjs',
+  'scripts/acceptance-v2-financial-integrity.mjs',
+  'scripts/historical-cash-audit-mysql.test.mjs',
+  'scripts/historical-cash-runner.mjs',
+  'scripts/historical-cash-runner.test.mjs',
+  'scripts/historical-cash-chain.mjs',
+  'scripts/historical-cash-package.mjs',
+  'scripts/historical-cash-package.test.mjs',
+  'scripts/historical-cash-runner-mysql.test.mjs',
+  'apps/api/src/id-business-v2/orders/id-business-v2-order-lifecycle-support.ts',
+  'apps/api/src/id-business-v2/orders/persistence/id-business-v2-orders.repository.ts',
+  'apps/api/src/id-business-v2/orders/id-business-v2-order-lifecycle.service.spec.ts',
+  'apps/api/src/id-business-v2/orders/id-business-v2-order-entry.service.spec.ts',
+  'scripts/backup-aws-mysql.sh'
+]);
+export const POST_CLEANUP_COMPILED_FILES = Object.freeze([
+  'apps/api/dist/id-business-v2/finance/public-api.js',
+  'apps/api/dist/id-business-v2/finance/id-business-v2-historical-cash.service.js',
+  'apps/api/dist/id-business-v2/finance/id-business-v2-historical-cash.types.js',
+  'apps/api/dist/id-business-v2/finance/persistence/id-business-v2-historical-cash.repository.js',
+  'apps/api/dist/id-business-v2/finance/persistence/id-business-v2-finance-historical-reversal.repository.js',
+  'apps/api/dist/id-business-v2/finance/id-business-v2-finance-posting.service.js',
+  'apps/api/dist/id-business-v2/finance/id-business-v2-finance-cash-cost.js',
+  'apps/api/dist/id-business-v2/finance/persistence/id-business-v2-finance-command.repository.js',
+  'apps/api/dist/id-business-v2/finance/persistence/id-business-v2-finance-posting.repository.js',
+  'apps/api/dist/id-business-v2/finance/id-business-v2-finance-input.js',
+  'apps/api/dist/id-business-v2/runtime/public-api.js',
+  'apps/api/dist/id-business-v2/runtime/id-business-v2-decimal.js',
+  'apps/api/dist/id-business-v2/runtime/id-business-v2-row-mapper.js',
+  'apps/api/dist/id-business-v2/runtime/id-business-v2-prisma-error.js',
+  'apps/api/dist/id-business-v2/runtime/id-business-v2-time.js',
+  'apps/api/dist/id-business-v2/runtime/id-business-v2-command-transaction.service.js',
+  'apps/api/dist/id-business-v2/runtime/persistence/id-business-v2-transactional-audit.repository.js',
+  'apps/api/dist/common/prisma/mysql-transaction-lock.js',
+  'apps/api/dist/common/prisma/prisma.service.js',
+  'apps/api/dist/common/prisma/bump-v2-scope-versions.js',
+  'apps/api/dist/audit-logs/audit-log-sanitizer.js',
+  'apps/api/dist/v2-auth/v2-identity.service.js',
+  'apps/api/dist/v2-auth/system-super-admin.js',
+  'packages/shared/dist/v2/decimal.js',
+  'packages/shared/dist/index.js'
+]);
+export const POST_CLEANUP_COST_ENTITY_IDS = Object.freeze([
+  '0e095178-8455-4f1d-8e45-d12b09064702:c6866d24-097b-44c5-b3a7-f3a3dcc11b23',
+  '10eb0ed7-3ce4-42a7-93e1-b83a898efe15:02d8080d-68d8-4095-8b60-a30d5cd6c4e0',
+  '49ba9779-9ff8-4bb8-8dd2-f587865f2a9e:02d8080d-68d8-4095-8b60-a30d5cd6c4e0',
+  '5a9ca0f0-2855-48e6-a50f-690dc64ebb65:c6866d24-097b-44c5-b3a7-f3a3dcc11b23',
+  'eb3f0d75-3802-49ab-8f3f-86fae65d8514:02d8080d-68d8-4095-8b60-a30d5cd6c4e0'
+]);
+const postCleanupJournalIds = POST_CLEANUP_COST_ENTITY_IDS.map((id) => id.split(':')[0]);
+const postCleanupAccountIds = [
+  ...new Set(POST_CLEANUP_COST_ENTITY_IDS.map((id) => id.split(':')[1]))
+].sort();
+const postCleanupJournalFields = `j.id, j.journal_no AS journalNo, j.journal_type AS journalType,
+  j.source_type AS sourceType, j.source_id AS sourceId, j.status, j.reversal_of_journal_id AS reversalOfJournalId,
+  j.occurred_at AS occurredAt, j.created_at AS createdAt, j.business_date AS businessDate,
+  JSON_UNQUOTE(JSON_EXTRACT(j.metadata, '$.cashHistoricalCost.version')) AS cashCostEvidenceVersion`;
+const postCleanupLineFields = `l.id, l.journal_id AS journalId, l.line_no AS lineNo, l.account_code AS accountCode,
+  l.direction, l.currency, CAST(l.amount_original AS CHAR) AS amountOriginal, CAST(l.amount_cny AS CHAR) AS amountCny,
+  CAST(l.fx_rate_to_cny AS CHAR) AS fxRateToCny, l.fx_rate_snapshot_id AS fxSnapshotId,
+  l.finance_account_id AS financeAccountId, l.supplier_account_id AS supplierAccountId, l.created_at AS createdAt`;
+export const postCleanupSourceQueries = Object.freeze({
+  accounts: { ids: postCleanupAccountIds, sql: historySourceQueries.accounts },
+  journals: {
+    ids: postCleanupJournalIds,
+    sql: `SELECT ${postCleanupJournalFields} FROM id_business_v2_finance_journals j WHERE j.id IN (IDS)`
+  },
+  lines: {
+    ids: postCleanupJournalIds,
+    sql: `SELECT ${postCleanupLineFields} FROM id_business_v2_finance_journal_lines l WHERE l.journal_id IN (IDS)`
+  },
+  expenses: {
+    ids: postCleanupJournalIds,
+    sql: historySourceQueries.expenses.replace('WHERE id IN (IDS)', 'WHERE journal_id IN (IDS)')
+  },
+  cashLines: {
+    ids: postCleanupAccountIds,
+    sql: `SELECT ${postCleanupLineFields} FROM id_business_v2_finance_journal_lines l WHERE l.account_code = 'cash' AND l.finance_account_id IN (IDS)`
+  },
+  cashJournals: {
+    ids: postCleanupAccountIds,
+    sql: `SELECT DISTINCT ${postCleanupJournalFields},
+    CAST(SHA2(IF(j.metadata IS NULL, 'NULL', CAST(j.metadata AS CHAR)), 256) AS CHAR) AS metadataSha256
+    FROM id_business_v2_finance_journals j JOIN id_business_v2_finance_journal_lines l ON l.journal_id = j.id
+    WHERE l.account_code = 'cash' AND l.finance_account_id IN (IDS)`
+  }
+});
+const equal = (a, b) => fingerprint(a) === fingerprint(b);
+const sha256Value = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+export function postCleanupSourceAnchor(policy) {
+  return fingerprint({
+    expectedCurrent: policy.expectedCurrent,
+    activeDatabase: policy.activeDatabase,
+    rulesSha256: policy.rulesSha256,
+    exceptions: policy.exceptions,
+    sources: policy.sources,
+    metadataSha256: policy.metadataSha256,
+    cleanupReceiptSha256: policy.cleanupReceiptSha256,
+    captureEvidence: policy.captureEvidence
+  });
+}
+
+export function validatePostCleanupPolicyDraft(policy, definitions, expectedCurrent) {
+  if (
+    policy?.version !== 1 ||
+    policy.id !== HISTORY_POST_CLEANUP_POLICY_ID ||
+    policy.userApproved !== false ||
+    policy.activation !== 'EXTERNAL_REVIEWED_SEAL_REQUIRED' ||
+    policy.expectedCurrent !== HISTORY_POST_CLEANUP_BASELINE ||
+    expectedCurrent !== HISTORY_POST_CLEANUP_BASELINE ||
+    policy.activeDatabase !== HISTORY_POST_CLEANUP_DATABASE ||
+    policy.checkCount !== 49 ||
+    definitions.length !== 49 ||
+    policy.rulesSha256 !== fingerprint(definitions) ||
+    !equal(policy.exceptions, [
+      { code: 'cash_historical_cost_evidence_mismatch', entityIds: POST_CLEANUP_COST_ENTITY_IDS }
+    ]) ||
+    policy.cleanupReceiptSha256 !== HISTORY_POST_CLEANUP_RECEIPT_SHA256 ||
+    !sha256Value(policy.metadataSha256) ||
+    !equal(policy.captureEvidence, POST_CLEANUP_CAPTURE_EVIDENCE) ||
+    !equal(Object.keys(policy.sources ?? {}).sort(), Object.keys(postCleanupSourceQueries).sort())
+  )
+    throw new Error('Post-cleanup draft identity, scope or all 49 rules changed');
+  for (const [name, query] of Object.entries(postCleanupSourceQueries)) {
+    const source = policy.sources[name];
+    if (
+      !equal(source?.ids, query.ids) ||
+      !sha256Value(source?.sha256) ||
+      !Number.isSafeInteger(source.rowCount) ||
+      source.rowCount <= 0 ||
+      (['accounts', 'journals', 'expenses'].includes(name) && source.rowCount !== query.ids.length)
+    )
+      throw new Error('Post-cleanup original source coverage changed');
+  }
+  if (policy.sourceAnchorSha256 !== postCleanupSourceAnchor(policy))
+    throw new Error('Post-cleanup original source anchor changed');
+  const bindings = policy.candidateBindings;
+  for (const [name, map] of Object.entries(bindings ?? {})) {
+    if (
+      !['sourceSha256', 'compiledServiceHashes'].includes(name) ||
+      !map ||
+      Array.isArray(map) ||
+      Object.keys(map).length === 0 ||
+      Object.values(map).some((value) => !sha256Value(value))
+    )
+      throw new Error('Post-cleanup candidate content was not frozen');
+    for (const file of Object.keys(map)) {
+      const valid =
+        name === 'sourceSha256'
+          ? /^(apps\/api\/src\/id-business-v2\/|scripts\/|packages\/shared\/src\/)[A-Za-z0-9_./-]+$/.test(
+              file
+            )
+          : /^(apps\/api\/dist\/|packages\/shared\/dist\/)[A-Za-z0-9_./-]+\.js$/.test(file);
+      if (!valid || file.includes('..') || file === 'scripts/lib/v2-release-history-policy.mjs')
+        throw new Error('Post-cleanup candidate file boundary changed');
+    }
+  }
+  if (!equal(Object.keys(bindings ?? {}).sort(), ['compiledServiceHashes', 'sourceSha256']))
+    throw new Error('Post-cleanup candidate content coverage changed');
+  if (
+    POST_CLEANUP_REQUIRED_SOURCE_FILES.some(
+      (file) => !Object.hasOwn(bindings.sourceSha256, file)
+    ) ||
+    !equal(
+      Object.keys(bindings.compiledServiceHashes).sort(),
+      [...POST_CLEANUP_COMPILED_FILES].sort()
+    )
+  )
+    throw new Error('Post-cleanup critical candidate dependency coverage changed');
+}
+
+export function assessPostCleanupAuditDraft({
+  policy,
+  definitions,
+  expectedCurrent,
+  stage,
+  checks,
+  sources,
+  metadata,
+  before,
+  identity,
+  scope,
+  cleanupReceiptSha256
+}) {
+  validatePostCleanupPolicyDraft(policy, definitions, expectedCurrent);
+  if (
+    !['before', 'after'].includes(stage) ||
+    !/^id_business_audit@/.test(identity?.currentUser) ||
+    identity.transactionIsolation !== 'REPEATABLE-READ' ||
+    String(identity.foreignKeyChecks) !== '1' ||
+    String(identity.sessionReadOnly) !== '1' ||
+    identity.databaseName !== HISTORY_POST_CLEANUP_DATABASE ||
+    String(identity.readOnly) !== '0' ||
+    String(identity.superReadOnly) !== '0' ||
+    String(scope?.targetOrdersCount) !== '0' ||
+    String(scope?.protectedThirdOrderCount) !== '1' ||
+    cleanupReceiptSha256 !== HISTORY_POST_CLEANUP_RECEIPT_SHA256
+  )
+    throw new Error('Post-cleanup database, original cleanup or read-only identity changed');
+  if (!equal(checks.map((item) => item.code).sort(), definitions.map((item) => item.code).sort()))
+    throw new Error('Post-cleanup audit rule coverage changed');
+  for (const check of checks) {
+    const expected =
+      check.code === 'cash_historical_cost_evidence_mismatch' ? POST_CLEANUP_COST_ENTITY_IDS : [];
+    if (
+      check.status !== 'EXECUTED' ||
+      check.count !== expected.length ||
+      !Array.isArray(check.samples) ||
+      !equal(check.samples.map((sample) => sample.entityId).sort(), [...expected].sort())
+    )
+      throw new Error('New, missing, changed or unexecuted post-cleanup finding');
+  }
+  if (!equal(Object.keys(sources).sort(), Object.keys(policy.sources).sort()))
+    throw new Error('Post-cleanup source coverage changed');
+  for (const [name, frozen] of Object.entries(policy.sources))
+    if (sources[name]?.sha256 !== frozen.sha256 || sources[name]?.rowCount !== frozen.rowCount)
+      throw new Error('Post-cleanup frozen money, state, version or cash chain changed');
+  if (
+    !equal(metadata.map((row) => row.id).sort(), [...postCleanupJournalIds].sort()) ||
+    metadata.some((row) => !sha256Value(row.metadataSha256)) ||
+    fingerprintRows(metadata) !== policy.metadataSha256
+  )
+    throw new Error('Post-cleanup original metadata changed');
+  if (
+    stage === 'after' &&
+    (before?.gate?.accepted !== true ||
+      before.gate.status !== 'APPROVED_POST_CLEANUP_HISTORICAL_EXCEPTIONS' ||
+      before.gate.policyId !== policy.id ||
+      before.gate.expectedCurrent !== expectedCurrent ||
+      before.gate.stage !== 'before' ||
+      before.gate.checkCount !== 49 ||
+      before.gate.executedCheckCount !== 49 ||
+      before.gate.unavailableCheckCount !== 0 ||
+      before.gate.violationCount !== 5 ||
+      before.gate.sourceAnchorSha256 !== policy.sourceAnchorSha256 ||
+      !equal(before.gate.sources, sources) ||
+      before.gate.metadataSha256 !== policy.metadataSha256 ||
+      before.gate.cleanupReceiptSha256 !== cleanupReceiptSha256)
+  )
+    throw new Error('Post-cleanup before receipt or source changed during release');
+  return {
+    accepted: false,
+    status: 'POST_CLEANUP_DRAFT_VERIFIED_NOT_ACTIVATED',
+    policyId: policy.id,
+    expectedCurrent,
+    stage,
+    checkCount: 49,
+    executedCheckCount: 49,
+    unavailableCheckCount: 0,
+    violationCount: 5,
+    sourceAnchorSha256: policy.sourceAnchorSha256,
+    sources,
+    metadataSha256: policy.metadataSha256,
+    cleanupReceiptSha256
+  };
+}
+
+export function acceptSealedPostCleanupAudit(
+  input,
+  { seal, sealSha256, sealBytes, cleanupReceiptBytes, candidateCommit, candidateTree }
+) {
+  const draft = assessPostCleanupAuditDraft(input);
+  if (
+    !sha256Value(HISTORY_POST_CLEANUP_SOURCE_ANCHOR_SHA256) ||
+    input.policy.sourceAnchorSha256 !== HISTORY_POST_CLEANUP_SOURCE_ANCHOR_SHA256 ||
+    !Buffer.isBuffer(sealBytes) ||
+    !Buffer.isBuffer(cleanupReceiptBytes) ||
+    createHash('sha256').update(sealBytes).digest('hex') !== sealSha256 ||
+    createHash('sha256').update(cleanupReceiptBytes).digest('hex') !==
+      HISTORY_POST_CLEANUP_RECEIPT_SHA256 ||
+    !equal(JSON.parse(sealBytes.toString()), seal) ||
+    seal?.version !== 1 ||
+    seal.policyId !== HISTORY_POST_CLEANUP_POLICY_ID ||
+    seal.userApproved !== true ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:/-]{5,299}$/.test(seal.approvalReference ?? '') ||
+    seal.expectedCurrent !== HISTORY_POST_CLEANUP_BASELINE ||
+    seal.activeDatabase !== HISTORY_POST_CLEANUP_DATABASE ||
+    seal.sourceAnchorSha256 !== input.policy.sourceAnchorSha256 ||
+    seal.policySha256 !== fingerprint(input.policy) ||
+    seal.candidateBindingsSha256 !== fingerprint(input.policy.candidateBindings) ||
+    !/^[a-f0-9]{40}$/.test(candidateCommit ?? '') ||
+    candidateCommit === HISTORY_POST_CLEANUP_BASELINE ||
+    seal.candidateCommit !== candidateCommit ||
+    !/^[a-f0-9]{40}$/.test(candidateTree ?? '') ||
+    seal.candidateTree !== candidateTree ||
+    !/^sha256:[a-f0-9]{64}$/.test(seal.apiImage ?? '')
+  )
+    throw new Error('Post-cleanup independent source or reviewed runtime seal required');
+  const receipt = JSON.parse(cleanupReceiptBytes.toString());
+  if (
+    receipt?.ok !== true ||
+    receipt.status !== 'POST_OPEN_READONLY_RUNTIME_AND_TWO_ORDER_SCOPE_VERIFIED' ||
+    receipt.databaseName !== HISTORY_POST_CLEANUP_DATABASE ||
+    receipt.release?.commit !== HISTORY_POST_CLEANUP_BASELINE ||
+    receipt.normalWritesOpened !== true ||
+    receipt.databaseMutationCommands !== 0 ||
+    receipt.credentialsExported !== false
+  )
+    throw new Error('Post-cleanup immutable completion receipt changed');
+  if (
+    input.stage === 'after' &&
+    (input.before?.gate?.releaseSealSha256 !== sealSha256 ||
+      input.before.gate.candidateCommit !== candidateCommit ||
+      input.before.gate.candidateTree !== candidateTree ||
+      input.before.gate.apiImage !== seal.apiImage)
+  )
+    throw new Error('Post-cleanup approved candidate changed during release');
+  return {
+    ...draft,
+    accepted: true,
+    status: 'APPROVED_POST_CLEANUP_HISTORICAL_EXCEPTIONS',
+    releaseSealSha256: sealSha256,
+    candidateCommit,
+    candidateTree,
+    apiImage: seal.apiImage
+  };
+}

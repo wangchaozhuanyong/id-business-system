@@ -131,6 +131,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     $queryRaw: vi.fn(),
     idBusinessV2FinanceJournal: { findFirst: vi.fn() },
     idBusinessV2Order: {
+      create: vi.fn(),
       findUnique: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn(),
@@ -220,6 +221,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
       const sql = Array.from(strings).join('');
+      if (sql.includes('"source_sold_order_id"')) return [];
       if (sql.includes('id_business_v2_accounts')) {
         const isSold = storedOrder.accountDisposition === 'sold';
         return [
@@ -1392,6 +1394,130 @@ describe('IdBusinessV2OrderLifecycleService', () => {
         operator
       )
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it.each([
+    ['completed', null],
+    ['failed', null],
+    ['failed', updatedAt],
+    ['refunded', updatedAt]
+  ])(
+    'rejects source deletion with a %s child deleted at %s before any mutation',
+    async (status, deletedAt) => {
+      storedOrder = makeOrder({ status: 'refunded', accountDisposition: 'recovered' });
+      tx.idBusinessV2Order.findFirst.mockResolvedValue(null);
+      tx.$queryRaw.mockImplementation(
+        async (strings: TemplateStringsArray, ...values: unknown[]) => {
+          const sql = Array.from(strings).join('');
+          if (sql.includes('"source_sold_order_id"')) {
+            expect(values).toEqual([orderId]);
+            expect(sql).toContain('FOR SHARE');
+            expect(sql).not.toContain('"status"');
+            expect(sql).not.toContain('"deleted_at"');
+            return [{ id: sourceOrderId, status, deletedAt }];
+          }
+          return [{ id: orderId }];
+        }
+      );
+      await expect(
+        service.remove(orderId, { reason: '隐藏原单但不能破坏售后来源' }, operator)
+      ).rejects.toThrow('仍被后续订单引用');
+      expect(storedOrder.deletedAt).toBeNull();
+      expect(orderLockService.releaseOrderLockInTransaction).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+      expect(financePostingService.post).not.toHaveBeenCalled();
+      expect(tx.auditLog.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('replays an already-deleted order without a new dependency read or mutation', async () => {
+    storedOrder = makeOrder({ status: 'refunded', deletedAt: updatedAt });
+    await expect(
+      service.remove(orderId, { reason: '重复删除已隐藏订单' }, operator)
+    ).resolves.toEqual({ deleted: true, idempotentReplay: true });
+    expect(
+      tx.$queryRaw.mock.calls.some(([strings]) =>
+        Array.from(strings as string[])
+          .join('')
+          .includes('"source_sold_order_id"')
+      )
+    ).toBe(false);
+    expect(orderLockService.releaseOrderLockInTransaction).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
+  });
+
+  it.each(['create', 'update'] as const)(
+    'rejects a child %s after source deletion before writing the child',
+    async (operation) => {
+      const repository = new IdBusinessV2OrdersRepository(prisma as never);
+      tx.$queryRaw.mockImplementation(
+        async (strings: TemplateStringsArray, ...values: unknown[]) => {
+          const sql = Array.from(strings).join('');
+          expect(values).toEqual([sourceOrderId]);
+          expect(sql).toContain('"deleted_at" IS NULL');
+          expect(sql).toContain('FOR SHARE');
+          return [];
+        }
+      );
+      const attempt =
+        operation === 'create'
+          ? repository.createOrder(
+              tx as never,
+              { ...makeOrder(), sourceSoldOrderId: sourceOrderId } as never
+            )
+          : repository.updateOrder(tx as never, orderId, {
+              sourceSoldOrderId: { set: sourceOrderId }
+            });
+      await expect(attempt).rejects.toThrow('来源销售订单不存在或已删除');
+      expect(tx.idBusinessV2Order.create).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+      expect(tx.auditLog.create).not.toHaveBeenCalled();
+      expect(financePostingService.post).not.toHaveBeenCalled();
+    }
+  );
+
+  it('detects a child created earlier through the current read before deleting its source', async () => {
+    const repository = new IdBusinessV2OrdersRepository(prisma as never);
+    storedOrder = makeOrder({ status: 'refunded' });
+    let childCreated = false;
+    tx.idBusinessV2Order.create.mockImplementation(async () => {
+      childCreated = true;
+      return makeOrder({ id: sourceOrderId, sourceSoldOrderId: orderId });
+    });
+    tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = Array.from(strings).join('');
+      if (sql.includes('"source_sold_order_id"'))
+        return childCreated ? [{ id: sourceOrderId }] : [];
+      return [{ id: orderId }];
+    });
+    await repository.createOrder(
+      tx as never,
+      { ...makeOrder(), sourceSoldOrderId: orderId } as never
+    );
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.idBusinessV2Order.create.mock.invocationCallOrder[0]
+    );
+    await expect(
+      service.remove(orderId, { reason: '子单先建立后不得隐藏来源' }, operator)
+    ).rejects.toThrow('仍被后续订单引用');
+    expect(tx.idBusinessV2Order.create).toHaveBeenCalledOnce();
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(orderLockService.releaseOrderLockInTransaction).not.toHaveBeenCalled();
+    expect(storedOrder.deletedAt).toBeNull();
+  });
+
+  it('preserves ordinary child writes without an additional source lookup', async () => {
+    const repository = new IdBusinessV2OrdersRepository(prisma as never);
+    tx.idBusinessV2Order.create.mockResolvedValue(makeOrder());
+    await repository.createOrder(tx as never, { ...makeOrder(), sourceSoldOrderId: null } as never);
+    await repository.updateOrder(tx as never, orderId, { remark: '普通备注修改' });
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.create).toHaveBeenCalledOnce();
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledOnce();
   });
 
   it('never writes website plaintext or lifecycle idempotency keys into audit data', async () => {

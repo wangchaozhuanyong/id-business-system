@@ -12,6 +12,12 @@ export const ordersFeature = defineV2Feature({
   freshnessPolicy: 'event-driven',
   filters: [
     {
+      key: 'archived',
+      label: '归档状态',
+      kind: 'select',
+      options: ['当前订单', '已归档', '全部订单']
+    },
+    {
       key: 'keyword',
       label: '搜索',
       kind: 'search',

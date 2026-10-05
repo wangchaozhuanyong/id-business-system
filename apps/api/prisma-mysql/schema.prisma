@@ -1558,6 +1558,7 @@ model IdBusinessV2Order {
   createdAt                    DateTime                            @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt                    DateTime                            @updatedAt @map("updated_at") @db.DateTime(6)
   deletedAt                    DateTime?                           @map("deleted_at") @db.DateTime(6)
+  archivedAt                   DateTime?                           @map("archived_at") @db.DateTime(6)
 
   customer                 IdBusinessV2Customer                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
   serviceOption            IdBusinessV2Option                   @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
@@ -1593,6 +1594,7 @@ model IdBusinessV2Order {
   @@index([dueAt])
   @@index([createdByUserId])
   @@index([deletedAt])
+  @@index([deletedAt, archivedAt, createdAt, id], map: "id_business_v2_orders_archive_list_idx")
   @@map("id_business_v2_orders")
 }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
 build_image() {
   local service="$1" dockerfile="$2" target="$3"
@@ -8,6 +9,9 @@ build_image() {
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
   if [[ "$service" == admin ]]; then
     options+=(--build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api)
+    if [[ "${HISTORICAL_EXCEPTION:-none}" == historical-finance-20261005-order-archive ]]; then
+      options+=(--build-arg "V2_BUILD_ID=$archive_build_id")
+    fi
   fi
   docker build "${options[@]}" -f "$dockerfile" -t "$reference" .
   echo "Built image: $service"
@@ -25,6 +29,51 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HIS
   python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image auto-recharge apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile ''
+  exit 0
+fi
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == historical-finance-20261005-post-cleanup ]]; then
+  [[ "${RELEASE_OPERATION:-release}" == prepare_post_cleanup_release ]] || exit 1
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api apps/api/Dockerfile.mysql runtime
+  build_image migrate apps/api/Dockerfile.mysql migration
+  exit 0
+fi
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == historical-finance-20261005-order-archive ]]; then
+  [[ "${RELEASE_OPERATION:-release}" == prepare_order_archive_release ]] || exit 1
+  archive_build_id="$(node --input-type=module - <<'JS'
+import { execFileSync } from 'node:child_process';
+import { lstatSync, readFileSync } from 'node:fs';
+import { ORDER_ARCHIVE_POLICY_FILE, verifyOrderArchiveSourceBindings } from './scripts/lib/v2-order-archive-release-policy.mjs';
+const policy = JSON.parse(readFileSync(ORDER_ARCHIVE_POLICY_FILE, 'utf8'));
+if (policy.id !== 'historical-finance-20261005-order-archive'
+    || policy.scope !== 'API_ADMIN_ORDER_ARCHIVE' || policy.userApproved !== false
+    || !/^[a-f0-9]{40}$/.test(policy.candidateBindings?.sourceTree ?? '')) {
+  throw new Error('Order archive deterministic Admin source binding missing');
+}
+const entries = execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD'], { encoding: 'utf8' })
+  .split('\0').filter(Boolean).filter((record) => record.slice(record.indexOf('\t') + 1) !== ORDER_ARCHIVE_POLICY_FILE)
+  .map((record) => {
+    const separator = record.indexOf('\t');
+    const [mode, kind] = record.slice(0, separator).split(' ');
+    const path = record.slice(separator + 1);
+    const metadata = lstatSync(path);
+    if (kind !== 'blob' || !['100644', '100755'].includes(mode) || !metadata.isFile()
+        || (metadata.mode & 0o111 ? '100755' : '100644') !== mode) {
+      throw new Error('Order archive deterministic Admin source file changed');
+    }
+    return { path, mode, bytes: readFileSync(path) };
+  });
+const verified = verifyOrderArchiveSourceBindings(policy, entries);
+process.stdout.write(`v2-${verified.sourceTree}`);
+JS
+)"
+  [[ "$archive_build_id" =~ ^v2-[a-f0-9]{40}$ ]] || exit 1
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api apps/api/Dockerfile.mysql runtime
+  build_image migrate apps/api/Dockerfile.mysql migration
+  build_image admin apps/admin/Dockerfile runtime
   exit 0
 fi
 

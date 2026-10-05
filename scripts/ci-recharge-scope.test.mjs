@@ -154,7 +154,8 @@ test('ordinary admin modules use frontend checks instead of backend and financia
   assert.deepEqual(commands, [
     ['run', 'build', '--workspace', '@apple-business/shared'],
     ['run', 'test', '--workspace', '@apple-business/admin'],
-    ['run', 'build', '--workspace', '@apple-business/admin']
+    ['run', 'build', '--workspace', '@apple-business/admin'],
+    ['exec', '--', 'node', 'scripts/acceptance-v2-order-archive-ui.mjs']
   ]);
   assert.ok(
     adminCheckCommands('admin', [...paths, files[0]]).some((args) =>

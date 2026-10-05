@@ -28,6 +28,8 @@ import { IdBusinessV2FinanceHistoryConfirmationRepository } from './persistence/
 import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
 import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
+import { IdBusinessV2HistoricalCashService } from './id-business-v2-historical-cash.service';
+import { IdBusinessV2HistoricalCashRepository } from './persistence/id-business-v2-historical-cash.repository';
 
 @Module({
   imports: [
@@ -54,6 +56,8 @@ import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-bu
     IdBusinessV2FinancePostingService,
     IdBusinessV2FinanceReportsService,
     IdBusinessV2FinanceSupplierWalletsService,
+    IdBusinessV2HistoricalCashService,
+    IdBusinessV2HistoricalCashRepository,
     IdBusinessV2FinanceCommandRepository,
     IdBusinessV2FinanceGiftCardRefundRepository,
     IdBusinessV2FinanceHistoryCommandRepository,
@@ -63,6 +67,10 @@ import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-bu
     IdBusinessV2FinanceReportRepository,
     IdBusinessV2FinanceSupplierWalletRepository
   ],
-  exports: [IdBusinessV2FinanceFxService, IdBusinessV2FinancePostingService]
+  exports: [
+    IdBusinessV2FinanceFxService,
+    IdBusinessV2FinancePostingService,
+    IdBusinessV2HistoricalCashService
+  ]
 })
 export class IdBusinessV2FinanceModule {}

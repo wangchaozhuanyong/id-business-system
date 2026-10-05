@@ -15,6 +15,31 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n');
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
+const retirementControlPaths = [
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/remote-deploy.test.py',
+  'scripts/production-release/retire-orphan-retention.py',
+  'scripts/production-release/retire-orphan-retention.test.py'
+];
+const preparedControlPaths = [
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/reuse-images.py',
+  'scripts/production-release/prepared-images.test.py'
+];
+const releaseMaintenanceControls = () => {
+  if (changed.some((path) => retirementControlPaths.includes(path)))
+    run('python3', ['-B', 'scripts/production-release/retire-orphan-retention.test.py']);
+  if (changed.some((path) => preparedControlPaths.includes(path)))
+    run('python3', ['-B', 'scripts/production-release/prepared-images.test.py']);
+};
+const archiveReleaseControls = () => {
+  run('node', ['--test', 'scripts/v2-order-archive-release-policy.test.mjs']);
+};
 
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
@@ -31,12 +56,24 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
-  if (changed.some((path) => historicalReleaseControlPaths.includes(path)))
+  if (changed.some((path) => historicalReleaseControlPaths.includes(path))) {
     run('node', ['--test', 'scripts/v2-release-history-policy.test.mjs']);
-  if (changed.some((path) => historicalReleaseControlPaths.includes(path)))
     run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);
-  if (changed.some((path) => historicalReleaseControlPaths.includes(path)))
     run('node', ['--test', 'scripts/v2-release-mailbox-audit.test.mjs']);
+  }
+  releaseMaintenanceControls();
+  archiveReleaseControls();
+  if (
+    changed.some((path) =>
+      [
+        'scripts/backup-aws-mysql.sh',
+        'scripts/verify-aws-mysql-backup.sh',
+        'scripts/mysql-dump-restore-normalizer.sed',
+        'scripts/aws-mysql-backup.test.mjs'
+      ].includes(path)
+    )
+  )
+    run('node', ['--test', 'scripts/aws-mysql-backup.test.mjs']);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/maintain-image-cache')))
@@ -79,6 +116,26 @@ if (part === 'guards') {
     );
     npm('run', 'check:v2-ui-language', '--', 'apps/admin/src/v2/features/auto-recharge');
   }
+} else if (part === 'release-controls') {
+  if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
+  if (
+    changed.some(
+      (path) =>
+        historicalReleaseControlPaths.includes(path) ||
+        path.startsWith('scripts/production-release/') ||
+        [
+          '.github/workflows/quality.yml',
+          'scripts/ci-recharge-check.mjs',
+          'scripts/ci-recharge-scope.mjs',
+          'scripts/ci-recharge-release.test.mjs'
+        ].includes(path)
+    )
+  )
+    run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
+  // Full npm test already runs backup, finite history and its nested remote
+  // deployment suite. Add only the missing preparation/retirement controls.
+  releaseMaintenanceControls();
+  archiveReleaseControls();
 } else if (part === 'admin') {
   for (const args of adminCheckCommands(mode, changed)) npm(...args);
 } else if (part === 'api') {

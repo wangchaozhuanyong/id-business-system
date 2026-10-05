@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -50,6 +51,19 @@ CONTINUATION_CANDIDATE_FILES = frozenset({
 # A third, fixed one-use entry pinned to independently verified successful 6a receipts.
 HISTORY_DIAGNOSTICS_POLICY_ID = 'historical-finance-20261005-recharge-diagnostics'
 HISTORY_DIAGNOSTICS_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+HISTORY_POST_CLEANUP_POLICY_ID = 'historical-finance-20261005-post-cleanup'
+HISTORY_POST_CLEANUP_BASELINE = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+HISTORY_POST_CLEANUP_DATABASE = 'id_business_v2_partial_cleanup_20261005_v1'
+HISTORY_POST_CLEANUP_RECEIPT_SHA256 = 'f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f'
+POST_CLEANUP_OPERATION = BASE / 'backups/mysql/partial-two-order-authorized-20261005-v1'
+POST_CLEANUP_SEAL = POST_CLEANUP_OPERATION / 'reviewed-financial-release-seal.json'
+POST_CLEANUP_RECEIPT = POST_CLEANUP_OPERATION / 'post-open-readonly-audit-v1.json'
+HISTORY_ORDER_ARCHIVE_POLICY_ID = 'historical-finance-20261005-order-archive'
+HISTORY_ORDER_ARCHIVE_BASELINE = '3ca300486d0edfadda83c094a48474a63959fce7'
+ORDER_ARCHIVE_BASELINE_TREE = 'b376704b4039bcc162433c3358205ae60c4dcfa9'
+ORDER_ARCHIVE_SEAL = POST_CLEANUP_OPERATION / 'reviewed-order-archive-release-seal.json'
+ORDER_ARCHIVE_MIGRATION = '20261005193000_order_independent_archive'
+ORDER_ARCHIVE_MIGRATION_SHA256 = '5738091ee212f78514c322a38d271bdc22ae6ec3743daf5e17835e52d93e0e04'
 DIAGNOSTICS_POLICY_SHA256 = '0682cb5ec0f95dabc49bcd3ba4d38384d1353ddfe275dd6dcf122f540d1dbcba'
 DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
 DIAGNOSTICS_MANIFEST_SHA256 = '202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866'
@@ -176,7 +190,9 @@ def require_historical_baseline(policy_id, expected_current):
     baselines = {HISTORY_POLICY_ID: HISTORY_BASELINE,
                  HISTORY_CONTINUATION_POLICY_ID: HISTORY_CONTINUATION_BASELINE,
                  HISTORY_DIAGNOSTICS_POLICY_ID: HISTORY_DIAGNOSTICS_BASELINE,
-                 HISTORY_MAINTENANCE_POLICY_ID: HISTORY_MAINTENANCE_BASELINE}
+                 HISTORY_MAINTENANCE_POLICY_ID: HISTORY_MAINTENANCE_BASELINE,
+                 HISTORY_ORDER_ARCHIVE_POLICY_ID: HISTORY_ORDER_ARCHIVE_BASELINE,
+                 HISTORY_POST_CLEANUP_POLICY_ID: HISTORY_POST_CLEANUP_BASELINE}
     require(policy_id in baselines and expected_current == baselines[policy_id],
             'Historical release exception cannot be reused after publication')
 
@@ -780,11 +796,23 @@ def verify_reusable_archive(release, source, commit, *, mailbox_only=False):
     require(actual == hashes, 'Reusable image source differs from release application source')
 
 
-def release_services(admin_only, additions, edge_changed=False, *, historical_diagnostics=False, historical_mailbox=False):
+def release_services(admin_only, additions, edge_changed=False, *, historical_diagnostics=False,
+                     historical_mailbox=False, historical_post_cleanup=False, historical_order_archive=False):
+    require(sum((historical_diagnostics, historical_mailbox, historical_post_cleanup, historical_order_archive)) <= 1,
+            'Historical release selection is ambiguous')
     if historical_mailbox:
-        require(not historical_diagnostics and not admin_only and not additions and not edge_changed,
+        require(not admin_only and not additions and not edge_changed,
                 'Mailbox release must update only the API without migrations or edge changes')
         return ('api',), ('api',)
+    if historical_order_archive:
+        require(not admin_only and not edge_changed
+                and additions in ([], [ORDER_ARCHIVE_MIGRATION + '/migration.sql']),
+                'Order archive publication requires only API, Admin and its unique migration')
+        return ('api', 'admin'), ('api', 'migrate', 'admin')
+    if historical_post_cleanup:
+        require(not admin_only and not additions and not edge_changed,
+                'Post-cleanup publication requires unchanged schema and API-only scope')
+        return ('api',), ('api', 'migrate')
     if historical_diagnostics:
         require(not admin_only, 'Historical diagnostics requires Worker publication')
         require_diagnostics_migration_scope(additions, edge_changed)
@@ -861,10 +889,15 @@ def environment_values(path):
     return values
 
 
-def service_state(directory, service, *, include_container_id=False):
+def service_state(directory, service, *, include_container_id=False, include_environment_hash=False):
     container = compose(directory, 'ps', '-q', service)
     require(bool(container), f'{service} container missing')
     data = json.loads(run('docker', 'inspect', container))[0]
+    if include_environment_hash:
+        require(isinstance(data.get('Config', {}).get('Env'), list)
+                and bool(data['Config']['Env'])
+                and all(isinstance(value, str) for value in data['Config']['Env']),
+                'Production container environment identity unavailable')
     if include_container_id:
         require(isinstance(data.get('Id'), str) and re.fullmatch(r'[0-9a-f]{64}', data['Id']),
                 'Production container identity unavailable')
@@ -879,6 +912,8 @@ def service_state(directory, service, *, include_container_id=False):
         **({'containerId': data['Id'],
             'startedAtSha256': hashlib.sha256(started_at.encode()).hexdigest()}
            if include_container_id else {}),
+        **({'environmentSha256': historical_fingerprint(sorted(data['Config'].get('Env', [])))}
+           if include_environment_hash else {}),
     }
 
 
@@ -894,20 +929,25 @@ def wait_healthy(directory, service):
     raise RuntimeError(f'{service} did not become healthy')
 
 
-def prepare_historical_before_receipt(directory, receipt):
-    # The previous root-owned 0600 receipt must remain private while its existing
-    # non-root audit reader can read the bind mount. Never change directory modes.
+def historical_audit_reader(directory, service='migrate'):
     probe = ("const os=require('node:os'); const user=os.userInfo(); "
              "console.log(JSON.stringify({uid:process.getuid(),gid:process.getgid(),user:user.username}));")
     try:
         identity = json.loads(compose(directory, 'run', '--rm', '--no-deps',
-            '--entrypoint', 'node', 'migrate', '-e', probe, timeout=30))
+            '--entrypoint', 'node', service, '-e', probe, timeout=30))
     except Exception:
         raise RuntimeError('Historical audit reader identity unavailable') from None
     require(isinstance(identity, dict) and set(identity) == {'uid', 'gid', 'user'}
             and identity['user'] == 'node'
             and all(type(identity[key]) is int and 0 < identity[key] <= 2147483647
                     for key in ('uid', 'gid')), 'Historical audit reader identity unavailable')
+    return identity
+
+
+def prepare_historical_before_receipt(directory, receipt, service='migrate'):
+    # Existing before receipts become private node-readable mounts; operation evidence
+    # uses separate reader copies below so its original ownership never changes.
+    identity = historical_audit_reader(directory, service)
     try:
         descriptor = os.open(receipt, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
@@ -926,24 +966,350 @@ def prepare_historical_before_receipt(directory, receipt):
         os.close(descriptor)
 
 
+def prepare_post_cleanup_reader_copy(directory, original, digest, filename, identity):
+    # Docker resolves the host mount as root; its node process reads only this 0400 copy.
+    require(filename in ('post-cleanup-seal.reader.json', 'post-cleanup-receipt.reader.json',
+                         'order-archive-seal.reader.json', 'order-archive-cleanup.reader.json'),
+            'Post-cleanup reader filename changed')
+    try:
+        descriptor = os.open(original, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as stream:
+            metadata = os.fstat(stream.fileno())
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                    and metadata.st_uid == os.geteuid() and stat.S_IMODE(metadata.st_mode) == 0o600,
+                    'Post-cleanup original evidence is not private')
+            content = stream.read()
+        require(hashlib.sha256(content).hexdigest() == digest, 'Post-cleanup original evidence changed')
+        reader = directory / filename
+        descriptor = os.open(reader, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fchown(stream.fileno(), identity['uid'], identity['gid'])
+            os.fchmod(stream.fileno(), 0o400)
+    except FileExistsError:
+        # A prior validated attempt may be reused only with the exact reader identity and bytes.
+        pass
+    except OSError:
+        raise RuntimeError('Post-cleanup reader evidence unavailable') from None
+    try:
+        descriptor = os.open(reader, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as stream:
+            metadata = os.fstat(stream.fileno())
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                    and stat.S_IMODE(metadata.st_mode) == 0o400
+                    and metadata.st_uid == identity['uid'] and metadata.st_gid == identity['gid']
+                    and hashlib.sha256(stream.read()).hexdigest() == digest,
+                    'Post-cleanup reader evidence changed')
+    except OSError:
+        raise RuntimeError('Post-cleanup reader evidence unavailable') from None
+    return reader
+
+
+def reviewed_post_cleanup_seal(source, expected_sha, candidate_commit, candidate_tree):
+    require(re.fullmatch(r'[a-f0-9]{64}', expected_sha or '') is not None,
+            'Reviewed post-cleanup external seal required')
+    for path, digest in ((POST_CLEANUP_SEAL, expected_sha),
+                         (POST_CLEANUP_RECEIPT, HISTORY_POST_CLEANUP_RECEIPT_SHA256)):
+        require(path.is_file() and not path.is_symlink()
+                and path.stat().st_nlink == 1 and path.stat().st_uid == os.geteuid()
+                and stat.S_IMODE(path.stat().st_mode) == 0o600
+                and hashlib.sha256(path.read_bytes()).hexdigest() == digest,
+                'Post-cleanup private sealed evidence changed')
+    seal = json.loads(POST_CLEANUP_SEAL.read_text())
+    policy = json.loads((source / 'deploy/aws' / (HISTORY_POST_CLEANUP_POLICY_ID + '.json')).read_text())
+    require(seal.get('version') == 1 and seal.get('userApproved') is True
+            and seal.get('policyId') == HISTORY_POST_CLEANUP_POLICY_ID
+            and seal.get('expectedCurrent') == HISTORY_POST_CLEANUP_BASELINE
+            and seal.get('activeDatabase') == HISTORY_POST_CLEANUP_DATABASE
+            and seal.get('candidateCommit') == candidate_commit
+            and seal.get('candidateTree') == candidate_tree
+            and re.fullmatch(r'[a-f0-9]{40}', candidate_commit or '') is not None
+            and re.fullmatch(r'[a-f0-9]{40}', candidate_tree or '') is not None
+            and candidate_commit != HISTORY_POST_CLEANUP_BASELINE
+            and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{5,299}', seal.get('approvalReference', '')) is not None
+            and re.fullmatch(r'sha256:[a-f0-9]{64}', seal.get('apiImage', '')) is not None
+            and seal.get('policySha256') == historical_fingerprint(policy)
+            and seal.get('sourceAnchorSha256') == policy.get('sourceAnchorSha256')
+            and policy.get('id') == HISTORY_POST_CLEANUP_POLICY_ID
+            and policy.get('userApproved') is False
+            and policy.get('activation') == 'EXTERNAL_REVIEWED_SEAL_REQUIRED'
+            and policy.get('expectedCurrent') == HISTORY_POST_CLEANUP_BASELINE
+            and policy.get('activeDatabase') == HISTORY_POST_CLEANUP_DATABASE
+            and policy.get('cleanupReceiptSha256') == HISTORY_POST_CLEANUP_RECEIPT_SHA256
+            and policy.get('checkCount') == 49
+            and seal.get('candidateBindingsSha256') == historical_fingerprint(policy.get('candidateBindings')),
+            'Post-cleanup reviewed candidate seal changed')
+    bindings = policy.get('candidateBindings', {}).get('sourceSha256', {})
+    require(isinstance(bindings, dict) and bool(bindings), 'Post-cleanup candidate source missing')
+    for name, digest in bindings.items():
+        require(isinstance(name, str) and '..' not in name
+                and re.fullmatch(r'(apps/api/src/id-business-v2/|scripts/|packages/shared/src/)[A-Za-z0-9_./-]+', name)
+                and name != 'scripts/lib/v2-release-history-policy.mjs'
+                and isinstance(digest, str) and re.fullmatch(r'[a-f0-9]{64}', digest),
+                'Post-cleanup source boundary changed')
+        path = source / name
+        require(path.is_file() and not path.is_symlink()
+                and hashlib.sha256(path.read_bytes()).hexdigest() == digest,
+                'Post-cleanup candidate source changed')
+    return policy, seal
+
+
+def reviewed_order_archive_seal(source, expected_sha, candidate_commit, candidate_tree,
+                                prepared_sha, image_run, image_attempt):
+    require(re.fullmatch(r'[a-f0-9]{64}', expected_sha or '') is not None
+            and re.fullmatch(r'[1-9][0-9]*', image_run or '') is not None
+            and re.fullmatch(r'[1-9][0-9]*', image_attempt or '') is not None,
+            'Reviewed order archive external seal required')
+    for path, digest in ((ORDER_ARCHIVE_SEAL, expected_sha),
+                         (POST_CLEANUP_RECEIPT, HISTORY_POST_CLEANUP_RECEIPT_SHA256)):
+        raw = private_maintenance_receipt(path)
+        require(stat.S_IMODE(path.stat().st_mode) == 0o600
+                and hashlib.sha256(raw).hexdigest() == digest,
+                'Order archive private reviewed evidence changed')
+    seal = json.loads(private_maintenance_receipt(ORDER_ARCHIVE_SEAL))
+    policy = json.loads((source / 'deploy/aws' / (HISTORY_ORDER_ARCHIVE_POLICY_ID + '.json')).read_text())
+    bindings = policy.get('candidateBindings', {})
+    require(seal.get('version') == 1 and seal.get('userApproved') is True
+            and seal.get('policyId') == HISTORY_ORDER_ARCHIVE_POLICY_ID
+            and seal.get('scope') == 'API_ADMIN_ORDER_ARCHIVE'
+            and seal.get('expectedCurrent') == HISTORY_ORDER_ARCHIVE_BASELINE
+            and seal.get('historicalSourceBaseline') == HISTORY_POST_CLEANUP_BASELINE
+            and seal.get('activeDatabase') == HISTORY_POST_CLEANUP_DATABASE
+            and seal.get('candidateCommit') == candidate_commit
+            and seal.get('candidateTree') == candidate_tree
+            and candidate_commit != HISTORY_ORDER_ARCHIVE_BASELINE
+            and re.fullmatch(r'[a-f0-9]{40}', candidate_commit or '') is not None
+            and re.fullmatch(r'[a-f0-9]{40}', candidate_tree or '') is not None
+            and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{5,299}', seal.get('approvalReference', '')) is not None
+            and re.fullmatch(r'[a-f0-9]{64}', prepared_sha or '') is not None
+            and seal.get('preparedImagesSha256') == prepared_sha
+            and seal.get('preparationRunId') == int(image_run)
+            and seal.get('preparationRunAttempt') == int(image_attempt)
+            and seal.get('policySha256') == historical_fingerprint(policy)
+            and seal.get('candidateBindingsSha256') == historical_fingerprint(bindings)
+            and seal.get('sourceTree') == bindings.get('sourceTree')
+            and seal.get('sourceAnchorSha256') == policy.get('sourceAnchorSha256')
+            and seal.get('cleanupReceiptSha256') == HISTORY_POST_CLEANUP_RECEIPT_SHA256
+            and policy.get('id') == HISTORY_ORDER_ARCHIVE_POLICY_ID
+            and policy.get('userApproved') is False
+            and policy.get('activation') == 'EXTERNAL_REVIEWED_SEAL_REQUIRED'
+            and policy.get('expectedCurrent') == HISTORY_ORDER_ARCHIVE_BASELINE
+            and policy.get('historicalSourceBaseline') == HISTORY_POST_CLEANUP_BASELINE
+            and policy.get('activeDatabase') == HISTORY_POST_CLEANUP_DATABASE
+            and policy.get('cleanupReceiptSha256') == HISTORY_POST_CLEANUP_RECEIPT_SHA256
+            and policy.get('checkCount') == 49
+            and isinstance(seal.get('images'), dict) and set(seal['images']) == {'api', 'admin', 'migrate'}
+            and all(re.fullmatch(r'sha256:[a-f0-9]{64}', value or '') for value in seal['images'].values())
+            and seal.get('migration') == bindings.get('migration')
+            and bindings.get('migration', {}).get('name') == ORDER_ARCHIVE_MIGRATION
+            and bindings.get('migration', {}).get('sqlSha256') == ORDER_ARCHIVE_MIGRATION_SHA256,
+            'Order archive reviewed candidate seal changed')
+    return policy, seal
+
+
+def require_order_archive_source_scope(release, policy):
+    bindings = policy['candidateBindings']
+    hashes, modes = bindings.get('sourceSha256'), bindings.get('sourceGitModes')
+    policy_path = 'deploy/aws/' + HISTORY_ORDER_ARCHIVE_POLICY_ID + '.json'
+    entries = list(release.rglob('*'))
+    require(all(not path.is_symlink() for path in entries), 'Order archive source contains a linked entry')
+    files = {str(path.relative_to(release)): path for path in entries if not path.is_dir()}
+    files.pop(policy_path, None)
+    require(isinstance(hashes, dict) and bool(hashes) and isinstance(modes, dict)
+            and set(files) == set(hashes) == set(modes) and policy_path not in hashes,
+            'Order archive complete source projection changed')
+    tree = {}
+    for name, path in files.items():
+        mode = modes[name]
+        require(mode in ('100644', '100755') and path.is_file() and not path.is_symlink()
+                and path.stat().st_nlink == 1 and '..' not in Path(name).parts
+                and stat.S_IMODE(path.stat().st_mode) in ((0o644, 0o664) if mode == '100644' else (0o755, 0o775)),
+                'Order archive source entry mode changed')
+        raw = path.read_bytes()
+        require(hashlib.sha256(raw).hexdigest() == hashes[name], 'Order archive candidate source changed')
+        oid = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).digest()
+        parent = tree
+        parts = Path(name).parts
+        for part in parts[:-1]:
+            parent = parent.setdefault(part, {})
+        parent[parts[-1]] = (mode, oid)
+    def git_tree(entries):
+        raw = b''
+        for name, value in sorted(entries.items(), key=lambda item: (item[0] + '/' if isinstance(item[1], dict) else item[0]).encode()):
+            mode, oid = ('40000', git_tree(value)) if isinstance(value, dict) else value
+            raw += mode.encode() + b' ' + name.encode() + b'\0' + oid
+        return hashlib.sha1(b'tree ' + str(len(raw)).encode() + b'\0' + raw).digest()
+    require(git_tree(tree).hex() == bindings.get('sourceTree'), 'Order archive source projection tree changed')
+    migration = release / 'apps/api/prisma-mysql/migrations' / ORDER_ARCHIVE_MIGRATION / 'migration.sql'
+    require(hashlib.sha256(migration.read_bytes()).hexdigest() == ORDER_ARCHIVE_MIGRATION_SHA256
+            and hashlib.sha256((release / 'apps/api/prisma-mysql/schema.prisma').read_bytes()).hexdigest()
+                == bindings['migration'].get('mysqlSchemaSha256'), 'Order archive migration source changed')
+
+
+def require_order_archive_preservation(previous, release, expected_environment, states):
+    require_diagnostics_environment_unchanged(previous, release, expected_environment)
+    for name in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws'):
+        require((previous / name).read_bytes() == (release / name).read_bytes(),
+                'Order archive publication changed runtime configuration')
+    current = {service: service_state(previous, service, include_container_id=True, include_environment_hash=True)
+               for service in states if service not in ('api', 'admin')}
+    require(all(current[service] == states[service] for service in current),
+            'Order archive publication changed a preserved service container')
+
+
+def require_order_archive_schema_change(previous, release, policy):
+    migration = policy['candidateBindings']['migration']
+    baseline = (previous / 'apps/api/prisma-mysql/schema.prisma').read_bytes()
+    candidate = (release / 'apps/api/prisma-mysql/schema.prisma').read_bytes()
+    field = b'  archivedAt                   DateTime?                           @map("archived_at") @db.DateTime(6)\n'
+    index = b'  @@index([deletedAt, archivedAt, createdAt, id], map: "id_business_v2_orders_archive_list_idx")\n'
+    require(hashlib.sha256(baseline).hexdigest() == migration.get('baselineMysqlSchemaSha256')
+            and hashlib.sha256(candidate).hexdigest() == migration.get('mysqlSchemaSha256')
+            and candidate.count(field) == candidate.count(index) == 1
+            and candidate.replace(field, b'', 1).replace(index, b'', 1) == baseline,
+            'Order archive publication changed schema beyond its nullable field and index')
+
+
+def require_order_archive_baseline(previous, manifest, states):
+    require(manifest.get('commit') == HISTORY_ORDER_ARCHIVE_BASELINE
+            and manifest.get('sourceTree') == ORDER_ARCHIVE_BASELINE_TREE
+            and has_registration_worker(previous), 'Order archive current runtime baseline changed')
+    verify_continuation_running_images(states, manifest)
+    override = json.loads((previous / 'compose.release.json').read_text())
+    require(set(override) == {'services'} and set(override['services']) == {*SERVICES, 'migrate'}
+            and all(override['services'][service].get('image') == states[service]['reference']
+                    and override['services'][service].get('pull_policy') == 'never'
+                    for service in SERVICES), 'Order archive current runtime image declarations changed')
+
+
+def verify_order_archive_admin_build(release, policy):
+    hashes = policy['candidateBindings'].get('adminBuildHashes', {})
+    require(isinstance(hashes, dict) and 'apps/admin/dist/index.html' in hashes and 0 < len(hashes) <= 4096,
+            'Order archive Admin build evidence missing')
+    paths = {}
+    for name, digest in hashes.items():
+        require(re.fullmatch(r'apps/admin/dist/[A-Za-z0-9_./-]+', name or '') is not None
+                and '..' not in Path(name).parts and re.fullmatch(r'[a-f0-9]{64}', digest or '') is not None,
+                'Order archive Admin build source changed')
+        paths['/usr/share/nginx/html/' + name.removeprefix('apps/admin/dist/')] = digest
+    output = compose(release, 'run', '--rm', '--no-deps', '--pull', 'never',
+        '--entrypoint', 'sh', 'admin', '-ec',
+        'find /usr/share/nginx/html -type f -exec sha256sum {} +; find /usr/share/nginx/html -type l -print',
+        timeout=240)
+    actual = {}
+    for line in output.splitlines():
+        digest, separator, name = line.partition('  ')
+        require(separator and name not in actual, 'Order archive Admin build evidence malformed')
+        # The pinned nginx base includes this error page; Vite does not emit it.
+        if name == '/usr/share/nginx/html/50x.html' and name not in paths:
+            continue
+        actual[name] = digest
+    require(actual == paths, 'Order archive Admin image build changed')
+    return {'verifiedFiles': len(paths), 'sha256': historical_fingerprint(hashes)}
+
+
+def order_archive_audit(directory, receipt, *, stage, source, before_receipt,
+                        seal_sha, candidate_commit, candidate_tree, prepared_sha, image_run, image_attempt):
+    policy, seal = reviewed_order_archive_seal(source, seal_sha, candidate_commit, candidate_tree,
+                                               prepared_sha, image_run, image_attempt)
+    require(stage in ('before', 'after'), 'Order archive audit stage missing')
+    override = json.loads((directory / 'compose.release.json').read_text())
+    image = json.loads(run('docker', 'image', 'inspect', override['services']['api']['image']))[0]
+    require(image['Id'] == seal['images']['api'], 'Order archive audit image changed')
+    values = environment_values(directory / '.env.aws.production')
+    url = maintenance_container_audit_url(values)
+    env = os.environ.copy(); env['V2_DATA_INTEGRITY_DATABASE_URL'] = url
+    identity = historical_audit_reader(directory, 'api')
+    seal_reader = prepare_post_cleanup_reader_copy(directory, ORDER_ARCHIVE_SEAL, seal_sha,
+        'order-archive-seal.reader.json', identity)
+    cleanup_reader = prepare_post_cleanup_reader_copy(directory, POST_CLEANUP_RECEIPT,
+        HISTORY_POST_CLEANUP_RECEIPT_SHA256, 'order-archive-cleanup.reader.json', identity)
+    mounts = ['-v', f'{source / "scripts"}:/app/scripts:ro', '-v', f'{source / "deploy/aws"}:/release-policy:ro',
+              '-v', f'{seal_reader}:/release-order-archive-seal.json:ro',
+              '-v', f'{cleanup_reader}:/release-cleanup-receipt.json:ro']
+    arguments = ['node', 'scripts/v2-order-archive-release-audit.mjs',
+        f'--policy=/release-policy/{HISTORY_ORDER_ARCHIVE_POLICY_ID}.json',
+        f'--expected-current={HISTORY_ORDER_ARCHIVE_BASELINE}', f'--stage={stage}',
+        '--order-archive-seal=/release-order-archive-seal.json', f'--order-archive-seal-sha256={seal_sha}',
+        '--cleanup-receipt=/release-cleanup-receipt.json',
+        f'--candidate-commit={candidate_commit}', f'--candidate-tree={candidate_tree}']
+    if stage == 'after':
+        require(before_receipt is not None, 'Order archive before audit missing')
+        prepare_historical_before_receipt(directory, before_receipt, 'api')
+        mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
+        arguments.append('--before-receipt=/release-before-audit.json')
+    report = json.loads(compose(directory, 'run', '--rm', '--no-deps', '--pull', 'never',
+        *mounts, '-e', 'V2_DATA_INTEGRITY_DATABASE_URL', 'api', *arguments, env=env, timeout=240))
+    gate = report.get('gate', {})
+    require(report.get('ok') is False and report.get('checkCount') == gate.get('checkCount') == 49
+            and report.get('violationCount') == gate.get('violationCount') == 5
+            and gate.get('executedCheckCount') == 49 and gate.get('unavailableCheckCount') == 0
+            and gate.get('accepted') is True and gate.get('policyId') == HISTORY_ORDER_ARCHIVE_POLICY_ID
+            and gate.get('status') == 'APPROVED_ORDER_ARCHIVE_HISTORICAL_EXCEPTIONS'
+            and gate.get('scope') == 'API_ADMIN_ORDER_ARCHIVE' and gate.get('stage') == stage
+            and gate.get('candidateCommit') == candidate_commit and gate.get('candidateTree') == candidate_tree
+            and gate.get('sourceTree') == policy['candidateBindings']['sourceTree']
+            and gate.get('releaseSealSha256') == seal_sha and gate.get('images') == seal['images']
+            and gate.get('expectedCurrent') == HISTORY_ORDER_ARCHIVE_BASELINE
+            and gate.get('historicalSourceBaseline') == HISTORY_POST_CLEANUP_BASELINE
+            and gate.get('sourceAnchorSha256') == policy['sourceAnchorSha256']
+            and gate.get('sources') == {name: {'rowCount': group['rowCount'], 'sha256': group['sha256']}
+                                       for name, group in policy['sources'].items()}
+            and gate.get('metadataSha256') == policy['metadataSha256']
+            and gate.get('cleanupReceiptSha256') == HISTORY_POST_CLEANUP_RECEIPT_SHA256
+            and gate.get('migration') == seal['migration']
+            and gate.get('preparedImagesSha256') == prepared_sha
+            and gate.get('preparationRunId') == int(image_run) and gate.get('preparationRunAttempt') == int(image_attempt),
+            'Reviewed order archive historical integrity gate failed')
+    receipt.write_text(json.dumps(report, indent=2) + '\n'); receipt.chmod(0o600)
+    return {'checkCount': 49, 'violationCount': 5, 'historicalException': gate}
+
+
 def audit(directory, receipt, *, historical_exception=False, historical_continuation=False,
-          historical_diagnostics=False, historical_maintenance=False, historical_mailbox=False, stage=None, source=None,
+          historical_diagnostics=False, historical_maintenance=False, historical_mailbox=False,
+          historical_post_cleanup=False, post_cleanup_seal_sha256=None,
+          historical_order_archive=False, order_archive_seal_sha256=None,
+          order_archive_prepared_sha256=None, image_run=None, image_attempt=None,
+          candidate_commit=None, candidate_tree=None, stage=None, source=None,
           before_receipt=None, origin=None):
     require(sum((historical_exception, historical_continuation, historical_diagnostics,
-                 historical_maintenance, historical_mailbox)) <= 1,
+                 historical_maintenance, historical_mailbox, historical_post_cleanup,
+                 historical_order_archive)) <= 1,
             'Historical release selection is ambiguous')
     if historical_mailbox:
         return mailbox_audit(directory, receipt, stage=stage, source=source,
                              before_receipt=before_receipt, origin=origin)
+    if historical_order_archive:
+        return order_archive_audit(directory, receipt, stage=stage, source=source,
+            before_receipt=before_receipt, seal_sha=order_archive_seal_sha256,
+            candidate_commit=candidate_commit, candidate_tree=candidate_tree,
+            prepared_sha=order_archive_prepared_sha256, image_run=image_run, image_attempt=image_attempt)
     if historical_maintenance:
         return maintenance_audit(directory, receipt, stage=stage, source=source,
                                  before_receipt=before_receipt, origin=origin)
-    policy_id = (HISTORY_DIAGNOSTICS_POLICY_ID if historical_diagnostics else
+    policy_id = (HISTORY_POST_CLEANUP_POLICY_ID if historical_post_cleanup else
+                 HISTORY_DIAGNOSTICS_POLICY_ID if historical_diagnostics else
                  HISTORY_CONTINUATION_POLICY_ID if historical_continuation else HISTORY_POLICY_ID)
-    baseline = (HISTORY_DIAGNOSTICS_BASELINE if historical_diagnostics else
+    baseline = (HISTORY_POST_CLEANUP_BASELINE if historical_post_cleanup else
+                HISTORY_DIAGNOSTICS_BASELINE if historical_diagnostics else
                 HISTORY_CONTINUATION_BASELINE if historical_continuation else HISTORY_BASELINE)
-    historical = historical_exception or historical_continuation or historical_diagnostics
+    historical = historical_exception or historical_continuation or historical_diagnostics or historical_post_cleanup
     policy = continuation_policy(source, policy_id) if historical_continuation or historical_diagnostics else None
+    audit_service = 'api' if historical_post_cleanup else 'migrate'
+    if historical_post_cleanup:
+        require(source is not None, 'Post-cleanup candidate source missing')
+        policy, release_seal = reviewed_post_cleanup_seal(source, post_cleanup_seal_sha256, candidate_commit, candidate_tree)
+        require(stage in ('before', 'after'), 'Post-cleanup audit stage missing')
+        runtime_state = service_state(directory, 'api')
+        runtime_image = runtime_state['image']
+        require(json.loads((directory / 'compose.release.json').read_text()).get('services', {})
+                .get('api', {}).get('image') == runtime_state['reference'],
+                'Post-cleanup audit API reference changed')
+        require(json.loads(run('docker', 'image', 'inspect', runtime_state['reference']))[0]['Id'] == runtime_image,
+                'Post-cleanup audit API image provenance changed')
+        if stage == 'after':
+            require(runtime_image == release_seal['apiImage'], 'Post-cleanup API image changed')
     values = environment_values(directory / '.env.aws.production')
     audit_url = values.get('V2_DATA_INTEGRITY_DATABASE_URL')
     require(bool(audit_url), 'Read-only audit database URL missing')
@@ -967,21 +1333,63 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
                       f'--policy=/release-policy/{policy_id}.json',
                       f'--expected-current={baseline}',
                       f'--stage={stage}']
+        if historical_post_cleanup:
+            identity = historical_audit_reader(directory, audit_service)
+            seal_reader = prepare_post_cleanup_reader_copy(directory, POST_CLEANUP_SEAL,
+                post_cleanup_seal_sha256, 'post-cleanup-seal.reader.json', identity)
+            cleanup_reader = prepare_post_cleanup_reader_copy(directory, POST_CLEANUP_RECEIPT,
+                HISTORY_POST_CLEANUP_RECEIPT_SHA256, 'post-cleanup-receipt.reader.json', identity)
+            mounts.extend(['-v', f'{seal_reader}:/release-post-cleanup-seal.json:ro',
+                           '-v', f'{cleanup_reader}:/release-cleanup-receipt.json:ro'])
+            audit_args.extend(['--post-cleanup-seal=/release-post-cleanup-seal.json',
+                               '--cleanup-receipt=/release-cleanup-receipt.json',
+                               f'--post-cleanup-seal-sha256={post_cleanup_seal_sha256}',
+                               f'--candidate-commit={candidate_commit}', f'--candidate-tree={candidate_tree}'])
         if stage == 'after':
             require(before_receipt is not None, 'Historical before audit missing')
-            prepare_historical_before_receipt(directory, before_receipt)
+            prepare_historical_before_receipt(directory, before_receipt, audit_service)
             mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
             audit_args.append('--before-receipt=/release-before-audit.json')
     output = compose(
         directory, 'run', '--rm', '--no-deps',
         *mounts,
         '-e', 'V2_DATA_INTEGRITY_DATABASE_URL',
-        'migrate', *audit_args,
+        audit_service, *audit_args,
         env=env, timeout=240,
     )
     report = json.loads(output)
     if historical:
         gate = report.get('gate', {})
+        if historical_post_cleanup:
+            require(report.get('ok') is False and report.get('checkCount') == 49
+                    and report.get('violationCount') == gate.get('violationCount') == 5
+                    and gate.get('accepted') is True and gate.get('policyId') == policy_id
+                    and gate.get('status') == 'APPROVED_POST_CLEANUP_HISTORICAL_EXCEPTIONS'
+                    and gate.get('expectedCurrent') == baseline and gate.get('stage') == stage
+                    and gate.get('checkCount') == gate.get('executedCheckCount') == 49
+                    and gate.get('unavailableCheckCount') == 0
+                    and gate.get('releaseSealSha256') == post_cleanup_seal_sha256
+                    and gate.get('candidateCommit') == candidate_commit
+                    and gate.get('candidateTree') == candidate_tree
+                    and gate.get('sourceAnchorSha256') == policy['sourceAnchorSha256']
+                    and gate.get('sources') == {name: {'rowCount': group['rowCount'], 'sha256': group['sha256']}
+                                                for name, group in policy['sources'].items()}
+                    and gate.get('metadataSha256') == policy['metadataSha256']
+                    and gate.get('cleanupReceiptSha256') == HISTORY_POST_CLEANUP_RECEIPT_SHA256
+                    and gate.get('apiImage') == release_seal['apiImage']
+                    and report.get('identity', {}).get('databaseName') == HISTORY_POST_CLEANUP_DATABASE
+                    and str(report['identity'].get('readOnly')) == '0'
+                    and str(report['identity'].get('superReadOnly')) == '0'
+                    and str(report['identity'].get('sessionReadOnly')) == '1'
+                    and report['identity'].get('currentUser', '').split('@')[0] == 'id_business_audit'
+                    and report['identity'].get('transactionIsolation') == 'REPEATABLE-READ'
+                    and str(report['identity'].get('foreignKeyChecks')) == '1',
+                    'Approved post-cleanup integrity gate failed')
+            require(service_state(directory, 'api')['image'] == runtime_image,
+                    'Post-cleanup audit API runtime changed')
+            receipt.write_text(json.dumps(report, indent=2) + '\n')
+            receipt.chmod(0o600)
+            return {'checkCount': 49, 'violationCount': 5, 'historicalException': gate}
         require(gate.get('accepted') is True and gate.get('policyId') == policy_id
                 and gate.get('expectedCurrent') == baseline
                 and gate.get('stage') == stage and gate.get('checkCount') == 48
@@ -1195,6 +1603,72 @@ def require_diagnostics_environment_unchanged(previous, release, expected):
     require((previous / '.env.aws.production').read_bytes() == expected
             and (release / '.env.aws.production').read_bytes() == expected,
             'Historical diagnostics production environment changed')
+
+
+def require_post_cleanup_source_scope(previous, release, policy):
+    require((previous / 'docker-compose.aws-mysql.yml').read_bytes()
+            == (release / 'docker-compose.aws-mysql.yml').read_bytes(),
+            'Post-cleanup Compose definition changed')
+    # All API runtime files outside the bound financial paths must match the exact running source.
+    # The five upstream Python worker changes remain pending source, with their old containers/images preserved.
+    def protected_files(root):
+        files = [path for path in (root / 'apps/api/src').rglob('*') if path.is_file()
+                 and not str(path.relative_to(root)).startswith((
+                     'apps/api/src/id-business-v2/finance/', 'apps/api/src/id-business-v2/orders/',
+                     'apps/api/src/id-business-v2/auto-recharge/worker/'))]
+        for folder in ('apps/api/prisma-mysql', 'packages/shared/src'):
+            files.extend(path for path in (root / folder).rglob('*') if path.is_file())
+        files.extend(root / name for name in ('package.json', 'package-lock.json',
+            'apps/api/package.json', 'apps/api/Dockerfile.mysql', 'packages/shared/package.json',
+            'apps/api/tsconfig.json', 'apps/api/tsconfig.build.json'))
+        require(all(path.is_file() and not path.is_symlink() for path in files),
+                'Post-cleanup protected API source unavailable')
+        return {str(path.relative_to(root)): (hashlib.sha256(path.read_bytes()).hexdigest(),
+                                             path.stat().st_mode & 0o7777) for path in files}
+    require(protected_files(previous) == protected_files(release),
+            'Post-cleanup contains unrelated API runtime changes')
+    bound = set(policy['candidateBindings']['sourceSha256'])
+    def unbound_finance_files(root):
+        files = []
+        for folder in ('apps/api/src/id-business-v2/finance', 'apps/api/src/id-business-v2/orders'):
+            files.extend(path for path in (root / folder).rglob('*') if path.is_file()
+                         and str(path.relative_to(root)) not in bound)
+        require(all(not path.is_symlink() for path in files), 'Post-cleanup unbound financial source unavailable')
+        return {str(path.relative_to(root)): (hashlib.sha256(path.read_bytes()).hexdigest(),
+                                             path.stat().st_mode & 0o7777) for path in files}
+    require(unbound_finance_files(previous) == unbound_finance_files(release),
+            'Post-cleanup contains unbound financial source changes')
+    def worker_files(root):
+        return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (root / 'apps/api/src/id-business-v2/auto-recharge/worker').rglob('*')
+                if path.is_file() and not path.is_symlink()}
+    old_worker = worker_files(previous); new_worker = worker_files(release)
+    pending = {name: {'previousSha256': old_worker.get(name), 'candidateSha256': new_worker.get(name)}
+               for name in sorted(set(old_worker) | set(new_worker)) if old_worker.get(name) != new_worker.get(name)}
+    allowed_pending = {name for name in DIAGNOSTICS_CANDIDATE_FILES
+                       if name.startswith('apps/api/src/id-business-v2/auto-recharge/worker/')}
+    require(set(pending) <= allowed_pending, 'Post-cleanup contains unreviewed pending worker source changes')
+    return pending
+
+
+def require_post_cleanup_preservation(previous, release, environment, before):
+    require_diagnostics_environment_unchanged(previous, release, environment)
+    current = {service: service_state(previous, service, include_container_id=True,
+        include_environment_hash=True) for service in before if service != 'api'}
+    require(current == {service: state for service, state in before.items() if service != 'api'},
+            'Post-cleanup preserved service changed')
+
+
+def post_cleanup_retention_maintenance(release):
+    module = runpy.run_path(str(release / 'scripts/production-release/retire-orphan-retention.py'))
+    result = module['retire'](apply=True)
+    require(isinstance(result, dict) and result.get('ok') is True
+            and result.get('status') in ('LEGACY_RETENTION_UNITS_ABSENT', 'LEGACY_RETENTION_ALREADY_RETIRED',
+                'LEGACY_RETENTION_TIMER_RETIRED_FAILURE_HISTORY_PRESERVED')
+            and result.get('databaseWrites') == result.get('deletedFiles') == 0
+            and type(result.get('timerMutations')) is int and result['timerMutations'] in (0, 1),
+            'Post-cleanup retention maintenance result unavailable')
+    return result
 
 
 def migration_plan(previous, release):
@@ -2087,6 +2561,11 @@ def main():
     parser.add_argument('--historical-finance-maintenance-continuation', action='store_true')
     parser.add_argument('--historical-finance-mailbox-batch', action='store_true')
     parser.add_argument('--recharge-pro-menu-b8', action='store_true')
+    parser.add_argument('--historical-finance-post-cleanup', action='store_true')
+    parser.add_argument('--post-cleanup-seal-sha256')
+    parser.add_argument('--historical-finance-order-archive', action='store_true')
+    parser.add_argument('--order-archive-seal-sha256')
+    parser.add_argument('--order-archive-prepared-images-sha256')
     parser.add_argument('--recharge-pro-menu-7f', action='store_true')
     args = parser.parse_args()
     recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f
@@ -2096,15 +2575,25 @@ def main():
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
     require(sum((args.historical_finance_exception, args.historical_finance_continuation,
-                 args.historical_finance_recharge_diagnostics, args.historical_finance_maintenance_continuation,
-                 args.historical_finance_mailbox_batch, args.recharge_pro_menu_b8, args.recharge_pro_menu_7f)) <= 1,
+                 args.historical_finance_recharge_diagnostics,
+                 args.historical_finance_maintenance_continuation, args.historical_finance_mailbox_batch,
+                 args.recharge_pro_menu_b8, args.recharge_pro_menu_7f, args.historical_finance_post_cleanup,
+                 args.historical_finance_order_archive)) <= 1,
             'Historical release selection is ambiguous')
+    require(bool(args.post_cleanup_seal_sha256) == args.historical_finance_post_cleanup,
+            'Post-cleanup publication requires an explicit reviewed seal')
+    require(bool(args.order_archive_seal_sha256) == args.historical_finance_order_archive
+            and bool(args.order_archive_prepared_images_sha256) == args.historical_finance_order_archive,
+            'Order archive publication requires independent reviewed seal and prepared image evidence')
     historical_policy_id = (HISTORY_MAINTENANCE_POLICY_ID if args.historical_finance_maintenance_continuation else
+        HISTORY_ORDER_ARCHIVE_POLICY_ID if args.historical_finance_order_archive else
+        HISTORY_POST_CLEANUP_POLICY_ID if args.historical_finance_post_cleanup else
         HISTORY_DIAGNOSTICS_POLICY_ID if args.historical_finance_recharge_diagnostics else
         HISTORY_CONTINUATION_POLICY_ID if args.historical_finance_continuation else HISTORY_POLICY_ID)
     if (args.historical_finance_exception or args.historical_finance_continuation
             or args.historical_finance_recharge_diagnostics
-            or args.historical_finance_maintenance_continuation):
+            or args.historical_finance_maintenance_continuation or args.historical_finance_post_cleanup
+            or args.historical_finance_order_archive):
         require_historical_baseline(historical_policy_id, args.expected_current)
     require(not (args.historical_finance_continuation and args.admin_only),
             'Historical registration continuation requires Worker publication')
@@ -2136,6 +2625,16 @@ def main():
             profile_raw = response.read(128 * 1024 + 1)
         recharge_profile = parse_fixed_recharge_scope(profile_raw)
         require(recharge_profile['id'] == recharge_profile_id, 'Fixed recharge runtime scope unavailable')
+    if args.historical_finance_post_cleanup:
+        require(not args.admin_only and image_commit == args.commit,
+                'Post-cleanup publication requires exact candidate API images')
+    if args.historical_finance_order_archive:
+        require(not args.admin_only and image_commit == args.commit
+                and args.image_commit == args.commit and args.image_run_id is not None
+                and args.image_run_attempt is not None
+                and re.fullmatch(r'[a-f0-9]{64}', args.order_archive_seal_sha256 or '') is not None
+                and re.fullmatch(r'[a-f0-9]{64}', args.order_archive_prepared_images_sha256 or '') is not None,
+                'Order archive publication requires exact independently prepared API and Admin images')
     os.umask(0o077)
     lock = (BASE / '.deploy.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2146,7 +2645,10 @@ def main():
     if args.historical_finance_mailbox_batch:
         verify_mailbox_baseline(previous)
     before = {service: service_state(previous, service,
-        include_container_id=args.historical_finance_recharge_diagnostics or recharge_requested or args.historical_finance_mailbox_batch)
+        include_container_id=args.historical_finance_recharge_diagnostics or recharge_requested
+                             or args.historical_finance_mailbox_batch or args.historical_finance_post_cleanup
+                             or args.historical_finance_order_archive,
+        **({'include_environment_hash': True} if args.historical_finance_post_cleanup or args.historical_finance_order_archive else {}))
         for service in production_services(previous)}
     require(all(state['status'] == 'running' for state in before.values()),
             'A production service is not running')
@@ -2154,7 +2656,9 @@ def main():
                 if service != 'caddy'), 'A production service is not healthy')
     initial_services, _ = release_services(args.admin_only, [],
         historical_diagnostics=args.historical_finance_recharge_diagnostics or recharge_requested,
-        historical_mailbox=args.historical_finance_mailbox_batch)
+        historical_mailbox=args.historical_finance_mailbox_batch,
+        historical_post_cleanup=args.historical_finance_post_cleanup,
+        historical_order_archive=args.historical_finance_order_archive)
     if recharge_requested:
         finance_origin = fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
         baseline_archive = fixed_recharge_runtime_archive(recharge_profile)
@@ -2165,8 +2669,11 @@ def main():
             with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as source:
                 verify_fixed_recharge_finance_source(previous, source)
         original_environment = fixed_recharge_bytes(previous / '.env.aws.production')
-    if args.historical_finance_recharge_diagnostics:
+    if args.historical_finance_recharge_diagnostics or args.historical_finance_post_cleanup:
         require_diagnostics_registration_isolation(previous, old_manifest, before)
+        original_environment = (previous / '.env.aws.production').read_bytes()
+    if args.historical_finance_order_archive:
+        require_order_archive_baseline(previous, old_manifest, before)
         original_environment = (previous / '.env.aws.production').read_bytes()
     if args.historical_finance_maintenance_continuation or args.historical_finance_mailbox_batch:
         original_environment = (previous / '.env.aws.production').read_bytes()
@@ -2245,6 +2752,16 @@ def main():
                     'Fixed recharge baseline changed')
         if args.historical_finance_recharge_diagnostics:
             require_diagnostics_source_scope(previous, release)
+        if args.historical_finance_post_cleanup:
+            policy, post_cleanup_release_seal = reviewed_post_cleanup_seal(release, args.post_cleanup_seal_sha256,
+                                                                        args.commit, args.source_tree)
+            pending_worker_source = require_post_cleanup_source_scope(previous, release, policy)
+        if args.historical_finance_order_archive:
+            policy, order_archive_release_seal = reviewed_order_archive_seal(release,
+                args.order_archive_seal_sha256, args.commit, args.source_tree,
+                args.order_archive_prepared_images_sha256, image_run, image_attempt)
+            require_order_archive_source_scope(release, policy)
+            require_order_archive_schema_change(previous, release, policy)
         if image_commit != args.commit:
             url = f'https://github.com/wangchaozhuanyong/id-business-system/archive/{image_commit}.tar.gz'
             with urllib.request.urlopen(url, timeout=60) as response:
@@ -2265,7 +2782,7 @@ def main():
         elif args.historical_finance_maintenance_continuation:
             require_maintenance_environment_unchanged(previous, release, original_environment)
             google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
-        elif args.historical_finance_recharge_diagnostics:
+        elif args.historical_finance_recharge_diagnostics or args.historical_finance_post_cleanup or args.historical_finance_order_archive:
             require_diagnostics_environment_unchanged(previous, release, original_environment)
             google_drive_folder = old_manifest.get('googleDriveSyncFolderId')
         else:
@@ -2281,9 +2798,15 @@ def main():
             require_diagnostics_migration_scope(additions, edge_changed)
         if recharge_requested:
             require_diagnostics_migration_scope(additions, edge_changed)
+        if args.historical_finance_order_archive:
+            require(additions == [ORDER_ARCHIVE_MIGRATION + '/migration.sql'] and not edge_changed,
+                    'Order archive publication requires its unique unapplied migration')
+            require_order_archive_preservation(previous, release, original_environment, before)
         updated_services, image_services = release_services(args.admin_only, additions, edge_changed,
             historical_diagnostics=args.historical_finance_recharge_diagnostics or recharge_requested,
-            historical_mailbox=args.historical_finance_mailbox_batch)
+            historical_mailbox=args.historical_finance_mailbox_batch,
+            historical_post_cleanup=args.historical_finance_post_cleanup,
+            historical_order_archive=args.historical_finance_order_archive)
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
                       for service in image_services}
@@ -2304,12 +2827,16 @@ def main():
                     '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
 
         step = 'audit-before'
-        before_audit = (fixed_recharge_audit(previous, release / 'before-audit.json',
+        before_audit = (None if args.historical_finance_order_archive else
+                       fixed_recharge_audit(previous, release / 'before-audit.json',
                              stage='before', source=finance_source, origin=finance_origin)
                        if recharge_requested else audit(previous, release / 'before-audit.json',
                              historical_exception=args.historical_finance_exception,
                              historical_continuation=args.historical_finance_continuation,
                              historical_diagnostics=args.historical_finance_recharge_diagnostics,
+                             historical_post_cleanup=args.historical_finance_post_cleanup,
+                             post_cleanup_seal_sha256=args.post_cleanup_seal_sha256,
+                             candidate_commit=args.commit, candidate_tree=args.source_tree,
                              stage='before', source=release,
                              **({'historical_maintenance': True, 'origin': previous}
                                 if args.historical_finance_maintenance_continuation else {}),
@@ -2333,6 +2860,19 @@ def main():
                 pulled_images[service] = image['Id']
         finally:
             subprocess.run(['docker', 'logout', registry], capture_output=True, text=True)
+        if args.historical_finance_post_cleanup:
+            require(pulled_images.get('api') == post_cleanup_release_seal['apiImage'],
+                    'Post-cleanup prepared API image differs from reviewed seal')
+        if args.historical_finance_order_archive:
+            require(pulled_images == order_archive_release_seal['images'],
+                    'Order archive prepared images differ from reviewed seal')
+            admin_build = verify_order_archive_admin_build(release, policy)
+            step = 'audit-before'
+            before_audit = audit(release, release / 'before-audit.json', historical_order_archive=True,
+                order_archive_seal_sha256=args.order_archive_seal_sha256,
+                order_archive_prepared_sha256=args.order_archive_prepared_images_sha256,
+                candidate_commit=args.commit, candidate_tree=args.source_tree,
+                image_run=image_run, image_attempt=image_attempt, stage='before', source=release)
         require(shutil.disk_usage(BASE).free > 2 * 1024**3, 'Insufficient free disk after pull')
 
         step = 'backup'
@@ -2353,17 +2893,26 @@ def main():
             require_diagnostics_environment_unchanged(previous, release, original_environment)
         if args.historical_finance_maintenance_continuation:
             require_maintenance_environment_unchanged(previous, release, original_environment)
+        if args.historical_finance_post_cleanup:
+            require_post_cleanup_preservation(previous, release, original_environment, before)
+        if args.historical_finance_order_archive:
+            require_order_archive_preservation(previous, release, original_environment, before)
         assert_release_jobs_idle(previous, updated_services, mailbox_only=args.historical_finance_mailbox_batch)
 
         step = 'migration'
         if args.historical_finance_mailbox_batch:
             require_mailbox_scope(previous, release, additions, edge_changed, original_environment)
-        run_release_migrations(release, args.admin_only,
-            args.historical_finance_recharge_diagnostics or args.historical_finance_mailbox_batch or recharge_requested)
+        if not args.historical_finance_post_cleanup:
+            run_release_migrations(release, args.admin_only,
+                args.historical_finance_recharge_diagnostics or args.historical_finance_mailbox_batch or recharge_requested)
         step = 'database-grants'
         database_grants = ({'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}
-            if recharge_requested else sync_new_table_grants(release, additions))
+            if recharge_requested else
+            {'ok': True, 'skipped': True, 'reason': 'API_ONLY_UNCHANGED_SCHEMA'}
+            if args.historical_finance_post_cleanup else sync_new_table_grants(release, additions))
         step = 'switch'
+        if args.historical_finance_order_archive:
+            require_order_archive_preservation(previous, release, original_environment, before)
         registration_runtime_service = ('auto-registration' if has_registration_worker(previous)
                                         else 'auto-recharge')
         for service in updated_services:
@@ -2385,6 +2934,14 @@ def main():
                             historical_exception=args.historical_finance_exception,
                             historical_continuation=args.historical_finance_continuation,
                             historical_diagnostics=args.historical_finance_recharge_diagnostics,
+                            historical_post_cleanup=args.historical_finance_post_cleanup,
+                            **({'historical_order_archive': True,
+                                'order_archive_seal_sha256': args.order_archive_seal_sha256,
+                                'order_archive_prepared_sha256': args.order_archive_prepared_images_sha256,
+                                'image_run': image_run, 'image_attempt': image_attempt}
+                               if args.historical_finance_order_archive else {}),
+                            post_cleanup_seal_sha256=args.post_cleanup_seal_sha256,
+                            candidate_commit=args.commit, candidate_tree=args.source_tree,
                             stage='after', source=release,
                             before_receipt=release / 'before-audit.json',
                             **({'historical_maintenance': True, 'origin': previous}
@@ -2394,11 +2951,14 @@ def main():
         if args.historical_finance_mailbox_batch:
             require_mailbox_scope(previous, release, additions, edge_changed, original_environment)
         after = {service: service_state(release, service,
-            include_container_id=args.historical_finance_recharge_diagnostics or recharge_requested or args.historical_finance_mailbox_batch)
+            include_container_id=args.historical_finance_recharge_diagnostics or recharge_requested
+                                 or args.historical_finance_mailbox_batch or args.historical_finance_post_cleanup
+                                 or args.historical_finance_order_archive,
+            **({'include_environment_hash': True} if args.historical_finance_post_cleanup or args.historical_finance_order_archive else {}))
             for service in production_services(release)}
         require(all(after[s] == before[s] for s in before if s not in updated_services),
                 'Unrelated service changed')
-        if args.historical_finance_recharge_diagnostics:
+        if args.historical_finance_recharge_diagnostics or args.historical_finance_post_cleanup or args.historical_finance_order_archive:
             require_diagnostics_environment_unchanged(previous, release, original_environment)
         if args.historical_finance_maintenance_continuation:
             require_maintenance_environment_unchanged(previous, release, original_environment)
@@ -2411,6 +2971,10 @@ def main():
             else:
                 with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as source:
                     verify_fixed_recharge_finance_source(previous, source)
+        if args.historical_finance_order_archive:
+            require_order_archive_preservation(previous, release, original_environment, before)
+            require(verify_order_archive_admin_build(release, policy) == admin_build,
+                    'Order archive Admin image evidence changed during publication')
         require(all(after[s]['image'] == pulled_images[image_service(s)]
                     for s in updated_services if s in SERVICES), 'Running image differs from release')
         public_url = environment_values(release / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
@@ -2424,6 +2988,13 @@ def main():
                 require(expected_policy is not None
                         and response.headers.get('Content-Security-Policy') == expected_policy.group(1),
                         'Public edge policy differs from release configuration')
+
+        maintenance = None
+        if args.historical_finance_post_cleanup:
+            step = 'post-cleanup-retention-maintenance'
+            maintenance = post_cleanup_retention_maintenance(release)
+            (release / 'retention-maintenance-result.json').write_text(json.dumps(maintenance, indent=2) + '\n')
+            (release / 'retention-maintenance-result.json').chmod(0o600)
 
         manifest = dict(old_manifest)
         if args.historical_finance_mailbox_batch:
@@ -2463,6 +3034,22 @@ def main():
             manifest['fixedRechargeRelease'] = fixed_recharge_context(args, recharge_profile, before_audit, after_audit)
             manifest['fixedRechargePreservedStates'] = {
                 'before': fixed_recharge_preserved_states(before), 'after': fixed_recharge_preserved_states(after)}
+        if args.historical_finance_post_cleanup:
+            manifest['postCleanupFinancialPublication'] = {
+                'scope': 'API_ONLY', 'workersPublished': False,
+                'pendingWorkerSource': pending_worker_source,
+                'preservedServiceContainers': {service: before[service] for service in before if service != 'api'},
+                'releaseSealSha256': args.post_cleanup_seal_sha256,
+                'retentionMaintenance': maintenance}
+        if args.historical_finance_order_archive:
+            manifest['orderArchivePublication'] = {
+                'scope': 'API_ADMIN_ORDER_ARCHIVE', 'workersPublished': False,
+                'releaseSealSha256': args.order_archive_seal_sha256,
+                'sourceProjectionTree': policy['candidateBindings']['sourceTree'],
+                'preparedImagesSha256': args.order_archive_prepared_images_sha256,
+                'migration': order_archive_release_seal['migration'], 'adminBuild': admin_build,
+                'preservedServiceContainers': {service: before[service] for service in before
+                                             if service not in ('api', 'admin')}}
         (release / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         point_current(release, f'{stamp}-publish')
         print(json.dumps({'status': 'DEPLOYED', 'commit': args.commit,
@@ -2472,7 +3059,8 @@ def main():
                           'backupVerified': True,
                           'auditViolations': after_audit['violationCount'],
                           **({'unchangedServiceContainersPreserved': True}
-                             if args.historical_finance_recharge_diagnostics or recharge_requested else {})}), flush=True)
+                             if args.historical_finance_recharge_diagnostics or recharge_requested
+                                or args.historical_finance_post_cleanup or args.historical_finance_order_archive else {})}), flush=True)
     except Exception as error:
         rollback_ok = True
         if (BASE / 'current').resolve() == release:

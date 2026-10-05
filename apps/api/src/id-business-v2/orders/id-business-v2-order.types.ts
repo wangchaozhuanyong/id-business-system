@@ -72,6 +72,7 @@ export interface IdBusinessV2OrderRecord {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  archivedAt?: Date | null;
 }
 
 export type IdBusinessV2OrderBalanceReturnStatus = 'active' | 'reversed';

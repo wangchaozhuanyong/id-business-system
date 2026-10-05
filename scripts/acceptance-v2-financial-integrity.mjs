@@ -1,13 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { V2_DATA_INTEGRITY_CHECKS } from './lib/v2-data-integrity-audit.mjs';
 
 const containerName = `id-business-v2-financial-integrity-${process.pid}`;
 const databaseName = `id_business_v2_financial_integrity_${process.pid}`;
+const archiveDatabaseName = `id_business_v2_order_archive_integrity_${process.pid}`;
+const archiveOnly = process.argv.slice(2).includes('--order-archive-only');
+assert.ok(
+  process.argv.slice(2).every((argument) => argument === '--order-archive-only'),
+  '财务隔离验收只接受 --order-archive-only'
+);
 const rootPassword = 'v2_financial_integrity_root_only';
 const auditUser = 'id_business_audit';
 const auditPassword = 'v2_financial_integrity_audit_only';
 const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+let createdContainerId;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -34,7 +43,7 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function mysql(sql) {
+function mysql(sql, database = databaseName) {
   return run('docker', [
     'exec',
     containerName,
@@ -43,10 +52,55 @@ function mysql(sql) {
     `--password=${rootPassword}`,
     '--batch',
     '--skip-column-names',
-    databaseName,
+    database,
     '--execute',
     sql
   ]);
+}
+
+function verifyOrderArchive(rootUrl) {
+  // The existing financial suites retain rows. Archive asserts every rule starts
+  // clean, so give it a fresh schema in this same caller-owned container.
+  mysql(`CREATE DATABASE ${archiveDatabaseName} CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
+  const archiveUrl = new URL(rootUrl);
+  archiveUrl.pathname = `/${archiveDatabaseName}`;
+  run('npx', ['prisma', 'migrate', 'deploy', '--schema', schemaPath], {
+    stdio: 'inherit',
+    env: { ...process.env, DATABASE_URL: archiveUrl.href }
+  });
+  const resultFile = resolve('.runtime/financial-integrity', `order-archive-${process.pid}.json`);
+  mkdirSync(dirname(resultFile), { recursive: true });
+  run(
+    'npm',
+    [
+      'run',
+      'test',
+      '--workspace=@apple-business/api',
+      '--',
+      '--run',
+      '--no-file-parallelism',
+      '--maxWorkers=2',
+      '--reporter=default',
+      '--reporter=json',
+      `--outputFile=${resultFile}`,
+      'src/id-business-v2/orders/order-archive-mysql.integration.spec.ts'
+    ],
+    {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        DATABASE_URL: archiveUrl.href,
+        V2_FINANCIAL_INTEGRITY_DATABASE_URL: archiveUrl.href
+      }
+    }
+  );
+  const result = JSON.parse(readFileSync(resultFile, 'utf8'));
+  assert.equal(result.numTotalTests, 10, '归档真实 MySQL 必须执行完整 10 项');
+  assert.equal(result.numPassedTests, 10, '归档真实 MySQL 必须全部通过');
+  assert.equal(result.numFailedTests, 0);
+  assert.equal(result.numPendingTests, 0, '归档真实 MySQL 不得被跳过');
+  assert.equal(result.numTodoTests ?? 0, 0);
+  return { database: archiveDatabaseName, executedTests: 10, skippedTests: 0, resultFile };
 }
 
 // All counterexamples live inside a disposable database transaction and are rolled back.
@@ -678,150 +732,226 @@ function verifyClosureCounterexamples() {
   return cases.length;
 }
 
-try {
-  run('docker', [
-    'run',
-    '--rm',
-    '--detach',
-    '--name',
-    containerName,
-    '--env',
-    `MYSQL_ROOT_PASSWORD=${rootPassword}`,
-    '--env',
-    `MYSQL_DATABASE=${databaseName}`,
-    '--publish',
-    '127.0.0.1::3306',
-    'mysql:8.4',
-    '--character-set-server=utf8mb4',
-    '--collation-server=utf8mb4_0900_ai_ci',
-    '--default-time-zone=+00:00',
-    '--sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION',
-    '--log-bin-trust-function-creators=1'
-  ]);
-
-  let ready = false;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const probe = runAllowingFailure('docker', [
-      'exec',
-      containerName,
-      'mysqladmin',
-      'ping',
-      '--host=127.0.0.1',
-      '--user=root',
-      `--password=${rootPassword}`,
-      '--silent'
-    ]);
-    if (probe.status === 0) {
-      ready = true;
-      break;
-    }
-    await wait(500);
-  }
-  if (!ready) throw new Error('财务完整性隔离 MySQL 在 60 秒内未就绪');
-
-  const portOutput = run('docker', ['port', containerName, '3306/tcp']);
-  const portMatch = portOutput.match(/:(\d+)$/m);
-  if (!portMatch) throw new Error('无法解析财务完整性隔离 MySQL 端口');
-  const rootUrl = `mysql://root:${rootPassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
-  const auditUrl = `mysql://${auditUser}:${auditPassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
-
-  run('npm', ['run', 'prisma:mysql:generate'], {
-    stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: rootUrl }
-  });
-  run('npx', ['prisma', 'migrate', 'deploy', '--schema', schemaPath], {
-    stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: rootUrl }
-  });
-
-  run(
-    'npm',
-    [
+async function main() {
+  try {
+    createdContainerId = run('docker', [
       'run',
-      'test',
-      '--workspace=@apple-business/api',
-      '--',
-      '--run',
-      // Specs share one database and mutate currency seeds, finance periods and scope versions.
-      // Serialize files while preserving every Promise.all concurrency scenario inside each spec.
-      '--no-file-parallelism',
-      'src/id-business-v2/finance/id-business-v2-financial-integrity-mysql.integration.spec.ts',
-      'src/id-business-v2/finance/finance-supplier-closure-mysql.integration.spec.ts',
-      'src/id-business-v2/finance/finance-exchange-costs-mysql.integration.spec.ts',
-      'src/id-business-v2/orders/order-cash-cost-mysql.integration.spec.ts',
-      'src/id-business-v2/auto-recharge/bank-recharge-lifecycle-mysql.integration.spec.ts',
-      'src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts',
-      'src/id-business-v2/data-governance/bank-recharge-governance-mysql.integration.spec.ts',
-      'src/id-business-v2/workspace/id-business-v2-website-visit-mysql.integration.spec.ts',
-      'src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts'
-    ],
-    {
+      '--rm',
+      '--detach',
+      '--name',
+      containerName,
+      '--label',
+      'codex.task=financial-integrity-acceptance',
+      '--memory=512m',
+      '--cpus=2',
+      '--env',
+      `MYSQL_ROOT_PASSWORD=${rootPassword}`,
+      '--env',
+      `MYSQL_DATABASE=${databaseName}`,
+      '--publish',
+      '127.0.0.1::3306',
+      'mysql:8.4',
+      '--character-set-server=utf8mb4',
+      '--collation-server=utf8mb4_0900_ai_ci',
+      '--default-time-zone=+00:00',
+      '--sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION',
+      '--log-bin-trust-function-creators=1'
+    ]);
+    assert.match(createdContainerId, /^[a-f0-9]{64}$/, '仅清理由当前验收创建的容器');
+
+    let ready = false;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const probe = runAllowingFailure('docker', [
+        'exec',
+        containerName,
+        'mysqladmin',
+        'ping',
+        '--host=127.0.0.1',
+        '--user=root',
+        `--password=${rootPassword}`,
+        '--silent'
+      ]);
+      if (probe.status === 0) {
+        ready = true;
+        break;
+      }
+      await wait(500);
+    }
+    if (!ready) throw new Error('财务完整性隔离 MySQL 在 60 秒内未就绪');
+
+    const portOutput = run('docker', ['port', containerName, '3306/tcp']);
+    const portMatch = portOutput.match(/:(\d+)$/m);
+    if (!portMatch) throw new Error('无法解析财务完整性隔离 MySQL 端口');
+    const rootUrl = `mysql://root:${rootPassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
+    const auditUrl = `mysql://${auditUser}:${auditPassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
+
+    run('npm', ['run', 'prisma:mysql:generate'], {
+      stdio: 'inherit',
+      env: { ...process.env, DATABASE_URL: rootUrl }
+    });
+    if (!archiveOnly)
+      run('npx', ['prisma', 'migrate', 'deploy', '--schema', schemaPath], {
+        stdio: 'inherit',
+        env: { ...process.env, DATABASE_URL: rootUrl }
+      });
+
+    const archiveProof = verifyOrderArchive(rootUrl);
+    if (archiveOnly) {
+      console.log(
+        JSON.stringify({
+          ok: true,
+          archiveProof,
+          cleanup: 'remove-owned-disposable-mysql-container'
+        })
+      );
+      return;
+    }
+
+    run(
+      'npm',
+      [
+        'run',
+        'test',
+        '--workspace=@apple-business/api',
+        '--',
+        '--run',
+        // Specs share one database and mutate currency seeds, finance periods and scope versions.
+        // Serialize files while preserving every Promise.all concurrency scenario inside each spec.
+        '--no-file-parallelism',
+        'src/id-business-v2/finance/id-business-v2-financial-integrity-mysql.integration.spec.ts',
+        'src/id-business-v2/finance/finance-supplier-closure-mysql.integration.spec.ts',
+        'src/id-business-v2/finance/finance-exchange-costs-mysql.integration.spec.ts',
+        'src/id-business-v2/orders/order-cash-cost-mysql.integration.spec.ts',
+        'src/id-business-v2/auto-recharge/bank-recharge-lifecycle-mysql.integration.spec.ts',
+        'src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts',
+        'src/id-business-v2/data-governance/bank-recharge-governance-mysql.integration.spec.ts',
+        'src/id-business-v2/workspace/id-business-v2-website-visit-mysql.integration.spec.ts',
+        'src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts'
+      ],
+      {
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+          DATABASE_URL: rootUrl,
+          V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl,
+          V2_WEBSITE_VISIT_DATABASE_URL: rootUrl,
+          V2_RECHARGE_TEST_DATABASE_URL: rootUrl,
+          V2_BANK_RECHARGE_TEST_DATABASE_URL: rootUrl,
+          V2_EXCHANGE_COST_TEST_DATABASE_URL: rootUrl
+        }
+      }
+    );
+
+    const provisioned = JSON.parse(
+      run('node', ['scripts/provision-v2-data-integrity-auditor.mjs'], {
+        env: {
+          ...process.env,
+          V2_DATA_INTEGRITY_DATABASE_URL: auditUrl,
+          MYSQL_DATABASE: databaseName,
+          MYSQL_ROOT_PASSWORD: rootPassword,
+          MYSQL_HOST_PORT: portMatch[1]
+        }
+      })
+    );
+    assert.equal(provisioned.ok, true);
+    assert.equal(provisioned.username, auditUser);
+
+    const healthy = JSON.parse(
+      run('node', ['scripts/v2-data-integrity-audit.mjs'], {
+        env: { ...process.env, V2_DATA_INTEGRITY_DATABASE_URL: auditUrl }
+      })
+    );
+    assert.equal(healthy.ok, true);
+    const expectedCodes = V2_DATA_INTEGRITY_CHECKS.map((check) => check.code).sort();
+    assert.deepEqual(healthy.checks.map((check) => check.code).sort(), expectedCodes);
+    assert.equal(healthy.checkCount, expectedCodes.length);
+    assert.equal(healthy.violationCount, 0);
+    assert.match(healthy.identity.currentUser, /^id_business_audit@/);
+    const counterexampleCount = verifyClosureCounterexamples();
+
+    run('node', ['--test', 'scripts/historical-cash-audit-mysql.test.mjs'], {
+      stdio: 'inherit',
+      env: { ...process.env, V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl }
+    });
+
+    // The CLI runner imports compiled fixtures; CI may have no dist yet.
+    // Always build from this source in dependency order instead of reusing dist.
+    const buildDatabase = new URL(rootUrl);
+    assert.equal(buildDatabase.protocol, 'mysql:');
+    assert.equal(buildDatabase.hostname, '127.0.0.1');
+    assert.match(buildDatabase.pathname, /^\/id_business_v2_financial_integrity_\d+$/);
+    const buildEnv = { ...process.env, DATABASE_URL: rootUrl };
+    run('npm', ['run', 'build', '--workspace', '@apple-business/shared'], {
+      stdio: 'inherit',
+      env: buildEnv
+    });
+    run('npm', ['run', 'build', '--workspace', '@apple-business/api'], {
+      stdio: 'inherit',
+      env: buildEnv
+    });
+
+    run('node', ['--test', 'scripts/historical-cash-runner-mysql.test.mjs'], {
       stdio: 'inherit',
       env: {
         ...process.env,
-        DATABASE_URL: rootUrl,
         V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl,
-        V2_WEBSITE_VISIT_DATABASE_URL: rootUrl,
-        V2_RECHARGE_TEST_DATABASE_URL: rootUrl,
-        V2_BANK_RECHARGE_TEST_DATABASE_URL: rootUrl,
-        V2_EXCHANGE_COST_TEST_DATABASE_URL: rootUrl
+        V2_DATA_INTEGRITY_DATABASE_URL: auditUrl
       }
-    }
-  );
+    });
 
-  const provisioned = JSON.parse(
-    run('node', ['scripts/provision-v2-data-integrity-auditor.mjs'], {
-      env: {
-        ...process.env,
-        V2_DATA_INTEGRITY_DATABASE_URL: auditUrl,
-        MYSQL_DATABASE: databaseName,
-        MYSQL_ROOT_PASSWORD: rootPassword,
-        MYSQL_HOST_PORT: portMatch[1]
+    // Historical negative fixtures keep immutable source rows. Run them after the clean
+    // scan and counterexamples; disposal of this container is their only cleanup.
+    run(
+      'npm',
+      [
+        'run',
+        'test',
+        '--workspace=@apple-business/api',
+        '--',
+        '--run',
+        '--no-file-parallelism',
+        'src/id-business-v2/finance/historical-cash-mysql.integration.spec.ts'
+      ],
+      {
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+          DATABASE_URL: rootUrl,
+          V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl,
+          V2_WEBSITE_VISIT_DATABASE_URL: rootUrl,
+          V2_RECHARGE_TEST_DATABASE_URL: rootUrl,
+          V2_BANK_RECHARGE_TEST_DATABASE_URL: rootUrl,
+          V2_EXCHANGE_COST_TEST_DATABASE_URL: rootUrl
+        }
       }
-    })
-  );
-  assert.equal(provisioned.ok, true);
-  assert.equal(provisioned.username, auditUser);
+    );
 
-  const healthy = JSON.parse(
-    run('node', ['scripts/v2-data-integrity-audit.mjs'], {
-      env: { ...process.env, V2_DATA_INTEGRITY_DATABASE_URL: auditUrl }
-    })
-  );
-  assert.equal(healthy.ok, true);
-  const expectedCodes = V2_DATA_INTEGRITY_CHECKS.map((check) => check.code).sort();
-  assert.deepEqual(healthy.checks.map((check) => check.code).sort(), expectedCodes);
-  assert.equal(healthy.checkCount, expectedCodes.length);
-  assert.equal(healthy.violationCount, 0);
-  assert.match(healthy.identity.currentUser, /^id_business_audit@/);
-  const counterexampleCount = verifyClosureCounterexamples();
+    const writeAccountAudit = runAllowingFailure('node', ['scripts/v2-data-integrity-audit.mjs'], {
+      env: { ...process.env, V2_DATA_INTEGRITY_DATABASE_URL: rootUrl }
+    });
+    assert.notEqual(writeAccountAudit.status, 0);
+    assert.match(
+      `${writeAccountAudit.stdout}\n${writeAccountAudit.stderr}`,
+      /仅具备 SELECT\/SHOW VIEW 权限/
+    );
 
-  const writeAccountAudit = runAllowingFailure('node', ['scripts/v2-data-integrity-audit.mjs'], {
-    env: { ...process.env, V2_DATA_INTEGRITY_DATABASE_URL: rootUrl }
-  });
-  assert.notEqual(writeAccountAudit.status, 0);
-  assert.match(
-    `${writeAccountAudit.stdout}\n${writeAccountAudit.stderr}`,
-    /仅具备 SELECT\/SHOW VIEW 权限/
-  );
-
-  const plaintextInsert = runAllowingFailure('docker', [
-    'exec',
-    containerName,
-    'mysql',
-    '--user=root',
-    `--password=${rootPassword}`,
-    databaseName,
-    '--execute',
-    `INSERT INTO users (id, username, display_name, phone, password_hash, updated_at)
+    const plaintextInsert = runAllowingFailure('docker', [
+      'exec',
+      containerName,
+      'mysql',
+      '--user=root',
+      `--password=${rootPassword}`,
+      databaseName,
+      '--execute',
+      `INSERT INTO users (id, username, display_name, phone, password_hash, updated_at)
      VALUES ('fa000000-0000-4000-8000-000000000001', 'plaintext-phone', '明文手机号',
              '13800138000', 'integration-only', CURRENT_TIMESTAMP(6));`
-  ]);
-  assert.notEqual(plaintextInsert.status, 0);
-  assert.match(`${plaintextInsert.stdout}\n${plaintextInsert.stderr}`, /Unknown column 'phone'/);
+    ]);
+    assert.notEqual(plaintextInsert.status, 0);
+    assert.match(`${plaintextInsert.stdout}\n${plaintextInsert.stderr}`, /Unknown column 'phone'/);
 
-  mysql(
-    `INSERT INTO id_business_v2_finance_journals (
+    mysql(
+      `INSERT INTO id_business_v2_finance_journals (
        id, journal_no, journal_type, source_type, source_id, business_date,
        period_month, occurred_at, status, summary, idempotency_key, updated_at
      ) VALUES (
@@ -863,37 +993,42 @@ try {
        JSON_ARRAY(), 88.8800, 'completed', '2026-08-28 10:00:00.000000',
        'financial-integrity:broken-order', CURRENT_TIMESTAMP(6)
      );`
-  );
+    );
 
-  const brokenAudit = runAllowingFailure('node', ['scripts/v2-data-integrity-audit.mjs'], {
-    env: { ...process.env, V2_DATA_INTEGRITY_DATABASE_URL: auditUrl }
-  });
-  assert.equal(brokenAudit.status, 1);
-  const broken = JSON.parse(brokenAudit.stdout);
-  assert.equal(broken.ok, false);
-  assert.ok(broken.failedChecks.includes('finance_journal_unbalanced'));
-  assert.ok(broken.failedChecks.includes('completed_order_finance_reconciliation_mismatch'));
-  assert.ok(broken.violationCount >= 1);
+    const brokenAudit = runAllowingFailure('node', ['scripts/v2-data-integrity-audit.mjs'], {
+      env: { ...process.env, V2_DATA_INTEGRITY_DATABASE_URL: auditUrl }
+    });
+    assert.equal(brokenAudit.status, 1);
+    const broken = JSON.parse(brokenAudit.stdout);
+    assert.equal(broken.ok, false);
+    assert.ok(broken.failedChecks.includes('finance_journal_unbalanced'));
+    assert.ok(broken.failedChecks.includes('completed_order_finance_reconciliation_mismatch'));
+    assert.ok(broken.violationCount >= 1);
 
-  console.log(
-    JSON.stringify({
-      ok: true,
-      database: databaseName,
-      checkCount: healthy.checkCount,
-      counterexampleCount,
-      verified: [
-        'real-mysql-post-rollback-idempotency-concurrency',
-        'real-mysql-website-visit-idempotency-reporting-retention',
-        'dedicated-readonly-auditor-provisioning',
-        'clean-mysql-full-scan',
-        'readonly-account-enforcement',
-        'plaintext-phone-column-absent',
-        'known-unbalanced-journal-detection',
-        'known-completed-order-profit-mismatch-detection'
-      ],
-      cleanup: 'remove-disposable-mysql-container'
-    })
-  );
-} finally {
-  runAllowingFailure('docker', ['rm', '--force', containerName], { stdio: 'ignore' });
+    console.log(
+      JSON.stringify({
+        ok: true,
+        database: databaseName,
+        checkCount: healthy.checkCount,
+        counterexampleCount,
+        archiveProof,
+        verified: [
+          'real-mysql-post-rollback-idempotency-concurrency',
+          'real-mysql-website-visit-idempotency-reporting-retention',
+          'dedicated-readonly-auditor-provisioning',
+          'clean-mysql-full-scan',
+          'readonly-account-enforcement',
+          'plaintext-phone-column-absent',
+          'known-unbalanced-journal-detection',
+          'known-completed-order-profit-mismatch-detection'
+        ],
+        cleanup: 'remove-disposable-mysql-container'
+      })
+    );
+  } finally {
+    if (createdContainerId && /^[a-f0-9]{64}$/.test(createdContainerId))
+      runAllowingFailure('docker', ['rm', '--force', createdContainerId], { stdio: 'ignore' });
+  }
 }
+
+await main();

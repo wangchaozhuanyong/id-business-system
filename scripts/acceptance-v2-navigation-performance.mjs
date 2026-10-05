@@ -278,7 +278,16 @@ function checkSourceContracts() {
     /skeleton-toolbar|skeleton-table/,
     '页面状态仍写死同一套筛选栏和表格骨架'
   );
-  for (const kind of ['table', 'form', 'metrics', 'settings', 'detail', 'cards', 'inline']) {
+  for (const kind of [
+    'table',
+    'form',
+    'metrics',
+    'settings',
+    'detail',
+    'cards',
+    'inline',
+    'control'
+  ]) {
     assert.ok(loadingVisuals.includes(`'${kind}'`), `缺少 ${kind} 内容骨架类型`);
     assert.ok(
       contentSkeleton.includes(`kind === '${kind}'`) || kind === 'inline',
@@ -326,7 +335,7 @@ function checkSourceContracts() {
       asyncRegionCount += 1;
       assert.match(
         match[0],
-        /\bskeleton=["'](?:table|form|metrics|settings|detail|cards|inline)["']/,
+        /\bskeleton=["'](?:table|form|metrics|settings|detail|cards|inline|control)["']/,
         `${file} 的异步区域没有显式内容形状`
       );
     }

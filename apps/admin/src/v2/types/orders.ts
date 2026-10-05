@@ -10,6 +10,7 @@ export type V2OrderStatus =
 
 export type V2OrderAccountDisposition = 'retained' | 'sold' | 'recovered';
 export type V2OrderAccountSource = 'inventory' | 'customer_owned';
+export type V2OrderArchiveFilter = 'active' | 'archived' | 'all';
 
 export interface V2OrderOption {
   id: string;
@@ -102,6 +103,7 @@ export interface V2Order {
   createdBy: V2OrderOperator | null;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string | null;
   activeLock: V2OrderLockSummary | null;
   upgradeBalanceReturn: V2OrderUpgradeBalanceReturn | null;
   operations: {
@@ -116,12 +118,15 @@ export interface V2Order {
     canReverseUpgradeBalanceReturn: boolean;
     canCancel: boolean;
     canDelete: boolean;
+    canArchive?: boolean;
+    canUnarchive?: boolean;
   };
 }
 
 export type V2OrderListResult = PaginatedResult<V2Order>;
 
 export interface V2OrderListQuery extends V2PageQuery {
+  archived?: V2OrderArchiveFilter;
   keyword?: string;
   customerId?: string;
   serviceOptionId?: string;
@@ -404,6 +409,19 @@ export interface CancelV2OrderInput {
 
 export interface DeleteV2OrderInput {
   reason: string;
+}
+
+export interface ArchiveV2OrderInput {
+  expectedUpdatedAt: string;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface ArchiveV2OrderResult {
+  id: string;
+  archivedAt: string | null;
+  updatedAt: string;
+  idempotentReplay: boolean;
 }
 
 export interface V2OrderReversalLedger {

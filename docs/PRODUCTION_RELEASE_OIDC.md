@@ -95,6 +95,34 @@ gh workflow run production-release.yml --ref main \
 
 发布步骤还会独立执行 `--check-fixed-recharge-deployment`，也可用 `operation=verify_recharge_release`、`commit=expected_current=实际新版本` 单独复查。SSM 只执行已按源码摘要绑定的单份读取快照；闭合 21 项投影必须匹配批准摘要、源码树、原 b8、保存的真实前后门禁和六个保留容器的实际状态。环境文件只在内存比较原字节，不解析或输出凭据；不执行数据库审计或服务变更。命令失败、类型不符、未知字段或来源不匹配均抑制原始输出并拒绝成功。
 
+## 两笔清理后的财务 API 发布准备（未批准提案）
+
+`historical_exception=historical-finance-20261005-post-cleanup` 是独立、默认未批准的提案，不能沿用上方 48 条规则／10 项历史例外的批准。固定生产基线为 `6a82a774f2a65e00d4f260c629f7152bf7935d1d`，活动库为 `id_business_v2_partial_cleanup_20261005_v1`；完整执行 49 条规则，保留精确 5 项既有成本差异，其他规则均为零。整体报告继续保留 `ok=false` 和 5 项异常，任何来源、金额、版本、账户资金链、规则或异常集合漂移均拒绝。
+
+此分支只更新 API，保留注册、充值、管理端、网关及其他容器的镜像、配置、实际 ID 和启动时间，也保留原未结束注册窗口。不运行迁移、数据库授权同步或既有自动镜像缓存清理；上游已存在的 Worker 源码增量不能视为随 API 上线。
+
+发布须按以下顺序准备实际证明，不能使用虚假 seal 摘要先触发一次失败发布：
+
+1. 授权发布方提交精确候选源码，目标必须是当时 main HEAD，并取得同源码的成功 Quality Gate。
+2. 使用 `operation=prepare_post_cleanup_release`、本提案 `historical_exception`、固定 `expected_current`；`post_cleanup_seal_sha256` 和 `reuse_image_run` 均留空。此阶段只构建／推送 API＋migrate，记录真实 commit／tree／质量运行／镜像 ID／digest，保存 `post-cleanup-prepared-images-<run>-<attempt>` 证明；不执行 SSM、生产部署或缓存清理。
+3. 审核精确 5 项有限例外、独立只读 capture 和两笔清理完成回执，以及本次真实 commit／tree／准备镜像和依赖指纹。用户明确批准后才形成外部 `userApproved=true` 的 reviewed seal，保存至服务器规定的私有路径，记录其原始字节 SHA256。仓库政策和未批准模板不能替代该 seal。
+4. 使用 `operation=release`、同一 commit／固定基线／本提案，`reuse_image_run` 指向第 2 步已经成功完成的准备运行，`post_cleanup_seal_sha256` 为第 3 步真实摘要。拒绝不同 commit、不同 workflow、未完成或失败运行、错误 attempt、过期／重复／缺失／过大 artifact、错误镜像或额外镜像服务；正式阶段禁止新构建替换已审核的镜像。
+5. 服务器在切换前后核对完整 49 条规则均已执行（executed=49、total=49、unexecuted=0）、精确同 5 项异常、独立来源及清理证明，在实际 API 镜像中校验 25 个编译依赖，并核验所有未更新容器不变。失败按受管流程仅回退 API；历史差异不由发布过程补账或删除。
+
+原操作目录的 seal 和清理回执维持 root0600；只读 API 检查使用同 SHA、非链接、node0400 的私有 reader 副本。成功发布及公开就绪检查之后，固定 helper 才可退役已经严格确认 ExecStart 缺失的孤立旧 retention timer；它只停用该定时器，保留服务失败历史、unit、备份和业务数据。此源码准备没有执行生产退役。
+
+正式发布后仍需核对实际 SHA／API 镜像，并验收认证后的页面业务操作。新例外提案未获批准或任何实际证明缺失时，不得宣称已可无条件发布、生产财务全零或真实业务验收成功。本轮源代码、验证和未批准模板见同项目 `.codex-audit/financial-closure-20261004/release-readiness-20261005/`。
+
+普通订单归档使用独立入口 `historical_exception=historical-finance-20261005-order-archive`，不扩大上方 API-only 入口。只读运行核验确认生产发布清单已因独立充值执行器发布变为 `3ca300486d0edfadda83c094a48474a63959fce7`；订单归档入口只接受这一实际基线。现有 API、管理端、注册及其他服务保持，归档发布继续保护此次充值发布后的实际容器。历史资料来源仍锚定两笔清理后的 `6a82a774f2a65e00d4f260c629f7152bf7935d1d` 及原始清理回执，不能把运行清单更新当作五项旧成本差异重新核对完成。
+
+归档候选只切换 API 和管理端，准备 API、admin、migrate 三个镜像。先取得精确 main 候选的 Quality Gate 成功，再以 `operation=prepare_order_archive_release` 构建和保存 `order-archive-prepared-images-<run>-<attempt>`；准备阶段不连接生产 SSM。审核真实镜像、完整源码内容及执行权限、编译依赖、管理端全部静态产物、唯一迁移与精确五项例外后，才可形成独立 `reviewed-order-archive-release-seal.json`。仓库政策始终 `userApproved=false`，旧批准和未批准模板不能替代外部审核 seal。
+
+正式操作要求 `operation=release`、同一 main commit、固定生产基线、同一准备运行和真实 `order_archive_seal_sha256`。服务器先在候选 API 镜像中执行完整只读 49 项检查，然后验证备份、执行唯一新增迁移 `20261005193000_order_independent_archive`、核验数据库授权、切换 API 和管理端，并再次完整检查 49 项。只允许新增可空订单归档时间及对应索引；将候选 schema 去除这两项后必须逐字节等于实际基线。检查继续保留 `ok=false` 和原五项例外，新增异常、资料漂移或缺少证明立即拒绝。
+
+注册、充值、网关及其他未更新容器的配置、镜像、实际 ID 和启动时间必须保持原值；原未结束注册窗口保持。此独立入口不触发发布后自动镜像缓存清理。失败只按受管流程恢复 API 与管理端服务，保留兼容的可空字段，禁止通过删除字段回滚、清空财务资料或猜测补账来绕过门禁。本次本地准备不执行生产迁移、订单归档、定时器退役、真实付款或注册重试。
+
+发布后再从实际运行镜像验收当前／已归档／全部列表、逐项归档和恢复、幂等重试及账务追溯。历史四笔订单清理必须先重新读取实际 ID、终态和原版本，再使用已验收的归档接口；不得用旧快照直接批量 SQL 修改或删除关联手工记录。当前准备与验证证据归属 `.codex-audit/financial-closure-20261004/order-archive-release-readiness-20261005/`。
+
 ## 固定 7f 的充值单服务候选
 
 b8 入口的实际发布在切换服务前被额外源码目录拒绝；诊断期间，API 单服务发布将当前版本变为 `7f70688b9bf53a071a0a324ca558aeabc4ced2e3`。旧 b8 批准对象及原文件摘要保持原字节，不能套用到新基线。

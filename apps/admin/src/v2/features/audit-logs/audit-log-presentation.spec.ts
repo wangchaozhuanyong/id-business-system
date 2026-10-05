@@ -14,6 +14,21 @@ import {
 } from './audit-log-presentation';
 
 describe('audit log presentation', () => {
+  it('归档与恢复使用独立中文审计名称，不混用删除资料恢复', () => {
+    expect(auditActionLabel('id_business_v2.order.archive')).toBe('归档订单');
+    expect(auditActionLabel('id_business_v2.order.unarchive')).toBe('恢复归档订单');
+    expect(auditFieldLabel('archivedAt')).toBe('归档时间');
+    expect(
+      getOperationAuditRestoreCandidate({
+        id: 'archive-audit',
+        module: 'id_business_v2',
+        action: 'id_business_v2.order.archive',
+        objectType: 'id_business_v2_order',
+        objectId: 'synthetic-order',
+        createdAt: '2026-10-05T00:00:00Z'
+      })
+    ).toBeNull();
+  });
   it('人工验证与等待确认审计使用明确中文名称', () => {
     expect(auditActionLabel('id_business_v2.auto_recharge.handoff')).toBe('操作原付款验证窗口');
     expect(auditActionLabel('id_business_v2.auto_recharge.server.quote_verified')).toBe(

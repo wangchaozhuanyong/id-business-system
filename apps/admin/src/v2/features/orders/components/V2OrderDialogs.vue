@@ -46,6 +46,16 @@
               <dd>{{ page.statusMeta(page.detail.status).label }}</dd>
             </div>
             <div>
+              <dt>列表归档</dt>
+              <dd>
+                {{
+                  page.detail.archivedAt
+                    ? `已归档 · ${page.formatDate(page.detail.archivedAt)}`
+                    : '当前订单'
+                }}
+              </dd>
+            </div>
+            <div>
               <dt>客户</dt>
               <dd>{{ page.detail.customer.name }}</dd>
             </div>
@@ -258,7 +268,23 @@
         </V2PanelSection>
         <footer class="v2-order-detail-actions">
           <AppButton
-            v-if="page.canConsumeOrders && page.detail.operations.canConsume"
+            v-if="page.canUpdateOrders && page.archive.canArchive(page.detail)"
+            variant="ghost"
+            @click="page.archive.openArchive(page.detail)"
+          >
+            归档订单
+          </AppButton>
+          <AppButton
+            v-if="page.canUpdateOrders && page.archive.canUnarchive(page.detail)"
+            variant="primary"
+            @click="page.archive.openUnarchive(page.detail)"
+          >
+            恢复归档
+          </AppButton>
+          <AppButton
+            v-if="
+              !page.detail.archivedAt && page.canConsumeOrders && page.detail.operations.canConsume
+            "
             variant="primary"
             :loading="page.consumingOrderId === page.detail.id"
             @click="page.consumeOrderBalance(page.detail)"
@@ -267,7 +293,9 @@
             扣减余额
           </AppButton>
           <AppButton
-            v-if="page.canUpdateOrders && page.detail.operations.canComplete"
+            v-if="
+              !page.detail.archivedAt && page.canUpdateOrders && page.detail.operations.canComplete
+            "
             variant="primary"
             :loading="page.completingOrderId === page.detail.id"
             @click="page.completeOrder(page.detail)"
@@ -276,7 +304,7 @@
             确认开通
           </AppButton>
           <AppButton
-            v-if="page.canUpdateOrders && page.detail.operations.canEdit"
+            v-if="!page.detail.archivedAt && page.canUpdateOrders && page.detail.operations.canEdit"
             variant="ghost"
             @click="page.openEdit(page.detail)"
           >
@@ -284,14 +312,22 @@
             修改
           </AppButton>
           <AppButton
-            v-if="page.canUpdateOrders && page.detail.operations.canRecordUpgradeBalanceReturn"
+            v-if="
+              !page.detail.archivedAt &&
+              page.canUpdateOrders &&
+              page.detail.operations.canRecordUpgradeBalanceReturn
+            "
             variant="ghost"
             @click="page.openUpgradeBalanceReturn(page.detail)"
           >
             登记升级退币
           </AppButton>
           <AppButton
-            v-if="page.canUpdateOrders && page.detail.operations.canReverseUpgradeBalanceReturn"
+            v-if="
+              !page.detail.archivedAt &&
+              page.canUpdateOrders &&
+              page.detail.operations.canReverseUpgradeBalanceReturn
+            "
             variant="ghost"
             :loading="page.lifecycleBusyOrderId === page.detail.id"
             @click="page.reverseUpgradeBalanceReturn(page.detail)"
@@ -299,14 +335,18 @@
             撤销升级退币
           </AppButton>
           <AppButton
-            v-if="page.canUpdateOrders && page.detail.operations.canRefund"
+            v-if="
+              !page.detail.archivedAt && page.canUpdateOrders && page.detail.operations.canRefund
+            "
             variant="ghost"
             @click="page.openRefund(page.detail)"
           >
             退款
           </AppButton>
           <AppButton
-            v-if="page.canUpdateOrders && page.detail.operations.canCancel"
+            v-if="
+              !page.detail.archivedAt && page.canUpdateOrders && page.detail.operations.canCancel
+            "
             variant="ghost"
             :loading="page.lifecycleBusyOrderId === page.detail.id"
             @click="page.cancelOrder(page.detail)"
@@ -314,7 +354,9 @@
             取消订单
           </AppButton>
           <AppButton
-            v-if="page.canDeleteOrders && page.detail.operations.canDelete"
+            v-if="
+              !page.detail.archivedAt && page.canDeleteOrders && page.detail.operations.canDelete
+            "
             variant="danger"
             :loading="page.lifecycleBusyOrderId === page.detail.id"
             @click="page.deleteOrder(page.detail)"
@@ -332,6 +374,8 @@
     :saving="page.editSaving"
     @submit="page.updateOrder"
   />
+
+  <V2OrderArchiveDialog :archive="page.archive" />
 
   <V2OrderRefundDialog
     v-model="page.refundVisible"
@@ -355,6 +399,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
 import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import V2OrderEditDrawer from './V2OrderEditDrawer.vue';
+import V2OrderArchiveDialog from './V2OrderArchiveDialog.vue';
 import V2OrderRefundDialog from './V2OrderRefundDialog.vue';
 import V2OrderUpgradeBalanceReturnDialog from './V2OrderUpgradeBalanceReturnDialog.vue';
 import type { UnwrapNestedRefs } from 'vue';
