@@ -234,19 +234,40 @@ test('independent before/after keeps all49 and original5 visible, and real modul
   );
 });
 
-test('order archive refuses the previous b8 runtime after the verified mailbox release', async () => {
+for (const [name, previousCurrent] of [
+  ['b8', 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'],
+  ['7f', '7f70688b9bf53a071a0a324ca558aeabc4ced2e3']
+])
+  test(`order archive refuses stale ${name} runtime after the verified recharge-only release`, async () => {
+    const f = await syntheticFixture();
+    assert.equal(f.accept().accepted, true);
+    assert.throws(
+      () =>
+        f.isolated.assessOrderArchiveAuditDraft({ ...f.input, expectedCurrent: previousCurrent }),
+      /Independent unapproved order archive policy required/
+    );
+    f.input.policy.expectedCurrent = previousCurrent;
+    assert.throws(
+      () => f.isolated.assessOrderArchiveAuditDraft(f.input),
+      /Independent unapproved order archive policy required/
+    );
+  });
+
+test('order archive rejects a rehashed prior7f seal without changing original financial anchors', async () => {
   const f = await syntheticFixture();
-  const previousCurrent = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0';
+  assert.equal(ORDER_ARCHIVE_BASELINE, '3ca300486d0edfadda83c094a48474a63959fce7');
   assert.equal(f.accept().accepted, true);
+  const originalSourceAnchor = f.input.policy.sourceAnchorSha256;
+  const originalMetadata = f.input.policy.metadataSha256;
+  f.proof.seal.expectedCurrent = '7f70688b9bf53a071a0a324ca558aeabc4ced2e3';
+  f.reseal();
   assert.throws(
-    () => f.isolated.assessOrderArchiveAuditDraft({ ...f.input, expectedCurrent: previousCurrent }),
-    /Independent unapproved order archive policy required/
+    f.accept,
+    /Independent order archive reviewed source, images, preparation and migration seal required/
   );
-  f.input.policy.expectedCurrent = previousCurrent;
-  assert.throws(
-    () => f.isolated.assessOrderArchiveAuditDraft(f.input),
-    /Independent unapproved order archive policy required/
-  );
+  assert.equal(f.input.policy.sourceAnchorSha256, originalSourceAnchor);
+  assert.equal(f.input.policy.metadataSha256, originalMetadata);
+  assert.equal(f.input.policy.historicalSourceBaseline, HISTORY_POST_CLEANUP_BASELINE);
 });
 
 for (const [name, mutate] of [

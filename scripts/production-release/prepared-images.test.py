@@ -220,12 +220,15 @@ class OrderArchivePreparedImageTests(unittest.TestCase):
         return images.validate_prepared_source(run, jobs, manifest, COMMIT, TREE, '111', RUN_ID,
                                                REPOSITORY, order_archive=True)
 
-    def test_archive_preparation_requires_latest_runtime_without_reusing_stale_b8_manifest(self):
+    def test_archive_preparation_requires_exact3ca_runtime_without_reusing_stale_b8_or7f_manifest(self):
         run, jobs, manifest, _ = archive_fixture()
-        manifest['expectedCurrent'] = '7f70688b9bf53a071a0a324ca558aeabc4ced2e3'
+        self.assertEqual(images.ORDER_ARCHIVE_BASELINE, '3ca300486d0edfadda83c094a48474a63959fce7')
+        manifest['expectedCurrent'] = images.ORDER_ARCHIVE_BASELINE
         self.assertEqual(self.validate(run, jobs, manifest), (COMMIT, ATTEMPT))
-        manifest['expectedCurrent'] = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
-        with self.assertRaises(RuntimeError): self.validate(run, jobs, manifest)
+        for stale in ('b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+                      '7f70688b9bf53a071a0a324ca558aeabc4ced2e3'):
+            manifest['expectedCurrent'] = stale
+            with self.subTest(stale=stale), self.assertRaises(RuntimeError): self.validate(run, jobs, manifest)
         old_run, old_jobs, old_manifest, _ = fixture()
         self.assertEqual(validate(old_run, old_jobs, old_manifest), (COMMIT, ATTEMPT))
 

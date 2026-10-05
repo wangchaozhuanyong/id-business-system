@@ -43,7 +43,7 @@ PREPARE_OPERATION = 'prepare_post_cleanup_release'
 ORDER_ARCHIVE_POLICY = 'historical-finance-20261005-order-archive'
 ORDER_ARCHIVE_PREPARE_OPERATION = 'prepare_order_archive_release'
 ORDER_ARCHIVE_SERVICES = ('api', 'migrate', 'admin')
-ORDER_ARCHIVE_BASELINE = '7f70688b9bf53a071a0a324ca558aeabc4ced2e3'
+ORDER_ARCHIVE_BASELINE = '3ca300486d0edfadda83c094a48474a63959fce7'
 
 
 def validate_prepared_source(run, jobs, manifest, release, source_tree, quality_run, run_id, repository,

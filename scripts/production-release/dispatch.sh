@@ -9,11 +9,15 @@ source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
 [[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]]
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 ]]; then
-  test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 ]]; then
+  case "$HISTORICAL_EXCEPTION" in
+    recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
+    recharge-pro-menu-7f-20261005) test "$EXPECTED_CURRENT" = 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ;;
+    *) exit 1 ;;
+  esac
   test "${RELEASE_ADMIN_ONLY:-false}" = false
   test -z "${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
-  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
 fi
 
 mkdir -p .deploy/production-release
@@ -40,6 +44,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'historical-finance-20261005-maintenance-continuation',
                          'historical-finance-20261005-mailbox-batch',
                          'recharge-pro-menu-b8-20261005',
+                         'recharge-pro-menu-7f-20261005',
                          'historical-finance-20261005-order-archive',
                          'historical-finance-20261005-post-cleanup')
 if history_policy == 'historical-finance-20261005':
@@ -63,6 +68,9 @@ elif history_policy == 'historical-finance-20261005-maintenance-continuation':
 elif history_policy == 'recharge-pro-menu-b8-20261005':
     assert previous == 'b8d643450ffa9012ccc09ead15e4681e3dee98d0' and admin_only == 'false'
     scope_flag += ' --recharge-pro-menu-b8'
+elif history_policy == 'recharge-pro-menu-7f-20261005':
+    assert previous == '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' and admin_only == 'false'
+    scope_flag += ' --recharge-pro-menu-7f'
 elif history_policy == 'historical-finance-20261005-post-cleanup':
     # The shared entry guard has already verified the baseline, scope and seal.
     assert os.environ.get('RELEASE_OPERATION', 'release') == 'release'
@@ -71,7 +79,7 @@ elif history_policy == 'historical-finance-20261005-post-cleanup':
     assert __import__('re').fullmatch(r'[1-9][0-9]*', os.environ.get('REUSE_IMAGE_RUN_ATTEMPT', ''))
     scope_flag += ' --historical-finance-post-cleanup --post-cleanup-seal-sha256 ' + os.environ['POST_CLEANUP_SEAL_SHA256']
 elif history_policy == 'historical-finance-20261005-order-archive':
-    assert previous == '7f70688b9bf53a071a0a324ca558aeabc4ced2e3'
+    assert previous == '3ca300486d0edfadda83c094a48474a63959fce7'
     assert os.environ.get('RELEASE_OPERATION', 'release') == 'release'
     assert admin_only == 'false' and os.environ.get('REUSE_IMAGE_COMMIT') == sha
     assert os.environ.get('REUSE_IMAGE_RUN_ID') == os.environ['REUSE_IMAGE_RUN']

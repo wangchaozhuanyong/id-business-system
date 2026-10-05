@@ -15,7 +15,7 @@ import {
 } from './v2-release-history-policy.mjs';
 
 export const ORDER_ARCHIVE_POLICY_ID = 'historical-finance-20261005-order-archive';
-export const ORDER_ARCHIVE_BASELINE = '7f70688b9bf53a071a0a324ca558aeabc4ced2e3';
+export const ORDER_ARCHIVE_BASELINE = '3ca300486d0edfadda83c094a48474a63959fce7';
 export const ORDER_ARCHIVE_SCOPE = 'API_ADMIN_ORDER_ARCHIVE';
 export const ORDER_ARCHIVE_POLICY_FILE = 'deploy/aws/' + ORDER_ARCHIVE_POLICY_ID + '.json';
 export const ORDER_ARCHIVE_MIGRATION_NAME = '20261005193000_order_independent_archive';
