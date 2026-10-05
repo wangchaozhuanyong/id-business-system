@@ -57,6 +57,32 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(job.registration_state, state)
             self.assertTrue(job.registration_state['profile_submitted'])
 
+    async def test_email_and_code_facts_pass_unchanged_through_retained_window_attempts(self):
+        value = server_payload()
+        for email_submitted, code_submitted in [(False, False), (True, False), (False, True), (True, True)]:
+            with self.subTest(email=email_submitted, code=code_submitted):
+                state = {'email_submitted': email_submitted, 'code_submitted': code_submitted,
+                         'profile_submitted': True}
+                expected = dict(state)
+                profile = self.owned_profile(value['id'])
+                profile['browser'].is_connected.return_value = True
+                profile['registration_state'] = state
+                profiles = builtin.BuiltinProfiles()
+                profiles.profile = profile
+                body = {**value, 'browserProfileId': profile['id']}
+                for attempt in [1, 2]:
+                    job = builtin.RegistrationServerJob(value['id'], {**body, 'attempt': attempt},
+                        'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+                    flow = MagicMock(run=AsyncMock(side_effect=Stop('mailbox_timeout')))
+                    with (patch.object(builtin, 'PROFILES', profiles),
+                          patch('registration_browser.RegistrationBrowser', return_value=flow) as create):
+                        with self.assertRaises(Stop):
+                            await job.execute_builtin()
+                    create.assert_called_once_with(job, profile['context'])
+                    self.assertIs(job.registration_state, state)
+                    self.assertIs(profiles.profile, profile)
+                    self.assertEqual(state, expected)
+
     async def test_unconfirmed_close_keeps_original_profile_and_blocks_another_task(self):
         profiles = builtin.BuiltinProfiles()
         profile = profiles.profile = self.owned_profile()

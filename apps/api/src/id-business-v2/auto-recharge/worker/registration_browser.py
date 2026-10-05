@@ -75,15 +75,20 @@ class RegistrationBrowser:
             self.job.check()
             await asyncio.sleep(.25)
 
-    async def mail(self, page):
+    async def mail(self, page, *, registration_code=False):
         code = await self.job.wait_code()
         try:
             if verification_link(code):
+                if registration_code:
+                    self.registration_state['code_submitted'] = True
                 await page.goto(code, wait_until='domcontentloaded', timeout=45000)
             else:
                 field = await self.field(page, CODE_INPUT)
                 if not field:
                     raise Stop('form_unrecognized')
+                if registration_code:
+                    # Input/change handlers may submit while fill is still awaiting.
+                    self.registration_state['code_submitted'] = True
                 await field.fill(code)
                 await field.press('Enter')
         finally:
@@ -245,7 +250,7 @@ class RegistrationBrowser:
         # Resume the exact profile rather than regenerating name, birthday or credentials.
         if not official_login_page(self.page.url):
             await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
-        email_submitted = code_submitted = signup_clicked = False
+        signup_clicked = False
         observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
         for _ in range(160):
             self.job.check()
@@ -278,23 +283,21 @@ class RegistrationBrowser:
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
             if view == 'code':
-                if code_submitted:
+                if self.registration_state.get('code_submitted'):
                     # The old input may remain while the accepted code navigates.
                     # Observe within the existing budget without submitting again.
                     if time.monotonic() < observation_deadline:
                         await self.settle(.5)
                         continue
                     await self.manual_registration('form_unrecognized')
-                    code_submitted = False
                 else:
                     if not self.job.awaiting_code:
                         self.job.prepare_mail('email_code')
                     else:
                         # Manual resume reports progress; rearm delivery without clearing a queued code.
                         self.job.event('waiting_email', step='email_code', newMailRequest=False)
-                    code_submitted = True
                     await self.end_recovery()
-                    await self.mail(self.page)
+                    await self.mail(self.page, registration_code=True)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
             if view == 'registered':
@@ -334,7 +337,7 @@ class RegistrationBrowser:
                     continue
             if view == 'existing':
                 raise Stop('existing_account_requires_review')
-            if view == 'email' and not email_submitted:
+            if view == 'email' and not self.registration_state.get('email_submitted'):
                 await self.end_recovery()
                 self.job.event('progress', step='email')
                 self.operation('email_submit')
@@ -370,7 +373,7 @@ class RegistrationBrowser:
                 # Timestamp the expected mail BEFORE submission triggers sending.
                 self.operation('email_submit')
                 self.job.prepare_mail('email_code', new_request=True)
-                email_submitted = True
+                self.registration_state['email_submitted'] = True
                 await submit.click(timeout=budget.remaining_ms())
                 await self.settle(3)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS

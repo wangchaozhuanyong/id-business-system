@@ -58,6 +58,60 @@ class RegistrationTests(unittest.TestCase):
         job.signal_cancel()
         with self.assertRaises(Stop): job.check()
 
+    def test_manual_wait_timeout_preserves_actual_checkpoint_reason(self):
+        for reason in ['verification_required', 'form_unrecognized', 'official_login_not_verified']:
+            with self.subTest(reason=reason):
+                job = RegistrationJob(payload(), 'https://manager.example.test', object)
+                def expire(event_type, **_data):
+                    if event_type == 'waiting_user':
+                        job.deadline = 0
+                with patch.object(job, 'event', side_effect=expire) as event:
+                    with self.assertRaises(Stop) as stopped:
+                        asyncio.run(job.manual(reason))
+                self.assertEqual(stopped.exception.report['reason'], reason)
+                self.assertFalse(job.waiting_for_user)
+                event.assert_called_once_with('waiting_user', reason=reason)
+
+    def test_mail_wait_timeout_still_reports_mailbox_timeout(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        job.deadline = 0
+        with self.assertRaises(Stop) as stopped:
+            asyncio.run(job.wait_code())
+        self.assertEqual(stopped.exception.report['reason'], 'mailbox_timeout')
+
+    def test_cancellation_takes_priority_over_manual_wait_timeout(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        def cancel(event_type, **_data):
+            if event_type == 'waiting_user':
+                job.deadline = 0
+                job.signal_cancel()
+        with patch.object(job, 'event', side_effect=cancel):
+            with self.assertRaises(Stop) as stopped:
+                asyncio.run(job.manual('verification_required'))
+        self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+        self.assertFalse(job.waiting_for_user)
+
+    def test_successful_manual_resume_does_not_mask_later_mail_timeout(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        def resume(event_type, **_data):
+            if event_type == 'waiting_user':
+                job.signal_resume()
+        with patch.object(job, 'event', side_effect=resume) as event:
+            asyncio.run(job.manual('verification_required'))
+        self.assertEqual([call.args[0] for call in event.call_args_list], ['waiting_user', 'progress'])
+        job.deadline = 0
+        with self.assertRaises(Stop) as stopped:
+            asyncio.run(job.wait_code())
+        self.assertEqual(stopped.exception.report['reason'], 'mailbox_timeout')
+
+    def test_failed_manual_callback_does_not_leave_an_active_handoff(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        with patch.object(job, 'event', side_effect=Stop('durable_state_unavailable')):
+            with self.assertRaises(Stop) as stopped:
+                asyncio.run(job.manual('verification_required'))
+        self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+        self.assertFalse(job.waiting_for_user)
+
     def test_manual_resume_uses_current_account_password_and_same_attempt(self):
         job = RegistrationJob(payload(), 'https://manager.example.test', object)
         job.waiting_for_user = True; job.payload['passwordVerified'] = True

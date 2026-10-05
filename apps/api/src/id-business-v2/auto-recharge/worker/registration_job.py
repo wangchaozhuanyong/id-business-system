@@ -70,13 +70,15 @@ class RegistrationJob:
         self.code_lock = threading.Lock()
         self.pending_code = None
         self.awaiting_code = False
+        self.manual_reason = None
         self.deadline = time.monotonic() + 43 * 60
 
     def check(self):
         if self.cancelled.is_set():
             raise Stop('operation_cancelled')
         if time.monotonic() >= self.deadline:
-            raise Stop('mailbox_timeout')
+            raise Stop(self.manual_reason if self.waiting_for_user and self.manual_reason
+                       else 'mailbox_timeout')
 
     def event(self, event_type, **data):
         if event_type != 'partial':
@@ -143,13 +145,15 @@ class RegistrationJob:
         self.check()
         self.resume_event.clear()
         self.waiting_for_user = True
-        self.event('waiting_user', reason=reason)
+        self.manual_reason = reason
         try:
+            self.event('waiting_user', reason=reason)
             while not self.resume_event.is_set():
                 self.check()
                 await asyncio.sleep(.5)
         finally:
             self.waiting_for_user = False
+            self.manual_reason = None
         self.event('progress')
 
     def signal_resume(self, credentials=None):
