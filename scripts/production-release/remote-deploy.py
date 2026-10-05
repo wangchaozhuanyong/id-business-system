@@ -117,11 +117,14 @@ try {
 MAILBOX_POLICY_ID = 'historical-finance-20261005-mailbox-batch'
 MAILBOX_BASELINE = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
 MAILBOX_IMAGE_IDENTITY = ('f5826f9fb4ad0d846d9875c035c913a61eb68290', '37312405714', '1')
-MAILBOX_POLICY_SHA256 = '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95'
+MAILBOX_POLICY_SHA256 = 'f3051a718cdbd55840d50affe6e5e1ddc62f187ff231f309679998608189481c'
 MAILBOX_MANIFEST_SHA256 = 'a0c248295509397e1862b13bd3aa41f46f32955ad8862226de56e63f868be9d8'
-MAILBOX_EXPECTED_GATE = {'accepted': True, 'status': 'APPROVED_MAILBOX_FROZEN_EXCEPTIONS', 'policyId': 'historical-finance-20261005-mailbox-batch', 'policySha256': '3039c9226059fe9dcf4e23b6a903da0de866c889174a39d3d61eca5304efbb95', 'expectedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'fixedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'imageCommit': 'f5826f9fb4ad0d846d9875c035c913a61eb68290', 'imageRun': '37312405714', 'imageAttempt': '1', 'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6, 'snapshotSha256': '03c3c6c494f7c5878441813814d3dc0fac9ad9d4b3480b0e81835129c97c76df'}
+MAILBOX_EXPECTED_GATE = {'accepted': True, 'status': 'APPROVED_MAILBOX_FROZEN_EXCEPTIONS', 'policyId': 'historical-finance-20261005-mailbox-batch', 'policySha256': 'f3051a718cdbd55840d50affe6e5e1ddc62f187ff231f309679998608189481c', 'expectedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'fixedCurrent': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0', 'imageCommit': 'f5826f9fb4ad0d846d9875c035c913a61eb68290', 'imageRun': '37312405714', 'imageAttempt': '1', 'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6, 'snapshotSha256': '03c3c6c494f7c5878441813814d3dc0fac9ad9d4b3480b0e81835129c97c76df', 'servicesUpdated': ['api']}
+
+MAILBOX_CARRIED_SOURCE = {'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py': 'f63eeb60d191aeb535c96bcd13cdbca8bbf040119ef08ca259875f621f283972', 'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py': 'a7becf0fc1d17dd6e843dbdf0c7ecb138a739ca6d9e8979767846e9b31d07d88'}
 
 REUSE_CONTROL_FILES = frozenset({
+    'deploy/aws/recharge-pro-menu-b8-20261005.json',
     'scripts/v2-release-mailbox-audit.mjs',
     'scripts/v2-release-mailbox-audit.test.mjs',
     'deploy/aws/historical-finance-20261005-mailbox-batch.json',
@@ -631,6 +634,9 @@ def mailbox_policy(source):
     policy = json.loads((source / 'deploy/aws' / (MAILBOX_POLICY_ID + '.json')).read_text())
     require(hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             == MAILBOX_POLICY_SHA256, 'Mailbox release approval changed')
+    require(policy.get('servicesUpdated') == ['api'] and policy.get('externalTestAcknowledged') is True
+            and policy.get('carriedWorkerSourceSha256') == MAILBOX_CARRIED_SOURCE,
+            'Mailbox API-only approval scope changed')
     return policy
 
 
@@ -730,11 +736,21 @@ def command_failure_summary(data):
     }
 
 
-def require_reusable_paths(paths):
-    require(set(paths) <= REUSE_CONTROL_FILES, 'Application or build source changed since image build')
+def require_reusable_paths(paths, *, mailbox_only=False):
+    allowed = REUSE_CONTROL_FILES | (set(MAILBOX_CARRIED_SOURCE) if mailbox_only else set())
+    require(set(paths) <= allowed, 'Application or build source changed since image build')
 
 
-def verify_reusable_archive(release, source, commit):
+def verify_mailbox_carried_sources(directory):
+    for name, digest in MAILBOX_CARRIED_SOURCE.items():
+        require(hashlib.sha256((directory / name).read_bytes()).hexdigest() == digest,
+                'Unchanged worker source carry differs from approved mailbox release')
+
+
+def verify_reusable_archive(release, source, commit, *, mailbox_only=False):
+    allowed = REUSE_CONTROL_FILES | (set(MAILBOX_CARRIED_SOURCE) if mailbox_only else set())
+    if mailbox_only:
+        verify_mailbox_carried_sources(release)
     prefix = f'id-business-system-{commit}/'
     hashes = {}
     seen = set()
@@ -747,17 +763,21 @@ def verify_reusable_archive(release, source, commit):
         name = member.name[len(prefix):]
         require(name not in seen, 'Duplicate reusable archive entry')
         seen.add(name)
-        if name not in REUSE_CONTROL_FILES:
+        if name not in allowed:
             hashes[name] = (hashlib.sha256(source.extractfile(member).read()).hexdigest(),
                             member.mode & 0o111)
     actual = {str(p.relative_to(release)): (hashlib.sha256(p.read_bytes()).hexdigest(),
                                          p.stat().st_mode & 0o111)
               for p in release.rglob('*') if p.is_file()
-              and str(p.relative_to(release)) not in REUSE_CONTROL_FILES}
+              and str(p.relative_to(release)) not in allowed}
     require(actual == hashes, 'Reusable image source differs from release application source')
 
 
-def release_services(admin_only, additions, edge_changed=False, *, historical_diagnostics=False):
+def release_services(admin_only, additions, edge_changed=False, *, historical_diagnostics=False, historical_mailbox=False):
+    if historical_mailbox:
+        require(not historical_diagnostics and not admin_only and not additions and not edge_changed,
+                'Mailbox release must update only the API without migrations or edge changes')
+        return ('api',), ('api',)
     if historical_diagnostics:
         require(not admin_only, 'Historical diagnostics requires Worker publication')
         require_diagnostics_migration_scope(additions, edge_changed)
@@ -1116,6 +1136,17 @@ def assert_no_active_jobs(directory, *, worker_changes):
     assert_no_active_recharge(directory)
     if worker_changes:
         assert_no_active_registration(directory)
+
+
+def assert_release_jobs_idle(directory, services, *, mailbox_only=False):
+    if mailbox_only:
+        # User explicitly identified the other window's external browser test and
+        # asked this release to proceed. Only API publication may use this entry.
+        require(tuple(services) == ('api',), 'Mailbox release cannot restart a test executor')
+        verify_mailbox_baseline(directory)
+        return
+    assert_no_active_jobs(directory,
+        worker_changes=registration_worker_changes(directory, services))
 
 
 def registration_worker_changes(directory, services):
@@ -1876,14 +1907,15 @@ def main():
     if args.historical_finance_mailbox_batch:
         verify_mailbox_baseline(previous)
     before = {service: service_state(previous, service,
-        include_container_id=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8)
+        include_container_id=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8 or args.historical_finance_mailbox_batch)
         for service in production_services(previous)}
     require(all(state['status'] == 'running' for state in before.values()),
             'A production service is not running')
     require(all(state['health'] == 'healthy' for service, state in before.items()
                 if service != 'caddy'), 'A production service is not healthy')
     initial_services, _ = release_services(args.admin_only, [],
-        historical_diagnostics=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8)
+        historical_diagnostics=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8,
+        historical_mailbox=args.historical_finance_mailbox_batch)
     if args.recharge_pro_menu_b8:
         finance_origin = fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
         baseline_archive = fixed_recharge_baseline_archive()
@@ -1895,8 +1927,7 @@ def main():
         original_environment = (previous / '.env.aws.production').read_bytes()
     if args.historical_finance_maintenance_continuation or args.historical_finance_mailbox_batch:
         original_environment = (previous / '.env.aws.production').read_bytes()
-    assert_no_active_jobs(previous,
-        worker_changes=registration_worker_changes(previous, initial_services))
+    assert_release_jobs_idle(previous, initial_services, mailbox_only=args.historical_finance_mailbox_batch)
 
     stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     release = BASE / 'releases' / f'{stamp}-{args.commit[:12]}'
@@ -1969,7 +2000,8 @@ def main():
             require(len(data) <= 64 * 1024 * 1024, 'Reusable source archive is too large')
             reusable = io.BytesIO(data)
             with tarfile.open(fileobj=reusable, mode='r:gz') as source:
-                verify_reusable_archive(release, source, image_commit)
+                verify_reusable_archive(release, source, image_commit,
+                    mailbox_only=args.historical_finance_mailbox_batch)
         shutil.copy2(previous / '.env.aws.production', release / '.env.aws.production')
         (release / '.env.aws.production').chmod(0o600)
         if args.recharge_pro_menu_b8:
@@ -1998,7 +2030,8 @@ def main():
         if args.recharge_pro_menu_b8:
             require_diagnostics_migration_scope(additions, edge_changed)
         updated_services, image_services = release_services(args.admin_only, additions, edge_changed,
-            historical_diagnostics=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8)
+            historical_diagnostics=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8,
+            historical_mailbox=args.historical_finance_mailbox_batch)
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
                       for service in image_services}
@@ -2065,8 +2098,7 @@ def main():
             require_diagnostics_environment_unchanged(previous, release, original_environment)
         if args.historical_finance_maintenance_continuation:
             require_maintenance_environment_unchanged(previous, release, original_environment)
-        assert_no_active_jobs(previous,
-            worker_changes=registration_worker_changes(previous, updated_services))
+        assert_release_jobs_idle(previous, updated_services, mailbox_only=args.historical_finance_mailbox_batch)
 
         step = 'migration'
         if args.historical_finance_mailbox_batch:
@@ -2107,7 +2139,7 @@ def main():
         if args.historical_finance_mailbox_batch:
             require_mailbox_scope(previous, release, additions, edge_changed, original_environment)
         after = {service: service_state(release, service,
-            include_container_id=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8)
+            include_container_id=args.historical_finance_recharge_diagnostics or args.recharge_pro_menu_b8 or args.historical_finance_mailbox_batch)
             for service in production_services(release)}
         require(all(after[s] == before[s] for s in before if s not in updated_services),
                 'Unrelated service changed')
@@ -2135,6 +2167,13 @@ def main():
                         'Public edge policy differs from release configuration')
 
         manifest = dict(old_manifest)
+        if args.historical_finance_mailbox_batch:
+            for name in ('fixedRechargeRelease', 'fixedRechargePreservedStates'):
+                manifest.pop(name, None)
+            preserved = set(before) - {'api'}
+            manifest['mailboxPreservedStates'] = {
+                'before': {name: before[name] for name in sorted(preserved)},
+                'after': {name: after[name] for name in sorted(preserved)}}
         manifest.update({
             'commit': args.commit, 'sourceBranch': 'main', 'sourceTree': args.source_tree,
             'releaseTag': f'v2-production-{stamp}',

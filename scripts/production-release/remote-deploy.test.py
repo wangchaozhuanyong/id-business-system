@@ -4971,5 +4971,69 @@ class FixedRechargeRuntimeScopeTests(unittest.TestCase):
             fetch.assert_not_called(); umask.assert_not_called()
 
 
+class MailboxApiOnlyTests(unittest.TestCase):
+    def test_api_archive_equivalence_rejects_other_source_changes_even_with_worker_carry(self):
+        repository = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            for path in deployment.MAILBOX_CARRIED_SOURCE:
+                file = root / path; file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes((repository / path).read_bytes())
+            node = root / 'apps/api/src/main.ts'; node.parent.mkdir(parents=True, exist_ok=True)
+            node.write_bytes(b'unchanged-node-bundle-input')
+            buffer = io.BytesIO()
+            with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+                entry = tarfile.TarInfo('id-business-system-' + deployment.MAILBOX_IMAGE_IDENTITY[0] + '/apps/api/src/main.ts')
+                entry.size = len(node.read_bytes()); entry.mode = 0o644
+                archive.addfile(entry, io.BytesIO(node.read_bytes()))
+            def verify():
+                with tarfile.open(fileobj=io.BytesIO(buffer.getvalue()), mode='r:gz') as archive:
+                    deployment.verify_reusable_archive(root, archive, deployment.MAILBOX_IMAGE_IDENTITY[0], mailbox_only=True)
+            verify()
+            node.write_bytes(b'changed-api-code')
+            with self.assertRaisesRegex(RuntimeError, 'application source'):
+                verify()
+
+    def test_mailbox_selects_only_api_and_ordinary_selection_remains_strict(self):
+        self.assertEqual(deployment.release_services(False, [], historical_mailbox=True), (('api',), ('api',)))
+        for admin, additions, edge, other in [(True, [], False, False), (False, ['new'], False, False),
+                                             (False, [], True, False), (False, [], False, True)]:
+            with self.assertRaises(RuntimeError):
+                deployment.release_services(admin, additions, edge, historical_mailbox=True, historical_diagnostics=other)
+
+    def test_test_exemption_only_applies_to_pinned_api_release_and_never_updates_jobs(self):
+        with patch.object(deployment, 'verify_mailbox_baseline') as baseline, \
+                patch.object(deployment, 'assert_no_active_jobs') as idle:
+            deployment.assert_release_jobs_idle('current', ('api',), mailbox_only=True)
+            baseline.assert_called_once_with('current'); idle.assert_not_called()
+            for services in [('api', 'auto-recharge'), ('admin',), deployment.SERVICES]:
+                with self.assertRaises(RuntimeError):
+                    deployment.assert_release_jobs_idle('current', services, mailbox_only=True)
+            deployment.assert_release_jobs_idle('current', ('api',), mailbox_only=False)
+            idle.assert_called_once_with('current', worker_changes=False)
+        with patch.object(deployment, 'verify_mailbox_baseline', side_effect=RuntimeError('changed')):
+            with self.assertRaises(RuntimeError):
+                deployment.assert_release_jobs_idle('current', ('api',), mailbox_only=True)
+
+    def test_only_fixed_worker_source_can_be_carried_without_replacing_its_running_image(self):
+        root = Path(__file__).resolve().parents[2]
+        deployment.verify_mailbox_carried_sources(root)
+        names = list(deployment.MAILBOX_CARRIED_SOURCE)
+        deployment.require_reusable_paths(names, mailbox_only=True)
+        with self.assertRaises(RuntimeError):
+            deployment.require_reusable_paths(names)
+        for name in ['apps/api/src/main.ts', 'apps/api/src/auth/auth.module.ts',
+                     'apps/api/prisma-mysql/schema.prisma', 'package-lock.json',
+                     'apps/api/src/id-business-v2/auto-recharge/worker/server.py']:
+            with self.assertRaises(RuntimeError):
+                deployment.require_reusable_paths([name], mailbox_only=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in names:
+                file = root / name; file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError, 'worker source carry'):
+                deployment.verify_mailbox_carried_sources(root)
+
+
 if __name__ == '__main__':
     unittest.main()
