@@ -10,7 +10,13 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/historical-finance-20261005-registration-continuation.json',
   'scripts/lib/v2-release-history-policy.mjs',
   'scripts/v2-release-history-audit.mjs',
-  'scripts/v2-release-history-policy.test.mjs'
+  'scripts/v2-release-history-policy.test.mjs',
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/remote-deploy.test.py',
+  'scripts/production-release/maintain-image-cache.py',
+  'scripts/production-release/maintain-image-cache.test.py'
 ]);
 export function isCiOnly(paths) {
   return (
