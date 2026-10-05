@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs';
 import {
   adminCheckCommands,
   adminUiGuardChecks,
-  auditRetentionMigration
+  auditRetentionMigration,
+  historicalReleaseControlPaths
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -17,12 +18,9 @@ const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared'
 
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
-  const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
-    .trim()
-    .split('\n')
-    .filter((p) => existsSync(p));
-  const formatted = changed.filter((p) => /\.(?:[cm]?js|ts|vue|css|json|md|yml)$/.test(p));
-  const linted = changed.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
+  const existing = changed.filter((p) => existsSync(p));
+  const formatted = existing.filter((p) => /\.(?:[cm]?js|ts|vue|css|json|md|yml)$/.test(p));
+  const linted = existing.filter((p) => /\.(?:mjs|ts|vue)$/.test(p));
   if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
   if (linted.length) npm('exec', '--', 'eslint', ...linted);
   run('node', [
@@ -33,6 +31,8 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+  if (changed.some((path) => historicalReleaseControlPaths.includes(path)))
+    run('node', ['--test', 'scripts/v2-release-history-policy.test.mjs']);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/maintain-image-cache')))

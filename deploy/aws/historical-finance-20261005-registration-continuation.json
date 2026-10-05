@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "id": "historical-finance-20261005-registration-continuation",
+  "userApproved": true,
+  "approvalDate": "2026-10-05",
+  "expectedCurrent": "d0f359dc78b2d2b166893bfec8545609f5baa16d",
+  "checkCount": 48,
+  "rulesSha256": "259332c0c8eb2d3d96d066cecd7cbe294ed5f2bd1e7af0d1c39f6c002859d7f4",
+  "exceptions": [
+    {
+      "code": "cash_historical_cost_evidence_mismatch",
+      "entityIds": [
+        "0e095178-8455-4f1d-8e45-d12b09064702:c6866d24-097b-44c5-b3a7-f3a3dcc11b23",
+        "10eb0ed7-3ce4-42a7-93e1-b83a898efe15:02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e:02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "5a9ca0f0-2855-48e6-a50f-690dc64ebb65:c6866d24-097b-44c5-b3a7-f3a3dcc11b23",
+        "c40dff47-93f4-4651-bad2-edf35c727298:02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "eb3f0d75-3802-49ab-8f3f-86fae65d8514:02d8080d-68d8-4095-8b60-a30d5cd6c4e0"
+      ]
+    },
+    {
+      "code": "finance_cash_source_currency_mismatch",
+      "entityIds": [
+        "0aa666b9-6dbe-450e-987e-32c7fd7bc180",
+        "9c59390d-eba8-4c8a-880b-e91353eb85ec",
+        "a160fcbb-b5e0-4c43-8512-02f54a3d3d35",
+        "d093d779-3659-4266-aa4a-7f1fd9c5813b"
+      ]
+    }
+  ],
+  "sources": {
+    "accounts": {
+      "ids": [
+        "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
+        "723b7183-e56e-4487-8f19-49f1bee14bc8",
+        "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
+      ],
+      "sha256": "9f4acd900992193968abc6d931a79c2f81503e869422fdec6def9ab5ea3b1280"
+    },
+    "journals": {
+      "ids": [
+        "0e095178-8455-4f1d-8e45-d12b09064702",
+        "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+        "3898495b-e61d-4fee-b5b8-42baf52993b9",
+        "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+        "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+        "83e51212-9b05-49ea-bf9e-efffd78c3bb5",
+        "c40dff47-93f4-4651-bad2-edf35c727298",
+        "e00418dd-c6e9-44c7-ab54-61c36e0d2439",
+        "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+      ],
+      "sha256": "3f39001ff42347b161a581d363771ad4169f6ecdabfd13345d730492b8f4f120"
+    },
+    "lines": {
+      "ids": [
+        "0e095178-8455-4f1d-8e45-d12b09064702",
+        "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+        "3898495b-e61d-4fee-b5b8-42baf52993b9",
+        "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+        "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+        "83e51212-9b05-49ea-bf9e-efffd78c3bb5",
+        "c40dff47-93f4-4651-bad2-edf35c727298",
+        "e00418dd-c6e9-44c7-ab54-61c36e0d2439",
+        "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+      ],
+      "sha256": "6303b51fbfd4e46e3f2242e0687964e034032a19641873b8df3e7fa64bda96d5"
+    },
+    "expenses": {
+      "ids": [
+        "15d6851b-2c7c-47b2-9308-bcc7c0d0997a",
+        "5f470679-9b40-4449-bdf5-9b259d3e179c",
+        "a1055b04-9b02-48b1-8bbd-1dea853a466a",
+        "d7e4e35a-5a30-4678-a786-0e85a057e0e5",
+        "f047f59b-36c8-4aa0-8a11-929040ec9cc7",
+        "f3ad1bc9-6b81-461a-a56d-5450e7efa461"
+      ],
+      "sha256": "cefe2e0c45666dd4e6fedd2e3a3d113e5573073f1e16bf77e89a9373b409e157"
+    },
+    "orders": {
+      "ids": ["c19663b2-7050-427c-b850-819b0e410dfc", "ed9db3ad-8a60-44b3-ae7c-d4e8f4dd10af"],
+      "sha256": "0d57b6a4b05accd260fa59392459f6b07f6059559c7d89e899c210dbaed51c2b"
+    }
+  },
+  "continuation": {
+    "originPolicySha256": "58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca",
+    "manifest": {
+      "commit": "d0f359dc78b2d2b166893bfec8545609f5baa16d",
+      "sourceTree": "6ebeaa8f50e5a8a01a1773b61e0107b30e2ba3b3",
+      "previousCommit": "ed2f75b0f4075347224ce3b2c82a90ed514d8d22",
+      "deploymentRun": "github-actions-37261188682-1",
+      "ciWorkflowRunId": 37261070282,
+      "imageBuildRun": "github-actions-37221936314-1"
+    },
+    "manifestSha256": "9cf4968a6ff0a1b6c28350456fc1e71fd4a161656a5c4d802fdddbe2deffc8a2",
+    "beforeReceiptSha256": "f84ca420a9db328407ca7f7c8ddb68f3957d84929ef7365588682a18421c3dc3",
+    "afterReceiptSha256": "08c71255cb8719f4cf1b42516745201073ab0233f5dfb835be2c26074bb1ba4f",
+    "beforeGateSha256": "e56ea16b5648648673617337493f7a4033d321d97c7180c8787112e8dfc216b0",
+    "afterGateSha256": "cb7cdf1cdc65c50eb56f6e4bb17f6a24364935735d5d0a9a018d69eba7526b87",
+    "metadataSha256": "b1648d5e5f832b0c540e88ea1ca4117eee664d8e6d84d06dca90d2ea0e146a6e",
+    "continuationOf": "historical-finance-20261005",
+    "fixedCurrent": "d0f359dc78b2d2b166893bfec8545609f5baa16d"
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "0c0490514b87c278c7aa37ed4606986a8b7c358d267b70b7cbaf1f4301c91e9b",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "c9bde25940e60984d8113c33d6d9f9651000fd88116ea8eab4cbc8ca3e596595",
+    "docs/V2_TASKS.md": "b59a5a7f53640cfb23fb8d3b04dd14f6dc3f40ff0a417e0c61e5f26f6d549e5d"
+  }
+}

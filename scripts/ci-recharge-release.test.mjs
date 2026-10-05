@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -41,6 +41,144 @@ function fixture(run) {
     rmSync(root, { recursive: true });
   }
 }
+
+function guardCommands(paths, { failHistory = false } = {}) {
+  let commands;
+  fixture(({ root, env }) => {
+    const log = join(root, 'guard-commands.txt');
+    writeFileSync(log, '');
+    writeFileSync(env.TASK_CHANGED_PATHS, paths.join('\n'));
+    for (const file of ['npm', 'node', 'python3'])
+      writeFileSync(
+        join(root, 'bin', file),
+        `#!/bin/sh\nprintf "%s\\n" "${file} $*" >> "$TASK_GUARD_LOG"\n${
+          file === 'node'
+            ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\n'
+            : ''
+        }`,
+        { mode: 0o755 }
+      );
+    execFileSync(
+      process.execPath,
+      [join(process.cwd(), 'scripts/ci-recharge-check.mjs'), 'guards', 'a'.repeat(40)],
+      {
+        cwd: root,
+        env: {
+          ...env,
+          CHECK_MODE: 'ci-only',
+          TASK_GUARD_LOG: log,
+          TASK_FAIL_HISTORY: String(failHistory)
+        },
+        stdio: 'pipe'
+      }
+    );
+    commands = readFileSync(log, 'utf8').trim().split('\n');
+  });
+  return commands;
+}
+
+function dispatchFixture(historyPolicy, current, run) {
+  fixture(({ root, env }) => {
+    const awsLog = join(root, 'dispatch-aws.txt');
+    const parametersFile = join(root, '.deploy/production-release/ssm-999999.json');
+    writeFileSync(awsLog, '');
+    writeFileSync(
+      join(root, 'bin', 'aws'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_DISPATCH_AWS_LOG"\ncase "$*" in\n*send-command*) printf "fixture-command\\n" ;;\n*--query\\ Status*) printf "Success\\n" ;;\n*StandardOutputContent*) printf "fixture-receipt\\n" ;;\nesac\n',
+      { mode: 0o755 }
+    );
+    const execute = () =>
+      execFileSync('bash', [join(process.cwd(), 'scripts/production-release/dispatch.sh')], {
+        cwd: root,
+        env: {
+          ...env,
+          HISTORICAL_EXCEPTION: historyPolicy,
+          EXPECTED_CURRENT: current,
+          RELEASE_ADMIN_ONLY: 'false',
+          SOURCE_TREE: 'c'.repeat(40),
+          QUALITY_RUN_ID: '111',
+          PRODUCTION_INSTANCE_ID: 'i-test-fixture-only',
+          TASK_DISPATCH_AWS_LOG: awsLog
+        },
+        stdio: 'pipe'
+      });
+    run({ execute, parametersFile, awsLog });
+  });
+}
+
+test('actual CI guards run historical tests for each exact control path, including deleted files', () => {
+  for (const path of [
+    'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-audit.mjs',
+    'scripts/v2-release-history-policy.test.mjs'
+  ]) {
+    const commands = guardCommands([path]);
+    assert.equal(
+      commands.filter(
+        (command) => command === 'node --test scripts/v2-release-history-policy.test.mjs'
+      ).length,
+      1,
+      path
+    );
+    assert.ok(commands.some((command) => command.includes('scripts/ci-recharge-release.test.mjs')));
+    assert.equal(
+      commands.some((command) => command.startsWith('npm ')),
+      false
+    );
+    assert.equal(
+      commands.some((command) => command.startsWith('python3 ')),
+      false
+    );
+  }
+});
+
+test('historical CI selection preserves existing deployment and cache control checks', () => {
+  const commands = guardCommands([
+    'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/cleanup-reviewed-cache.py',
+    'scripts/production-release/cleanup-verified-backups.py',
+    'scripts/production-release/storage-maintenance.py'
+  ]);
+  for (const command of [
+    'node --test scripts/v2-release-history-policy.test.mjs',
+    'python3 -B scripts/production-release/remote-deploy.test.py',
+    'python3 -B scripts/production-release/maintain-image-cache.test.py',
+    'python3 -B scripts/production-release/cleanup-reviewed-cache.test.py',
+    'python3 -B scripts/production-release/cleanup-verified-backups.test.py',
+    'python3 -B scripts/production-release/storage-maintenance.test.py'
+  ])
+    assert.equal(commands.filter((actual) => actual === command).length, 1, command);
+  assert.equal(
+    commands.some((command) => command.startsWith('npm ')),
+    false
+  );
+});
+
+test('historical CI test selection is exact and a rejected historical test stops the guard', () => {
+  for (const path of [
+    'docs/V2_TASKS.md',
+    'deploy/aws/historical-finance-20261005.json',
+    'deploy/aws/historical-finance-unreviewed.json',
+    'scripts/v2-release-history-audit-other.mjs',
+    'scripts/lib/v2-data-integrity-audit.mjs'
+  ])
+    assert.equal(
+      guardCommands([path]).includes('node --test scripts/v2-release-history-policy.test.mjs'),
+      false,
+      path
+    );
+  assert.throws(
+    () => guardCommands(['scripts/lib/v2-release-history-policy.mjs'], { failHistory: true }),
+    (error) =>
+      error.status === 1 &&
+      String(error.stderr).includes(
+        'Command failed: node --test scripts/v2-release-history-policy.test.mjs'
+      )
+  );
+});
 
 test('real build and push scripts select only admin for frontend plus release-control changes', () => {
   fixture(({ env, log }) => {
@@ -139,6 +277,56 @@ test('recovery dispatch keeps deployment run and reused image run separate', () 
     assert.ok(command.includes(`--image-commit ${'d'.repeat(40)}`));
     assert.ok(command.includes('--image-run-id 222 --image-run-attempt 1'));
   });
+});
+
+test('real historical dispatch selects only the flag approved for its exact baseline', () => {
+  for (const [policy, current, selected, rejected] of [
+    [
+      'historical-finance-20261005-registration-continuation',
+      'd0f359dc78b2d2b166893bfec8545609f5baa16d',
+      '--historical-finance-continuation',
+      '--historical-finance-exception'
+    ],
+    [
+      'historical-finance-20261005',
+      'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
+      '--historical-finance-exception',
+      '--historical-finance-continuation'
+    ]
+  ])
+    dispatchFixture(policy, current, ({ execute, parametersFile, awsLog }) => {
+      execute();
+      const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+      const args = parameters.commands.at(-1).split(' ');
+      assert.equal(args.filter((arg) => arg === selected).length, 1, policy);
+      assert.equal(args.includes(rejected), false, policy);
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1,
+        policy
+      );
+    });
+});
+
+test('real historical dispatch rejects reused or wrong baselines before parameters and AWS', () => {
+  for (const [policy, current] of [
+    [
+      'historical-finance-20261005-registration-continuation',
+      'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+    ],
+    ['historical-finance-20261005-registration-continuation', 'f'.repeat(40)],
+    ['historical-finance-20261005', 'd0f359dc78b2d2b166893bfec8545609f5baa16d']
+  ])
+    dispatchFixture(policy, current, ({ execute, parametersFile, awsLog }) => {
+      assert.throws(
+        execute,
+        (error) => error.status === 1 && String(error.stderr).includes('AssertionError')
+      );
+      assert.equal(existsSync(parametersFile), false, `${policy}: parameters generated`);
+      assert.equal(readFileSync(awsLog, 'utf8'), '', `${policy}: AWS called`);
+    });
 });
 
 test('worker CI runs card setup, full upgrade and registration browser regression modules', () => {

@@ -1040,5 +1040,161 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result[key]['ok'])
 
 
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+        from registration_builtin import RegistrationServerJob
+        from test_registration_builtin import server_payload
+        value = server_payload()
+        value['browserProfileId'] = 'reg_' + 'a' * 64
+        self.job = RegistrationServerJob(value['id'], value,
+            'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+        self.flow = RegistrationBrowser(self.job, self.context)
+        self.flow.page = self.page
+        async def settle(_seconds=2): await asyncio.sleep(.02)
+        self.flow.settle = settle
+        self.flow.registration_country = AsyncMock(return_value='US')
+        self.job.prepare_mail = MagicMock(wraps=self.job.prepare_mail)
+        self.job.wait_code = AsyncMock(wraps=self.job.wait_code)
+        self.tasks = []
+        self.api_state = 'running'
+        self.requested_at = None
+        self.eligible_mail = False
+        self.deliveries = 0
+        self.pauses = 0
+        self.second_pause = asyncio.Event()
+
+    async def asyncTearDown(self):
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def resume_mail_fixture(self, arrival):
+        async def complete_manual():
+            await asyncio.sleep(.02)
+            if arrival == 'paused':
+                self.eligible_mail = True
+                deliver()  # MailDelivery cannot deliver while awaiting_user.
+                self.assertIsNone(self.job.pending_code)
+            if arrival != 'challenge':
+                await self.page.locator('#human-challenge').evaluate('(node) => node.remove()')
+            self.job.signal_resume()
+
+        async def later_mail():
+            await asyncio.sleep(.08)
+            self.eligible_mail = True
+            deliver()
+
+        def deliver():
+            if self.api_state == 'awaiting_email' and self.eligible_mail:
+                self.job.signal_code('123456', self.job.attempt, 'email_code', 'fixture-mail')
+                self.deliveries += 1
+
+        def event(name, **data):
+            self.events.append((name, data))
+            self.job.step = data.get('step', self.job.step)
+            self.api_state = 'running'
+            if name == 'waiting_email':
+                self.api_state = 'awaiting_email'
+                if data.get('newMailRequest') or self.requested_at is None:
+                    self.requested_at = (self.requested_at or 0) + 1
+                elif arrival == 'pending':
+                    self.assertEqual(self.job.pending_code, ('123456', 'fixture-mail'))
+                    self.assertTrue(self.job.code_event.is_set())
+                if arrival == 'pending':
+                    self.eligible_mail = True
+                deliver()  # The existing callback requests delivery, including paused arrivals.
+            elif name == 'waiting_user':
+                self.api_state = 'awaiting_user'
+                self.pauses += 1
+                if self.pauses == 1:
+                    self.tasks.append(asyncio.create_task(complete_manual()))
+                else:
+                    self.second_pause.set()
+            elif name == 'mail_accepted':
+                # The actual API requires awaiting_email for consumption acknowledgment.
+                self.assertEqual(self.previous_state, 'awaiting_email')
+            elif name == 'progress' and self.pauses and arrival == 'later':
+                self.tasks.append(asyncio.create_task(later_mail()))
+            self.previous_state = self.api_state
+
+        self.job.event = event
+        self.previous_state = self.api_state
+        email = '''<form><input type="email"><button>Continue</button></form><script>
+        document.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();await fetch('/fixture/email',{method:'POST'});
+          window.location.assign('/email-verification');
+        }; </script>'''
+        code = '''<h1 id="human-challenge">Verify you are human</h1>
+        <form><input name="code" autocomplete="one-time-code"><button>Continue</button></form><script>
+        document.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();await fetch('/fixture/code',{method:'POST',
+            body:JSON.stringify({code:event.target.querySelector('input').value})});
+          window.location.assign('/welcome');
+        }; </script>'''
+        async def local(route):
+            self.navigation_methods.append(route.request.method)
+            path = urlsplit(route.request.url).path
+            if path in {'/fixture/email', '/fixture/code'}:
+                self.submissions.append((path, route.request.post_data))
+                await route.fulfill(content_type='application/json', body='{}')
+            else:
+                body = code if path == '/email-verification' else '<main>Welcome</main>' if path == '/welcome' else email
+                await route.fulfill(content_type='text/html', body='<!doctype html><html><body>' + body + '</body></html>')
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+
+    async def finish_resumed_mail(self, arrival):
+        await self.resume_mail_fixture(arrival)
+        original_page, original_context = self.flow.page, self.flow.context
+        async def identity(page, _email, **_kwargs):
+            return ('fixture', 'identity') if urlsplit(page.url).path == '/welcome' else None
+        with patch('registration_browser.official_identity', identity):
+            await asyncio.wait_for(self.flow.register(), timeout=15)
+        await asyncio.gather(*self.tasks)
+        self.assertTrue(self.flow.data['registered'])
+        self.assertIs(self.flow.page, original_page)
+        self.assertIs(self.flow.context, original_context)
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.job.wait_code.assert_awaited_once()
+        self.assertEqual([data['newMailRequest'] for name, data in self.events if name == 'waiting_email'], [True, False])
+        self.assertEqual(self.requested_at, 1)
+        self.assertEqual([path for path, _body in self.submissions], ['/fixture/email', '/fixture/code'])
+        self.assertEqual(sum(name == 'mail_accepted' for name, _data in self.events), 1)
+        self.assertFalse(self.job.awaiting_code)
+        self.assertIsNone(self.job.pending_code)
+        self.assertFalse(self.flow.registration_refreshed)
+        self.assertEqual(self.pauses, 1)
+        self.assertEqual(self.page_errors, [])
+
+    async def test_mail_arrived_during_manual_pause_is_consumed_in_original_window(self):
+        await self.finish_resumed_mail('paused')
+        self.assertEqual(self.deliveries, 1)
+
+    async def test_new_mail_after_manual_resume_is_consumed_once(self):
+        await self.finish_resumed_mail('later')
+        self.assertEqual(self.deliveries, 1)
+
+    async def test_pending_mail_survives_resume_and_duplicate_delivery(self):
+        await self.finish_resumed_mail('pending')
+        self.assertEqual(self.deliveries, 2)
+
+    async def test_remaining_human_challenge_never_rearms_or_submits_mail(self):
+        await self.resume_mail_fixture('challenge')
+        with patch('registration_browser.official_identity', AsyncMock(return_value=None)):
+            task = asyncio.create_task(self.flow.register())
+            self.tasks.append(task)
+            await asyncio.wait_for(self.second_pause.wait(), timeout=15)
+            self.assertTrue(self.job.waiting_for_user)
+            self.assertEqual(self.api_state, 'awaiting_user')
+            self.assertEqual([data['newMailRequest'] for name, data in self.events if name == 'waiting_email'], [True])
+            self.assertEqual([path for path, _body in self.submissions], ['/fixture/email'])
+            self.job.wait_code.assert_not_awaited()
+            self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+            self.assertEqual(self.page_errors, [])
+
+
 if __name__ == '__main__':
     unittest.main()

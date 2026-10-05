@@ -5,6 +5,7 @@ import test from 'node:test';
 import { V2_DATA_INTEGRITY_CHECKS } from './lib/v2-data-integrity-audit.mjs';
 import {
   acceptHistoricalAudit,
+  fingerprint,
   fingerprintRows,
   serializeHistoricalAuditReport,
   validateHistoryPolicy
@@ -143,6 +144,114 @@ test('canonical financial fingerprints ignore order and preserve every amount, s
 test('policy schema hashes all 48 real checks', () => {
   validateHistoryPolicy(policy, V2_DATA_INTEGRITY_CHECKS, policy.expectedCurrent);
 });
+
+const continuationPolicy = JSON.parse(
+  readFileSync(
+    new URL(
+      '../deploy/aws/historical-finance-20261005-registration-continuation.json',
+      import.meta.url
+    )
+  )
+);
+// Only irreversible metadata hashes; no journal metadata or private financial fields.
+const frozenMetadataHashes = [
+  'ce06945f2862986c0ff07e155b9207ec340c58d6598c0eb252a2d607e6cc43a5',
+  '4df682e8d327f5d1459d5dbbed31a2f5b5ce8b63d153c7f132a9ecc23e3ca79f',
+  'fb329000228cc5a24c264c57139de8bf854fc86fc18bf1c04ab61a2b5cb4b921',
+  'baeac8872cb32512fc6952d9c2d4b7211da986205c37b538af4edc51fc24d618',
+  '55e09a5f5ff5841180a14530ae248feb06990e1ff99022f6b39c229e9714c05a',
+  'fb329000228cc5a24c264c57139de8bf854fc86fc18bf1c04ab61a2b5cb4b921',
+  '7f4abe23547d7c8e3a79c039dcaabbe053c430ed9ada83b5006f3e75d94e3a5f',
+  '3406929769a319c62237f09a5e47f782e36fb744087fb1762f71da3f0fce23bf',
+  'baeac8872cb32512fc6952d9c2d4b7211da986205c37b538af4edc51fc24d618'
+];
+const continuationFixture = () => ({
+  ...fixture(),
+  policy: structuredClone(continuationPolicy),
+  expectedCurrent: continuationPolicy.expectedCurrent,
+  metadata: [...continuationPolicy.sources.journals.ids]
+    .sort((a, b) => a.localeCompare(b, 'en'))
+    .map((id, index) => ({ id, metadataSha256: frozenMetadataHashes[index] }))
+});
+test('registration continuation preserves the complete original financial exception scope', () => {
+  const restored = {
+    ...continuationPolicy,
+    id: policy.id,
+    expectedCurrent: policy.expectedCurrent
+  };
+  delete restored.continuation;
+  delete restored.candidateSourceSha256;
+  assert.equal(fingerprint(restored), fingerprint(policy));
+  assert.equal(
+    fingerprintRows(continuationFixture().metadata),
+    continuationPolicy.continuation.metadataSha256
+  );
+  const input = continuationFixture();
+  const before = { ok: false, violationCount: 10, gate: acceptHistoricalAudit(input) };
+  const after = acceptHistoricalAudit({ ...input, stage: 'after', before });
+  assert.equal(after.accepted, true);
+  assert.equal(after.continuationOf, policy.id);
+  assert.equal(after.fixedCurrent, continuationPolicy.expectedCurrent);
+  assert.equal(after.executedCheckCount, 48);
+  assert.equal(after.unavailableCheckCount, 0);
+  assert.equal(after.violationCount, 10);
+});
+for (const [name, mutate] of [
+  ['previous or later production SHA', (x) => (x.expectedCurrent = policy.expectedCurrent)],
+  ['later one-time reuse', (x) => (x.expectedCurrent = 'f'.repeat(40))],
+  ['different original manifest', (x) => (x.policy.continuation.manifestSha256 = 'f'.repeat(64))],
+  [
+    'different original before receipt',
+    (x) => (x.policy.continuation.beforeReceiptSha256 = 'f'.repeat(64))
+  ],
+  [
+    'different original after receipt',
+    (x) => (x.policy.continuation.afterReceiptSha256 = 'f'.repeat(64))
+  ],
+  [
+    'changed candidate worker',
+    (x) =>
+      (x.policy.candidateSourceSha256[Object.keys(x.policy.candidateSourceSha256)[0]] = 'f'.repeat(
+        64
+      ))
+  ],
+  ['different frozen exception entity', (x) => (x.policy.exceptions[0].entityIds[0] = 'other')],
+  ['new anomaly', (x) => (x.checks[0].count = 1)],
+  [
+    'same-size replaced exception',
+    (x) => (x.checks.find((c) => c.count === 4).samples[0].entityId = 'other')
+  ],
+  ['new metadata before switch', (x) => (x.metadata[0].metadataSha256 = 'f'.repeat(64))],
+  ['changed source fingerprint', (x) => (x.sources.accounts = 'f'.repeat(64))],
+  ['unknown rule status', (x) => (x.checks[0].status = 'NOT_EXECUTED')],
+  [
+    'legacy schema-unavailable rule',
+    (x) =>
+      Object.assign(
+        x.checks.find((c) => c.code === 'bank_soft_delete_safety_mismatch'),
+        { status: 'SCHEMA_NOT_DEPLOYED', databaseCode: '1054', field: 'o.deleted_at' }
+      )
+  ]
+])
+  test(`registration continuation rejects ${name}`, () => {
+    const input = continuationFixture();
+    mutate(input);
+    assert.throws(() => acceptHistoricalAudit(input));
+  });
+for (const [name, mutate] of [
+  ['incomplete original rule execution', (x) => (x.executedCheckCount = 46)],
+  ['unavailable original rule', (x) => (x.unavailableCheckCount = 2)],
+  ['wrong origin', (x) => (x.continuationOf = 'other')],
+  ['wrong fixed production SHA', (x) => (x.fixedCurrent = 'f'.repeat(40))],
+  ['changed successful provenance', (x) => (x.continuation.manifestSha256 = 'f'.repeat(64))],
+  ['unknown acceptance status', (x) => (x.status = 'UNKNOWN')]
+])
+  test(`registration continuation rejects before receipt with ${name}`, () => {
+    const input = continuationFixture();
+    const before = { gate: acceptHistoricalAudit(input) };
+    mutate(before.gate);
+    assert.throws(() => acceptHistoricalAudit({ ...input, stage: 'after', before }));
+  });
 
 test('production Python deployment and cache controls retain their safety checks', () => {
   for (const path of [

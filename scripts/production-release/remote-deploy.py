@@ -23,6 +23,30 @@ import urllib.request
 BASE = Path('/opt/id-business-v2')
 SERVICES = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')
 ALL_SERVICES = (*SERVICES, 'mysql', 'caddy')
+HISTORY_POLICY_ID = 'historical-finance-20261005'
+HISTORY_BASELINE = 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+HISTORY_CONTINUATION_POLICY_ID = 'historical-finance-20261005-registration-continuation'
+HISTORY_CONTINUATION_BASELINE = 'd0f359dc78b2d2b166893bfec8545609f5baa16d'
+CONTINUATION_POLICY_SHA256 = '7407cc7c5676657b3f24b6e5649f1316cd3c64adb5aeb8f47006cfda58124137'
+CONTINUATION_CONTROL_FILES = frozenset({
+    '.github/workflows/production-release.yml',
+    'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/maintain-image-cache.test.py',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-audit.mjs', 'scripts/v2-release-history-policy.test.mjs',
+    'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'docs/PRODUCTION_RELEASE_OIDC.md',
+})
+CONTINUATION_CANDIDATE_FILES = frozenset({
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+    'docs/V2_TASKS.md',
+})
 REUSE_CONTROL_FILES = frozenset({
     '.github/workflows/production-release.yml',
     'scripts/ci-recharge-scope.mjs',
@@ -57,6 +81,122 @@ REUSE_CONTROL_FILES = frozenset({
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def historical_fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True,
+        separators=(',', ':')).encode()).hexdigest()
+
+
+def require_historical_baseline(policy_id, expected_current):
+    baselines = {HISTORY_POLICY_ID: HISTORY_BASELINE,
+                 HISTORY_CONTINUATION_POLICY_ID: HISTORY_CONTINUATION_BASELINE}
+    require(policy_id in baselines and expected_current == baselines[policy_id],
+            'Historical release exception cannot be reused after publication')
+
+
+def continuation_policy(source):
+    policy = json.loads((source / 'deploy/aws' /
+        (HISTORY_CONTINUATION_POLICY_ID + '.json')).read_text())
+    require(historical_fingerprint(policy) == CONTINUATION_POLICY_SHA256
+            and policy.get('id') == HISTORY_CONTINUATION_POLICY_ID
+            and policy.get('expectedCurrent') == HISTORY_CONTINUATION_BASELINE
+            and set(policy.get('candidateSourceSha256', {})) == CONTINUATION_CANDIDATE_FILES,
+            'Historical continuation policy changed')
+    original = {**policy, 'id': HISTORY_POLICY_ID, 'expectedCurrent': HISTORY_BASELINE}
+    original.pop('continuation', None); original.pop('candidateSourceSha256', None)
+    require(historical_fingerprint(original) ==
+            '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca',
+            'Historical continuation changed the original approved scope')
+    return policy
+
+
+def private_historical_receipt(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as receipt:
+            metadata = os.fstat(receipt.fileno())
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                    and stat.S_IMODE(metadata.st_mode) in (0o600, 0o400),
+                    'Historical continuation receipt is not private')
+            data = receipt.read(8 * 1024 * 1024 + 1)
+        require(len(data) <= 8 * 1024 * 1024, 'Historical continuation receipt is too large')
+        return data
+    except OSError:
+        raise RuntimeError('Historical continuation receipt unavailable') from None
+
+
+def verify_continuation_baseline(previous, policy):
+    proof = policy['continuation']
+    files = [('release-manifest.json', 'manifestSha256'),
+             ('before-audit.json', 'beforeReceiptSha256'),
+             ('after-audit.json', 'afterReceiptSha256')]
+    receipts = {}
+    for name, digest_key in files:
+        data = private_historical_receipt(previous / name)
+        require(hashlib.sha256(data).hexdigest() == proof[digest_key],
+                'Historical continuation successful receipt changed')
+        receipts[name] = json.loads(data)
+    manifest = receipts['release-manifest.json']
+    require(all(manifest.get(key) == value for key, value in proof['manifest'].items())
+            and manifest.get('commit') == HISTORY_CONTINUATION_BASELINE
+            and manifest.get('previousCommit') == HISTORY_BASELINE
+            and proof['continuationOf'] == HISTORY_POLICY_ID
+            and proof['fixedCurrent'] == HISTORY_CONTINUATION_BASELINE,
+            'Historical continuation successful manifest changed')
+    sources = {name: group['sha256'] for name, group in policy['sources'].items()}
+    for stage in ('before', 'after'):
+        report = receipts[stage + '-audit.json']
+        summary = manifest.get('dataAudit' + stage.title(), {})
+        gate = report.get('gate', {})
+        require(report.get('ok') is False and report.get('checkCount') == 48
+                and report.get('violationCount') == 10
+                and summary.get('checkCount') == 48 and summary.get('violationCount') == 10
+                and gate == summary.get('historicalException')
+                and historical_fingerprint(gate) == proof[stage + 'GateSha256']
+                and gate.get('accepted') is True and gate.get('policyId') == HISTORY_POLICY_ID
+                and gate.get('expectedCurrent') == HISTORY_BASELINE and gate.get('stage') == stage
+                and gate.get('checkCount') == gate.get('executedCheckCount') == 48
+                and gate.get('unavailableCheckCount') == 0 and gate.get('violationCount') == 10
+                and gate.get('sources') == sources
+                and gate.get('metadataSha256') == proof['metadataSha256'],
+                'Historical continuation successful audit changed')
+    return manifest
+
+
+def verify_continuation_archive(release, source, policy):
+    prefix = f'id-business-system-{HISTORY_CONTINUATION_BASELINE}/'
+    baseline = {}; seen = set()
+    for member in source.getmembers():
+        require((member.name == prefix[:-1] or member.name.startswith(prefix))
+                and '..' not in Path(member.name).parts
+                and (member.isfile() or member.isdir()), 'Unsafe continuation source archive entry')
+        if not member.isfile():
+            continue
+        name = member.name[len(prefix):]
+        require(name not in seen, 'Duplicate continuation source archive entry')
+        seen.add(name)
+        if name not in CONTINUATION_CONTROL_FILES and name not in CONTINUATION_CANDIDATE_FILES:
+            baseline[name] = (hashlib.sha256(source.extractfile(member).read()).hexdigest(),
+                              member.mode & 0o111)
+    actual = {str(path.relative_to(release)):
+              (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode & 0o111)
+              for path in release.rglob('*') if path.is_file()
+              and str(path.relative_to(release)) not in CONTINUATION_CONTROL_FILES
+              and str(path.relative_to(release)) not in CONTINUATION_CANDIDATE_FILES}
+    require(actual == baseline, 'Historical continuation contains unrelated source changes')
+    require(all((release / name).is_file() and not (release / name).is_symlink()
+                and (release / name).stat().st_mode & 0o111 == 0
+                and hashlib.sha256((release / name).read_bytes()).hexdigest() == digest
+                for name, digest in policy['candidateSourceSha256'].items()),
+            'Historical continuation registration source changed')
+
+
+def verify_continuation_running_images(states, manifest):
+    require(all(states.get(service, {}).get('image') ==
+                manifest.get('images', {}).get(service, {}).get('digest')
+                and bool(states.get(service, {}).get('image')) for service in SERVICES),
+            'Historical continuation running image changed')
 
 
 def command_failure_summary(data):
@@ -240,8 +380,14 @@ def prepare_historical_before_receipt(directory, receipt):
         os.close(descriptor)
 
 
-def audit(directory, receipt, *, historical_exception=False, stage=None,
+def audit(directory, receipt, *, historical_exception=False, historical_continuation=False, stage=None,
           source=None, before_receipt=None):
+    require(not (historical_exception and historical_continuation),
+            'Historical release selection is ambiguous')
+    policy_id = HISTORY_CONTINUATION_POLICY_ID if historical_continuation else HISTORY_POLICY_ID
+    baseline = HISTORY_CONTINUATION_BASELINE if historical_continuation else HISTORY_BASELINE
+    historical = historical_exception or historical_continuation
+    policy = continuation_policy(source) if historical_continuation else None
     values = environment_values(directory / '.env.aws.production')
     audit_url = values.get('V2_DATA_INTEGRITY_DATABASE_URL')
     require(bool(audit_url), 'Read-only audit database URL missing')
@@ -256,14 +402,14 @@ def audit(directory, receipt, *, historical_exception=False, stage=None,
     env['V2_DATA_INTEGRITY_DATABASE_URL'] = container_url
     audit_args = ['node', 'scripts/v2-data-integrity-audit.mjs']
     mounts = ['-v', f'{directory / "scripts"}:/app/scripts:ro']
-    if historical_exception:
+    if historical:
         require(stage in ('before', 'after') and source is not None,
                 'Historical exception audit source missing')
         mounts = ['-v', f'{source / "scripts"}:/app/scripts:ro',
                   '-v', f'{source / "deploy/aws"}:/release-policy:ro']
         audit_args = ['node', 'scripts/v2-release-history-audit.mjs',
-                      '--policy=/release-policy/historical-finance-20261005.json',
-                      '--expected-current=ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
+                      f'--policy=/release-policy/{policy_id}.json',
+                      f'--expected-current={baseline}',
                       f'--stage={stage}']
         if stage == 'after':
             require(before_receipt is not None, 'Historical before audit missing')
@@ -278,21 +424,33 @@ def audit(directory, receipt, *, historical_exception=False, stage=None,
         env=env, timeout=240,
     )
     report = json.loads(output)
-    if historical_exception:
+    if historical:
         gate = report.get('gate', {})
-        require(gate.get('accepted') is True and gate.get('policyId') == 'historical-finance-20261005'
-                and gate.get('expectedCurrent') == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
+        require(gate.get('accepted') is True and gate.get('policyId') == policy_id
+                and gate.get('expectedCurrent') == baseline
                 and gate.get('stage') == stage and gate.get('checkCount') == 48
                 and report.get('violationCount') == gate.get('violationCount') == 10
                 and (stage != 'after' or gate.get('unavailableCheckCount') == 0),
                 'Approved historical integrity gate failed')
+        if historical_continuation:
+            require(report.get('ok') is False and report.get('checkCount') == 48
+                    and gate.get('status') == 'APPROVED_HISTORICAL_EXCEPTIONS'
+                    and gate.get('executedCheckCount') == 48
+                    and gate.get('unavailableCheckCount') == 0
+                    and gate.get('continuationOf') == HISTORY_POLICY_ID
+                    and gate.get('fixedCurrent') == HISTORY_CONTINUATION_BASELINE
+                    and gate.get('continuation') == policy['continuation']
+                    and gate.get('metadataSha256') == policy['continuation']['metadataSha256']
+                    and gate.get('sources') == {
+                        name: group['sha256'] for name, group in policy['sources'].items()},
+                    'Approved historical continuation integrity gate failed')
     else:
         require(report.get('ok') is True and report.get('violationCount') == 0,
                 'Financial data integrity audit failed')
     receipt.write_text(json.dumps(report, indent=2) + '\n')
     receipt.chmod(0o600)
     return {'checkCount': report.get('checkCount'), 'violationCount': report.get('violationCount'),
-            **({'historicalException': report['gate']} if historical_exception else {})}
+            **({'historicalException': report['gate']} if historical else {})}
 
 
 def assert_no_active_recharge(directory):
@@ -546,13 +704,18 @@ def main():
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
     parser.add_argument('--historical-finance-exception', action='store_true')
+    parser.add_argument('--historical-finance-continuation', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
-    require(not args.historical_finance_exception or
-            args.expected_current == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
-            'Historical release exception cannot be reused after publication')
+    require(not (args.historical_finance_exception and args.historical_finance_continuation),
+            'Historical release selection is ambiguous')
+    if args.historical_finance_exception or args.historical_finance_continuation:
+        require_historical_baseline(HISTORY_CONTINUATION_POLICY_ID
+            if args.historical_finance_continuation else HISTORY_POLICY_ID, args.expected_current)
+    require(not (args.historical_finance_continuation and args.admin_only),
+            'Historical registration continuation requires Worker publication')
     require(re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository), 'Invalid image repository')
     require(re.fullmatch(r'[0-9]+', args.run_id), 'Invalid workflow run')
     require(re.fullmatch(r'[1-9][0-9]*', args.run_attempt), 'Invalid workflow attempt')
@@ -604,6 +767,18 @@ def main():
             item.rename(release / item.name)
         extracted.rmdir()
         archive.unlink()
+        if args.historical_finance_continuation:
+            policy = continuation_policy(release)
+            verified_manifest = verify_continuation_baseline(previous, policy)
+            require(verified_manifest == old_manifest, 'Historical continuation manifest changed')
+            verify_continuation_running_images(before, old_manifest)
+            url = (f'https://github.com/wangchaozhuanyong/id-business-system/archive/'
+                   f'{HISTORY_CONTINUATION_BASELINE}.tar.gz')
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read(64 * 1024 * 1024 + 1)
+            require(len(data) <= 64 * 1024 * 1024, 'Continuation source archive is too large')
+            with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source:
+                verify_continuation_archive(release, source, policy)
         if image_commit != args.commit:
             url = f'https://github.com/wangchaozhuanyong/id-business-system/archive/{image_commit}.tar.gz'
             with urllib.request.urlopen(url, timeout=60) as response:
@@ -641,6 +816,7 @@ def main():
         step = 'audit-before'
         before_audit = audit(previous, release / 'before-audit.json',
                              historical_exception=args.historical_finance_exception,
+                             historical_continuation=args.historical_finance_continuation,
                              stage='before', source=release)
         step = 'images'
         pulled_images = {}
@@ -685,6 +861,7 @@ def main():
         step = 'audit-after'
         after_audit = audit(release, release / 'after-audit.json',
                             historical_exception=args.historical_finance_exception,
+                            historical_continuation=args.historical_finance_continuation,
                             stage='after', source=release,
                             before_receipt=release / 'before-audit.json')
         after = {service: service_state(release, service) for service in production_services(release)}

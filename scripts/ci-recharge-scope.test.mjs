@@ -33,6 +33,103 @@ test('documentation and CI selectors do not start business or database checks', 
   ])
     assert.equal(checkMode([path], schema, schema), 'full');
 });
+test('historical audit controls use their four exact reviewed paths', () => {
+  const controls = [
+    'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-audit.mjs',
+    'scripts/v2-release-history-policy.test.mjs'
+  ];
+  for (const path of controls) {
+    assert.equal(isCiOnly([path]), true, path);
+    assert.equal(checkMode([path], schema, schema), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+  }
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py';
+  assert.equal(checkMode([...controls, worker], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, worker]), ['guards', 'connector']);
+  const security = 'apps/api/src/auth/auth.service.ts';
+  assert.equal(checkMode([...controls, security], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, security]), ['guards', 'api', 'security']);
+  const admin = 'apps/admin/src/v2/features/orders/Orders.vue';
+  assert.equal(checkMode([...controls, admin], schema, schema), 'admin');
+  assert.deepEqual(selectedParts([...controls, admin]), ['guards', 'admin']);
+  for (const path of [
+    'deploy/aws/historical-finance-20261005.json',
+    'deploy/aws/historical-finance-unreviewed.json',
+    'deploy/aws/historical-finance-20261005-registration-continuation-other.json',
+    'deploy/aws/historical-finance-20261005-registration-continuation.json.backup',
+    'scripts/lib/v2-release-history-policy-other.mjs',
+    'scripts/v2-release-history-audit-other.mjs',
+    'scripts/v2-release-history-policy-other.test.mjs',
+    'scripts/lib/v2-data-integrity-audit.mjs'
+  ]) {
+    assert.equal(isCiOnly([path]), false, path);
+    assert.equal(checkMode([path], schema, schema), 'full', path);
+    assert.equal(checkMode([...controls, worker, path], schema, schema), 'full', path);
+    assert.equal(checkMode([...controls, security, path], schema, schema), 'full', path);
+  }
+});
+test('the complete registration continuation candidate retains targeted checks with exact production controls', () => {
+  const productionControls = [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/maintain-image-cache.test.py'
+  ];
+  const candidate = [
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+    'docs/V2_TASKS.md',
+    'docs/PRODUCTION_RELEASE_OIDC.md',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-audit.mjs',
+    'scripts/v2-release-history-policy.test.mjs',
+    ...productionControls
+  ];
+  assert.equal(candidate.length, 18);
+  assert.equal(checkMode(candidate, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(candidate), ['guards', 'admin', 'api', 'connector']);
+  assert.equal(
+    checkMode(
+      candidate.filter((path) => !path.startsWith('apps/')),
+      schema,
+      schema
+    ),
+    'ci-only'
+  );
+  for (const path of productionControls) {
+    assert.equal(checkMode([path], schema, schema), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+  }
+  for (const path of [
+    'scripts/production-release/unreviewed.py',
+    'scripts/production-release/remote-deploy-other.py',
+    'scripts/production-release/maintain-image-cache-other.test.py',
+    'deploy/aws/historical-finance-unreviewed.json',
+    'scripts/lib/v2-data-integrity-audit.mjs',
+    'apps/api/src/id-business-v2/orders/order.service.ts'
+  ]) {
+    assert.equal(checkMode([path], schema, schema), 'full', path);
+    assert.equal(checkMode([...candidate, path], schema, schema), 'full', path);
+  }
+  for (const path of [
+    'scripts/production-release/storage-maintenance.py',
+    'scripts/production-release/reuse-images.py',
+    'scripts/production-release/cleanup-reviewed-cache.py'
+  ]) {
+    assert.equal(isCiOnly([path]), true, path);
+    assert.equal(checkMode([...candidate, path], schema, schema), 'full', path);
+  }
+});
 test('approved audit trigger migration runs isolated MySQL guards without hiding other changes', () => {
   const migration =
     'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
