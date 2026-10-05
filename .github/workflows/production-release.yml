@@ -274,6 +274,7 @@ jobs:
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
           python3 - <<'PY'
+          import ast
           import json
           from pathlib import Path
           import shlex
@@ -292,6 +293,282 @@ jobs:
           PROOF_GATE_HASHES = (
               ('before', '73f4bb876129fcb53a6ef7f31873db017b6df245372fcc2c222813018550adb6'),
               ('after', '6b3d3445796b1dfc840b8e4c0b9d31c663269847181575f3913f0c7eafabe18a'))
+          PROOF_RECEIPT = {
+              'manifest': {'commit': PROOF_CURRENT, 'previousCommit': PROOF_PREVIOUS,
+                  'sourceTree': 'a329e268cf7afcb9967789dcb998e0177cad5ddf',
+                  'releaseTag': 'v2-production-20261005T050620Z',
+                  'deploymentRun': 'github-actions-37265858979-1', 'imageBuildRun': 'github-actions-37265858979-1',
+                  'ciWorkflowRunId': 37265801532},
+              'manifestSha256': '202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866',
+              'beforeReceiptSha256': 'b54520e73edffbc0a9fcf6592da3733b04564c5b65ff41f1ed8789ea782804d5',
+              'afterReceiptSha256': '818e1980ab01bff0eafaca24863601bca8b02aa0e4bcadf64c3a671bc38edf63',
+              'beforeGateSha256': PROOF_GATE_HASHES[0][1], 'afterGateSha256': PROOF_GATE_HASHES[1][1],
+              'metadataSha256': 'b1648d5e5f832b0c540e88ea1ca4117eee664d8e6d84d06dca90d2ea0e146a6e',
+              'sourcesSha256': 'db943f1852946a475b43940cd6db62abcc4e78b7a8345f141633106a1399d884',
+              'continuationSha256': '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768cab8945cb21ba',
+              'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 10,
+              'accepted': True, 'sameManifest': True, 'receiptsMatchManifest': True, 'runningImagesMatchManifest': True,
+              'images': {
+                  'media-resolver': 'sha256:61d025286e67173385b691e36c8469d5aa556feb28667dafcec64b527b00f046',
+                  'auto-recharge': 'sha256:52ba677bcc7e9c638458fa4d1d57ba64982181c27b838852535d97ad90b46ed3',
+                  'auto-registration': 'sha256:52ba677bcc7e9c638458fa4d1d57ba64982181c27b838852535d97ad90b46ed3',
+                  'api': 'sha256:cb4527113166284592b0217b1916af0cf378a920d15fd815db774583ce152f51',
+                  'admin': 'sha256:8c2c3578b28e4826dcd06fbfb2aedd8956d933d5a3d396bd75ea0f07c8a08827'}}
+          PROOF_HISTORY_BASELINES = {
+              'historical-finance-20261005': 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
+              'historical-finance-20261005-registration-continuation': PROOF_PREVIOUS,
+              'historical-finance-20261005-recharge-diagnostics': PROOF_CURRENT}
+          PROOF_CONTINUATIONS = {
+              'historical-finance-20261005-registration-continuation': PROOF_RECEIPT['continuationSha256'],
+              'historical-finance-20261005-recharge-diagnostics':
+                  '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'}
+          PROOF_FAILURES = ('MANIFEST_UNAVAILABLE', 'FIXED_PROOF_UNAVAILABLE',
+              'DOCKER_DIAGNOSTIC_FAILED', 'IMAGE_INVENTORY_BOUND')
+          def release_lock_summary(lock_path=Path('/opt/id-business-v2/.deploy.lock'), proc=Path('/proc')):
+              unknown = {'status': 'NOT_MEASURED', 'holders': []}
+              flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+              def bounded(path, limit):
+                  with os.fdopen(os.open(path, flags), 'rb') as source:
+                      if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                          raise ValueError()
+                      data = source.read(limit + 1)
+                      if len(data) > limit:
+                          raise ValueError()
+                      return data
+              def identity(info):
+                  return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink)
+              def snapshot(info):
+                  entries = []
+                  for line in bounded(proc / 'locks', 256 * 1024).decode('ascii').splitlines():
+                      fields = line.split()
+                      waiting = len(fields) > 1 and fields[1] == '->'
+                      if waiting:
+                          fields.pop(1)
+                      if (len(fields) != 8 or not re.fullmatch(r'[0-9]+:', fields[0])
+                              or fields[1] not in ('FLOCK', 'POSIX', 'OFDLCK')
+                              or fields[2] not in ('ADVISORY', 'MANDATORY')
+                              or fields[3] not in ('READ', 'WRITE')
+                              or not re.fullmatch(r'-?[0-9]+', fields[4])
+                              or not re.fullmatch(r'[0-9a-fA-F]+:[0-9a-fA-F]+:[0-9]+', fields[5])
+                              or not fields[6].isdigit()
+                              or not (fields[7].isdigit() or fields[7] == 'EOF')):
+                          raise ValueError()
+                      major, minor, inode = fields[5].split(':')
+                      if (not waiting and (int(major, 16), int(minor, 16), int(inode))
+                              == (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino)):
+                          pid = int(fields[4])
+                          if pid <= 0 and not (fields[1] == 'OFDLCK' and pid == -1):
+                              raise ValueError()
+                          entries.append((fields[1], fields[3], pid))
+                  if len(entries) > 16:
+                      raise ValueError()
+                  return sorted(entries)
+              def process(pid):
+                  data = bounded(proc / str(pid) / 'stat', 4096).decode('ascii').strip()
+                  head, tail = data.rsplit(') ', 1)
+                  prefix = str(pid) + ' ('
+                  fields = tail.split()
+                  if (not head.startswith(prefix) or len(fields) < 20
+                          or fields[0] not in ('R', 'S', 'D', 'Z', 'T', 't', 'W', 'X', 'x', 'I', 'K', 'P')
+                          or not fields[19].isdigit()):
+                      raise ValueError()
+                  comm = head[len(prefix):]
+                  if not (re.fullmatch(r'python(?:3(?:\.[0-9]{1,2})?)?', comm)
+                          or comm in ('bash', 'sh', 'flock', 'node', 'ssm-agent-worke', 'amazon-ssm-agen')):
+                      comm = 'OTHER'
+                  return comm, fields[0], int(fields[19])
+              def invocation(pid):
+                  # Stop at the second NUL; never read inline source or later arguments.
+                  with os.fdopen(os.open(proc / str(pid) / 'cmdline', flags), 'rb') as source:
+                      if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                          raise ValueError()
+                      data = b''
+                      for _ in range(512):
+                          byte = os.read(source.fileno(), 1)
+                          if not byte:
+                              break
+                          data += byte
+                          if data.count(b'\0') == 2:
+                              break
+                  if data.count(b'\0') != 2:
+                      return 'UNKNOWN'
+                  first, second = data.split(b'\0')[:2]
+                  if re.fullmatch(rb'(?:/usr/(?:local/)?bin/)?python3(?:\.[0-9]{1,2})?', first):
+                      if second == b'-c':
+                          return 'PYTHON_INLINE'
+                      if re.fullmatch(rb'/opt/id-business-v2/\.staging/oidc-[a-f0-9]{40}/remote-deploy\.py', second):
+                          return 'REMOTE_DEPLOY'
+                  if second == b'-c' and first in (b'sh', b'bash', b'/bin/sh', b'/bin/bash'):
+                      return 'SHELL_INLINE'
+                  return 'UNKNOWN'
+              try:
+                  with os.fdopen(os.open(lock_path, flags), 'rb') as lock:
+                      info = os.fstat(lock.fileno())
+                      if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                          raise ValueError()
+                      entries = snapshot(info)
+                      holders = []
+                      if entries:
+                          uptime = bounded(proc / 'uptime', 128).decode('ascii').split()[0]
+                          if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', uptime):
+                              raise ValueError()
+                          ticks = os.sysconf('SC_CLK_TCK')
+                          if ticks <= 0:
+                              raise ValueError()
+                      for kind, mode, pid in entries:
+                          holder = {'kind': kind, 'mode': mode, 'pid': pid if pid > 0 else None,
+                              'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED', 'elapsedSeconds': None,
+                              'script': 'UNKNOWN'}
+                          if pid > 0:
+                              comm, state, started = process(pid)
+                              script = invocation(pid)
+                              # Process age; /proc/locks has no acquisition timestamp.
+                              elapsed = int(float(uptime) - started / ticks)
+                              if elapsed < 0 or elapsed > 2 ** 31 - 1 or process(pid)[::2] != (comm, started):
+                                  raise ValueError()
+                              holder.update(comm=comm, state=state, elapsedSeconds=elapsed, script=script)
+                          holders.append(holder)
+                      if (snapshot(info) != entries or identity(os.fstat(lock.fileno())) != identity(info)
+                              or identity(os.stat(lock_path, follow_symlinks=False)) != identity(info)):
+                          raise ValueError()
+                      return {'status': 'HELD' if holders else 'UNLOCKED', 'holders': holders}
+              except Exception:
+                  return unknown
+          def project_readonly_diagnostics(value, closed=True):
+              keys = {'currentCommit', 'releaseTag', 'sourceTree', 'previousCommit', 'servicesUpdated',
+                  'newMigrations', 'backupBeforeRelease', 'dataAuditBefore', 'dataAuditAfter', 'services'}
+              if not isinstance(value, dict) or closed and set(value) != keys:
+                  raise ValueError()
+              def matches(pattern, text):
+                  return isinstance(text, str) and re.fullmatch(pattern, text) is not None
+              def digest(data):
+                  return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+              def count(data, key, expected):
+                  if type(data.get(key)) is not int or data[key] != expected:
+                      raise ValueError()
+              projection = {key: value[key] for key in keys}
+              if (any(not matches(r'[a-f0-9]{40}', value[key]) for key in ('currentCommit', 'sourceTree', 'previousCommit'))
+                      or not matches(r'v2-production-[0-9]{8}T[0-9]{6}Z', value['releaseTag'])
+                      or not matches(r'id-business-v2-[0-9]{8}T[0-9]{6}Z\.sql\.gz', value['backupBeforeRelease'])):
+                  raise ValueError()
+              for key, limit, pattern in (
+                      ('servicesUpdated', 6, r'(?:media-resolver|auto-recharge|auto-registration|api|admin|caddy)'),
+                      ('newMigrations', 128, r'[0-9]{14}_[a-z][a-z0-9_]{0,127}')):
+                  items = value[key]
+                  if (not isinstance(items, list) or len(items) > limit or any(not matches(pattern, item) for item in items)
+                          or len(set(items)) != len(items) or key == 'servicesUpdated' and not items):
+                      raise ValueError()
+              services = value['services']
+              if not isinstance(services, dict) or set(services) != set(PROOF_SERVICES):
+                  raise ValueError()
+              for state in services.values():
+                  if (not isinstance(state, dict) or set(state) != {'image', 'status', 'health'}
+                          or not matches(r'sha256:[a-f0-9]{64}', state['image'])
+                          or state['status'] not in ('running', 'created', 'exited', 'restarting', 'paused', 'dead', 'removing')
+                          or state['health'] not in ('healthy', 'unhealthy', 'starting')):
+                      raise ValueError()
+              for stage in ('before', 'after'):
+                  audit = value['dataAudit' + stage.title()]
+                  if not isinstance(audit, dict):
+                      raise ValueError()
+                  gate = audit.get('historicalException')
+                  if not isinstance(gate, dict):
+                      raise ValueError()
+                  policy = gate.get('policyId')
+                  if (policy not in PROOF_CONTINUATIONS or gate.get('accepted') is not True
+                          or gate.get('status') != 'APPROVED_HISTORICAL_EXCEPTIONS' or gate.get('stage') != stage
+                          or gate.get('expectedCurrent') != PROOF_HISTORY_BASELINES[policy]
+                          or gate.get('fixedCurrent') != PROOF_HISTORY_BASELINES[policy]
+                          or value['previousCommit'] != PROOF_HISTORY_BASELINES[policy]
+                          or gate.get('continuationOf') != 'historical-finance-20261005'):
+                      raise ValueError()
+                  if policy == 'historical-finance-20261005-recharge-diagnostics' and (
+                          value['newMigrations'] or value['servicesUpdated'] != ['auto-recharge']):
+                      raise ValueError()
+                  for key, expected in (('checkCount', 48), ('executedCheckCount', 48),
+                                        ('unavailableCheckCount', 0), ('violationCount', 10)):
+                      count(gate, key, expected)
+                  count(audit, 'checkCount', 48)
+                  count(audit, 'violationCount', 10)
+                  safe_gate = {key: gate[key] for key in ('accepted', 'status', 'policyId', 'stage', 'expectedCurrent',
+                      'fixedCurrent', 'continuationOf', 'checkCount', 'executedCheckCount', 'unavailableCheckCount', 'violationCount')}
+                  hash_fields = {'gateSha256', 'sourcesSha256', 'metadataSha256', 'continuationSha256'}
+                  if closed:
+                      if (set(audit) != {'checkCount', 'executedCheckCount', 'unavailableCheckCount',
+                              'violationCount', 'historicalException'}
+                              or set(gate) != set(safe_gate) | hash_fields):
+                          raise ValueError()
+                      count(audit, 'executedCheckCount', 48)
+                      count(audit, 'unavailableCheckCount', 0)
+                      safe_gate.update({key: gate[key] for key in hash_fields})
+                  else:
+                      safe_gate.update(gateSha256=digest(gate), sourcesSha256=digest(gate['sources']),
+                          metadataSha256=gate['metadataSha256'], continuationSha256=digest(gate['continuation']))
+                  if (any(not matches(r'[a-f0-9]{64}', safe_gate[key]) for key in hash_fields)
+                          or safe_gate['metadataSha256'] != PROOF_RECEIPT['metadataSha256']
+                          or safe_gate['sourcesSha256'] != PROOF_RECEIPT['sourcesSha256']
+                          or safe_gate['continuationSha256'] != PROOF_CONTINUATIONS[policy]):
+                      raise ValueError()
+                  projection['dataAudit' + stage.title()] = {'checkCount': 48, 'executedCheckCount': 48,
+                      'unavailableCheckCount': 0, 'violationCount': 10, 'historicalException': safe_gate}
+              return projection
+          def readonly_receipts(output, succeeded):
+              unknown = {'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}
+              try:
+                  if len(output.encode()) > 24000:
+                      raise ValueError()
+                  lines = output.strip().splitlines()
+                  first = json.loads(lines[0])
+                  lock = first['releaseLock']
+                  if (set(first) != {'releaseLock'} or set(lock) != {'status', 'holders'}
+                          or lock['status'] not in ('HELD', 'UNLOCKED', 'NOT_MEASURED')
+                          or not isinstance(lock['holders'], list) or len(lock['holders']) > 16
+                          or (bool(lock['holders']) != (lock['status'] == 'HELD'))):
+                      raise ValueError()
+                  for holder in lock['holders']:
+                      if (set(holder) != {'kind', 'mode', 'pid', 'comm', 'state', 'elapsedSeconds', 'script'}
+                              or holder['kind'] not in ('FLOCK', 'POSIX', 'OFDLCK')
+                              or holder['mode'] not in ('READ', 'WRITE')
+                              or not (holder['pid'] is None or type(holder['pid']) is int and holder['pid'] > 0)
+                              or not (holder['comm'] in ('OTHER', 'NOT_MEASURED', 'bash', 'sh', 'flock', 'node',
+                                  'ssm-agent-worke', 'amazon-ssm-agen')
+                                  or re.fullmatch(r'python(?:3(?:\.[0-9]{1,2})?)?', holder['comm']))
+                              or holder['state'] not in ('R', 'S', 'D', 'Z', 'T', 't', 'W', 'X', 'x', 'I', 'K', 'P', 'NOT_MEASURED')
+                              or not (holder['elapsedSeconds'] is None or type(holder['elapsedSeconds']) is int
+                                  and 0 <= holder['elapsedSeconds'] <= 2 ** 31 - 1)
+                              or holder['script'] not in ('PYTHON_INLINE', 'SHELL_INLINE', 'REMOTE_DEPLOY', 'UNKNOWN')):
+                          raise ValueError()
+              except Exception:
+                  first = unknown
+              if not succeeded:
+                  receipts = [first]
+                  try:
+                      failure = json.loads(lines[1])
+                      if set(failure) == {'readOnlyFailure'} and failure['readOnlyFailure'] in PROOF_FAILURES:
+                          receipts.append(failure)
+                  except Exception:
+                      pass
+                  return receipts
+              try:
+                  if len(lines) != 2 or first is unknown:
+                      raise ValueError()
+                  diagnostics = json.loads(lines[1])
+                  if not isinstance(diagnostics, dict) or not re.fullmatch(r'[a-f0-9]{40}', diagnostics['currentCommit']):
+                      raise ValueError()
+                  if diagnostics['currentCommit'] == PROOF_CURRENT:
+                      def exact(actual, expected):
+                          if type(actual) is not type(expected):
+                              return False
+                          if isinstance(expected, dict):
+                              return set(actual) == set(expected) and all(exact(actual[key], item) for key, item in expected.items())
+                          return actual == expected
+                      if not exact(diagnostics, {'currentCommit': PROOF_CURRENT, 'safeProof': PROOF_RECEIPT}):
+                          raise ValueError()
+                  else:
+                      diagnostics = project_readonly_diagnostics(diagnostics)
+                  return [first, diagnostics]
+              except Exception:
+                  raise RuntimeError('Read-only diagnostic output unavailable') from None
           def proof_fingerprint(value):
               return hashlib.sha256(json.dumps(value, sort_keys=True,
                   separators=(',', ':')).encode()).hexdigest()
@@ -375,11 +652,17 @@ jobs:
               except Exception:
                   raise RuntimeError('Read-only fixed release proof unavailable') from None
           def read(*args):
-              result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+              try:
+                  result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+              except Exception:
+                  print(json.dumps({'readOnlyFailure': 'DOCKER_DIAGNOSTIC_FAILED'}), flush=True)
+                  raise RuntimeError('Read-only Docker diagnostic failed') from None
               if result.returncode:
+                  print(json.dumps({'readOnlyFailure': 'DOCKER_DIAGNOSTIC_FAILED'}), flush=True)
                   raise RuntimeError('Read-only Docker diagnostic failed')
               return result.stdout.strip()
           base = Path('/opt/id-business-v2')
+          print(json.dumps({'releaseLock': release_lock_summary()}, separators=(',', ':')), flush=True)
           try:
               with (base / 'current' / 'release-manifest.json').open('rb') as source:
                   manifest_bytes = source.read(8 * 1024 * 1024 + 1)
@@ -389,6 +672,7 @@ jobs:
               if not isinstance(manifest, dict):
                   raise ValueError()
           except Exception:
+              print(json.dumps({'readOnlyFailure': 'MANIFEST_UNAVAILABLE'}), flush=True)
               raise SystemExit('Read-only manifest unavailable') from None
           if manifest.get('commit') == PROOF_CURRENT:
               try:
@@ -407,6 +691,7 @@ jobs:
                       states[service] = dict(zip(('image', 'status', 'health'), fields))
                   proof = fixed_release_proof(base / 'current', manifest, states)
               except Exception:
+                  print(json.dumps({'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'}), flush=True)
                   raise SystemExit('Read-only fixed release proof unavailable') from None
               print(json.dumps({'currentCommit': PROOF_CURRENT, 'safeProof': proof}, separators=(',', ':')))
               raise SystemExit(0)
@@ -449,6 +734,7 @@ jobs:
           unused_images = []
           image_ids = sorted(set(read('docker', 'image', 'ls', '--no-trunc', '--quiet').splitlines()))
           if len(image_ids) > 500:
+              print(json.dumps({'readOnlyFailure': 'IMAGE_INVENTORY_BOUND'}), flush=True)
               raise RuntimeError('Read-only image inventory exceeds bound')
           image_format = ('{"id":{{json .Id}},"repoTags":{{json .RepoTags}},'
               '"repoDigests":{{json .RepoDigests}},"sizeBytes":{{json .Size}},'
@@ -482,7 +768,19 @@ jobs:
               images.append({'tag': image['Tag'], 'size': image['Size'],
                   'metadata': read('docker', 'image', 'inspect', '--format',
                       '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}', reference)})
-          print(json.dumps({'currentCommit': manifest['commit'], 'releaseTag': manifest['releaseTag'],
+          states = {}
+          for service in PROOF_SERVICES:
+              container = read('docker', 'compose', '--env-file', str(base / 'current' / '.env.aws.production'),
+                  '-f', str(base / 'current' / 'docker-compose.aws-mysql.yml'),
+                  '-f', str(base / 'current' / 'compose.release.json'), 'ps', '-q', service)
+              if not re.fullmatch(r'[a-f0-9]{12,64}', container):
+                  raise RuntimeError('Read-only service identity unavailable')
+              fields = read('docker', 'inspect', '--format',
+                  '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container).split()
+              if len(fields) != 3:
+                  raise RuntimeError('Read-only service state unavailable')
+              states[service] = dict(zip(('image', 'status', 'health'), fields))
+          print(json.dumps(project_readonly_diagnostics({'currentCommit': manifest['commit'], 'releaseTag': manifest['releaseTag'],
               'previousCommit': manifest.get('previousCommit'),
               'sourceTree': manifest.get('sourceTree'),
               'dataAuditBefore': manifest.get('dataAuditBefore'),
@@ -494,21 +792,38 @@ jobs:
               'protectedImageIds': sorted(protected_image_ids),
               'unusedLocalImages': unused_images, 'unusedImageReleaseEvidence': release_image_evidence,
               'disk': {'totalBytes': usage.total, 'usedBytes': usage.used, 'freeBytes': usage.free},
-              'containers': containers, 'images': images,
-              'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}))
+              'containers': containers, 'images': images, 'services': states,
+              'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}, False), separators=(',', ':')))
           '''
           parameters = {'commands': ['python3 -c ' + shlex.quote(program)], 'executionTimeout': ['120']}
           Path('.deploy/production-release/readonly-diagnostics.json').write_text(json.dumps(parameters))
+          receivers = [node for node in ast.parse(program).body
+              if isinstance(node, ast.FunctionDef) and node.name in ('readonly_receipts', 'project_readonly_diagnostics')
+              or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
+          filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n'
+          filter_program += ('output=sys.stdin.read(24001)\n'
+              'for receipt in readonly_receipts(output, False):\n'
+              '    print(json.dumps(receipt, separators=(",", ":")), flush=True)\n'
+              'if sys.argv[1] == "0":\n'
+              '    for receipt in readonly_receipts(output, True)[1:]:\n'
+              '        print(json.dumps(receipt, separators=(",", ":")), flush=True)\n')
+          Path('.deploy/production-release/readonly-diagnostics-filter.py').write_text(filter_program)
           PY
           command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
             --document-name AWS-RunShellScript \
             --parameters file://.deploy/production-release/readonly-diagnostics.json \
             --query 'Command.CommandId' --output text)"
-          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+          wait_status=0
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?
           aws ssm get-command-invocation --command-id "$command_id" \
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
-            > .deploy/production-release/readonly-diagnostics-result.json
-          python3 -m json.tool .deploy/production-release/readonly-diagnostics-result.json
+            | python3 .deploy/production-release/readonly-diagnostics-filter.py "$wait_status"
+          if (( wait_status != 0 )); then
+            aws ssm get-command-invocation --command-id "$command_id" \
+              --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
+              | python3 scripts/production-release/remote-deploy.py --summarize-command-result
+          fi
+          exit "$wait_status"
 
       - name: Verify fixed read-only mailbox queries in the running API
         if: inputs.operation == 'verify_mailbox'
