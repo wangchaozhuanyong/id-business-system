@@ -125,6 +125,7 @@ if (part === 'guards') {
       'test_bitbrowser_upgrade',
       'test_connector_health',
       'test_session_retry',
+      'test_pro.ProMenuDiagnosticsTests',
       'test_server',
       'test_worker_isolation',
       'test_server_proxy',
