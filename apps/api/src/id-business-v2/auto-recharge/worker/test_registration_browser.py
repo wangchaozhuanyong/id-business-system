@@ -647,6 +647,75 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.browser.close()
         await self.driver.stop()
 
+    async def registration_code_fixture(self, *, delay=0, navigate=True):
+        html = '''<!doctype html><html><body><form aria-busy="false">
+        <input name="code" autocomplete="one-time-code"><button>Continue</button></form><script>
+        document.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();const form=event.target;form.setAttribute('aria-busy','true');
+          await fetch('/fixture/code',{method:'POST',body:JSON.stringify({code:form.querySelector('input').value})});
+          __AFTER_SUBMISSION__
+        }; </script></body></html>'''.replace('__AFTER_SUBMISSION__',
+            "window.location.assign('/welcome');" if navigate else
+            "form.setAttribute('aria-busy','false');form.insertAdjacentHTML('beforeend','<p role=alert>Invalid code</p>');")
+        async def local(route):
+            self.navigation_methods.append(route.request.method)
+            path = urlsplit(route.request.url).path
+            if path == '/fixture/code':
+                self.submissions.append(json.loads(route.request.post_data))
+                await asyncio.sleep(delay)
+                await route.fulfill(content_type='application/json', body='{}')
+            elif path == '/welcome':
+                await route.fulfill(content_type='text/html', body='<main>Welcome</main>')
+            else:
+                await route.fulfill(content_type='text/html', body=html)
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/email-verification', wait_until='domcontentloaded')
+        def prepare_mail(step, *, new_request=False):
+            self.job.awaiting_code = True
+        async def wait_code():
+            self.job.awaiting_code = False
+            return '123456'
+        self.job.prepare_mail = MagicMock(side_effect=prepare_mail)
+        self.job.wait_code = AsyncMock(side_effect=wait_code)
+
+    async def test_registration_code_navigation_after_three_seconds_does_not_pause_or_resubmit(self):
+        await self.registration_code_fixture(delay=7)
+        self.flow.settle = RegistrationBrowser.settle.__get__(self.flow)
+        async def identity(page, email, **_kwargs):
+            return ('fixture', 'identity') if urlsplit(page.url).path == '/welcome' else None
+        with patch('registration_browser.official_identity', identity):
+            await self.flow.register()
+        self.assertTrue(self.flow.data['registered'])
+        self.assertEqual(self.submissions, [{'code': '123456'}])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        self.job.prepare_mail.assert_called_once_with('email_code')
+        self.job.wait_code.assert_awaited_once()
+        self.job.manual.assert_not_awaited()
+        self.assertFalse(self.flow.registration_refreshed)
+        self.assertEqual(self.page_errors, [])
+
+    async def test_registration_code_stays_after_submission_pauses_only_after_budget(self):
+        await self.registration_code_fixture(navigate=False)
+        observed_code_after_submit = []
+        original_view = self.flow.registration_view
+        async def view():
+            result = await original_view()
+            if self.submissions and result[0] == 'code':
+                observed_code_after_submit.append(result[0])
+            return result
+        self.flow.registration_view = view
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop) as stopped:
+                await self.flow.register()
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+        self.assertGreater(len(observed_code_after_submit), 1)
+        self.assertEqual(self.submissions, [{'code': '123456'}])
+        self.job.prepare_mail.assert_called_once_with('email_code')
+        self.job.wait_code.assert_awaited_once()
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertFalse(self.flow.registration_refreshed)
+        self.assertEqual(self.page_errors, [])
+
     async def observation_fixture(self, mode):
         from browser_session import SessionBudget
         self.session_reads = 0

@@ -277,6 +277,11 @@ class RegistrationBrowser:
                 continue
             if view == 'code':
                 if code_submitted:
+                    # The old input may remain while the accepted code navigates.
+                    # Observe within the existing budget without submitting again.
+                    if time.monotonic() < observation_deadline:
+                        await self.settle(.5)
+                        continue
                     await self.manual_registration('form_unrecognized')
                     code_submitted = False
                 else:
