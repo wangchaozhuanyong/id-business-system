@@ -396,5 +396,43 @@ class HistoricalReceiptRetentionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'financial audit'):
                 cache.verify_deployment(manifest, 'github-actions-123-1')
 
+class HistoricalContinuationRetentionTests(unittest.TestCase):
+    def manifest(self):
+        policy = json.loads((DIRECTORY.parent.parent / 'deploy/aws/' /
+            (cache.HISTORY_CONTINUATION_POLICY_ID + '.json')).read_text())
+        gate = {'accepted': True, 'status': 'APPROVED_HISTORICAL_EXCEPTIONS',
+            'policyId': policy['id'], 'expectedCurrent': policy['expectedCurrent'],
+            'fixedCurrent': policy['expectedCurrent'], 'continuationOf': 'historical-finance-20261005',
+            'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 10,
+            'metadataSha256': policy['continuation']['metadataSha256'],
+            'sources': {name: group['sha256'] for name, group in policy['sources'].items()},
+            'continuation': policy['continuation']}
+        return {'previousCommit': cache.HISTORY_CONTINUATION_BASELINE, 'deploymentRun': 'github-actions-123-1',
+            **{'dataAudit' + stage.title(): {'checkCount': 48, 'violationCount': 10,
+                'historicalException': {**gate, 'stage': stage}} for stage in ('before', 'after')}}
+
+    def test_only_the_fixed_original_exception_provenance_allows_post_release_cleanup(self):
+        cache.verify_deployment(self.manifest(), 'github-actions-123-1')
+
+    def test_partial_execution_or_same_new_source_fingerprints_and_metadata_are_rejected(self):
+        import copy
+        mutations = [lambda x: x.update(previousCommit='f' * 40),
+            lambda x: x['dataAuditBefore']['historicalException'].update(executedCheckCount=46),
+            lambda x: x['dataAuditBefore']['historicalException'].update(unavailableCheckCount=2),
+            lambda x: x['dataAuditBefore']['historicalException'].update(status='UNKNOWN'),
+            lambda x: x['dataAuditAfter']['historicalException'].update(continuationOf='other'),
+            lambda x: x['dataAuditAfter']['historicalException']['continuation'].update(manifestSha256='f' * 64)]
+        for stage in ('before', 'after'):
+            mutations.extend([
+                lambda x, stage=stage: x['dataAudit' + stage.title()]['historicalException'].update(
+                    sources={'accounts':'f' * 64}),
+                lambda x, stage=stage: x['dataAudit' + stage.title()]['historicalException'].update(
+                    metadataSha256='f' * 64)])
+        for index, mutate in enumerate(mutations):
+            manifest = copy.deepcopy(self.manifest()); mutate(manifest)
+            with self.subTest(index=index), self.assertRaisesRegex(RuntimeError, 'financial audit'):
+                cache.verify_deployment(manifest, 'github-actions-123-1')
+
+
 if __name__ == '__main__':
     unittest.main()

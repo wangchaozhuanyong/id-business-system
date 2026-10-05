@@ -6,13 +6,21 @@ import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
 export const auditRetentionMigration =
   'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
+export const historicalReleaseControlPaths = Object.freeze([
+  'deploy/aws/historical-finance-20261005-registration-continuation.json',
+  'scripts/lib/v2-release-history-policy.mjs',
+  'scripts/v2-release-history-audit.mjs',
+  'scripts/v2-release-history-policy.test.mjs'
+]);
 export function isCiOnly(paths) {
   return (
     paths.length > 0 &&
-    paths.every((p) =>
-      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
-        p
-      )
+    paths.every(
+      (p) =>
+        historicalReleaseControlPaths.includes(p) ||
+        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+          p
+        )
     )
   );
 }
@@ -139,7 +147,16 @@ const allowed =
 export function isRechargeOnly(paths, oldSchema, newSchema) {
   if (!paths.length || !paths.some((p) => p.includes('auto-recharge') || p === migration))
     return false;
-  if (!paths.every((p) => allowed.test(p) || p === schema || p === migration)) return false;
+  if (
+    !paths.every(
+      (p) =>
+        allowed.test(p) ||
+        historicalReleaseControlPaths.includes(p) ||
+        p === schema ||
+        p === migration
+    )
+  )
+    return false;
   if (!paths.includes(schema)) return true;
   const model = /model IdBusinessV2RechargeBrowserSetting \{[^}]*\}\s*/;
   return (
@@ -158,7 +175,9 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   return (
     isRechargeOnly(paths, oldSchema, newSchema) ||
     (paths.some((p) => securityPaths.test(p)) &&
-      paths.every((p) => allowed.test(p) || securityPaths.test(p)))
+      paths.every(
+        (p) => allowed.test(p) || historicalReleaseControlPaths.includes(p) || securityPaths.test(p)
+      ))
   );
 }
 export function selectedParts(paths) {

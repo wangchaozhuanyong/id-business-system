@@ -16,6 +16,10 @@ TAG = re.compile(r'[0-9a-f]{40}-[1-9][0-9]*-[1-9][0-9]*-(?:admin|api|migrate|med
 LEGACY_POLICY = 'reviewed-obsolete-project-cache-20261003'
 LEGACY_PLAN_SHA256 = '0596af43c4fbf904c3b784ebadb2f444aee3747dc6d8d38a6f9f09a845c6e1c9'
 BUILDER_POLICY = 'unused-builder-cache-20261003'
+HISTORY_CONTINUATION_POLICY_ID = 'historical-finance-20261005-registration-continuation'
+HISTORY_CONTINUATION_BASELINE = 'd0f359dc78b2d2b166893bfec8545609f5baa16d'
+CONTINUATION_PROOF_SHA256 = '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768cab8945cb21ba'
+CONTINUATION_SOURCES_SHA256 = 'db943f1852946a475b43940cd6db62abcc4e78b7a8345f141633106a1399d884'
 
 
 def require(condition, reason):
@@ -112,7 +116,26 @@ def verify_deployment(manifest, deployment_run):
         and before.get('metadataSha256') == after.get('metadataSha256')
         and re.fullmatch(r'[a-f0-9]{64}', after.get('metadataSha256', '')) is not None
     )
-    require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0 or historical_ok,
+    continuation_ok = manifest.get('previousCommit') == HISTORY_CONTINUATION_BASELINE
+    for stage, gate in (('before', before), ('after', after)):
+        summary = manifest.get('dataAudit' + stage.title(), {})
+        continuation_ok = continuation_ok and (
+            gate.get('accepted') is True and gate.get('policyId') == HISTORY_CONTINUATION_POLICY_ID
+            and gate.get('status') == 'APPROVED_HISTORICAL_EXCEPTIONS'
+            and gate.get('expectedCurrent') == gate.get('fixedCurrent') == HISTORY_CONTINUATION_BASELINE
+            and gate.get('continuationOf') == 'historical-finance-20261005'
+            and gate.get('stage') == stage
+            and summary.get('checkCount') == gate.get('checkCount') == gate.get('executedCheckCount') == 48
+            and gate.get('unavailableCheckCount') == 0
+            and summary.get('violationCount') == gate.get('violationCount') == 10
+            and hashlib.sha256(json.dumps(gate.get('continuation'), sort_keys=True,
+                separators=(',', ':')).encode()).hexdigest() == CONTINUATION_PROOF_SHA256
+            and hashlib.sha256(json.dumps(gate.get('sources'), sort_keys=True,
+                separators=(',', ':')).encode()).hexdigest() == CONTINUATION_SOURCES_SHA256
+            and gate.get('metadataSha256') == gate.get('continuation', {}).get('metadataSha256')
+        )
+    require(manifest.get('dataAuditAfter', {}).get('violationCount') == 0
+            or historical_ok or continuation_ok,
             'Post-release financial audit is missing or failed')
 
 

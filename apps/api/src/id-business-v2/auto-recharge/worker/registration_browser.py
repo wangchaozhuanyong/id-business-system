@@ -287,6 +287,9 @@ class RegistrationBrowser:
                 else:
                     if not self.job.awaiting_code:
                         self.job.prepare_mail('email_code')
+                    else:
+                        # Manual resume reports progress; rearm delivery without clearing a queued code.
+                        self.job.event('waiting_email', step='email_code', newMailRequest=False)
                     code_submitted = True
                     await self.end_recovery()
                     await self.mail(self.page)

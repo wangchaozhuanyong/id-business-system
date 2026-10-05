@@ -25,10 +25,14 @@ admin_only = os.environ.get('RELEASE_ADMIN_ONLY', 'false')
 assert admin_only in ('true', 'false')
 scope_flag = ' --admin-only' if admin_only == 'true' else ''
 history_policy = os.environ.get('HISTORICAL_EXCEPTION', 'none')
-assert history_policy in ('none', 'historical-finance-20261005')
-if history_policy != 'none':
+assert history_policy in ('none', 'historical-finance-20261005',
+                         'historical-finance-20261005-registration-continuation')
+if history_policy == 'historical-finance-20261005':
     assert previous == 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
     scope_flag += ' --historical-finance-exception'
+elif history_policy == 'historical-finance-20261005-registration-continuation':
+    assert previous == 'd0f359dc78b2d2b166893bfec8545609f5baa16d'
+    scope_flag += ' --historical-finance-continuation'
 image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)
 image_run = os.environ.get('REUSE_IMAGE_RUN_ID', run_id)
 image_attempt = os.environ.get('REUSE_IMAGE_RUN_ATTEMPT', attempt)

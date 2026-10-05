@@ -33,6 +33,44 @@ test('documentation and CI selectors do not start business or database checks', 
   ])
     assert.equal(checkMode([path], schema, schema), 'full');
 });
+test('historical continuation controls use only the four exact reviewed paths', () => {
+  const controls = [
+    'deploy/aws/historical-finance-20261005-registration-continuation.json',
+    'scripts/lib/v2-release-history-policy.mjs',
+    'scripts/v2-release-history-audit.mjs',
+    'scripts/v2-release-history-policy.test.mjs'
+  ];
+  for (const path of controls) {
+    assert.equal(isCiOnly([path]), true, path);
+    assert.equal(checkMode([path], schema, schema), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+  }
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py';
+  assert.equal(checkMode([...controls, worker], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, worker]), ['guards', 'connector']);
+  const security = 'apps/api/src/auth/auth.service.ts';
+  assert.equal(checkMode([...controls, security], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, security]), ['guards', 'api', 'security']);
+  const admin = 'apps/admin/src/v2/features/orders/Orders.vue';
+  assert.equal(checkMode([...controls, admin], schema, schema), 'admin');
+  assert.deepEqual(selectedParts([...controls, admin]), ['guards', 'admin']);
+  for (const path of [
+    'deploy/aws/historical-finance-20261005.json',
+    'deploy/aws/historical-finance-unreviewed.json',
+    'deploy/aws/historical-finance-20261005-registration-continuation-other.json',
+    'deploy/aws/historical-finance-20261005-registration-continuation.json.backup',
+    'scripts/lib/v2-release-history-policy-other.mjs',
+    'scripts/v2-release-history-audit-other.mjs',
+    'scripts/v2-release-history-policy-other.test.mjs',
+    'scripts/lib/v2-data-integrity-audit.mjs'
+  ]) {
+    assert.equal(isCiOnly([path]), false, path);
+    assert.equal(checkMode([path], schema, schema), 'full', path);
+    assert.equal(checkMode([...controls, worker, path], schema, schema), 'full', path);
+    assert.equal(checkMode([...controls, security, path], schema, schema), 'full', path);
+  }
+});
 test('approved audit trigger migration runs isolated MySQL guards without hiding other changes', () => {
   const migration =
     'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';

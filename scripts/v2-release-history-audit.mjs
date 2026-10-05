@@ -55,6 +55,7 @@ try {
             /Unknown column '([a-zA-Z0-9_.]+)'/i
           )?.[1];
           if (
+            policy.continuation ||
             args.stage !== 'before' ||
             databaseCode !== '1054' ||
             field !== 'o.deleted_at' ||

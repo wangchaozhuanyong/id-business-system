@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 
 export const HISTORY_POLICY_ID = 'historical-finance-20261005';
 export const HISTORY_BASELINE = 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22';
+export const HISTORY_CONTINUATION_POLICY_ID =
+  'historical-finance-20261005-registration-continuation';
+export const HISTORY_CONTINUATION_BASELINE = 'd0f359dc78b2d2b166893bfec8545609f5baa16d';
 const policySha256 = '58be04eac7b385fdcd7386746358e1c02ff2b925a92b635cf6afe588495fd4ca';
+const continuationPolicySha256 = '7407cc7c5676657b3f24b6e5649f1316cd3c64adb5aeb8f47006cfda58124137';
 const allowedRules = new Set([
   'finance_cash_source_currency_mismatch',
   'cash_historical_cost_evidence_mismatch'
@@ -37,18 +41,33 @@ export function serializeHistoricalAuditReport(report) {
 }
 
 export function validateHistoryPolicy(policy, definitions, expectedCurrent) {
+  const continuation = policy?.id === HISTORY_CONTINUATION_POLICY_ID;
+  const baseline = continuation ? HISTORY_CONTINUATION_BASELINE : HISTORY_BASELINE;
   if (
-    fingerprint(policy) !== policySha256 ||
-    policy?.id !== HISTORY_POLICY_ID ||
+    fingerprint(policy) !== (continuation ? continuationPolicySha256 : policySha256) ||
+    policy?.id !== (continuation ? HISTORY_CONTINUATION_POLICY_ID : HISTORY_POLICY_ID) ||
     policy.version !== 1 ||
-    policy.expectedCurrent !== HISTORY_BASELINE ||
-    expectedCurrent !== HISTORY_BASELINE ||
+    policy.expectedCurrent !== baseline ||
+    expectedCurrent !== baseline ||
     policy.userApproved !== true ||
     policy.checkCount !== 48 ||
     definitions.length !== 48 ||
     policy.rulesSha256 !== fingerprint(definitions)
   )
     throw new Error('Historical release policy identity, baseline or rules changed');
+  if (continuation) {
+    const original = { ...policy, id: HISTORY_POLICY_ID, expectedCurrent: HISTORY_BASELINE };
+    delete original.continuation;
+    delete original.candidateSourceSha256;
+    if (
+      fingerprint(original) !== policySha256 ||
+      policy.continuation.continuationOf !== HISTORY_POLICY_ID ||
+      policy.continuation.originPolicySha256 !== policySha256 ||
+      policy.continuation.fixedCurrent !== baseline ||
+      policy.continuation.manifest.commit !== baseline
+    )
+      throw new Error('Historical continuation changed the original approved scope');
+  }
   const codes = new Set(policy.exceptions.map((item) => item.code));
   if (codes.size !== 2 || [...codes].some((code) => !allowedRules.has(code)))
     throw new Error('Historical release exception scope changed');
@@ -81,6 +100,7 @@ export function acceptHistoricalAudit({
   identity
 }) {
   validateHistoryPolicy(policy, definitions, expectedCurrent);
+  const continuation = policy.id === HISTORY_CONTINUATION_POLICY_ID;
   if (
     !['before', 'after'].includes(stage) ||
     !/^id_business_audit@/.test(identity.currentUser) ||
@@ -99,6 +119,8 @@ export function acceptHistoricalAudit({
     policy.exceptions.map((item) => [item.code, [...item.entityIds].sort()])
   );
   for (const check of checks) {
+    if (continuation && check.status !== 'EXECUTED')
+      throw new Error('Historical continuation requires all rules to execute');
     if (check.status === 'SCHEMA_NOT_DEPLOYED') {
       if (
         stage !== 'before' ||
@@ -131,6 +153,8 @@ export function acceptHistoricalAudit({
   )
     throw new Error('Historical journal metadata coverage changed');
   const metadataSha256 = fingerprintRows(metadata);
+  if (continuation && metadataSha256 !== policy.continuation.metadataSha256)
+    throw new Error('Historical metadata changed since the approved release');
   if (
     stage === 'after' &&
     (before?.gate?.policyId !== policy.id ||
@@ -138,7 +162,16 @@ export function acceptHistoricalAudit({
       before.gate.stage !== 'before' ||
       before.gate.accepted !== true ||
       before.gate.metadataSha256 !== metadataSha256 ||
-      JSON.stringify(before.gate.sources) !== JSON.stringify(sources))
+      JSON.stringify(before.gate.sources) !== JSON.stringify(sources) ||
+      (continuation &&
+        (before.gate.checkCount !== 48 ||
+          before.gate.executedCheckCount !== 48 ||
+          before.gate.unavailableCheckCount !== 0 ||
+          before.gate.violationCount !== 10 ||
+          before.gate.status !== 'APPROVED_HISTORICAL_EXCEPTIONS' ||
+          before.gate.continuationOf !== HISTORY_POLICY_ID ||
+          before.gate.fixedCurrent !== expectedCurrent ||
+          fingerprint(before.gate.continuation) !== fingerprint(policy.continuation))))
   )
     throw new Error('Historical source or metadata changed during release');
   return {
@@ -152,7 +185,14 @@ export function acceptHistoricalAudit({
     executedCheckCount: checks.filter((item) => item.status !== 'SCHEMA_NOT_DEPLOYED').length,
     unavailableCheckCount: checks.filter((item) => item.status === 'SCHEMA_NOT_DEPLOYED').length,
     sources,
-    metadataSha256
+    metadataSha256,
+    ...(continuation
+      ? {
+          continuationOf: HISTORY_POLICY_ID,
+          fixedCurrent: expectedCurrent,
+          continuation: policy.continuation
+        }
+      : {})
   };
 }
 

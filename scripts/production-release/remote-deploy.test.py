@@ -512,6 +512,192 @@ class GoogleDriveReleaseConfigTests(unittest.TestCase):
 
 
 
+class HistoricalContinuationTests(unittest.TestCase):
+    def policy(self):
+        return json.loads((Path(__file__).resolve().parents[2] / 'deploy/aws' /
+            (deployment.HISTORY_CONTINUATION_POLICY_ID + '.json')).read_text())
+
+    def fixture(self, root):
+        policy = self.policy(); proof = policy['continuation']
+        sources = {name: group['sha256'] for name, group in policy['sources'].items()}
+        reports = {}
+        for stage in ('before', 'after'):
+            gate = {'accepted': True, 'status': 'APPROVED_HISTORICAL_EXCEPTIONS',
+                'policyId': deployment.HISTORY_POLICY_ID, 'expectedCurrent': deployment.HISTORY_BASELINE,
+                'stage': stage, 'checkCount': 48, 'violationCount': 10,
+                'executedCheckCount': 48, 'unavailableCheckCount': 0, 'sources': sources,
+                'metadataSha256': proof['metadataSha256']}
+            self.assertEqual(deployment.historical_fingerprint(gate), proof[stage + 'GateSha256'])
+            reports[stage] = {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': gate}
+        manifest = {**proof['manifest'], **{
+            'dataAudit' + stage.title(): {'checkCount': 48, 'violationCount': 10,
+                'historicalException': report['gate']} for stage, report in reports.items()}}
+        values = {'release-manifest.json': manifest,
+                  **{stage + '-audit.json': report for stage, report in reports.items()}}
+        self.save_fixture(root, policy, values)
+        return policy, values
+
+    def save_fixture(self, root, policy, values):
+        # Synthetic private files exercise the verifier; real policy identity is tested separately.
+        for name, value in values.items():
+            data = json.dumps(value).encode(); path = root / name
+            path.write_bytes(data); path.chmod(0o600)
+            key = {'release-manifest.json': 'manifestSha256',
+                   'before-audit.json': 'beforeReceiptSha256',
+                   'after-audit.json': 'afterReceiptSha256'}[name]
+            policy['continuation'][key] = deployment.hashlib.sha256(data).hexdigest()
+
+    def test_only_original_or_one_fixed_continuation_baseline_is_allowed(self):
+        deployment.require_historical_baseline(deployment.HISTORY_POLICY_ID, deployment.HISTORY_BASELINE)
+        deployment.require_historical_baseline(deployment.HISTORY_CONTINUATION_POLICY_ID,
+                                               deployment.HISTORY_CONTINUATION_BASELINE)
+        for policy, baseline in [(deployment.HISTORY_POLICY_ID, deployment.HISTORY_CONTINUATION_BASELINE),
+                (deployment.HISTORY_CONTINUATION_POLICY_ID, deployment.HISTORY_BASELINE),
+                (deployment.HISTORY_CONTINUATION_POLICY_ID, 'f' * 40), ('unknown', 'f' * 40)]:
+            with self.subTest(policy=policy), self.assertRaises(RuntimeError):
+                deployment.require_historical_baseline(policy, baseline)
+
+    def test_continuation_policy_requires_the_pinned_complete_identity(self):
+        source = Path(__file__).resolve().parents[2]
+        deployment.continuation_policy(source)
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); (root / 'deploy/aws').mkdir(parents=True)
+            policy = self.policy(); policy['expectedCurrent'] = 'f' * 40
+            (root / 'deploy/aws' / (deployment.HISTORY_CONTINUATION_POLICY_ID + '.json')).write_text(
+                json.dumps(policy))
+            with self.assertRaisesRegex(RuntimeError, 'policy changed'):
+                deployment.continuation_policy(root)
+
+    def test_successful_original_private_manifest_and_both_receipts_are_required(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); policy, values = self.fixture(root)
+            self.assertEqual(deployment.verify_continuation_baseline(root, policy), values['release-manifest.json'])
+            for filename in values:
+                path = root / filename; original = path.read_bytes()
+                path.write_bytes(original + b' ')
+                with self.subTest(filename=filename), self.assertRaisesRegex(RuntimeError, 'receipt changed'):
+                    deployment.verify_continuation_baseline(root, policy)
+                path.write_bytes(original)
+            (root / 'after-audit.json').unlink()
+            with self.assertRaisesRegex(RuntimeError, 'receipt unavailable'):
+                deployment.verify_continuation_baseline(root, policy)
+
+    def test_same_count_but_forged_successful_origin_gate_or_metadata_is_rejected(self):
+        mutations = [
+            lambda x: x['release-manifest.json'].update(commit='f' * 40),
+            lambda x: x['release-manifest.json'].update(sourceTree='f' * 40),
+            lambda x: x['before-audit.json']['gate'].update(executedCheckCount=46, unavailableCheckCount=2),
+            lambda x: x['after-audit.json']['gate'].update(metadataSha256='f' * 64),
+            lambda x: x['after-audit.json']['gate'].update(sources={'unknown': 'f' * 64}),
+            lambda x: x['after-audit.json']['gate'].update(accepted=False),
+            lambda x: x['release-manifest.json']['dataAuditAfter'].update(violationCount=0),
+        ]
+        for index, mutate in enumerate(mutations):
+            with tempfile.TemporaryDirectory(dir='.deploy') as name:
+                root = Path(name); policy, values = self.fixture(root)
+                mutate(values); self.save_fixture(root, policy, values)
+                with self.subTest(index=index), self.assertRaises(RuntimeError):
+                    deployment.verify_continuation_baseline(root, policy)
+
+    def test_receipts_cannot_be_public_symlinks_or_hardlinks(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); path = root / 'private.json'; path.write_text('{}'); path.chmod(0o600)
+            link = root / 'link.json'; link.symlink_to(path.name)
+            hard = root / 'hard.json'; deployment.os.link(path, hard)
+            for candidate in (link, hard):
+                with self.subTest(candidate=candidate.name), self.assertRaises(RuntimeError):
+                    deployment.private_historical_receipt(candidate)
+            hard.unlink(); path.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'not private'):
+                deployment.private_historical_receipt(path)
+
+    def test_running_services_must_match_the_frozen_manifest_images(self):
+        states = {service: {'image': 'sha256:' + service} for service in deployment.SERVICES}
+        manifest = {'images': {service: {'digest': state['image']} for service, state in states.items()}}
+        deployment.verify_continuation_running_images(states, manifest)
+        states['auto-registration']['image'] = 'sha256:other'
+        with self.assertRaisesRegex(RuntimeError, 'running image changed'):
+            deployment.verify_continuation_running_images(states, manifest)
+
+    def audit_report(self, stage):
+        policy = self.policy()
+        return {'ok': False, 'checkCount': 48, 'violationCount': 10, 'gate': {
+            'accepted': True, 'status': 'APPROVED_HISTORICAL_EXCEPTIONS',
+            'policyId': policy['id'], 'expectedCurrent': policy['expectedCurrent'],
+            'fixedCurrent': policy['expectedCurrent'], 'continuationOf': deployment.HISTORY_POLICY_ID,
+            'stage': stage, 'checkCount': 48, 'violationCount': 10, 'executedCheckCount': 48,
+            'unavailableCheckCount': 0, 'sources': {
+                name: group['sha256'] for name, group in policy['sources'].items()},
+            'metadataSha256': policy['continuation']['metadataSha256'],
+            'continuation': policy['continuation']}}
+
+    def audit(self, report, stage):
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); before = root / 'before.json'; before.write_text('{}'); before.chmod(0o600)
+            source = Path(__file__).resolve().parents[2]
+            with patch.object(deployment, 'environment_values', return_value={
+                    'V2_DATA_INTEGRITY_DATABASE_URL': 'mysql://id_business_audit:synthetic@localhost/test'}), \
+                    patch.object(deployment.os, 'fchown'), \
+                    patch.object(deployment, 'compose', side_effect=lambda directory, *args, **kwargs:
+                        json.dumps({'uid':1000,'gid':1000,'user':'node'} if '--entrypoint' in args else report)) as compose:
+                result = deployment.audit(root, root / 'receipt.json', historical_continuation=True,
+                    stage=stage, source=source, before_receipt=before)
+                return result, compose.call_args.args
+
+    def test_new_audit_mounts_exact_continuation_and_reports_original_exception_source(self):
+        for stage in ('before', 'after'):
+            result, command = self.audit(self.audit_report(stage), stage)
+            self.assertEqual(result['violationCount'], 10)
+            self.assertEqual(result['historicalException']['continuationOf'], deployment.HISTORY_POLICY_ID)
+            self.assertIn('--expected-current=' + deployment.HISTORY_CONTINUATION_BASELINE, command)
+            self.assertIn('--policy=/release-policy/' + deployment.HISTORY_CONTINUATION_POLICY_ID + '.json', command)
+            self.assertNotIn('--user', command)
+            self.assertTrue(all(command[index + 1].endswith(':ro')
+                for index, part in enumerate(command) if part == '-v'))
+
+    def test_new_audit_rejects_incomplete_stable_but_changed_or_false_zero_receipts(self):
+        mutations = [lambda x: x.update(ok=True), lambda x: x.update(checkCount=46),
+            lambda x: x['gate'].update(executedCheckCount=46),
+            lambda x: x['gate'].update(unavailableCheckCount=2),
+            lambda x: x['gate'].update(metadataSha256='f' * 64),
+            lambda x: x['gate'].update(sources={'unknown':'f' * 64}),
+            lambda x: x['gate'].update(continuationOf='other'),
+            lambda x: x['gate'].update(fixedCurrent='f' * 40),
+            lambda x: x['gate']['continuation'].update(manifestSha256='f' * 64)]
+        for stage in ('before', 'after'):
+            for index, mutate in enumerate(mutations):
+                report = self.audit_report(stage); mutate(report)
+                with self.subTest(stage=stage, index=index), self.assertRaises(RuntimeError):
+                    self.audit(report, stage)
+
+    def test_candidate_allows_only_the_frozen_registration_files_and_named_controls(self):
+        policy = self.policy()
+        with tempfile.TemporaryDirectory(dir='.deploy') as name:
+            root = Path(name); (root / 'apps/api').mkdir(parents=True)
+            (root / 'apps/api/unrelated.ts').write_text('unchanged')
+            for filename in policy['candidateSourceSha256']:
+                path = root / filename; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('fixture-only:' + filename)
+                policy['candidateSourceSha256'][filename] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+            control = root / 'scripts/production-release/remote-deploy.py'
+            control.parent.mkdir(parents=True); control.write_text('fixture control')
+            content = b'unchanged'; data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w') as archive:
+                item = tarfile.TarInfo(f'id-business-system-{deployment.HISTORY_CONTINUATION_BASELINE}/apps/api/unrelated.ts')
+                item.size = len(content); item.mode = 0o644; archive.addfile(item, io.BytesIO(content))
+            def verify():
+                with tarfile.open(fileobj=io.BytesIO(data.getvalue()), mode='r') as archive:
+                    deployment.verify_continuation_archive(root, archive, policy)
+            verify()
+            (root / 'apps/api/unrelated.ts').write_text('changed')
+            with self.assertRaisesRegex(RuntimeError, 'unrelated source'):
+                verify()
+            (root / 'apps/api/unrelated.ts').write_text('unchanged')
+            (root / next(iter(policy['candidateSourceSha256']))).write_text('unfrozen registration')
+            with self.assertRaisesRegex(RuntimeError, 'registration source changed'):
+                verify()
+
+
 class HistoricalAuditTests(unittest.TestCase):
     reader_identity = {'uid': 1000, 'gid': 1000, 'user': 'node'}
 
