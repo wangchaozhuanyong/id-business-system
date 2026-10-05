@@ -357,7 +357,7 @@ jobs:
                       if (not waiting and (int(major, 16), int(minor, 16), int(inode))
                               == (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino)):
                           pid = int(fields[4])
-                          if pid <= 0 and not (fields[1] == 'OFDLCK' and pid == -1):
+                          if (pid > 2 ** 31 - 1 or pid <= 0 and not (fields[1] == 'OFDLCK' and pid == -1)):
                               raise ValueError()
                           entries.append((fields[1], fields[3], pid))
                   if len(entries) > 16:
@@ -370,13 +370,14 @@ jobs:
                   fields = tail.split()
                   if (not head.startswith(prefix) or len(fields) < 20
                           or fields[0] not in ('R', 'S', 'D', 'Z', 'T', 't', 'W', 'X', 'x', 'I', 'K', 'P')
-                          or not fields[19].isdigit()):
+                          or not fields[19].isdigit() or not fields[1].isdigit()
+                          or int(fields[1]) > 2 ** 31 - 1):
                       raise ValueError()
                   comm = head[len(prefix):]
                   if not (re.fullmatch(r'python(?:3(?:\.[0-9]{1,2})?)?', comm)
                           or comm in ('bash', 'sh', 'flock', 'node', 'ssm-agent-worke', 'amazon-ssm-agen')):
                       comm = 'OTHER'
-                  return comm, fields[0], int(fields[19])
+                  return comm, fields[0], int(fields[19]), int(fields[1])
               def invocation(pid):
                   # Stop at the second NUL; never read inline source or later arguments.
                   with os.fdopen(os.open(proc / str(pid) / 'cmdline', flags), 'rb') as source:
@@ -396,11 +397,28 @@ jobs:
                   if re.fullmatch(rb'(?:/usr/(?:local/)?bin/)?python3(?:\.[0-9]{1,2})?', first):
                       if second == b'-c':
                           return 'PYTHON_INLINE'
+                      if second == b'-':
+                          return 'PYTHON_STDIN'
                       if re.fullmatch(rb'/opt/id-business-v2/\.staging/oidc-[a-f0-9]{40}/remote-deploy\.py', second):
                           return 'REMOTE_DEPLOY'
                   if second == b'-c' and first in (b'sh', b'bash', b'/bin/sh', b'/bin/bash'):
                       return 'SHELL_INLINE'
                   return 'UNKNOWN'
+              def location(pid):
+                  try:
+                      cwd = os.readlink(proc / str(pid) / 'cwd')
+                      if len(cwd) > 4096:
+                          raise ValueError()
+                      ssm = re.fullmatch(r'/var/lib/amazon/ssm/i-[0-9a-f]{8,17}/document/orchestration/'
+                          r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/'
+                          r'awsrunShellScript/0\.awsrunShellScript', cwd)
+                      if ssm:
+                          return 'SSM_ORCHESTRATION', ssm.group(1)
+                      if cwd == '/opt/id-business-v2' or cwd.startswith('/opt/id-business-v2/'):
+                          return 'PROJECT', None
+                      return 'OTHER', None
+                  except Exception:
+                      return 'NOT_MEASURED', None
               try:
                   with os.fdopen(os.open(lock_path, flags), 'rb') as lock:
                       info = os.fstat(lock.fileno())
@@ -418,15 +436,29 @@ jobs:
                       for kind, mode, pid in entries:
                           holder = {'kind': kind, 'mode': mode, 'pid': pid if pid > 0 else None,
                               'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED', 'elapsedSeconds': None,
-                              'script': 'UNKNOWN'}
+                              'script': 'UNKNOWN', 'cwd': 'NOT_MEASURED', 'commandUuid': None,
+                              'parent': {'pid': None, 'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'}}
                           if pid > 0:
-                              comm, state, started = process(pid)
+                              comm, state, started, parent_pid = process(pid)
                               script = invocation(pid)
+                              cwd, command_uuid = location(pid)
+                              parent = {'pid': None, 'comm': 'NOT_MEASURED', 'state': 'NOT_MEASURED'}
+                              if parent_pid > 0:
+                                  try:
+                                      parent_comm, parent_state, parent_started, _parent = process(parent_pid)
+                                      if process(parent_pid)[::2] != (parent_comm, parent_started):
+                                          raise ValueError()
+                                      parent.update(pid=parent_pid, comm=parent_comm, state=parent_state)
+                                  except Exception:
+                                      pass
                               # Process age; /proc/locks has no acquisition timestamp.
                               elapsed = int(float(uptime) - started / ticks)
-                              if elapsed < 0 or elapsed > 2 ** 31 - 1 or process(pid)[::2] != (comm, started):
+                              final_comm, _state, final_started, final_parent_pid = process(pid)
+                              if (elapsed < 0 or elapsed > 2 ** 31 - 1
+                                      or (final_comm, final_started, final_parent_pid) != (comm, started, parent_pid)):
                                   raise ValueError()
-                              holder.update(comm=comm, state=state, elapsedSeconds=elapsed, script=script)
+                              holder.update(comm=comm, state=state, elapsedSeconds=elapsed, script=script,
+                                  cwd=cwd, commandUuid=command_uuid, parent=parent)
                           holders.append(holder)
                       if (snapshot(info) != entries or identity(os.fstat(lock.fileno())) != identity(info)
                               or identity(os.stat(lock_path, follow_symlinks=False)) != identity(info)):
@@ -512,6 +544,133 @@ jobs:
                   projection['dataAudit' + stage.title()] = {'checkCount': 48, 'executedCheckCount': 48,
                       'unavailableCheckCount': 0, 'violationCount': 10, 'historicalException': safe_gate}
               return projection
+          def fixed_proof_diagnostic(directory, observed_manifest, states):
+              def sha(value):
+                  return isinstance(value, str) and re.fullmatch(r'[a-f0-9]{40}', value) is not None
+              diagnostic = {'proofAccepted': False,
+                  'currentCommit': observed_manifest.get('commit') if isinstance(observed_manifest, dict)
+                      and sha(observed_manifest.get('commit')) else None,
+                  'provenanceMatched': None, 'services': {}, 'receipts': {}}
+              for service in PROOF_SERVICES:
+                  state = states.get(service, {}) if isinstance(states, dict) else {}
+                  if not isinstance(state, dict):
+                      state = {}
+                  image = state.get('image')
+                  diagnostic['services'][service] = {
+                      'image': image if isinstance(image, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image) else None,
+                      'status': state.get('status') if state.get('status') in
+                          ('running', 'created', 'exited', 'restarting', 'paused', 'dead', 'removing') else 'NOT_MEASURED',
+                      'health': state.get('health') if state.get('health') in
+                          ('healthy', 'unhealthy', 'starting') else 'NOT_MEASURED'}
+              def identity(info):
+                  return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                      info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+              def counters(value):
+                  return isinstance(value, dict) and all(type(value.get(key)) is int and value[key] == expected
+                      for key, expected in (('checkCount', 48), ('executedCheckCount', 48),
+                          ('unavailableCheckCount', 0), ('violationCount', 10)))
+              for name, hash_key in (('release-manifest.json', 'manifestSha256'),
+                      ('before-audit.json', 'beforeReceiptSha256'), ('after-audit.json', 'afterReceiptSha256')):
+                  path = directory / name
+                  row = {'fileStatus': 'NOT_MEASURED', 'readable': False, 'rawHashMatched': None,
+                      'gateHashMatched': None, 'countersMatched': None, 'actualSha256': None}
+                  diagnostic['receipts'][name] = row
+                  try:
+                      info = path.lstat()
+                      if stat.S_ISLNK(info.st_mode):
+                          row['fileStatus'] = 'SYMLINK'
+                      elif not stat.S_ISREG(info.st_mode):
+                          row['fileStatus'] = 'NOT_REGULAR'
+                      elif info.st_nlink != 1:
+                          row['fileStatus'] = 'HARDLINK'
+                      elif stat.S_IMODE(info.st_mode) not in (0o400, 0o600):
+                          row['fileStatus'] = 'UNSAFE_MODE'
+                      elif info.st_size > 8 * 1024 * 1024:
+                          row['fileStatus'] = 'OVERSIZED'
+                      else:
+                          try:
+                              raw = proof_private_bytes(path)
+                              if identity(path.lstat()) != identity(info):
+                                  row['fileStatus'] = 'CHANGED_DURING_READ'
+                                  continue
+                          except Exception:
+                              try:
+                                  if identity(path.lstat()) != identity(info):
+                                      row['fileStatus'] = 'CHANGED_DURING_READ'
+                              except FileNotFoundError:
+                                  row['fileStatus'] = 'CHANGED_DURING_READ'
+                              except Exception:
+                                  pass
+                              continue
+                          row.update(fileStatus='READABLE', readable=True,
+                              actualSha256=hashlib.sha256(raw).hexdigest(),
+                              rawHashMatched=hashlib.sha256(raw).hexdigest() == PROOF_RECEIPT[hash_key],
+                              gateHashMatched=False, countersMatched=False)
+                          try:
+                              value = json.loads(raw)
+                              if not isinstance(value, dict):
+                                  continue
+                              if name == 'release-manifest.json':
+                                  diagnostic['currentCommit'] = value.get('commit') if sha(value.get('commit')) else None
+                                  diagnostic['provenanceMatched'] = (value == observed_manifest
+                                      and all(type(value.get(key)) is type(expected) and value[key] == expected
+                                          for key, expected in PROOF_RECEIPT['manifest'].items()))
+                                  audits = [value.get('dataAudit' + stage.title(), {}) for stage, _hash in PROOF_GATE_HASHES]
+                                  row['gateHashMatched'] = all(isinstance(audit, dict)
+                                      and proof_fingerprint(audit.get('historicalException')) == expected_hash
+                                      for audit, (_stage, expected_hash) in zip(audits, PROOF_GATE_HASHES))
+                                  row['countersMatched'] = all(isinstance(audit, dict)
+                                      and type(audit.get('checkCount')) is int and audit['checkCount'] == 48
+                                      and type(audit.get('violationCount')) is int and audit['violationCount'] == 10
+                                      and counters(audit.get('historicalException')) for audit in audits)
+                              else:
+                                  stage = 'before' if name == 'before-audit.json' else 'after'
+                                  row['gateHashMatched'] = proof_fingerprint(value.get('gate')) == dict(PROOF_GATE_HASHES)[stage]
+                                  checks = value.get('checks')
+                                  row['countersMatched'] = (value.get('ok') is False
+                                      and type(value.get('checkCount')) is int and value['checkCount'] == 48
+                                      and type(value.get('violationCount')) is int and value['violationCount'] == 10
+                                      and counters(value.get('gate')) and isinstance(checks, list) and len(checks) == 48
+                                      and all(isinstance(check, dict) and check.get('status') == 'EXECUTED'
+                                          and isinstance(check.get('code'), str) and type(check.get('count')) is int
+                                          and check['count'] >= 0 for check in checks)
+                                      and len({check['code'] for check in checks}) == 48
+                                      and sum(check['count'] for check in checks) == 10)
+                          except Exception:
+                              pass
+                  except FileNotFoundError:
+                      row['fileStatus'] = 'MISSING'
+                  except Exception:
+                      pass
+              return diagnostic
+          def closed_fixed_proof_diagnostic(value):
+              if (not isinstance(value, dict) or set(value) != {'proofAccepted', 'currentCommit', 'provenanceMatched', 'services', 'receipts'}
+                      or value['proofAccepted'] is not False
+                      or not (value['currentCommit'] is None or isinstance(value['currentCommit'], str)
+                          and re.fullmatch(r'[a-f0-9]{40}', value['currentCommit']))
+                      or not (value['provenanceMatched'] is None or type(value['provenanceMatched']) is bool)
+                      or not isinstance(value['services'], dict) or set(value['services']) != set(PROOF_SERVICES)
+                      or not isinstance(value['receipts'], dict)
+                      or set(value['receipts']) != {'release-manifest.json', 'before-audit.json', 'after-audit.json'}):
+                  raise ValueError()
+              for state in value['services'].values():
+                  if (not isinstance(state, dict) or set(state) != {'image', 'status', 'health'}
+                          or not (state['image'] is None or isinstance(state['image'], str)
+                              and re.fullmatch(r'sha256:[a-f0-9]{64}', state['image']))
+                          or state['status'] not in ('running', 'created', 'exited', 'restarting', 'paused', 'dead', 'removing', 'NOT_MEASURED')
+                          or state['health'] not in ('healthy', 'unhealthy', 'starting', 'NOT_MEASURED')):
+                      raise ValueError()
+              for row in value['receipts'].values():
+                  if (not isinstance(row, dict) or set(row) != {'fileStatus', 'readable', 'rawHashMatched', 'gateHashMatched', 'countersMatched', 'actualSha256'}
+                          or row['fileStatus'] not in ('MISSING', 'SYMLINK', 'NOT_REGULAR', 'HARDLINK', 'UNSAFE_MODE',
+                              'OVERSIZED', 'CHANGED_DURING_READ', 'READABLE', 'NOT_MEASURED')
+                          or type(row['readable']) is not bool or row['readable'] != (row['fileStatus'] == 'READABLE')
+                          or any(item is not None and type(item) is not bool for item in
+                              (row['rawHashMatched'], row['gateHashMatched'], row['countersMatched']))
+                          or not (row['actualSha256'] is None or isinstance(row['actualSha256'], str)
+                              and re.fullmatch(r'[a-f0-9]{64}', row['actualSha256']))):
+                      raise ValueError()
+              return value
           def readonly_receipts(output, succeeded):
               unknown = {'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}
               try:
@@ -526,7 +685,8 @@ jobs:
                           or (bool(lock['holders']) != (lock['status'] == 'HELD'))):
                       raise ValueError()
                   for holder in lock['holders']:
-                      if (set(holder) != {'kind', 'mode', 'pid', 'comm', 'state', 'elapsedSeconds', 'script'}
+                      old_keys = {'kind', 'mode', 'pid', 'comm', 'state', 'elapsedSeconds', 'script'}
+                      if (set(holder) not in (old_keys, old_keys | {'cwd', 'commandUuid', 'parent'})
                               or holder['kind'] not in ('FLOCK', 'POSIX', 'OFDLCK')
                               or holder['mode'] not in ('READ', 'WRITE')
                               or not (holder['pid'] is None or type(holder['pid']) is int and holder['pid'] > 0)
@@ -536,8 +696,22 @@ jobs:
                               or holder['state'] not in ('R', 'S', 'D', 'Z', 'T', 't', 'W', 'X', 'x', 'I', 'K', 'P', 'NOT_MEASURED')
                               or not (holder['elapsedSeconds'] is None or type(holder['elapsedSeconds']) is int
                                   and 0 <= holder['elapsedSeconds'] <= 2 ** 31 - 1)
-                              or holder['script'] not in ('PYTHON_INLINE', 'SHELL_INLINE', 'REMOTE_DEPLOY', 'UNKNOWN')):
+                              or holder['script'] not in ('PYTHON_INLINE', 'PYTHON_STDIN', 'SHELL_INLINE', 'REMOTE_DEPLOY', 'UNKNOWN')):
                           raise ValueError()
+                      if 'cwd' in holder:
+                          parent = holder['parent']
+                          command = holder['commandUuid']
+                          if (holder['cwd'] not in ('SSM_ORCHESTRATION', 'PROJECT', 'OTHER', 'NOT_MEASURED')
+                                  or not (command is None or isinstance(command, str)
+                                      and re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', command))
+                                  or (command is not None) != (holder['cwd'] == 'SSM_ORCHESTRATION')
+                                  or not isinstance(parent, dict) or set(parent) != {'pid', 'comm', 'state'}
+                                  or not (parent['pid'] is None or type(parent['pid']) is int and 0 < parent['pid'] <= 2 ** 31 - 1)
+                                  or not (parent['comm'] in ('OTHER', 'NOT_MEASURED', 'bash', 'sh', 'flock', 'node',
+                                      'ssm-agent-worke', 'amazon-ssm-agen') or isinstance(parent['comm'], str)
+                                      and re.fullmatch(r'python(?:3(?:\.[0-9]{1,2})?)?', parent['comm']))
+                                  or parent['state'] not in ('R', 'S', 'D', 'Z', 'T', 't', 'W', 'X', 'x', 'I', 'K', 'P', 'NOT_MEASURED')):
+                              raise ValueError()
               except Exception:
                   first = unknown
               if not succeeded:
@@ -546,6 +720,10 @@ jobs:
                       failure = json.loads(lines[1])
                       if set(failure) == {'readOnlyFailure'} and failure['readOnlyFailure'] in PROOF_FAILURES:
                           receipts.append(failure)
+                          if failure['readOnlyFailure'] in ('FIXED_PROOF_UNAVAILABLE', 'DOCKER_DIAGNOSTIC_FAILED'):
+                              details = json.loads(lines[2])
+                              if isinstance(details, dict) and set(details) == {'fixedProofDiagnostic'}:
+                                  receipts.append({'fixedProofDiagnostic': closed_fixed_proof_diagnostic(details['fixedProofDiagnostic'])})
                   except Exception:
                       pass
                   return receipts
@@ -690,8 +868,11 @@ jobs:
                           raise ValueError()
                       states[service] = dict(zip(('image', 'status', 'health'), fields))
                   proof = fixed_release_proof(base / 'current', manifest, states)
-              except Exception:
-                  print(json.dumps({'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'}), flush=True)
+              except Exception as error:
+                  if not (isinstance(error, RuntimeError) and error.args == ('Read-only Docker diagnostic failed',)):
+                      print(json.dumps({'readOnlyFailure': 'FIXED_PROOF_UNAVAILABLE'}), flush=True)
+                  print(json.dumps({'fixedProofDiagnostic': fixed_proof_diagnostic(base / 'current', manifest, states)},
+                      separators=(',', ':')), flush=True)
                   raise SystemExit('Read-only fixed release proof unavailable') from None
               print(json.dumps({'currentCommit': PROOF_CURRENT, 'safeProof': proof}, separators=(',', ':')))
               raise SystemExit(0)
@@ -798,7 +979,8 @@ jobs:
           parameters = {'commands': ['python3 -c ' + shlex.quote(program)], 'executionTimeout': ['120']}
           Path('.deploy/production-release/readonly-diagnostics.json').write_text(json.dumps(parameters))
           receivers = [node for node in ast.parse(program).body
-              if isinstance(node, ast.FunctionDef) and node.name in ('readonly_receipts', 'project_readonly_diagnostics')
+              if isinstance(node, ast.FunctionDef) and node.name in
+                  ('readonly_receipts', 'project_readonly_diagnostics', 'closed_fixed_proof_diagnostic')
               or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
           filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n'
           filter_program += ('output=sys.stdin.read(24001)\n'
