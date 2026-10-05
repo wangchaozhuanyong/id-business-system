@@ -3619,5 +3619,207 @@ class MaintenanceContinuationTests(unittest.TestCase):
             self.assertTrue(call.kwargs['historical_maintenance'])
             self.assertEqual(call.kwargs['origin'], result.previous)
 
+class ReadOnlyMaintenanceReadbackTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        ReadOnlyReleaseProofTests.setUpClass()
+        cls.program = ReadOnlyReleaseProofTests.program
+        cls.namespace = ReadOnlyReleaseProofTests.namespace
+
+    def setUp(self):
+        output = Path(__file__).resolve().parents[2] / '.runtime/recharge-registration-isolation-20261005'
+        output.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=output)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.lock = {'releaseLock': {'status': 'NOT_MEASURED', 'holders': []}}
+        self.states = {service: {'image': 'sha256:' + str(index + 1) * 64,
+            'status': 'running', 'health': 'healthy'} for index, service in enumerate(self.namespace['PROOF_SERVICES'])}
+        self.raw = {'currentCommit': self.namespace['PROOF_MAINTENANCE_CURRENT'],
+            'sourceTree': self.namespace['PROOF_MAINTENANCE_TREE'],
+            'previousCommit': self.namespace['PROOF_MAINTENANCE_PREVIOUS'],
+            'deploymentRun': self.namespace['PROOF_MAINTENANCE_RUN'],
+            'servicesUpdated': list(self.namespace['PROOF_SERVICES']), 'newMigrations': [], 'migrationApplied': False,
+            'policySha256': self.namespace['PROOF_MAINTENANCE_POLICY'], 'pinsMatched': True,
+            'runningImagesMatchManifest': True, 'services': copy.deepcopy(self.states)}
+        self.reports = {}
+        for stage, key in (('before', 'dataAuditBefore'), ('after', 'dataAuditAfter')):
+            gate = {**deployment.MAINTENANCE_EXPECTED_GATE, 'stage': stage}
+            self.raw[key] = {'checkCount': 48, 'violationCount': 6, 'historicalException': gate}
+            self.reports[stage + '-audit.json'] = {'ok': False, 'checkCount': 48, 'violationCount': 6,
+                'gate': copy.deepcopy(gate), 'privateFixture': 'SENTINEL_PRIVATE_REPORT',
+                'checks': [{'privateFixture': 'SENTINEL_PRIVATE_ROW'}]}
+        self.manifest = {key: copy.deepcopy(self.raw[key]) for key in ('sourceTree', 'previousCommit',
+            'deploymentRun', 'servicesUpdated', 'newMigrations', 'migrationApplied', 'dataAuditBefore', 'dataAuditAfter')}
+        self.manifest.update(commit=self.raw['currentCommit'], images={service: {'digest': state['image'],
+            'reference': 'SENTINEL_PRIVATE_REFERENCE'} for service, state in self.states.items()},
+            privateFixture='SENTINEL_PRIVATE_MANIFEST')
+        self.closed = self.namespace['closed_current_maintenance_readback'](self.raw, False)
+
+    def private_bytes(self):
+        return {name: json.dumps(value).encode() for name, value in
+            {'release-manifest.json': self.manifest, **self.reports}.items()}
+
+    def wire(self, value):
+        return json.dumps(self.lock) + '\n' + json.dumps(value) + '\n'
+
+    def test_actual_stage_gate_pins_and_closed_projection_bind_new_six_item_maintenance(self):
+        for stage in ('before', 'after'):
+            self.assertEqual(deployment.historical_fingerprint({**deployment.MAINTENANCE_EXPECTED_GATE, 'stage': stage}),
+                self.namespace['PROOF_MAINTENANCE_GATES'][stage])
+        self.assertEqual(self.namespace['PROOF_MAINTENANCE_POLICY'], deployment.MAINTENANCE_POLICY_SHA256)
+        self.assertEqual(self.namespace['closed_current_maintenance_readback'](self.closed), self.closed)
+        self.assertEqual(len(self.closed), 13)
+        self.assertEqual(self.closed['dataAuditBefore']['violationCount'], 6)
+        self.assertNotIn('SENTINEL', json.dumps(self.closed))
+        self.assertNotIn('historicalException', json.dumps(self.closed))
+        self.assertNotIn('databaseName', json.dumps(self.closed))
+
+    def test_raw_and_closed_projection_reject_wrong_pins_types_counts_stage_scope_and_health(self):
+        raw_mutations = []
+        for key in deployment.MAINTENANCE_EXPECTED_GATE:
+            bad = copy.deepcopy(self.raw)
+            bad['dataAuditBefore']['historicalException'][key] = 'SENTINEL_PRIVATE_WRONG_PIN'
+            raw_mutations.append(bad)
+        for stage in ('before', 'after'):
+            key = 'dataAuditBefore' if stage == 'before' else 'dataAuditAfter'
+            for field, wrong in (('stage', 'after' if stage == 'before' else 'before'),
+                    ('violationCount', 10), ('checkCount', True), ('accepted', 1)):
+                bad = copy.deepcopy(self.raw); bad[key]['historicalException'][field] = wrong
+                raw_mutations.append(bad)
+        bad = copy.deepcopy(self.raw); bad['dataAuditAfter']['privateFixture'] = 'SENTINEL_PRIVATE_EXTRA'
+        raw_mutations.append(bad)
+        for bad in raw_mutations:
+            with self.assertRaises(ValueError):
+                self.namespace['closed_current_maintenance_readback'](bad, False)
+        closed_mutations = []
+        for key in ('currentCommit', 'sourceTree', 'previousCommit', 'deploymentRun', 'policySha256'):
+            bad = copy.deepcopy(self.closed); bad[key] = 'SENTINEL_PRIVATE_WRONG_VERSION'; closed_mutations.append(bad)
+        for key, wrong in (('pinsMatched', 1), ('runningImagesMatchManifest', False), ('migrationApplied', 0),
+                ('newMigrations', ['20261005000000_unknown']), ('servicesUpdated', list(reversed(self.raw['servicesUpdated'])))):
+            bad = copy.deepcopy(self.closed); bad[key] = wrong; closed_mutations.append(bad)
+        for field, wrong in (('checkCount', True), ('executedCheckCount', 47), ('unavailableCheckCount', 1),
+                ('violationCount', 10), ('gateSha256', '0' * 64), ('gateMatched', False)):
+            bad = copy.deepcopy(self.closed); bad['dataAuditAfter'][field] = wrong; closed_mutations.append(bad)
+        for field, wrong in (('image', 'SENTINEL_PRIVATE_REF'), ('status', 'exited'), ('health', 'unhealthy')):
+            bad = copy.deepcopy(self.closed); bad['services']['auto-recharge'][field] = wrong; closed_mutations.append(bad)
+        bad = copy.deepcopy(self.closed); del bad['services']['api']; closed_mutations.append(bad)
+        bad = copy.deepcopy(self.closed); bad['services']['SENTINEL_PRIVATE_SERVICE'] = {}; closed_mutations.append(bad)
+        bad = copy.deepcopy(self.closed); bad['SENTINEL_PRIVATE_KEY'] = 'SENTINEL_PRIVATE_VALUE'; closed_mutations.append(bad)
+        for bad in closed_mutations:
+            with self.assertRaises(ValueError):
+                self.namespace['closed_current_maintenance_readback'](bad)
+
+    def test_saved_private_reports_manifest_and_actual_digests_must_agree_without_persistent_writes(self):
+        files = self.private_bytes()
+        provider = self.namespace['current_maintenance_readback']
+        with patch.dict(self.namespace, proof_private_bytes=lambda path: files[path.name]):
+            self.assertEqual(provider(self.root, self.manifest, self.states), self.closed)
+        cases = []
+        for field, wrong in (('ok', True), ('checkCount', True), ('violationCount', 10)):
+            reports = copy.deepcopy(self.reports); reports['after-audit.json'][field] = wrong; cases.append(reports)
+        reports = copy.deepcopy(self.reports); reports['after-audit.json']['gate']['accepted'] = 1; cases.append(reports)
+        reports = copy.deepcopy(self.reports); reports['before-audit.json']['gate']['stage'] = 'after'; cases.append(reports)
+        for reports in cases:
+            bad_files = {**files, **{name: json.dumps(value).encode() for name, value in reports.items()}}
+            with patch.dict(self.namespace, proof_private_bytes=lambda path: bad_files[path.name]):
+                with self.assertRaises(ValueError):
+                    provider(self.root, self.manifest, self.states)
+        bad_states = copy.deepcopy(self.states); bad_states['auto-registration']['image'] = 'sha256:' + '0' * 64
+        with patch.dict(self.namespace, proof_private_bytes=lambda path: files[path.name]):
+            with self.assertRaises(ValueError):
+                provider(self.root, self.manifest, bad_states)
+        seen = {}
+        def changed(path):
+            seen[path.name] = seen.get(path.name, 0) + 1
+            return files[path.name] + (b' ' if seen[path.name] > 1 else b'')
+        with patch.dict(self.namespace, proof_private_bytes=changed):
+            with self.assertRaises(ValueError):
+                provider(self.root, self.manifest, self.states)
+        duplicate = dict(files); duplicate['after-audit.json'] = b'{"ok":false,"ok":false}'
+        with patch.dict(self.namespace, proof_private_bytes=lambda path: duplicate[path.name]):
+            with self.assertRaises(ValueError):
+                provider(self.root, self.manifest, self.states)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def run_actual_embedded_producer(self, files):
+        program = self.program
+        prefix = [node for node in program.body if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef))
+            or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
+        namespace = {}
+        exec(compile(ast.Module(body=prefix, type_ignores=[]), '<actual-readonly-program>', 'exec'), namespace)
+        class MemoryPath:
+            def __init__(self, name=''):
+                self.name = name
+            def __truediv__(self, name):
+                return MemoryPath(name)
+            def open(self, mode):
+                if mode != 'rb':
+                    raise AssertionError('Read-only source mode changed')
+                return io.BytesIO(files[self.name])
+            def __str__(self):
+                return '/synthetic-fixed-readonly-path/' + self.name
+        calls = []
+        active = [None]
+        def read(*args):
+            calls.append(args)
+            if args[:2] == ('docker', 'compose') and args[-3:-1] == ('ps', '-q'):
+                active[0] = args[-1]
+                return 'a' * 64
+            if args[:3] == ('docker', 'inspect', '--format') and len(args) == 5:
+                state = self.states[active[0]]
+                return ' '.join(state[key] for key in ('image', 'status', 'health'))
+            raise AssertionError('Unexpected read-only command')
+        namespace.update(Path=lambda _value: MemoryPath(), read=read,
+            release_lock_summary=lambda: self.lock['releaseLock'], proof_private_bytes=lambda path: files[path.name])
+        top = [node for node in program.body if node not in prefix]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(compile(ast.Module(body=top, type_ignores=[]), '<actual-readonly-top-level>', 'exec'), namespace)
+        return stopped.exception.code, output.getvalue(), calls
+
+    def test_actual_embedded_producer_reads_only_saved_receipts_and_five_live_services(self):
+        code, output, calls = self.run_actual_embedded_producer(self.private_bytes())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 10)
+        self.assertEqual(self.namespace['readonly_maintenance_receipts'](output, True), [self.lock, self.closed])
+        self.assertNotIn('SENTINEL', output)
+        self.assertNotIn('databaseName', output)
+        self.assertEqual(self.namespace['readonly_maintenance_receipts'](output, False), [self.lock])
+        bad = self.private_bytes(); bad['after-audit.json'] = b'{"private":"SENTINEL_PRIVATE_UNKNOWN_REPORT"}'
+        code, output, calls = self.run_actual_embedded_producer(bad)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.namespace['readonly_maintenance_receipts'](output, False),
+            [self.lock, {'readOnlyFailure': 'MANIFEST_UNAVAILABLE'}])
+        self.assertNotIn('SENTINEL', output)
+
+    def test_real_generated_filter_accepts_exact_b8_and_rejects_private_unknown_extra_duplicate_nan(self):
+        _builder, parameters, _decoder, filter_path = ReadOnlyFixedIsolationDiagnosticTests.generated_readonly_command(self)
+        self.assertLessEqual(len(json.dumps(parameters).encode()), 20 * 1024)
+        def filtered(wire, succeeded=True):
+            return deployment.subprocess.run([deployment.sys.executable, str(filter_path), '0' if succeeded else '1'],
+                input=wire, capture_output=True, text=True, timeout=30)
+        result = filtered(self.wire(self.closed))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [self.lock, self.closed])
+        fixed = {'currentCommit': self.namespace['PROOF_CURRENT'], 'safeProof': self.namespace['PROOF_RECEIPT']}
+        self.assertEqual(filtered(self.wire(fixed)).returncode, 0)
+        bad = copy.deepcopy(self.closed); bad['dataAuditBefore']['violationCount'] = 10
+        private = copy.deepcopy(self.closed); private['SENTINEL_PRIVATE_KEY'] = 'SENTINEL_PRIVATE_VALUE'
+        invalid = [self.wire(bad), self.wire(private), self.wire(self.closed) + '{"SENTINEL_PRIVATE_THIRD":true}\n',
+            self.wire(self.closed).replace('"gateMatched": true', '"gateMatched": NaN', 1),
+            self.wire(self.closed).replace('"pinsMatched": true', '"pinsMatched": true, "pinsMatched": true', 1),
+            self.wire(self.closed).replace('"status": "NOT_MEASURED"', '"status":"NOT_MEASURED","status":"NOT_MEASURED"', 1)]
+        for wire in invalid:
+            result = filtered(wire)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [self.lock])
+            self.assertNotIn('SENTINEL', result.stdout + result.stderr)
+        result = filtered(self.wire(self.closed), False)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([json.loads(line) for line in result.stdout.splitlines()], [self.lock])
+
+
 if __name__ == '__main__':
     unittest.main()

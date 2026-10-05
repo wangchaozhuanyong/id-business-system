@@ -938,6 +938,130 @@ jobs:
                   return [first, diagnostics] + ([side] if len(lines) == 3 else [])
               except Exception:
                   raise RuntimeError('Read-only diagnostic output unavailable') from None
+          PROOF_MAINTENANCE_CURRENT = 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
+          PROOF_MAINTENANCE_TREE = '410f1db22deb8629ab88da27fc0b93fd32987b2f'
+          PROOF_MAINTENANCE_PREVIOUS = '6a82a774f2a65e00d4f260c629f7152bf7935d1d'
+          PROOF_MAINTENANCE_RUN = 'github-actions-37302661631-1'
+          PROOF_MAINTENANCE_POLICY = '2103ab9a701fca15af406284874ef70d91004d6b2ac5cdd92fa91a8403399135'
+          PROOF_MAINTENANCE_GATES = {'before': 'dceb2de78641d3b9ea8b83040da462f50819f3f2c578ad451cd34344aa50a39d',
+              'after': '56a81a6e8e3a8bdba8bc7d0887148e5429477707d3d38f17f84e966593465e2d'}
+          def closed_current_maintenance_readback(value, closed=True):
+              keys = {'currentCommit', 'sourceTree', 'previousCommit', 'deploymentRun', 'servicesUpdated',
+                  'newMigrations', 'migrationApplied', 'policySha256', 'pinsMatched',
+                  'runningImagesMatchManifest', 'services', 'dataAuditBefore', 'dataAuditAfter'}
+              if not isinstance(value, dict) or set(value) != keys:
+                  raise ValueError()
+              expected = {'currentCommit': PROOF_MAINTENANCE_CURRENT, 'sourceTree': PROOF_MAINTENANCE_TREE,
+                  'previousCommit': PROOF_MAINTENANCE_PREVIOUS, 'deploymentRun': PROOF_MAINTENANCE_RUN,
+                  'policySha256': PROOF_MAINTENANCE_POLICY}
+              if (any(type(value[key]) is not str or value[key] != item for key, item in expected.items())
+                      or value['migrationApplied'] is not False or value['pinsMatched'] is not True
+                      or value['runningImagesMatchManifest'] is not True
+                      or type(value['servicesUpdated']) is not list or value['servicesUpdated'] != list(PROOF_SERVICES)
+                      or type(value['newMigrations']) is not list or value['newMigrations'] != []):
+                  raise ValueError()
+              services = value['services']
+              if not isinstance(services, dict) or set(services) != set(PROOF_SERVICES):
+                  raise ValueError()
+              for state in services.values():
+                  if (not isinstance(state, dict) or set(state) != {'image', 'status', 'health'}
+                          or not isinstance(state['image'], str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', state['image'])
+                          or state['status'] != 'running' or state['health'] != 'healthy'):
+                      raise ValueError()
+              result = dict(value)
+              for stage, key in (('before', 'dataAuditBefore'), ('after', 'dataAuditAfter')):
+                  audit = value[key]
+                  counts = {'checkCount': 48, 'executedCheckCount': 48, 'unavailableCheckCount': 0, 'violationCount': 6}
+                  if not isinstance(audit, dict):
+                      raise ValueError()
+                  if closed:
+                      if (set(audit) != set(counts) | {'gateSha256', 'gateMatched'}
+                              or audit['gateMatched'] is not True or audit['gateSha256'] != PROOF_MAINTENANCE_GATES[stage]
+                              or any(type(audit[name]) is not int or audit[name] != item for name, item in counts.items())):
+                          raise ValueError()
+                  else:
+                      if (set(audit) != {'checkCount', 'violationCount', 'historicalException'}
+                              or type(audit['checkCount']) is not int or audit['checkCount'] != 48
+                              or type(audit['violationCount']) is not int or audit['violationCount'] != 6):
+                          raise ValueError()
+                      gate = audit['historicalException']
+                      gate_keys = {'accepted', 'status', 'policyId', 'expectedCurrent', 'fixedCurrent', 'stage',
+                          'checkCount', 'executedCheckCount', 'unavailableCheckCount', 'violationCount',
+                          'databaseName', 'policySha256', 'rulesSha256', 'schemaSha256', 'entitySetSha256',
+                          'closureItemsSha256', 'receiptSetSha256', 'sourceSha256'}
+                      if (not isinstance(gate, dict) or set(gate) != gate_keys
+                              or gate['accepted'] is not True or gate['stage'] != stage
+                              or any(type(gate[name]) is not int or gate[name] != item for name, item in counts.items())
+                              or hashlib.sha256(json.dumps(gate, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                                  != PROOF_MAINTENANCE_GATES[stage]):
+                          raise ValueError()
+                  result[key] = {**counts, 'gateSha256': PROOF_MAINTENANCE_GATES[stage], 'gateMatched': True}
+              return result
+          def readonly_maintenance_receipts(output, succeeded):
+              if not succeeded:
+                  return readonly_receipts(output, False)
+              try:
+                  def unique(items):
+                      result = {}
+                      for key, item in items:
+                          if key in result:
+                              raise ValueError()
+                          result[key] = item
+                      return result
+                  def invalid_constant(_value):
+                      raise ValueError()
+                  lines = output.strip().splitlines()
+                  if len(output.encode()) > 24000:
+                      raise ValueError()
+                  observed = json.loads(lines[1])
+                  if not isinstance(observed, dict) or observed.get('currentCommit') != PROOF_MAINTENANCE_CURRENT:
+                      return readonly_receipts(output, True)
+                  value = json.loads(lines[1], object_pairs_hook=unique, parse_constant=invalid_constant)
+                  first = json.loads(lines[0], object_pairs_hook=unique, parse_constant=invalid_constant)
+                  lock = readonly_receipts(lines[0], False)[0]
+                  if len(lines) != 2 or first != lock:
+                      raise ValueError()
+                  return [lock, closed_current_maintenance_readback(value)]
+              except Exception:
+                  raise RuntimeError('Read-only diagnostic output unavailable') from None
+          def current_maintenance_readback(directory, observed_manifest, states):
+              def unique(items):
+                  result = {}
+                  for key, value in items:
+                      if key in result:
+                          raise ValueError()
+                      result[key] = value
+                  return result
+              def invalid_constant(_value):
+                  raise ValueError()
+              raw = {name: proof_private_bytes(directory / name) for name in
+                  ('release-manifest.json', 'before-audit.json', 'after-audit.json')}
+              manifest = json.loads(raw['release-manifest.json'], object_pairs_hook=unique, parse_constant=invalid_constant)
+              if manifest != observed_manifest:
+                  raise ValueError()
+              audits = {}
+              for stage, key in (('before', 'dataAuditBefore'), ('after', 'dataAuditAfter')):
+                  report = json.loads(raw[stage + '-audit.json'], object_pairs_hook=unique, parse_constant=invalid_constant)
+                  audit = manifest[key]
+                  if (not isinstance(report, dict) or report.get('ok') is not False
+                          or type(report.get('checkCount')) is not int or report['checkCount'] != 48
+                          or type(report.get('violationCount')) is not int or report['violationCount'] != 6
+                          or report.get('gate') != audit.get('historicalException')
+                          or hashlib.sha256(json.dumps(report.get('gate'), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                              != PROOF_MAINTENANCE_GATES[stage]):
+                      raise ValueError()
+                  audits[key] = audit
+              images = manifest['images']
+              if any(states[service]['image'] != images[service]['digest'] for service in PROOF_SERVICES):
+                  raise ValueError()
+              value = {key: manifest[key] for key in ('sourceTree', 'previousCommit', 'deploymentRun',
+                  'servicesUpdated', 'newMigrations', 'migrationApplied')}
+              value.update({'currentCommit': manifest['commit'], 'policySha256': audits['dataAuditBefore']['historicalException']['policySha256'],
+                  'pinsMatched': True, 'runningImagesMatchManifest': True, 'services': states, **audits})
+              result = closed_current_maintenance_readback(value, False)
+              if any(proof_private_bytes(directory / name) != data for name, data in raw.items()):
+                  raise ValueError()
+              return result
           def proof_fingerprint(value):
               return hashlib.sha256(json.dumps(value, sort_keys=True,
                   separators=(',', ':')).encode()).hexdigest()
@@ -1072,6 +1196,27 @@ jobs:
               print(json.dumps({'fixedIsolationDiagnostic': fixed_isolation_diagnostic(base / 'current', manifest, registration_container)},
                   separators=(',', ':')))
               raise SystemExit(0)
+          if manifest.get('commit') == PROOF_MAINTENANCE_CURRENT:
+              try:
+                  states = {}
+                  for service in PROOF_SERVICES:
+                      container = read('docker', 'compose', '--env-file', str(base / 'current' / '.env.aws.production'),
+                          '-f', str(base / 'current' / 'docker-compose.aws-mysql.yml'),
+                          '-f', str(base / 'current' / 'compose.release.json'), 'ps', '-q', service)
+                      if not re.fullmatch(r'[a-f0-9]{12,64}', container):
+                          raise ValueError()
+                      fields = read('docker', 'inspect', '--format',
+                          '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container).split()
+                      if len(fields) != 3:
+                          raise ValueError()
+                      states[service] = dict(zip(('image', 'status', 'health'), fields))
+                  result = current_maintenance_readback(base / 'current', manifest, states)
+              except Exception as error:
+                  if not (isinstance(error, RuntimeError) and error.args == ('Read-only Docker diagnostic failed',)):
+                      print(json.dumps({'readOnlyFailure': 'MANIFEST_UNAVAILABLE'}), flush=True)
+                  raise SystemExit('Read-only manifest unavailable') from None
+              print(json.dumps(result, separators=(',', ':')))
+              raise SystemExit(0)
           previous_manifest = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
           protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)
               for image in release.get('images', {}).values()}
@@ -1181,14 +1326,15 @@ jobs:
           Path('.deploy/production-release/readonly-diagnostics.json').write_text(json.dumps(parameters))
           receivers = [node for node in ast.parse(program).body
               if isinstance(node, ast.FunctionDef) and node.name in
-                  ('readonly_receipts', 'project_readonly_diagnostics', 'closed_fixed_proof_diagnostic', 'closed_fixed_isolation_diagnostic')
+                  ('readonly_receipts', 'project_readonly_diagnostics', 'closed_fixed_proof_diagnostic', 'closed_fixed_isolation_diagnostic',
+                      'closed_current_maintenance_readback', 'readonly_maintenance_receipts')
               or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
           filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n'
           filter_program += ('output=sys.stdin.read(24001)\n'
-              'for receipt in readonly_receipts(output, False):\n'
+              'for receipt in readonly_maintenance_receipts(output, False):\n'
               '    print(json.dumps(receipt, separators=(",", ":")), flush=True)\n'
               'if sys.argv[1] == "0":\n'
-              '    for receipt in readonly_receipts(output, True)[1:]:\n'
+              '    for receipt in readonly_maintenance_receipts(output, True)[1:]:\n'
               '        print(json.dumps(receipt, separators=(",", ":")), flush=True)\n')
           Path('.deploy/production-release/readonly-diagnostics-filter.py').write_text(filter_program)
           PY
