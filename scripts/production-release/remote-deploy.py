@@ -54,6 +54,8 @@ DIAGNOSTICS_POLICY_SHA256 = '0682cb5ec0f95dabc49bcd3ba4d38384d1353ddfe275dd6dcf1
 DIAGNOSTICS_PROOF_SHA256 = '5412e83e9702c09d2e070e98b7eb4256dfd8cfbbf4be6bf09e3f13202a2bb670'
 DIAGNOSTICS_MANIFEST_SHA256 = '202262260aca06d9c2d613e9b3ed1e7e6dc9d41d02e6834560e44488dfb33866'
 DIAGNOSTICS_COMPOSE_SHA256 = '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8'
+DIAGNOSTICS_OVERRIDE_RAW_SHA256 = '10b7d30b6bd08d356b516d67dd54b39620b9b6fc1ca7e22bb760008a7cd0a635'
+DIAGNOSTICS_OVERRIDE_CANONICAL_SHA256 = '9437772305ea1d18f790c528c3db05e126970153c77cdbe55d644122fe8b7313'
 REGISTRATION_PROOF_SHA256 = '5762fb16f9787ca1c3bcb255a31e50188dc868de66bbaee8768cab8945cb21ba'
 DIAGNOSTICS_CANDIDATE_FILES = frozenset({
     'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
@@ -270,6 +272,46 @@ def verify_continuation_archive(release, source, policy, policy_id=HISTORY_CONTI
             'Historical diagnostics candidate source changed'
             if policy_id == HISTORY_DIAGNOSTICS_POLICY_ID else
             'Historical continuation registration source changed')
+
+
+def normalize_diagnostics_candidate_modes(release, policy):
+    # GitHub archives can carry 0664. Only the seven pinned, newly extracted
+    # diagnostic candidates may lose group-write before the unchanged archive guard.
+    require(policy.get('id') == HISTORY_DIAGNOSTICS_POLICY_ID
+            and policy.get('expectedCurrent') == HISTORY_DIAGNOSTICS_BASELINE
+            and set(policy.get('candidateSourceSha256', {})) == DIAGNOSTICS_CANDIDATE_FILES,
+            'Historical continuation candidate scope changed')
+    opened = []
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    try:
+        for name, digest in policy['candidateSourceSha256'].items():
+            path = release / name
+            require(not release.is_symlink() and all(not (release / Path(*Path(name).parts[:index])).is_symlink()
+                    for index in range(1, len(Path(name).parts) + 1)),
+                    'Unsafe diagnostics candidate source entry')
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            candidate = os.fdopen(descriptor, 'rb')
+            metadata = os.fstat(candidate.fileno())
+            opened.append((path, candidate, metadata))
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                    and stat.S_IMODE(metadata.st_mode) in (0o644, 0o664)
+                    and hashlib.sha256(candidate.read()).hexdigest() == digest
+                    and identity(os.fstat(candidate.fileno())) == identity(metadata),
+                    'Historical diagnostics candidate source changed')
+        # Validate every descriptor/path again before modifying any of the seven.
+        require(all(identity(path.lstat()) == identity(metadata)
+                    and identity(os.fstat(candidate.fileno())) == identity(metadata)
+                    and not path.is_symlink() for path, candidate, metadata in opened),
+                'Historical diagnostics candidate source changed')
+        for _path, candidate, _metadata in opened:
+            if stat.S_IMODE(os.fstat(candidate.fileno()).st_mode) == 0o664:
+                os.fchmod(candidate.fileno(), 0o644)
+    except OSError:
+        raise RuntimeError('Historical diagnostics candidate source changed') from None
+    finally:
+        for _path, candidate, _metadata in opened:
+            candidate.close()
 
 
 def verify_continuation_running_images(states, manifest):
@@ -657,11 +699,19 @@ def require_diagnostics_registration_isolation(previous, manifest, states):
             'Historical diagnostics requires the fixed independent worker layout')
     verify_continuation_running_images(states, manifest)
     registration = manifest.get('images', {}).get('auto-registration', {})
-    override = json.loads((previous / 'compose.release.json').read_text())
+    override_data = (previous / 'compose.release.json').read_bytes()
+    override = json.loads(override_data)
+    # The frozen runtime override has six services; the manifest can also retain
+    # historical image records that are not runtime service declarations.
     expected_override = {'services': {service: {
-        'image': image.get('reference'), 'pull_policy': 'never'}
-        for service, image in manifest['images'].items()}}
-    require(override == expected_override and bool(registration.get('reference'))
+        'image': manifest['images'].get(service, {}).get('reference'), 'pull_policy': 'never'}
+        for service in (*SERVICES, 'migrate')}}
+    require(hashlib.sha256(override_data).hexdigest() == DIAGNOSTICS_OVERRIDE_RAW_SHA256
+        and historical_fingerprint(override) == DIAGNOSTICS_OVERRIDE_CANONICAL_SHA256
+        and override == expected_override
+        and all(isinstance(image['image'], str) and image['image']
+                for image in expected_override['services'].values())
+        and bool(registration.get('reference'))
         and states.get('auto-registration', {}).get('reference') == registration['reference'],
         'Historical diagnostics image override changed')
 
@@ -943,6 +993,8 @@ def main():
             verified_manifest = verify_continuation_baseline(previous, policy, historical_policy_id)
             require(verified_manifest == old_manifest, 'Historical continuation manifest changed')
             verify_continuation_running_images(before, old_manifest)
+            if args.historical_finance_recharge_diagnostics:
+                normalize_diagnostics_candidate_modes(release, policy)
             url = (f'https://github.com/wangchaozhuanyong/id-business-system/archive/'
                    f'{fixed_continuation(historical_policy_id)[0]}.tar.gz')
             with urllib.request.urlopen(url, timeout=60) as response:
