@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "kind": "FIXED_RECHARGE_RUNTIME_SCOPE",
+  "id": "recharge-pro-menu-7f-20261005",
+  "enabled": true,
+  "approvalStatus": "APPROVED",
+  "expectedCurrent": "7f70688b9bf53a071a0a324ca558aeabc4ced2e3",
+  "baselineRelease": {
+    "afterAuditSha256": "2e680677aa83fc41622d9f4c1624ed7b95e5060552a5cfc86a57e8244136b480",
+    "beforeAuditSha256": "3bea7caef0dca35649975e96c7ff0a08a35e68ff66165a621090006b210e0af4",
+    "commit": "7f70688b9bf53a071a0a324ca558aeabc4ced2e3",
+    "composeSha256": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
+    "deploymentRun": "github-actions-37333706418-1",
+    "manifestSha256": "191ce391702da497f75ea35e20b1893f054c04968e4c921cd72fc8be1654e384",
+    "overrideCanonicalSha256": "8e63e7d12a54de30637e84f416882aeb6443d1d3906611a3292b53917e00df5c",
+    "overrideRawSha256": "bef006d276c37bb021a6b35712e8144dd2fc00823c344c9d40bf9230b9d3b35a",
+    "previousCommit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+    "sourceTree": "1dc54c20227dd713d61d4651882e5d73a47b9010"
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "f63eeb60d191aeb535c96bcd13cdbca8bbf040119ef08ca259875f621f283972",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "a7becf0fc1d17dd6e843dbdf0c7ecb138a739ca6d9e8979767846e9b31d07d88",
+    "docs/V2_TASKS.md": "5dbc60923ce70dd30523be5751b4aa611394360090ea8e4fd7cf908d5a47633c"
+  },
+  "carriedSourceOnlySha256": {},
+  "controlSourceSha256": {
+    ".github/workflows/production-release.yml": "07eaa90d10d5fe6c9e3f5277133f97e3cfcdc639a12dc2b072108df997fa9a94",
+    "docs/PRODUCTION_RELEASE_OIDC.md": "0b9f27f755b8c2a7297b091abec1f9b92140c287819301a155724d733d302b49",
+    "scripts/ci-recharge-check.mjs": "1245d78206b9cb9098cd1329015ea1fa297016ada76f3355cb0d7636635eee2e",
+    "scripts/ci-recharge-release.test.mjs": "32b7ff77896a46017ac54ca36f3d5ac539151b4b5acf8c93a4e4a72d0d3f0379",
+    "scripts/ci-recharge-scope.mjs": "02f3bad9bba24a1d49a08dbe9e924e3feced2a262c29c64913e0124092313b7e",
+    "scripts/ci-recharge-scope.test.mjs": "7772b409836dedd4634d5b447d73e2fd8bbd7ee5ac22f5ec21780746f9f61e69",
+    "scripts/production-release/build-images.sh": "e15c430d023bbc13f6c94f3ee1197e46c66599f6ea57d926fa1a53ffdf5f0a21",
+    "scripts/production-release/dispatch.sh": "81d9bb190bde4ad1328f45596591bf421dc0d917442820a3cdacbb250dfd3107",
+    "scripts/production-release/push-images.sh": "03b26869125fe94d83fced73ffc6c3b7e0ef7e7a11f61193bd65c5c78f0dd56b",
+    "scripts/production-release/remote-deploy.py": "3fe7b7a7dc3128e041c46f2d70969f6e5e2902682c99c109138db7d5366c2c9e",
+    "scripts/production-release/remote-deploy.test.py": "5e2f41fa3ebd2ac37926784841fc08e9008ea54c1abf76b431b6a124567eafd2"
+  },
+  "sourceModes": {
+    ".github/workflows/production-release.yml": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": 420,
+    "docs/PRODUCTION_RELEASE_OIDC.md": 420,
+    "docs/V2_TASKS.md": 420,
+    "scripts/ci-recharge-check.mjs": 420,
+    "scripts/ci-recharge-release.test.mjs": 420,
+    "scripts/ci-recharge-scope.mjs": 420,
+    "scripts/ci-recharge-scope.test.mjs": 420,
+    "scripts/production-release/build-images.sh": 420,
+    "scripts/production-release/dispatch.sh": 420,
+    "scripts/production-release/push-images.sh": 420,
+    "scripts/production-release/remote-deploy.py": 420,
+    "scripts/production-release/remote-deploy.test.py": 420
+  },
+  "scope": {
+    "servicesUpdated": ["auto-recharge"],
+    "imageServices": ["auto-recharge"],
+    "preservedServices": ["auto-registration", "api", "admin", "media-resolver", "mysql", "caddy"],
+    "imageReuseAllowed": false,
+    "cacheCleanupAllowed": false,
+    "migrationDeploymentAllowed": false,
+    "financialWritesAllowed": false,
+    "registrationRestartAllowed": false,
+    "googleDriveConfigAllowed": false,
+    "databaseGrantSyncAllowed": false
+  },
+  "financeValidator": {
+    "kind": "EXISTING_MAINTENANCE_48",
+    "sourceCommit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
+    "originCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "policyId": "historical-finance-20261005-maintenance-continuation",
+    "checkCount": 48,
+    "executedCheckCount": 48,
+    "unavailableCheckCount": 0,
+    "violationCount": 6
+  }
+}

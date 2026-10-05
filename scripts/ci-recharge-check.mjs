@@ -47,6 +47,7 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/cleanup-verified-backups.test.py']);
   if (
     changed.includes('deploy/aws/recharge-pro-menu-b8-20261005.json') ||
+    changed.includes('deploy/aws/recharge-pro-menu-7f-20261005.json') ||
     changed.some((path) => path.startsWith('scripts/production-release/'))
   )
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);

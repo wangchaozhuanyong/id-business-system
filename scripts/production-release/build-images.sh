@@ -13,9 +13,16 @@ build_image() {
   echo "Built image: $service"
 }
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 ]]; then
-  test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0
-  python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 ]]; then
+  case "$HISTORICAL_EXCEPTION" in
+    recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
+    recharge-pro-menu-7f-20261005) test "$EXPECTED_CURRENT" = 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ;;
+    *) exit 1 ;;
+  esac
+  test -z "${REUSE_IMAGE_COMMIT:-}"
+  test -z "${REUSE_IMAGE_RUN_ID:-}"
+  test -z "${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image auto-recharge apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile ''
   exit 0

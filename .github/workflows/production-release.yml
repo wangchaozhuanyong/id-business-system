@@ -68,6 +68,7 @@ on:
           - historical-finance-20261005-maintenance-continuation
           - historical-finance-20261005-mailbox-batch
           - recharge-pro-menu-b8-20261005
+          - recharge-pro-menu-7f-20261005
 
       diagnostic_command_id:
         description: Optional exact failed SSM command to inspect in verify_access (UUID)
@@ -136,16 +137,21 @@ jobs:
           test "$REQUESTED_REUSE_IMAGE_RUN" = 37312405714
 
       - name: Verify fixed recharge runtime approval
-        if: inputs.historical_exception == 'recharge-pro-menu-b8-20261005'
+        if: inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005'
         env:
+          FIXED_RECHARGE_PROFILE: ${{ inputs.historical_exception }}
           RELEASE_OPERATION: ${{ inputs.operation }}
           REQUESTED_REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
         run: |
           set -Eeuo pipefail
           test "$RELEASE_OPERATION" = release
-          test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0
+          case "$FIXED_RECHARGE_PROFILE" in
+            recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
+            recharge-pro-menu-7f-20261005) test "$EXPECTED_CURRENT" = 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ;;
+            *) exit 1 ;;
+          esac
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
-          python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope
+          python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$FIXED_RECHARGE_PROFILE"
 
       - name: Build images on the GitHub runner
         if: inputs.operation == 'release' && inputs.reuse_image_run == ''
@@ -1590,7 +1596,7 @@ jobs:
         run: bash scripts/production-release/dispatch.sh
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch')
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch')
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -1656,8 +1662,9 @@ jobs:
           exit 1
 
       - name: Verify fixed recharge deployment independently
-        if: inputs.operation == 'verify_recharge_release' || (inputs.operation == 'release' && inputs.historical_exception == 'recharge-pro-menu-b8-20261005')
+        if: inputs.operation == 'verify_recharge_release' || (inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005'))
         env:
+          FIXED_RECHARGE_PROFILE: ${{ inputs.historical_exception == 'recharge-pro-menu-b8-20261005' && 'recharge-pro-menu-b8-20261005' || 'recharge-pro-menu-7f-20261005' }}
           RELEASE_OPERATION: ${{ inputs.operation }}
         run: |
           set -Eeuo pipefail
@@ -1678,14 +1685,17 @@ jobs:
           source_path = Path('scripts/production-release/remote-deploy.py')
           namespace = {'__name__': 'fixed_recharge_readback_builder', '__file__': str(source_path)}
           exec(compile(source, str(source_path), 'exec'), namespace)
-          profile = namespace['parse_fixed_recharge_scope'](Path('deploy/aws/recharge-pro-menu-b8-20261005.json').read_bytes())
+          identity = os.environ['FIXED_RECHARGE_PROFILE']
+          if identity not in ('recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005'):
+              raise SystemExit('Fixed recharge identity unavailable')
+          profile = namespace['parse_fixed_recharge_scope'](Path('deploy/aws/' + identity + '.json').read_bytes())
           profile_sha = hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
           staging = '/opt/id-business-v2/.staging/oidc-' + commit + '/remote-deploy.py'
           verifier = (
               'import hashlib,pathlib,sys;'
               + 'p=pathlib.Path(' + repr(staging) + ');b=p.read_bytes();'
               + '\nif len(b)>1024*1024 or hashlib.sha256(b).hexdigest()!=' + repr(hashlib.sha256(source).hexdigest()) + ':\n    raise RuntimeError("Fixed recharge verifier source unavailable")\n'
-              + 'sys.argv=[str(p),"--check-fixed-recharge-deployment","--expected-current",' + repr(commit)
+              + 'sys.argv=[str(p),"--check-fixed-recharge-deployment","--fixed-recharge-profile",' + repr(identity) + ',"--expected-current",' + repr(commit)
               + ',"--source-tree",' + repr(tree) + ',"--profile-sha256",' + repr(profile_sha) + '];'
               + 'exec(compile(b,str(p),"exec"),{"__name__":"__main__","__file__":str(p)})')
           parameters = {'commands': ['python3 -c ' + shlex.quote(verifier)], 'executionTimeout': ['120']}
@@ -1728,9 +1738,12 @@ jobs:
               namespace = {'__name__': 'fixed_recharge_readback_filter', '__file__': str(source_path)}
               source = source_path.read_bytes()
               exec(compile(source, str(source_path), 'exec'), namespace)
-              profile = namespace['parse_fixed_recharge_scope'](Path('deploy/aws/recharge-pro-menu-b8-20261005.json').read_bytes())
+              identity = os.environ['FIXED_RECHARGE_PROFILE']
+              if identity not in ('recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005'):
+                  raise ValueError()
+              profile = namespace['parse_fixed_recharge_scope'](Path('deploy/aws/' + identity + '.json').read_bytes())
               digest = hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-              namespace['validate_fixed_recharge_readback_projection'](receipt, os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE'], digest)
+              namespace['validate_fixed_recharge_readback_projection'](receipt, os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE'], digest, profile_id=identity)
           except BaseException:
               raise SystemExit('Fixed recharge deployment readback unavailable; raw output suppressed') from None
           print(json.dumps(receipt, separators=(',', ':')))
@@ -1741,5 +1754,5 @@ jobs:
           exit "$wait_status"
 
       - name: Record skipped cache maintenance for fixed recharge release
-        if: inputs.operation == 'release' && inputs.historical_exception == 'recharge-pro-menu-b8-20261005'
+        if: inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005')
         run: printf '%s\n' RECHARGE_ONLY_CACHE_SKIPPED
