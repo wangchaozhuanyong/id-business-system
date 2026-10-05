@@ -4976,7 +4976,7 @@ class MailboxApiOnlyTests(unittest.TestCase):
         repository = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            for path in deployment.MAILBOX_CARRIED_SOURCE:
+            for path in set(deployment.MAILBOX_CARRIED_SOURCE) | set(deployment.MAILBOX_REUSE_BUILD_CONTROLS):
                 file = root / path; file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_bytes((repository / path).read_bytes())
             node = root / 'apps/api/src/main.ts'; node.parent.mkdir(parents=True, exist_ok=True)
@@ -4993,6 +4993,24 @@ class MailboxApiOnlyTests(unittest.TestCase):
             node.write_bytes(b'changed-api-code')
             with self.assertRaisesRegex(RuntimeError, 'application source'):
                 verify()
+
+    def test_build_controls_are_fixed_and_never_admitted_to_ordinary_reuse(self):
+        repository = Path(__file__).resolve().parents[2]
+        names = list(deployment.MAILBOX_REUSE_BUILD_CONTROLS)
+        deployment.require_reusable_paths(names, mailbox_only=True)
+        with self.assertRaises(RuntimeError):
+            deployment.require_reusable_paths(names)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in set(names) | set(deployment.MAILBOX_CARRIED_SOURCE):
+                file = root / name; file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes((repository / name).read_bytes())
+            deployment.verify_mailbox_carried_sources(root)
+            for name in names:
+                (root / name).write_bytes(b'altered-build-selection')
+                with self.assertRaisesRegex(RuntimeError, 'build controls'):
+                    deployment.verify_mailbox_carried_sources(root)
+                (root / name).write_bytes((repository / name).read_bytes())
 
     def test_mailbox_selects_only_api_and_ordinary_selection_remains_strict(self):
         self.assertEqual(deployment.release_services(False, [], historical_mailbox=True), (('api',), ('api',)))
