@@ -5,7 +5,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import test from 'node:test';
 import { load as loadYaml } from 'js-yaml';
-import { adminCheckCommands, checkMode, isCiOnly, selectedParts } from './ci-recharge-scope.mjs';
+import {
+  adminCheckCommands,
+  adminUiGuardChecks,
+  checkMode,
+  isCiOnly,
+  selectedParts
+} from './ci-recharge-scope.mjs';
 
 function fixture(run) {
   mkdirSync('.deploy', { recursive: true });
@@ -440,6 +446,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'registration-worker-87-20261006'), false);
   assert.equal(selected('release', 'registration-worker-88-20261006'), false);
   assert.equal(selected('release', 'registration-worker-89-20261006'), false);
+  assert.equal(selected('release', 'registration-worker-90-20261007'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -456,6 +463,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-87-20261006',
         'registration-worker-88-20261006',
         'registration-worker-89-20261006',
+        'registration-worker-90-20261007',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -2864,4 +2872,146 @@ test('fixed 89 Pro bridge workflow build and both dispatch selectors retain the 
   assert.ok(
     rechargeApproval.run.includes(`recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = ${old}`)
   );
+});
+
+test('fixed 90 hydration selection accepts actual c3 and rejects stale or combined inputs before effects', () => {
+  const baseline = 'c3cad767b372738b2193e60584b0a53daa53b65f';
+  fixture(({ env, log }) => {
+    const approved = {
+      ...env,
+      HISTORICAL_EXCEPTION: 'registration-worker-90-20261007',
+      EXPECTED_CURRENT: baseline,
+      RELEASE_ADMIN_ONLY: 'false',
+      REUSE_IMAGE_COMMIT: '',
+      REUSE_IMAGE_RUN_ID: '',
+      REUSE_IMAGE_RUN_ATTEMPT: ''
+    };
+    const select = (fields = {}) =>
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: { ...approved, ...fields },
+        stdio: 'pipe'
+      });
+    select();
+    for (const fields of [
+      { EXPECTED_CURRENT: 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' },
+      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
+      { EXPECTED_CURRENT: '4c200c4ae08bb8214ff8e0955f8237ce85069cc6' },
+      { EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c' },
+      { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
+      { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
+      { EXPECTED_CURRENT: 'f'.repeat(40) },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { RELEASE_OPERATION: 'verify_unused_cache' },
+      { RELEASE_OPERATION: 'prepare_order_archive_release' },
+      { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
+      { REUSE_IMAGE_RUN: '123' },
+      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
+      { REUSE_IMAGE_RUN_ID: '123' },
+      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
+      { ORDER_ARCHIVE_SEAL_SHA256: 'a'.repeat(64) },
+      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'a'.repeat(64) }
+    ]) {
+      assert.throws(
+        () => select(fields),
+        (error) => error.status === 1
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    }
+    select({
+      HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006',
+      EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+    });
+    assert.throws(() => select({ HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006' }));
+    assert.equal(readFileSync(log, 'utf8'), '');
+  });
+});
+
+test('fixed 90 hydration workflow confines dual builds and explicit readback to its profile', () => {
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 90 registration runtime approval'
+  );
+  assert.equal(approval.if, "inputs.historical_exception == 'registration-worker-90-20261007'");
+  assert.ok(
+    approval.run.includes('test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f')
+  );
+  for (const name of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
+    const source = readFileSync(`scripts/production-release/${name}`, 'utf8');
+    const branch = source
+      .split(
+        '\nif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then'
+      )[1]
+      .split(/\n(?:fi|elif )/)[0];
+    assert.ok(
+      branch.includes('test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f')
+    );
+    assert.ok(
+      source.includes(
+        'recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+      )
+    );
+  }
+  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8');
+  const branch = build
+    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then')[1]
+    .split('\nfi')[0];
+  assert.ok(branch.includes('registration-admin-build-context'));
+  assert.ok(
+    branch.includes('build_image admin "$registration_admin_context/apps/admin/Dockerfile" runtime')
+  );
+  assert.ok(branch.includes('build_image auto-recharge "$registration_context/'));
+  assert.equal(branch.includes('build_image api'), false);
+  assert.equal(branch.includes('build_image migrate'), false);
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 90 registration deployment independently'
+  );
+  assert.ok(readback.run.includes("profile_id='registration-worker-90-20261007'"));
+  assert.ok(readback.run.includes('raw output suppressed'));
+});
+
+test('fixed 90 hydration CI targets only the reviewed mixed source and retains all UI rules', () => {
+  const profile = 'deploy/aws/registration-worker-90-20261007.json';
+  const paths = [
+    profile,
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py',
+    'apps/admin/src/api/requestPolicy.ts',
+    'apps/admin/src/api/requestPolicy.spec.ts',
+    'apps/admin/src/v2/features/auto-registration/useRegistrationStart.ts',
+    'apps/admin/src/v2/features/auto-registration/useRegistrationPage.spec.ts',
+    'scripts/production-release/remote-deploy.py'
+  ];
+  assert.equal(isCiOnly([profile]), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'connector']);
+  const commands = adminCheckCommands('recharge', paths);
+  assert.deepEqual(commands[1], [
+    'run',
+    'test',
+    '--workspace',
+    '@apple-business/admin',
+    '--',
+    'src/api/requestPolicy.spec.ts',
+    'src/v2/features/auto-registration/useRegistrationPage.spec.ts'
+  ]);
+  const guards = adminUiGuardChecks('recharge', paths);
+  for (const rule of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(guards.includes(rule));
+  assert.equal(checkMode(paths.filter((path) => path !== profile)), 'full');
+  for (const extra of [
+    'apps/api/src/auth/auth.controller.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+    'apps/admin/src/v2/features/customers/CustomerList.vue'
+  ])
+    assert.equal(checkMode([...paths, extra]), 'full');
 });

@@ -40,6 +40,21 @@ const BUSINESS_READ_POLICY: ApiRequestPolicy = {
   timeoutMs: 15_000
 };
 
+const REGISTRATION_CREATE_POLICY: ApiRequestPolicy = {
+  retryDelaysMs: [],
+  timeoutMs: 70_000
+};
+
+const REGISTRATION_LAUNCH_POLICY: ApiRequestPolicy = {
+  retryDelaysMs: [],
+  timeoutMs: 90_000
+};
+
+const REGISTRATION_PENDING_POLICY: ApiRequestPolicy = {
+  ...BUSINESS_READ_POLICY,
+  timeoutMs: 30_000
+};
+
 const MEDIA_DOWNLOAD_POLICY: ApiRequestPolicy = {
   retryDelaysMs: [],
   timeoutMs: 390_000
@@ -88,6 +103,19 @@ export function getApiEndpointPolicy(url?: string): ApiEndpointPolicy {
 
 export function getApiRequestPolicy(method?: string, url?: string): ApiRequestPolicy | null {
   const pathname = normalizePathname(url);
+  const requestMethod = method?.toLowerCase();
+  if (requestMethod === 'post' && pathname === '/id-business-v2/auto-registration/jobs') {
+    return REGISTRATION_CREATE_POLICY;
+  }
+  if (
+    requestMethod === 'post' &&
+    /^\/id-business-v2\/auto-registration\/jobs\/[^/]+\/launch$/.test(pathname)
+  ) {
+    return REGISTRATION_LAUNCH_POLICY;
+  }
+  if (requestMethod === 'get' && pathname === '/id-business-v2/auto-registration/jobs/pending') {
+    return REGISTRATION_PENDING_POLICY;
+  }
   if (pathname.startsWith('/id-business-v2/vendure-mailboxes/')) {
     return method?.toLowerCase() === 'get'
       ? VENDURE_MAILBOX_READ_POLICY

@@ -28,6 +28,38 @@ EMAIL_REQUEST_METHODS = {'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELE
 EMAIL_REQUEST_HOSTS = {'chatgpt', 'openai_auth', 'auth0', 'other'}
 EMAIL_REQUEST_PATHS = {'login', 'email_code', 'password', 'profile', 'other'}
 EMAIL_REQUEST_FAILURES = {'none', 'http_error', 'blocked', 'timeout', 'network', 'cancelled', 'unknown'}
+EMAIL_SUBMIT_READINESS = r'''(form, submit) => {
+  if (!form || !submit || !form.isConnected || !submit.isConnected || submit.form !== form) return 'unknown';
+  const method = (submit.hasAttribute('formmethod') ? submit.formMethod : form.method).toLowerCase();
+  if (method !== 'get') return 'not_required';
+  // Camoufox isolates page expandos. Waive only this exact form's descriptors;
+  // association, method and all other DOM reads keep their original Xray view.
+  const localNative = Object.getOwnPropertyDescriptor(form, 'onsubmit');
+  if (localNative && !('value' in localNative)) return 'unknown';
+  const wrapper = Object.getOwnPropertyDescriptor(form, 'wrappedJSObject');
+  let observed = form;
+  if (wrapper) {
+    if ('value' in wrapper || typeof wrapper.get !== 'function' || wrapper.set) return 'unknown';
+    const getterName = Object.getOwnPropertyDescriptor(wrapper.get, 'name');
+    if (!getterName || !('value' in getterName) || getterName.value !== 'get wrappedJSObject'
+        || !/^function wrappedJSObject\(\)\s*\{\s*\[native code\]\s*\}$/.test(
+          Reflect.apply(Function.prototype.toString, wrapper.get, []))) return 'unknown';
+    observed = Reflect.apply(wrapper.get, form, []);
+    if (!observed || typeof observed !== 'object') return 'unknown';
+  }
+  const native = Object.getOwnPropertyDescriptor(observed, 'onsubmit');
+  if (native && !('value' in native)) return 'unknown';
+  if (typeof (native ? native.value : form.onsubmit) === 'function') return 'native_handler';
+  const keys = Object.getOwnPropertyNames(observed).filter(key => key.startsWith('__reactProps$'));
+  if (keys.length > 1) return 'unknown';
+  if (!keys.length) return 'no_handler';
+  const descriptor = Object.getOwnPropertyDescriptor(observed, keys[0]);
+  if (!descriptor || !('value' in descriptor) || !descriptor.value || typeof descriptor.value !== 'object') return 'unknown';
+  const handler = Object.getOwnPropertyDescriptor(descriptor.value, 'onSubmit');
+  if (!handler) return 'no_handler';
+  if (!('value' in handler)) return 'unknown';
+  return typeof handler.value === 'function' ? 'react_handler' : handler.value == null ? 'no_handler' : 'unknown';
+}'''
 EMAIL_FORM_SEMANTICS = {
     'effective_method': {'get', 'post', 'dialog', 'other'},
     'action_host': EMAIL_REQUEST_HOSTS,
@@ -38,6 +70,7 @@ EMAIL_FORM_SEMANTICS = {
     'email_disabled': {'true', 'false'},
     'submit_disabled': {'true', 'false'},
     'value_nonempty': {'true', 'false'},
+    'submit_readiness': {'native_handler', 'react_handler', 'no_handler', 'unknown', 'not_required'},
 }
 
 
@@ -296,7 +329,7 @@ class RegistrationBrowser:
                 'Registration email form job=%s attempt=%s point=%s slot=%s phase=%s read=%s gate=%s '
                 'path=%s email_count=%s code_count=%s continue_count=%s same_form_count=%s target=%s validity=%s alert_count=%s email_error=%s '
                 'effective_method=%s action_host=%s action_path=%s submitter_type=%s ready_state=%s '
-                'busy=%s email_disabled=%s submit_disabled=%s value_nonempty=%s',
+                'busy=%s email_disabled=%s submit_disabled=%s value_nonempty=%s submit_readiness=%s',
                 job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
                 attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
                 point if point in {'before_safe_get', 'pause'} else 'unknown', slot,
@@ -350,6 +383,7 @@ class RegistrationBrowser:
                         : segments.some(s => ['profile','about-you'].includes(s)) ? 'profile' : 'other';
                     } catch (_) { action_host = action_path = 'other'; }
                   }
+                  const submitReadiness = ''' + EMAIL_SUBMIT_READINESS + ''';
                   const bit = value => value ? 'true' : 'false';
                   const count = list => Math.min(2, list.length);
                   const alerts = email && email.form ? [...email.form.querySelectorAll('[role="alert"],[aria-live="assertive"]')].filter(shown) : [];
@@ -373,7 +407,8 @@ class RegistrationBrowser:
                     busy:form ? bit(form.getAttribute('aria-busy') === 'true' || (submit && submit.getAttribute('aria-busy') === 'true')) : 'not_measured',
                     email_disabled:email ? bit(email.matches(':disabled')) : 'not_measured',
                     submit_disabled:submit ? bit(submit.matches(':disabled')) : 'not_measured',
-                    value_nonempty:email ? bit(email.value.length > 0) : 'not_measured'};
+                    value_nonempty:email ? bit(email.value.length > 0) : 'not_measured',
+                    submit_readiness:submitReadiness(form, submit)};
                 }''', {'emailSelector': EMAIL_INPUT, 'codeSelector': CODE_INPUT,
                         'expected': self.data['email']}), timeout=min(.1, milliseconds / 1000))
                 if (type(result) is dict and set(result) == {
@@ -392,13 +427,13 @@ class RegistrationBrowser:
         if (gate != 'none' or value['email_error'] not in {'none', 'not_measured'}) and 'email_form_first_failure' not in self.registration_state:
             self.registration_state['email_form_first_failure'] = dict(value)
 
-    async def email_submit_control(self, email):
+    async def email_submit_control(self, email, *, require_valid=True):
         """Resolve one actual button associated with the exact email form."""
         self.official(self.page)
         handle = await email.element_handle()
         if not handle or not await handle.evaluate('(node) => node.isConnected && !!node.form'):
             return None, None, 'wrong_scope'
-        if not await handle.evaluate('(node) => node.validity.valid'):
+        if require_valid and not await handle.evaluate('(node) => node.validity.valid'):
             return handle, None, 'invalid'
         candidates = self.page.get_by_role('button', name=re.compile(r'^(continue|继续)$', re.I))
         associated = []
@@ -412,6 +447,15 @@ class RegistrationBrowser:
         if len(associated) != 1:
             return handle, None, 'ambiguous' if len(associated) > 1 else 'wrong_scope'
         return handle, associated[0], None
+
+    async def email_submit_ready(self, email, button):
+        """Only an exact GET form's observable submit handler permits filling it."""
+        self.official(self.page)
+        value = await button.evaluate('''(node, email) => {
+            const readiness = ''' + EMAIL_SUBMIT_READINESS + ''';
+            return email.isConnected ? readiness(email.form, node) : 'unknown';
+        }''', email)
+        return value in {'native_handler', 'react_handler', 'not_required'}
 
     async def email_submit_unchanged(self, email, button, form, page, url):
         if self.page is not page or page.url != url:
@@ -430,9 +474,13 @@ class RegistrationBrowser:
         if not await button.is_visible() or not await button.is_enabled() or await self.challenge():
             return False
         # Recheck after challenge reads; a fixed handle cannot resolve to a new code button.
-        return bool(await button.evaluate('''(node, args) => node.isConnected && args.email.isConnected
+        return bool(await button.evaluate('''(node, args) => {
+            const readiness = ''' + EMAIL_SUBMIT_READINESS + ''';
+            return node.isConnected && args.email.isConnected
             && node.form === args.form && args.email.form === args.form
-            && args.email.value === args.expected && args.email.validity.valid''',
+            && args.email.value === args.expected && args.email.validity.valid
+            && ['native_handler','react_handler','not_required'].includes(readiness(args.form, node));
+        }''',
             {'email': email, 'form': form, 'expected': self.data['email']}))
 
     async def guard(self, route):
@@ -809,6 +857,9 @@ class RegistrationBrowser:
         if not official_login_page(self.page.url):
             await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
         signup_clicked = False
+        email_prepare_budget = None
+        first_not_ready = None
+        email_readiness_reached = False
         observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
         for _ in range(160):
             self.job.check()
@@ -907,10 +958,30 @@ class RegistrationBrowser:
                 await self.end_recovery()
                 self.job.event('progress', step='email')
                 self.operation('email_submit')
-                budget = SessionBudget(REGISTRATION_OBSERVE_SECONDS,
+                budget = email_prepare_budget or SessionBudget(REGISTRATION_OBSERVE_SECONDS,
                                        cancelled=self.job.cancelled.is_set)
+                email_prepare_budget = budget
                 async def prepare_email_submit():
-                    await field.fill(self.data['email'])
+                    nonlocal first_not_ready, email_readiness_reached
+                    # SSR GET forms can be actionable before their handler hydrates.
+                    # Re-resolve replacements without filling or requesting mail until ready.
+                    while True:
+                        current_email = await self.field(self.page, EMAIL_INPUT)
+                        if not current_email:
+                            return None, None, None, 'reobserve', 'target_changed'
+                        email_handle, submit, gate = await self.email_submit_control(current_email, require_valid=False)
+                        if not submit:
+                            return None, None, None, 'form_unrecognized', gate
+                        if await self.challenge():
+                            return None, None, None, 'verification_required', 'none'
+                        if await self.email_submit_ready(email_handle, submit):
+                            email_readiness_reached = True
+                            break
+                        if first_not_ready is None:
+                            await self.email_diagnostic('prepare', budget)
+                            first_not_ready = dict(self.registration_state.get('email_form_current', {}))
+                        await self.settle(.1)
+                    await current_email.fill(self.data['email'])
                     current_email = await self.field(self.page, EMAIL_INPUT)
                     if not current_email or await current_email.input_value() != self.data['email']:
                         return None, None, None, 'form_unrecognized', 'target_changed'
@@ -927,6 +998,8 @@ class RegistrationBrowser:
                         return None, None, None, 'form_unrecognized', gate or 'target_changed'
                     if await self.challenge():
                         return None, None, None, 'verification_required', 'none'
+                    if not await self.email_submit_ready(email_handle, submit):
+                        return None, None, None, 'reobserve', 'target_changed'
                     form = (await email_handle.evaluate_handle('(node) => node.form')).as_element()
                     return email_handle, submit, form, None, 'none'
                 try:
@@ -936,6 +1009,11 @@ class RegistrationBrowser:
                     detached = type(exc).__name__ == 'Error' and 'Element is not attached to the DOM' in str(exc)
                     if not detached and not self.retryable_observation(exc):
                         raise
+                    if (not email_readiness_reached and isinstance(exc, Stop)
+                            and exc.report.get('reason') == 'session_load_timeout'
+                            and first_not_ready and first_not_ready.get('read') == 'measured'
+                            and first_not_ready.get('submit_readiness') in {'no_handler', 'unknown'}):
+                        self.registration_state.setdefault('email_form_first_failure', first_not_ready)
                     if not getattr(self.job, 'registration_observation_error', None):
                         details = exc.report if isinstance(exc, Stop) else session_failure(exc)
                         self.job.registration_observation_error = {
@@ -945,9 +1023,14 @@ class RegistrationBrowser:
                             self.job.registration_observation_error['reason'] = 'registration_page_changing'
                     reason = 'form_unrecognized'
                     gate = 'target_changed' if detached else 'none'
+                if reason == 'reobserve':
+                    continue
                 if reason:
                     await self.email_diagnostic('prepare', budget, gate)
                     await self.manual_registration(reason)
+                    email_prepare_budget = None
+                    first_not_ready = None
+                    email_readiness_reached = False
                     observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                     continue
                 await self.email_diagnostic('prepare', budget)

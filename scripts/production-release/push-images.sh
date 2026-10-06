@@ -2,7 +2,22 @@
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-89-20261006 ]]; then
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-90-20261007
+  services=(auto-recharge admin)
+  registration_admin_projection="$(read_registration_admin_projection)"
+  for registration_service in "${services[@]}"; do
+    registration_reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${registration_service}"
+    test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+    if [[ "$registration_service" == admin ]]; then
+      test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.admin-projection-sha256" }}')" = "$registration_admin_projection"
+    fi
+  done
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-89-20261006 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = d2e22e623d0e19851c79ffe43396f5f97a99b8d3
   test "${RELEASE_ADMIN_ONLY:-false}" = false
@@ -83,6 +98,9 @@ for service in "${services[@]}"; do
   image_tag="${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   reference="${RELEASE_REPOSITORY}:${image_tag}"
   test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+  if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 && "$service" == admin ]]; then
+    test "$(docker image inspect "$reference" --format '{{ index .Config.Labels "id-business-v2.admin-projection-sha256" }}')" = "$registration_admin_projection"
+  fi
   docker push "$reference"
   aws ecr describe-images --repository-name id-business-v2-release \
     --image-ids "imageTag=${image_tag}" \

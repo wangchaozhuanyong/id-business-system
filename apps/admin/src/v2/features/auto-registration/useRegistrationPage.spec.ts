@@ -4,6 +4,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { V2RegistrationJob, V2RegistrationMailbox } from './contracts';
 import { useRegistrationPage } from './useRegistrationPage';
 import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
+import { ApiError } from '@/api/apiError';
 const mock = vi.hoisted(() => ({
   connector: vi.fn(),
   create: vi.fn(),
@@ -180,12 +181,13 @@ describe('注册表单和邮件生命周期', () => {
     page.openStart(mailbox);
     mock.launch.mockResolvedValueOnce({ id, attempt: 1, delivery: 'unknown' });
     await page.start();
-    mock.pending.mockResolvedValueOnce(baseJob);
+    mock.pending.mockRejectedValue(new Error('邮箱服务暂不可用'));
     expect(page.startConfirmText.value).toBe('核对原任务');
     await page.start();
     expect(mock.create).toHaveBeenCalledOnce();
     expect(mock.launch).toHaveBeenCalledOnce();
-    expect(mock.pending).toHaveBeenCalledWith(mailbox.id);
+    expect(mock.pending).not.toHaveBeenCalled();
+    expect(mock.job).toHaveBeenCalledWith(id);
     expect(page.filters.activeJobId).toBe(id);
   });
   it('创建响应丢失时查回原任务，保留草稿并等待原任务操作', async () => {
@@ -198,6 +200,132 @@ describe('注册表单和邮件生命周期', () => {
     expect(page.filters.activeJobId).toBe(id);
     expect(page.draft.form.age).toBe(25);
     expect(page.message.value).toContain('已找到原注册任务');
+    expect(page.error.value).toBe('');
+  });
+  it('创建超时后的空核对保留不明状态，迟到任务只读接回原编号', async () => {
+    let committed = false;
+    mock.create.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('请求超时')), 15_000);
+          setTimeout(() => {
+            committed = true;
+          }, 18_065);
+        })
+    );
+    mock.pending.mockImplementation(async () => (committed ? baseJob : null));
+    page.openStart(mailbox);
+    page.draft.form.age = 25;
+    const firstStart = page.start();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await firstStart;
+    expect(page.startConfirmText.value).toBe('核对原任务');
+    expect(page.error.value).toContain('创建结果暂不明确');
+    expect(page.message.value).not.toContain('重新');
+    await page.start();
+    expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.launch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3065);
+    await page.start();
+    expect(page.filters.activeJobId).toBe(id);
+    expect(page.message.value).toContain('已找到原注册任务');
+    expect(page.error.value).toBe('');
+    expect(page.draft.form.age).toBe(25);
+    expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.launch).not.toHaveBeenCalled();
+  });
+  it('未取得任务编号时不能只因时间经过和核对为空而重新创建', async () => {
+    page.openStart(mailbox);
+    mock.create.mockRejectedValueOnce(new Error('网络中断'));
+    await page.start();
+    await vi.advanceTimersByTimeAsync(90_000);
+    await page.start();
+    expect(page.startConfirmText.value).toBe('核对原任务');
+    expect(page.error.value).toContain('创建结果暂不明确');
+    expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.launch).not.toHaveBeenCalled();
+  });
+  it.each(['queued', 'running', 'awaiting_email'] as const)(
+    '已知编号直接读取原任务 %s，不重新查邮箱或启动任务',
+    async (state) => {
+      page.openStart(mailbox);
+      mock.launch.mockRejectedValueOnce(new Error('请求超时'));
+      await page.start();
+      mock.job.mockResolvedValueOnce({ ...baseJob, state });
+      mock.pending.mockRejectedValue(new Error('邮箱服务暂不可用'));
+      await page.start();
+      expect(mock.job).toHaveBeenCalledWith(id);
+      expect(mock.pending).not.toHaveBeenCalled();
+      expect(page.filters.activeJobId).toBe(id);
+      expect(page.message.value).toContain('已找到原注册任务');
+      expect(mock.create).toHaveBeenCalledOnce();
+      expect(mock.launch).toHaveBeenCalledOnce();
+      expect(mock.resume).not.toHaveBeenCalled();
+    }
+  );
+  it('原编号读取失败或返回其他编号时仍保留原任务，不回退创建', async () => {
+    page.openStart(mailbox);
+    mock.launch.mockRejectedValueOnce(new Error('请求超时'));
+    await page.start();
+    mock.job.mockRejectedValueOnce(new Error('任务暂不可读'));
+    await page.start();
+    expect(page.startConfirmText.value).toBe('核对原任务');
+    mock.job.mockResolvedValueOnce({ ...baseJob, id: '22222222-2222-4222-8222-222222222222' });
+    await page.start();
+    expect(page.filters.activeJobId).toBe(id);
+    expect(page.error.value).toContain('读取结果不一致');
+    expect(mock.pending).not.toHaveBeenCalled();
+    expect(mock.create).toHaveBeenCalledOnce();
+    expect(mock.launch).toHaveBeenCalledOnce();
+  });
+  it.each(['completed', 'cancelled'] as const)(
+    '原任务 %s 后结束核对锁，提示刷新资格并保留输入',
+    async (state) => {
+      page.openStart(mailbox);
+      page.draft.form.age = 25;
+      mock.launch.mockRejectedValueOnce(new Error('请求超时'));
+      await page.start();
+      mock.job.mockResolvedValueOnce({ ...baseJob, state });
+      await page.start();
+      expect(page.startConfirmText.value).toBe('开始注册');
+      expect(page.message.value).toContain('原任务已结束，请刷新邮箱状态');
+      expect(page.draft.form.age).toBe(25);
+      expect(mock.create).toHaveBeenCalledOnce();
+      expect(mock.launch).toHaveBeenCalledOnce();
+    }
+  );
+  it('明确校验失败且未查到任务时解除不明状态，保留错误和草稿', async () => {
+    page.openStart(mailbox);
+    page.draft.form.age = 25;
+    mock.create.mockRejectedValueOnce(
+      new ApiError('资料校验失败', {
+        code: 'VALIDATION_FAILED',
+        kind: 'validation',
+        status: 400,
+        retryable: false
+      })
+    );
+    await page.start();
+    expect(page.startConfirmText.value).toBe('开始注册');
+    expect(page.error.value).toBe('资料校验失败');
+    expect(page.message.value).toContain('请刷新邮箱状态');
+    expect(page.draft.form.age).toBe(25);
+    expect(mock.launch).not.toHaveBeenCalled();
+  });
+  it('服务错误响应不能证明未创建，不解除空核对的不明状态', async () => {
+    page.openStart(mailbox);
+    mock.create.mockRejectedValueOnce(
+      new ApiError('网关暂不可用', {
+        code: 'SERVICE_UNAVAILABLE',
+        kind: 'transient',
+        status: 504,
+        retryable: true
+      })
+    );
+    await page.start();
+    expect(page.startConfirmText.value).toBe('核对原任务');
+    expect(page.error.value).toContain('创建结果暂不明确');
+    expect(mock.launch).not.toHaveBeenCalled();
   });
   it('创建和核对都失败时锁定为核对原任务，不能重建', async () => {
     page.openStart(mailbox);

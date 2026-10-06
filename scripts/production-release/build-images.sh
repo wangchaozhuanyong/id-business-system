@@ -9,6 +9,11 @@ build_image() {
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
   if [[ "$service" == admin ]]; then
     options+=(--build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api)
+    if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
+      [[ "${registration_admin_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+      options+=(--label "id-business-v2.admin-projection-sha256=$registration_admin_projection")
+      options+=(--build-arg "V2_BUILD_ID=v2-$RELEASE_COMMIT")
+    fi
     if [[ "${HISTORICAL_EXCEPTION:-none}" == historical-finance-20261005-order-archive ]]; then
       options+=(--build-arg "V2_BUILD_ID=$archive_build_id")
     fi
@@ -16,6 +21,22 @@ build_image() {
   docker build "${options[@]}" -f "$dockerfile" -t "$reference" "$context"
   echo "Built image: $service"
 }
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-90-20261007
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-registration-build --registration-profile registration-worker-90-20261007
+  registration_context=.deploy/production-release/registration-build-context
+  registration_admin_context=.deploy/production-release/registration-admin-build-context
+  registration_admin_projection="$(read_registration_admin_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  build_image admin "$registration_admin_context/apps/admin/Dockerfile" runtime "$registration_admin_context"
+  exit 0
+fi
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-89-20261006 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
