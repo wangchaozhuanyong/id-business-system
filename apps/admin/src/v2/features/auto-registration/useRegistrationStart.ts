@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, reactive, ref, watch, type Ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
+import { isApiError } from '@/api/apiError';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { registrationApi } from './api';
@@ -88,30 +89,28 @@ export function useRegistrationStart(config: {
   }
   async function reconcile(aliasId: string) {
     const originalId = attempts[aliasId]?.jobId;
-    const pending = await registrationApi.pending(aliasId);
+    const original = originalId
+      ? await registrationApi.job(originalId)
+      : await registrationApi.pending(aliasId);
     if (disposed) return;
-    if (pending) {
-      attempts[aliasId] = { jobId: pending.id, uncertain: false };
-      config.onJob(pending.id);
-      config.message.value = '已找到原注册任务，请在注册任务中查看进度、继续或取消';
-      formOpen.value = false;
-      config.onStarted?.();
-    } else if (originalId) {
-      const original = await registrationApi.job(originalId);
-      if (disposed) return;
-      if (!['completed', 'cancelled'].includes(original.state)) {
-        config.onJob(original.id);
-        config.error.value = '原任务尚未结束，请先核对原任务';
-        return;
+    if (original) {
+      if (originalId && original.id !== originalId) {
+        throw new Error('原任务读取结果不一致，请重新核对');
       }
-      delete attempts[aliasId];
       config.onJob(original.id);
-      config.message.value = '原任务已结束，请刷新邮箱状态后再操作';
+      if (['completed', 'cancelled'].includes(original.state)) {
+        delete attempts[aliasId];
+        config.message.value = '原任务已结束，请刷新邮箱状态后再操作';
+      } else {
+        attempts[aliasId] = { jobId: original.id, uncertain: false };
+        config.message.value = '已找到原注册任务，请在注册任务中查看进度、继续或取消';
+      }
       formOpen.value = false;
       config.onStarted?.();
+      return 'found';
     } else {
-      delete attempts[aliasId];
-      config.message.value = '未发现已建立的注册任务；资料已保留，可重新点击开始注册';
+      config.error.value = '创建结果暂不明确，资料已保留；请点击核对原任务，避免重复注册';
+      return 'uncertain';
     }
   }
   async function start() {
@@ -145,8 +144,17 @@ export function useRegistrationStart(config: {
       } catch (cause) {
         if (disposed) return;
         try {
-          await reconcile(aliasId);
-          if (!disposed) config.error.value = getApiErrorMessage(cause);
+          const result = await reconcile(aliasId);
+          if (
+            !disposed &&
+            result === 'uncertain' &&
+            isApiError(cause) &&
+            [400, 401, 403, 404, 409, 422].includes(cause.status ?? 0)
+          ) {
+            delete attempts[aliasId];
+            config.error.value = getApiErrorMessage(cause);
+            config.message.value = '注册创建未被接收，资料已保留；请刷新邮箱状态后再操作';
+          }
         } catch {
           if (!disposed)
             config.error.value = '创建结果暂不明确，资料已保留；请点击核对原任务，避免重复注册';

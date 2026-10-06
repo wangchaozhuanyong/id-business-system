@@ -135,6 +135,7 @@ class AutoMailEventTests(unittest.IsolatedAsyncioTestCase):
         flow.registration_view = AsyncMock(return_value=('email', field))
         flow.button = AsyncMock(return_value=button)
         flow.email_submit_control = AsyncMock(return_value=(field, button, None))
+        flow.email_submit_ready = AsyncMock(return_value=True)
         flow.email_submit_unchanged = AsyncMock(return_value=True)
         flow.field = AsyncMock(return_value=field)
         flow.challenge = AsyncMock(return_value=False)

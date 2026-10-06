@@ -76,6 +76,49 @@ describe('API request policy registry', () => {
     expect(getApiRequestRetryDelay({ ...input, aborted: true })).toBeNull();
   });
 
+  it.each([
+    ['/id-business-v2/auto-registration/jobs', 70_000],
+    ['/id-business-v2/auto-registration/jobs/11111111-1111-4111-8111-111111111111/launch', 90_000]
+  ])('gives registration POST %s its budget without replaying a timeout', (url, timeoutMs) => {
+    expect(getApiRequestPolicy('POST', url)).toEqual({ retryDelaysMs: [], timeoutMs });
+    expect(
+      getApiRequestRetryDelay({ isNetworkError: true, method: 'POST', retryCount: 0, url })
+    ).toBeNull();
+    expect(
+      getApiRequestRetryDelay({
+        isNetworkError: false,
+        method: 'POST',
+        retryCount: 0,
+        status: 503,
+        url
+      })
+    ).toBeNull();
+  });
+
+  it('gives only pending registration GET the mailbox read budget', () => {
+    const url = '/id-business-v2/auto-registration/jobs/pending?mailboxAliasId=mail-1';
+    expect(getApiRequestPolicy('GET', url)).toEqual({
+      retryDelaysMs: [200, 800],
+      timeoutMs: 30_000
+    });
+    expect(getApiRequestPolicy('POST', url)).toBeNull();
+    expect(
+      getApiRequestPolicy(
+        'GET',
+        '/id-business-v2/auto-registration/jobs/11111111-1111-4111-8111-111111111111'
+      )?.timeoutMs
+    ).toBe(15_000);
+  });
+
+  it.each([
+    '/id-business-v2/auto-registration/jobs/other',
+    '/id-business-v2/auto-registration/jobs/11111111-1111-4111-8111-111111111111/resume',
+    '/id-business-v2/auto-registration/jobs/11111111-1111-4111-8111-111111111111/launch/other'
+  ])('does not expand registration write budgets to %s or another method', (url) => {
+    expect(getApiRequestPolicy('POST', url)).toBeNull();
+    expect(getApiRequestPolicy('PUT', '/id-business-v2/auto-registration/jobs')).toBeNull();
+  });
+
   it('allows relay writes to finish one bounded remote operation without retrying them', () => {
     const url = '/id-business-v2/workspace-relay/jobs/e400eb2b-6d10-4d9b-85a9-28310bc7ebea/run';
     expect(getApiRequestPolicy('POST', url)).toEqual({

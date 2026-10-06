@@ -2125,7 +2125,8 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         async def identity(page, _email, **_kwargs):
             return ('fixture', 'identity') if urlsplit(page.url).path == '/welcome' else None
         with patch('registration_browser.official_identity', identity):
-            await asyncio.wait_for(self.flow.register(), timeout=15)
+            # Initial observation (10s), preparation (15s), and transition read (10s).
+            await asyncio.wait_for(self.flow.register(), timeout=40)
 
     async def test_email_onclick_only_continue_submits_once_without_enter(self):
         await self.email_fixture('click')
@@ -2170,9 +2171,16 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.flow.data['registered'])
 
     async def test_unknown_email_submission_after_manual_continue_never_repeats(self):
+        import registration_browser
         await self.email_fixture('unknown')
         self.job.manual.side_effect = [None, Stop('fixture_paused')]
-        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+        original_begin = self.flow.begin_email_requests
+        def short_post_submit_observation():
+            original_begin()
+            registration_browser.REGISTRATION_OBSERVE_SECONDS = 1
+        self.flow.begin_email_requests = short_post_submit_observation
+        # Preparation keeps the real budget; only post-submit observation is shortened.
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 15):
             with self.assertRaises(Stop): await self.register_fixture()
         self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
         self.assertEqual(self.submissions, [{'email': self.job.payload['email'], 'enterPresses': 0}])
@@ -2186,12 +2194,13 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.email_fixture('click')
         self.page.set_default_timeout(10000)
         removed = False
+        removed_before_mail = False
         if missing == 'button':
             control = self.flow.email_submit_control
-            async def disappearing_button(email):
+            async def disappearing_button(email, **kwargs):
                 nonlocal removed
-                result = await control(email)
-                if result[1] and not removed:
+                result = await control(email, **kwargs)
+                if result[1] and not removed and kwargs.get('require_valid', True):
                     await result[1].evaluate('(node) => node.remove()')
                     removed = True
                 return result
@@ -2200,20 +2209,25 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
             from registration_browser import EMAIL_INPUT
             field = self.flow.field
             async def disappearing_email(page, selector):
-                nonlocal removed
+                nonlocal removed, removed_before_mail
                 result = await field(page, selector)
                 if (result and not removed and selector == EMAIL_INPUT
-                        and self.job.registration_operation == 'email_submit'):
+                        and await result.input_value() == self.job.payload['email']):
+                    removed_before_mail = self.job.prepare_mail.call_count == 0
                     await result.evaluate('(node) => node.remove()')
                     removed = True
                 return result
             self.flow.field = disappearing_email
         started = time.monotonic()
-        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 3 if missing == 'email' else 1):
             with self.assertRaises(Stop):
-                await asyncio.wait_for(self.register_fixture(), timeout=4)
-        self.assertLess(time.monotonic() - started, 4)
+                await asyncio.wait_for(self.register_fixture(), timeout=7 if missing == 'email' else 4)
+        self.assertLess(time.monotonic() - started, 6 if missing == 'email' else 4)
         self.assertTrue(removed)
+        if missing == 'email':
+            self.assertTrue(removed_before_mail)
+            self.assertFalse(self.flow.registration_state.get('email_submit_prepared', False))
+            self.assertFalse(self.flow.registration_state.get('email_submit_started', False))
         self.job.manual.assert_awaited_once_with('form_unrecognized')
         self.assertEqual(self.job.registration_observation_error,
                          {'reason': 'registration_page_changing', 'error_type': 'Error'} if missing == 'button'
@@ -2246,11 +2260,7 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         };
         __EXTRA__
         </script></body></html>'''
-        extra = ("document.querySelector('button').onclick=()=>fetch('/fixture/wrong',{method:'POST'});" if mode == 'outside' else
-                 '''document.querySelector('input').oninput=()=>setTimeout(()=>{
-                   document.body.innerHTML='<form id="code-form"><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';
-                   document.querySelector('form').onsubmit=e=>{e.preventDefault();fetch('/fixture/code',{method:'POST'});};
-                 },150);''' if mode == 'callback_race' else '')
+        extra = "document.querySelector('button').onclick=()=>fetch('/fixture/wrong',{method:'POST'});" if mode == 'outside' else ''
         html = html.replace('__EXTRA__', extra)
         async def local(route):
             path = urlsplit(route.request.url).path
@@ -2266,18 +2276,27 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
         def prepare(_step, *, new_request=False):
             self.job.awaiting_code = True
-            if mode == 'callback_race': time.sleep(.4)
             if mode == 'callback_timeout': time.sleep(1.05)
         self.job.prepare_mail = MagicMock(side_effect=prepare)
         self.job.wait_code = AsyncMock(side_effect=Stop('fixture_code_observed'))
+        if mode == 'callback_race':
+            original_reobserve = self.flow.email_submit_unchanged
+            async def replaced_after_callback(*args):
+                self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+                await self.page.evaluate('''() => {
+                  document.body.innerHTML='<form id="code-form"><p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';
+                  document.querySelector('form').onsubmit=e=>{e.preventDefault();fetch('/fixture/code',{method:'POST'});};
+                }''')
+                return await original_reobserve(*args)
+            self.flow.email_submit_unchanged = replaced_after_callback
         if mode == 'click_error':
             from playwright.async_api import Error
             control = self.flow.email_submit_control
             injected = False
-            async def interrupted_control(email):
+            async def interrupted_control(email, **kwargs):
                 nonlocal injected
-                result = await control(email)
-                if result[1] and not injected:
+                result = await control(email, **kwargs)
+                if result[1] and not injected and kwargs.get('require_valid', True):
                     injected = True
                     original_click = result[1].click
                     async def interrupted_click(**kwargs):
@@ -2292,8 +2311,8 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.context_error_injection_reached = False
             method = 'email_submit_control' if mode == 'prepare_context_error' else 'email_submit_unchanged'
             original = getattr(self.flow, method)
-            async def changing_context(*args):
-                await original(*args)  # Complete actual native DOM reads before the injected browser error.
+            async def changing_context(*args, **kwargs):
+                await original(*args, **kwargs)  # Complete actual native DOM reads before the injected browser error.
                 try:
                     await self.page.evaluate('''() => { throw new Error('Execution context was destroyed synthetic-private'); }''')
                 except Error as error:
@@ -2305,9 +2324,17 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
                         self.flow.registration_view = AsyncMock(side_effect=Stop('form_unrecognized'))
                     raise
             setattr(self.flow, method, changing_context)
-        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 15 if category_mode else 1):
+        positive_submission = mode in {'external_associated', 'click_error'}
+        if positive_submission:
+            import registration_browser
+            original_begin = self.flow.begin_email_requests
+            def short_post_submit_observation():
+                original_begin()
+                registration_browser.REGISTRATION_OBSERVE_SECONDS = 1
+            self.flow.begin_email_requests = short_post_submit_observation
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 15 if category_mode or mode == 'callback_race' or positive_submission else 1):
             with self.assertRaises(Error if mode == 'click_error' else Stop) as stopped:
-                await asyncio.wait_for(self.flow.register(), timeout=10 if category_mode else 7)
+                await asyncio.wait_for(self.flow.register(), timeout=40 if mode == 'callback_race' or positive_submission else 10 if category_mode else 7)
         return 'fixture_click_interrupted' if mode == 'click_error' else stopped.exception.report['reason']
 
     async def test_unrelated_global_continue_never_prepares_or_clicks(self):
@@ -2436,6 +2463,247 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class EmailHydrationBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Native GET fallback and delayed form handlers, entirely offline."""
+    async def asyncSetUp(self):
+        await EmailSubmitBrowserTests.asyncSetUp(self)
+        self.job.wait_code = AsyncMock(side_effect=Stop('fixture_code_observed'))
+        self.flow.refresh_registration = AsyncMock(return_value=False)
+
+    async def asyncTearDown(self):
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def hydration_fixture(self, mode='native', method='get'):
+        html = '''<!doctype html><html><body><form id="email-form" action="/auth/login" method="__METHOD__">
+        <input type="email" name="email" required><button>Continue</button></form><script>
+        const state=document.documentElement.dataset;state.preHydrationInputs='0';state.hydrationStarted='false';
+        state.scriptBoot='true';state.hydrated='false';
+        document.querySelector('input').oninput=()=>{if(state.hydrated!=='true')state.preHydrationInputs=String(Number(state.preHydrationInputs)+1);};
+        if('__MODE__'==='native_getter'){
+          state.nativeGetterCalls='0';Object.defineProperty(document.querySelector('form'),'onsubmit',{
+            get:()=>{state.nativeGetterCalls=String(Number(state.nativeGetterCalls)+1);throw new Error('synthetic-private-OTP');}});
+        }
+        if('__MODE__'==='react_getter'){
+          document.querySelector('button').onclick=()=>{};document.body.__reactProps$parent={onSubmit:()=>{}};
+          state.reactGetterCalls='0';Object.defineProperty(document.querySelector('form'),'__reactProps$fixture',{
+            get:()=>{state.reactGetterCalls=String(Number(state.reactGetterCalls)+1);throw new Error('synthetic-private-OTP');}});
+        }
+        if('__MODE__'==='wrapper_getter'){
+          state.wrapperGetterCalls='0';Object.defineProperty(document.querySelector('form'),'wrappedJSObject',{
+            get(){/* [native code] */state.wrapperGetterCalls=String(Number(state.wrapperGetterCalls)+1);
+              return {__reactProps$spoof:{onSubmit(){}}};}});
+        }
+        document.addEventListener('fixture-arm',()=>{if(state.hydrationStarted==='true')return;state.hydrationStarted='true';setTimeout(()=>{
+          state.beforeHydrationNonempty=String(!!document.querySelector('input').value);
+          if('__MODE__'==='replace')document.querySelector('form').outerHTML=
+            '<form id="email-form" action="/auth/login" method="get"><input type="email" name="email" required><button>Continue</button></form>';
+          const form=document.querySelector('form');form.querySelector('input').value='';
+          const handler=async event=>{event.preventDefault();await fetch('/fixture/email',{
+            method:'POST',body:JSON.stringify({email:form.querySelector('input').value})});
+            document.body.innerHTML='<form><p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';
+          };
+          if('__MODE__'==='react'){
+            // Exercise the documented React own-props contract with native delegated events.
+            form.__reactProps$fixture={onSubmit:handler};
+            state.wrapperGetterCalls='0';Object.defineProperty(form,'wrappedJSObject',{
+              get:()=>{state.wrapperGetterCalls=String(Number(state.wrapperGetterCalls)+1);throw new Error('synthetic-wrapper');}});
+            document.addEventListener('submit',event=>{if(event.target===form)form.__reactProps$fixture.onSubmit(event);});
+          }else form.onsubmit=handler;
+          state.hydrated='true';
+        },600);});
+        </script></body></html>'''.replace('__METHOD__', method).replace('__MODE__', mode)
+        async def local(route):
+            request = route.request
+            self.navigation_methods.append((request.method, urlsplit(request.url).path, bool(urlsplit(request.url).query)))
+            if urlsplit(request.url).path == '/api/auth/session':
+                await route.fulfill(content_type='application/json', body='{}')
+            elif urlsplit(request.url).path == '/fixture/email' or request.method == 'POST':
+                self.submissions.append(json.loads(request.post_data) if request.post_data.startswith('{') else request.method)
+                if method == 'post':
+                    await route.fulfill(content_type='text/html', body='<form><p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>')
+                else:
+                    await route.fulfill(content_type='application/json', body='{}')
+            else:
+                await route.fulfill(content_type='text/html', body=html)
+        await self.context.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='load', timeout=5000)
+        self.assertEqual(await self.page.evaluate('document.readyState'), 'complete')
+        self.assertEqual(await self.page.locator('html').get_attribute('data-script-boot'), 'true')
+
+    async def arm_on_first_gate_read(self, *, cancel=False, navigate=False):
+        original = self.flow.email_submit_ready
+        self.gate_reads = 0
+        async def ready(email, button):
+            result = await original(email, button)
+            self.gate_reads += 1
+            if self.gate_reads == 1:
+                self.assertFalse(result)
+                self.job.prepare_mail.assert_not_called()
+                self.assertEqual(await self.page.locator('input').input_value(), '')
+                if cancel:
+                    self.job.cancelled.set()
+                elif navigate:
+                    await self.page.evaluate("document.body.innerHTML='<form><p>Check your email. Email verification code</p><input name=code autocomplete=one-time-code><button>Continue</button></form>'")
+                else:
+                    await self.page.evaluate("document.dispatchEvent(new Event('fixture-arm'))")
+            return result
+        self.flow.email_submit_ready = ready
+
+    async def expect_code(self):
+        with self.assertRaises(Stop) as stopped:
+            await asyncio.wait_for(self.flow.register(), timeout=40)
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_code_observed')
+        self.assertEqual(self.submissions, [{'email': self.job.payload['email']}])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.job.wait_code.assert_awaited_once()
+        self.job.manual.assert_not_awaited()
+        self.assertTrue(self.flow.registration_state['email_click_returned'])
+        self.assertFalse(self.flow.registration_state.get('code_submitted'))
+        self.assertFalse(self.flow.registration_state.get('profile_submitted'))
+        self.assertNotIn('email_form_first_failure', self.flow.registration_state)
+        self.assertFalse(self.flow.data['registered'])
+        self.assertEqual(await self.page.locator('html').get_attribute('data-before-hydration-nonempty'), 'false')
+        self.assertEqual(await self.page.locator('html').get_attribute('data-pre-hydration-inputs'), '0')
+        self.assertFalse(any(method == 'GET' and query for method, _path, query in self.navigation_methods))
+        self.assertEqual(self.page_errors, [])
+
+    async def test_native_get_fallback_clears_email_without_handler_but_gate_waits(self):
+        await self.hydration_fixture()
+        # Reproduce the unguarded native behavior without running the executor.
+        await self.page.locator('input').fill(self.job.payload['email'])
+        await self.page.get_by_role('button', name='Continue').click()
+        await self.page.wait_for_load_state('load')
+        self.assertTrue(any(method == 'GET' and query for method, _path, query in self.navigation_methods))
+        self.assertEqual(await self.page.locator('input').input_value(), '')
+        self.navigation_methods.clear()
+        await self.arm_on_first_gate_read()
+        await self.expect_code()
+        self.assertGreater(self.gate_reads, 1)
+        self.assertEqual(self.flow.registration_state['email_form_pre_submit']['submit_readiness'], 'native_handler')
+
+    async def test_exact_react_form_props_handler_is_observed_before_fill(self):
+        await self.hydration_fixture('react')
+        await self.arm_on_first_gate_read()
+        await self.expect_code()
+        self.assertEqual(self.flow.registration_state['email_form_pre_submit']['submit_readiness'], 'react_handler')
+        self.assertEqual(await self.page.locator('html').get_attribute('data-wrapper-getter-calls'), '0')
+
+    async def test_hydration_replaced_email_form_is_resolved_before_fill(self):
+        await self.hydration_fixture('replace')
+        await self.arm_on_first_gate_read()
+        await self.expect_code()
+
+    async def test_complete_get_form_without_handler_exhausts_original_budget_without_fill(self):
+        await self.hydration_fixture()
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop) as stopped:
+                await asyncio.wait_for(self.flow.register(), timeout=4)
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+        self.assertEqual(self.job.registration_observation_error, {'reason':'session_load_timeout', 'error_type':'TimeoutError'})
+        self.job.prepare_mail.assert_not_called()
+        self.assertEqual(await self.page.locator('input').input_value(), '')
+        self.assertEqual(self.submissions, [])
+        self.assertEqual(len(self.navigation_methods), 1)
+        self.assertFalse(self.flow.registration_state.get('email_submit_prepared'))
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+        first = self.flow.registration_state['email_form_first_failure']
+        self.assertEqual((first['read'], first['submit_readiness'], first['value_nonempty']),
+                         ('measured', 'no_handler', 'false'))
+
+    async def test_cancel_during_handler_wait_never_fills_or_requests_mail(self):
+        await self.hydration_fixture()
+        await self.arm_on_first_gate_read(cancel=True)
+        with self.assertRaises(Stop) as stopped:
+            await asyncio.wait_for(self.flow.register(), timeout=7)
+        self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+        self.job.prepare_mail.assert_not_called()
+        self.job.manual.assert_not_awaited()
+        self.assertEqual(await self.page.locator('input').input_value(), '')
+        self.assertEqual(self.submissions, [])
+
+    async def test_own_onsubmit_accessor_is_unknown_without_calling_getter_or_submitting(self):
+        await self.hydration_fixture('native_getter')
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop):
+                await asyncio.wait_for(self.flow.register(), timeout=4)
+        self.assertEqual(await self.page.locator('html').get_attribute('data-native-getter-calls'), '0')
+        self.assertEqual(self.flow.registration_state['email_form_first_failure']['submit_readiness'], 'unknown')
+        self.job.prepare_mail.assert_not_called()
+        self.assertEqual(self.submissions, [])
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+
+    async def test_code_navigation_while_waiting_does_not_click_or_fill_replacement(self):
+        await self.hydration_fixture()
+        await self.arm_on_first_gate_read(navigate=True)
+        with self.assertRaises(Stop) as stopped:
+            await asyncio.wait_for(self.flow.register(), timeout=40)
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_code_observed')
+        self.assertEqual(self.submissions, [])
+        self.assertFalse(self.flow.registration_state.get('email_submit_prepared'))
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+        self.job.wait_code.assert_awaited_once()
+
+    async def test_callback_removed_get_handler_preserves_mail_fence_without_click(self):
+        await self.hydration_fixture()
+        await self.page.evaluate('() => { document.querySelector("form").onsubmit=event=>event.preventDefault(); }')
+        original = self.flow.email_submit_unchanged
+        async def handler_removed_before_reobserve(*args):
+            self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+            await self.page.evaluate('document.querySelector("form").onsubmit=null')
+            return await original(*args)
+        self.flow.email_submit_unchanged = handler_removed_before_reobserve
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 3):
+            with self.assertRaises(Stop):
+                await asyncio.wait_for(self.flow.register(), timeout=7)
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertEqual(self.submissions, [])
+        self.assertTrue(self.flow.registration_state['email_submit_prepared'])
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+
+    async def test_get_readiness_does_not_use_button_or_parent_handlers_or_getters(self):
+        from browser_session import SessionBudget
+        await self.hydration_fixture('react_getter')
+        field = await self.flow.field(self.page, 'input[type=email]')
+        email, button, _ = await self.flow.email_submit_control(field, require_valid=False)
+        self.assertFalse(await self.flow.email_submit_ready(email, button))
+        await self.flow.email_diagnostic('prepare', SessionBudget(1))
+        self.assertEqual(self.flow.registration_state['email_form_current']['submit_readiness'], 'unknown')
+        self.assertEqual(await self.page.locator('html').get_attribute('data-react-getter-calls'), '0')
+        self.assertEqual(self.submissions, [])
+
+    async def test_native_code_comment_cannot_authorize_a_content_wrapper_getter(self):
+        from registration_browser import EMAIL_SUBMIT_READINESS
+        await self.hydration_fixture('wrapper_getter')
+        result = await self.page.evaluate('''() => {
+          const readiness = ''' + EMAIL_SUBMIT_READINESS + ''';
+          let calls=0;const form={isConnected:true,method:'get',onsubmit:null};
+          const button={isConnected:true,form,hasAttribute:()=>false};
+          const fake=function wrappedJSObject(){/* [native code] */calls++;return {__reactProps$spoof:{onSubmit(){}}};};
+          Object.defineProperty(fake,'name',{value:'get wrappedJSObject'});
+          Object.defineProperty(form,'wrappedJSObject',{get:fake});
+          return {readiness:readiness(form,button),calls};
+        }''')
+        self.assertEqual(result, {'readiness':'unknown', 'calls':0})
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop):
+                await asyncio.wait_for(self.flow.register(), timeout=4)
+        self.assertEqual(await self.page.locator('html').get_attribute('data-wrapper-getter-calls'), '0')
+        self.job.prepare_mail.assert_not_called()
+        self.assertEqual(self.submissions, [])
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+
+    async def test_native_post_form_keeps_existing_submission_behavior_without_handler(self):
+        await self.hydration_fixture(method='post')
+        with self.assertRaises(Stop) as stopped:
+            await asyncio.wait_for(self.flow.register(), timeout=40)
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_code_observed')
+        self.assertEqual(self.submissions, ['POST'])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertTrue(self.flow.registration_state['email_click_returned'])
+        self.assertEqual(self.flow.registration_state['email_form_pre_submit']['submit_readiness'], 'not_required')
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
 class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
     """Actual Camoufox form/network events; every request is fulfilled or aborted locally."""
     async def asyncSetUp(self):
@@ -2458,9 +2726,10 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
         await ProfileBrowserTests.asyncTearDown(self)
 
     async def fixture(self, mode):
+        import registration_browser
         html = '''<!doctype html><html><body><form action="/auth/login" method="get">
         <input type="email" name="email" required><button>Continue</button></form>__SCRIPT__</body></html>'''
-        script = '' if mode == 'native_get' else '''<script>
+        script = '<script>document.querySelector("form").onsubmit=()=>{};</script>' if mode == 'native_get' else '''<script>
         document.querySelector('form').onsubmit=event=>{
           event.preventDefault();fetch('/fixture/email?token=synthetic-private-token',{
             method:'POST',body:'synthetic-private-password-OTP-123456'}).then(()=>{
@@ -2494,9 +2763,15 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await route.fulfill(content_type='text/html', body=html)
         await self.context.route('**/*', local)
         await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
-        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 3 if mode == 'finished_burst' else 1), self.assertLogs('registration', level='WARNING') as logs:
+        original_begin = self.flow.begin_email_requests
+        def short_post_submit_observation():
+            original_begin()
+            registration_browser.REGISTRATION_OBSERVE_SECONDS = 3 if mode == 'finished_burst' else 1
+        self.flow.begin_email_requests = short_post_submit_observation
+        # Keep real preparation time; shorten only observation after the submission fence.
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 15), self.assertLogs('registration', level='WARNING') as logs:
             with self.assertRaises(Stop) as stopped:
-                await asyncio.wait_for(self.flow.register(), timeout=12)
+                await asyncio.wait_for(self.flow.register(), timeout=40)
         self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
         self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
         self.job.manual.assert_awaited_once_with('form_unrecognized')
@@ -3325,6 +3600,7 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         submit=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
         flow.field=AsyncMock(return_value=field);flow.button=AsyncMock(return_value=submit)
         flow.email_submit_control=AsyncMock(return_value=(field,submit,None))
+        flow.email_submit_ready=AsyncMock(return_value=True)
         flow.email_submit_unchanged=AsyncMock(return_value=True)
         flow.challenge=AsyncMock(return_value=False)
         async def observed():
@@ -3450,7 +3726,10 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                                 await flow.register()
                         self.assertEqual(flow.job.registration_observation_error, expected)
                         submit.click.assert_not_awaited()
-                        field.fill.assert_awaited_once_with(flow.data['email'])
+                        if method == 'email_submit_control':
+                            field.fill.assert_not_awaited()
+                        else:
+                            field.fill.assert_awaited_once_with(flow.data['email'])
                         self.assertFalse(flow.registration_state.get('email_submit_started'))
                         self.assertNotIn('private-token', '\n'.join(logs.output))
 
