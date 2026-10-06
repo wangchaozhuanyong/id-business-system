@@ -1,5 +1,6 @@
 """Real browser DOM fixture; all requests are fulfilled locally in memory."""
 import asyncio
+import base64
 import os
 import json
 import time
@@ -576,11 +577,11 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_refresh_guard_is_removed_before_manual_challenge(self):
         flow = self.flow()
         flow.page.goto.return_value = SimpleNamespace(status=403)
-        async def manual(_reason):
+        async def manual(_reason, **_kwargs):
             self.assertEqual(flow.context.unroute.await_count, 1)
         flow.job.manual = AsyncMock(side_effect=manual)
         self.assertTrue(await flow.refresh_registration())
-        flow.job.manual.assert_awaited_once_with('verification_required')
+        flow.job.manual.assert_awaited_once_with('verification_required', can_resume=flow.verification_resolved)
 
     async def test_cancelled_refresh_cannot_navigate(self):
         flow = self.flow(); flow.job.cancelled.set()
@@ -997,7 +998,7 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
             await self.serve(body)
             navigations = len(self.navigation_methods)
             with self.assertRaises(Stop): await self.flow.register()
-            self.job.manual.assert_awaited_with('verification_required')
+            self.job.manual.assert_awaited_with('verification_required', can_resume=self.flow.verification_resolved)
             self.assertEqual(len(self.navigation_methods), navigations)
             self.assertEqual(self.submissions, [])
 
@@ -1380,6 +1381,221 @@ class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
             self.job.wait_code.assert_not_awaited()
             self.assertEqual(self.page_errors, [])
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class PassiveVerificationBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """A disappearing fixture challenge is observed, never clicked or solved."""
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+        from registration_builtin import RegistrationServerJob
+        from test_registration_builtin import server_payload
+        value = server_payload()
+        value['browserProfileId'] = 'reg_' + 'a' * 64
+        value['registrationAge'] = 45
+        self.job = RegistrationServerJob(value['id'], value,
+            'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
+        self.job.registration_state = {}
+        self.flow = RegistrationBrowser(self.job, self.context)
+        self.flow.page = self.page
+        self.flow.registration_country = AsyncMock(return_value='US')
+        async def settle(_seconds=2):
+            self.job.check()
+            await asyncio.sleep(.02)
+        self.flow.settle = settle
+        self.job.prepare_mail = MagicMock(wraps=self.job.prepare_mail)
+        self.job.wait_code = AsyncMock(wraps=self.job.wait_code)
+        self.job.manual = AsyncMock(wraps=self.job.manual)
+        self.job.signal_resume = MagicMock(wraps=self.job.signal_resume)
+        self.tasks = []
+        self.requests = []
+        self.waiting_user = asyncio.Event()
+        self.server_registered = False
+        self.mail_fence = 1
+        self.deliveries = 0
+
+    async def asyncTearDown(self):
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def passive_fixture(self, resolved='code', *, disappears=True, stop=None, succeeds=False):
+        async def change_challenge():
+            # Only fixture JavaScript removes its overlay. No CAPTCHA input is operated.
+            if stop == 'cancel':
+                self.job.signal_cancel()
+            elif stop == 'expiry':
+                self.job.deadline = time.monotonic() - 1
+            await self.page.evaluate("document.dispatchEvent(new Event('fixture-auto-resolve'))")
+
+        def event(name, **data):
+            self.events.append((name, data))
+            self.job.step = data.get('step', self.job.step)
+            if name == 'waiting_user':
+                self.assertEqual(data.get('reason'), 'verification_required')
+                self.assertTrue(self.job.waiting_for_user)
+                self.waiting_user.set()
+                self.job.deadline = time.monotonic() + (15 if succeeds else 2)
+                if disappears:
+                    self.tasks.append(asyncio.create_task(change_challenge()))
+            elif name == 'waiting_email':
+                self.assertFalse(self.job.waiting_for_user)
+                if data.get('newMailRequest'):
+                    self.mail_fence += 1
+                self.job.signal_code('123456', self.job.attempt, 'email_code', 'fixture-passive-mail')
+                self.deliveries += 1
+
+        self.job.event = event
+        html = '''<!doctype html><html><head><meta charset="utf-8"></head><body>
+        <main><h1>Verify you are human</h1><div class="cf-turnstile">
+        <button id="captcha">I am human</button></div></main><script>
+        document.documentElement.dataset.captchaClicks='0';
+        document.querySelector('#captcha').onclick=()=>{
+          document.documentElement.dataset.captchaClicks=String(Number(document.documentElement.dataset.captchaClicks)+1);
+        };
+        const root=document.querySelector('main');
+        window.render=stage=>{
+          const code='<form><p>Check your email. Email verification code</p>'
+            +'<input name="code" autocomplete="one-time-code"><button>Continue</button></form>';
+          const profile='<form><input name="name" autocomplete="name">'
+            +'<input name="age" type="number"><button>Continue</button></form>';
+          if(stage==='code'||stage==='ambiguous_code')root.innerHTML=code+(stage==='ambiguous_code'?code:'');
+          else if(stage==='profile'||stage==='ambiguous_profile')root.innerHTML=profile+(stage==='ambiguous_profile'?profile:'');
+          else root.innerHTML='<main>Loading...</main>';
+          root.querySelectorAll('form').forEach(form=>form.onsubmit=async event=>{
+            event.preventDefault();const kind=form.querySelector('[name=code]')?'code':'profile';
+            const values={};form.querySelectorAll('input[name]').forEach(input=>values[input.name]=input.value);
+            await fetch('/fixture/'+kind,{method:'POST',body:JSON.stringify(values)});
+            if(kind==='code')window.render('profile');else root.innerHTML='<p>Welcome</p>';
+          });
+        };
+        document.addEventListener('fixture-auto-resolve',()=>setTimeout(()=>window.render(__RESOLVED__),80));
+        </script></body></html>'''.replace('__RESOLVED__', json.dumps(resolved))
+
+        def session():
+            def part(value):
+                return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+            token = '.'.join((part({'alg': 'RS256'}), part({
+                'exp': int(time.time()) + 3600,
+                'https://api.openai.com/auth': {'chatgpt_account_id': 'passive-fixture-account'},
+                'https://api.openai.com/profile': {'email': self.job.payload['email']}}),
+                'c3ludGhldGljX3NpZ25hdHVyZQ'))
+            return {'accessToken': token, 'user': {'id': 'passive-fixture-user',
+                    'email': self.job.payload['email']}, 'account': {'id': 'passive-fixture-account'}}
+
+        async def local(route):
+            request = route.request
+            path = urlsplit(request.url).path
+            self.requests.append((request.method, path, request.is_navigation_request()))
+            if path == '/api/auth/session':
+                self.assertEqual(request.method, 'GET')
+                await route.fulfill(content_type='application/json',
+                    body=json.dumps(session() if self.server_registered else {}))
+            elif path == '/backend-api/accounts/check/v4-2023-04-27':
+                self.assertEqual(request.method, 'GET')
+                self.assertTrue(self.server_registered)
+                await route.fulfill(content_type='application/json', body=json.dumps({
+                    'accounts': {'passive-fixture-account': {'account': {'plan_type': 'free'}}}}))
+            elif path in {'/fixture/code', '/fixture/profile'}:
+                self.assertEqual(request.method, 'POST')
+                self.submissions.append((path, json.loads(request.post_data)))
+                if path == '/fixture/profile':
+                    self.server_registered = True
+                await route.fulfill(content_type='application/json', body='{}')
+            else:
+                self.assertEqual((request.method, path), ('GET', '/email-verification'))
+                await route.fulfill(content_type='text/html', body=html)
+        await self.context.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/email-verification', wait_until='domcontentloaded')
+        self.assertEqual(self.page_errors, [])
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.captchaClicks'), '0')
+        self.job.deadline = time.monotonic() + 15
+
+    async def assert_pause_integrity(self):
+        self.job.manual.assert_awaited_once_with('verification_required', can_resume=self.flow.verification_resolved)
+        self.job.signal_resume.assert_not_called()
+        self.assertTrue(self.waiting_user.is_set())
+        self.assertFalse(self.job.waiting_for_user)
+        self.assertIsNone(self.job.manual_reason)
+        await asyncio.gather(*self.tasks)
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.captchaClicks'), '0')
+        self.assertEqual([(method, path) for method, path, navigation in self.requests if navigation],
+                         [('GET', '/email-verification')])
+        self.assertFalse(self.flow.registration_refreshed)
+        self.assertIs(self.flow.page, self.page)
+        self.assertIs(self.flow.context, self.context)
+        self.assertEqual(self.mail_fence, 1)
+        self.assertEqual(self.page_errors, [])
+
+    async def stopped_fixture(self, resolved='code', *, disappears=True, stop=None):
+        await self.passive_fixture(resolved, disappears=disappears, stop=stop)
+        with self.assertRaises(Stop) as stopped:
+            await asyncio.wait_for(self.flow.register(), timeout=12)
+        self.assertEqual(stopped.exception.report['reason'],
+                         'operation_cancelled' if stop == 'cancel' else 'verification_required')
+        await self.assert_pause_integrity()
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_not_called()
+        self.job.wait_code.assert_not_awaited()
+        self.assertEqual(self.deliveries, 0)
+        self.assertFalse(self.job.payload['registered'])
+        self.assertFalse(self.job.payload['passwordVerified'])
+        self.assertFalse(self.job.payload['mfaVerified'])
+        self.assertNotIn('registered', [name for name, _data in self.events])
+
+    async def test_self_resolving_challenge_delivers_code_once_then_completes_original_profile(self):
+        await self.passive_fixture(succeeds=True)
+        await asyncio.wait_for(self.flow.register(), timeout=20)
+        await self.assert_pause_integrity()
+        self.assertEqual(self.submissions, [('/fixture/code', {'code': '123456'}),
+            ('/fixture/profile', {'name': self.job.payload['displayName'], 'age': '45'})])
+        self.job.wait_code.assert_awaited_once()
+        self.job.prepare_mail.assert_called_once_with('email_code')
+        self.assertEqual(self.deliveries, 1)
+        self.assertEqual([data.get('newMailRequest') for name, data in self.events if name == 'waiting_email'], [False])
+        self.assertTrue(self.flow.registration_state['code_submitted'])
+        self.assertTrue(self.flow.registration_state['profile_submitted'])
+        self.assertTrue(self.job.payload['registered'])
+        self.assertFalse(self.job.payload['passwordVerified'])
+        self.assertFalse(self.job.payload['mfaVerified'])
+        self.assertEqual([name for name, _data in self.events].count('registered'), 1)
+
+    async def test_self_resolving_challenge_can_continue_new_profile_after_previous_code_submission(self):
+        self.flow.registration_state['code_submitted'] = True
+        await self.passive_fixture('profile', succeeds=True)
+        await asyncio.wait_for(self.flow.register(), timeout=20)
+        await self.assert_pause_integrity()
+        self.assertEqual(self.submissions, [('/fixture/profile',
+            {'name': self.job.payload['displayName'], 'age': '45'})])
+        self.job.wait_code.assert_not_awaited()
+        self.job.prepare_mail.assert_not_called()
+        self.assertTrue(self.job.payload['registered'])
+
+    async def test_genuine_challenge_remains_paused_without_mail_or_captcha_actions(self):
+        await self.stopped_fixture(disappears=False)
+        self.assertTrue(await self.page.locator('.cf-turnstile').is_visible())
+
+    async def test_disappeared_challenge_does_not_replay_previously_submitted_code(self):
+        self.flow.registration_state['code_submitted'] = True
+        await self.stopped_fixture()
+        self.assertTrue(await self.page.locator('input[name="code"]').is_visible())
+
+    async def test_disappeared_challenge_does_not_replay_previously_submitted_profile(self):
+        self.flow.registration_state['profile_submitted'] = True
+        await self.stopped_fixture('profile')
+
+    async def test_disappeared_challenge_with_ambiguous_code_forms_remains_paused(self):
+        await self.stopped_fixture('ambiguous_code')
+
+    async def test_disappeared_challenge_with_ambiguous_profile_forms_remains_paused(self):
+        await self.stopped_fixture('ambiguous_profile')
+
+    async def test_cancel_wins_when_fixture_challenge_disappears(self):
+        await self.stopped_fixture(stop='cancel')
+
+    async def test_original_deadline_wins_when_fixture_challenge_disappears(self):
+        await self.stopped_fixture(stop='expiry')
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
