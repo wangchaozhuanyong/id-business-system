@@ -3064,9 +3064,9 @@ def run_release_migrations(release, admin_only, historical_diagnostics=False):
 REGISTRATION_SCOPE_ID = 'registration-worker-b8-80-20261006'
 REGISTRATION_SCOPE_FILE = 'deploy/aws/' + REGISTRATION_SCOPE_ID + '.json'
 REGISTRATION_CURRENT = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
-REGISTRATION_SOURCE = '091c5f3e62fd01b3af80d98a6552435637cc47dc'
+REGISTRATION_SOURCE = '8dc096085ddb78fcf23c257257f5dc512fac1cf5'
 REGISTRATION_WORKER_PREFIX = 'apps/api/src/id-business-v2/auto-recharge/worker/'
-REGISTRATION_PROJECTION_SHA256 = '1fd789ef8d45948bf2ce2409b955c9c9a4b3898a8b675edad869c611a59b1e14'
+REGISTRATION_PROJECTION_SHA256 = '778547eff19ff80059f8aea605369cbe0820c44bfcb366fbf7fe307533870b83'
 REGISTRATION_FILES = frozenset(REGISTRATION_WORKER_PREFIX + name for name in (
     'registration_browser.py', 'registration_job.py', 'test_registration.py',
     'test_registration_browser.py', 'test_registration_builtin.py'))
@@ -3077,11 +3077,12 @@ REGISTRATION_CONTROLS = frozenset({
     'scripts/production-release/remote-deploy.py', 'scripts/production-release/remote-deploy.test.py',
     'scripts/production-release/registration-only-transport.test.py',
     'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
-    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-release.test.mjs'})
-REGISTRATION_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': 'ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5',
- 'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py': 'a4256d8ac85f17064c29485b16e48888346c88a61abe315c5924622486530ad1',
- 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py': '4593b2eaab271dd9c16ab12adac07b42f87c79173b432982cef178c17c9767e0',
- 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': 'fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06',
+    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-release.test.mjs',
+    'scripts/v2-registration-finance-audit.mjs', 'scripts/v2-registration-finance-audit.test.mjs'})
+REGISTRATION_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': '6a484c2bf081a5fea20f650b66e9368c200930882635179e3a25c294faabc53b',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py': '78cc204cc4e4b63494d42019b075a51c3ac4ee7494e6f55aee5d127ef7ce2590',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py': 'b49b874d9cfb5af42c9ddfa3fc348f7dc8470af0e140424c8035b446cd4dc471',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': 'af9778d037be3c7644371173a4a1a8143880ad2f385efd77d0739dae2ff91b53',
  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py': '1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe',
  'docs/AUTO_REGISTRATION.md': '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c'}
 REGISTRATION_BASELINE = {'commit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
@@ -3138,6 +3139,61 @@ REGISTRATION_FINANCE = {'kind': 'EXISTING_SEALED_ORDER_ARCHIVE_49',
  'sourceProjectionTree': 'd9c2e534f0e71d5c88ffc4db492c4db2e79a9370',
  'sourceAnchorSha256': '39dd801292f081560fdaf7db2feb6cdd6f3c1bc8b730ca9add4d33a472466920',
  'cleanupReceiptSha256': 'f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f'}
+REGISTRATION_CLEARANCE = {'version': 1,
+ 'mode': 'STRICT_ZERO_AFTER_APPROVED_REVERSALS_49',
+ 'sourceCommit': '6a82a774f2a65e00d4f260c629f7152bf7935d1d',
+ 'checkCount': 49,
+ 'executedCheckCount': 49,
+ 'unavailableCheckCount': 0,
+ 'violationCount': 0,
+ 'rulesSha256': 'fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a',
+ 'sources': {'accounts': {'ids': ['02d8080d-68d8-4095-8b60-a30d5cd6c4e0',
+                                  'c6866d24-097b-44c5-b3a7-f3a3dcc11b23'],
+                          'rowCount': 2,
+                          'sha256': '7e3f38a53838c3edc387498e6bb0ea8585af89b3606a0979c6d10441680172fb'},
+             'cashJournals': {'ids': ['02d8080d-68d8-4095-8b60-a30d5cd6c4e0',
+                                      'c6866d24-097b-44c5-b3a7-f3a3dcc11b23'],
+                              'rowCount': 15,
+                              'sha256': 'eba994ee593ab87b49e2c9d772e6b81dd5f84a8a5376c0a946e8f9258d61aa96'},
+             'cashLines': {'ids': ['02d8080d-68d8-4095-8b60-a30d5cd6c4e0',
+                                   'c6866d24-097b-44c5-b3a7-f3a3dcc11b23'],
+                           'rowCount': 15,
+                           'sha256': '6564164dd9d17c0617120e483ba79fbadeb0148c8c522066d137aa6a79059b79'},
+             'expenses': {'ids': ['0e095178-8455-4f1d-8e45-d12b09064702',
+                                  '10eb0ed7-3ce4-42a7-93e1-b83a898efe15',
+                                  '49ba9779-9ff8-4bb8-8dd2-f587865f2a9e',
+                                  '5a9ca0f0-2855-48e6-a50f-690dc64ebb65',
+                                  'eb3f0d75-3802-49ab-8f3f-86fae65d8514'],
+                          'rowCount': 5,
+                          'sha256': '740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c'},
+             'journals': {'ids': ['0e095178-8455-4f1d-8e45-d12b09064702',
+                                  '10eb0ed7-3ce4-42a7-93e1-b83a898efe15',
+                                  '49ba9779-9ff8-4bb8-8dd2-f587865f2a9e',
+                                  '5a9ca0f0-2855-48e6-a50f-690dc64ebb65',
+                                  'eb3f0d75-3802-49ab-8f3f-86fae65d8514'],
+                          'rowCount': 5,
+                          'sha256': '51b7f09183c5cfeb4c107cefde6ce1c652d1f0167dbd7c567c34b7e50964f4fb'},
+             'lines': {'ids': ['0e095178-8455-4f1d-8e45-d12b09064702',
+                               '10eb0ed7-3ce4-42a7-93e1-b83a898efe15',
+                               '49ba9779-9ff8-4bb8-8dd2-f587865f2a9e',
+                               '5a9ca0f0-2855-48e6-a50f-690dc64ebb65',
+                               'eb3f0d75-3802-49ab-8f3f-86fae65d8514'],
+                       'rowCount': 10,
+                       'sha256': 'f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c'}},
+ 'metadataSha256': '4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb',
+ 'checksSha256': '94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2',
+ 'reversalCount': 5,
+ 'reversalAuditSha256': 'd90da27ad60e57116ef68f8e9e8a4f2af110cbd0e50b67d06937cf0946d8e3fc',
+ 'reversalChainSha256': '22b06da04b6aca6af194b7ed1053eb8f5f9851926c0a68478bf0f614a613aea9',
+ 'scope': {'deletedOrderSha256': ['a2ffdcf9fc09b3731b9b7fbdf41581ba5a810084ffc15172175b3ae67daed82d',
+                                  'c06d6d101d1525ffdc8e8fd7790a7a038a20a71f8a833020698ca3010fc9df79'],
+           'protectedOrderSha256': '4b95901aeeb2fdd34d0fe8784ebf0d4da58ccf2341bf27469f71bb3114e6332b'},
+ 'evidence': {'cash-five-clearance-completion-source-index-20261006-v2.json': 'f92fc07094fe7aacdf7762d331b96f5fe1b5cf1ebdb0267df59f7ac7c59cc8a2',
+              'cash-five-clearance-inventory-fresh-before-20261006-v4.report.json': 'a458e31568c3810d229c0696a81cc185269bd50d426330837750a632d51cec0d',
+              'cash-five-clearance-inventory-after-20261006-v4.report.json': '2921c7d8f81bfdac3f7e8b17a8bba85fe2fc3c3d17fd52b07c482b57c3f7cc1d',
+              'cash-five-clearance-real49-after-20261006-v1.report.json': 'b89ed31f7b2f948c441a8d25fc412c0d8278182adec19386ff541bda54669788',
+              'cash-five-clearance-five-real-ui-actions-20261006-v1.json': '28a07113cc4f399c885ba66e2afe4d55dbe5a70fe3841749e7fbda99a390dde8',
+              'cash-five-clearance-independent-actual-final-review-20261006-v1.json': 'a74b8c4631a36d182eca28266e50f36e62db72518a4a3ea8d4f78f4783e094fe'}}
 REGISTRATION_SCOPE = {
     'servicesUpdated': ['auto-registration'], 'imageServices': ['auto-recharge'],
     'preservedServices': ['auto-recharge', 'api', 'admin', 'media-resolver', 'mysql', 'caddy'],
@@ -3150,7 +3206,7 @@ def registration_profile(value):
     require(isinstance(value, dict) and set(value) == {'version', 'kind', 'id', 'enabled',
         'expectedCurrent', 'baselineRelease', 'registrationSourceCommit', 'workerBasisCommit',
         'registrationSourceSha256', 'workerProjection', 'workerProjectionSha256',
-        'buildInputSha256', 'controlSourceSha256', 'scope', 'financeValidator'},
+        'buildInputSha256', 'controlSourceSha256', 'scope', 'financeValidator', 'financeClearance'},
         'Fixed registration scope changed')
     require(type(value['version']) is int and value['version'] == 1 and value['enabled'] is True
         and value['kind'] == 'FIXED_REGISTRATION_RUNTIME_SCOPE' and value['id'] == REGISTRATION_SCOPE_ID
@@ -3159,7 +3215,8 @@ def registration_profile(value):
         and value['workerBasisCommit'] == RECHARGE_SCOPE_CURRENT
         and value['baselineRelease'] == REGISTRATION_BASELINE
         and historical_fingerprint(value['scope']) == historical_fingerprint(REGISTRATION_SCOPE)
-        and historical_fingerprint(value['financeValidator']) == historical_fingerprint(REGISTRATION_FINANCE),
+        and historical_fingerprint(value['financeValidator']) == historical_fingerprint(REGISTRATION_FINANCE)
+        and historical_fingerprint(value['financeClearance']) == historical_fingerprint(REGISTRATION_CLEARANCE),
         'Fixed registration scope changed')
     digest = lambda x: isinstance(x, str) and re.fullmatch(r'[a-f0-9]{64}', x) is not None
     names = REGISTRATION_FILES | {'docs/AUTO_REGISTRATION.md'}
@@ -3377,25 +3434,92 @@ def require_registration_finance_source(source):
     require_order_archive_source_scope(source, policy)
 
 
-def registration_finance_audit(directory, receipt, *, stage, source, before_receipt=None):
+def registration_zero_gate(stage, frozen):
+    require(stage in ('before', 'after'), 'Fixed registration audit stage changed')
+    keys = ('releaseSealSha256', 'candidateCommit', 'candidateTree', 'sourceTree', 'images', 'migration',
+            'preparedImagesSha256', 'preparationRunId', 'preparationRunAttempt')
+    return {**{name: frozen[name] for name in keys}, 'accepted': True,
+        'status': REGISTRATION_CLEARANCE['mode'], 'stage': stage, 'checkCount': 49,
+        'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 0,
+        'sourceCommit': REGISTRATION_CLEARANCE['sourceCommit'], 'sourcePolicyId': REGISTRATION_FINANCE['policyId'],
+        'clearanceSealSha256': historical_fingerprint(REGISTRATION_CLEARANCE),
+        **{name: REGISTRATION_CLEARANCE[name] for name in ('rulesSha256', 'checksSha256', 'sources',
+            'metadataSha256', 'reversalCount', 'reversalAuditSha256', 'reversalChainSha256')},
+        'scope': {'targetOrdersCount': 0, 'protectedThirdOrderCount': 1}}
+
+
+def require_registration_zero_report(report, stage, frozen):
+    gate = registration_zero_gate(stage, frozen)
+    identity = report.get('identity', {})
+    require(isinstance(identity, dict) and set(identity) == {'currentUser', 'databaseName', 'transactionIsolation',
+        'foreignKeyChecks', 'readOnly', 'superReadOnly', 'sessionReadOnly'}
+        and re.fullmatch(r'id_business_audit@[^\r\n]{1,255}', identity.get('currentUser', ''))
+        and identity.get('databaseName') == MAINTENANCE_DATABASE
+        and identity.get('transactionIsolation') == 'REPEATABLE-READ'
+        and str(identity.get('foreignKeyChecks')) == str(identity.get('sessionReadOnly')) == '1'
+        and str(identity.get('readOnly')) == str(identity.get('superReadOnly')) == '0',
+        'Fixed registration approved reversal audit identity changed')
+    require(set(report) == {'ok', 'checkCount', 'violationCount', 'failedChecks', 'identity', 'checks', 'gate', 'generatedAt'}
+        and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,20}Z', report.get('generatedAt', '')) is not None
+        and report.get('ok') is True and type(report.get('checkCount')) is int and report['checkCount'] == 49
+        and type(report.get('violationCount')) is int and report['violationCount'] == 0
+        and report.get('failedChecks') == []
+        and historical_fingerprint(report.get('gate')) == historical_fingerprint(gate)
+        and historical_fingerprint(report.get('checks')) == REGISTRATION_CLEARANCE['checksSha256'],
+        'Fixed registration approved reversal integrity gate changed')
+    return {'checkCount': 49, 'violationCount': 0, 'registrationFinanceGate': gate}
+
+
+def registration_finance_audit(directory, receipt, *, stage, source, before_receipt=None, control_source=None):
     require(stage in ('before', 'after'), 'Fixed registration audit stage changed')
     require_registration_finance_source(source)
-    # The original 80 policy/seal describes existing facts; no API, Admin or migration is published here.
-    summary = order_archive_audit(directory, receipt, stage=stage, source=source,
-        before_receipt=before_receipt, seal_sha=REGISTRATION_FINANCE['releaseSealSha256'],
-        candidate_commit=REGISTRATION_CURRENT, candidate_tree=REGISTRATION_BASELINE['sourceTree'],
-        prepared_sha=REGISTRATION_FINANCE['preparedImagesSha256'],
-        image_run=str(REGISTRATION_FINANCE['preparationRunId']),
-        image_attempt=str(REGISTRATION_FINANCE['preparationRunAttempt']))
-    report = fixed_recharge_json(private_maintenance_receipt(receipt))
-    require(summary == {'checkCount': 49, 'violationCount': 5, 'historicalException': report.get('gate')}
-        and historical_fingerprint(report.get('gate')) == REGISTRATION_FINANCE['gateSha256'][stage]
-        and historical_fingerprint(report.get('checks')) == REGISTRATION_FINANCE['checksSha256'],
-        'Fixed registration fresh integrity gate changed')
+    policy, seal = reviewed_order_archive_seal(source, REGISTRATION_FINANCE['releaseSealSha256'],
+        REGISTRATION_CURRENT, REGISTRATION_BASELINE['sourceTree'], REGISTRATION_FINANCE['preparedImagesSha256'],
+        str(REGISTRATION_FINANCE['preparationRunId']), str(REGISTRATION_FINANCE['preparationRunAttempt']))
+    frozen = {**REGISTRATION_FINANCE, 'sourceTree': policy['candidateBindings']['sourceTree'],
+        'candidateCommit': REGISTRATION_CURRENT, 'candidateTree': REGISTRATION_BASELINE['sourceTree'],
+        'images': seal['images'], 'migration': seal['migration']}
+    control_source = control_source or Path(__file__).resolve().parents[2]
+    profile_raw = fixed_recharge_bytes(control_source / REGISTRATION_SCOPE_FILE, modes=(0o644, 0o664), limit=128 * 1024)
+    profile = registration_profile(fixed_recharge_json(profile_raw))
+    auditor = control_source / 'scripts/v2-registration-finance-audit.mjs'
+    require(hashlib.sha256(fixed_recharge_bytes(auditor, modes=(0o644, 0o664))).hexdigest()
+        == profile['controlSourceSha256']['scripts/v2-registration-finance-audit.mjs'],
+        'Fixed registration reviewed source changed')
+    override = fixed_recharge_json((directory / 'compose.release.json').read_bytes())
+    image = json.loads(run('docker', 'image', 'inspect', override['services']['api']['image']))[0]
+    require(image['Id'] == seal['images']['api'], 'Order archive audit image changed')
+    env = os.environ.copy(); env['V2_DATA_INTEGRITY_DATABASE_URL'] = maintenance_container_audit_url(
+        environment_values(directory / '.env.aws.production'))
+    identity = historical_audit_reader(directory, 'api')
+    seal_reader = prepare_post_cleanup_reader_copy(directory, ORDER_ARCHIVE_SEAL,
+        REGISTRATION_FINANCE['releaseSealSha256'], 'order-archive-seal.reader.json', identity)
+    cleanup_reader = prepare_post_cleanup_reader_copy(directory, POST_CLEANUP_RECEIPT,
+        HISTORY_POST_CLEANUP_RECEIPT_SHA256, 'order-archive-cleanup.reader.json', identity)
+    mounts = ['-v', f'{source / "scripts"}:/app/scripts:ro', '-v', f'{source / "deploy/aws"}:/release-policy:ro',
+        '-v', f'{auditor}:/registration-control/audit.mjs:ro',
+        '-v', f'{control_source / REGISTRATION_SCOPE_FILE}:/registration-control/profile.json:ro',
+        '-v', f'{seal_reader}:/release-order-archive-seal.json:ro',
+        '-v', f'{cleanup_reader}:/release-cleanup-receipt.json:ro']
+    arguments = ['node', '/registration-control/audit.mjs', '--profile=/registration-control/profile.json',
+        f'--policy=/release-policy/{HISTORY_ORDER_ARCHIVE_POLICY_ID}.json', f'--stage={stage}',
+        '--seal=/release-order-archive-seal.json', '--cleanup-receipt=/release-cleanup-receipt.json']
     if stage == 'after':
         require(before_receipt is not None, 'Fixed registration before audit missing')
+        require_registration_zero_report(fixed_recharge_json(private_maintenance_receipt(before_receipt)), 'before', frozen)
+        prepare_historical_before_receipt(directory, before_receipt, 'api')
+        mounts.extend(['-v', f'{before_receipt}:/release-before-audit.json:ro'])
+        arguments.append('--before-receipt=/release-before-audit.json')
+    else:
+        require(before_receipt is None, 'Fixed registration audit stage changed')
+    report = fixed_recharge_json(compose(directory, 'run', '--rm', '--no-deps', '--pull', 'never',
+        *mounts, '-e', 'V2_DATA_INTEGRITY_DATABASE_URL', 'api', *arguments, env=env, timeout=240).encode())
+    summary = require_registration_zero_report(report, stage, frozen)
+    if stage == 'after':
         before = fixed_recharge_json(private_maintenance_receipt(before_receipt))
-        require(before.get('checks') == report.get('checks'), 'Fixed registration integrity facts changed')
+        require(before['checks'] == report['checks'] and before['identity'] == report['identity'],
+                'Fixed registration integrity facts changed')
+    receipt.write_text(json.dumps(report, indent=2) + '\n'); receipt.chmod(0o600)
     return summary
 
 
@@ -3473,7 +3597,7 @@ def registration_release(args):
             require(shutil.disk_usage(BASE).free > 6 * 1024**3, 'Insufficient free disk before pull')
             step = 'audit-before'
             before_audit = registration_finance_audit(previous, release / 'before-audit.json',
-                stage='before', source=finance_source)
+                stage='before', source=finance_source, control_source=release)
             step = 'images'
             reference = args.repository + ':' + args.commit + '-' + args.run_id + '-' + args.run_attempt + '-auto-recharge'
             registry = args.repository.split('/')[0]
@@ -3512,7 +3636,7 @@ def registration_release(args):
             registration_worker_hashes(release, profile)
             step = 'audit-after'
             after_audit = registration_finance_audit(release, release / 'after-audit.json', stage='after',
-                source=finance_source, before_receipt=release / 'before-audit.json')
+                source=finance_source, before_receipt=release / 'before-audit.json', control_source=release)
             after = {name: service_state(release, name, include_container_id=True, include_environment_hash=True)
                      for name in ALL_SERVICES}
             require(registration_preserved_states(after) == registration_preserved_states(states)
@@ -3542,6 +3666,8 @@ def registration_release(args):
                 'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
                 'financeSourceCommit': REGISTRATION_CURRENT,
                 'financePolicyId': HISTORY_ORDER_ARCHIVE_POLICY_ID,
+                'financeMode': REGISTRATION_CLEARANCE['mode'],
+                'clearanceSealSha256': historical_fingerprint(REGISTRATION_CLEARANCE),
                 'environmentUnchanged': True, 'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED',
                 'cacheStatus': 'SKIPPED'}
             manifest['fixedRegistrationPreservedStates'] = {
@@ -3553,7 +3679,7 @@ def registration_release(args):
             point_current(release, stamp + '-publish')
             print(json.dumps({'status': 'DEPLOYED', 'commit': args.commit,
                 'servicesUpdated': ['auto-registration'], 'migrationApplied': False,
-                'auditViolations': 5, 'unchangedServiceContainersPreserved': True}), flush=True)
+                'auditViolations': 0, 'unchangedServiceContainersPreserved': True}), flush=True)
             return 0
         except Exception as error:
             rollback_ok = True
@@ -3575,7 +3701,8 @@ def registration_readback_receipt(expected_current, source_tree, profile_raw_sha
         'previousCommit': REGISTRATION_CURRENT, 'registrationSourceCommit': REGISTRATION_SOURCE,
         'workerBasisCommit': RECHARGE_SCOPE_CURRENT, 'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
         'servicesUpdated': ['auto-registration'], 'preservedServiceCount': 6,
-        'checkCount': 49, 'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 5,
+        'checkCount': 49, 'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 0,
+        'financeMode': REGISTRATION_CLEARANCE['mode'],
         'runningSourceMatched': True, 'unchangedServiceContainersPreserved': True,
         'environmentUnchanged': True, 'migrationStatus': 'SKIPPED',
         'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED', 'liveServicesHealthy': True}
@@ -3617,6 +3744,8 @@ def check_fixed_registration_deployment(expected_current, source_tree, profile_r
         'profileRawSha256': profile_raw_sha256, 'registrationSourceCommit': REGISTRATION_SOURCE,
         'workerBasisCommit': RECHARGE_SCOPE_CURRENT, 'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
         'financeSourceCommit': REGISTRATION_CURRENT, 'financePolicyId': HISTORY_ORDER_ARCHIVE_POLICY_ID,
+        'financeMode': REGISTRATION_CLEARANCE['mode'],
+        'clearanceSealSha256': historical_fingerprint(REGISTRATION_CLEARANCE),
         'environmentUnchanged': True, 'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED',
         'cacheStatus': 'SKIPPED'}, 'Fixed registration manifest provenance changed')
     previous = Path(manifest['previousRelease'])
@@ -3652,18 +3781,14 @@ def check_fixed_registration_deployment(expected_current, source_tree, profile_r
         and fixed_recharge_json((current / 'compose.release.json').read_bytes()) == {
             'services': {name: {'image': images[name]['reference'], 'pull_policy': 'never'}
                          for name in (*SERVICES, 'migrate')}}, 'Fixed registration configuration changed')
-    audit_checks = []
+    original = fixed_recharge_json(private_maintenance_receipt(previous / 'before-audit.json'))['gate']
+    audit_facts = []
     for stage in ('before', 'after'):
         report = fixed_recharge_json(private_maintenance_receipt(current / (stage + '-audit.json')))
-        require(report.get('ok') is False and type(report.get('checkCount')) is int and report['checkCount'] == 49
-            and type(report.get('violationCount')) is int and report['violationCount'] == 5
-            and historical_fingerprint(report.get('gate')) == REGISTRATION_FINANCE['gateSha256'][stage]
-            and historical_fingerprint(report.get('checks')) == REGISTRATION_FINANCE['checksSha256']
-            and manifest['dataAudit' + stage.title()] == {
-                'checkCount': 49, 'violationCount': 5, 'historicalException': report['gate']},
-            'Fixed registration audit changed')
-        audit_checks.append(report['checks'])
-    require(audit_checks[0] == audit_checks[1], 'Fixed registration audit facts changed')
+        summary = require_registration_zero_report(report, stage, original)
+        require(manifest['dataAudit' + stage.title()] == summary, 'Fixed registration audit changed')
+        audit_facts.append((report['checks'], report['identity']))
+    require(audit_facts[0] == audit_facts[1], 'Fixed registration audit facts changed')
     registration_worker_hashes(current, profile)
     require((BASE / 'current').resolve() == current, 'Fixed registration current changed')
     require({name: service_state(current, name, include_container_id=True, include_environment_hash=True)

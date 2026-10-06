@@ -6533,6 +6533,12 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             changed = patch.object(deployment, name, value); changed.start(); self.addCleanup(changed.stop)
         self.contents = {name: (project / name).read_bytes() for name in
             deployment.RECHARGE_SCOPE_CANDIDATES | deployment.RECHARGE_MAIN80_CONTROLS | set(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)}
+        for source_commit, bindings in ((deployment.RECHARGE_MAIN80_CARRIED_COMMIT, deployment.RECHARGE_MAIN80_FD_CARRIED_SOURCE),
+                                       (deployment.RECHARGE_MAIN80_FA_CARRIED_COMMIT, deployment.RECHARGE_MAIN80_FA_CARRIED_SOURCE)):
+            for name, digest in bindings.items():
+                raw = subprocess.check_output(['git', 'show', source_commit + ':' + name], cwd=project)
+                self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest)
+                self.contents[name] = raw
         self.profile.update(enabled=True, approvalStatus='APPROVED')
         self.profile['carriedSourceOnlySha256'] = copy.deepcopy(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)
         self.profile['sourceModes'] = {name: 0o644 for name in self.contents}
@@ -6739,6 +6745,26 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                     bad[group][name] = bad['carriedSourceOnlySha256'].pop(name)
                 with self.subTest(name=name, mutation=mutation), self.assertRaises(RuntimeError):
                     deployment.main80_recharge_scope(bad)
+
+    def test_main80_candidate_rejects_new_d55_registration_job_and_test_bytes(self):
+        project = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            fixture = self.fixture(Path(name)); stack, _ = self.patches(fixture)
+            for path, raw in self.contents.items():
+                target = fixture.previous / path; target.write_bytes(raw); target.chmod(0o644)
+            target = fixture.previous / deployment.RECHARGE_MAIN80_FILE
+            target.write_text(json.dumps(self.profile)); target.chmod(0o644)
+            with stack:
+                deployment.verify_main80_recharge_candidate_source(fixture.previous, fixture.archive, self.profile)
+                for basename in ('registration_job.py', 'test_registration.py'):
+                    path = deployment.REGISTRATION_WORKER_PREFIX + basename
+                    current = subprocess.check_output(['git', 'show', deployment.REGISTRATION_SOURCE + ':' + path], cwd=project)
+                    self.assertNotEqual(deployment.hashlib.sha256(current).hexdigest(),
+                        deployment.RECHARGE_MAIN80_CARRIED_SOURCE[path])
+                    target = fixture.previous / path; original = target.read_bytes(); target.write_bytes(current)
+                    with self.subTest(file=basename), self.assertRaisesRegex(RuntimeError, 'source scope changed'):
+                        deployment.verify_main80_recharge_candidate_source(fixture.previous, fixture.archive, self.profile)
+                    target.write_bytes(original)
         old = copy.deepcopy(self.profile)
         old['carriedSourceOnlySha256'] = copy.deepcopy(deployment.RECHARGE_MAIN80_FD_CARRIED_SOURCE)
         for name in deployment.RECHARGE_MAIN80_FA_CARRIED_SOURCE: old['sourceModes'].pop(name)
@@ -7250,31 +7276,95 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
             'checksSha256': deployment.historical_fingerprint(reports['before']['checks'])}
         return reports, finance
 
-    def test_fresh_finance_uses_original_seal_and_rejects_new_facts_even_same_count(self):
-        reports, finance = self.audit_fixture()
+    def zero_fixture(self):
+        policy = json.loads((self.root / 'deploy/aws/historical-finance-20261005-order-archive.json').read_text())
+        seal = {'images': {name: 'sha256:' + '1' * 64 for name in ('api', 'admin', 'migrate')},
+                'migration': policy['candidateBindings']['migration']}
+        frozen = {name: deployment.REGISTRATION_FINANCE[name] for name in ('releaseSealSha256',
+            'preparedImagesSha256', 'preparationRunId', 'preparationRunAttempt')}
+        frozen.update(sourceTree=policy['candidateBindings']['sourceTree'], candidateCommit=deployment.REGISTRATION_CURRENT,
+            candidateTree=deployment.REGISTRATION_BASELINE['sourceTree'], images=seal['images'], migration=seal['migration'])
+        reports = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
+            'import {readFileSync} from "node:fs"; '
+            'import {registrationZeroGate} from "./scripts/v2-registration-finance-audit.mjs"; '
+            'import {fingerprint,HISTORY_POST_CLEANUP_DATABASE} from "./scripts/lib/v2-release-history-policy.mjs"; '
+            'import {V2_DATA_INTEGRITY_CHECKS} from "./scripts/lib/v2-data-integrity-audit.mjs"; '
+            'const {profile,frozen}=JSON.parse(readFileSync(0,"utf8")); '
+            'const checks=V2_DATA_INTEGRITY_CHECKS.map(({code})=>({code,count:0,samples:[],status:"EXECUTED"})); '
+            'const identity={currentUser:"id_business_audit@synthetic",databaseName:HISTORY_POST_CLEANUP_DATABASE,'
+            'transactionIsolation:"REPEATABLE-READ",foreignKeyChecks:"1",readOnly:"0",superReadOnly:"0",sessionReadOnly:"1"}; '
+            'console.log(JSON.stringify(Object.fromEntries(["before","after"].map(stage=>[stage,{ok:true,'
+            'checkCount:49,violationCount:0,failedChecks:[],identity,checks,gate:registrationZeroGate(profile,stage,frozen,fingerprint),'
+            'generatedAt:"2026-10-06T05:51:16.143Z"}]))));'],
+            input=json.dumps({'profile': self.profile, 'frozen': frozen}).encode(), cwd=self.root))
+        return reports, frozen, policy, seal
+
+    def test_actual_node_gate_crosses_python_validator_with_full_original_frozen_provenance(self):
+        reports, frozen, _policy, _seal = self.zero_fixture()
+        self.assertEqual(len(frozen), 9)
+        for stage, report in reports.items():
+            with self.subTest(stage=stage):
+                summary = deployment.require_registration_zero_report(report, stage, frozen)
+                self.assertEqual(summary['violationCount'], 0)
+                self.assertEqual(report['gate']['sourceCommit'], deployment.REGISTRATION_CLEARANCE['sourceCommit'])
+                self.assertNotEqual(report['gate']['sourceCommit'], deployment.REGISTRATION_CURRENT)
+                self.assertEqual(deployment.historical_fingerprint({name: report['gate'][name] for name in frozen}),
+                    deployment.historical_fingerprint(frozen))
+                changed = copy.deepcopy(report); changed['gate']['sourceCommit'] = deployment.REGISTRATION_CURRENT
+                with self.assertRaises(RuntimeError): deployment.require_registration_zero_report(changed, stage, frozen)
+
+    def test_fresh_zero_finance_binds_approved_reversals_original_api_seal_and_closed_mounts(self):
+        reports, frozen, policy, seal = self.zero_fixture()
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             root = Path(name); before = root / 'before.json'; after = root / 'after.json'
-            before.write_text(json.dumps(reports['before'])); after.write_text(json.dumps(reports['after']))
-            before.chmod(0o600); after.chmod(0o600)
-            summary = {'checkCount': 49, 'violationCount': 5, 'historicalException': reports['after']['gate']}
-            with patch.object(deployment, 'REGISTRATION_FINANCE', finance), \
-                    patch.object(deployment, 'require_registration_finance_source'), \
-                    patch.object(deployment, 'order_archive_audit', return_value=summary) as audit:
-                self.assertEqual(deployment.registration_finance_audit(root, after, stage='after',
-                    source=root, before_receipt=before), summary)
-                self.assertEqual(audit.call_args.kwargs['candidate_commit'], deployment.REGISTRATION_CURRENT)
-                self.assertEqual(audit.call_args.kwargs['seal_sha'], finance['releaseSealSha256'])
-                self.assertEqual(audit.call_args.kwargs['prepared_sha'], finance['preparedImagesSha256'])
-                for key in ('sources', 'metadataSha256', 'exceptionsSha256'):
-                    with self.subTest(key=key), self.assertRaises(RuntimeError):
-                        changed = copy.deepcopy(reports['after']); changed['gate'][key] = 'same-count-new-fact'
-                        after.write_text(json.dumps(changed))
-                        audit.return_value = {**summary, 'historicalException': changed['gate']}
-                        deployment.registration_finance_audit(root, after, stage='after', source=root, before_receipt=before)
-                after.write_text(json.dumps({**reports['after'], 'checks': [{'code': 'synthetic', 'count': 5,
-                    'samples': ['different-fact']}] })); audit.return_value = summary
-                with self.assertRaises(RuntimeError):
-                    deployment.registration_finance_audit(root, after, stage='after', source=root, before_receipt=before)
+            (root / 'compose.release.json').write_text(json.dumps({'services': {'api': {'image': 'fixed-api'}}}))
+            for path, (raw, _mode) in self.candidate.items():
+                target = root / path; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(raw)
+                target.chmod(0o644)
+            profile_path = root / deployment.REGISTRATION_SCOPE_FILE; profile_path.parent.mkdir(parents=True, exist_ok=True)
+            profile_path.write_text(json.dumps(self.profile)); profile_path.chmod(0o644)
+            before.write_text(json.dumps(reports['before'])); before.chmod(0o600)
+            with patch.object(deployment, 'require_registration_finance_source'), \
+                    patch.object(deployment, 'reviewed_order_archive_seal', return_value=(policy, seal)) as reviewed, \
+                    patch.object(deployment, 'run', return_value=json.dumps([{'Id': seal['images']['api']}])), \
+                    patch.object(deployment, 'environment_values', return_value={}), \
+                    patch.object(deployment, 'maintenance_container_audit_url', return_value='synthetic-readonly-url'), \
+                    patch.object(deployment, 'historical_audit_reader', return_value={'uid': 1000, 'gid': 1000, 'user': 'node'}), \
+                    patch.object(deployment, 'prepare_post_cleanup_reader_copy', side_effect=lambda *args: root / args[3]), \
+                    patch.object(deployment, 'prepare_historical_before_receipt'), \
+                    patch.object(deployment, 'compose', return_value=json.dumps(reports['after'])) as compose:
+                summary = deployment.registration_finance_audit(root, after, stage='after', source=root,
+                    before_receipt=before, control_source=root)
+                self.assertEqual(summary['violationCount'], 0)
+                self.assertEqual(summary['registrationFinanceGate']['status'], deployment.REGISTRATION_CLEARANCE['mode'])
+                self.assertEqual(reviewed.call_args.args[1], deployment.REGISTRATION_FINANCE['releaseSealSha256'])
+                self.assertIn('api', compose.call_args.args)
+                self.assertIn('/registration-control/audit.mjs', compose.call_args.args)
+                self.assertNotIn('migrate', compose.call_args.args)
+                self.assertEqual(after.stat().st_mode & 0o777, 0o600)
+                for field in ('sources', 'metadataSha256', 'reversalAuditSha256', 'reversalChainSha256', 'status'):
+                    changed = copy.deepcopy(reports['after']); changed['gate'][field] = 'unapproved'
+                    compose.return_value = json.dumps(changed)
+                    with self.subTest(field=field), self.assertRaises(RuntimeError):
+                        deployment.registration_finance_audit(root, after, stage='after', source=root,
+                            before_receipt=before, control_source=root)
+
+    def test_zero_report_refuses_original_five_partial_findings_identity_and_extra_fields(self):
+        reports, frozen, _policy, _seal = self.zero_fixture()
+        self.assertEqual(deployment.require_registration_zero_report(reports['before'], 'before', frozen)['violationCount'], 0)
+        for count in (1, 2, 3, 4, 5, True):
+            changed = copy.deepcopy(reports['before']); changed['violationCount'] = count
+            with self.subTest(count=count), self.assertRaises(RuntimeError):
+                deployment.require_registration_zero_report(changed, 'before', frozen)
+        for patch in ({'extra': 'SENTINEL'}, {'checkCount': True}, {'ok': False}, {'failedChecks': ['new']}):
+            with self.subTest(patch=patch), self.assertRaises(RuntimeError):
+                deployment.require_registration_zero_report({**reports['before'], **patch}, 'before', frozen)
+        for field in reports['before']['identity']:
+            changed = copy.deepcopy(reports['before']); changed['identity'][field] = 'unapproved'
+            with self.subTest(identity=field), self.assertRaises(RuntimeError):
+                deployment.require_registration_zero_report(changed, 'before', frozen)
+        changed = copy.deepcopy(reports['before']); changed['checks'][0]['count'] = 1
+        with self.assertRaises(RuntimeError): deployment.require_registration_zero_report(changed, 'before', frozen)
 
     def test_baseline_pins_raw_receipts_compose_env_archive_and_normalized_live_env(self):
         reports, finance = self.audit_fixture()
@@ -7349,7 +7439,13 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                 'containerId': 'unchanged-' + service, 'startedAtSha256': 'a' * 64, 'environmentSha256': 'b' * 64}
                 for service in deployment.ALL_SERVICES}
             commit = 'a' * 40; reference = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + commit + '-123-1-auto-recharge'
-            reports, finance = self.audit_fixture()
+            original_reports, finance = self.audit_fixture()
+            reports, frozen, _policy, _seal = self.zero_fixture()
+            for stage, original in original_reports.items():
+                original['gate'].update({name: frozen[name] for name in ('releaseSealSha256', 'candidateCommit',
+                    'candidateTree', 'sourceTree', 'images', 'migration', 'preparedImagesSha256',
+                    'preparationRunId', 'preparationRunAttempt')})
+                path = previous / (stage + '-audit.json'); path.write_text(json.dumps(original)); path.chmod(0o600)
             profile = copy.deepcopy(self.profile); profile['financeValidator'] = finance
             candidate = {**self.candidate, deployment.REGISTRATION_SCOPE_FILE: (json.dumps(profile).encode(), '100644'),
                 'apps/api/UNRELATED_MAIN_API': (b'must-never-enter-release', '100644')}
@@ -7385,7 +7481,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
             def audit(_directory, _receipt, **kwargs):
                 if fail_after and kwargs['stage'] == 'after': raise RuntimeError('synthetic audit rejection')
                 report = reports[kwargs['stage']]; _receipt.write_text(json.dumps(report)); _receipt.chmod(0o600)
-                return {'checkCount': 49, 'violationCount': 5, 'historicalException': report['gate']}
+                return {'checkCount': 49, 'violationCount': 0, 'registrationFinanceGate': report['gate']}
             def guard(directory, *_args):
                 if retained or retained_rollback and Path(directory) != previous:
                     raise RuntimeError('Active registration jobs prevent release')
@@ -7423,6 +7519,10 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                             elif readback_changed == 'after-audit.json':
                                 data = json.loads(path.read_text()); data['checks'][0]['samples'] = ['same-count-different-fact']
                                 path.write_text(json.dumps(data))
+                            elif readback_changed == 'audit-identity':
+                                path = current / 'after-audit.json'
+                                data = json.loads(path.read_text()); data['identity']['currentUser'] = 'id_business_audit@different-host'
+                                path.write_text(json.dumps(data))
                             else: path.write_bytes(path.read_bytes() + b' ')
                         try:
                             verified = deployment.check_fixed_registration_deployment(commit, args.source_tree,
@@ -7457,18 +7557,19 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
         self.assertEqual(value.calls, []); self.assertEqual(value.rollback, [])
         self.assertEqual(value.current, value.previous)
 
-    def test_actual_readback_validates_source_and_49_original_gate_with_closed_output(self):
+    def test_actual_readback_validates_source_and_approved_reversal_zero_gate_with_closed_output(self):
         value = self.publication(readback=True)
         self.assertEqual(value.result, 0)
         self.assertEqual(value.verified['status'], 'VERIFIED')
         self.assertEqual([value.verified[key] for key in ('checkCount', 'executedCheckCount',
-            'unavailableCheckCount', 'violationCount')], [49, 49, 0, 5])
+            'unavailableCheckCount', 'violationCount')], [49, 49, 0, 0])
+        self.assertEqual(value.verified['financeMode'], deployment.REGISTRATION_CLEARANCE['mode'])
         self.assertEqual(value.verified['preservedServiceCount'], 6)
         self.assertNotIn('SYNTHETIC_PRIVATE', json.dumps(value.verified))
 
     def test_actual_readback_rejects_source_config_and_audit_tampering(self):
         for name in ('docker-compose.aws-mysql.yml', '.env.aws.production', 'compose.release.json',
-                     'after-audit.json', deployment.REGISTRATION_WORKER_PREFIX + 'registration_job.py'):
+                     'after-audit.json', 'audit-identity', deployment.REGISTRATION_WORKER_PREFIX + 'registration_job.py'):
             with self.subTest(name=name):
                 value = self.publication(readback=True, readback_changed=name)
                 self.assertEqual(value.result, 0); self.assertEqual(value.verified, 'REJECTED')

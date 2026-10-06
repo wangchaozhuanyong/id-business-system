@@ -609,6 +609,7 @@ test('actual full-mode release controls select each missing suite once without r
   assert.equal(checkMode(paths, '', ''), 'full');
   assert.deepEqual(guardCommands(paths, { part: 'release-controls' }), [
     'node --test scripts/ci-recharge-release.test.mjs',
+    'node --test scripts/v2-registration-finance-audit.test.mjs',
     'python3 -B scripts/production-release/registration-only-transport.test.py',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
@@ -616,6 +617,7 @@ test('actual full-mode release controls select each missing suite once without r
   ]);
   const recharge = guardCommands(paths);
   for (const command of [
+    'node --test scripts/v2-registration-finance-audit.test.mjs',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py'
   ])

@@ -1,5 +1,6 @@
 """Visible official registration/settings pages. Unknown UI waits for its owner."""
 import asyncio
+import logging
 import re
 import time
 from urllib.parse import urlsplit, parse_qs
@@ -9,7 +10,8 @@ from browser_password_login import (EMAIL_INPUT, PASSWORD_INPUT, CODE_INPUT,
                                     login_payment_write, login_code_type, unique_visible, clear_visible_secrets)
 from checkout_core import Stop
 from browser_checkout import observe_page_network, retryable_page_load_error
-from browser_session import SessionBudget, session_failure
+from browser_session import SessionBudget, session_failure, RETRYABLE_NETWORK_CODES
+from registration_job import JOB_ID, STEPS
 from registration_security import verification_link, totp, totp_key, offer_from_text, registration_age, birth_age
 
 NAME_INPUT = 'input[name="name"], input[name="fullName"], input[autocomplete="name"]'
@@ -17,6 +19,8 @@ BIRTH_INPUT = 'input[type="date"], input[name="birthday"], input[name="birthdate
 AGE_INPUT = 'input[name="age"], input[autocomplete="age"]'
 PROFILE_SUBMIT = r'^(continue|submit|finish|next|创建账户|创建账号|继续|完成|下一步)$'
 REGISTRATION_OBSERVE_SECONDS = 15
+REGISTRATION_VIEWS = {'verification', 'code', 'profile', 'unknown', 'registered', 'existing', 'email', 'signup'}
+REGISTRATION_WRITES = {'email_submit', 'code_submit', 'profile_submit', 'signup_click'}
 
 
 class RegistrationBrowser:
@@ -32,6 +36,31 @@ class RegistrationBrowser:
 
     def operation(self, name):
         self.job.registration_operation = name
+        if type(name) is str and name in REGISTRATION_WRITES:
+            self.job.registration_last_write = name
+
+    def log_pause(self, reason):
+        def closed(value, allowed, default='none'):
+            return value if type(value) is str and value in allowed else default
+        job_id = getattr(self.job, 'id', None)
+        attempt = getattr(self.job, 'attempt', None)
+        observation = getattr(self.job, 'registration_observation_error', None)
+        observation = observation if isinstance(observation, dict) else {}
+        logging.getLogger('registration').warning(
+            'Registration paused job=%s attempt=%s step=%s reason=%s last_observed_view=%s last_write=%s '
+            'email_submit_started=%s email_click_returned=%s email_submitted=%s code_submitted=%s profile_submitted=%s '
+            'observation_reason=%s observation_error_type=%s observation_browser_code=%s',
+            job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
+            attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
+            closed(getattr(self.job, 'step', None), STEPS, 'unknown'),
+            closed(reason, {'verification_required', 'form_unrecognized'}, 'unknown'),
+            closed(getattr(self.job, 'registration_last_observed_view', None), REGISTRATION_VIEWS, 'unknown'),
+            closed(getattr(self.job, 'registration_last_write', None), REGISTRATION_WRITES),
+            *(self.registration_state.get(key) is True for key in (
+                'email_submit_started', 'email_click_returned', 'email_submitted', 'code_submitted', 'profile_submitted')),
+            closed(observation.get('reason'), {'session_network_error', 'session_load_timeout', 'registration_page_changing'}),
+            closed(observation.get('error_type'), {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}),
+            closed(observation.get('browser_error_code'), RETRYABLE_NETWORK_CODES))
 
     async def guard(self, route):
         request = route.request
@@ -81,6 +110,7 @@ class RegistrationBrowser:
             if verification_link(code):
                 if registration_code:
                     self.registration_state['code_submitted'] = True
+                    self.operation('code_submit')
                 await page.goto(code, wait_until='domcontentloaded', timeout=45000)
             else:
                 field = await self.field(page, CODE_INPUT)
@@ -89,6 +119,7 @@ class RegistrationBrowser:
                 if registration_code:
                     # Input/change handlers may submit while fill is still awaiting.
                     self.registration_state['code_submitted'] = True
+                    self.operation('code_submit')
                 await field.fill(code)
                 await field.press('Enter')
         finally:
@@ -205,6 +236,7 @@ class RegistrationBrowser:
     async def manual_registration(self, reason):
         # An explicit administrator handoff may perform writes in the same window.
         await self.end_recovery()
+        self.log_pause(reason)
         if reason == 'verification_required' and not self.data.get('registered'):
             await self.job.manual(reason, can_resume=self.verification_resolved)
         else:
@@ -306,6 +338,7 @@ class RegistrationBrowser:
                 budget = SessionBudget(10, cancelled=self.job.cancelled.is_set)
                 self.observation_budget = budget
                 view, field = await budget.run(self.registration_view, 'registration_observe')
+                self.job.registration_last_observed_view = view if type(view) is str and view in REGISTRATION_VIEWS else 'unknown'
             except Exception as exc:
                 if isinstance(exc, Stop) and exc.report.get('reason') == 'verification_required':
                     await self.manual_registration('verification_required')
@@ -319,10 +352,11 @@ class RegistrationBrowser:
                     raise
                 # Only controlled transport diagnostics survive; never exception text or session data.
                 details = exc.report if isinstance(exc, Stop) else session_failure(exc)
-                self.job.registration_observation_error = {
-                    key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
-                if page_changing:
-                    self.job.registration_observation_error['reason'] = 'registration_page_changing'
+                if not getattr(self.job, 'registration_observation_error', None):
+                    self.job.registration_observation_error = {
+                        key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
+                    if page_changing:
+                        self.job.registration_observation_error['reason'] = 'registration_page_changing'
                 view, field = 'unknown', None
             finally:
                 self.observation_budget = None
@@ -410,9 +444,10 @@ class RegistrationBrowser:
                 except Stop as exc:
                     if exc.report.get('reason') != 'session_load_timeout':
                         raise
-                    self.job.registration_observation_error = {
-                        key: exc.report[key] for key in ('reason', 'error_type', 'browser_error_code')
-                        if key in exc.report}
+                    if not getattr(self.job, 'registration_observation_error', None):
+                        self.job.registration_observation_error = {
+                            key: exc.report[key] for key in ('reason', 'error_type', 'browser_error_code')
+                            if key in exc.report}
                     reason = 'form_unrecognized'
                 if reason:
                     await self.manual_registration(reason)
@@ -422,13 +457,16 @@ class RegistrationBrowser:
                 self.operation('email_submit')
                 self.job.prepare_mail('email_code', new_request=True)
                 self.registration_state['email_submitted'] = True
+                self.registration_state['email_submit_started'] = True
                 await submit.click(timeout=budget.remaining_ms())
+                self.registration_state['email_click_returned'] = True
                 await self.settle(3)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
             if view == 'signup' and not signup_clicked:
                 await self.end_recovery()
                 signup_clicked = True
+                self.operation('signup_click')
                 await field.click()
                 await self.settle(3)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
