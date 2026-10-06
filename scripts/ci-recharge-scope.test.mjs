@@ -596,8 +596,9 @@ test('fixed main80 recharge profile remains an exact control path and keeps Pro 
   }
 });
 
-test('fixed registration 80 controls retain worker checks and reject the disabled 3ca draft', () => {
+test('fixed registration 80 and 956 controls retain worker checks and reject other baselines', () => {
   const profile = 'deploy/aws/registration-worker-b8-80-20261006.json';
+  const continuation = 'deploy/aws/registration-worker-956-20261006.json';
   const transport = 'scripts/production-release/registration-only-transport.test.py';
   const auditors = [
     'scripts/v2-registration-finance-audit.mjs',
@@ -608,11 +609,17 @@ test('fixed registration 80 controls retain worker checks and reject the disable
   assert.deepEqual(selectedParts([profile, transport, ...auditors]), ['guards']);
   const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py';
   assert.deepEqual(selectedParts([profile, worker]), ['guards', 'connector']);
+  assert.equal(isCiOnly([continuation]), true);
+  assert.equal(checkMode([continuation], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([continuation]), ['guards']);
+  assert.deepEqual(selectedParts([continuation, worker]), ['guards', 'connector']);
   for (const other of [
     'deploy/aws/registration-worker-b8-3ca-20261006.json',
     profile + '.backup',
     profile + '/future.json',
     'deploy/aws/registration-worker-b8-80-other.json',
+    'deploy/aws/registration-worker-956-20261007.json',
+    continuation + '.backup',
     'scripts/production-release/registration-only-other.test.py',
     'scripts/v2-registration-finance-audit-other.mjs',
     'scripts/v2-registration-finance-audit.mjs.backup',

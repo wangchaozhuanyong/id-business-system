@@ -24,9 +24,17 @@ PROFILE_FILE = 'deploy/aws/' + PROFILE + '.json'
 
 
 class TransportTests(unittest.TestCase):
+    profile = PROFILE
+    baseline = BASELINE
+    profile_file = PROFILE_FILE
+    scope_args = []
+    release_flag = '--registration-worker-b8-80'
+    artifact_step = 'Save fixed registration Worker build projection'
+    readback_step = 'Verify fixed registration deployment independently'
+    readback_parameters = 'fixed-registration-readback.json'
     @contextmanager
     def fixture(self):
-        output = PROJECT / '.runtime/registration-only-transport'
+        output = PROJECT / '.runtime/registration-password-release-20261006/transport'
         output.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='fixture-', dir=output) as directory:
             root = Path(directory)
@@ -34,14 +42,14 @@ class TransportTests(unittest.TestCase):
                 target = root / 'scripts/production-release' / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((PROJECT / 'scripts/production-release' / name).read_bytes())
-            profile = root / PROFILE_FILE
+            profile = root / self.profile_file
             profile.parent.mkdir(parents=True)
-            profile.write_text(json.dumps({'id': PROFILE, 'fixtureOnly': True}))
+            profile.write_text(json.dumps({'id': self.profile, 'fixtureOnly': True}))
             source = root / 'scripts/production-release/remote-deploy.py'
             source.write_text('''import os, json
-def validate_fixed_registration_readback_projection(value, commit, tree, profile):
+def validate_fixed_registration_readback_projection(value, commit, tree, profile, *, profile_id='registration-worker-b8-80-20261006'):
     expected={'status':'VERIFIED','currentCommit':commit,'sourceTree':tree,'profileSha256':profile}
-    if value != expected or set(value) != set(expected):
+    if profile_id != os.environ['LOCAL_TEST_PROFILE'] or value != expected or set(value) != set(expected):
         raise ValueError('Synthetic closed receipt changed')
 ''')
             private = root / '.fixture'
@@ -53,7 +61,7 @@ with open(os.environ['LOCAL_TOOL_LOG'],'a') as target:
 if name=='python3':
     if args and args[0].endswith('remote-deploy.py'):
         if os.environ.get('LOCAL_SCOPE_FAILURE')=='true':sys.exit(19)
-        if args[1:]==['--prepare-fixed-registration-build']:
+        if args[1:] in (['--prepare-fixed-registration-build'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-956-20261006']):
             context=pathlib.Path('.deploy/production-release/registration-build-context')
             dockerfile=context/'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
             dockerfile.parent.mkdir(parents=True);dockerfile.write_text('FROM synthetic-fixture\\n')
@@ -80,11 +88,11 @@ if name=='aws':
                 executable.write_text('#!' + sys.executable + '\n' + tool)
                 executable.chmod(0o755)
             env = dict(PATH=str(private) + os.pathsep + os.defpath, LANG='C.UTF-8',
-                LOCAL_REAL_PYTHON=sys.executable, LOCAL_TOOL_LOG=str(private / 'calls.jsonl'),
-                RELEASE_COMMIT=COMMIT, EXPECTED_CURRENT=BASELINE, SOURCE_TREE=TREE,
+                LOCAL_REAL_PYTHON=sys.executable, LOCAL_TEST_PROFILE=self.profile, LOCAL_TOOL_LOG=str(private / 'calls.jsonl'),
+                RELEASE_COMMIT=COMMIT, EXPECTED_CURRENT=self.baseline, SOURCE_TREE=TREE,
                 QUALITY_RUN_ID='123', RELEASE_REPOSITORY=REPOSITORY, GITHUB_RUN_ID='456',
                 GITHUB_RUN_ATTEMPT='1', GITHUB_ENV=str(private / 'github.env'),
-                HISTORICAL_EXCEPTION=PROFILE, RELEASE_OPERATION='release', RELEASE_ADMIN_ONLY='false',
+                HISTORICAL_EXCEPTION=self.profile, RELEASE_OPERATION='release', RELEASE_ADMIN_ONLY='false',
                 AWS_REGION='ap-northeast-1', PRODUCTION_INSTANCE_ID='i-synthetic',
                 REUSE_IMAGE_RUN='', REUSE_IMAGE_COMMIT='', REUSE_IMAGE_RUN_ID='', REUSE_IMAGE_RUN_ATTEMPT='',
                 POST_CLEANUP_SEAL_SHA256='', ORDER_ARCHIVE_SEAL_SHA256='')
@@ -122,8 +130,8 @@ if name=='aws':
             self.assertEqual(calls[0][calls[0].index('-f') + 1], CONTEXT + '/' + WORKER + '/Dockerfile')
             self.assertEqual(calls[0][calls[0].index('-t') + 1], REPOSITORY + ':' + COMMIT + '-456-1-auto-recharge')
             self.assertEqual(self.calls(env, 'python3'), [
-                ['scripts/production-release/remote-deploy.py', '--check-fixed-registration-scope'],
-                ['scripts/production-release/remote-deploy.py', '--prepare-fixed-registration-build']])
+                ['scripts/production-release/remote-deploy.py', '--check-fixed-registration-scope'] + self.scope_args,
+                ['scripts/production-release/remote-deploy.py', '--prepare-fixed-registration-build'] + self.scope_args])
             self.assertEqual(Path(env['GITHUB_ENV']).read_text(), 'RELEASE_ADMIN_ONLY=false\n')
 
     def test_registration_push_verifies_and_pushes_only_worker_tag(self):
@@ -133,7 +141,7 @@ if name=='aws':
             expected = REPOSITORY + ':' + COMMIT + '-456-1-auto-recharge'
             self.assertEqual([call for call in self.calls(env, 'docker') if call[0] == 'push'], [['push', expected]])
             self.assertEqual(self.calls(env, 'python3'), [
-                ['scripts/production-release/remote-deploy.py', '--check-fixed-registration-scope']])
+                ['scripts/production-release/remote-deploy.py', '--check-fixed-registration-scope'] + self.scope_args])
             self.assertEqual(len([call for call in self.calls(env, 'aws') if call[:2] == ['ecr', 'describe-images']]), 1)
 
     def test_scope_failure_stops_before_build_push_or_dispatch(self):
@@ -143,7 +151,7 @@ if name=='aws':
                 result = self.run_script(root, env, script)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.calls(env, 'python3'), [
-                    ['scripts/production-release/remote-deploy.py', '--check-fixed-registration-scope']])
+                    ['scripts/production-release/remote-deploy.py', '--check-fixed-registration-scope'] + self.scope_args])
                 self.assertEqual(self.calls(env, 'docker'), [])
                 self.assertEqual(self.calls(env, 'aws'), [])
 
@@ -170,9 +178,9 @@ if name=='aws':
             self.assertEqual(result.returncode, 0, result.stderr)
             parameters = json.loads((root / '.deploy/production-release/ssm-456.json').read_text())
             command = shlex.split(parameters['commands'][-1])
-            self.assertIn('--registration-worker-b8-80', command)
+            self.assertIn(self.release_flag, command)
             self.assertNotIn('--admin-only', command)
-            for field, value in (('--commit', COMMIT), ('--expected-current', BASELINE),
+            for field, value in (('--commit', COMMIT), ('--expected-current', self.baseline),
                                  ('--image-commit', COMMIT), ('--image-run-id', '456'), ('--image-run-attempt', '1')):
                 self.assertEqual(command[command.index(field) + 1], value)
 
@@ -195,22 +203,22 @@ if name=='aws':
         self.assertIn('group: id-business-v2-production-release\n  cancel-in-progress: false', workflow)
         self.assertIn('run: bash scripts/production-release/check-source.sh', workflow)
         block, _script = self.workflow_step('Verify or maintain recoverable unused project image cache')
-        self.assertIn("inputs.historical_exception != '" + PROFILE + "'", block)
-        block, _script = self.workflow_step('Save fixed registration Worker build projection')
-        self.assertIn("inputs.operation == 'release' && inputs.historical_exception == '" + PROFILE + "'", block)
+        self.assertIn("inputs.historical_exception != '" + self.profile + "'", block)
+        block, _script = self.workflow_step(self.artifact_step)
+        self.assertIn("inputs.operation == 'release' && inputs.historical_exception == '" + self.profile + "'", block)
         self.assertIn('path: .deploy/production-release/registration-build-projection.json', block)
 
     def test_readback_uses_bound_verifier_and_closed_receipt_filter(self):
-        _block, script = self.workflow_step('Verify fixed registration deployment independently')
+        _block, script = self.workflow_step(self.readback_step)
         with self.fixture() as (root, env):
-            profile_sha = hashlib.sha256((root / PROFILE_FILE).read_bytes()).hexdigest()
+            profile_sha = hashlib.sha256((root / self.profile_file).read_bytes()).hexdigest()
             receipt = {'status': 'VERIFIED', 'currentCommit': COMMIT, 'sourceTree': TREE, 'profileSha256': profile_sha}
             env['LOCAL_READBACK_OUTPUT'] = 'FIXED_REGISTRATION_RELEASE_VERIFIED ' + json.dumps(receipt)
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env,
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), receipt)
-            parameters = json.loads((root / '.deploy/production-release/fixed-registration-readback.json').read_text())
+            parameters = json.loads((root / '.deploy/production-release' / self.readback_parameters).read_text())
             command = shlex.split(parameters['commands'][0])
             self.assertEqual(command[:2], ['python3', '-c'])
             compile(command[2], '<bound-registration-readback>', 'exec')
@@ -218,6 +226,8 @@ if name=='aws':
             self.assertIn('--check-fixed-registration-deployment', command[2])
             self.assertIn('--registration-profile-sha256', command[2])
             self.assertIn(profile_sha, command[2])
+            if self.scope_args:
+                self.assertIn('\"--registration-profile\",\"' + self.profile + '\"', command[2])
             staging = '/opt/id-business-v2/.staging/oidc-' + COMMIT + '/remote-deploy.py'
             local_source = root / 'scripts/production-release/remote-deploy.py'
             local_verifier = command[2].replace(repr(staging), repr(str(local_source)))
@@ -233,7 +243,7 @@ if name=='aws':
             self.assertNotIn('RAW_SECRET_SENTINEL', changed.stdout + changed.stderr)
 
     def test_readback_rejects_unknown_duplicate_and_raw_output_without_leaks(self):
-        _block, script = self.workflow_step('Verify fixed registration deployment independently')
+        _block, script = self.workflow_step(self.readback_step)
         values = ['RAW_SECRET_SENTINEL', 'FIXED_REGISTRATION_RELEASE_VERIFIED {"status":"VERIFIED","status":"RAW_SECRET_SENTINEL"}',
                   'FIXED_REGISTRATION_RELEASE_VERIFIED {"unexpected":"RAW_SECRET_SENTINEL"}',
                   'FIXED_REGISTRATION_RELEASE_VERIFIED NaN', 'FIXED_REGISTRATION_RELEASE_VERIFIED ' + 'X' * 8193]
@@ -245,6 +255,45 @@ if name=='aws':
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn('RAW_SECRET_SENTINEL', result.stdout + result.stderr)
                 self.assertEqual(result.stdout, '')
+
+
+class Registration956TransportTests(TransportTests):
+    profile = 'registration-worker-956-20261006'
+    baseline = '9560d8038a39d4ded1e560d484bdcb941a5d9c43'
+    profile_file = 'deploy/aws/' + profile + '.json'
+    scope_args = ['--registration-profile', profile]
+    release_flag = '--registration-worker-956'
+    artifact_step = 'Save fixed 956 registration Worker build projection'
+    readback_step = 'Verify fixed 956 registration deployment independently'
+    readback_parameters = 'fixed-registration-956-readback.json'
+
+    def test_other_profile_and_foreign_finance_seals_fail_before_transport(self):
+        mutations=[('HISTORICAL_EXCEPTION','registration-worker-b8-80-20261006'),
+                   ('HISTORICAL_EXCEPTION','registration-worker-arbitrary'),
+                   ('EXPECTED_CURRENT',BASELINE),('RELEASE_OPERATION','verify_unused_cache'),
+                   ('POST_CLEANUP_SEAL_SHA256','a'*64),('ORDER_ARCHIVE_SEAL_SHA256','a'*64),
+                   ('ORDER_ARCHIVE_PREPARED_IMAGES_SHA256','a'*64)]
+        for script in ('build-images.sh','push-images.sh','dispatch.sh'):
+            for field,value in mutations:
+                with self.subTest(script=script,field=field),self.fixture() as (root,env):
+                    env[field]=value
+                    result=self.run_script(root,env,script)
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(self.calls(env,'aws'),[])
+                    self.assertEqual(self.calls(env,'docker'),[])
+
+    def test_956_readback_rejects_implicit_old_profile_validation(self):
+        _block,script=self.workflow_step(self.readback_step)
+        script,count=re.subn(r",\n\s+profile_id='registration-worker-956-20261006'",'',script)
+        self.assertEqual(count,1)
+        with self.fixture() as (root,env):
+            profile_sha=hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest()
+            receipt={'status':'VERIFIED','currentCommit':COMMIT,'sourceTree':TREE,'profileSha256':profile_sha}
+            env['LOCAL_READBACK_OUTPUT']='FIXED_REGISTRATION_RELEASE_VERIFIED '+json.dumps(receipt)
+            result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertEqual(result.stdout,'')
+            self.assertNotIn('RAW_SECRET_SENTINEL',result.stderr)
 
 
 if __name__ == '__main__':
