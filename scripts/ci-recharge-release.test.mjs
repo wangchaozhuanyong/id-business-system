@@ -13,9 +13,9 @@ import {
   selectedParts
 } from './ci-recharge-scope.mjs';
 
-function fixture(run) {
-  mkdirSync('.deploy', { recursive: true });
-  const root = mkdtempSync(join(process.cwd(), '.deploy/release-scope-test-'));
+function fixture(run, outputDirectory = '.deploy') {
+  mkdirSync(outputDirectory, { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), outputDirectory, 'release-scope-test-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
   const log = join(root, 'docker.log');
@@ -3014,4 +3014,103 @@ test('fixed 90 hydration CI targets only the reviewed mixed source and retains a
     'apps/admin/src/v2/features/customers/CustomerList.vue'
   ])
     assert.equal(checkMode([...paths, extra]), 'full');
+});
+
+test('fixed 91 profile observation selection accepts actual 01cec519 and rejects stale or combined inputs before effects', () => {
+  const baseline = '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af';
+  fixture(({ env, log }) => {
+    const approved = {
+      ...env,
+      HISTORICAL_EXCEPTION: 'registration-worker-91-20261007',
+      EXPECTED_CURRENT: baseline,
+      RELEASE_ADMIN_ONLY: 'false',
+      REUSE_IMAGE_COMMIT: '',
+      REUSE_IMAGE_RUN_ID: '',
+      REUSE_IMAGE_RUN_ATTEMPT: ''
+    };
+    const select = (fields = {}) =>
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: { ...approved, ...fields },
+        stdio: 'pipe'
+      });
+    select();
+    for (const fields of [
+      { EXPECTED_CURRENT: 'c3cad767b372738b2193e60584b0a53daa53b65f' },
+      { HISTORICAL_EXCEPTION: 'registration-worker-90-20261007' },
+      { HISTORICAL_EXCEPTION: 'registration-worker-89-20261006' },
+      { EXPECTED_CURRENT: 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' },
+      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
+      { EXPECTED_CURRENT: '4c200c4ae08bb8214ff8e0955f8237ce85069cc6' },
+      { EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c' },
+      { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
+      { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
+      { EXPECTED_CURRENT: 'f'.repeat(40) },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { RELEASE_OPERATION: 'verify_unused_cache' },
+      { RELEASE_OPERATION: 'prepare_order_archive_release' },
+      { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
+      { REUSE_IMAGE_RUN: '123' },
+      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
+      { REUSE_IMAGE_RUN_ID: '123' },
+      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
+      { ORDER_ARCHIVE_SEAL_SHA256: 'a'.repeat(64) },
+      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'a'.repeat(64) }
+    ]) {
+      assert.throws(
+        () => select(fields),
+        (error) => error.status === 1
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    }
+    select({
+      HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006',
+      EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+    });
+    assert.throws(() => select({ HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006' }));
+    assert.equal(readFileSync(log, 'utf8'), '');
+  }, '.runtime/registration-profile-observation-release-20261007/node-selection');
+});
+
+test('fixed 91 profile observation workflow confines fresh Worker builds and explicit readback to its profile', () => {
+  const profile = 'registration-worker-91-20261007';
+  const baseline = '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af';
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 91 registration runtime approval'
+  );
+  assert.equal(approval.if, `inputs.historical_exception == '${profile}'`);
+  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+  assert.ok(approval.run.includes(`--registration-profile ${profile}`));
+  for (const name of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
+    const source = readFileSync(`scripts/production-release/${name}`, 'utf8');
+    const branch = source.split(`== ${profile} ]]; then`)[1].split(/\n(?:fi|elif )/)[0];
+    assert.ok(branch.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+    assert.ok(branch.includes(`--registration-profile ${profile}`));
+  }
+  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
+    .split(`== ${profile} ]]; then`)[1]
+    .split('\nfi')[0];
+  assert.equal((build.match(/build_image /g) || []).length, 1);
+  assert.ok(build.includes('build_image auto-recharge "$registration_context/'));
+  assert.equal(build.includes('registration-admin-build-context'), false);
+  const push = readFileSync('scripts/production-release/push-images.sh', 'utf8')
+    .split(`== ${profile} ]]; then`)[1]
+    .split('\nelif ')[0];
+  assert.ok(push.includes('services=(auto-recharge)'));
+  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8')
+    .split(`elif history_policy == '${profile}':`)[1]
+    .split('\nelif ')[0];
+  assert.ok(dispatch.includes("scope_flag += ' --registration-worker-91'"));
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 91 registration deployment independently'
+  );
+  assert.ok(readback.run.includes(`profile_id='${profile}'`));
+  assert.ok(readback.run.includes('raw output suppressed'));
+  const skipped = workflowSteps.find(
+    (step) => step.name === 'Record skipped cache maintenance for fixed 91 registration release'
+  );
+  assert.equal(
+    skipped.if,
+    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
+  );
 });
