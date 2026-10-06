@@ -1411,7 +1411,7 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await self.flow.register()
         self.assertEqual(stopped.exception.report['reason'], 'fixture_email_reached')
         self.assertTrue(self.flow.registration_refreshed)
-        self.assertEqual(self.session_reads, 2)
+        self.assertEqual(self.session_reads, 1)
         self.assertIs(self.flow.page, self.page)
         self.job.manual.assert_not_awaited()
         self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
@@ -1674,6 +1674,198 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
         result['binding_callback_invoked'] = bool(captured)
         for key in ['array_from', 'node_for_each', 'node_spread', 'node_for_of', 'form_data_entries']:
             self.assertTrue(result[key]['ok'])
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class InitialFormBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Actual DOM and session/account requests, never mocked official identity."""
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+
+    async def asyncTearDown(self):
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def fixture(self, body, mode='healthy', *, email_submit=False):
+        from browser_session import SessionBudget
+        await self.context.unroute('**/*')
+        self.session_reads = self.account_reads = self.document_gets = 0
+        self.submissions.clear()
+        def session():
+            def part(value):
+                return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+            email = 'other@example.invalid' if mode == 'mismatch' else self.job.payload['email']
+            token = '.'.join((part({'alg':'RS256'}), part({
+                'exp':int(time.time())+3600,
+                'https://api.openai.com/auth':{'chatgpt_account_id':'initial-fixture-account'},
+                'https://api.openai.com/profile':{'email':email}}), 'c3ludGhldGlj'))
+            return {'accessToken':token,'user':{'id':'initial-fixture-user','email':email},
+                    'account':{'id':'initial-fixture-account'}}
+        script = '''<script>document.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();await fetch('/fixture/email',{method:'POST',body:'{}'});
+          document.body.innerHTML='<p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button>';
+        };</script>''' if email_submit else ''
+        async def local(route):
+            request = route.request
+            path = urlsplit(request.url).path
+            if request.method not in {'GET','HEAD','OPTIONS'}:
+                self.submissions.append(path)
+            if path == '/api/auth/session':
+                self.session_reads += 1
+                if mode == 'network':
+                    await route.abort('failed'); return
+                if mode == 'timeout':
+                    await asyncio.sleep(3)
+                try:
+                    await route.fulfill(content_type='application/json',body=json.dumps(
+                        session() if mode in {'same','mismatch'} else {}))
+                except Exception:
+                    if mode != 'timeout': raise
+            elif path == '/backend-api/accounts/check/v4-2023-04-27':
+                self.account_reads += 1
+                await route.fulfill(content_type='application/json',body=json.dumps({
+                    'accounts':{'initial-fixture-account':{'account':{'plan_type':'free'}}}}))
+            elif path == '/fixture/email':
+                await route.fulfill(content_type='application/json',body='{}')
+            else:
+                self.document_gets += 1
+                await route.fulfill(content_type='text/html',body='<!doctype html><html><body>'+body+script+'</body></html>')
+        await self.context.route('**/*',local)
+        await self.page.goto('https://chatgpt.com/auth/login',wait_until='domcontentloaded')
+        self.flow.observation_budget = SessionBudget(2,cancelled=self.job.cancelled.is_set)
+
+    async def test_initial_email_signup_do_not_require_anonymous_session_fetch(self):
+        for view,body in [('email','<form><input type="email"><button>Continue</button></form>'),
+                          ('signup','<button>Sign up</button>')]:
+            for mode in ['healthy','network','timeout']:
+                with self.subTest(view=view,mode=mode):
+                    await self.fixture(body,mode)
+                    observed,_field = await self.flow.registration_view()
+                    self.assertEqual(observed,view)
+                    self.assertEqual(self.session_reads,0)
+                    self.assertEqual(self.submissions,[])
+                    self.assertFalse(self.job.payload['registered'])
+                    self.assertNotIn('registered',self.events)
+
+    async def test_initial_password_form_requires_existing_account_review_without_fetch(self):
+        await self.fixture('<input type="password">','network')
+        self.assertEqual(await self.flow.registration_view(),('existing',None))
+        self.assertEqual(self.session_reads,0)
+        self.assertEqual(self.submissions,[])
+
+    async def test_navigation_before_initial_email_read_cannot_use_nonofficial_ui(self):
+        import registration_browser
+        await self.fixture('<input type="email">','network')
+        original = registration_browser.unique_visible
+        async def changing(page,selector):
+            field = await original(page,selector)
+            if selector == registration_browser.PASSWORD_INPUT:
+                await page.goto('https://unsupported.example.test/auth/login',wait_until='domcontentloaded')
+            return field
+        with patch('registration_browser.unique_visible',changing):
+            with self.assertRaises(Stop) as stopped:
+                await self.flow.registration_view()
+        self.assertEqual(stopped.exception.report['reason'],'form_unrecognized')
+        self.assertEqual(self.session_reads,0)
+        self.assertEqual(self.submissions,[])
+
+    async def test_each_submit_fact_keeps_identity_ahead_of_stale_email_and_signup(self):
+        for flag in ['email_submit_started','email_submitted','code_submitted','profile_submitted']:
+            for body in ['<input type="email">','<button>Sign up</button>']:
+                with self.subTest(flag=flag,body=body):
+                    self.flow.registration_state.clear()
+                    self.flow.registration_state[flag] = True
+                    await self.fixture(body,'same')
+                    self.assertEqual(await self.flow.registration_view(),('registered',None))
+                    self.assertEqual(self.session_reads,2)
+                    self.assertEqual(self.account_reads,1)
+                    self.assertTrue(self.flow.registration_state[flag])
+                    self.assertEqual(self.submissions,[])
+
+    async def test_submitted_stale_email_cannot_hide_session_failure(self):
+        from browser_session import SessionBudget
+        self.flow.registration_state['email_submitted'] = True
+        for mode,reason in [('network','session_network_error'),('timeout','session_load_timeout')]:
+            with self.subTest(mode=mode):
+                await self.fixture('<input type="email">',mode)
+                self.flow.observation_budget = SessionBudget(.8,cancelled=self.job.cancelled.is_set)
+                with self.assertRaises(Stop) as stopped:
+                    await self.flow.registration_view()
+                self.assertEqual(stopped.exception.report['reason'],reason)
+                self.assertEqual(self.session_reads,1)
+                self.assertEqual(self.submissions,[])
+                self.assertTrue(self.flow.registration_state['email_submitted'])
+
+    async def test_registered_payload_keeps_identity_first_without_submit_flags(self):
+        self.job.payload['registered'] = True
+        await self.fixture('<input type="email">','same')
+        self.assertEqual(await self.flow.registration_view(),('registered',None))
+        self.assertEqual(self.session_reads,2)
+        self.assertEqual(self.account_reads,1)
+        self.assertEqual(self.submissions,[])
+
+    async def test_wrong_identity_is_not_swallowed_or_accepted(self):
+        for body,registered,submitted in [('<main>Welcome</main>',False,False),
+                                          ('<input type="email">',False,True),
+                                          ('<button>Sign up</button>',True,False)]:
+            with self.subTest(registered=registered,submitted=submitted):
+                self.job.payload['registered'] = registered
+                self.flow.registration_state.clear()
+                if submitted: self.flow.registration_state['email_submitted'] = True
+                await self.fixture(body,'mismatch')
+                with self.assertRaises(Stop) as stopped:
+                    await self.flow.registration_view()
+                self.assertEqual(stopped.exception.report['reason'],'official_login_email_mismatch')
+                self.assertEqual(self.session_reads,1)
+                self.assertEqual(self.submissions,[])
+                self.assertNotIn('registered',self.events)
+
+    async def test_ambiguous_initial_inputs_pause_before_any_session_or_write(self):
+        for body in ['<input type="email"><input type="email"><button>Continue</button>',
+                     '<input type="password"><input type="password">']:
+            with self.subTest(body=body):
+                await self.fixture(body,'network')
+                self.job.manual.reset_mock()
+                with self.assertRaises(Stop) as stopped:
+                    await self.flow.register()
+                self.assertEqual(stopped.exception.report['reason'],'fixture_paused')
+                self.job.manual.assert_awaited_once_with('form_unrecognized')
+                self.assertEqual(self.session_reads,0)
+                self.assertEqual(self.submissions,[])
+                self.assertEqual(self.document_gets,1)
+
+    async def test_challenge_code_profile_and_loading_keep_priority(self):
+        for expected,body in [
+                ('verification','<h1>Verify you are human</h1><input type="email">'),
+                ('code','<p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><input type="email">'),
+                ('profile','<form><input name="name"><input name="age"><button>Continue</button></form><input type="email">'),
+                ('unknown','<div aria-busy="true">Loading</div><input type="email">')]:
+            with self.subTest(view=expected):
+                await self.fixture(body,'network')
+                view,_field = await self.flow.registration_view()
+                self.assertEqual(view,expected)
+                self.assertEqual(self.session_reads,0)
+                self.assertEqual(self.submissions,[])
+
+    async def test_initial_email_progresses_once_without_fetch_and_keeps_mail_fence(self):
+        await self.fixture('<form><input type="email"><button>Continue</button></form>',
+                           'network',email_submit=True)
+        def prepare_mail(_step,*,new_request=False):
+            self.job.awaiting_code = True
+        self.job.prepare_mail = MagicMock(side_effect=prepare_mail)
+        self.job.wait_code = AsyncMock(side_effect=Stop('fixture_waiting_for_code'))
+        with self.assertRaises(Stop) as stopped:
+            await self.flow.register()
+        self.assertEqual(stopped.exception.report['reason'],'fixture_waiting_for_code')
+        self.assertEqual(self.submissions,['/fixture/email'])
+        self.assertEqual(self.session_reads,0)
+        self.job.prepare_mail.assert_called_once_with('email_code',new_request=True)
+        self.job.wait_code.assert_awaited_once()
+        self.assertTrue(self.flow.registration_state['email_submit_started'])
+        self.assertTrue(self.flow.registration_state['email_submitted'])
+        self.assertFalse(self.flow.registration_state.get('code_submitted',False))
+        self.assertFalse(self.flow.registration_state.get('profile_submitted',False))
+        self.assertFalse(self.flow.registration_refreshed)
+        self.job.manual.assert_not_awaited()
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
