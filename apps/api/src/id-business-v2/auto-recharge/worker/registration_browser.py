@@ -23,11 +23,22 @@ REGISTRATION_VIEWS = {'verification', 'code', 'profile', 'unknown', 'registered'
 REGISTRATION_WRITES = {'email_submit', 'code_submit', 'profile_submit', 'signup_click'}
 IDENTITY_RECOVERY = 'identity_recovery_readonly'
 EMAIL_REQUEST_LIMIT = 16
-EMAIL_REQUEST_PHASES = {'before_click', 'click', 'after_click', 'safe_get'}
+EMAIL_REQUEST_PHASES = {'before_click', 'click', 'after_click', 'safe_get', 'unknown'}
 EMAIL_REQUEST_METHODS = {'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'other', 'none'}
 EMAIL_REQUEST_HOSTS = {'chatgpt', 'openai_auth', 'auth0', 'other'}
 EMAIL_REQUEST_PATHS = {'login', 'email_code', 'password', 'profile', 'other'}
 EMAIL_REQUEST_FAILURES = {'none', 'http_error', 'blocked', 'timeout', 'network', 'cancelled', 'unknown'}
+EMAIL_FORM_SEMANTICS = {
+    'effective_method': {'get', 'post', 'dialog', 'other'},
+    'action_host': EMAIL_REQUEST_HOSTS,
+    'action_path': EMAIL_REQUEST_PATHS,
+    'submitter_type': {'submit', 'button', 'reset', 'other'},
+    'ready_state': {'loading', 'interactive', 'complete', 'other'},
+    'busy': {'true', 'false'},
+    'email_disabled': {'true', 'false'},
+    'submit_disabled': {'true', 'false'},
+    'value_nonempty': {'true', 'false'},
+}
 
 
 class RegistrationBrowser:
@@ -105,7 +116,8 @@ class RegistrationBrowser:
             return
         state = dict(read='observing', request_count=0, response_count=0, failed_count=0,
                      navigation_count=0, overflow=False, main_frame_host='other',
-                     main_frame_path='other', first_failure=None, current=None, last_write=None)
+                     main_frame_path='other', first_failure=None, current=None, last_write=None,
+                     first_navigation=None, last_navigation=None)
         self.email_request_observation = state
         page = self.page
         self.email_request_page = page
@@ -123,25 +135,34 @@ class RegistrationBrowser:
                 state['first_failure'] = dict(record)
             if record['method'] not in {'GET', 'HEAD', 'OPTIONS'}:
                 state['last_write'] = dict(record)
+            if record['kind'] == 'navigation' and record['frame'] == 'main':
+                if state['first_navigation'] is None:
+                    state['first_navigation'] = dict(record)
+                state['last_navigation'] = dict(record)
+        def closed_request(request, phase):
+            if self.email_request_page is not page or request.frame.page is not page:
+                return None
+            kind = ('navigation' if request.is_navigation_request()
+                    else 'fetch' if request.resource_type in {'xhr', 'fetch'} else None)
+            if kind is None:
+                return None
+            host, path = self.email_request_target(request.url)
+            if host == 'other':
+                return None
+            method = request.method
+            return dict(phase=phase, event='request', host=host,
+                        method=method if method in EMAIL_REQUEST_METHODS - {'none'} else 'other',
+                        kind=kind, frame='main' if request.frame is page.main_frame else 'subframe',
+                        path=path, http_status=None, failure='none')
         def requested(request):
             try:
-                if self.email_request_page is not page or request.frame.page is not page:
-                    return
-                kind = ('navigation' if request.is_navigation_request()
-                        else 'fetch' if request.resource_type in {'xhr', 'fetch'} else None)
-                if kind is None:
-                    return
-                host, path = self.email_request_target(request.url)
-                if host == 'other':
+                record = closed_request(request, self.email_request_phase)
+                if record is None:
                     return
                 count('request_count')
                 if len(self.email_requests) >= EMAIL_REQUEST_LIMIT:
                     state['overflow'] = True
-                    return
-                method = request.method
-                record = dict(phase=self.email_request_phase, event='request', host=host,
-                              method=method if method in EMAIL_REQUEST_METHODS - {'none'} else 'other',
-                              kind=kind, path=path, http_status=None, failure='none')
+                    self.email_requests.pop(next(iter(self.email_requests)))
                 self.email_requests[request] = record
                 retain(record)
             except Exception:
@@ -150,13 +171,13 @@ class RegistrationBrowser:
             try:
                 if self.email_request_page is not page:
                     return
-                original = self.email_requests.get(response.request)
+                original = self.email_requests.get(response.request) or closed_request(response.request, 'unknown')
                 if original is None:
                     return
                 count('response_count')
                 status = response.status
                 status = status if type(status) is int and 100 <= status <= 599 else None
-                retain(dict(original, phase=self.email_request_phase, event='response',
+                retain(dict(original, event='response',
                             http_status=status, failure='http_error' if status and status >= 400 else 'none'))
             except Exception:
                 state['read'] = 'unavailable'
@@ -164,7 +185,7 @@ class RegistrationBrowser:
             try:
                 if self.email_request_page is not page:
                     return
-                original = self.email_requests.get(request)
+                original = self.email_requests.pop(request, None) or closed_request(request, 'unknown')
                 if original is None:
                     return
                 count('failed_count')
@@ -174,9 +195,12 @@ class RegistrationBrowser:
                            else 'cancelled' if code in {'net::ERR_ABORTED', 'NS_BINDING_ABORTED'}
                            else 'network' if code in RETRYABLE_NETWORK_CODES or code in {'net::ERR_FAILED', 'NS_ERROR_FAILURE'}
                            else 'unknown')
-                retain(dict(original, phase=self.email_request_phase, event='requestfailed', failure=failure))
+                retain(dict(original, event='requestfailed', failure=failure))
             except Exception:
                 state['read'] = 'unavailable'
+        def finished(request):
+            if self.email_request_page is page:
+                self.email_requests.pop(request, None)
         def navigated(frame):
             try:
                 if self.email_request_page is not page or frame is not page.main_frame:
@@ -188,7 +212,7 @@ class RegistrationBrowser:
         try:
             state['main_frame_host'], state['main_frame_path'] = self.email_request_target(page.url)
             for name, handler in (('request', requested), ('response', responded),
-                                  ('requestfailed', failed), ('framenavigated', navigated)):
+                                  ('requestfailed', failed), ('requestfinished', finished), ('framenavigated', navigated)):
                 self.email_request_handlers.append((name, handler))
                 page.on(name, handler)
         except Exception:
@@ -211,7 +235,8 @@ class RegistrationBrowser:
         state = self.email_request_observation
         if (type(state) is not dict or set(state) != {
                 'read', 'request_count', 'response_count', 'failed_count', 'navigation_count',
-                'overflow', 'main_frame_host', 'main_frame_path', 'first_failure', 'current', 'last_write'}
+                'overflow', 'main_frame_host', 'main_frame_path', 'first_failure', 'current', 'last_write',
+                'first_navigation', 'last_navigation'}
                 or type(state['read']) is not str or state['read'] not in {'observing', 'closed', 'unavailable'}
                 or type(state['overflow']) is not bool
                 or type(state['main_frame_host']) is not str or state['main_frame_host'] not in EMAIL_REQUEST_HOSTS
@@ -228,29 +253,30 @@ class RegistrationBrowser:
                        'response_count=%s failed_count=%s navigation_count=%s overflow=%s main_frame_host=%s main_frame_path=%s',
                        job_id, attempt, point, *(state[key] for key in ('read', 'request_count', 'response_count',
                            'failed_count', 'navigation_count', 'overflow', 'main_frame_host', 'main_frame_path')))
-        for slot in ('first_failure', 'current', 'last_write'):
+        for slot in ('first_failure', 'current', 'last_write', 'first_navigation', 'last_navigation'):
             record = state[slot]
             allowed = {'phase': EMAIL_REQUEST_PHASES, 'event': {'request', 'response', 'requestfailed'},
                        'host': EMAIL_REQUEST_HOSTS - {'other'}, 'method': EMAIL_REQUEST_METHODS - {'none'},
-                       'kind': {'navigation', 'fetch'}, 'path': EMAIL_REQUEST_PATHS, 'failure': EMAIL_REQUEST_FAILURES}
+                       'kind': {'navigation', 'fetch'}, 'frame': {'main', 'subframe'},
+                       'path': EMAIL_REQUEST_PATHS, 'failure': EMAIL_REQUEST_FAILURES}
             if (type(record) is not dict or set(record) != set(allowed) | {'http_status'}
                     or any(type(record[key]) is not str or record[key] not in values for key, values in allowed.items())
                     or not (record['http_status'] is None or type(record['http_status']) is int
                             and 100 <= record['http_status'] <= 599)):
                 continue
             logger.warning('Registration email request job=%s attempt=%s point=%s slot=%s phase=%s event=%s '
-                           'host=%s method=%s kind=%s path=%s http_status=%s failure=%s',
+                           'host=%s method=%s kind=%s path=%s http_status=%s failure=%s frame=%s',
                            job_id, attempt, point, slot, *(record[key] for key in (
-                               'phase', 'event', 'host', 'method', 'kind', 'path', 'http_status', 'failure')))
+                               'phase', 'event', 'host', 'method', 'kind', 'path', 'http_status', 'failure', 'frame')))
 
     def log_email_diagnostic(self, point):
         job_id = getattr(self.job, 'id', None)
         attempt = getattr(self.job, 'attempt', None)
-        for slot in ('email_form_first_failure', 'email_form_current'):
+        for slot in ('email_form_first_failure', 'email_form_pre_submit', 'email_form_current'):
             value = self.registration_state.get(slot)
             if type(value) is not dict or set(value) != {
                     'phase', 'read', 'gate', 'path', 'email_count', 'code_count',
-                    'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error'}:
+                    'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error'} | set(EMAIL_FORM_SEMANTICS):
                 continue
             allowed = {
                 'phase': {'prepare', 'after_callback', 'observe'},
@@ -260,6 +286,7 @@ class RegistrationBrowser:
                 'target': {'matches', 'differs', 'missing', 'ambiguous', 'not_measured'},
                 'validity': {'valid', 'invalid', 'missing', 'ambiguous', 'not_measured'},
                 'email_error': {'none', 'invalid', 'not_supported', 'already_exists', 'request_rejected', 'unknown', 'not_measured'}}
+            allowed.update({key: values | {'not_measured'} for key, values in EMAIL_FORM_SEMANTICS.items()})
             if (any(type(value[key]) is not str or value[key] not in values
                     for key, values in allowed.items())
                     or any(type(value[key]) is not int or value[key] not in {0, 1, 2}
@@ -267,12 +294,15 @@ class RegistrationBrowser:
                 continue
             logging.getLogger('registration').warning(
                 'Registration email form job=%s attempt=%s point=%s slot=%s phase=%s read=%s gate=%s '
-                'path=%s email_count=%s code_count=%s continue_count=%s same_form_count=%s target=%s validity=%s alert_count=%s email_error=%s',
+                'path=%s email_count=%s code_count=%s continue_count=%s same_form_count=%s target=%s validity=%s alert_count=%s email_error=%s '
+                'effective_method=%s action_host=%s action_path=%s submitter_type=%s ready_state=%s '
+                'busy=%s email_disabled=%s submit_disabled=%s value_nonempty=%s',
                 job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
                 attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
                 point if point in {'before_safe_get', 'pause'} else 'unknown', slot,
                 *(value[key] for key in ('phase', 'read', 'gate', 'path', 'email_count',
-                                        'code_count', 'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error')))
+                                        'code_count', 'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error')),
+                *(value[key] for key in EMAIL_FORM_SEMANTICS))
 
     async def email_diagnostic(self, phase, budget, gate='none'):
         """Closed observations only; no events, extra requests or extra budget."""
@@ -290,6 +320,7 @@ class RegistrationBrowser:
         value = dict(phase=phase, read='not_measured', gate=gate, path=path_class,
                      email_count=0, code_count=0, continue_count=0, same_form_count=0,
                      target='not_measured', validity='not_measured', alert_count=0, email_error='not_measured')
+        value.update({key: 'not_measured' for key in EMAIL_FORM_SEMANTICS})
         try:
             milliseconds = budget.remaining_ms()
             if milliseconds >= 25:
@@ -301,6 +332,25 @@ class RegistrationBrowser:
                   const buttons = [...document.querySelectorAll('button,[role="button"]')].filter(e =>
                     shown(e) && /^(continue|继续)$/i.test((e.getAttribute('aria-label') || e.innerText || '').trim()));
                   const email = emails.length === 1 ? emails[0] : null;
+                  const associated = buttons.filter(b => email && email.form && b.form === email.form);
+                  const submit = associated.length === 1 ? associated[0] : null;
+                  const form = email && email.form;
+                  const method = submit && form ? (submit.hasAttribute('formmethod') ? submit.formMethod : form.method).toLowerCase() : '';
+                  let action_host = 'not_measured', action_path = 'not_measured';
+                  if (submit && form) {
+                    try {
+                      const action = new URL(submit.hasAttribute('formaction') ? submit.formAction : form.action, document.baseURI);
+                      action_host = action.protocol === 'https:' && (!action.port || action.port === '443') && !action.username && !action.password
+                        ? ({'chatgpt.com':'chatgpt','auth.openai.com':'openai_auth','auth0.openai.com':'auth0'}[action.hostname] || 'other') : 'other';
+                      const path = action.pathname.toLowerCase(), segments = path.split('/');
+                      action_path = action_host === 'other' ? 'other'
+                        : ['/auth/login','/log-in','/login','/u/login/identifier'].includes(path) ? 'login'
+                        : ['email-verification','email-otp','email-code'].some(s => path.includes(s)) ? 'email_code'
+                        : segments.includes('password') ? 'password'
+                        : segments.some(s => ['profile','about-you'].includes(s)) ? 'profile' : 'other';
+                    } catch (_) { action_host = action_path = 'other'; }
+                  }
+                  const bit = value => value ? 'true' : 'false';
                   const count = list => Math.min(2, list.length);
                   const alerts = email && email.form ? [...email.form.querySelectorAll('[role="alert"],[aria-live="assertive"]')].filter(shown) : [];
                   const known = new Map([
@@ -310,21 +360,31 @@ class RegistrationBrowser:
                     ['your request was rejected. please try again.', 'request_rejected']]);
                   const errors = [...new Set(alerts.map(e => known.get((e.innerText || '').trim().replace(/\\s+/g, ' ').toLowerCase()) || 'unknown'))];
                   return {email_count:count(emails), code_count:count(codes), continue_count:count(buttons),
-                    same_form_count:count(buttons.filter(b => email && email.form && b.form === email.form)),
+                    same_form_count:count(associated),
                     alert_count:count(alerts), email_error:errors.length === 1 ? errors[0] : errors.length ? 'unknown' : 'none',
                     target:email ? (email.value === args.expected ? 'matches' : 'differs')
                       : (emails.length ? 'ambiguous' : 'missing'),
                     validity:email ? (email.validity.valid ? 'valid' : 'invalid')
-                      : (emails.length ? 'ambiguous' : 'missing')};
+                      : (emails.length ? 'ambiguous' : 'missing'),
+                    effective_method:submit && form ? (['get','post','dialog'].includes(method) ? method : 'other') : 'not_measured',
+                    action_host, action_path,
+                    submitter_type:submit ? (['submit','button','reset'].includes(submit.type) ? submit.type : 'other') : 'not_measured',
+                    ready_state:['loading','interactive','complete'].includes(document.readyState) ? document.readyState : 'other',
+                    busy:form ? bit(form.getAttribute('aria-busy') === 'true' || (submit && submit.getAttribute('aria-busy') === 'true')) : 'not_measured',
+                    email_disabled:email ? bit(email.matches(':disabled')) : 'not_measured',
+                    submit_disabled:submit ? bit(submit.matches(':disabled')) : 'not_measured',
+                    value_nonempty:email ? bit(email.value.length > 0) : 'not_measured'};
                 }''', {'emailSelector': EMAIL_INPUT, 'codeSelector': CODE_INPUT,
                         'expected': self.data['email']}), timeout=min(.1, milliseconds / 1000))
                 if (type(result) is dict and set(result) == {
-                        'email_count', 'code_count', 'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error'}
+                        'email_count', 'code_count', 'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error'} | set(EMAIL_FORM_SEMANTICS)
                         and all(type(result[key]) is int and result[key] in {0, 1, 2}
                                 for key in ('email_count', 'code_count', 'continue_count', 'same_form_count', 'alert_count'))
                         and result['target'] in {'matches', 'differs', 'missing', 'ambiguous'}
                         and result['validity'] in {'valid', 'invalid', 'missing', 'ambiguous'}
-                        and result['email_error'] in {'none', 'invalid', 'not_supported', 'already_exists', 'request_rejected', 'unknown'}):
+                        and result['email_error'] in {'none', 'invalid', 'not_supported', 'already_exists', 'request_rejected', 'unknown'}
+                        and all(type(result[key]) is str and result[key] in allowed | {'not_measured'}
+                                for key, allowed in EMAIL_FORM_SEMANTICS.items())):
                     value.update(result, read='measured')
         except Exception:
             pass  # Diagnostic failures neither replace the primary error nor delay recovery.
@@ -890,6 +950,10 @@ class RegistrationBrowser:
                     await self.manual_registration(reason)
                     observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                     continue
+                await self.email_diagnostic('prepare', budget)
+                prepared_diagnostic = self.registration_state.get('email_form_current')
+                if type(prepared_diagnostic) is dict:
+                    self.registration_state['email_form_pre_submit'] = dict(prepared_diagnostic)
                 # Timestamp the expected mail BEFORE submission triggers sending.
                 self.operation('email_submit')
                 prepared_page, prepared_url = self.page, self.page.url

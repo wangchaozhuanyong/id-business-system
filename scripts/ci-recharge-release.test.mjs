@@ -439,6 +439,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'registration-worker-86-20261006'), false);
   assert.equal(selected('release', 'registration-worker-87-20261006'), false);
   assert.equal(selected('release', 'registration-worker-88-20261006'), false);
+  assert.equal(selected('release', 'registration-worker-89-20261006'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -454,6 +455,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-86-20261006',
         'registration-worker-87-20261006',
         'registration-worker-88-20261006',
+        'registration-worker-89-20261006',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -2775,5 +2777,91 @@ test('main80 actual readback parser accepts the 21-field 49-check proof and reje
       }
     },
     identity
+  );
+});
+
+test('fixed 89 Pro bridge selection accepts actual d2 and rejects stale or combined inputs before effects', () => {
+  const baseline = 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3';
+  fixture(({ env, log }) => {
+    const approved = {
+      ...env,
+      HISTORICAL_EXCEPTION: 'registration-worker-89-20261006',
+      EXPECTED_CURRENT: baseline,
+      RELEASE_ADMIN_ONLY: 'false',
+      REUSE_IMAGE_COMMIT: '',
+      REUSE_IMAGE_RUN_ID: '',
+      REUSE_IMAGE_RUN_ATTEMPT: ''
+    };
+    const select = (fields = {}) =>
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: { ...approved, ...fields },
+        stdio: 'pipe'
+      });
+    select();
+    for (const fields of [
+      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
+      { EXPECTED_CURRENT: '4c200c4ae08bb8214ff8e0955f8237ce85069cc6' },
+      { EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c' },
+      { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
+      { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
+      { EXPECTED_CURRENT: 'f'.repeat(40) },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { RELEASE_OPERATION: 'verify_unused_cache' },
+      { RELEASE_OPERATION: 'prepare_order_archive_release' },
+      { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
+      { REUSE_IMAGE_RUN: '123' },
+      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
+      { REUSE_IMAGE_RUN_ID: '123' },
+      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
+      { ORDER_ARCHIVE_SEAL_SHA256: 'a'.repeat(64) },
+      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'a'.repeat(64) }
+    ]) {
+      assert.throws(
+        () => select(fields),
+        (error) => error.status === 1
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    }
+    select({
+      HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006',
+      EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+    });
+    assert.throws(() => select({ HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006' }));
+    assert.equal(readFileSync(log, 'utf8'), '');
+  });
+});
+
+test('fixed 89 Pro bridge workflow build and both dispatch selectors retain the independent main80 b91 anchor', () => {
+  const baseline = 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3';
+  const old = 'b91b626a71ed2c7c2473d080551b3b10b693b0cb';
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 89 registration runtime approval'
+  );
+  assert.equal(approval.if, "inputs.historical_exception == 'registration-worker-89-20261006'");
+  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+  assert.equal(approval.run.includes(old), false);
+  for (const filename of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
+    const source = readFileSync(`scripts/production-release/${filename}`, 'utf8');
+    const branch = source
+      .split('== registration-worker-89-20261006 ]]; then')[1]
+      .split(/\n(?:fi|elif )/)[0];
+    assert.ok(branch.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+    assert.equal(branch.includes(old), false);
+    assert.ok(source.includes(`recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = ${old}`));
+  }
+  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8');
+  const python89 = dispatch
+    .split("elif history_policy == 'registration-worker-89-20261006':")[1]
+    .split('\nelif ')[0];
+  assert.ok(python89.includes(`assert previous == '${baseline}' and admin_only == 'false'`));
+  assert.ok(python89.includes("scope_flag += ' --registration-worker-89'"));
+  assert.equal(python89.includes(old), false);
+  assert.ok(dispatch.includes(`assert previous == '${old}' and admin_only == 'false'`));
+  const rechargeApproval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge runtime approval'
+  );
+  assert.ok(
+    rechargeApproval.run.includes(`recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = ${old}`)
   );
 });

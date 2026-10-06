@@ -78,6 +78,7 @@ on:
           - registration-worker-86-20261006
           - registration-worker-87-20261006
           - registration-worker-88-20261006
+          - registration-worker-89-20261006
 
           - historical-finance-20261005-post-cleanup
           - historical-finance-20261005-order-archive
@@ -250,6 +251,17 @@ jobs:
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-88-20261006
 
+      - name: Verify fixed 89 registration runtime approval
+        if: inputs.historical_exception == 'registration-worker-89-20261006'
+        env:
+          REQUESTED_REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
+        run: |
+          set -Eeuo pipefail
+          test "$RELEASE_OPERATION" = release
+          test "$EXPECTED_CURRENT" = d2e22e623d0e19851c79ffe43396f5f97a99b8d3
+          test -z "$REQUESTED_REUSE_IMAGE_RUN"
+          python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-89-20261006
+
       - name: Build images on the GitHub runner
         if: (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
@@ -354,6 +366,16 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: registration-worker-88-build-projection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/registration-build-projection.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save fixed 89 registration Worker build projection
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-89-20261006'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: registration-worker-89-build-projection-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/registration-build-projection.json
           if-no-files-found: error
           include-hidden-files: true
@@ -1789,7 +1811,7 @@ jobs:
         run: bash scripts/production-release/dispatch.sh
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -2428,6 +2450,86 @@ jobs:
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
             | python3 .deploy/production-release/fixed-registration-88-readback-filter.py
 
+      - name: Verify fixed 89 registration deployment independently
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-89-20261006'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY_BUILD_REGISTRATION_READBACK'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shlex
+          commit = os.environ['RELEASE_COMMIT']
+          tree = os.environ['SOURCE_TREE']
+          if not re.fullmatch(r'[a-f0-9]{40}', commit) or not re.fullmatch(r'[a-f0-9]{40}', tree):
+              raise SystemExit('Fixed registration readback source unavailable')
+          source = Path('scripts/production-release/remote-deploy.py').read_bytes()
+          profile = Path('deploy/aws/registration-worker-89-20261006.json').read_bytes()
+          profile_sha = hashlib.sha256(profile).hexdigest()
+          staging = '/opt/id-business-v2/.staging/oidc-' + commit + '/remote-deploy.py'
+          verifier = (
+              'import hashlib,pathlib,sys;'
+              + 'p=pathlib.Path(' + repr(staging) + ');b=p.read_bytes();'
+              + '\nif len(b)>1024*1024 or hashlib.sha256(b).hexdigest()!=' + repr(hashlib.sha256(source).hexdigest()) + ':\n    raise RuntimeError("Fixed registration verifier source unavailable")\n'
+              + 'sys.argv=[str(p),"--check-fixed-registration-deployment","--expected-current",' + repr(commit)
+              + ',"--source-tree",' + repr(tree) + ',"--registration-profile-sha256",' + repr(profile_sha)
+              + ',"--registration-profile","registration-worker-89-20261006"];'
+              + 'exec(compile(b,str(p),"exec"),{"__name__":"__main__","__file__":str(p)})')
+          parameters = {'commands': ['python3 -c ' + shlex.quote(verifier)], 'executionTimeout': ['120']}
+          if len(json.dumps(parameters).encode()) > 20 * 1024:
+              raise SystemExit('Fixed registration readback exceeds the SSM command limit')
+          Path('.deploy/production-release/fixed-registration-89-readback.json').write_text(json.dumps(parameters))
+          PY_BUILD_REGISTRATION_READBACK
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/fixed-registration-89-readback.json \
+            --query 'Command.CommandId' --output text)"
+          wait_status=0
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?
+          if (( wait_status != 0 )); then
+            echo 'Fixed registration deployment readback failed; raw output suppressed' >&2
+            exit "$wait_status"
+          fi
+          cat > .deploy/production-release/fixed-registration-89-readback-filter.py <<'PY_FILTER_REGISTRATION_READBACK'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          try:
+              output = sys.stdin.read(8193)
+              prefix = 'FIXED_REGISTRATION_RELEASE_VERIFIED '
+              if len(output.encode()) > 8192 or not output.startswith(prefix) or len(output.strip().splitlines()) != 1:
+                  raise ValueError()
+              def unique(items):
+                  value = {}
+                  for key, item in items:
+                      if key in value:
+                          raise ValueError()
+                      value[key] = item
+                  return value
+              def invalid(_value):
+                  raise ValueError()
+              receipt = json.loads(output[len(prefix):], object_pairs_hook=unique, parse_constant=invalid)
+              source_path = Path('scripts/production-release/remote-deploy.py')
+              namespace = {'__name__': 'fixed_registration_readback_filter', '__file__': str(source_path)}
+              source = source_path.read_bytes()
+              exec(compile(source, str(source_path), 'exec'), namespace)
+              profile = Path('deploy/aws/registration-worker-89-20261006.json').read_bytes()
+              namespace['validate_fixed_registration_readback_projection'](
+                  receipt, os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE'], hashlib.sha256(profile).hexdigest(),
+                  profile_id='registration-worker-89-20261006')
+          except BaseException:
+              raise SystemExit('Fixed registration deployment readback unavailable; raw output suppressed') from None
+          print(json.dumps(receipt, separators=(',', ':')))
+          PY_FILTER_REGISTRATION_READBACK
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
+            | python3 .deploy/production-release/fixed-registration-89-readback-filter.py
+
       - name: Record skipped cache maintenance for fixed registration release
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-b8-80-20261006'
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
@@ -2449,4 +2551,8 @@ jobs:
 
       - name: Record skipped cache maintenance for fixed 88 registration release
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-88-20261006'
+        run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
+
+      - name: Record skipped cache maintenance for fixed 89 registration release
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-89-20261006'
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
