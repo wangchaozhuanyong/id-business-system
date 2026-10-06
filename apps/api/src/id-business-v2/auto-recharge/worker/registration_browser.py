@@ -21,6 +21,7 @@ PROFILE_SUBMIT = r'^(continue|submit|finish|next|创建账户|创建账号|继�
 REGISTRATION_OBSERVE_SECONDS = 15
 REGISTRATION_VIEWS = {'verification', 'code', 'profile', 'unknown', 'registered', 'existing', 'email', 'signup'}
 REGISTRATION_WRITES = {'email_submit', 'code_submit', 'profile_submit', 'signup_click'}
+IDENTITY_RECOVERY = 'identity_recovery_readonly'
 
 
 class RegistrationBrowser:
@@ -33,6 +34,14 @@ class RegistrationBrowser:
         self.recovery_readonly = None
         self.registration_loading = False
         self.observation_budget = None
+        retained = self.registration_state.get(IDENTITY_RECOVERY)
+        if retained is not None:
+            if (type(retained) is not dict or set(retained) != {'context', 'page', 'handler'}
+                    or retained['context'] is not self.context or not callable(retained['handler'])
+                    or self.data.get('registered') is not True):
+                raise Stop('builtin_profile_missing')
+            self.recovery_readonly = retained['handler']
+            self.registration_refreshed = True
 
     def operation(self, name):
         self.job.registration_operation = name
@@ -63,6 +72,11 @@ class RegistrationBrowser:
             closed(observation.get('browser_error_code'), RETRYABLE_NETWORK_CODES))
 
     async def guard(self, route):
+        # A new attempt's guard is registered last; delegate to the exact retained
+        # read-only handler so it cannot hide the older route via continue_().
+        if self.recovery_readonly is not None:
+            await self.recovery_readonly(route)
+            return
         request = route.request
         url = urlsplit(request.url)
         payment_path = request.method not in {'GET', 'HEAD', 'OPTIONS'} and (
@@ -97,6 +111,71 @@ class RegistrationBrowser:
         budget = self.observation_budget or SessionBudget(10, cancelled=self.job.cancelled.is_set)
         return await official_identity(page or self.page, self.data['email'],
                                        budget=budget, observe_errors=True)
+
+    @staticmethod
+    def retryable_observation(error):
+        if isinstance(error, Stop):
+            return retryable_page_load_error(error)
+        if type(error).__name__ == 'TimeoutError':
+            return True
+        if type(error).__name__ != 'Error':
+            return False
+        return (retryable_page_load_error(error) or bool(re.search(
+            r'Execution context was destroyed|Cannot find context with specified id', str(error))))
+
+    def recovery_budget(self):
+        self.job.check()
+        seconds = REGISTRATION_OBSERVE_SECONDS
+        deadline = getattr(self.job, 'deadline', None)
+        if type(deadline) in {int, float}:
+            seconds = min(seconds, max(0, deadline - time.monotonic()))
+        return SessionBudget(seconds, cancelled=self.job.cancelled.is_set)
+
+    async def registered_identity(self):
+        # This is an identity read in the retained Page, never registration replay.
+        budget = self.recovery_budget()
+        previous_budget = self.observation_budget
+        try:
+            self.observation_budget = SessionBudget(
+                min(10, budget.remaining_ms() / 1000), cancelled=self.job.cancelled.is_set)
+            try:
+                identity = await self.identity()
+                if identity:
+                    await self.end_recovery()
+                elif self.recovery_readonly is not None:
+                    raise Stop('official_login_not_verified')
+                return identity
+            except Exception as exc:
+                if not self.retryable_observation(exc):
+                    raise
+                first_error = exc
+                previous_error = getattr(self.job, 'registration_observation_error', None)
+                if previous_error is None or (type(previous_error) is dict and not previous_error):
+                    details = exc.report if isinstance(exc, Stop) else session_failure(exc)
+                    reason = ('registration_page_changing' if type(exc).__name__ == 'Error' and re.search(
+                        r'Execution context was destroyed|Cannot find context with specified id', str(exc))
+                        else details.get('reason'))
+                    allowed = {
+                        'reason': {'session_network_error', 'session_load_timeout', 'registration_page_changing'},
+                        'error_type': {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'},
+                        'browser_error_code': RETRYABLE_NETWORK_CODES}
+                    self.job.registration_observation_error = {
+                        key: value for key, values in allowed.items()
+                        if type(value := reason if key == 'reason' else details.get(key)) is str and value in values}
+            # A short read-only observation precedes the sole safe GET; both use
+            # the original overall deadline, including time spent reading identity.
+            await budget.run(lambda: self.settle(.25), 'registered_reobserve')
+            self.observation_budget = budget
+            if not await self.refresh_registration():
+                raise first_error
+            await self.guard_registered_onboarding()
+            identity = await self.identity()
+            if not identity:
+                raise Stop('official_login_not_verified')
+            await self.end_recovery()
+            return identity
+        finally:
+            self.observation_budget = previous_budget
 
     async def settle(self, seconds=2):
         deadline = time.monotonic() + seconds
@@ -230,12 +309,20 @@ class RegistrationBrowser:
 
     async def end_recovery(self):
         if self.recovery_readonly is not None:
-            await self.context.unroute('**/*', self.recovery_readonly)
+            handler = self.recovery_readonly
+            await self.context.unroute('**/*', handler)
+            retained = self.registration_state.get(IDENTITY_RECOVERY)
+            if (type(retained) is dict and retained.get('context') is self.context
+                    and retained.get('handler') is handler):
+                self.registration_state.pop(IDENTITY_RECOVERY)
             self.recovery_readonly = None
 
     async def manual_registration(self, reason):
         # An explicit administrator handoff may perform writes in the same window.
-        await self.end_recovery()
+        # Registered identity recovery stays read-only while its owner observes
+        # a challenge or ambiguous onboarding; no unverified handoff unlocks writes.
+        if IDENTITY_RECOVERY not in self.registration_state:
+            await self.end_recovery()
         self.log_pause(reason)
         if reason == 'verification_required' and not self.data.get('registered'):
             await self.job.manual(reason, can_resume=self.verification_resolved)
@@ -308,9 +395,12 @@ class RegistrationBrowser:
                 await route.fallback()
         await self.context.route('**/*', readonly)
         self.recovery_readonly = readonly
+        if self.data.get('registered') is True:
+            self.registration_state[IDENTITY_RECOVERY] = {
+                'context': self.context, 'page': self.page, 'handler': readonly}
         verification = False
         try:
-            budget = SessionBudget(20, cancelled=self.job.cancelled.is_set)
+            budget = self.observation_budget or SessionBudget(20, cancelled=self.job.cancelled.is_set)
             # Explicit GET in this Page: reload could resubmit a previous document POST.
             response = await budget.run(lambda: self.page.goto(url, wait_until='domcontentloaded', timeout=0), 'page_refresh')
             self.official(self.page)
@@ -319,7 +409,8 @@ class RegistrationBrowser:
                 raise Stop('http_error', http_status=response.status)
         except Exception as exc:
             if not retryable_page_load_error(exc):
-                await self.end_recovery()
+                if IDENTITY_RECOVERY not in self.registration_state:
+                    await self.end_recovery()
                 raise
             return False
         if verification:
@@ -520,15 +611,47 @@ class RegistrationBrowser:
 
     async def verify_login(self, mfa=False, *, allow_email_identity=False):
         # A clean context proves the staged password works; an existing session cannot.
-        verification = (await self.job.new_verification_context()
-                        if hasattr(self.job, 'new_verification_context')
-                        else await self.context.browser.new_context())
-        await verification.route('**/*', self.guard)
-        page = await verification.new_page()
+        verification = None
+        page = None
+        primary_error = None
+        phase = 'context_create'
+
+        def mark(name):
+            nonlocal phase
+            phase = name
+            self.operation('verification_' + name)
+
+        def failure(error, *, cleanup=False):
+            name = type(error).__name__
+            details = {'phase': phase, 'error_type': name if name in {
+                'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'Stop'
+            } else 'UnexpectedError'}
+            attribute = ('registration_verification_cleanup_error' if cleanup
+                         else 'registration_verification_error')
+            if getattr(self.job, attribute, None) is None:
+                setattr(self.job, attribute, details)
+            if not cleanup:
+                self.job.registration_verification_last_error = details
+            job_id = getattr(self.job, 'id', None)
+            attempt = getattr(self.job, 'attempt', None)
+            report = error.report if isinstance(error, Stop) else {}
+            if name in {'Error', 'TimeoutError', 'TargetClosedError'}:
+                try:
+                    report = session_failure(error)
+                except Exception:
+                    report = {}
+            code = report.get('browser_error_code')
+            logging.getLogger('registration').warning(
+                'Registration verification failed job=%s attempt=%s phase=%s error_type=%s browser_code=%s cleanup=%s',
+                job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
+                attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
+                details['phase'], details['error_type'],
+                code if type(code) is str and code in RETRYABLE_NETWORK_CODES else 'none', cleanup)
         submitted_email = False
         submitted_totp = False
 
         async def safe_page():
+            mark('body_read')
             self.official(page)
             text = (await page.locator('body').inner_text())[:12000]
             if re.search(r'just a moment|verify.{0,40}human|human verification|人机验证',
@@ -550,6 +673,7 @@ class RegistrationBrowser:
             value = ''
             try:
                 try:
+                    mark('email_code_wait')
                     value = await asyncio.wait_for(self.job.wait_code(), timeout=120)
                 except asyncio.TimeoutError:
                     raise Stop('verification_required') from None
@@ -559,46 +683,116 @@ class RegistrationBrowser:
                         or not isinstance(value, str) or not re.fullmatch(r'[0-9]{6,8}', value)):
                     raise Stop('verification_required')
                 self.official(page)
+                mark('email_code_fill')
                 await field.fill(value)
                 await safe_page()
                 field = await self.field(page, CODE_INPUT)
                 if not field or await login_code_type(page, field) != 'email':
                     raise Stop('verification_required')
                 self.official(page)
+                mark('email_code_submit')
                 await field.press('Enter')
             finally:
                 value = ''
             await self.settle(3)
 
+        async def reobserve_submitted_code_identity(*, before_password=False):
+            # A code can disappear between locating it and reading its label.
+            # Only a previously submitted recognized code permits this one read;
+            # no navigation, new context, fill or Enter is repeated.
+            if not submitted_email and not submitted_totp:
+                return None
+            await safe_page()
+            mark('identity_read')
+            identity = await self.identity(page)
+            self.official(page)
+            if not identity:
+                return None
+            mark('field_read')
+            if await unique_visible(page, CODE_INPUT):
+                raise Stop('verification_required')
+            if before_password:
+                if allow_email_identity and submitted_email and not mfa:
+                    return False
+                raise Stop('verification_required')
+            if mfa and not submitted_totp:
+                raise Stop('mfa_unverified')
+            return True
+
         try:
-            await page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+            mark('context_create')
+            verification = (await self.job.new_verification_context()
+                            if hasattr(self.job, 'new_verification_context')
+                            else await self.context.browser.new_context())
+            mark('context_route')
+            await verification.route('**/*', self.guard)
+            mark('page_create')
+            page = await verification.new_page()
+            budget = self.recovery_budget()
+            navigation_readonly = None
+            # No email, password or OTP has been entered: only the fixed GET can
+            # be repeated once, in this clean Page and the same total budget.
+            for navigation in range(2):
+                mark('navigation')
+                try:
+                    response = await budget.run(lambda: page.goto(
+                        'https://chatgpt.com/auth/login', wait_until='domcontentloaded', timeout=0),
+                        'verification_page_load')
+                    self.official(page)
+                    if response and response.status >= 400:
+                        raise Stop('verification_required' if response.status == 403 else 'http_error',
+                                   http_status=response.status)
+                    break
+                except Exception as exc:
+                    if navigation or not self.retryable_observation(exc):
+                        raise
+                    failure(exc)
+                    budget.remaining_ms()
+                    async def readonly(route):
+                        if route.request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+                            await route.abort('blockedbyclient')
+                        else:
+                            await route.fallback()
+                    mark('navigation_guard')
+                    await verification.route('**/*', readonly)
+                    navigation_readonly = readonly
             await self.settle(3)
             await safe_page()
+            mark('field_read')
             email = await self.field(page, EMAIL_INPUT)
             if not email:
                 raise Stop('verification_required')
+            if navigation_readonly:
+                mark('navigation_guard')
+                await verification.unroute('**/*', navigation_readonly)
+            mark('email_fill')
             await email.fill(self.data['email'])
             # Fence the current task's mail before either login submission can send it.
+            mark('mail_prepare')
             self.job.prepare_mail('mfa' if mfa else 'password', new_request=True)
             await safe_page()
             self.official(page)
+            mark('email_submit')
             await email.press('Enter')
             await self.settle(3)
             chose_password = False
             for _ in range(60):
                 await safe_page()
+                mark('identity_read')
                 if await self.identity(page):
                     # Inspect identity before any settings password control can
                     # be mistaken for an unauthenticated login form.
                     if allow_email_identity and submitted_email and not mfa:
                         return False
                     raise Stop('verification_required')
+                mark('field_read')
                 password = await self.field(page, PASSWORD_INPUT)
                 if password:
                     break
                 if not chose_password:
                     choice = await self.button(page, r'^(use (?:a )?password|使用密码|使用密码登录)$')
                     if choice:
+                        mark('password_choice')
                         await choice.click()
                         chose_password = True
                         await self.settle(.5)
@@ -606,7 +800,12 @@ class RegistrationBrowser:
                 code = await self.field(page, CODE_INPUT)
                 if code:
                     await safe_page()
-                    if await login_code_type(page, code) != 'email':
+                    code_type = await login_code_type(page, code)
+                    if code_type != 'email':
+                        if code_type == 'unknown':
+                            verified = await reobserve_submitted_code_identity(before_password=True)
+                            if verified is not None:
+                                return verified
                         raise Stop('verification_required')
                     if not submitted_email:
                         await email_code()
@@ -618,12 +817,15 @@ class RegistrationBrowser:
                 raise Stop('verification_required')
             await safe_page()
             self.official(page)
+            mark('password_fill')
             await password.fill(self.data['password'])
             await safe_page()
             self.official(page)
+            mark('password_submit')
             await password.press('Enter')
             for _ in range(60):
                 await safe_page()
+                mark('identity_read')
                 if await self.identity(page):
                     if mfa and not submitted_totp:
                         # Password and identity are proved; settings must still show
@@ -642,16 +844,22 @@ class RegistrationBrowser:
                         value = totp(self.data['totpSecret'])
                         try:
                             self.official(page)
+                            mark('totp_fill')
                             await code.fill(value)
                             await safe_page()
                             code = await self.field(page, CODE_INPUT)
                             if not code or await login_code_type(page, code) != 'totp':
                                 raise Stop('verification_required')
                             self.official(page)
+                            mark('totp_submit')
                             await code.press('Enter')
                         finally:
                             value = ''
                     elif code_type != 'totp' or not mfa:
+                        if code_type == 'unknown':
+                            verified = await reobserve_submitted_code_identity()
+                            if verified is not None:
+                                return verified
                         raise Stop('verification_required')
                 else:
                     text = (await page.locator('body').inner_text())[:12000]
@@ -659,9 +867,29 @@ class RegistrationBrowser:
                         raise Stop('password_unverified')
                 await self.settle(.5)
             raise Stop('verification_required')
+        except BaseException as exc:
+            primary_error = exc
+            mark(phase)
+            failure(exc)
+            raise
         finally:
-            await clear_visible_secrets(page)
-            await verification.close()
+            cleanup_error = None
+            failed_phase = phase
+            for name, cleanup in (
+                    ('secret_cleanup', lambda: clear_visible_secrets(page) if page else asyncio.sleep(0)),
+                    ('context_cleanup', lambda: verification.close() if verification else asyncio.sleep(0))):
+                try:
+                    phase = name
+                    await cleanup()
+                except Exception as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+                    failure(exc, cleanup=True)
+            if primary_error is not None:
+                mark(failed_phase)
+            elif cleanup_error is not None:
+                mark('cleanup')
+                raise cleanup_error
 
     async def password(self):
         self.job.event('progress', step='password')
@@ -828,20 +1056,27 @@ class RegistrationBrowser:
 
     async def run(self):
         self.operation('browser_attach')
-        await self.context.route('**/*', self.guard)
-        pages = [page for page in self.context.pages if official_login_page(page.url)]
-        self.page = pages[-1] if pages else await self.context.new_page()
         primary_error = None
         try:
+            await self.context.route('**/*', self.guard)
+            retained = self.registration_state.get(IDENTITY_RECOVERY)
+            if retained is not None:
+                self.page = retained['page']
+                if self.page not in self.context.pages:
+                    raise Stop('builtin_profile_missing')
+                self.official(self.page)
+            else:
+                pages = [page for page in self.context.pages if official_login_page(page.url)]
+                self.page = pages[-1] if pages else await self.context.new_page()
             if self.data['registered'] and not official_login_page(self.page.url):
                 await self.page.goto('https://chatgpt.com', wait_until='domcontentloaded')
             if not self.data['registered']:
                 await self.register()
             else:
                 await self.guard_registered_onboarding()
-                if not await self.identity():
+                if not await self.registered_identity():
                     await self.job.manual('official_login_not_verified')
-                    if not await self.identity():
+                    if not await self.registered_identity():
                         raise Stop('official_login_not_verified')
             if not self.data['passwordVerified']:
                 await self.password()
@@ -854,8 +1089,18 @@ class RegistrationBrowser:
             raise
         finally:
             cleanup_error = None
-            for cleanup in (self.end_recovery, lambda: clear_visible_secrets(self.page),
-                            lambda: self.context.unroute('**/*', self.guard)):
+            retained = self.registration_state.get(IDENTITY_RECOVERY)
+            keep_readonly = (primary_error is not None and type(retained) is dict
+                             and retained.get('context') is self.context
+                             and retained.get('handler') is self.recovery_readonly)
+            if keep_readonly and self.job.cancelled.is_set():
+                # Builtin cancellation closes this exact browser immediately after
+                # run returns. Drop RAM ownership, but keep writes blocked until close.
+                self.registration_state.pop(IDENTITY_RECOVERY)
+            cleanups = ([] if keep_readonly else [self.end_recovery]) + [
+                lambda: clear_visible_secrets(self.page) if self.page else asyncio.sleep(0),
+                lambda: self.context.unroute('**/*', self.guard)]
+            for cleanup in cleanups:
                 try:
                     await cleanup()
                 except Exception as exc:
