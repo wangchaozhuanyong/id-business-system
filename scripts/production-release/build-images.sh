@@ -3,7 +3,7 @@ set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
 build_image() {
-  local service="$1" dockerfile="$2" target="$3"
+  local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
@@ -13,9 +13,22 @@ build_image() {
       options+=(--build-arg "V2_BUILD_ID=$archive_build_id")
     fi
   fi
-  docker build "${options[@]}" -f "$dockerfile" -t "$reference" .
+  docker build "${options[@]}" -f "$dockerfile" -t "$reference" "$context"
   echo "Built image: $service"
 }
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-registration-build
+  registration_context=.deploy/production-release/registration-build-context
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  exit 0
+fi
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-main80-20261006 ]]; then
   case "$HISTORICAL_EXCEPTION" in

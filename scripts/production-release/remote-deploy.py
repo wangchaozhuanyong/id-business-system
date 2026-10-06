@@ -797,9 +797,15 @@ def verify_reusable_archive(release, source, commit, *, mailbox_only=False):
 
 
 def release_services(admin_only, additions, edge_changed=False, *, historical_diagnostics=False,
-                     historical_mailbox=False, historical_post_cleanup=False, historical_order_archive=False):
-    require(sum((historical_diagnostics, historical_mailbox, historical_post_cleanup, historical_order_archive)) <= 1,
+                     historical_mailbox=False, historical_post_cleanup=False, historical_order_archive=False,
+                     registration_only=False):
+    require(sum((historical_diagnostics, historical_mailbox, historical_post_cleanup, historical_order_archive,
+                 registration_only)) <= 1,
             'Historical release selection is ambiguous')
+    if registration_only:
+        require(not admin_only and not additions and not edge_changed,
+                'Registration publication requires unchanged schema and one Worker only')
+        return ('auto-registration',), ('auto-recharge',)
     if historical_mailbox:
         require(not admin_only and not additions and not edge_changed,
                 'Mailbox release must update only the API without migrations or edge changes')
@@ -1903,7 +1909,7 @@ RECHARGE_MAIN80_BUSINESS = {
     'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
         '727ead31c878f1d829aae2ef2f6ed6626147ad184615d8a09d52505760414e2c'}
 RECHARGE_MAIN80_CARRIED_COMMIT = 'fd173815aac0048011fe1583acfe345575bca286'
-RECHARGE_MAIN80_CARRIED_SOURCE = {
+RECHARGE_MAIN80_FD_CARRIED_SOURCE = {
     'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py':
         'ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5',
     'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py':
@@ -1914,6 +1920,13 @@ RECHARGE_MAIN80_CARRIED_SOURCE = {
         'fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06',
     'docs/AUTO_REGISTRATION.md':
         '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c'}
+RECHARGE_MAIN80_FA_CARRIED_COMMIT = '602f3d1f95f5e2be0605e46223b8703a69cb54a4'
+RECHARGE_MAIN80_FA_CARRIED_SOURCE = {
+    'deploy/aws/registration-worker-b8-80-20261006.json':
+        '3f002d7a8ec945e4d594e3e79ec57d180584cfe8dc7ae7141f68c1bb81ebe568',
+    'scripts/production-release/registration-only-transport.test.py':
+        '8ff9a7eb48b918b91336239757eef85261c4d7399dcb1a2c4aa2db0d814782ab'}
+RECHARGE_MAIN80_CARRIED_SOURCE = {**RECHARGE_MAIN80_FD_CARRIED_SOURCE, **RECHARGE_MAIN80_FA_CARRIED_SOURCE}
 
 
 def main80_recharge_scope(value, *, require_approved=True):
@@ -3048,6 +3061,616 @@ def run_release_migrations(release, admin_only, historical_diagnostics=False):
         compose(release, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
 
 
+REGISTRATION_SCOPE_ID = 'registration-worker-b8-80-20261006'
+REGISTRATION_SCOPE_FILE = 'deploy/aws/' + REGISTRATION_SCOPE_ID + '.json'
+REGISTRATION_CURRENT = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
+REGISTRATION_SOURCE = '091c5f3e62fd01b3af80d98a6552435637cc47dc'
+REGISTRATION_WORKER_PREFIX = 'apps/api/src/id-business-v2/auto-recharge/worker/'
+REGISTRATION_PROJECTION_SHA256 = '1fd789ef8d45948bf2ce2409b955c9c9a4b3898a8b675edad869c611a59b1e14'
+REGISTRATION_FILES = frozenset(REGISTRATION_WORKER_PREFIX + name for name in (
+    'registration_browser.py', 'registration_job.py', 'test_registration.py',
+    'test_registration_browser.py', 'test_registration_builtin.py'))
+REGISTRATION_CONTROLS = frozenset({
+    '.github/workflows/production-release.yml', 'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh', 'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/remote-deploy.py', 'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/registration-only-transport.test.py',
+    'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-release.test.mjs'})
+REGISTRATION_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': 'ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py': 'a4256d8ac85f17064c29485b16e48888346c88a61abe315c5924622486530ad1',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py': '4593b2eaab271dd9c16ab12adac07b42f87c79173b432982cef178c17c9767e0',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': 'fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py': '1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe',
+ 'docs/AUTO_REGISTRATION.md': '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c'}
+REGISTRATION_BASELINE = {'commit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+ 'sourceTree': 'fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b',
+ 'previousCommit': '3ca300486d0edfadda83c094a48474a63959fce7',
+ 'deploymentRun': 'github-actions-37364471153-2',
+ 'manifestSha256': '622ce40b7d1144cb260fc9711773ddf37fb7000784dc3f1d4ec6fdbf6dd38e85',
+ 'beforeAuditSha256': '9b70752e23052cb18845ff33c7bc19d49f8757f5d15e5b6446fc6468682becf7',
+ 'afterAuditSha256': 'd9393cdc5ef3b89acf71ab59686f5d689457125b4e8fff59a8732f67be80b07c',
+ 'composeSha256': '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8',
+ 'overrideRawSha256': 'fdaf610856bdfef3983ab57586d67d199cb60552ac5000c142f1c7083cda7560',
+ 'overrideCanonicalSha256': 'd6448664a8a204e42f5b41cb79df3121874d3d8308925ce17c4c1a89c06f8925',
+ 'environmentRawSha256': 'a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af',
+ 'sourceArchiveSha256': '232c1a4c992fc31eb1e6c31011dd1a48e8a20889c57c5298841df509fdc9dd26',
+ 'runtimeEnvironmentSha256': {'admin': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4',
+                              'api': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c',
+                              'auto-recharge': '5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae',
+                              'auto-registration': 'de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17',
+                              'caddy': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181',
+                              'media-resolver': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163',
+                              'mysql': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'}}
+REGISTRATION_FINANCE = {'kind': 'EXISTING_SEALED_ORDER_ARCHIVE_49',
+ 'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+ 'candidateTree': 'fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b',
+ 'policyId': 'historical-finance-20261005-order-archive',
+ 'checkCount': 49,
+ 'executedCheckCount': 49,
+ 'unavailableCheckCount': 0,
+ 'violationCount': 5,
+ 'policyRawSha256': '243101271c3087f8bc87521972c0d698a2e2e444044268ec5eebf05b93b6e778',
+ 'policyCanonicalSha256': '91096c5c2cf5d6b1a3210794ec3cdf20aef54fe457d11b75df1735416d7c3511',
+ 'rulesSha256': 'fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a',
+ 'exceptionsSha256': '410340139d3ea77de19103e20d0577946cd920ce9ec229978f0fd3d081644bc9',
+ 'metadataSha256': '4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb',
+ 'sources': {'accounts': {'rowCount': 2,
+                          'sha256': '95e4a89173c5241290875f79cd96ac6c2e68e809b840dac3ff1987afb5bfab82'},
+             'cashJournals': {'rowCount': 10,
+                              'sha256': '7af63905fa4958871ed5d724ce51fafae336e8317295e5b1bf68a6533070ba26'},
+             'cashLines': {'rowCount': 10,
+                           'sha256': '0cb3f1804059f9610f81ce015f4e872b5152861a365ce772ee18f13f3151bef1'},
+             'expenses': {'rowCount': 5,
+                          'sha256': '740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c'},
+             'journals': {'rowCount': 5,
+                          'sha256': 'df7e1a47198be81db1d59414d1204e50732cebcf77c8ad9a136bdfbea2e635b3'},
+             'lines': {'rowCount': 10,
+                       'sha256': 'f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c'}},
+ 'checksSha256': 'e1158ece628a1f952fe7cd9ab6c480208b0f3006575405af2cb9393971eefdd1',
+ 'gateSha256': {'before': '257f88bdc796c62582f9d8f4d8e7dc67b0fe5f46ae8d0370c53dcf16b535fa23',
+                'after': 'a312a13b61f5e56a1901f81a2fd0094c7da588e1012fc09dc2b7a8cd55075ab3'},
+ 'releaseSealSha256': 'a3e241c715ceb01c18427f56d98a4ea173598afb3874e8b4522ce43a07d3fc0c',
+ 'preparedImagesSha256': '4ed683fae91fc60df43e2b068d4d18782e0d977676320fda5b194de72302f57d',
+ 'preparationRunId': 37362644900,
+ 'preparationRunAttempt': 1,
+ 'sourceProjectionTree': 'd9c2e534f0e71d5c88ffc4db492c4db2e79a9370',
+ 'sourceAnchorSha256': '39dd801292f081560fdaf7db2feb6cdd6f3c1bc8b730ca9add4d33a472466920',
+ 'cleanupReceiptSha256': 'f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f'}
+REGISTRATION_SCOPE = {
+    'servicesUpdated': ['auto-registration'], 'imageServices': ['auto-recharge'],
+    'preservedServices': ['auto-recharge', 'api', 'admin', 'media-resolver', 'mysql', 'caddy'],
+    **{key: False for key in ('imageReuseAllowed', 'cacheCleanupAllowed', 'migrationDeploymentAllowed',
+        'financialWritesAllowed', 'googleDriveConfigAllowed', 'databaseGrantSyncAllowed')}}
+
+
+def registration_profile(value):
+    """A fixed runtime selection; it cannot create or enlarge a finance exception."""
+    require(isinstance(value, dict) and set(value) == {'version', 'kind', 'id', 'enabled',
+        'expectedCurrent', 'baselineRelease', 'registrationSourceCommit', 'workerBasisCommit',
+        'registrationSourceSha256', 'workerProjection', 'workerProjectionSha256',
+        'buildInputSha256', 'controlSourceSha256', 'scope', 'financeValidator'},
+        'Fixed registration scope changed')
+    require(type(value['version']) is int and value['version'] == 1 and value['enabled'] is True
+        and value['kind'] == 'FIXED_REGISTRATION_RUNTIME_SCOPE' and value['id'] == REGISTRATION_SCOPE_ID
+        and value['expectedCurrent'] == REGISTRATION_CURRENT
+        and value['registrationSourceCommit'] == REGISTRATION_SOURCE
+        and value['workerBasisCommit'] == RECHARGE_SCOPE_CURRENT
+        and value['baselineRelease'] == REGISTRATION_BASELINE
+        and historical_fingerprint(value['scope']) == historical_fingerprint(REGISTRATION_SCOPE)
+        and historical_fingerprint(value['financeValidator']) == historical_fingerprint(REGISTRATION_FINANCE),
+        'Fixed registration scope changed')
+    digest = lambda x: isinstance(x, str) and re.fullmatch(r'[a-f0-9]{64}', x) is not None
+    names = REGISTRATION_FILES | {'docs/AUTO_REGISTRATION.md'}
+    require(isinstance(value['registrationSourceSha256'], dict)
+        and set(value['registrationSourceSha256']) == names
+        and value['registrationSourceSha256'] == REGISTRATION_SOURCE_SHA256
+        and set(value['buildInputSha256']) == {'.dockerignore', 'scripts/audit-python-dependencies.py'}
+        and all(digest(x) for x in value['buildInputSha256'].values())
+        and value['buildInputSha256'] == {
+            '.dockerignore': '9f69c1f476e723f1d8de9892058c34abc3817481b6d8259da4175c3f6293c05d',
+            'scripts/audit-python-dependencies.py': '99b90a53943699d44c3fca8642db0ef7917ce618d2f3e09a4e30f31c127ee41c'}
+        and set(value['controlSourceSha256']) == REGISTRATION_CONTROLS
+        and all(digest(x) for x in value['controlSourceSha256'].values()), 'Fixed registration source changed')
+    projection = value['workerProjection']
+    require(isinstance(projection, dict) and len(projection) == 60
+        and all(isinstance(name, str) and name.startswith(REGISTRATION_WORKER_PREFIX)
+                and '..' not in Path(name).parts and isinstance(row, dict)
+                and set(row) == {'mode', 'sha256'} and row['mode'] in ('100644', '100755')
+                and digest(row['sha256']) for name, row in projection.items())
+        and value['workerProjectionSha256'] == REGISTRATION_PROJECTION_SHA256
+        and historical_fingerprint(projection) == REGISTRATION_PROJECTION_SHA256
+        and all(projection[name]['sha256'] == value['registrationSourceSha256'][name]
+                for name in REGISTRATION_FILES), 'Fixed registration projection changed')
+    return value
+
+
+def registration_archive(raw, commit):
+    require(re.fullmatch(r'[a-f0-9]{40}', commit) and isinstance(raw, bytes)
+        and 0 < len(raw) <= 64 * 1024 * 1024, 'Fixed registration archive unavailable')
+    result = {}; total = 0; prefix = 'id-business-system-' + commit + '/'
+    with tarfile.open(fileobj=io.BytesIO(raw), mode='r:*') as archive:
+        for member in archive:
+            require((member.name.startswith(prefix) or member.isdir() and member.name.rstrip('/') == prefix.rstrip('/'))
+                and '\\' not in member.name
+                and '..' not in Path(member.name).parts, 'Fixed registration archive unavailable')
+            if member.isdir():
+                continue
+            name = member.name[len(prefix):]
+            total += member.size
+            require(member.isfile() and name and name not in result
+                and member.mode in (0o644, 0o664, 0o755, 0o775)
+                and 0 <= member.size <= 8 * 1024 * 1024 and total <= 64 * 1024 * 1024,
+                'Fixed registration archive unavailable')
+            data = archive.extractfile(member).read(8 * 1024 * 1024 + 1)
+            require(len(data) == member.size, 'Fixed registration archive unavailable')
+            result[name] = (data, '100755' if member.mode & 0o111 else '100644')
+    require(result, 'Fixed registration archive unavailable')
+    return result
+
+
+def registration_download(commit):
+    require(re.fullmatch(r'[a-f0-9]{40}', commit), 'Fixed registration archive unavailable')
+    with urllib.request.urlopen('https://github.com/wangchaozhuanyong/id-business-system/archive/'
+            + commit + '.tar.gz', timeout=60) as response:
+        raw = response.read(64 * 1024 * 1024 + 1)
+    require(0 < len(raw) <= 64 * 1024 * 1024, 'Fixed registration archive unavailable')
+    return raw
+
+
+def registration_source(profile, files):
+    for name, digest in {**profile['registrationSourceSha256'], **profile['controlSourceSha256']}.items():
+        require(name in files and hashlib.sha256(files[name][0]).hexdigest() == digest,
+                'Fixed registration reviewed source changed')
+
+
+def registration_worker_projection(profile, basis, candidate):
+    registration_source(profile, candidate)
+    result = {name: row for name, row in basis.items() if name.startswith(REGISTRATION_WORKER_PREFIX)}
+    result.update({name: candidate[name] for name in REGISTRATION_FILES})
+    actual = {name: {'mode': mode, 'sha256': hashlib.sha256(data).hexdigest()}
+              for name, (data, mode) in result.items()}
+    require(actual == profile['workerProjection'], 'Fixed registration projection changed')
+    for name, digest in profile['buildInputSha256'].items():
+        require(name in basis and hashlib.sha256(basis[name][0]).hexdigest() == digest,
+                'Fixed registration build input changed')
+        result[name] = basis[name]
+    return result
+
+
+def check_fixed_registration_scope():
+    root = Path(__file__).resolve().parents[2]
+    profile = registration_profile(fixed_recharge_json(fixed_recharge_bytes(
+        root / REGISTRATION_SCOPE_FILE, modes=(0o644, 0o664), limit=128 * 1024)))
+    for name, digest in {**profile['registrationSourceSha256'], **profile['controlSourceSha256']}.items():
+        require(hashlib.sha256(fixed_recharge_bytes(root / name,
+            modes=(0o644, 0o664, 0o755, 0o775))).hexdigest() == digest,
+            'Fixed registration reviewed source changed')
+    return root, profile
+
+
+def write_registration_files(root, files):
+    require(root.is_absolute() and root.resolve() == root and not root.exists(),
+            'Fixed registration output already exists')
+    root.mkdir(mode=0o700)
+    for name, (data, mode) in files.items():
+        require(name and not Path(name).is_absolute() and '..' not in Path(name).parts,
+                'Fixed registration output changed')
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Public Git subdirectories are bound read-only into non-root audit containers.
+        # Keep the outer staging directory private and restore traversal under umask 077.
+        for parent in path.parents:
+            if parent == root:
+                break
+            parent.chmod(0o755)
+        path.write_bytes(data)
+        path.chmod(0o755 if mode == '100755' else 0o644)
+
+
+def prepare_fixed_registration_build():
+    root, profile = check_fixed_registration_scope()
+    candidate = {name: (fixed_recharge_bytes(root / name, modes=(0o644, 0o664, 0o755, 0o775)),
+                        '100755' if (root / name).stat().st_mode & 0o111 else '100644')
+                 for name in profile['registrationSourceSha256'].keys() | profile['controlSourceSha256'].keys()}
+    basis = registration_archive(registration_download(RECHARGE_SCOPE_CURRENT), RECHARGE_SCOPE_CURRENT)
+    files = registration_worker_projection(profile, basis, candidate)
+    output = root / '.deploy/production-release'
+    require(not output.is_symlink() and not (root / '.deploy').is_symlink(),
+            'Fixed registration output changed')
+    output.mkdir(parents=True, exist_ok=True)
+    write_registration_files(output / 'registration-build-context', files)
+    manifest = {'version': 1, 'id': REGISTRATION_SCOPE_ID,
+        'sourceCommit': run('git', '-C', str(root), 'rev-parse', 'HEAD'),
+        'sourceTree': run('git', '-C', str(root), 'rev-parse', 'HEAD^{tree}'),
+        'registrationSourceCommit': REGISTRATION_SOURCE, 'workerBasisCommit': RECHARGE_SCOPE_CURRENT,
+        'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
+        'registrationSourceSha256': profile['registrationSourceSha256'],
+        'contextPath': '.deploy/production-release/registration-build-context'}
+    target = output / 'registration-build-projection.json'
+    require(not target.exists() and not target.is_symlink(), 'Fixed registration output already exists')
+    target.write_text(json.dumps(manifest, indent=2) + '\n')
+    return manifest
+
+
+def registration_audit_receipts(previous, manifest):
+    reports = {}
+    for stage in ('before', 'after'):
+        raw = private_maintenance_receipt(previous / (stage + '-audit.json'))
+        require(hashlib.sha256(raw).hexdigest() == REGISTRATION_BASELINE[stage + 'AuditSha256'],
+                'Fixed registration baseline changed')
+        report = fixed_recharge_json(raw)
+        require(report.get('ok') is False and type(report.get('checkCount')) is int
+            and report['checkCount'] == 49 and type(report.get('violationCount')) is int
+            and report['violationCount'] == 5
+            and historical_fingerprint(report.get('gate')) == REGISTRATION_FINANCE['gateSha256'][stage]
+            and historical_fingerprint(report.get('checks')) == REGISTRATION_FINANCE['checksSha256']
+            and manifest.get('dataAudit' + stage.title(), {}).get('historicalException') == report['gate'],
+            'Fixed registration baseline audit changed')
+        reports[stage] = report
+    require(reports['before'].get('checks') == reports['after'].get('checks'),
+            'Fixed registration baseline audit changed')
+
+
+def registration_baseline(previous, states=None):
+    require(previous.resolve() == previous and previous.parent == BASE / 'releases',
+            'Fixed registration baseline changed')
+    raw = private_maintenance_receipt(previous / 'release-manifest.json')
+    require(hashlib.sha256(raw).hexdigest() == REGISTRATION_BASELINE['manifestSha256'],
+            'Fixed registration baseline changed')
+    manifest = fixed_recharge_json(raw)
+    require(all(manifest.get(key) == REGISTRATION_BASELINE[key]
+        for key in ('commit', 'sourceTree', 'previousCommit', 'deploymentRun', 'sourceArchiveSha256'))
+        and manifest.get('servicesUpdated') == ['api', 'admin']
+        and manifest.get('newMigrations') == [ORDER_ARCHIVE_MIGRATION + '/migration.sql']
+        and manifest.get('migrationApplied') is True,
+        'Fixed registration baseline changed')
+    registration_audit_receipts(previous, manifest)
+    for name, key in (('docker-compose.aws-mysql.yml', 'composeSha256'),
+                      ('compose.release.json', 'overrideRawSha256')):
+        require(hashlib.sha256(fixed_recharge_bytes(previous / name,
+            modes=(0o400, 0o600, 0o644, 0o664))).hexdigest() == REGISTRATION_BASELINE[key],
+            'Fixed registration baseline changed')
+    override = fixed_recharge_json((previous / 'compose.release.json').read_bytes())
+    require(historical_fingerprint(override) == REGISTRATION_BASELINE['overrideCanonicalSha256']
+        and override == {'services': {name: {'image': manifest['images'][name]['reference'], 'pull_policy': 'never'}
+            for name in (*SERVICES, 'migrate')}}, 'Fixed registration baseline changed')
+    require(hashlib.sha256(fixed_recharge_bytes(previous / '.env.aws.production')).hexdigest()
+        == REGISTRATION_BASELINE['environmentRawSha256'], 'Fixed registration environment changed')
+    require(manifest['images']['auto-registration']['sourceCommit'] == RECHARGE_SCOPE_CURRENT,
+        'Fixed registration baseline changed')
+    if states is not None:
+        require(set(states) == set(ALL_SERVICES) and all(row['status'] == 'running' for row in states.values())
+            and all(states[name]['health'] == 'healthy' for name in ALL_SERVICES if name != 'caddy')
+            and all(states[name].get('environmentSha256') == REGISTRATION_BASELINE['runtimeEnvironmentSha256'][name]
+                    for name in ALL_SERVICES)
+            and all(states[name]['image'] == manifest['images'][name]['digest']
+                and states[name]['reference'] == manifest['images'][name]['reference'] for name in SERVICES),
+            'Fixed registration baseline changed')
+    return manifest, previous
+
+
+def prepare_registration_finance_source(args, raw):
+    require(hashlib.sha256(raw).hexdigest() == REGISTRATION_BASELINE['sourceArchiveSha256'],
+            'Fixed registration finance archive changed')
+    files = registration_archive(raw, REGISTRATION_CURRENT)
+    root = BASE / '.staging' / ('oidc-' + args.commit)
+    require(root.resolve() == root, 'Fixed registration finance source changed')
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / ('fixed-80-finance-' + args.run_id + '-' + args.run_attempt)
+    write_registration_files(target, files)
+    require_registration_finance_source(target)
+    return target
+
+
+def require_registration_finance_source(source):
+    raw = fixed_recharge_bytes(source / 'deploy/aws/historical-finance-20261005-order-archive.json',
+                              modes=(0o644, 0o664))
+    policy = fixed_recharge_json(raw)
+    require(hashlib.sha256(raw).hexdigest() == REGISTRATION_FINANCE['policyRawSha256']
+        and historical_fingerprint(policy) == REGISTRATION_FINANCE['policyCanonicalSha256']
+        and historical_fingerprint(policy.get('exceptions')) == REGISTRATION_FINANCE['exceptionsSha256']
+        and policy.get('rulesSha256') == REGISTRATION_FINANCE['rulesSha256']
+        and policy.get('metadataSha256') == REGISTRATION_FINANCE['metadataSha256'],
+        'Fixed registration finance policy changed')
+    require_order_archive_source_scope(source, policy)
+
+
+def registration_finance_audit(directory, receipt, *, stage, source, before_receipt=None):
+    require(stage in ('before', 'after'), 'Fixed registration audit stage changed')
+    require_registration_finance_source(source)
+    # The original 80 policy/seal describes existing facts; no API, Admin or migration is published here.
+    summary = order_archive_audit(directory, receipt, stage=stage, source=source,
+        before_receipt=before_receipt, seal_sha=REGISTRATION_FINANCE['releaseSealSha256'],
+        candidate_commit=REGISTRATION_CURRENT, candidate_tree=REGISTRATION_BASELINE['sourceTree'],
+        prepared_sha=REGISTRATION_FINANCE['preparedImagesSha256'],
+        image_run=str(REGISTRATION_FINANCE['preparationRunId']),
+        image_attempt=str(REGISTRATION_FINANCE['preparationRunAttempt']))
+    report = fixed_recharge_json(private_maintenance_receipt(receipt))
+    require(summary == {'checkCount': 49, 'violationCount': 5, 'historicalException': report.get('gate')}
+        and historical_fingerprint(report.get('gate')) == REGISTRATION_FINANCE['gateSha256'][stage]
+        and historical_fingerprint(report.get('checks')) == REGISTRATION_FINANCE['checksSha256'],
+        'Fixed registration fresh integrity gate changed')
+    if stage == 'after':
+        require(before_receipt is not None, 'Fixed registration before audit missing')
+        before = fixed_recharge_json(private_maintenance_receipt(before_receipt))
+        require(before.get('checks') == report.get('checks'), 'Fixed registration integrity facts changed')
+    return summary
+
+
+def registration_preserved_states(states):
+    return {name: states[name] for name in ALL_SERVICES if name != 'auto-registration'}
+
+
+def registration_rollback(previous, release, before):
+    # Check the live new Worker, not the old image receipt, before a destructive restart.
+    assert_no_active_registration(release)
+    rollback_service(previous, release, 'auto-registration', before)
+
+
+def registration_worker_hashes(directory, profile):
+    expected = {name.removeprefix(REGISTRATION_WORKER_PREFIX): row['sha256']
+                for name, row in profile['workerProjection'].items()}
+    probe = ('import hashlib,json\nfrom pathlib import Path\nnames=' + repr(sorted(expected))
+        + '\nprint(json.dumps({n:hashlib.sha256((Path("/app")/n).read_bytes()).hexdigest() for n in names}))')
+    value = fixed_recharge_json(compose(directory, 'exec', '-T', 'auto-registration',
+        'python', '-B', '-c', probe, timeout=20).encode())
+    require(value == expected, 'Fixed registration running source changed')
+
+
+def registration_release(args):
+    require(args.expected_current == REGISTRATION_CURRENT and not args.admin_only
+        and not getattr(args, 'recharge_pro_main80', False)
+        and all(not getattr(args, name) for name in (
+            'historical_finance_exception', 'historical_finance_continuation', 'historical_finance_recharge_diagnostics',
+            'historical_finance_maintenance_continuation', 'historical_finance_mailbox_batch',
+            'recharge_pro_menu_b8', 'recharge_pro_menu_7f', 'historical_finance_post_cleanup',
+            'historical_finance_order_archive', 'post_cleanup_seal_sha256', 'order_archive_seal_sha256',
+            'order_archive_prepared_images_sha256'))
+        and (args.image_commit or args.commit) == args.commit
+        and (args.image_run_id or args.run_id) == args.run_id
+        and (args.image_run_attempt or args.run_attempt) == args.run_attempt,
+        'Fixed registration selection changed')
+    require(all(re.fullmatch(r'[a-f0-9]{40}', value or '') for value in (args.commit, args.source_tree))
+        and all(re.fullmatch(r'[1-9][0-9]*', value or '') for value in (args.run_id, args.run_attempt, args.ci_run_id))
+        and re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository),
+        'Fixed registration selection changed')
+    os.umask(0o077)
+    with (BASE / '.deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        previous = (BASE / 'current').resolve()
+        states = {name: service_state(previous, name, include_container_id=True, include_environment_hash=True)
+                  for name in ALL_SERVICES}
+        old_manifest, origin = registration_baseline(previous, states)
+        assert_release_jobs_idle(previous, ('auto-registration',))
+        stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+        release = BASE / 'releases' / (stamp + '-' + args.commit[:12])
+        step = 'source'; changed = False
+        try:
+            candidate_raw = registration_download(args.commit)
+            candidate = registration_archive(candidate_raw, args.commit)
+            profile_raw = candidate[REGISTRATION_SCOPE_FILE][0]
+            profile = registration_profile(fixed_recharge_json(profile_raw))
+            basis_raw = registration_download(RECHARGE_SCOPE_CURRENT)
+            basis = registration_archive(basis_raw, RECHARGE_SCOPE_CURRENT)
+            worker = registration_worker_projection(profile, basis, candidate)
+            finance_raw = registration_download(REGISTRATION_CURRENT)
+            require(hashlib.sha256(finance_raw).hexdigest() == REGISTRATION_BASELINE['sourceArchiveSha256'],
+                    'Fixed registration finance archive changed')
+            runtime = registration_archive(finance_raw, REGISTRATION_CURRENT)
+            runtime = {name: row for name, row in runtime.items() if not name.startswith(REGISTRATION_WORKER_PREFIX)}
+            runtime.update({name: row for name, row in worker.items() if name.startswith(REGISTRATION_WORKER_PREFIX)})
+            runtime.update({name: candidate[name] for name in REGISTRATION_CONTROLS | {REGISTRATION_SCOPE_FILE}})
+            runtime.update({name: candidate[name] for name in profile['registrationSourceSha256']})
+            write_registration_files(release, runtime)
+            # Only the running baseline's Compose and secrets determine the new service configuration.
+            for name in ('docker-compose.aws-mysql.yml', '.env.aws.production'):
+                shutil.copy2(previous / name, release / name)
+            (release / '.env.aws.production').chmod(0o600)
+            environment = fixed_recharge_bytes(previous / '.env.aws.production')
+            finance_source = prepare_registration_finance_source(args, finance_raw)
+            require(shutil.disk_usage(BASE).free > 6 * 1024**3, 'Insufficient free disk before pull')
+            step = 'audit-before'
+            before_audit = registration_finance_audit(previous, release / 'before-audit.json',
+                stage='before', source=finance_source)
+            step = 'images'
+            reference = args.repository + ':' + args.commit + '-' + args.run_id + '-' + args.run_attempt + '-auto-recharge'
+            registry = args.repository.split('/')[0]
+            password = run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
+            logged = subprocess.run(['docker', 'login', '--username', 'AWS', '--password-stdin', registry],
+                                    input=password, capture_output=True, text=True)
+            require(logged.returncode == 0, 'ECR login failed')
+            try:
+                run('docker', 'pull', reference, timeout=900)
+                image = json.loads(run('docker', 'image', 'inspect', reference))[0]
+                require(image['Architecture'] == 'amd64'
+                    and image['Config']['Labels'].get('org.opencontainers.image.revision') == args.commit,
+                    'Fixed registration image changed')
+            finally:
+                subprocess.run(['docker', 'logout', registry], capture_output=True, text=True)
+            override = fixed_recharge_json((previous / 'compose.release.json').read_bytes())
+            override['services']['auto-registration']['image'] = reference
+            (release / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
+            require(shutil.disk_usage(BASE).free > 2 * 1024**3, 'Insufficient free disk after pull')
+            step = 'backup'
+            backup = fresh_backup(previous)
+            (release / 'backup-verification.json').write_text(json.dumps(backup, indent=2) + '\n')
+            (release / 'backup-verification.json').chmod(0o600)
+            require((BASE / 'current').resolve() == previous, 'Fixed registration baseline changed')
+            require({name: service_state(previous, name, include_container_id=True, include_environment_hash=True)
+                for name in ALL_SERVICES} == states, 'Fixed registration baseline changed')
+            require_diagnostics_environment_unchanged(previous, release, environment)
+            registration_baseline(previous, states)
+            assert_release_jobs_idle(previous, ('auto-registration',))
+            step = 'switch'
+            assert_no_active_registration(previous)
+            changed = True
+            compose(release, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
+                '--force-recreate', 'auto-registration', timeout=300)
+            wait_healthy(release, 'auto-registration')
+            registration_worker_hashes(release, profile)
+            step = 'audit-after'
+            after_audit = registration_finance_audit(release, release / 'after-audit.json', stage='after',
+                source=finance_source, before_receipt=release / 'before-audit.json')
+            after = {name: service_state(release, name, include_container_id=True, include_environment_hash=True)
+                     for name in ALL_SERVICES}
+            require(registration_preserved_states(after) == registration_preserved_states(states)
+                and after['auto-registration']['image'] == image['Id']
+                and after['auto-registration']['reference'] == reference,
+                'Fixed registration preserved service changed')
+            require_diagnostics_environment_unchanged(previous, release, environment)
+            registration_worker_hashes(release, profile)
+            require_registration_finance_source(finance_source)
+            manifest = dict(old_manifest)
+            manifest.pop('fixedRechargeRelease', None); manifest.pop('fixedRechargePreservedStates', None)
+            manifest.update(commit=args.commit, sourceBranch='main', sourceTree=args.source_tree,
+                previousCommit=REGISTRATION_CURRENT, previousRelease=str(previous),
+                deploymentRun='github-actions-' + args.run_id + '-' + args.run_attempt,
+                imageBuildRun='github-actions-' + args.run_id + '-' + args.run_attempt,
+                ciWorkflow='Quality Gate', ciWorkflowRunId=int(args.ci_run_id),
+                releaseTag='v2-production-' + stamp, sourceArchiveSha256=hashlib.sha256(candidate_raw).hexdigest(),
+                servicesUpdated=['auto-registration'], migrationApplied=False, newMigrations=[],
+                databaseGrants={'status': 'SKIPPED', 'reason': 'FIXED_REGISTRATION_NO_MIGRATIONS'},
+                dataAuditBefore=before_audit, dataAuditAfter=after_audit, backupBeforeRelease=backup['name'],
+                deployedAt=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+            manifest['images'] = {**old_manifest['images'], 'auto-registration': {
+                'reference': reference, 'digest': image['Id'], 'sourceCommit': args.commit}}
+            manifest['fixedRegistrationRelease'] = {'id': REGISTRATION_SCOPE_ID,
+                'profileRawSha256': hashlib.sha256(profile_raw).hexdigest(),
+                'registrationSourceCommit': REGISTRATION_SOURCE, 'workerBasisCommit': RECHARGE_SCOPE_CURRENT,
+                'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
+                'financeSourceCommit': REGISTRATION_CURRENT,
+                'financePolicyId': HISTORY_ORDER_ARCHIVE_POLICY_ID,
+                'environmentUnchanged': True, 'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED',
+                'cacheStatus': 'SKIPPED'}
+            manifest['fixedRegistrationPreservedStates'] = {
+                'before': registration_preserved_states(states), 'after': registration_preserved_states(after)}
+            manifest['rollback'] = {'release': str(previous), 'images': {'auto-registration': states['auto-registration']['image']},
+                                    'servicesAdded': []}
+            (release / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+            require((BASE / 'current').resolve() == previous, 'Fixed registration baseline changed')
+            point_current(release, stamp + '-publish')
+            print(json.dumps({'status': 'DEPLOYED', 'commit': args.commit,
+                'servicesUpdated': ['auto-registration'], 'migrationApplied': False,
+                'auditViolations': 5, 'unchangedServiceContainersPreserved': True}), flush=True)
+            return 0
+        except Exception as error:
+            rollback_ok = True
+            if changed:
+                try:
+                    registration_rollback(previous, release, states)
+                    if (BASE / 'current').resolve() == release:
+                        point_current(previous, stamp + '-recover')
+                except Exception:
+                    rollback_ok = False
+            print(json.dumps({'status': 'DEPLOY_FAILED', 'step': step, 'errorType': type(error).__name__,
+                'rollbackOk': rollback_ok, 'servicesStarted': ['auto-registration'] if changed else []}), flush=True)
+            return 1
+
+
+def registration_readback_receipt(expected_current, source_tree, profile_raw_sha256):
+    return {'version': 1, 'id': REGISTRATION_SCOPE_ID, 'status': 'VERIFIED',
+        'currentCommit': expected_current, 'sourceTree': source_tree, 'profileSha256': profile_raw_sha256,
+        'previousCommit': REGISTRATION_CURRENT, 'registrationSourceCommit': REGISTRATION_SOURCE,
+        'workerBasisCommit': RECHARGE_SCOPE_CURRENT, 'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
+        'servicesUpdated': ['auto-registration'], 'preservedServiceCount': 6,
+        'checkCount': 49, 'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 5,
+        'runningSourceMatched': True, 'unchangedServiceContainersPreserved': True,
+        'environmentUnchanged': True, 'migrationStatus': 'SKIPPED',
+        'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED', 'liveServicesHealthy': True}
+
+
+def validate_fixed_registration_readback_projection(value, expected_current, source_tree, profile_raw_sha256):
+    require(re.fullmatch(r'[a-f0-9]{40}', expected_current or '')
+        and re.fullmatch(r'[a-f0-9]{40}', source_tree or '')
+        and re.fullmatch(r'[a-f0-9]{64}', profile_raw_sha256 or ''),
+        'Fixed registration readback unavailable')
+    expected = registration_readback_receipt(expected_current, source_tree, profile_raw_sha256)
+    require(isinstance(value, dict) and set(value) == set(expected)
+        and historical_fingerprint(value) == historical_fingerprint(expected),
+        'Fixed registration readback unavailable')
+    return value
+
+
+def check_fixed_registration_deployment(expected_current, source_tree, profile_raw_sha256):
+    receipt = registration_readback_receipt(expected_current, source_tree, profile_raw_sha256)
+    validate_fixed_registration_readback_projection(receipt, expected_current, source_tree, profile_raw_sha256)
+    current = (BASE / 'current').resolve()
+    require(current.parent == BASE / 'releases'
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + expected_current[:12], current.name),
+        'Fixed registration readback unavailable')
+    profile_raw = fixed_recharge_bytes(current / REGISTRATION_SCOPE_FILE, modes=(0o644, 0o664), limit=128 * 1024)
+    require(hashlib.sha256(profile_raw).hexdigest() == profile_raw_sha256, 'Fixed registration profile changed')
+    profile = registration_profile(fixed_recharge_json(profile_raw))
+    reviewed = {name: (fixed_recharge_bytes(current / name, modes=(0o644, 0o664, 0o755, 0o775)), '100644')
+                for name in profile['registrationSourceSha256'].keys() | profile['controlSourceSha256'].keys()}
+    registration_source(profile, reviewed)
+    manifest = fixed_recharge_json(private_maintenance_receipt(current / 'release-manifest.json'))
+    require(manifest.get('commit') == expected_current and manifest.get('sourceTree') == source_tree
+        and manifest.get('previousCommit') == REGISTRATION_CURRENT
+        and manifest.get('servicesUpdated') == ['auto-registration'] and manifest.get('migrationApplied') is False
+        and manifest.get('newMigrations') == []
+        and manifest.get('databaseGrants') == {'status': 'SKIPPED', 'reason': 'FIXED_REGISTRATION_NO_MIGRATIONS'},
+        'Fixed registration manifest changed')
+    require(manifest.get('fixedRegistrationRelease') == {'id': REGISTRATION_SCOPE_ID,
+        'profileRawSha256': profile_raw_sha256, 'registrationSourceCommit': REGISTRATION_SOURCE,
+        'workerBasisCommit': RECHARGE_SCOPE_CURRENT, 'workerProjectionSha256': REGISTRATION_PROJECTION_SHA256,
+        'financeSourceCommit': REGISTRATION_CURRENT, 'financePolicyId': HISTORY_ORDER_ARCHIVE_POLICY_ID,
+        'environmentUnchanged': True, 'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED',
+        'cacheStatus': 'SKIPPED'}, 'Fixed registration manifest provenance changed')
+    previous = Path(manifest['previousRelease'])
+    old_manifest, _origin = registration_baseline(previous)
+    images = manifest['images']
+    require(set(images) == set(old_manifest['images'])
+        and all(images[name] == old_manifest['images'][name] for name in images if name != 'auto-registration'),
+        'Fixed registration preserved image changed')
+    live = {name: service_state(current, name, include_container_id=True, include_environment_hash=True)
+            for name in ALL_SERVICES}
+    saved = manifest['fixedRegistrationPreservedStates']
+    require(set(saved) == {'before', 'after'} and saved['before'] == saved['after']
+        == registration_preserved_states(live)
+        and all(row['status'] == 'running' for row in live.values())
+        and all(live[name]['health'] == 'healthy' for name in ALL_SERVICES if name != 'caddy'),
+        'Fixed registration preserved service changed')
+    run_id = manifest['deploymentRun']
+    require(re.fullmatch(r'github-actions-[1-9][0-9]*-[1-9][0-9]*', run_id)
+        and manifest['imageBuildRun'] == run_id, 'Fixed registration image provenance changed')
+    reference = images['auto-registration']['reference']
+    require(re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+        + expected_current + '-' + run_id.removeprefix('github-actions-') + '-auto-recharge', reference)
+        and images['auto-registration']['sourceCommit'] == expected_current
+        and live['auto-registration']['reference'] == reference
+        and live['auto-registration']['image'] == images['auto-registration']['digest'],
+        'Fixed registration image provenance changed')
+    metadata = json.loads(run('docker', 'image', 'inspect', live['auto-registration']['image']))[0]
+    require(metadata['Architecture'] == 'amd64' and metadata['Id'] == live['auto-registration']['image']
+        and metadata['Config']['Labels'].get('org.opencontainers.image.revision') == expected_current,
+        'Fixed registration image provenance changed')
+    require((current / 'docker-compose.aws-mysql.yml').read_bytes() == (previous / 'docker-compose.aws-mysql.yml').read_bytes()
+        and (current / '.env.aws.production').read_bytes() == (previous / '.env.aws.production').read_bytes()
+        and fixed_recharge_json((current / 'compose.release.json').read_bytes()) == {
+            'services': {name: {'image': images[name]['reference'], 'pull_policy': 'never'}
+                         for name in (*SERVICES, 'migrate')}}, 'Fixed registration configuration changed')
+    audit_checks = []
+    for stage in ('before', 'after'):
+        report = fixed_recharge_json(private_maintenance_receipt(current / (stage + '-audit.json')))
+        require(report.get('ok') is False and type(report.get('checkCount')) is int and report['checkCount'] == 49
+            and type(report.get('violationCount')) is int and report['violationCount'] == 5
+            and historical_fingerprint(report.get('gate')) == REGISTRATION_FINANCE['gateSha256'][stage]
+            and historical_fingerprint(report.get('checks')) == REGISTRATION_FINANCE['checksSha256']
+            and manifest['dataAudit' + stage.title()] == {
+                'checkCount': 49, 'violationCount': 5, 'historicalException': report['gate']},
+            'Fixed registration audit changed')
+        audit_checks.append(report['checks'])
+    require(audit_checks[0] == audit_checks[1], 'Fixed registration audit facts changed')
+    registration_worker_hashes(current, profile)
+    require((BASE / 'current').resolve() == current, 'Fixed registration current changed')
+    require({name: service_state(current, name, include_container_id=True, include_environment_hash=True)
+             for name in ALL_SERVICES} == live, 'Fixed registration current service changed')
+    return validate_fixed_registration_readback_projection(receipt, expected_current, source_tree, profile_raw_sha256)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
@@ -3074,8 +3697,13 @@ def main():
     parser.add_argument('--order-archive-prepared-images-sha256')
     parser.add_argument('--recharge-pro-menu-7f', action='store_true')
     parser.add_argument('--recharge-pro-main80', action='store_true')
+    parser.add_argument('--registration-worker-b8-80', action='store_true')
     args = parser.parse_args()
     recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_main80
+    require(not (args.registration_worker_b8_80 and recharge_requested),
+            'Historical release selection is ambiguous')
+    if args.registration_worker_b8_80:
+        return registration_release(args)
     recharge_profile_id = (RECHARGE_MAIN80_ID if args.recharge_pro_main80 else
         RECHARGE_7F_ID if args.recharge_pro_menu_7f else RECHARGE_SCOPE_ID)
     recharge_binding = fixed_recharge_binding(recharge_profile_id) if recharge_requested else None
@@ -3620,6 +4248,28 @@ def main():
 if __name__ == '__main__':
     if sys.argv[1:] == ['--summarize-command-result']:
         print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_failure_summary(json.load(sys.stdin))))
+    elif sys.argv[1:] in (['--check-fixed-registration-scope'], ['--prepare-fixed-registration-build']):
+        try:
+            if sys.argv[1] == '--prepare-fixed-registration-build':
+                result = prepare_fixed_registration_build()
+                print('REGISTRATION_PROJECTION_PREPARED ' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+            else:
+                check_fixed_registration_scope()
+                print('REGISTRATION_PROFILE_VERIFIED')
+        except Exception:
+            raise SystemExit('Fixed registration scope unavailable; raw output suppressed') from None
+    elif sys.argv[1:2] == ['--check-fixed-registration-deployment']:
+        try:
+            tokens = sys.argv[2:]
+            require(len(tokens) == 6 and set(tokens[::2]) == {
+                '--expected-current', '--source-tree', '--registration-profile-sha256'},
+                'Fixed registration readback unavailable')
+            values = dict(zip(tokens[::2], tokens[1::2]))
+            result = check_fixed_registration_deployment(values['--expected-current'], values['--source-tree'],
+                values['--registration-profile-sha256'])
+        except Exception:
+            raise SystemExit('Fixed registration readback unavailable; raw output suppressed') from None
+        print('FIXED_REGISTRATION_RELEASE_VERIFIED ' + json.dumps(result, sort_keys=True, separators=(',', ':')))
     elif sys.argv[1:2] == ['--check-fixed-recharge-scope']:
         try:
             tokens = sys.argv[2:]

@@ -433,6 +433,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'recharge-pro-menu-b8-20261005'), false);
   assert.equal(selected('release', 'recharge-pro-menu-7f-20261005'), false);
   assert.equal(selected('release', 'recharge-pro-main80-20261006'), false);
+  assert.equal(selected('release', 'registration-worker-b8-80-20261006'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -442,6 +443,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'recharge-pro-menu-b8-20261005',
         'recharge-pro-menu-7f-20261005',
         'recharge-pro-main80-20261006',
+        'registration-worker-b8-80-20261006',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -607,6 +609,7 @@ test('actual full-mode release controls select each missing suite once without r
   assert.equal(checkMode(paths, '', ''), 'full');
   assert.deepEqual(guardCommands(paths, { part: 'release-controls' }), [
     'node --test scripts/ci-recharge-release.test.mjs',
+    'python3 -B scripts/production-release/registration-only-transport.test.py',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
@@ -2614,26 +2617,37 @@ test('main80 actual readback parser accepts the 21-field 49-check proof and reje
   fixedRechargeReadbackFixture(
     ({ root, execute, receipt, digest, awsLog, profile, profileFile }) => {
       const inheritedCommit = 'fd173815aac0048011fe1583acfe345575bca286';
+      const registrationControlCommit = '602f3d1f95f5e2be0605e46223b8703a69cb54a4';
       const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/';
-      const inheritedNames = [
+      const inheritedBusinessNames = [
         `${worker}registration_browser.py`,
         `${worker}registration_job.py`,
         `${worker}test_registration.py`,
         `${worker}test_registration_browser.py`,
         'docs/AUTO_REGISTRATION.md'
       ];
+      const inheritedControlNames = [
+        'deploy/aws/registration-worker-b8-80-20261006.json',
+        'scripts/production-release/registration-only-transport.test.py'
+      ];
+      const inheritedNames = [...inheritedBusinessNames, ...inheritedControlNames];
       const inherited = Object.fromEntries(
         inheritedNames.map((name) => [
           name,
           createHash('sha256')
-            .update(execFileSync('git', ['show', `${inheritedCommit}:${name}`]))
+            .update(
+              execFileSync('git', [
+                'show',
+                `${inheritedControlNames.includes(name) ? registrationControlCommit : inheritedCommit}:${name}`
+              ])
+            )
             .digest('hex')
         ])
       );
       assert.equal(profile.enabled, true);
       assert.equal(profile.approvalStatus, 'APPROVED');
       assert.deepEqual(profile.carriedSourceOnlySha256, inherited);
-      assert.equal(Object.keys(profile.sourceModes).length, 20);
+      assert.equal(Object.keys(profile.sourceModes).length, 22);
       for (const name of inheritedNames) assert.equal(profile.sourceModes[name], 0o644);
       assert.equal(Object.keys(receipt).length, 21);
       assert.deepEqual(JSON.parse(execute()), receipt);

@@ -32,6 +32,17 @@ const preparedControlPaths = [
   'scripts/production-release/reuse-images.py',
   'scripts/production-release/prepared-images.test.py'
 ];
+const registrationControlPaths = [
+  'deploy/aws/registration-worker-b8-80-20261006.json',
+  'scripts/production-release/registration-only-transport.test.py',
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/remote-deploy.test.py'
+];
 const releaseMaintenanceControls = () => {
   if (changed.some((path) => retirementControlPaths.includes(path)))
     run('python3', ['-B', 'scripts/production-release/retire-orphan-retention.test.py']);
@@ -87,9 +98,12 @@ if (part === 'guards') {
     changed.includes('deploy/aws/recharge-pro-menu-b8-20261005.json') ||
     changed.includes('deploy/aws/recharge-pro-menu-7f-20261005.json') ||
     changed.includes('deploy/aws/recharge-pro-main80-20261006.json') ||
+    changed.includes('deploy/aws/registration-worker-b8-80-20261006.json') ||
     changed.some((path) => path.startsWith('scripts/production-release/'))
   )
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
+  if (changed.some((path) => registrationControlPaths.includes(path)))
+    run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
     run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
   if (
@@ -134,6 +148,8 @@ if (part === 'guards') {
     )
   )
     run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
+  if (changed.some((path) => registrationControlPaths.includes(path)))
+    run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
   releaseMaintenanceControls();
