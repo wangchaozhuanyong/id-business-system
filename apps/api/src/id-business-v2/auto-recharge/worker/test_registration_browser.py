@@ -2436,6 +2436,173 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Actual Camoufox form/network events; every request is fulfilled or aborted locally."""
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+        self.job.id = '11111111-1111-4111-8111-111111111111'
+        self.job.attempt = 1
+        self.job.step = 'email_code'
+        self.job.prepare_mail = MagicMock(side_effect=lambda *_args, **_kwargs: setattr(self.job, 'awaiting_code', True))
+        self.installed, self.removed = [], []
+        original_on, original_remove = self.page.on, self.page.remove_listener
+        def on(name, handler):
+            self.installed.append((name, handler))
+            return original_on(name, handler)
+        def remove(name, handler):
+            self.removed.append((name, handler))
+            return original_remove(name, handler)
+        self.page.on, self.page.remove_listener = on, remove
+
+    async def asyncTearDown(self):
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def fixture(self, mode):
+        html = '''<!doctype html><html><body><form action="/auth/login" method="get">
+        <input type="email" name="email" required><button>Continue</button></form>__SCRIPT__</body></html>'''
+        script = '' if mode == 'native_get' else '''<script>
+        document.querySelector('form').onsubmit=event=>{
+          event.preventDefault();fetch('/fixture/email?token=synthetic-private-token',{
+            method:'POST',body:'synthetic-private-password-OTP-123456'}).then(()=>{
+              __AFTER__
+            }).catch(()=>{document.querySelector('input').value='';});
+        };</script>'''
+        script = script.replace('__AFTER__', "window.location.assign('/auth/login');" if mode == 'accepted_login'
+                                else "document.querySelector('input').value='';")
+        html = html.replace('__SCRIPT__', script)
+        async def local(route):
+            request = route.request
+            path = urlsplit(request.url).path
+            self.navigation_methods.append(request.method)
+            if path == '/api/auth/session':
+                await route.fulfill(content_type='application/json', body='{}')
+            elif path == '/fixture/email':
+                self.submissions.append(request.method)
+                if mode == 'transport_failed':
+                    await route.abort('connectionreset')
+                else:
+                    await route.fulfill(status=400 if mode == 'rejected' else 200,
+                        content_type='application/json', body='{"private":"synthetic-secret-OTP-123456"}')
+            else:
+                await route.fulfill(content_type='text/html', body=html)
+        await self.context.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1), self.assertLogs('registration', level='WARNING') as logs:
+            with self.assertRaises(Stop) as stopped:
+                await asyncio.wait_for(self.flow.register(), timeout=12)
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.job.manual.assert_awaited_once_with('form_unrecognized')
+        self.assertTrue(self.flow.registration_state['email_submit_started'])
+        self.assertTrue(self.flow.registration_state['email_click_returned'])
+        self.assertFalse(self.flow.registration_state.get('code_submitted', False))
+        self.assertFalse(self.flow.registration_state.get('profile_submitted', False))
+        self.assertFalse(self.flow.data['registered'])
+        self.assertEqual(self.installed, self.removed)
+        self.assertEqual([name for name, _handler in self.installed], ['request', 'response', 'requestfailed', 'framenavigated'])
+        self.assertEqual(self.flow.email_requests, {})
+        self.assertIsNone(self.flow.email_request_page)
+        state = self.flow.email_request_observation
+        self.assertEqual(state['read'], 'closed')
+        frozen = json.dumps(state, sort_keys=True)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+        self.assertEqual(json.dumps(state, sort_keys=True), frozen)
+        text = '\n'.join(logs.output)
+        for excluded in ['owner@example.test', 'synthetic-private', 'synthetic-secret', '123456', 'https://']:
+            self.assertNotIn(excluded, text)
+        self.assertIn('point=before_safe_get', text)
+        self.assertIn('point=stop read=closed', text)
+        self.assertEqual(self.page_errors, [])
+        return state, text
+
+    async def test_native_form_get_is_not_claimed_as_email_code_request(self):
+        state, text = await self.fixture('native_get')
+        self.assertEqual(self.submissions, [])
+        self.assertIsNone(state['last_write'])
+        self.assertIsNone(state['first_failure'])
+        self.assertIn('method=GET kind=navigation path=login http_status=200 failure=none', text)
+        self.assertGreaterEqual(state['navigation_count'], 2)
+
+    async def test_post_rejection_keeps_first_failure_across_safe_get(self):
+        state, text = await self.fixture('rejected')
+        self.assertEqual(self.submissions, ['POST'])
+        self.assertEqual((state['first_failure']['event'], state['first_failure']['method'],
+                          state['first_failure']['http_status'], state['first_failure']['failure']),
+                         ('response', 'POST', 400, 'http_error'))
+        self.assertEqual(state['last_write']['http_status'], 400)
+        self.assertEqual(state['current']['method'], 'GET')
+        self.assertIn('slot=first_failure', text)
+
+    async def test_transport_failure_is_closed_without_second_submission(self):
+        state, _text = await self.fixture('transport_failed')
+        self.assertEqual(self.submissions, ['POST'])
+        self.assertEqual(state['failed_count'], 1)
+        self.assertEqual((state['first_failure']['event'], state['first_failure']['http_status'],
+                          state['first_failure']['failure']), ('requestfailed', None, 'network'))
+
+    async def test_post_2xx_then_login_preserves_http_outcome_without_registration_claim(self):
+        state, text = await self.fixture('accepted_login')
+        self.assertEqual(self.submissions, ['POST'])
+        self.assertIsNone(state['first_failure'])
+        self.assertEqual((state['last_write']['event'], state['last_write']['method'],
+                          state['last_write']['http_status']), ('response', 'POST', 200))
+        self.assertEqual(state['main_frame_path'], 'login')
+        self.assertIn('slot=last_write', text)
+        self.assertNotIn('registered', self.events)
+
+    async def test_code_and_profile_posts_cannot_overwrite_email_transition_snapshot(self):
+        html = '''<!doctype html><html><body><main></main><script>
+        let stage='email';const root=document.querySelector('main');
+        function render(){
+          const fields=stage==='email'?'<input type="email" name="email" required>':
+            stage==='code'?'<p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code">':
+            '<input name="name"><input type="date" name="birthday">';
+          root.innerHTML='<form>'+fields+'<button>Continue</button></form>';
+          root.querySelector('form').onsubmit=async event=>{
+            event.preventDefault();await fetch('/fixture/'+stage,{method:'POST',body:'synthetic-private-OTP'});
+            if(stage==='profile'){root.innerHTML='<main>Welcome</main>';return;}
+            stage=stage==='email'?'code':'profile';render();
+          };
+        }render();</script></body></html>'''
+        snapshots = []
+        async def local(route):
+            path = urlsplit(route.request.url).path
+            if path == '/api/auth/session':
+                await route.fulfill(content_type='application/json', body='{}')
+            elif path.startswith('/fixture/'):
+                self.submissions.append(path)
+                if path != '/fixture/email':
+                    snapshots.append((self.flow.email_request_page is None,
+                                      json.dumps(self.flow.email_request_observation, sort_keys=True)))
+                await route.fulfill(content_type='application/json', body='{}')
+            else:
+                await route.fulfill(content_type='text/html', body=html)
+        await self.context.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+        async def wait_code():
+            self.job.awaiting_code = False
+            return '123456'
+        self.job.wait_code = AsyncMock(side_effect=wait_code)
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 3), self.assertLogs('registration', level='WARNING') as logs:
+            with self.assertRaises(Stop):
+                await asyncio.wait_for(self.flow.register(), timeout=15)
+        self.assertEqual(self.submissions, ['/fixture/email', '/fixture/code', '/fixture/profile'])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.job.wait_code.assert_awaited_once()
+        self.assertEqual(len(snapshots), 2)
+        self.assertTrue(all(inactive for inactive, _snapshot in snapshots))
+        frozen = json.dumps(self.flow.email_request_observation, sort_keys=True)
+        self.assertTrue(all(snapshot == frozen for _inactive, snapshot in snapshots))
+        self.assertEqual(self.flow.email_request_observation['request_count'], 1)
+        self.assertEqual(self.flow.email_request_observation['last_write']['http_status'], 200)
+        self.assertEqual(self.installed, self.removed)
+        summaries = [line for line in logs.output if 'Registration email requests ' in line and 'point=transition' in line]
+        self.assertEqual(len(summaries), 1)
+        self.assertIn('read=closed', summaries[0])
+        self.assertEqual(self.page_errors, [])
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
 class ResumeMailBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await ProfileBrowserTests.asyncSetUp(self)
@@ -3185,8 +3352,9 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         flow,field,submit=await self.email_flow()
         with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS',.25),self.assertLogs('registration',level='WARNING') as logs:
             with self.assertRaises(Stop):await flow.register()
-        self.assertIn('last_observed_view=email last_write=email_submit',logs.output[0])
-        self.assertIn('email_submit_started=True email_click_returned=True email_submitted=True',logs.output[0])
+        pause = next(line for line in logs.output if 'Registration paused ' in line)
+        self.assertIn('last_observed_view=email last_write=email_submit',pause)
+        self.assertIn('email_submit_started=True email_click_returned=True email_submitted=True',pause)
         field.fill.assert_awaited_once_with(flow.data['email']);submit.click.assert_awaited_once()
         flow.job.prepare_mail.assert_called_once_with('email_code',new_request=True)
         flow.job.manual.assert_awaited_once_with('form_unrecognized')
@@ -3252,3 +3420,133 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                         field.fill.assert_awaited_once_with(flow.data['email'])
                         self.assertFalse(flow.registration_state.get('email_submit_started'))
                         self.assertNotIn('private-token', '\n'.join(logs.output))
+
+
+class EmailRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    def fixture(self):
+        flow = PauseDiagnosticsTests().flow()
+        handlers = {}
+        page = SimpleNamespace(url='https://chatgpt.com/auth/login?token=private-token',
+                               on=lambda name, handler: handlers.setdefault(name, handler),
+                               remove_listener=lambda name, handler: handlers.pop(name), main_frame=None)
+        page.main_frame = SimpleNamespace(page=page, url=page.url)
+        flow.page = page
+        flow.begin_email_requests()
+        return flow, page, handlers
+
+    def request(self, page, *, method='POST', navigation=False, code='net::ERR_CONNECTION_RESET'):
+        class Request:
+            frame = page.main_frame
+            resource_type = 'fetch'
+            url = 'https://auth.openai.com/email-verification?token=private-token-OTP-123456'
+            failure = code
+            def is_navigation_request(self):
+                return navigation
+            def __getattr__(self, name):
+                raise AssertionError('forbidden request read')
+        request = Request()
+        request.method = method
+        return request
+
+    async def test_request_association_and_all_counts_are_bounded(self):
+        flow, page, handlers = self.fixture()
+        requests = [self.request(page) for _ in range(40)]
+        for request in requests:
+            handlers['request'](request)
+        self.assertEqual(len(flow.email_requests), 16)
+        for request in requests[:16]:
+            for _ in range(2):
+                handlers['response'](SimpleNamespace(request=request, status=200))
+                handlers['requestfailed'](request)
+                handlers['framenavigated'](page.main_frame)
+        state = flow.email_request_observation
+        self.assertTrue(state['overflow'])
+        for key in ('request_count', 'response_count', 'failed_count', 'navigation_count'):
+            self.assertEqual(state[key], 16)
+        flow.end_email_requests()
+        self.assertEqual(flow.email_requests, {})
+        self.assertEqual(handlers, {})
+
+    async def test_first_failure_and_post_outcome_survive_later_read_navigation(self):
+        flow, page, handlers = self.fixture()
+        first = self.request(page)
+        handlers['request'](first)
+        handlers['response'](SimpleNamespace(request=first, status=409))
+        saved = dict(flow.email_request_observation['first_failure'])
+        later = self.request(page)
+        handlers['request'](later)
+        handlers['response'](SimpleNamespace(request=later, status=200))
+        read = self.request(page, method='GET', navigation=True)
+        handlers['request'](read)
+        handlers['response'](SimpleNamespace(request=read, status=200))
+        page.main_frame.url = 'https://chatgpt.com/auth/login?code=private-token'
+        handlers['framenavigated'](page.main_frame)
+        self.assertEqual(flow.email_request_observation['first_failure'], saved)
+        self.assertEqual(flow.email_request_observation['last_write']['http_status'], 200)
+        self.assertEqual(flow.email_request_observation['current']['method'], 'GET')
+        self.assertEqual(flow.email_request_observation['main_frame_path'], 'login')
+        flow.end_email_requests()
+
+    async def test_closed_failure_logging_never_reads_or_emits_private_fields(self):
+        flow, page, handlers = self.fixture()
+        request = self.request(page, method='private-method', code='private-secret-OTP-123456')
+        handlers['request'](request)
+        handlers['requestfailed'](request)
+        with self.assertLogs('registration', level='WARNING') as logs:
+            flow.log_email_requests('pause')
+        text = '\n'.join(logs.output)
+        self.assertIn('method=other', text)
+        self.assertIn('failure=unknown', text)
+        for excluded in ['private-', '123456', 'https://', 'owner@']:
+            self.assertNotIn(excluded, text)
+        self.assertEqual(flow.email_request_observation['read'], 'observing')
+        flow.end_email_requests()
+
+    async def test_other_page_host_resource_and_subframe_do_not_pollute_observation(self):
+        flow, page, handlers = self.fixture()
+        other_page = SimpleNamespace(main_frame=SimpleNamespace(page=SimpleNamespace()))
+        other = self.request(other_page)
+        handlers['request'](other)
+        other = self.request(page)
+        other.url = 'https://untrusted.example/email-verification?token=private-token'
+        handlers['request'](other)
+        other = self.request(page)
+        other.resource_type = 'image'
+        handlers['request'](other)
+        handlers['framenavigated'](SimpleNamespace(page=page, url=page.url))
+        self.assertEqual(flow.email_request_observation['request_count'], 0)
+        self.assertEqual(flow.email_request_observation['navigation_count'], 0)
+        self.assertIsNone(flow.email_request_observation['current'])
+        flow.end_email_requests()
+
+    async def test_listener_cleanup_on_stop_is_inert_even_if_removal_fails(self):
+        flow, page, handlers = self.fixture()
+        request = self.request(page)
+        flow.observe_registration = AsyncMock(side_effect=Stop('operation_cancelled'))
+        page.remove_listener = MagicMock(side_effect=RuntimeError('private-secret'))
+        with self.assertRaises(Stop) as stopped:
+            await flow.register()
+        self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+        self.assertEqual(page.remove_listener.call_count, 4)
+        self.assertIsNone(flow.email_request_page)
+        handlers['request'](request)
+        self.assertEqual(flow.email_request_observation['request_count'], 0)
+        self.assertEqual(flow.email_requests, {})
+        self.assertEqual(flow.email_request_observation['read'], 'unavailable')
+
+    async def test_invalid_state_and_records_are_not_logged(self):
+        flow, page, handlers = self.fixture()
+        request = self.request(page)
+        handlers['request'](request)
+        handlers['response'](SimpleNamespace(request=request, status=True))
+        self.assertIsNone(flow.email_request_observation['current']['http_status'])
+        flow.email_request_observation['current']['failure'] = {'secret': 'private-token'}
+        flow.email_request_observation['last_write'] = None
+        with self.assertLogs('registration', level='WARNING') as logs:
+            flow.log_email_requests('pause')
+        self.assertEqual(len(logs.output), 1)
+        flow.email_request_observation['main_frame_path'] = ['private-token']
+        with patch('registration_browser.logging.getLogger') as logger:
+            flow.log_email_requests('pause')
+        logger.assert_not_called()
+        flow.end_email_requests()
