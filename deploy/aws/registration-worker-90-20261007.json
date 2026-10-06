@@ -292,7 +292,7 @@
   "controlSourceSha256": {
     "scripts/production-release/push-images.sh": "5207d3d9b5d8f4c09e9309956aaa1bf1d0b009b1e021c71fa5ad4c7c5fb5be3d",
     "scripts/production-release/remote-deploy.test.py": "6234c174735eb41ab7b369d71a16d1a23e8fec9b829fbc72f5b64206be30d311",
-    "scripts/ci-recharge-release.test.mjs": "d4bdf6fa58b9ad5f97614fe4468f5d63b396a7a94d015f1014ab8af429b7710d",
+    "scripts/ci-recharge-release.test.mjs": "a063604b1f6b723cffd13afb9d4dc64aed31cfefd6ba0af14361e608b74a9262",
     "scripts/production-release/registration-only-transport.test.py": "6ee9a45856f3c079f019f79889479dbd88a8de79addd8b7a248693ae5abb5003",
     "scripts/ci-recharge-check.mjs": "beb1b890c4982db5dc6399672883ca62b677b27fc45a9e244a7da553093c77ad",
     "scripts/ci-recharge-scope.test.mjs": "7aa86187335da5b6c25b6a7e3ec68a810f140052e538c13589fc107c36725878",
