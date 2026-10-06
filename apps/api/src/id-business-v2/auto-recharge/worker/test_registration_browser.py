@@ -1855,3 +1855,130 @@ class OriginalAttemptBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    def flow(self):
+        job=SimpleNamespace(id='11111111-1111-4111-8111-111111111111',attempt=2,step='email_code',
+            payload={'email':'private-owner@example.test','password':'private-password','totpSecret':'private-mfa',
+                     'birthDate':'1996-01-01','displayName':'private-name'},
+            check=lambda:None,cancelled=threading.Event(),awaiting_code=False,
+            event=MagicMock(),prepare_mail=MagicMock(),manual=AsyncMock(side_effect=Stop('fixture_paused')))
+        context=SimpleNamespace(route=AsyncMock(),unroute=AsyncMock())
+        flow=RegistrationBrowser(job,context)
+        flow.page=SimpleNamespace(url='https://chatgpt.com/onboarding?token=private-token',goto=AsyncMock(),reload=AsyncMock())
+        flow.refresh_registration=AsyncMock(return_value=False)
+        async def settle(seconds):
+            if seconds==.5:await asyncio.sleep(.05)
+        flow.settle=settle
+        return flow
+
+    async def email_flow(self, *, fill_error=None, click_error=None):
+        flow=self.flow()
+        field=SimpleNamespace(fill=AsyncMock(side_effect=fill_error),input_value=AsyncMock(return_value=flow.data['email']))
+        submit=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
+        flow.field=AsyncMock(return_value=field);flow.button=AsyncMock(return_value=submit)
+        flow.challenge=AsyncMock(return_value=False)
+        async def observed():
+            return 'email',field
+        flow.registration_view=AsyncMock(side_effect=observed)
+        async def click(**_kwargs):
+            self.assertTrue(flow.registration_state['email_submit_started'])
+            self.assertFalse(flow.registration_state.get('email_click_returned',False))
+            if click_error:raise click_error
+        submit.click.side_effect=click
+        return flow,field,submit
+
+    async def test_pause_logging_excludes_secret_and_untrusted_fields_without_new_reads(self):
+        flow=self.flow()
+        secret='private-secret\nforged=success'
+        flow.job.id=secret;flow.job.attempt=True;flow.job.step=secret
+        flow.job.registration_last_observed_view=secret;flow.job.registration_last_write=secret
+        flow.job.registration_observation_error={'reason':secret,'error_type':secret,'browser_error_code':secret,'body':secret}
+        flow.registration_state.update(email_submitted=secret,code_submitted=True,profile_submitted=False)
+        flow.page.locator=MagicMock(side_effect=AssertionError('diagnostics must not read DOM'))
+        with self.assertLogs('registration',level='WARNING') as logs:
+            flow.log_pause(secret)
+        line=logs.output[0]
+        for excluded in ['private-secret','private-password','private-mfa','private-owner','private-token','private-name','forged=']:
+            self.assertNotIn(excluded,line)
+        self.assertIn('job=unknown attempt=0 step=unknown reason=unknown',line)
+        self.assertIn('last_observed_view=unknown last_write=none',line)
+        self.assertIn('email_submitted=False code_submitted=True profile_submitted=False',line)
+        flow.page.locator.assert_not_called();flow.page.goto.assert_not_awaited()
+
+    async def test_read_operations_preserve_last_write_and_existing_operation(self):
+        flow=self.flow()
+        for write in ['email_submit','code_submit','profile_submit','signup_click']:
+            flow.operation(write)
+            for read in ['challenge_read','identity_read','profile_read','page_refresh']:
+                flow.operation(read)
+                self.assertEqual(flow.job.registration_operation,read)
+                self.assertEqual(flow.job.registration_last_write,write)
+        with self.assertLogs('registration',level='WARNING') as logs:flow.log_pause('form_unrecognized')
+        self.assertIn('last_write=signup_click',logs.output[0])
+
+    async def test_unknown_and_ambiguous_observation_pause_before_manual_without_submission(self):
+        for ambiguous in [False,True]:
+            flow=self.flow()
+            if ambiguous:
+                flow.job.registration_last_observed_view='email'
+                flow.registration_view=AsyncMock(side_effect=Stop('login_form_ambiguous'))
+            else:flow.registration_view=AsyncMock(return_value=('unknown',None))
+            with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS',0),self.assertLogs('registration',level='WARNING') as logs:
+                with self.assertRaises(Stop):await flow.register()
+            self.assertEqual(len(logs.output),1)
+            self.assertIn('last_observed_view='+('email' if ambiguous else 'unknown'),logs.output[0])
+            self.assertIn('email_submit_started=False email_click_returned=False',logs.output[0])
+            flow.job.manual.assert_awaited_once_with('form_unrecognized')
+            flow.job.prepare_mail.assert_not_called();flow.page.goto.assert_not_awaited()
+
+    async def test_email_click_phase_facts_are_observed_without_repeat_submission(self):
+        flow,field,submit=await self.email_flow()
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS',.25),self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(Stop):await flow.register()
+        self.assertIn('last_observed_view=email last_write=email_submit',logs.output[0])
+        self.assertIn('email_submit_started=True email_click_returned=True email_submitted=True',logs.output[0])
+        field.fill.assert_awaited_once_with(flow.data['email']);submit.click.assert_awaited_once()
+        flow.job.prepare_mail.assert_called_once_with('email_code',new_request=True)
+        flow.job.manual.assert_awaited_once_with('form_unrecognized')
+
+    async def test_failed_click_never_reports_click_returned_or_replays_submission(self):
+        flow,field,submit=await self.email_flow(click_error=Stop('session_network_error'))
+        with self.assertRaises(Stop) as stopped:await flow.register()
+        self.assertEqual(stopped.exception.report['reason'],'session_network_error')
+        with self.assertLogs('registration',level='WARNING') as logs:flow.log_pause('form_unrecognized')
+        self.assertIn('last_observed_view=email last_write=email_submit',logs.output[0])
+        self.assertIn('email_submit_started=True email_click_returned=False email_submitted=True',logs.output[0])
+        submit.click.assert_awaited_once();flow.job.manual.assert_not_awaited()
+
+    async def test_first_network_failure_survives_later_page_change(self):
+        flow=self.flow()
+        first={'reason':'session_network_error','error_type':'Error','browser_error_code':'net::ERR_CONNECTION_RESET'}
+        class Error(Exception):pass
+        flow.registration_view=AsyncMock(side_effect=[Stop(first['reason'],error_type=first['error_type'],browser_error_code=first['browser_error_code']),Error('Execution context was destroyed private-token')])
+        flow.refresh_registration=AsyncMock(side_effect=[True,False])
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS',0),self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(Stop):await flow.register()
+        self.assertEqual(flow.job.registration_observation_error,first)
+        self.assertIn('observation_reason=session_network_error observation_error_type=Error observation_browser_code=net::ERR_CONNECTION_RESET',logs.output[0])
+        self.assertNotIn('private-token',logs.output[0])
+
+    async def test_email_prepare_timeout_preserves_first_failure_without_mail_request(self):
+        flow,field,submit=await self.email_flow(fill_error=Stop('session_load_timeout',error_type='TimeoutError'))
+        first={'reason':'session_network_error','error_type':'Error','browser_error_code':'NS_ERROR_NET_RESET'}
+        flow.job.registration_observation_error=first
+        with self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(Stop):await flow.register()
+        self.assertIs(flow.job.registration_observation_error,first)
+        self.assertIn('observation_browser_code=NS_ERROR_NET_RESET',logs.output[0])
+        self.assertIn('email_submit_started=False email_click_returned=False',logs.output[0])
+        flow.job.prepare_mail.assert_not_called();submit.click.assert_not_awaited()
+
+    async def test_cancel_still_wins_without_pause_log_or_submission(self):
+        flow=self.flow();flow.job.check=MagicMock(side_effect=Stop('operation_cancelled'))
+        with patch('registration_browser.logging.getLogger') as logger:
+            with self.assertRaises(Stop) as stopped:await flow.register()
+        self.assertEqual(stopped.exception.report['reason'],'operation_cancelled')
+        logger.return_value.warning.assert_not_called();flow.job.manual.assert_not_awaited()
+        flow.job.prepare_mail.assert_not_called();flow.page.goto.assert_not_awaited()
