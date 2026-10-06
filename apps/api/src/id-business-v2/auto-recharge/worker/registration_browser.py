@@ -281,6 +281,22 @@ class RegistrationBrowser:
             return 'profile', profile
         if self.registration_loading:
             return 'unknown', None
+        # A clear initial form does not require an anonymous session fetch. Once
+        # any submission may have happened, identity keeps priority over stale UI.
+        initial_form = (self.data.get('registered') is not True and all(
+            self.registration_state.get(key, False) is False for key in (
+                'email_submit_started', 'email_submitted', 'code_submitted', 'profile_submitted')))
+        if initial_form:
+            self.official(self.page)
+            if await unique_visible(self.page, PASSWORD_INPUT):
+                return 'existing', None
+            self.official(self.page)
+            email = await unique_visible(self.page, EMAIL_INPUT)
+            if email:
+                return 'email', email
+            signup = await self.button(self.page, r'^(sign up|create account|注册|创建账户|创建账号)$')
+            if signup:
+                return 'signup', signup
         if await self.identity():
             return 'registered', None
         if await self.field(self.page, PASSWORD_INPUT):
