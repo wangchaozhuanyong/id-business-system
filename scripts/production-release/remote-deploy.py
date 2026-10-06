@@ -2284,7 +2284,7 @@ def main80_recharge_baseline(previous, profile, manifest, states, *, source_arch
     return origin
 
 
-def main80_recharge_audit(directory, receipt, *, stage, source, profile, before_receipt=None, control_source=None):
+def main80_recharge_audit(directory, receipt, *, stage, source, auditor_source, profile, before_receipt=None, control_source=None):
     """Reuse the released zero49 auditor while preserving the sealed original 80 policy."""
     main80_recharge_scope(profile)
     policy, seal = main80_recharge_seal(source, profile)
@@ -2292,7 +2292,7 @@ def main80_recharge_audit(directory, receipt, *, stage, source, profile, before_
         main80_recharge_report(fixed_recharge_json(fixed_recharge_bytes(source / (stored_stage + '-audit.json'))),
             profile, policy, seal, stored_stage)
     control_source = control_source or directory
-    result = registration_finance_audit(directory, receipt, stage=stage, source=source,
+    result = registration_finance_audit(directory, receipt, stage=stage, source=auditor_source,
         before_receipt=before_receipt, control_source=control_source, profile_id=REGISTRATION_EMAIL_REQUEST_ID)
     report = fixed_recharge_json(fixed_recharge_bytes(receipt))
     frozen = fixed_recharge_json(fixed_recharge_bytes(source / 'before-audit.json'))['gate']
@@ -4850,6 +4850,7 @@ def main():
     baseline_archive = None
     finance_archive = None
     finance_source = None
+    auditor_source = None
     if recharge_requested:
         require(args.expected_current == recharge_binding['current'], 'Fixed recharge baseline changed')
         require_diagnostics_release_arguments(args, image_commit, image_run, image_attempt)
@@ -4920,6 +4921,10 @@ def main():
     step = 'source'
     changed = []
     try:
+        if args.recharge_pro_main80:
+            step = 'finance-source'
+            auditor_source = prepare_registration_finance_source(args, registration_download(REGISTRATION_CURRENT))
+            step = 'source'
         if args.recharge_pro_menu_7f:
             step = 'finance-source'
             finance_source = prepare_fixed_recharge_finance_source(args, finance_archive)
@@ -5063,7 +5068,8 @@ def main():
         step = 'audit-before'
         before_audit = (None if args.historical_finance_order_archive else
                        main80_recharge_audit(previous, release / 'before-audit.json',
-                           stage='before', source=finance_source, profile=recharge_profile, control_source=previous)
+                           stage='before', source=finance_source, auditor_source=auditor_source,
+                           profile=recharge_profile, control_source=previous)
                        if args.recharge_pro_main80 else fixed_recharge_audit(previous, release / 'before-audit.json',
                              stage='before', source=finance_source, origin=finance_origin)
                        if recharge_requested else audit(previous, release / 'before-audit.json',
@@ -5168,7 +5174,7 @@ def main():
 
         step = 'audit-after'
         after_audit = (main80_recharge_audit(release, release / 'after-audit.json',
-                            stage='after', source=finance_source, profile=recharge_profile,
+                            stage='after', source=finance_source, auditor_source=auditor_source, profile=recharge_profile,
                             before_receipt=release / 'before-audit.json', control_source=previous)
                       if args.recharge_pro_main80 else fixed_recharge_audit(release, release / 'after-audit.json',
                             stage='after', source=finance_source, origin=finance_origin,
