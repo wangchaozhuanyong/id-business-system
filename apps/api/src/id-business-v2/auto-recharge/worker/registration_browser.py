@@ -699,7 +699,8 @@ class RegistrationBrowser:
                         details = exc.report if isinstance(exc, Stop) else session_failure(exc)
                         self.job.registration_observation_error = {
                             key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
-                        if detached:
+                        if detached or (type(exc).__name__ == 'Error' and re.search(
+                                r'Execution context was destroyed|Cannot find context with specified id', str(exc))):
                             self.job.registration_observation_error['reason'] = 'registration_page_changing'
                     reason = 'form_unrecognized'
                     gate = 'target_changed' if detached else 'none'
@@ -724,7 +725,8 @@ class RegistrationBrowser:
                         details = exc.report if isinstance(exc, Stop) else session_failure(exc)
                         self.job.registration_observation_error = {
                             key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
-                        if detached:
+                        if detached or (type(exc).__name__ == 'Error' and re.search(
+                                r'Execution context was destroyed|Cannot find context with specified id', str(exc))):
                             self.job.registration_observation_error['reason'] = 'registration_page_changing'
                     unchanged = False
                 if not unchanged:

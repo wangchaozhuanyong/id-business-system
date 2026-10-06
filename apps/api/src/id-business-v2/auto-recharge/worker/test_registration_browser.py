@@ -2286,6 +2286,13 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     result[1].click = interrupted_click
                 return result
             self.flow.email_submit_control = interrupted_control
+        if mode in {'prepare_context_error', 'callback_context_error'}:
+            method = 'email_submit_control' if mode == 'prepare_context_error' else 'email_submit_unchanged'
+            original = getattr(self.flow, method)
+            async def changing_context(*args):
+                await original(*args)  # Complete actual native DOM reads before the injected browser error.
+                await self.page.evaluate('''() => { throw new Error('Execution context was destroyed synthetic-private'); }''')
+            setattr(self.flow, method, changing_context)
         with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
             with self.assertRaises(Error if mode == 'click_error' else Stop) as stopped:
                 await asyncio.wait_for(self.flow.register(), timeout=7)
@@ -2326,6 +2333,22 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
         self.assertFalse(self.flow.registration_state.get('email_submit_started'))
         self.assertEqual(self.job.registration_observation_error['reason'], 'session_load_timeout')
+
+    async def test_prepare_context_error_is_closed_before_any_submission(self):
+        self.assertEqual(await self.email_guard_fixture('prepare_context_error'), 'fixture_paused')
+        self.assertEqual(self.job.registration_observation_error,
+                         {'reason':'registration_page_changing', 'error_type':'Error'})
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_not_called()
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+
+    async def test_callback_context_error_keeps_request_and_never_clicks(self):
+        self.assertEqual(await self.email_guard_fixture('callback_context_error'), 'fixture_paused')
+        self.assertEqual(self.job.registration_observation_error,
+                         {'reason':'registration_page_changing', 'error_type':'Error'})
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
 
     async def test_post_click_detach_preserves_possible_write_and_resume_never_repeats(self):
         self.assertEqual(await self.email_guard_fixture('click_error'), 'fixture_click_interrupted')
@@ -3193,3 +3216,25 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.exception.report['reason'],'operation_cancelled')
         logger.return_value.warning.assert_not_called();flow.job.manual.assert_not_awaited()
         flow.job.prepare_mail.assert_not_called();flow.page.goto.assert_not_awaited()
+
+    async def test_prepare_and_callback_context_failures_are_closed_and_keep_first_reason(self):
+        class Error(Exception):
+            pass
+        for method in ['email_submit_control', 'email_submit_unchanged']:
+            for marker in ['Execution context was destroyed', 'Cannot find context with specified id']:
+                for retained in [False, True]:
+                    with self.subTest(method=method, marker=marker, retained=retained):
+                        flow, field, submit = await self.email_flow()
+                        expected = {'reason':'registration_page_changing', 'error_type':'Error'}
+                        if retained:
+                            expected = {'reason':'session_network_error', 'error_type':'Error'}
+                            flow.job.registration_observation_error = expected
+                        getattr(flow, method).side_effect = Error(marker + ' private-token')
+                        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', .1), self.assertLogs('registration', level='WARNING') as logs:
+                            with self.assertRaises(Stop):
+                                await flow.register()
+                        self.assertEqual(flow.job.registration_observation_error, expected)
+                        submit.click.assert_not_awaited()
+                        field.fill.assert_awaited_once_with(flow.data['email'])
+                        self.assertFalse(flow.registration_state.get('email_submit_started'))
+                        self.assertNotIn('private-token', '\n'.join(logs.output))
