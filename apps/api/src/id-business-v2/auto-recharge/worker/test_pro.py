@@ -799,6 +799,72 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payments, 0)
 
 
+class ProRegionDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unavailable_region_count_preserves_stop_without_old_button_state(self):
+        from plan_selection import plan_scope
+        page = MagicMock()
+        page.title = AsyncMock(return_value='ChatGPT')
+        dialogs = page.get_by_role.return_value.filter.return_value
+        dialogs.count = AsyncMock(side_effect=[2, RuntimeError('PRIVATE_COUNT_BODY')])
+        assertion = MagicMock()
+        assertion.to_have_count = AsyncMock(side_effect=PlaywrightTimeoutError('PRIVATE_TIMEOUT_BODY'))
+        with patch('plan_selection.expect', return_value=assertion), self.assertRaises(Stop) as stopped:
+            await plan_scope(page)
+        selection = MagicMock()
+        selection.run = AsyncMock(side_effect=stopped.exception)
+        selection.diagnostics = {'step': 'choose_tier', 'role': 'button', 'matched_count': 1,
+                                 'enabled': True, 'selected': True, 'error_type': 'Error',
+                                 'available_plans': []}
+        with patch('plan_selection.Selection', return_value=selection), self.assertRaises(Stop) as blocked:
+            await select_plan(page, 'pro-500', lambda *_args, **_kwargs: None)
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_region_ambiguous')
+        self.assertEqual(blocked.exception.report['diagnostics'], {
+            'step': 'choose_tier', 'role': 'region', 'available_plans': [], 'error_type': 'TimeoutError',
+        })
+        self.assertNotIn('PRIVATE', json.dumps(blocked.exception.report))
+
+    async def test_closed_page_region_wait_keeps_original_error_without_fabricated_count(self):
+        from plan_selection import plan_scope
+        page = MagicMock()
+        page.title = AsyncMock(side_effect=TargetClosedError())
+        dialogs = page.get_by_role.return_value.filter.return_value
+        dialogs.count = AsyncMock(side_effect=[2, TargetClosedError()])
+        assertion = MagicMock()
+        assertion.to_have_count = AsyncMock(side_effect=TargetClosedError())
+        with patch('plan_selection.expect', return_value=assertion), self.assertRaises(Stop) as stopped:
+            await plan_scope(page)
+        selection = MagicMock()
+        selection.run = AsyncMock(side_effect=stopped.exception)
+        selection.diagnostics = {'step': 'choose_tier', 'role': 'button',
+                                 'matched_count': 1, 'enabled': True}
+        with patch('plan_selection.Selection', return_value=selection), self.assertRaises(Stop) as blocked:
+            await select_plan(page, 'pro-500', lambda *_args, **_kwargs: None)
+        self.assertEqual(blocked.exception.report['reason'], 'official_plan_region_ambiguous')
+        self.assertEqual(blocked.exception.report['diagnostics'], {
+            'step': 'choose_tier', 'role': 'region', 'error_type': 'TargetClosedError',
+        })
+
+    async def test_region_stop_accepts_only_measured_count_and_controlled_fields(self):
+        page = MagicMock()
+        page.title = AsyncMock(return_value='ChatGPT')
+        for count, expected in ((2, 2), (0, 0), (True, None)):
+            with self.subTest(count=count):
+                selection = MagicMock()
+                selection.diagnostics = {'step': 'choose_tier', 'role': 'button',
+                                         'matched_count': 1, 'enabled': True, 'selected': True}
+                selection.run = AsyncMock(side_effect=Stop('official_plan_region_ambiguous', diagnostics={
+                    'role': 'region', 'matched_count': count, 'enabled': True,
+                    'selected': True, 'html': 'PRIVATE_REGION_BODY', 'error_type': 'PRIVATE_ERROR',
+                }))
+                with patch('plan_selection.Selection', return_value=selection), self.assertRaises(Stop) as stopped:
+                    await select_plan(page, 'pro-500', lambda *_args, **_kwargs: None)
+                diagnostics = {'step': 'choose_tier', 'role': 'region'}
+                if expected is not None:
+                    diagnostics['matched_count'] = expected
+                self.assertEqual(stopped.exception.report['diagnostics'], diagnostics)
+                self.assertNotIn('PRIVATE', json.dumps(stopped.exception.report))
+
+
 class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
     """当前卡片/用量控件夹具；全部网络请求终止于本机。"""
     async def asyncSetUp(self):
@@ -872,6 +938,104 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'false')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
+
+    async def test_pro_details_waits_for_transient_dialog_overlap_to_become_unique(self):
+        await self.page.evaluate('''() => {
+            const original=window.openPro;
+            window.openPro=()=>{original();
+              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+              overlay.textContent='Synthetic transition';document.body.append(overlay);
+              setTimeout(()=>overlay.remove(),120);};
+        }''')
+        button = await self.select()
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'), 'true')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_view_all_waits_for_transient_dialog_overlap_before_card_expansion(self):
+        await self.page.evaluate('''() => {
+            document.querySelector('#cards').hidden=true;
+            const navigation=document.createElement('button');navigation.textContent='查看所有套餐';
+            navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
+              document.querySelector('#cards').hidden=false;navigation.remove();
+              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+              overlay.textContent='Synthetic transition';document.body.append(overlay);
+              setTimeout(()=>overlay.remove(),120);};
+            document.querySelector('section').append(navigation);
+        }''')
+        button = await self.select()
+        self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_persistent_dialog_overlap_reports_region_count_without_button_state(self):
+        await self.page.evaluate('''() => {
+            const original=window.openPro;
+            window.openPro=()=>{original();
+              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+              overlay.textContent='Synthetic persistent overlap';document.body.append(overlay);};
+        }''')
+        report = await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(report['diagnostics'], {
+            'step': 'choose_tier', 'role': 'region', 'matched_count': 2, 'available_plans': [],
+            'error_type': 'AssertionError',
+        })
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
+
+    async def test_dialog_transition_to_zero_never_falls_back_to_body(self):
+        await self.page.evaluate('''() => {
+            const original=window.openPro;
+            window.openPro=()=>{original();
+              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+              overlay.textContent='Synthetic transition';document.body.append(overlay);
+              setTimeout(()=>{document.querySelector('section').hidden=true;overlay.remove();},120);};
+        }''')
+        report = await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(report['diagnostics'], {
+            'step': 'choose_tier', 'role': 'region', 'matched_count': 0, 'available_plans': [],
+            'error_type': 'AssertionError',
+        })
+
+    async def test_transient_dialog_overlap_does_not_allow_duplicate_pro_markers(self):
+        await self.page.evaluate('''() => {
+            const original=window.openPro;
+            window.openPro=()=>{original();
+              const details=document.querySelector('#pro-details');const copy=details.cloneNode(true);
+              copy.querySelector('#usage-group').remove();details.after(copy);
+              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+              overlay.textContent='Synthetic transition';document.body.append(overlay);
+              setTimeout(()=>overlay.remove(),120);};
+        }''')
+        report = await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(report['diagnostics']['role'], 'region')
+        self.assertEqual(report['diagnostics']['matched_count'], 2)
+        self.assertNotIn('enabled', report['diagnostics'])
+        self.assertNotIn('selected', report['diagnostics'])
+
+    async def test_duplicate_heading_reports_its_actual_count_before_tier_selection(self):
+        await self.page.locator('#pro-details').evaluate('''node => {
+            const heading=document.createElement('h3');heading.textContent='Plus';node.append(heading);
+        }''')
+        report = await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(report['diagnostics']['role'], 'region')
+        self.assertEqual(report['diagnostics']['matched_count'], 2)
+        self.assertNotIn('enabled', report['diagnostics'])
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
+
+    async def test_pro_text_outside_heading_is_rejected_with_measured_count(self):
+        await self.page.locator('#pro-details').evaluate('''node => {
+            node.querySelector('h3').textContent='Plus';
+            const product=document.createElement('span');product.textContent='Pro';node.append(product);
+        }''')
+        report = await self.assert_blocked('official_plan_region_ambiguous')
+        self.assertEqual(report['diagnostics']['role'], 'region')
+        self.assertEqual(report['diagnostics']['matched_count'], 1)
+        self.assertNotIn('enabled', report['diagnostics'])
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
 
     async def test_existing_pro_details_and_plus_upgrade_reuse_only_verified_pro_scope(self):
         await self.page.evaluate('openPro()')

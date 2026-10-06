@@ -3,11 +3,11 @@ set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "${RELEASE_OPERATION:-release}" == release ]] || exit 1
 
-[[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-[[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]]
-[[ "$SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]]
-[[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-[[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]]
+[[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+[[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]] || exit 1
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; then
   test "$EXPECTED_CURRENT" = 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b
@@ -16,10 +16,11 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; 
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope
 fi
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 ]]; then
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-main80-20261006 ]]; then
   case "$HISTORICAL_EXCEPTION" in
     recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
     recharge-pro-menu-7f-20261005) test "$EXPECTED_CURRENT" = 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ;;
+    recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b ;;
     *) exit 1 ;;
   esac
   test "${RELEASE_ADMIN_ONLY:-false}" = false
@@ -52,6 +53,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'historical-finance-20261005-mailbox-batch',
                          'recharge-pro-menu-b8-20261005',
                          'recharge-pro-menu-7f-20261005',
+                         'recharge-pro-main80-20261006',
                          'registration-worker-b8-80-20261006',
                          'historical-finance-20261005-order-archive',
                          'historical-finance-20261005-post-cleanup')
@@ -79,6 +81,9 @@ elif history_policy == 'recharge-pro-menu-b8-20261005':
 elif history_policy == 'recharge-pro-menu-7f-20261005':
     assert previous == '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' and admin_only == 'false'
     scope_flag += ' --recharge-pro-menu-7f'
+elif history_policy == 'recharge-pro-main80-20261006':
+    assert previous == '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' and admin_only == 'false'
+    scope_flag += ' --recharge-pro-main80'
 elif history_policy == 'registration-worker-b8-80-20261006':
     assert previous == '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (

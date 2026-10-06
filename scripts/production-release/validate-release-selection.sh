@@ -46,6 +46,11 @@ validate_release_selection() {
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1
       return 0 ;;
+    recharge-pro-main80-20261006)
+      [[ "${EXPECTED_CURRENT:-}" == 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      return 0 ;;
     historical-finance-20261005-order-archive)
       [[ "${EXPECTED_CURRENT:-}" == 3ca300486d0edfadda83c094a48474a63959fce7 ]] || return 1
       [[ "${RELEASE_ADMIN_ONLY:-false}" == false && -z "${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1

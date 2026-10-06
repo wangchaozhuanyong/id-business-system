@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "kind": "FIXED_RECHARGE_RUNTIME_SCOPE",
+  "id": "recharge-pro-main80-20261006",
+  "enabled": true,
+  "approvalStatus": "APPROVED",
+  "expectedCurrent": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+  "baselineRelease": {
+    "afterAuditSha256": "d9393cdc5ef3b89acf71ab59686f5d689457125b4e8fff59a8732f67be80b07c",
+    "beforeAuditSha256": "9b70752e23052cb18845ff33c7bc19d49f8757f5d15e5b6446fc6468682becf7",
+    "commit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+    "composeSha256": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
+    "deploymentRun": "github-actions-37364471153-2",
+    "manifestSha256": "622ce40b7d1144cb260fc9711773ddf37fb7000784dc3f1d4ec6fdbf6dd38e85",
+    "overrideCanonicalSha256": "d6448664a8a204e42f5b41cb79df3121874d3d8308925ce17c4c1a89c06f8925",
+    "overrideRawSha256": "fdaf610856bdfef3983ab57586d67d199cb60552ac5000c142f1c7083cda7560",
+    "previousCommit": "3ca300486d0edfadda83c094a48474a63959fce7",
+    "sourceTree": "fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b"
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "5b5db9c3fa650c1940f26a5685d4601ac2c6b19d3dd9077664d062ed69d74c09",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "727ead31c878f1d829aae2ef2f6ed6626147ad184615d8a09d52505760414e2c",
+    "docs/V2_TASKS.md": "0cb1a9a3ba1a7af1eef367ba584c57a9fee84b3faa99f8a4e46c69bea92e20c0"
+  },
+  "carriedSourceOnlySha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5",
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": "a4256d8ac85f17064c29485b16e48888346c88a61abe315c5924622486530ad1",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": "4593b2eaab271dd9c16ab12adac07b42f87c79173b432982cef178c17c9767e0",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06",
+    "docs/AUTO_REGISTRATION.md": "3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c",
+    "deploy/aws/registration-worker-b8-80-20261006.json": "3f002d7a8ec945e4d594e3e79ec57d180584cfe8dc7ae7141f68c1bb81ebe568",
+    "scripts/production-release/registration-only-transport.test.py": "8ff9a7eb48b918b91336239757eef85261c4d7399dcb1a2c4aa2db0d814782ab"
+  },
+  "controlSourceSha256": {
+    ".github/workflows/production-release.yml": "6eb0639bc3b19698ea31cf024fe182e48c13adb02c7e54356860866a85907366",
+    "docs/PRODUCTION_RELEASE_OIDC.md": "b68b8c4bb712e95c5dad293d8cf189d2c0af826767434d3744adb91e088a3b4d",
+    "scripts/ci-recharge-check.mjs": "b77e16aeada548ec556ae580fc8b96a2fe93cb47c63bab8055810965f3483af5",
+    "scripts/ci-recharge-release.test.mjs": "96f9b28e3fd7b9a83d920a0964a8eb3a90c6b3067e3a4901c0777a7186bf7130",
+    "scripts/ci-recharge-scope.mjs": "1c81cb7ad460fe85bb91e8f06dea229bf71cf92a4a67b348912e99ec81635d45",
+    "scripts/ci-recharge-scope.test.mjs": "8ccb92dda4ea1dcd4182bf37b560fc9382ed5486bd36af11e085398149760af4",
+    "scripts/production-release/build-images.sh": "6116f9c98c922da7a91c7da34311749c80245724560441121742d3de25c05953",
+    "scripts/production-release/dispatch.sh": "85637e66747bc88432a5613119029bff531ac51cb8cf52759fdc47f5b810f585",
+    "scripts/production-release/push-images.sh": "fbf2b45690fd0a89b4d4759744f013c846e165f6043dd3978c4f850ff18ed680",
+    "scripts/production-release/validate-release-selection.sh": "a75e07eeba6fdb896f9a2061ee938f9bc17ed6a0615301629cbea1c9f793b0d2",
+    "scripts/production-release/remote-deploy.py": "ddc0ca20959f69609a9a9ae321e69089dfe5e4c64609db94e8f73ac69e83246b",
+    "scripts/production-release/remote-deploy.test.py": "6feebd544d5d25d99527e9a11e2d4b7c4c87e4c05c764daa9657508cd8575917"
+  },
+  "sourceModes": {
+    ".github/workflows/production-release.yml": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": 420,
+    "docs/PRODUCTION_RELEASE_OIDC.md": 420,
+    "docs/V2_TASKS.md": 420,
+    "scripts/ci-recharge-check.mjs": 420,
+    "scripts/ci-recharge-release.test.mjs": 420,
+    "scripts/ci-recharge-scope.mjs": 420,
+    "scripts/ci-recharge-scope.test.mjs": 420,
+    "scripts/production-release/build-images.sh": 420,
+    "scripts/production-release/dispatch.sh": 420,
+    "scripts/production-release/push-images.sh": 420,
+    "scripts/production-release/remote-deploy.py": 420,
+    "scripts/production-release/remote-deploy.test.py": 420,
+    "scripts/production-release/validate-release-selection.sh": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": 420,
+    "docs/AUTO_REGISTRATION.md": 420,
+    "deploy/aws/registration-worker-b8-80-20261006.json": 420,
+    "scripts/production-release/registration-only-transport.test.py": 420
+  },
+  "scope": {
+    "servicesUpdated": ["auto-recharge"],
+    "imageServices": ["auto-recharge"],
+    "preservedServices": ["auto-registration", "api", "admin", "media-resolver", "mysql", "caddy"],
+    "imageReuseAllowed": false,
+    "cacheCleanupAllowed": false,
+    "migrationDeploymentAllowed": false,
+    "financialWritesAllowed": false,
+    "registrationRestartAllowed": false,
+    "googleDriveConfigAllowed": false,
+    "databaseGrantSyncAllowed": false
+  },
+  "financeValidator": {
+    "checkCount": 49,
+    "executedCheckCount": 49,
+    "historicalSourceBaseline": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "images": {
+      "admin": "sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693",
+      "api": "sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0",
+      "migrate": "sha256:6f2c0d6f71c23ee2ec0565c1dae9a0a79f42dcf5ccb589bf0583c2b9e78414f9"
+    },
+    "kind": "EXISTING_ORDER_ARCHIVE_49",
+    "migration": {
+      "baselineMysqlSchemaSha256": "39b9bd4d1bf8a42263e494880c2b047a91628102cc6676abd06dc4aecd2149a0",
+      "mysqlSchemaSha256": "c70cbcb110bb48c395b7e7284dedc0486a9afc125d940c455c0bafc1cffc701d",
+      "name": "20261005193000_order_independent_archive",
+      "sqlSha256": "5738091ee212f78514c322a38d271bdc22ae6ec3743daf5e17835e52d93e0e04"
+    },
+    "originCommit": "3ca300486d0edfadda83c094a48474a63959fce7",
+    "policyId": "historical-finance-20261005-order-archive",
+    "policySha256": "91096c5c2cf5d6b1a3210794ec3cdf20aef54fe457d11b75df1735416d7c3511",
+    "preparationRunAttempt": 1,
+    "preparationRunId": 37362644900,
+    "preparedImagesSha256": "4ed683fae91fc60df43e2b068d4d18782e0d977676320fda5b194de72302f57d",
+    "releaseSealSha256": "a3e241c715ceb01c18427f56d98a4ea173598afb3874e8b4522ce43a07d3fc0c",
+    "sourceCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+    "sourceProjectionTree": "d9c2e534f0e71d5c88ffc4db492c4db2e79a9370",
+    "sourceTree": "fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b",
+    "unavailableCheckCount": 0,
+    "violationCount": 5
+  }
+}

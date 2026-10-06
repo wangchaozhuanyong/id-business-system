@@ -10,6 +10,7 @@ from plans import PRO_GROUP, PRO_PRICE_PLANS, PRO_USAGE_LABELS, selection_spec
 STEP_SECONDS = 30
 SELECTION_SECONDS = 90
 HOME_ENTRY_SECONDS = 2
+REGION_TRANSITION_SECONDS = 2
 PRICING_URL = "https://chatgpt.com/pricing"
 UPGRADE = re.compile(r"^\s*(?:Upgrade|Upgrade plan|升级|升级套餐)\s*$", re.I)
 PERSONAL = re.compile(r"^(?:Toggle for switching to Personal plans|切换以改为个人套餐|改为个人套餐|Personal|个人)$", re.I)
@@ -79,26 +80,39 @@ def pro_detail_groups(card):
     return card.get_by_role('radiogroup').filter(visible=True)
 
 
+def region_ambiguous(count=None, *, error_type=None):
+    diagnostics = {'role': 'region'}
+    if type(count) is int and count >= 0:
+        diagnostics['matched_count'] = min(count, 100)
+    if isinstance(error_type, str) and error_type in ERROR_TYPES:
+        diagnostics['error_type'] = error_type
+    return Stop('official_plan_region_ambiguous', diagnostics=diagnostics)
+
+
 async def pro_card(scope, *, details=False):
     """新入口/详情只使用官网已观察的 Pro 专属标记，不能扩大到卡片外。"""
     card = await marked_pro_cards(scope)
     count = await card.count()
     if count != 1:
-        raise Stop('official_plan_region_ambiguous' if count > 1 else 'official_plan_option_not_found')
+        raise region_ambiguous(count) if count > 1 else Stop('official_plan_option_not_found')
     product = card.get_by_text('Pro', exact=True).filter(visible=True)
-    if (await card.get_by_role('heading').filter(visible=True).count() != 1
-            or await product.count() != 1
-            or not await product.evaluate("""node => {
+    heading_count = await card.get_by_role('heading').filter(visible=True).count()
+    if heading_count != 1:
+        raise region_ambiguous(heading_count)
+    product_count = await product.count()
+    if product_count != 1:
+        raise region_ambiguous(product_count)
+    if not await product.evaluate("""node => {
                 const heading = node.closest('h1,h2,h3,h4,h5,h6,[role=heading]');
                 const card = node.closest('[data-testid="pro-pricing-modal-column-top-half"]');
                 return Boolean(heading && card && card.contains(heading));
-            }""")):
-        raise Stop('official_plan_region_ambiguous')
+            }"""):
+        raise region_ambiguous(product_count)
     if details:
         groups = pro_detail_groups(card)
         count = await groups.count()
         if count != 1:
-            raise Stop('official_plan_region_ambiguous' if count > 1 else 'official_plan_tier_not_found')
+            raise region_ambiguous(count) if count > 1 else Stop('official_plan_tier_not_found')
         if not (await groups.get_attribute('aria-label') or '').strip():
             raise Stop('official_plan_tier_not_found')
     return card
@@ -122,7 +136,7 @@ async def pro_control(scope, target_plan):
     groups = pro_detail_groups(await pro_card(scope, details=True)) if marked else pro_groups(scope)
     count = await groups.count()
     if count > 1:
-        raise Stop('official_plan_region_ambiguous')
+        raise region_ambiguous(count)
     if count == 1:
         # 本地币种页面以标准/更多/最高额度选档，金额不能用于推断套餐。
         named = groups.get_by_role('radio', name=re.compile(
@@ -158,7 +172,20 @@ async def plan_scope(page):
     dialogs = page.get_by_role('dialog').filter(visible=True)
     count = await dialogs.count()
     if count > 1:
-        raise Stop('official_plan_region_ambiguous')
+        # 转换动画可短暂保留旧弹窗；只等待原先的唯一条件，不选择任意一个。
+        try:
+            await expect(dialogs).to_have_count(
+                1, timeout=max(1, min(REGION_TRANSITION_SECONDS, STEP_SECONDS) * 1000))
+        except Exception as exc:
+            try:
+                count = await dialogs.count()
+            except Exception:
+                count = None
+            error_type = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
+            raise region_ambiguous(count, error_type=error_type) from None
+        count = await dialogs.count()
+        if count != 1:
+            raise region_ambiguous(count)
     if count == 1:
         return dialogs
     main = page.get_by_role('main').filter(visible=True)
@@ -373,6 +400,12 @@ async def select_plan(page, target_plan, report, *, require_upgrade=False):
                 exc.report['reason'] = 'verification_required'
         except Exception:
             pass
+        region = safe_diagnostics(exc.report.get('diagnostics'))
+        if region.get('role') == 'region':
+            for key in ('role', 'matched_count', 'enabled', 'selected', 'error_type'):
+                selection.diagnostics.pop(key, None)
+            selection.diagnostics.update({key: region[key] for key in ('role', 'matched_count', 'error_type')
+                                          if key in region})
         exc.report.update(stage='plan_selection', diagnostics=safe_diagnostics(selection.diagnostics))
         raise
     except Exception as exc:

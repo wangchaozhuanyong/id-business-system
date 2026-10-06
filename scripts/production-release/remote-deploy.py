@@ -1884,10 +1884,401 @@ RECHARGE_7F_RUN = 'github-actions-37333706418-1'
 RECHARGE_7F_FILE = 'deploy/aws/' + RECHARGE_7F_ID + '.json'
 RECHARGE_7F_CARRIED = frozenset()
 
+# A separate, closed continuation of the actual order-archive publication.
+# Unknown native receipt/image identities belong in a disabled profile, never here.
+RECHARGE_MAIN80_ID = 'recharge-pro-main80-20261006'
+RECHARGE_MAIN80_CURRENT = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
+RECHARGE_MAIN80_TREE = 'fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b'
+RECHARGE_MAIN80_FILE = 'deploy/aws/' + RECHARGE_MAIN80_ID + '.json'
+RECHARGE_MAIN80_CONTROLS = RECHARGE_SCOPE_CONTROLS | {'scripts/production-release/validate-release-selection.sh'}
+RECHARGE_MAIN80_POLICY_SHA256 = '91096c5c2cf5d6b1a3210794ec3cdf20aef54fe457d11b75df1735416d7c3511'
+RECHARGE_MAIN80_PROJECTION_TREE = 'd9c2e534f0e71d5c88ffc4db492c4db2e79a9370'
+RECHARGE_MAIN80_MIGRATION = {'name': ORDER_ARCHIVE_MIGRATION,
+    'sqlSha256': ORDER_ARCHIVE_MIGRATION_SHA256,
+    'mysqlSchemaSha256': 'c70cbcb110bb48c395b7e7284dedc0486a9afc125d940c455c0bafc1cffc701d',
+    'baselineMysqlSchemaSha256': '39b9bd4d1bf8a42263e494880c2b047a91628102cc6676abd06dc4aecd2149a0'}
+RECHARGE_MAIN80_FINANCE = {'kind': 'EXISTING_ORDER_ARCHIVE_49',
+    'sourceCommit': RECHARGE_MAIN80_CURRENT, 'sourceTree': RECHARGE_MAIN80_TREE,
+    'originCommit': HISTORY_ORDER_ARCHIVE_BASELINE, 'historicalSourceBaseline': HISTORY_POST_CLEANUP_BASELINE,
+    'policyId': HISTORY_ORDER_ARCHIVE_POLICY_ID, 'checkCount': 49, 'executedCheckCount': 49,
+    'unavailableCheckCount': 0, 'violationCount': 5, 'policySha256': RECHARGE_MAIN80_POLICY_SHA256,
+    'sourceProjectionTree': RECHARGE_MAIN80_PROJECTION_TREE, 'migration': RECHARGE_MAIN80_MIGRATION}
+RECHARGE_MAIN80_BUSINESS = {
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py':
+        '5b5db9c3fa650c1940f26a5685d4601ac2c6b19d3dd9077664d062ed69d74c09',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
+        '727ead31c878f1d829aae2ef2f6ed6626147ad184615d8a09d52505760414e2c'}
+RECHARGE_MAIN80_CARRIED_COMMIT = 'fd173815aac0048011fe1583acfe345575bca286'
+RECHARGE_MAIN80_FD_CARRIED_SOURCE = {
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py':
+        'ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5',
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py':
+        'a4256d8ac85f17064c29485b16e48888346c88a61abe315c5924622486530ad1',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py':
+        '4593b2eaab271dd9c16ab12adac07b42f87c79173b432982cef178c17c9767e0',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py':
+        'fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06',
+    'docs/AUTO_REGISTRATION.md':
+        '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c'}
+RECHARGE_MAIN80_FA_CARRIED_COMMIT = '602f3d1f95f5e2be0605e46223b8703a69cb54a4'
+RECHARGE_MAIN80_FA_CARRIED_SOURCE = {
+    'deploy/aws/registration-worker-b8-80-20261006.json':
+        '3f002d7a8ec945e4d594e3e79ec57d180584cfe8dc7ae7141f68c1bb81ebe568',
+    'scripts/production-release/registration-only-transport.test.py':
+        '8ff9a7eb48b918b91336239757eef85261c4d7399dcb1a2c4aa2db0d814782ab'}
+RECHARGE_MAIN80_CARRIED_SOURCE = {**RECHARGE_MAIN80_FD_CARRIED_SOURCE, **RECHARGE_MAIN80_FA_CARRIED_SOURCE}
+
+
+def main80_recharge_scope(value, *, require_approved=True):
+    message = 'Fixed main80 recharge runtime scope unavailable'
+    require(isinstance(value, dict) and set(value) == {'version', 'kind', 'id', 'enabled',
+        'approvalStatus', 'expectedCurrent', 'baselineRelease', 'candidateSourceSha256',
+        'carriedSourceOnlySha256', 'controlSourceSha256', 'sourceModes', 'scope', 'financeValidator'}, message)
+    require(type(value['version']) is int and value['version'] == 1
+        and value['kind'] == 'FIXED_RECHARGE_RUNTIME_SCOPE' and value['id'] == RECHARGE_MAIN80_ID
+        and type(value['enabled']) is bool and value['approvalStatus'] in ('NOT_APPROVED', 'APPROVED')
+        and value['enabled'] == (value['approvalStatus'] == 'APPROVED')
+        and value['expectedCurrent'] == RECHARGE_MAIN80_CURRENT, message)
+    if require_approved:
+        require(value['enabled'], 'Fixed recharge runtime scope is not approved')
+    approved = value['enabled']
+    digest = lambda item: isinstance(item, str) and re.fullmatch(r'[a-f0-9]{64}', item) is not None
+    evidence_digest = lambda item: digest(item) or (not approved and item is None)
+    baseline = value['baselineRelease']
+    require(isinstance(baseline, dict) and set(baseline) == {'commit', 'sourceTree', 'previousCommit',
+        'deploymentRun', 'manifestSha256', 'beforeAuditSha256', 'afterAuditSha256', 'composeSha256',
+        'overrideRawSha256', 'overrideCanonicalSha256'}
+        and baseline['commit'] == RECHARGE_MAIN80_CURRENT and baseline['sourceTree'] == RECHARGE_MAIN80_TREE
+        and baseline['previousCommit'] == HISTORY_ORDER_ARCHIVE_BASELINE
+        and ((isinstance(baseline['deploymentRun'], str) and re.fullmatch(
+            r'github-actions-[1-9][0-9]*-[1-9][0-9]*', baseline['deploymentRun']))
+            or (not approved and baseline['deploymentRun'] is None))
+        and all(evidence_digest(baseline[key]) for key in ('manifestSha256', 'beforeAuditSha256',
+            'afterAuditSha256', 'composeSha256', 'overrideRawSha256', 'overrideCanonicalSha256')), message)
+    names = set()
+    for key, expected in (('candidateSourceSha256', RECHARGE_SCOPE_CANDIDATES),
+            ('carriedSourceOnlySha256', set(RECHARGE_MAIN80_CARRIED_SOURCE)), ('controlSourceSha256', RECHARGE_MAIN80_CONTROLS)):
+        group = value[key]
+        require(isinstance(group, dict) and set(group) == expected and all(digest(item) for item in group.values()), message)
+        names.update(group)
+    require(all(value['candidateSourceSha256'].get(name) == item for name, item in RECHARGE_MAIN80_BUSINESS.items())
+        and historical_fingerprint(value['carriedSourceOnlySha256']) == historical_fingerprint(RECHARGE_MAIN80_CARRIED_SOURCE)
+        and isinstance(value['sourceModes'], dict) and set(value['sourceModes']) == names
+        and all(type(mode) is int and mode == 0o644 for mode in value['sourceModes'].values())
+        and historical_fingerprint(value['scope']) == historical_fingerprint(RECHARGE_SCOPE_EXPECTED), message)
+    finance = value['financeValidator']
+    extra = {'releaseSealSha256', 'preparedImagesSha256', 'preparationRunId', 'preparationRunAttempt', 'images'}
+    require(isinstance(finance, dict) and set(finance) == set(RECHARGE_MAIN80_FINANCE) | extra
+        and historical_fingerprint({key: finance[key] for key in RECHARGE_MAIN80_FINANCE})
+            == historical_fingerprint(RECHARGE_MAIN80_FINANCE)
+        and all(evidence_digest(finance[key]) for key in ('releaseSealSha256', 'preparedImagesSha256'))
+        and all((type(finance[key]) is int and 0 < finance[key] <= 9007199254740991)
+            or (not approved and finance[key] is None) for key in ('preparationRunId', 'preparationRunAttempt'))
+        and ((not approved and finance['images'] is None)
+            or (isinstance(finance['images'], dict) and set(finance['images']) == {'api', 'admin', 'migrate'}
+                and all(isinstance(item, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', item)
+                    for item in finance['images'].values()))), message)
+    return value
+
+
+def main80_recharge_gate(profile, policy, seal, stage):
+    """Retain the original order-archive candidate and sealed native gate identity."""
+    main80_recharge_scope(profile)
+    require(stage in ('before', 'after'), 'Fixed main80 recharge integrity gate failed')
+    finance = profile['financeValidator']
+    require(historical_fingerprint(policy) == finance['policySha256']
+        and policy['candidateBindings']['sourceTree'] == finance['sourceProjectionTree']
+        and seal['images'] == finance['images'] and seal['migration'] == finance['migration'],
+        'Fixed main80 recharge native finance identity changed')
+    return {'accepted': True, 'policyId': HISTORY_ORDER_ARCHIVE_POLICY_ID,
+        'status': 'APPROVED_ORDER_ARCHIVE_HISTORICAL_EXCEPTIONS', 'scope': 'API_ADMIN_ORDER_ARCHIVE',
+        'stage': stage, 'checkCount': 49, 'executedCheckCount': 49, 'unavailableCheckCount': 0,
+        'violationCount': 5, 'candidateCommit': RECHARGE_MAIN80_CURRENT, 'candidateTree': RECHARGE_MAIN80_TREE,
+        'sourceTree': finance['sourceProjectionTree'], 'releaseSealSha256': finance['releaseSealSha256'],
+        'images': finance['images'], 'expectedCurrent': HISTORY_ORDER_ARCHIVE_BASELINE,
+        'historicalSourceBaseline': HISTORY_POST_CLEANUP_BASELINE,
+        'sourceAnchorSha256': policy['sourceAnchorSha256'],
+        'sources': {name: {'rowCount': group['rowCount'], 'sha256': group['sha256']}
+                    for name, group in policy['sources'].items()},
+        'metadataSha256': policy['metadataSha256'], 'cleanupReceiptSha256': HISTORY_POST_CLEANUP_RECEIPT_SHA256,
+        'migration': finance['migration'], 'preparedImagesSha256': finance['preparedImagesSha256'],
+        'preparationRunId': finance['preparationRunId'], 'preparationRunAttempt': finance['preparationRunAttempt']}
+
+
+def main80_recharge_report(report, profile, policy, seal, stage):
+    expected = main80_recharge_gate(profile, policy, seal, stage)
+    require(isinstance(report, dict) and report.get('ok') is False
+        and type(report.get('checkCount')) is int and report['checkCount'] == 49
+        and type(report.get('violationCount')) is int and report['violationCount'] == 5
+        and historical_fingerprint(report.get('gate')) == historical_fingerprint(expected),
+        'Fixed main80 recharge integrity gate failed')
+    rows = report.get('checks')
+    exceptions = policy.get('exceptions')
+    require(isinstance(exceptions, list) and len(exceptions) == 1
+        and all(isinstance(item, dict) and set(item) == {'code', 'entityIds'}
+            and isinstance(item['code'], str) and isinstance(item['entityIds'], list)
+            and len(item['entityIds']) == len(set(item['entityIds'])) == 5
+            and all(isinstance(entity, str) and re.fullmatch(r'[a-f0-9-]{36}:[a-f0-9-]{36}', entity)
+                for entity in item['entityIds']) for item in exceptions),
+        'Fixed main80 recharge frozen native exceptions changed')
+    frozen = {item['code']: sorted(item['entityIds']) for item in exceptions}
+    require(isinstance(rows, list) and len(rows) == 49
+        and all(isinstance(row, dict) and set(row) == {'code', 'count', 'status', 'samples'}
+            and isinstance(row['code'], str) and re.fullmatch(r'[a-z][a-z0-9_]{0,199}', row['code'])
+            and type(row['count']) is int and 0 <= row['count'] <= 5 and row['status'] == 'EXECUTED'
+            and isinstance(row['samples'], list) and len(row['samples']) == row['count']
+            and all(isinstance(sample, dict) and set(sample) == {'entityId', 'detailSha256'}
+                and isinstance(sample['entityId'], str)
+                and isinstance(sample['detailSha256'], str) and re.fullmatch(r'[a-f0-9]{64}', sample['detailSha256'])
+                for sample in row['samples'])
+            and row['count'] == len(frozen.get(row['code'], []))
+            and sorted(sample['entityId'] for sample in row['samples']) == frozen.get(row['code'], []) for row in rows)
+        and len({row['code'] for row in rows}) == 49 and sum(row['count'] for row in rows) == 5,
+        'Fixed main80 recharge complete native checks changed')
+    return {'checkCount': 49, 'violationCount': 5, 'historicalException': report['gate']}
+
+
+def main80_recharge_seal(source, profile):
+    main80_recharge_scope(profile)
+    finance = profile['financeValidator']
+    require(hashlib.sha256(fixed_recharge_bytes(ORDER_ARCHIVE_SEAL)).hexdigest() == finance['releaseSealSha256']
+        and hashlib.sha256(fixed_recharge_bytes(POST_CLEANUP_RECEIPT)).hexdigest() == HISTORY_POST_CLEANUP_RECEIPT_SHA256,
+        'Fixed main80 recharge private native evidence changed')
+    return reviewed_order_archive_seal(source, finance['releaseSealSha256'],
+        RECHARGE_MAIN80_CURRENT, RECHARGE_MAIN80_TREE, finance['preparedImagesSha256'],
+        str(finance['preparationRunId']), str(finance['preparationRunAttempt']))
+
+
+def main80_recharge_reader_evidence(directory):
+    before = directory / 'before-audit.json'
+    metadata = before.lstat()
+    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+        and stat.S_IMODE(metadata.st_mode) in (0o400, 0o600),
+        'Fixed main80 recharge original audit ownership unavailable')
+    for filename, original in (('order-archive-seal.reader.json', ORDER_ARCHIVE_SEAL),
+            ('order-archive-cleanup.reader.json', POST_CLEANUP_RECEIPT)):
+        reader = directory / filename
+        info = reader.lstat()
+        require((info.st_uid, info.st_gid) == (metadata.st_uid, metadata.st_gid)
+            and fixed_recharge_bytes(reader, modes=(0o400,)) == fixed_recharge_bytes(original, modes=(0o600,)),
+            'Fixed main80 recharge original reader evidence changed')
+        after = reader.lstat()
+        require((after.st_uid, after.st_gid) == (metadata.st_uid, metadata.st_gid)
+            and (before.lstat().st_uid, before.lstat().st_gid) == (metadata.st_uid, metadata.st_gid),
+            'Fixed main80 recharge original reader ownership changed')
+
+
+def main80_recharge_public_snapshot(directory, files):
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+        value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    observed = {}
+    for name, (digest, mode) in files.items():
+        path = directory / name
+        before = path.lstat()
+        require(hashlib.sha256(fixed_recharge_bytes(path, modes=(mode,))).hexdigest() == digest
+            and identity(before) == identity(path.lstat()), 'Fixed main80 recharge public source changed during read')
+        observed[path] = identity(before)
+        for parent in path.parents:
+            if parent != directory and directory not in parent.parents:
+                break
+            info = parent.lstat()
+            require(stat.S_ISDIR(info.st_mode) and not parent.is_symlink(), 'Fixed main80 recharge public source unavailable')
+            value = identity(info)
+            require(parent not in observed or observed[parent] == value, 'Fixed main80 recharge public source changed during read')
+            observed[parent] = value
+    return observed
+
+
+def require_main80_recharge_public_snapshot(observed):
+    require(all((value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+        value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns) == previous
+        for path, previous in observed.items() for value in (path.lstat(),)),
+        'Fixed main80 recharge public source changed after read')
+
+
+def verify_main80_recharge_finance_source(previous, data):
+    """Compare the exact published main80 public source, excluding only native outputs."""
+    main80_recharge_reader_evidence(previous)
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+        expected = fixed_recharge_archive(archive, profile_id=RECHARGE_MAIN80_ID)
+    generated = ('.env.aws.production', 'compose.release.json', 'release-manifest.json',
+        'before-audit.json', 'after-audit.json', 'backup-verification.json',
+        'order-archive-seal.reader.json', 'order-archive-cleanup.reader.json')
+    actual = fixed_recharge_file_map(previous, allowed=set(expected), omitted=generated)
+    def canonical_modes(value):
+        require(all(mode in (0o644, 0o664, 0o755, 0o775) for _digest, mode in value.values()),
+            'Fixed main80 recharge native source mode changed')
+        return {name: (digest, 0o755 if mode & 0o111 else 0o644) for name, (digest, mode) in value.items()}
+    require(canonical_modes(actual) == canonical_modes(expected), 'Fixed main80 recharge native source changed')
+    return main80_recharge_public_snapshot(previous, actual)
+
+
+def verify_main80_recharge_candidate_source(release, data, profile):
+    main80_recharge_reader_evidence(release)
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+        names = set(fixed_recharge_archive(archive, profile_id=RECHARGE_MAIN80_ID))
+    approved = set(profile['candidateSourceSha256']) | set(profile['carriedSourceOnlySha256']) | set(profile['controlSourceSha256'])
+    generated = ('.env.aws.production', 'compose.release.json', 'release-manifest.json', 'before-audit.json',
+        'after-audit.json', 'backup-verification.json', 'order-archive-seal.reader.json', 'order-archive-cleanup.reader.json')
+    files = fixed_recharge_file_map(release, allowed=names | approved | {RECHARGE_MAIN80_FILE}, omitted=generated)
+    actual = set(files)
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+        verify_fixed_recharge_archive(release, archive, profile, names=actual)
+    return main80_recharge_public_snapshot(release, files)
+
+
+def main80_recharge_preserved_states(states):
+    return {service: {key: states[service][key] for key in
+        ('image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256', 'environmentSha256')}
+        for service in ALL_SERVICES if service != 'auto-recharge'}
+
+
+def main80_recharge_baseline(previous, profile, manifest, states, *, source_archive=None):
+    """Verify actual native receipts; a disabled preview is never native evidence."""
+    main80_recharge_scope(profile)
+    message = 'Fixed main80 recharge baseline changed'
+    require(previous.is_absolute() and previous.resolve() == previous and previous.parent == BASE / 'releases'
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + RECHARGE_MAIN80_CURRENT[:12], previous.name), message)
+    observed = {}
+    def read(path, **options):
+        raw = fixed_recharge_bytes(path, **options)
+        observed[path] = (raw, options)
+        return raw
+    baseline, finance = profile['baselineRelease'], profile['financeValidator']
+    stored_manifest = fixed_recharge_json(read(previous / 'release-manifest.json'))
+    require(hashlib.sha256(observed[previous / 'release-manifest.json'][0]).hexdigest() == baseline['manifestSha256']
+        and historical_fingerprint(stored_manifest) == historical_fingerprint(manifest)
+        and all(manifest.get(key) == item for key, item in {'commit': RECHARGE_MAIN80_CURRENT,
+            'sourceTree': RECHARGE_MAIN80_TREE, 'previousCommit': HISTORY_ORDER_ARCHIVE_BASELINE,
+            'deploymentRun': baseline['deploymentRun'], 'servicesUpdated': ['api', 'admin'],
+            'migrationApplied': True, 'newMigrations': [ORDER_ARCHIVE_MIGRATION + '/migration.sql']}.items())
+        and manifest.get('migrationApplied') is True
+        and manifest.get('imageBuildRun') == 'github-actions-' + str(finance['preparationRunId'])
+            + '-' + str(finance['preparationRunAttempt']), message)
+    policy_raw = read(previous / ('deploy/aws/' + HISTORY_ORDER_ARCHIVE_POLICY_ID + '.json'), modes=(0o644, 0o664))
+    require(historical_fingerprint(fixed_recharge_json(policy_raw)) == RECHARGE_MAIN80_POLICY_SHA256, message)
+    read(ORDER_ARCHIVE_SEAL); read(POST_CLEANUP_RECEIPT)
+    for filename in ('order-archive-seal.reader.json', 'order-archive-cleanup.reader.json'):
+        read(previous / filename, modes=(0o400,))
+    main80_recharge_reader_evidence(previous)
+    policy, seal = main80_recharge_seal(previous, profile)
+    receipts = {}
+    for stage in ('before', 'after'):
+        raw = read(previous / (stage + '-audit.json'))
+        require(hashlib.sha256(raw).hexdigest() == baseline[stage + 'AuditSha256'], message)
+        report = fixed_recharge_json(raw)
+        summary = main80_recharge_report(report, profile, policy, seal, stage)
+        require(historical_fingerprint(manifest.get('dataAudit' + stage.title())) == historical_fingerprint(summary), message)
+        receipts[stage] = report
+    require(historical_fingerprint(receipts['before']['checks']) == historical_fingerprint(receipts['after']['checks']), message)
+    compose_raw = read(previous / 'docker-compose.aws-mysql.yml', modes=(0o400, 0o600, 0o644, 0o664))
+    override_raw = read(previous / 'compose.release.json', modes=(0o400, 0o600, 0o644))
+    read(previous / '.env.aws.production')
+    images = manifest.get('images', {})
+    require(set(states) == set(ALL_SERVICES) and isinstance(images, dict) and set(images) == {*SERVICES, 'migrate'}
+        and all(state['status'] == 'running' and (state['health'] is None if service == 'caddy' else state['health'] == 'healthy')
+            and all(isinstance(state.get(key), str) and re.fullmatch(r'[a-f0-9]{64}', state[key])
+                for key in ('containerId', 'startedAtSha256', 'environmentSha256')) for service, state in states.items())
+        and all(states[service]['image'] == images[service]['digest']
+            and states[service]['reference'] == images[service]['reference'] for service in SERVICES)
+        and has_registration_worker(previous) and hashlib.sha256(compose_raw).hexdigest() == baseline['composeSha256']
+        and hashlib.sha256(override_raw).hexdigest() == baseline['overrideRawSha256']
+        and historical_fingerprint(fixed_recharge_json(override_raw)) == baseline['overrideCanonicalSha256']
+        and fixed_recharge_json(override_raw) == {'services': {service: {'image': images[service]['reference'], 'pull_policy': 'never'}
+            for service in (*SERVICES, 'migrate')}}, message)
+    for service in ('api', 'admin', 'migrate'):
+        image = images[service]
+        require(image.get('digest') == finance['images'][service] and image.get('sourceCommit') == RECHARGE_MAIN80_CURRENT
+            and isinstance(image.get('reference'), str) and re.fullmatch(
+                r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+                + RECHARGE_MAIN80_CURRENT + '-' + str(finance['preparationRunId'])
+                + '-' + str(finance['preparationRunAttempt']) + '-' + service, image['reference']), message)
+    publication = manifest.get('orderArchivePublication')
+    require(isinstance(publication, dict) and set(publication) == {'scope', 'workersPublished', 'releaseSealSha256',
+        'sourceProjectionTree', 'preparedImagesSha256', 'migration', 'adminBuild', 'preservedServiceContainers'}
+        and publication['scope'] == 'API_ADMIN_ORDER_ARCHIVE' and publication['workersPublished'] is False
+        and all(publication[key] == finance[key] for key in ('releaseSealSha256', 'preparedImagesSha256', 'migration'))
+        and publication['sourceProjectionTree'] == finance['sourceProjectionTree']
+        and publication['adminBuild'] == {'verifiedFiles': len(policy['candidateBindings']['adminBuildHashes']),
+            'sha256': historical_fingerprint(policy['candidateBindings']['adminBuildHashes'])}
+        and publication['preservedServiceContainers'] == {service: states[service] for service in ALL_SERVICES
+            if service not in ('api', 'admin')}, message)
+    public_observed = verify_main80_recharge_finance_source(previous, source_archive) if source_archive is not None else None
+    require(all(fixed_recharge_bytes(path, **options) == raw for path, (raw, options) in observed.items()), message)
+    main80_recharge_reader_evidence(previous)
+    if public_observed is not None:
+        require_main80_recharge_public_snapshot(public_observed)
+    return previous
+
+
+def main80_recharge_audit(directory, receipt, *, stage, source, profile, before_receipt=None):
+    """Run the unchanged, original 49-rule native audit through its retained API image."""
+    finance = main80_recharge_scope(profile)['financeValidator']
+    policy, seal = main80_recharge_seal(source, profile)
+    result = order_archive_audit(directory, receipt, stage=stage, source=source, before_receipt=before_receipt,
+        seal_sha=finance['releaseSealSha256'], candidate_commit=RECHARGE_MAIN80_CURRENT,
+        candidate_tree=RECHARGE_MAIN80_TREE, prepared_sha=finance['preparedImagesSha256'],
+        image_run=str(finance['preparationRunId']), image_attempt=str(finance['preparationRunAttempt']))
+    report = fixed_recharge_json(fixed_recharge_bytes(receipt))
+    expected = main80_recharge_report(report, profile, policy, seal, stage)
+    stored = fixed_recharge_json(fixed_recharge_bytes(source / (stage + '-audit.json')))
+    main80_recharge_report(stored, profile, policy, seal, stage)
+    require(historical_fingerprint(result) == historical_fingerprint(expected)
+        and historical_fingerprint(stored['checks']) == historical_fingerprint(report['checks']),
+        'Fixed main80 recharge fresh native integrity gate failed')
+    return result
+
+
+def main80_recharge_context(args, profile, before_gate, after_gate):
+    main80_recharge_scope(profile)
+    require(re.fullmatch(r'[a-f0-9]{40}', args.commit or '') and re.fullmatch(r'[a-f0-9]{40}', args.source_tree or '')
+        and args.expected_current == RECHARGE_MAIN80_CURRENT, 'Fixed main80 recharge runtime scope unavailable')
+    for stage, gate in (('before', before_gate), ('after', after_gate)):
+        require(isinstance(gate, dict) and set(gate) == {'checkCount', 'violationCount', 'historicalException'}
+            and type(gate['checkCount']) is int and gate['checkCount'] == 49
+            and type(gate['violationCount']) is int and gate['violationCount'] == 5
+            and gate['historicalException'].get('stage') == stage
+            and gate['historicalException'].get('candidateCommit') == RECHARGE_MAIN80_CURRENT
+            and gate['historicalException'].get('candidateTree') == RECHARGE_MAIN80_TREE,
+            'Fixed main80 recharge fresh integrity gate failed')
+    return {'version': 1, 'id': RECHARGE_MAIN80_ID, 'profileSha256': historical_fingerprint(profile),
+        'expectedCurrent': RECHARGE_MAIN80_CURRENT, 'sourceCommit': args.commit, 'sourceTree': args.source_tree,
+        'servicesUpdated': ['auto-recharge'], 'financeValidator': 'EXISTING_ORDER_ARCHIVE_49',
+        'sourceCommitForFinance': RECHARGE_MAIN80_CURRENT, 'originCommitForFinance': HISTORY_ORDER_ARCHIVE_BASELINE,
+        'beforeGateSha256': historical_fingerprint(before_gate['historicalException']),
+        'afterGateSha256': historical_fingerprint(after_gate['historicalException']),
+        'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True,
+        'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED'}
+
+
+def validate_main80_recharge_readback_projection(value, expected_current, source_tree, profile_sha256):
+    try:
+        require(isinstance(expected_current, str) and re.fullmatch(r'[a-f0-9]{40}', expected_current)
+            and expected_current != RECHARGE_MAIN80_CURRENT
+            and isinstance(source_tree, str) and re.fullmatch(r'[a-f0-9]{40}', source_tree)
+            and isinstance(profile_sha256, str) and re.fullmatch(r'[a-f0-9]{64}', profile_sha256),
+            'Fixed recharge deployment verification unavailable')
+        expected = {'version': 1, 'id': RECHARGE_MAIN80_ID, 'status': 'VERIFIED', 'currentCommit': expected_current,
+            'sourceTree': source_tree, 'previousCommit': RECHARGE_MAIN80_CURRENT, 'profileSha256': profile_sha256,
+            'servicesUpdated': ['auto-recharge'], 'preservedServiceCount': 6, 'checkCount': 49,
+            'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 5, 'storedGatesMatched': True,
+            'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True,
+            'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED',
+            'liveServicesHealthy': True, 'rechargeImageMatched': True}
+        require(isinstance(value, dict) and set(value) == set(expected)
+            and historical_fingerprint(value) == historical_fingerprint(expected),
+            'Fixed recharge deployment verification unavailable')
+        return value
+    except Exception:
+        raise RuntimeError('Fixed recharge deployment verification unavailable') from None
+
 
 def fixed_recharge_binding(profile_id=RECHARGE_SCOPE_ID):
-    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID),
+    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID),
             'Fixed recharge runtime scope unavailable')
+    if profile_id == RECHARGE_MAIN80_ID:
+        return {'id': RECHARGE_MAIN80_ID, 'current': RECHARGE_MAIN80_CURRENT, 'tree': RECHARGE_MAIN80_TREE,
+            'file': RECHARGE_MAIN80_FILE, 'previous': HISTORY_ORDER_ARCHIVE_BASELINE, 'carried': frozenset(RECHARGE_MAIN80_CARRIED_SOURCE)}
     if profile_id == RECHARGE_7F_ID:
         return {'id': RECHARGE_7F_ID, 'current': RECHARGE_7F_CURRENT, 'tree': RECHARGE_7F_TREE,
             'run': RECHARGE_7F_RUN, 'file': RECHARGE_7F_FILE, 'previous': RECHARGE_SCOPE_CURRENT,
@@ -1914,6 +2305,8 @@ def fixed_recharge_json(raw):
 
 def fixed_recharge_scope(value, *, require_approved=True):
     try:
+        if isinstance(value, dict) and value.get('id') == RECHARGE_MAIN80_ID:
+            return main80_recharge_scope(value, require_approved=require_approved)
         require(isinstance(value, dict) and set(value) == {'version', 'kind', 'id', 'enabled',
             'approvalStatus', 'expectedCurrent', 'baselineRelease', 'candidateSourceSha256',
             'carriedSourceOnlySha256', 'controlSourceSha256', 'sourceModes', 'scope', 'financeValidator'},
@@ -2107,6 +2500,8 @@ def check_fixed_recharge_scope(*, require_approved=True, profile_id=RECHARGE_SCO
 
 
 def fixed_recharge_baseline(previous, profile, manifest, states):
+    if isinstance(profile, dict) and profile.get('id') == RECHARGE_MAIN80_ID:
+        return main80_recharge_baseline(previous, profile, manifest, states)
     fixed_recharge_scope(profile)
     binding = fixed_recharge_binding(profile['id'])
     baseline = profile['baselineRelease']
@@ -2323,6 +2718,8 @@ def verify_fixed_recharge_finance_source(previous, source):
 
 
 def fixed_recharge_context(args, profile, before_gate, after_gate):
+    if isinstance(profile, dict) and profile.get('id') == RECHARGE_MAIN80_ID:
+        return main80_recharge_context(args, profile, before_gate, after_gate)
     fixed_recharge_scope(profile)
     binding = fixed_recharge_binding(profile['id'])
     require(re.fullmatch(r'[a-f0-9]{40}', args.commit) and re.fullmatch(r'[a-f0-9]{40}', args.source_tree)
@@ -2387,6 +2784,8 @@ def fixed_recharge_preserved_states(states):
 
 def validate_fixed_recharge_readback_projection(value, expected_current, source_tree, profile_sha256,
         profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_MAIN80_ID:
+        return validate_main80_recharge_readback_projection(value, expected_current, source_tree, profile_sha256)
     try:
         binding = fixed_recharge_binding(profile_id)
         require(isinstance(expected_current, str) and re.fullmatch(r'[a-f0-9]{40}', expected_current)
@@ -2409,6 +2808,8 @@ def validate_fixed_recharge_readback_projection(value, expected_current, source_
 
 
 def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha256, profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_MAIN80_ID:
+        return check_main80_recharge_deployment(expected_current, source_tree, profile_sha256)
     try:
         binding = fixed_recharge_binding(profile_id)
         observed = {}
@@ -2539,6 +2940,118 @@ def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha25
             'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True,
             'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED',
             'liveServicesHealthy': True, 'rechargeImageMatched': True}, expected_current, source_tree, profile_sha256, profile_id)
+    except Exception:
+        raise RuntimeError('Fixed recharge deployment verification unavailable') from None
+
+
+def check_main80_recharge_deployment(expected_current, source_tree, profile_sha256):
+    try:
+        message = 'Fixed recharge deployment verification unavailable'
+        projection = {'version': 1, 'id': RECHARGE_MAIN80_ID, 'status': 'VERIFIED', 'currentCommit': expected_current,
+            'sourceTree': source_tree, 'previousCommit': RECHARGE_MAIN80_CURRENT, 'profileSha256': profile_sha256,
+            'servicesUpdated': ['auto-recharge'], 'preservedServiceCount': 6, 'checkCount': 49,
+            'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 5, 'storedGatesMatched': True,
+            'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True,
+            'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED',
+            'liveServicesHealthy': True, 'rechargeImageMatched': True}
+        validate_main80_recharge_readback_projection(projection, expected_current, source_tree, profile_sha256)
+        current = (BASE / 'current').resolve()
+        require(current.parent == BASE / 'releases' and current.resolve() == current
+            and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + expected_current[:12], current.name), message)
+        observed = {}
+        def read(path, **options):
+            raw = fixed_recharge_bytes(path, **options)
+            require(path not in observed or observed[path][0] == raw, message)
+            observed[path] = (raw, options)
+            return raw
+        profile = parse_fixed_recharge_scope(read(current / RECHARGE_MAIN80_FILE, modes=(0o644, 0o664), limit=128 * 1024))
+        require(profile['id'] == RECHARGE_MAIN80_ID and historical_fingerprint(profile) == profile_sha256, message)
+        manifest = fixed_recharge_json(read(current / 'release-manifest.json'))
+        require(manifest.get('commit') == expected_current and manifest.get('sourceTree') == source_tree
+            and manifest.get('previousCommit') == RECHARGE_MAIN80_CURRENT
+            and manifest.get('servicesUpdated') == ['auto-recharge'] and manifest.get('migrationApplied') is False
+            and manifest.get('newMigrations') == [] and manifest.get('databaseGrants') == {
+                'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}, message)
+        previous = Path(manifest['previousRelease'])
+        require(previous.is_absolute() and previous.resolve() == previous and previous.parent == BASE / 'releases', message)
+        baseline_manifest = fixed_recharge_json(read(previous / 'release-manifest.json'))
+        read(ORDER_ARCHIVE_SEAL); read(POST_CLEANUP_RECEIPT)
+        for filename in ('order-archive-seal.reader.json', 'order-archive-cleanup.reader.json'):
+            read(previous / filename, modes=(0o400,))
+            read(current / filename, modes=(0o400,))
+        main80_recharge_reader_evidence(current)
+        read(previous / ('deploy/aws/' + HISTORY_ORDER_ARCHIVE_POLICY_ID + '.json'), modes=(0o644, 0o664))
+        read(previous / 'compose.release.json', modes=(0o400, 0o600, 0o644))
+        require(read(current / '.env.aws.production') == read(previous / '.env.aws.production'), message)
+        snapshots = manifest.get('fixedRechargePreservedStates')
+        preserved = set(ALL_SERVICES) - {'auto-recharge'}
+        row_keys = {'image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256', 'environmentSha256'}
+        require(isinstance(snapshots, dict) and set(snapshots) == {'before', 'after'}
+            and isinstance(snapshots['before'], dict) and set(snapshots['before']) == preserved
+            and historical_fingerprint(snapshots['before']) == historical_fingerprint(snapshots['after']), message)
+        for service, state in snapshots['before'].items():
+            require(isinstance(state, dict) and set(state) == row_keys and state['status'] == 'running'
+                and (state['health'] is None if service == 'caddy' else state['health'] == 'healthy')
+                and isinstance(state['reference'], str) and 0 < len(state['reference']) <= 512
+                and isinstance(state['image'], str) and re.fullmatch(r'sha256:[a-f0-9]{64}', state['image'])
+                and all(isinstance(state[key], str) and re.fullmatch(r'[a-f0-9]{64}', state[key])
+                    for key in ('containerId', 'startedAtSha256', 'environmentSha256')), message)
+        baseline_states = {**snapshots['before'], 'auto-recharge':
+            baseline_manifest['orderArchivePublication']['preservedServiceContainers']['auto-recharge']}
+        archive_data = fixed_recharge_runtime_archive(profile)
+        main80_recharge_baseline(previous, profile, baseline_manifest, baseline_states, source_archive=archive_data)
+        policy, seal = main80_recharge_seal(previous, profile)
+        gates = {}
+        for stage in ('before', 'after'):
+            report = fixed_recharge_json(read(current / (stage + '-audit.json')))
+            gates[stage] = main80_recharge_report(report, profile, policy, seal, stage)
+            require(historical_fingerprint(manifest.get('dataAudit' + stage.title())) == historical_fingerprint(gates[stage]), message)
+            original = fixed_recharge_json(read(previous / (stage + '-audit.json')))
+            main80_recharge_report(original, profile, policy, seal, stage)
+            require(historical_fingerprint(report['checks']) == historical_fingerprint(original['checks']), message)
+        context = main80_recharge_context(argparse.Namespace(commit=expected_current, source_tree=source_tree,
+            expected_current=RECHARGE_MAIN80_CURRENT), profile, gates['before'], gates['after'])
+        require(historical_fingerprint(manifest.get('fixedRechargeRelease')) == historical_fingerprint(context), message)
+        approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
+        for name, digest in approved.items():
+            require(hashlib.sha256(read(current / name, modes=(profile['sourceModes'][name],))).hexdigest() == digest, message)
+        require(read(current / 'docker-compose.aws-mysql.yml', modes=(0o644, 0o664))
+            == read(previous / 'docker-compose.aws-mysql.yml', modes=(0o644, 0o664))
+            and read(current / 'deploy/caddy/Caddyfile.aws', modes=(0o644, 0o664))
+                == read(previous / 'deploy/caddy/Caddyfile.aws', modes=(0o644, 0o664)) and has_registration_worker(current), message)
+        override = fixed_recharge_json(read(current / 'compose.release.json', modes=(0o400, 0o600, 0o644)))
+        images = manifest['images']
+        require(set(images) == {*SERVICES, 'migrate'}
+            and override == {'services': {service: {'image': images[service]['reference'], 'pull_policy': 'never'}
+                for service in (*SERVICES, 'migrate')}}
+            and all(images[service] == baseline_manifest['images'][service]
+                for service in (*SERVICES, 'migrate') if service != 'auto-recharge'), message)
+        live = {service: service_state(current, service, include_container_id=True, include_environment_hash=True)
+            for service in ALL_SERVICES}
+        require(main80_recharge_preserved_states(live) == snapshots['after']
+            and all(state['status'] == 'running' for state in live.values())
+            and all(live[service]['health'] == 'healthy' for service in ALL_SERVICES if service != 'caddy'), message)
+        image, deployment_run = images['auto-recharge'], manifest.get('deploymentRun')
+        require(isinstance(deployment_run, str) and re.fullmatch(r'github-actions-[1-9][0-9]*-[1-9][0-9]*', deployment_run)
+            and manifest.get('imageBuildRun') == deployment_run and image.get('sourceCommit') == expected_current
+            and isinstance(image.get('reference'), str) and re.fullmatch(
+                r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+                + expected_current + '-' + deployment_run.removeprefix('github-actions-') + '-auto-recharge', image['reference'])
+            and live['auto-recharge']['image'] == image['digest'] and live['auto-recharge']['reference'] == image['reference'], message)
+        inspected = json.loads(run('docker', 'image', 'inspect', live['auto-recharge']['image']))
+        require(isinstance(inspected, list) and len(inspected) == 1 and inspected[0]['Id'] == image['digest']
+            and inspected[0]['Architecture'] == 'amd64'
+            and inspected[0]['Config']['Labels'].get('org.opencontainers.image.revision') == expected_current, message)
+        public_observed = verify_main80_recharge_candidate_source(current, archive_data, profile)
+        main80_recharge_baseline(previous, profile, baseline_manifest, baseline_states, source_archive=archive_data)
+        verify_main80_recharge_candidate_source(current, archive_data, profile)
+        require({service: service_state(current, service, include_container_id=True, include_environment_hash=True)
+            for service in ALL_SERVICES} == live and (BASE / 'current').resolve() == current, message)
+        require(all(fixed_recharge_bytes(path, **options) == raw for path, (raw, options) in observed.items())
+            and (BASE / 'current').resolve() == current, message)
+        main80_recharge_reader_evidence(previous); main80_recharge_reader_evidence(current)
+        require_main80_recharge_public_snapshot(public_observed)
+        return validate_main80_recharge_readback_projection(projection, expected_current, source_tree, profile_sha256)
     except Exception:
         raise RuntimeError('Fixed recharge deployment verification unavailable') from None
 
@@ -2908,6 +3421,7 @@ def registration_worker_hashes(directory, profile):
 
 def registration_release(args):
     require(args.expected_current == REGISTRATION_CURRENT and not args.admin_only
+        and not getattr(args, 'recharge_pro_main80', False)
         and all(not getattr(args, name) for name in (
             'historical_finance_exception', 'historical_finance_continuation', 'historical_finance_recharge_diagnostics',
             'historical_finance_maintenance_continuation', 'historical_finance_mailbox_batch',
@@ -3182,12 +3696,16 @@ def main():
     parser.add_argument('--order-archive-seal-sha256')
     parser.add_argument('--order-archive-prepared-images-sha256')
     parser.add_argument('--recharge-pro-menu-7f', action='store_true')
+    parser.add_argument('--recharge-pro-main80', action='store_true')
     parser.add_argument('--registration-worker-b8-80', action='store_true')
     args = parser.parse_args()
+    recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_main80
+    require(not (args.registration_worker_b8_80 and recharge_requested),
+            'Historical release selection is ambiguous')
     if args.registration_worker_b8_80:
         return registration_release(args)
-    recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f
-    recharge_profile_id = RECHARGE_7F_ID if args.recharge_pro_menu_7f else RECHARGE_SCOPE_ID
+    recharge_profile_id = (RECHARGE_MAIN80_ID if args.recharge_pro_main80 else
+        RECHARGE_7F_ID if args.recharge_pro_menu_7f else RECHARGE_SCOPE_ID)
     recharge_binding = fixed_recharge_binding(recharge_profile_id) if recharge_requested else None
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
@@ -3195,7 +3713,7 @@ def main():
     require(sum((args.historical_finance_exception, args.historical_finance_continuation,
                  args.historical_finance_recharge_diagnostics,
                  args.historical_finance_maintenance_continuation, args.historical_finance_mailbox_batch,
-                 args.recharge_pro_menu_b8, args.recharge_pro_menu_7f, args.historical_finance_post_cleanup,
+                 args.recharge_pro_menu_b8, args.recharge_pro_menu_7f, args.recharge_pro_main80, args.historical_finance_post_cleanup,
                  args.historical_finance_order_archive)) <= 1,
             'Historical release selection is ambiguous')
     require(bool(args.post_cleanup_seal_sha256) == args.historical_finance_post_cleanup,
@@ -3266,7 +3784,7 @@ def main():
         include_container_id=args.historical_finance_recharge_diagnostics or recharge_requested
                              or args.historical_finance_mailbox_batch or args.historical_finance_post_cleanup
                              or args.historical_finance_order_archive,
-        **({'include_environment_hash': True} if args.historical_finance_post_cleanup or args.historical_finance_order_archive else {}))
+        **({'include_environment_hash': True} if args.historical_finance_post_cleanup or args.historical_finance_order_archive or args.recharge_pro_main80 else {}))
         for service in production_services(previous)}
     require(all(state['status'] == 'running' for state in before.values()),
             'A production service is not running')
@@ -3278,12 +3796,13 @@ def main():
         historical_post_cleanup=args.historical_finance_post_cleanup,
         historical_order_archive=args.historical_finance_order_archive)
     if recharge_requested:
-        finance_origin = fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
         baseline_archive = fixed_recharge_runtime_archive(recharge_profile)
+        finance_origin = (main80_recharge_baseline(previous, recharge_profile, old_manifest, before, source_archive=baseline_archive)
+            if args.recharge_pro_main80 else fixed_recharge_baseline(previous, recharge_profile, old_manifest, before))
         finance_source = previous
         if args.recharge_pro_menu_7f:
             finance_archive = fixed_recharge_baseline_archive()
-        else:
+        elif not args.recharge_pro_main80:
             with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as source:
                 verify_fixed_recharge_finance_source(previous, source)
         original_environment = fixed_recharge_bytes(previous / '.env.aws.production')
@@ -3295,7 +3814,10 @@ def main():
         original_environment = (previous / '.env.aws.production').read_bytes()
     if args.historical_finance_maintenance_continuation or args.historical_finance_mailbox_batch:
         original_environment = (previous / '.env.aws.production').read_bytes()
-    assert_release_jobs_idle(previous, initial_services, mailbox_only=args.historical_finance_mailbox_batch)
+    if args.recharge_pro_main80:
+        assert_no_active_jobs(previous, worker_changes=True)
+    else:
+        assert_release_jobs_idle(previous, initial_services, mailbox_only=args.historical_finance_mailbox_batch)
 
     stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     release = BASE / 'releases' / f'{stamp}-{args.commit[:12]}'
@@ -3446,7 +3968,9 @@ def main():
 
         step = 'audit-before'
         before_audit = (None if args.historical_finance_order_archive else
-                       fixed_recharge_audit(previous, release / 'before-audit.json',
+                       main80_recharge_audit(previous, release / 'before-audit.json',
+                           stage='before', source=finance_source, profile=recharge_profile)
+                       if args.recharge_pro_main80 else fixed_recharge_audit(previous, release / 'before-audit.json',
                              stage='before', source=finance_source, origin=finance_origin)
                        if recharge_requested else audit(previous, release / 'before-audit.json',
                              historical_exception=args.historical_finance_exception,
@@ -3499,9 +4023,13 @@ def main():
         (release / 'backup-verification.json').chmod(0o600)
         require((BASE / 'current').resolve() == previous, 'Production changed before switch')
         if recharge_requested:
-            fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
+            if args.recharge_pro_main80:
+                main80_recharge_baseline(previous, recharge_profile, old_manifest, before, source_archive=baseline_archive)
+            else:
+                fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
             require_diagnostics_environment_unchanged(previous, release, original_environment)
-            require({service: service_state(previous, service, include_container_id=True)
+            require({service: service_state(previous, service, include_container_id=True,
+                    **({'include_environment_hash': True} if args.recharge_pro_main80 else {}))
                 for service in ALL_SERVICES} == before, 'Fixed recharge baseline changed')
             if args.recharge_pro_menu_7f:
                 with tarfile.open(fileobj=io.BytesIO(finance_archive), mode='r:gz') as source:
@@ -3515,7 +4043,10 @@ def main():
             require_post_cleanup_preservation(previous, release, original_environment, before)
         if args.historical_finance_order_archive:
             require_order_archive_preservation(previous, release, original_environment, before)
-        assert_release_jobs_idle(previous, updated_services, mailbox_only=args.historical_finance_mailbox_batch)
+        if args.recharge_pro_main80:
+            assert_no_active_jobs(previous, worker_changes=True)
+        else:
+            assert_release_jobs_idle(previous, updated_services, mailbox_only=args.historical_finance_mailbox_batch)
 
         step = 'migration'
         if args.historical_finance_mailbox_batch:
@@ -3545,7 +4076,10 @@ def main():
             print(f'HEALTHY {service}', flush=True)
 
         step = 'audit-after'
-        after_audit = (fixed_recharge_audit(release, release / 'after-audit.json',
+        after_audit = (main80_recharge_audit(release, release / 'after-audit.json',
+                            stage='after', source=finance_source, profile=recharge_profile,
+                            before_receipt=release / 'before-audit.json')
+                      if args.recharge_pro_main80 else fixed_recharge_audit(release, release / 'after-audit.json',
                             stage='after', source=finance_source, origin=finance_origin,
                             before_receipt=release / 'before-audit.json')
                       if recharge_requested else audit(release, release / 'after-audit.json',
@@ -3572,7 +4106,7 @@ def main():
             include_container_id=args.historical_finance_recharge_diagnostics or recharge_requested
                                  or args.historical_finance_mailbox_batch or args.historical_finance_post_cleanup
                                  or args.historical_finance_order_archive,
-            **({'include_environment_hash': True} if args.historical_finance_post_cleanup or args.historical_finance_order_archive else {}))
+            **({'include_environment_hash': True} if args.historical_finance_post_cleanup or args.historical_finance_order_archive or args.recharge_pro_main80 else {}))
             for service in production_services(release)}
         require(all(after[s] == before[s] for s in before if s not in updated_services),
                 'Unrelated service changed')
@@ -3581,12 +4115,15 @@ def main():
         if args.historical_finance_maintenance_continuation:
             require_maintenance_environment_unchanged(previous, release, original_environment)
         if recharge_requested:
-            fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
+            if args.recharge_pro_main80:
+                main80_recharge_baseline(previous, recharge_profile, old_manifest, before, source_archive=baseline_archive)
+            else:
+                fixed_recharge_baseline(previous, recharge_profile, old_manifest, before)
             require_diagnostics_environment_unchanged(previous, release, original_environment)
             if args.recharge_pro_menu_7f:
                 with tarfile.open(fileobj=io.BytesIO(finance_archive), mode='r:gz') as source:
                     verify_fixed_recharge_clean_finance_source(finance_source, source)
-            else:
+            elif not args.recharge_pro_main80:
                 with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as source:
                     verify_fixed_recharge_finance_source(previous, source)
         if args.historical_finance_order_archive:
@@ -3613,6 +4150,15 @@ def main():
             maintenance = post_cleanup_retention_maintenance(release)
             (release / 'retention-maintenance-result.json').write_text(json.dumps(maintenance, indent=2) + '\n')
             (release / 'retention-maintenance-result.json').chmod(0o600)
+
+        if args.recharge_pro_main80:
+            # Readiness probes can outlast the previous preservation check.
+            main80_recharge_baseline(previous, recharge_profile, old_manifest, before, source_archive=baseline_archive)
+            verify_main80_recharge_candidate_source(release, baseline_archive, recharge_profile)
+            require_diagnostics_environment_unchanged(previous, release, original_environment)
+            require({service: service_state(release, service, include_container_id=True, include_environment_hash=True)
+                for service in ALL_SERVICES} == after and (BASE / 'current').resolve() == previous,
+                'Fixed main80 recharge publication tail changed')
 
         manifest = dict(old_manifest)
         if args.historical_finance_mailbox_batch:
@@ -3647,11 +4193,12 @@ def main():
         })
         manifest.pop('prCiRunId', None)
         if recharge_requested:
-            if args.recharge_pro_menu_7f:
+            if args.recharge_pro_menu_7f or args.recharge_pro_main80:
                 manifest.pop('mailboxPreservedStates', None)
             manifest['fixedRechargeRelease'] = fixed_recharge_context(args, recharge_profile, before_audit, after_audit)
+            preserved_state = main80_recharge_preserved_states if args.recharge_pro_main80 else fixed_recharge_preserved_states
             manifest['fixedRechargePreservedStates'] = {
-                'before': fixed_recharge_preserved_states(before), 'after': fixed_recharge_preserved_states(after)}
+                'before': preserved_state(before), 'after': preserved_state(after)}
         if args.historical_finance_post_cleanup:
             manifest['postCleanupFinancialPublication'] = {
                 'scope': 'API_ONLY', 'workersPublished': False,
@@ -3728,7 +4275,7 @@ if __name__ == '__main__':
             tokens = sys.argv[2:]
             if tokens:
                 require(len(tokens) == 2 and tokens[0] == '--fixed-recharge-profile'
-                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID),
+                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID),
                     'Fixed recharge runtime scope unavailable')
                 check_fixed_recharge_scope(profile_id=tokens[1])
             else:
@@ -3745,7 +4292,7 @@ if __name__ == '__main__':
                     'Fixed recharge deployment verification unavailable')
             values = dict(zip(tokens[::2], tokens[1::2]))
             if '--fixed-recharge-profile' in values:
-                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID),
+                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID),
                         'Fixed recharge deployment verification unavailable')
                 result = check_fixed_recharge_deployment(values['--expected-current'], values['--source-tree'],
                     values['--profile-sha256'], profile_id=values['--fixed-recharge-profile'])
