@@ -1,9 +1,11 @@
 """One authorized account per task in its original local browser profile."""
 import asyncio
 import json
+import logging
 import re
 import threading
 import time
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
@@ -13,6 +15,13 @@ from registration_security import validate_birthdate, verification_link, totp_ke
 
 JOB_ID = re.compile(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}')
 STEPS = 'queued email email_code profile registered password password_verified mfa mfa_verified offer completed'.split()
+CALLBACK_EVENTS = {'progress', 'mail_accepted', 'waiting_email', 'waiting_user', 'registered',
+                   'password_verified', 'totp_pending', 'mfa_verified', 'offer', 'complete',
+                   'partial', 'cancelled'}
+CALLBACK_ERROR_TYPES = {'HTTPError', 'URLError', 'TimeoutError', 'OSError', 'ConnectionResetError',
+                        'ConnectionRefusedError', 'BrokenPipeError', 'JSONDecodeError',
+                        'UnicodeDecodeError', 'ValueError', 'TypeError', 'KeyError', 'AttributeError'}
+CALLBACK_FAILURE_KINDS = {'HTTP_STATUS', 'TIMEOUT', 'TRANSPORT', 'INVALID_JSON', 'INVALID_RECEIPT'}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -71,6 +80,8 @@ class RegistrationJob:
         self.pending_code = None
         self.awaiting_code = False
         self.manual_reason = None
+        self.registration_callback_error = None
+        self.registration_callback_cleanup_error = None
         self.deadline = time.monotonic() + 43 * 60
 
     def check(self):
@@ -89,14 +100,65 @@ class RegistrationJob:
         body = {'type': event_type, 'attempt': self.attempt, 'step': requested, **data}
         request = Request(self.payload['callbackUrl'], data=json.dumps(body).encode(), method='POST',
                           headers={'Content-Type': 'application/json', 'X-Registration-Task': self.payload['agentToken']})
+        started = time.monotonic()
+        failure_kind = 'TRANSPORT'
+        read_error, response_closing = None, False
         try:
             with build_opener(NoRedirect).open(request, timeout=10) as response:
-                result = json.loads(response.read(180000), object_pairs_hook=unique_object)
+                try:
+                    raw = response.read(180000)
+                    failure_kind = 'INVALID_JSON'
+                    result = json.loads(raw, object_pairs_hook=unique_object)
+                except Exception as error:
+                    read_error = error
+                    self._callback_failure(event_type, requested, error, failure_kind, started)
+                    raise
+                finally:
+                    response_closing = True
+                    if read_error is None:
+                        failure_kind = 'TRANSPORT'
+            response_closing = False
+            failure_kind = 'INVALID_RECEIPT'
             if result.get('success') is not True or not isinstance(result.get('data'), dict):
                 raise ValueError()
             self.step = result['data']['step']
-        except Exception:
+        except Exception as error:
+            if response_closing and (read_error is None or error is not read_error):
+                if self.registration_callback_cleanup_error is None:
+                    kind = type(error).__name__
+                    self.registration_callback_cleanup_error = kind if kind in CALLBACK_ERROR_TYPES else 'UnexpectedError'
+                    logging.getLogger('registration').warning(
+                        'Registration callback cleanup failed error_type=%s',
+                        self.registration_callback_cleanup_error)
+            self._callback_failure(event_type, requested, error, failure_kind, started)
             raise Stop('durable_state_unavailable') from None
+
+    def _callback_failure(self, event_type, requested, error, failure_kind, started):
+        if self.registration_callback_error is not None:
+            return
+        http_status = None
+        if isinstance(error, HTTPError):
+            failure_kind = 'HTTP_STATUS'
+            http_status = error.code if type(error.code) is int and 100 <= error.code <= 599 else None
+        elif isinstance(error, TimeoutError) or (isinstance(error, URLError)
+                                                and isinstance(error.reason, TimeoutError)):
+            failure_kind = 'TIMEOUT'
+        kind = type(error).__name__
+        record = {
+            'job_id': self.id if isinstance(self.id, str) and JOB_ID.fullmatch(self.id) else 'unknown',
+            'attempt': self.attempt if type(self.attempt) is int and self.attempt > 0 else 0,
+            'event_type': event_type if isinstance(event_type, str) and event_type in CALLBACK_EVENTS else 'unknown',
+            'step': requested if requested in STEPS else 'unknown',
+            'failure_kind': failure_kind if failure_kind in CALLBACK_FAILURE_KINDS else 'TRANSPORT',
+            'http_status': http_status,
+            'error_type': kind if kind in CALLBACK_ERROR_TYPES else 'UnexpectedError',
+            'elapsed_ms': max(0, int((time.monotonic() - started) * 1000))
+        }
+        self.registration_callback_error = record
+        logging.getLogger('registration').warning(
+            'Registration callback failed job=%s attempt=%s event_type=%s step=%s failure_kind=%s http_status=%s error_type=%s elapsed_ms=%s',
+            record['job_id'], record['attempt'], record['event_type'], record['step'],
+            record['failure_kind'], record['http_status'], record['error_type'], record['elapsed_ms'])
 
     def prepare_mail(self, step, *, new_request=False):
         if type(new_request) is not bool:

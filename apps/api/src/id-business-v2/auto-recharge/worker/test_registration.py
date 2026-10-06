@@ -1,10 +1,13 @@
 import asyncio
 from copy import deepcopy
 from datetime import date
+import io
+import json
 import unittest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from types import SimpleNamespace
 import threading
+from urllib.error import HTTPError, URLError
 
 from checkout_core import Stop
 from registration_job import RegistrationJob
@@ -375,6 +378,224 @@ class RegistrationObservationTests(unittest.IsolatedAsyncioTestCase):
                 await flow.run()
         self.assertEqual(flow.job.registration_operation, 'browser_cleanup')
         self.assertEqual(flow.job.registration_cleanup_error, 'UnexpectedError')
+
+
+class RegistrationCallbackDiagnosticsTests(unittest.TestCase):
+    secret = 'https://private.example.test/?token=fixture-token password=fixture-password otp=654321'
+
+    class Response:
+        def __init__(self, raw=b'{"success":true,"data":{"step":"queued"}}', read_error=None, close_error=None):
+            self.raw, self.read_error, self.close_error = raw, read_error, close_error
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            if self.close_error:
+                raise self.close_error
+
+        def read(self, _limit):
+            if self.read_error:
+                raise self.read_error
+            return self.raw
+
+    def job(self):
+        return RegistrationJob(payload(), 'https://manager.example.test', object)
+
+    def assert_private(self, job, logger):
+        output = json.dumps(job.registration_callback_error)
+        for call in logger.warning.call_args_list:
+            self.assertFalse(call.kwargs)
+            output += call.args[0] % call.args[1:]
+        for forbidden in ['private.example.test', 'fixture-token', 'fixture-password', '654321',
+                          payload()['agentToken'], payload()['password'], payload()['email'],
+                          payload()['callbackUrl']]:
+            self.assertNotIn(forbidden, output)
+
+    def failure(self, kind, error_type, *, error=None, response=None, status=None):
+        job = self.job()
+        logger = MagicMock()
+        opener = MagicMock()
+        if error is not None:
+            opener.open.side_effect = error
+        else:
+            opener.open.return_value = response
+        with patch('registration_job.build_opener', return_value=opener), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            with self.assertRaises(Stop) as stopped:
+                job.event('progress', reason='proxy_verifying')
+        self.assertEqual(stopped.exception.report, {'status': 'blocked', 'reason': 'durable_state_unavailable'})
+        self.assertIsNone(stopped.exception.__cause__)
+        self.assertEqual(job.registration_callback_error['failure_kind'], kind)
+        self.assertEqual(job.registration_callback_error['error_type'], error_type)
+        self.assertEqual(job.registration_callback_error['http_status'], status)
+        self.assertEqual(job.registration_callback_error['job_id'], job.id)
+        self.assertEqual(job.registration_callback_error['attempt'], 1)
+        self.assertEqual(job.registration_callback_error['event_type'], 'progress')
+        self.assertEqual(job.registration_callback_error['step'], 'queued')
+        self.assertEqual(type(job.registration_callback_error['elapsed_ms']), int)
+        self.assertGreaterEqual(job.registration_callback_error['elapsed_ms'], 0)
+        opener.open.assert_called_once()
+        self.assertEqual(opener.open.call_args.kwargs, {'timeout': 10})
+        self.assert_private(job, logger)
+        return job, logger
+
+    def test_http_status_is_closed_and_does_not_read_error_body(self):
+        for status in [401, 403, 409, 500]:
+            with self.subTest(status=status):
+                body = MagicMock()
+                error = HTTPError(self.secret, status, self.secret, {'Private': self.secret}, body)
+                job, logger = self.failure('HTTP_STATUS', 'HTTPError', error=error, status=status)
+                body.read.assert_not_called()
+                logger.warning.assert_called_once()
+                self.assertIsNone(job.registration_callback_cleanup_error)
+
+    def test_invalid_or_boolean_http_status_is_not_logged(self):
+        for status in [True, None, '500', 99, 600]:
+            with self.subTest(status=status):
+                self.failure('HTTP_STATUS', 'HTTPError', error=HTTPError(self.secret, status, self.secret, {}, io.BytesIO()))
+
+    def test_direct_and_nested_timeout_only_inspect_exception_types(self):
+        self.failure('TIMEOUT', 'TimeoutError', error=TimeoutError(self.secret))
+        self.failure('TIMEOUT', 'URLError', error=URLError(TimeoutError(self.secret)))
+
+    def test_transport_failure_does_not_log_exception_text_or_attributes(self):
+        self.failure('TRANSPORT', 'URLError', error=URLError(self.secret))
+        self.failure('TRANSPORT', 'OSError', error=OSError(self.secret))
+
+        class UnsafeError(Exception):
+            def __str__(self):
+                raise AssertionError('Exception text must never be inspected')
+
+        error = UnsafeError(self.secret)
+        error.request = error.response = error.headers = error.url = self.secret
+        self.failure('TRANSPORT', 'UnexpectedError', error=error)
+
+    def test_json_failure_is_distinct_from_receipt_failure(self):
+        for raw, error_type in [(b'{', 'JSONDecodeError'), (b'\xff', 'UnicodeDecodeError'),
+                                (b'{"success":true,"success":true}', 'ValueError')]:
+            with self.subTest(raw_kind=error_type):
+                self.failure('INVALID_JSON', error_type, response=self.Response(raw))
+        for raw, error_type in [(b'{"success":false}', 'ValueError'),
+                                (b'{"success":true,"data":null}', 'ValueError'),
+                                (b'{"success":true,"data":[]}', 'ValueError'),
+                                (b'{"success":true,"data":{}}', 'KeyError'),
+                                (b'[]', 'AttributeError')]:
+            with self.subTest(receipt_kind=error_type):
+                self.failure('INVALID_RECEIPT', error_type, response=self.Response(raw))
+
+    def test_valid_json_containing_sensitive_data_is_not_in_failure_record(self):
+        raw = json.dumps({'success': False, 'data': {'password': self.secret}, 'message': self.secret}).encode()
+        self.failure('INVALID_RECEIPT', 'ValueError', response=self.Response(raw))
+
+    def test_partial_failure_preserves_first_diagnostic(self):
+        job = self.job()
+        logger = MagicMock(); opener = MagicMock()
+        opener.open.side_effect = [TimeoutError(self.secret), HTTPError(self.secret, 500, self.secret, {}, None)]
+        with patch('registration_job.build_opener', return_value=opener), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            with self.assertRaises(Stop):
+                job.event('progress', reason='proxy_resolving')
+            original = job.registration_callback_error
+            with self.assertRaises(Stop):
+                job.event('partial', reason='durable_state_unavailable')
+        self.assertIs(job.registration_callback_error, original)
+        self.assertEqual(original['failure_kind'], 'TIMEOUT')
+        self.assertEqual(original['event_type'], 'progress')
+        self.assertEqual(opener.open.call_count, 2)
+        logger.warning.assert_called_once()
+        self.assert_private(job, logger)
+
+    def test_response_cleanup_failure_cannot_replace_first_read_or_json_failure(self):
+        for response, expected in [
+                (self.Response(read_error=TimeoutError(self.secret), close_error=RuntimeError(self.secret)), 'TIMEOUT'),
+                (self.Response(raw=b'{', close_error=RuntimeError(self.secret)), 'INVALID_JSON')]:
+            with self.subTest(expected=expected):
+                job, logger = self.failure(expected, 'TimeoutError' if expected == 'TIMEOUT' else 'JSONDecodeError', response=response)
+                self.assertEqual(job.registration_callback_cleanup_error, 'UnexpectedError')
+                self.assertEqual(logger.warning.call_count, 2)
+
+    def test_cleanup_only_failure_still_stops_but_has_separate_identity(self):
+        job, logger = self.failure('TRANSPORT', 'OSError', response=self.Response(close_error=OSError(self.secret)))
+        self.assertEqual(job.registration_callback_cleanup_error, 'OSError')
+        self.assertEqual(logger.warning.call_count, 2)
+        self.assertEqual(job.step, 'queued')
+
+    def test_success_keeps_single_callback_and_original_step_behavior(self):
+        job = self.job(); logger = MagicMock(); opener = MagicMock()
+        job.step = 'email'
+        opener.open.return_value = self.Response(b'{"success":true,"data":{"step":"email_code"}}')
+        with patch('registration_job.build_opener', return_value=opener), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            job.event('progress', step='queued', reason='proxy_ready')
+        opener.open.assert_called_once()
+        body = json.loads(opener.open.call_args.args[0].data)
+        self.assertEqual(body, {'type': 'progress', 'attempt': 1, 'step': 'email', 'reason': 'proxy_ready'})
+        self.assertEqual(job.step, 'email_code')
+        self.assertIsNone(job.registration_callback_error)
+        self.assertIsNone(job.registration_callback_cleanup_error)
+        logger.warning.assert_not_called()
+
+    def test_late_ack_timeout_does_not_claim_server_state_was_unchanged(self):
+        job = self.job(); committed = {}; logger = MagicMock()
+        def commit_then_timeout(request, **_kwargs):
+            committed.update(json.loads(request.data))
+            raise TimeoutError(self.secret)
+        with patch('registration_job.build_opener', return_value=SimpleNamespace(open=commit_then_timeout)), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            with self.assertRaises(Stop):
+                job.event('progress', step='email', reason='proxy_ready')
+        self.assertEqual(committed['step'], 'email')
+        self.assertEqual(job.step, 'queued')
+        self.assertEqual(job.registration_callback_error['step'], 'email')
+        self.assertEqual(job.registration_callback_error['failure_kind'], 'TIMEOUT')
+        self.assert_private(job, logger)
+
+    def test_callback_error_does_not_overwrite_browser_cleanup_diagnostic(self):
+        job = self.job(); job.registration_cleanup_error = 'TargetClosedError'
+        with patch('registration_job.build_opener', side_effect=TimeoutError(self.secret)), \
+                patch('registration_job.logging.getLogger', return_value=MagicMock()):
+            with self.assertRaises(Stop):
+                job.event('progress')
+        self.assertEqual(job.registration_cleanup_error, 'TargetClosedError')
+        self.assertIsNone(job.registration_callback_cleanup_error)
+
+    def test_elapsed_and_logged_identity_are_bounded_to_safe_values(self):
+        job = self.job(); job.id = self.secret; job.attempt = self.secret
+        logger = MagicMock()
+        with patch.object(job, 'check'), patch('registration_job.time.monotonic', side_effect=[100, 100.5]), \
+                patch('registration_job.build_opener', side_effect=TimeoutError(self.secret)), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            with self.assertRaises(Stop):
+                job.event(self.secret)
+        self.assertEqual(job.registration_callback_error['job_id'], 'unknown')
+        self.assertEqual(job.registration_callback_error['event_type'], 'unknown')
+        self.assertEqual(job.registration_callback_error['attempt'], 0)
+        self.assertEqual(job.registration_callback_error['elapsed_ms'], 500)
+        self.assert_private(job, logger)
+
+    def test_failed_proxy_progress_callback_stops_before_another_extraction(self):
+        import server_proxy
+        job = self.job(); logger = MagicMock(); opener = MagicMock()
+        opener.open.side_effect = [self.Response(), HTTPError(self.secret, 500, self.secret, {}, None)]
+        resolve = AsyncMock(side_effect=Stop('server_proxy_unavailable'))
+        launch = AsyncMock()
+        def progress(stage, **_details):
+            job.event('progress', reason=stage)
+        with patch('registration_job.build_opener', return_value=opener), \
+                patch('registration_job.logging.getLogger', return_value=logger), \
+                patch.object(server_proxy, 'resolve', resolve):
+            with self.assertRaises(Stop) as stopped:
+                asyncio.run(server_proxy.prepare_browser({'mode': 'dynamic'}, launch,
+                    expected_country='US', target_url='https://chatgpt.com/auth/login', progress=progress))
+        self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+        resolve.assert_awaited_once()
+        launch.assert_not_awaited()
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(job.registration_callback_error['failure_kind'], 'HTTP_STATUS')
+        self.assertEqual(job.registration_callback_error['http_status'], 500)
+        logger.warning.assert_called_once()
+        self.assert_private(job, logger)
 
 
 if __name__ == '__main__':
