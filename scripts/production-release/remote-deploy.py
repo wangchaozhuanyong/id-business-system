@@ -2746,6 +2746,12 @@ def write_registration_files(root, files):
                 'Fixed registration output changed')
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Public Git subdirectories are bound read-only into non-root audit containers.
+        # Keep the outer staging directory private and restore traversal under umask 077.
+        for parent in path.parents:
+            if parent == root:
+                break
+            parent.chmod(0o755)
         path.write_bytes(data)
         path.chmod(0o755 if mode == '100755' else 0o644)
 
