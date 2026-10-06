@@ -2,7 +2,14 @@
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-87-20261006 ]]; then
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-88-20261006 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 4c200c4ae08bb8214ff8e0955f8237ce85069cc6
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-88-20261006
+  services=(auto-recharge)
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-87-20261006 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 651f62902fba74ddd189b34932084573b39d245c
   test "${RELEASE_ADMIN_ONLY:-false}" = false

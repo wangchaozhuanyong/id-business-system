@@ -22,6 +22,12 @@ REGISTRATION_OBSERVE_SECONDS = 15
 REGISTRATION_VIEWS = {'verification', 'code', 'profile', 'unknown', 'registered', 'existing', 'email', 'signup'}
 REGISTRATION_WRITES = {'email_submit', 'code_submit', 'profile_submit', 'signup_click'}
 IDENTITY_RECOVERY = 'identity_recovery_readonly'
+EMAIL_REQUEST_LIMIT = 16
+EMAIL_REQUEST_PHASES = {'before_click', 'click', 'after_click', 'safe_get'}
+EMAIL_REQUEST_METHODS = {'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'other', 'none'}
+EMAIL_REQUEST_HOSTS = {'chatgpt', 'openai_auth', 'auth0', 'other'}
+EMAIL_REQUEST_PATHS = {'login', 'email_code', 'password', 'profile', 'other'}
+EMAIL_REQUEST_FAILURES = {'none', 'http_error', 'blocked', 'timeout', 'network', 'cancelled', 'unknown'}
 
 
 class RegistrationBrowser:
@@ -34,6 +40,11 @@ class RegistrationBrowser:
         self.recovery_readonly = None
         self.registration_loading = False
         self.observation_budget = None
+        self.email_request_observation = None
+        self.email_request_page = None
+        self.email_request_handlers = []
+        self.email_requests = {}
+        self.email_request_phase = 'before_click'
         retained = self.registration_state.get(IDENTITY_RECOVERY)
         if retained is not None:
             if (type(retained) is not dict or set(retained) != {'context', 'page', 'handler'}
@@ -71,6 +82,166 @@ class RegistrationBrowser:
             closed(observation.get('error_type'), {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}),
             closed(observation.get('browser_error_code'), RETRYABLE_NETWORK_CODES))
         self.log_email_diagnostic('pause')
+        self.log_email_requests('pause')
+
+    @staticmethod
+    def email_request_target(url):
+        """Discard URL/query values immediately; only closed classes leave this read."""
+        parsed = urlsplit(url)
+        host = {'chatgpt.com': 'chatgpt', 'auth.openai.com': 'openai_auth',
+                'auth0.openai.com': 'auth0'}.get(parsed.hostname, 'other')
+        if parsed.scheme != 'https' or parsed.port not in {None, 443} or parsed.username or parsed.password:
+            host = 'other'
+        path = parsed.path.casefold()
+        kind = ('login' if path in {'/auth/login', '/log-in', '/login', '/u/login/identifier'}
+                else 'email_code' if re.search(r'email-verification|email-otp|email-code', path)
+                else 'password' if re.search(r'(?:^|/)password(?:/|$)', path)
+                else 'profile' if re.search(r'(?:^|/)(?:profile|about-you)(?:/|$)', path) else 'other')
+        return host, kind if host != 'other' else 'other'
+
+    def begin_email_requests(self):
+        """Observe this Page only. No request/body reads, routing, or extra waits."""
+        if self.email_request_observation is not None:
+            return
+        state = dict(read='observing', request_count=0, response_count=0, failed_count=0,
+                     navigation_count=0, overflow=False, main_frame_host='other',
+                     main_frame_path='other', first_failure=None, current=None, last_write=None)
+        self.email_request_observation = state
+        page = self.page
+        self.email_request_page = page
+        def count(key):
+            if state[key] < EMAIL_REQUEST_LIMIT:
+                state[key] += 1
+            else:
+                state['overflow'] = True
+        def retain(record):
+            # Session GETs cannot hide the latest navigation/write outcome.
+            if (state['current'] is None or record['kind'] == 'navigation'
+                    or record['method'] not in {'GET', 'HEAD', 'OPTIONS'} or record['failure'] != 'none'):
+                state['current'] = dict(record)
+            if record['failure'] != 'none' and state['first_failure'] is None:
+                state['first_failure'] = dict(record)
+            if record['method'] not in {'GET', 'HEAD', 'OPTIONS'}:
+                state['last_write'] = dict(record)
+        def requested(request):
+            try:
+                if self.email_request_page is not page or request.frame.page is not page:
+                    return
+                kind = ('navigation' if request.is_navigation_request()
+                        else 'fetch' if request.resource_type in {'xhr', 'fetch'} else None)
+                if kind is None:
+                    return
+                host, path = self.email_request_target(request.url)
+                if host == 'other':
+                    return
+                count('request_count')
+                if len(self.email_requests) >= EMAIL_REQUEST_LIMIT:
+                    state['overflow'] = True
+                    return
+                method = request.method
+                record = dict(phase=self.email_request_phase, event='request', host=host,
+                              method=method if method in EMAIL_REQUEST_METHODS - {'none'} else 'other',
+                              kind=kind, path=path, http_status=None, failure='none')
+                self.email_requests[request] = record
+                retain(record)
+            except Exception:
+                state['read'] = 'unavailable'
+        def responded(response):
+            try:
+                if self.email_request_page is not page:
+                    return
+                original = self.email_requests.get(response.request)
+                if original is None:
+                    return
+                count('response_count')
+                status = response.status
+                status = status if type(status) is int and 100 <= status <= 599 else None
+                retain(dict(original, phase=self.email_request_phase, event='response',
+                            http_status=status, failure='http_error' if status and status >= 400 else 'none'))
+            except Exception:
+                state['read'] = 'unavailable'
+        def failed(request):
+            try:
+                if self.email_request_page is not page:
+                    return
+                original = self.email_requests.get(request)
+                if original is None:
+                    return
+                count('failed_count')
+                code = request.failure
+                failure = ('blocked' if code in {'net::ERR_BLOCKED_BY_CLIENT', 'NS_ERROR_BLOCKED_BY_POLICY'}
+                           else 'timeout' if code in {'net::ERR_TIMED_OUT', 'NS_ERROR_NET_TIMEOUT'}
+                           else 'cancelled' if code in {'net::ERR_ABORTED', 'NS_BINDING_ABORTED'}
+                           else 'network' if code in RETRYABLE_NETWORK_CODES or code in {'net::ERR_FAILED', 'NS_ERROR_FAILURE'}
+                           else 'unknown')
+                retain(dict(original, phase=self.email_request_phase, event='requestfailed', failure=failure))
+            except Exception:
+                state['read'] = 'unavailable'
+        def navigated(frame):
+            try:
+                if self.email_request_page is not page or frame is not page.main_frame:
+                    return
+                count('navigation_count')
+                state['main_frame_host'], state['main_frame_path'] = self.email_request_target(frame.url)
+            except Exception:
+                state['read'] = 'unavailable'
+        try:
+            state['main_frame_host'], state['main_frame_path'] = self.email_request_target(page.url)
+            for name, handler in (('request', requested), ('response', responded),
+                                  ('requestfailed', failed), ('framenavigated', navigated)):
+                self.email_request_handlers.append((name, handler))
+                page.on(name, handler)
+        except Exception:
+            self.end_email_requests()
+            state['read'] = 'unavailable'
+
+    def end_email_requests(self):
+        page, self.email_request_page = self.email_request_page, None
+        handlers, self.email_request_handlers = self.email_request_handlers, []
+        self.email_requests.clear()
+        for name, handler in handlers:
+            try:
+                page.remove_listener(name, handler)
+            except Exception:
+                self.email_request_observation['read'] = 'unavailable'
+        if self.email_request_observation and self.email_request_observation['read'] == 'observing':
+            self.email_request_observation['read'] = 'closed'
+
+    def log_email_requests(self, point):
+        state = self.email_request_observation
+        if (type(state) is not dict or set(state) != {
+                'read', 'request_count', 'response_count', 'failed_count', 'navigation_count',
+                'overflow', 'main_frame_host', 'main_frame_path', 'first_failure', 'current', 'last_write'}
+                or type(state['read']) is not str or state['read'] not in {'observing', 'closed', 'unavailable'}
+                or type(state['overflow']) is not bool
+                or type(state['main_frame_host']) is not str or state['main_frame_host'] not in EMAIL_REQUEST_HOSTS
+                or type(state['main_frame_path']) is not str or state['main_frame_path'] not in EMAIL_REQUEST_PATHS
+                or any(type(state[key]) is not int or not 0 <= state[key] <= EMAIL_REQUEST_LIMIT
+                       for key in ('request_count', 'response_count', 'failed_count', 'navigation_count'))):
+            return
+        job_id, attempt = getattr(self.job, 'id', None), getattr(self.job, 'attempt', None)
+        job_id = job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown'
+        attempt = attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0
+        point = point if type(point) is str and point in {'before_safe_get', 'pause', 'transition', 'stop'} else 'unknown'
+        logger = logging.getLogger('registration')
+        logger.warning('Registration email requests job=%s attempt=%s point=%s read=%s request_count=%s '
+                       'response_count=%s failed_count=%s navigation_count=%s overflow=%s main_frame_host=%s main_frame_path=%s',
+                       job_id, attempt, point, *(state[key] for key in ('read', 'request_count', 'response_count',
+                           'failed_count', 'navigation_count', 'overflow', 'main_frame_host', 'main_frame_path')))
+        for slot in ('first_failure', 'current', 'last_write'):
+            record = state[slot]
+            allowed = {'phase': EMAIL_REQUEST_PHASES, 'event': {'request', 'response', 'requestfailed'},
+                       'host': EMAIL_REQUEST_HOSTS - {'other'}, 'method': EMAIL_REQUEST_METHODS - {'none'},
+                       'kind': {'navigation', 'fetch'}, 'path': EMAIL_REQUEST_PATHS, 'failure': EMAIL_REQUEST_FAILURES}
+            if (type(record) is not dict or set(record) != set(allowed) | {'http_status'}
+                    or any(type(record[key]) is not str or record[key] not in values for key, values in allowed.items())
+                    or not (record['http_status'] is None or type(record['http_status']) is int
+                            and 100 <= record['http_status'] <= 599)):
+                continue
+            logger.warning('Registration email request job=%s attempt=%s point=%s slot=%s phase=%s event=%s '
+                           'host=%s method=%s kind=%s path=%s http_status=%s failure=%s',
+                           job_id, attempt, point, slot, *(record[key] for key in (
+                               'phase', 'event', 'host', 'method', 'kind', 'path', 'http_status', 'failure')))
 
     def log_email_diagnostic(self, point):
         job_id = getattr(self.job, 'id', None)
@@ -567,6 +738,13 @@ class RegistrationBrowser:
         return True
 
     async def register(self):
+        try:
+            await self.observe_registration()
+        finally:
+            self.end_email_requests()
+            self.log_email_requests('stop')
+
+    async def observe_registration(self):
         # Resume the exact profile rather than regenerating name, birthday or credentials.
         if not official_login_page(self.page.url):
             await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
@@ -602,6 +780,9 @@ class RegistrationBrowser:
                 view, field = 'unknown', None
             finally:
                 self.observation_budget = None
+            if view in {'code', 'profile', 'registered', 'existing'} and self.email_request_page is not None:
+                self.end_email_requests()
+                self.log_email_requests('transition')
             if view == 'verification':
                 await self.manual_registration('verification_required')
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
@@ -732,11 +913,14 @@ class RegistrationBrowser:
                 if not unchanged:
                     await self.email_diagnostic('after_callback', budget, 'target_changed')
                     continue
+                self.begin_email_requests()
                 self.registration_state['email_submitted'] = True
                 self.registration_state['email_submit_started'] = True
                 self.operation('email_submit')
+                self.email_request_phase = 'click'
                 await submit.click(timeout=budget.remaining_ms())
                 self.registration_state['email_click_returned'] = True
+                self.email_request_phase = 'after_click'
                 await self.settle(3)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
@@ -752,6 +936,8 @@ class RegistrationBrowser:
                 await self.settle(.5)
                 continue
             self.log_email_diagnostic('before_safe_get')
+            self.log_email_requests('before_safe_get')
+            self.email_request_phase = 'safe_get'
             if await self.refresh_registration():
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
