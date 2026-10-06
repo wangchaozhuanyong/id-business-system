@@ -141,7 +141,7 @@ class RegistrationJob:
                     return code
             await asyncio.sleep(.5)
 
-    async def manual(self, reason='verification_required'):
+    async def manual(self, reason='verification_required', *, can_resume=None):
         self.check()
         self.resume_event.clear()
         self.waiting_for_user = True
@@ -150,6 +150,12 @@ class RegistrationJob:
             self.event('waiting_user', reason=reason)
             while not self.resume_event.is_set():
                 self.check()
+                if can_resume is not None:
+                    # Read-only observation may confirm the original page can continue.
+                    ready = await can_resume()
+                    self.check()
+                    if ready is True:
+                        break
                 await asyncio.sleep(.5)
         finally:
             self.waiting_for_user = False

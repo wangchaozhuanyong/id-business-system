@@ -111,6 +111,113 @@ class RegistrationTests(unittest.TestCase):
                 asyncio.run(job.manual('verification_required'))
         self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
         self.assertFalse(job.waiting_for_user)
+        self.assertIsNone(job.manual_reason)
+
+    def test_manual_wait_without_observation_keeps_explicit_resume_path(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        deadline = job.deadline
+        async def resume_after_poll(_delay):
+            self.assertTrue(job.waiting_for_user)
+            self.assertFalse(job.resume_event.is_set())
+            job.signal_resume()
+        with patch.object(job, 'event') as event, patch('registration_job.asyncio.sleep', new=AsyncMock(side_effect=resume_after_poll)) as sleep:
+            asyncio.run(job.manual('form_unrecognized'))
+        sleep.assert_awaited_once_with(.5)
+        self.assertEqual([call.args[0] for call in event.call_args_list], ['waiting_user', 'progress'])
+        self.assertTrue(job.resume_event.is_set())
+        self.assertFalse(job.waiting_for_user)
+        self.assertIsNone(job.manual_reason)
+        self.assertEqual(job.deadline, deadline)
+
+    def test_passive_manual_observation_continues_without_a_resume_signal(self):
+        for observations in [[True], [False, True]]:
+            with self.subTest(observations=observations):
+                job = RegistrationJob(payload(), 'https://manager.example.test', object)
+                deadline = job.deadline
+                can_resume = AsyncMock(side_effect=observations)
+                with patch.object(job, 'event') as event, patch('registration_job.asyncio.sleep', new=AsyncMock()) as sleep:
+                    asyncio.run(job.manual('verification_required', can_resume=can_resume))
+                self.assertEqual(can_resume.await_count, len(observations))
+                self.assertEqual(sleep.await_count, len(observations) - 1)
+                self.assertEqual([call.args[0] for call in event.call_args_list], ['waiting_user', 'progress'])
+                self.assertFalse(job.resume_event.is_set())
+                self.assertFalse(job.waiting_for_user)
+                self.assertIsNone(job.manual_reason)
+                self.assertEqual(job.deadline, deadline)
+                self.assertEqual(job.attempt, 1)
+
+    def test_passive_false_observation_preserves_manual_handoff(self):
+        for observation in [False, 1, 'synthetic-ready']:
+            with self.subTest(observation=observation):
+                job = RegistrationJob(payload(), 'https://manager.example.test', object)
+                async def verify():
+                    observed = asyncio.Event()
+                    release = asyncio.Event()
+                    async def can_resume():
+                        observed.set()
+                        await release.wait()
+                        return observation
+                    task = asyncio.create_task(job.manual('verification_required', can_resume=can_resume))
+                    await observed.wait()
+                    self.assertFalse(task.done())
+                    self.assertTrue(job.waiting_for_user)
+                    self.assertEqual(job.manual_reason, 'verification_required')
+                    self.assertFalse(job.resume_event.is_set())
+                    job.signal_resume()
+                    release.set()
+                    await task
+                with patch.object(job, 'event') as event, patch('registration_job.asyncio.sleep', new=AsyncMock()):
+                    asyncio.run(asyncio.wait_for(verify(), timeout=1))
+                self.assertEqual([call.args[0] for call in event.call_args_list], ['waiting_user', 'progress'])
+                self.assertTrue(job.resume_event.is_set())
+                self.assertFalse(job.waiting_for_user)
+                self.assertIsNone(job.manual_reason)
+
+    def test_passive_observation_cannot_override_cancellation_or_deadline(self):
+        for cancelled, expired, expected in [(True, False, 'operation_cancelled'),
+                                              (False, True, 'verification_required'),
+                                              (True, True, 'operation_cancelled')]:
+            with self.subTest(cancelled=cancelled, expired=expired):
+                job = RegistrationJob(payload(), 'https://manager.example.test', object)
+                async def can_resume():
+                    if cancelled:
+                        job.signal_cancel()
+                    if expired:
+                        job.deadline = 0
+                    return True
+                with patch.object(job, 'event') as event:
+                    with self.assertRaises(Stop) as stopped:
+                        asyncio.run(job.manual('verification_required', can_resume=can_resume))
+                self.assertEqual(stopped.exception.report['reason'], expected)
+                event.assert_called_once_with('waiting_user', reason='verification_required')
+                self.assertFalse(job.resume_event.is_set())
+                self.assertFalse(job.waiting_for_user)
+                self.assertIsNone(job.manual_reason)
+
+    def test_passive_observation_is_not_called_after_an_expired_waiting_callback(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        def expire(event_type, **_data):
+            if event_type == 'waiting_user':
+                job.deadline = 0
+        can_resume = AsyncMock(return_value=True)
+        with patch.object(job, 'event', side_effect=expire):
+            with self.assertRaises(Stop) as stopped:
+                asyncio.run(job.manual('verification_required', can_resume=can_resume))
+        self.assertEqual(stopped.exception.report['reason'], 'verification_required')
+        can_resume.assert_not_awaited()
+        self.assertFalse(job.waiting_for_user)
+        self.assertIsNone(job.manual_reason)
+
+    def test_passive_observation_exception_clears_handoff_without_progress(self):
+        job = RegistrationJob(payload(), 'https://manager.example.test', object)
+        can_resume = AsyncMock(side_effect=RuntimeError('synthetic_observation_failure'))
+        with patch.object(job, 'event') as event:
+            with self.assertRaisesRegex(RuntimeError, 'synthetic_observation_failure'):
+                asyncio.run(job.manual('verification_required', can_resume=can_resume))
+        event.assert_called_once_with('waiting_user', reason='verification_required')
+        self.assertFalse(job.resume_event.is_set())
+        self.assertFalse(job.waiting_for_user)
+        self.assertIsNone(job.manual_reason)
 
     def test_manual_resume_uses_current_account_password_and_same_attempt(self):
         job = RegistrationJob(payload(), 'https://manager.example.test', object)
