@@ -17,6 +17,19 @@ build_image() {
   echo "Built image: $service"
 }
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-86-20261006 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = fd3a6da610c505c2b7a51601cf854182991ffd12
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-86-20261006
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-registration-build --registration-profile registration-worker-86-20261006
+  registration_context=.deploy/production-release/registration-build-context
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  exit 0
+fi
+
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-85-20261006 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 85e94572cd965dd993743d12d55a3e91d60b6444

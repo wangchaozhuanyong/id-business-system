@@ -9,6 +9,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "$QUALITY_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
 [[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]] || exit 1
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-86-20261006 ]]; then
+  test "$EXPECTED_CURRENT" = fd3a6da610c505c2b7a51601cf854182991ffd12
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-86-20261006
+fi
+
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-85-20261006 ]]; then
   test "$EXPECTED_CURRENT" = 85e94572cd965dd993743d12d55a3e91d60b6444
   test "${RELEASE_ADMIN_ONLY:-false}" = false
@@ -71,6 +78,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'registration-worker-b8-80-20261006',
                          'registration-worker-956-20261006',
                          'registration-worker-85-20261006',
+                         'registration-worker-86-20261006',
                          'historical-finance-20261005-order-archive',
                          'historical-finance-20261005-post-cleanup')
 if history_policy == 'historical-finance-20261005':
@@ -115,6 +123,11 @@ elif history_policy == 'registration-worker-85-20261006':
     assert not any(os.environ.get(key) for key in (
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-85'
+elif history_policy == 'registration-worker-86-20261006':
+    assert previous == 'fd3a6da610c505c2b7a51601cf854182991ffd12' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
+    scope_flag += ' --registration-worker-86'
 elif history_policy == 'historical-finance-20261005-post-cleanup':
     # The shared entry guard has already verified the baseline, scope and seal.
     assert os.environ.get('RELEASE_OPERATION', 'release') == 'release'
@@ -132,7 +145,7 @@ elif history_policy == 'historical-finance-20261005-order-archive':
     scope_flag += (' --historical-finance-order-archive --order-archive-seal-sha256 '
                    + os.environ['ORDER_ARCHIVE_SEAL_SHA256']
                    + ' --order-archive-prepared-images-sha256 ' + os.environ['ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'])
-if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006'):
+if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006'):
     image_commit, image_run, image_attempt = sha, run_id, attempt
 else:
     image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)
