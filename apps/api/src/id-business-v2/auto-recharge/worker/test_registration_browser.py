@@ -2286,16 +2286,28 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     result[1].click = interrupted_click
                 return result
             self.flow.email_submit_control = interrupted_control
-        if mode in {'prepare_context_error', 'callback_context_error'}:
+        category_mode = mode in {'prepare_context_error', 'callback_context_error'}
+        if category_mode:
+            from playwright.async_api import Error
+            self.context_error_injection_reached = False
             method = 'email_submit_control' if mode == 'prepare_context_error' else 'email_submit_unchanged'
             original = getattr(self.flow, method)
             async def changing_context(*args):
                 await original(*args)  # Complete actual native DOM reads before the injected browser error.
-                await self.page.evaluate('''() => { throw new Error('Execution context was destroyed synthetic-private'); }''')
+                try:
+                    await self.page.evaluate('''() => { throw new Error('Execution context was destroyed synthetic-private'); }''')
+                except Error as error:
+                    self.context_error_injection_reached = (
+                        type(error).__name__ == 'Error'
+                        and 'Execution context was destroyed synthetic-private' in str(error))
+                    if self.context_error_injection_reached:
+                        # The category test stops at its next observation after recording the actual injected error.
+                        self.flow.registration_view = AsyncMock(side_effect=Stop('form_unrecognized'))
+                    raise
             setattr(self.flow, method, changing_context)
-        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 15 if category_mode else 1):
             with self.assertRaises(Error if mode == 'click_error' else Stop) as stopped:
-                await asyncio.wait_for(self.flow.register(), timeout=7)
+                await asyncio.wait_for(self.flow.register(), timeout=10 if category_mode else 7)
         return 'fixture_click_interrupted' if mode == 'click_error' else stopped.exception.report['reason']
 
     async def test_unrelated_global_continue_never_prepares_or_clicks(self):
@@ -2336,6 +2348,7 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_prepare_context_error_is_closed_before_any_submission(self):
         self.assertEqual(await self.email_guard_fixture('prepare_context_error'), 'fixture_paused')
+        self.assertTrue(self.context_error_injection_reached)
         self.assertEqual(self.job.registration_observation_error,
                          {'reason':'registration_page_changing', 'error_type':'Error'})
         self.assertEqual(self.submissions, [])
@@ -2344,6 +2357,7 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_callback_context_error_keeps_request_and_never_clicks(self):
         self.assertEqual(await self.email_guard_fixture('callback_context_error'), 'fixture_paused')
+        self.assertTrue(self.context_error_injection_reached)
         self.assertEqual(self.job.registration_observation_error,
                          {'reason':'registration_page_changing', 'error_type':'Error'})
         self.assertEqual(self.submissions, [])
