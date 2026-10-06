@@ -7419,9 +7419,9 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                     'a' * 40, 'b' * 40, 'c' * 64)
 
     def publication(self, *, retained=False, retained_rollback=False, fail_after=False, preserved_drift=None,
-                    readback=False, readback_changed=None, continuation=False, late_retained=False, initial=False):
+                    readback=False, readback_changed=None, continuation=False, late_retained=False, initial=False, email=False):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
-            profile_id = (deployment.REGISTRATION_INITIAL_ID if initial else deployment.REGISTRATION_CONTINUATION_ID
+            profile_id = (deployment.REGISTRATION_EMAIL_ID if email else deployment.REGISTRATION_INITIAL_ID if initial else deployment.REGISTRATION_CONTINUATION_ID
                 if continuation else deployment.REGISTRATION_SCOPE_ID)
             contract = deployment.registration_contract(profile_id)
             current_pin = contract['current']
@@ -7430,7 +7430,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
             (base / 'current').symlink_to(previous)
             old_images = {service: {'reference': 'baseline-' + service, 'digest': 'sha256:old-' + service,
                 'sourceCommit': deployment.REGISTRATION_CURRENT} for service in (*deployment.SERVICES, 'migrate')}
-            old_images['auto-registration']['sourceCommit'] = current_pin if continuation or initial else deployment.RECHARGE_SCOPE_CURRENT
+            old_images['auto-registration']['sourceCommit'] = current_pin if continuation or initial or email else deployment.RECHARGE_SCOPE_CURRENT
             old = {'images': old_images, 'orderArchivePublication': {'preservedOriginalProvenance': True}}
             (previous / 'compose.release.json').write_text(json.dumps({'services': {
                 service: {'image': entry['reference'], 'pull_policy': 'never'} for service, entry in old_images.items()}}))
@@ -7454,19 +7454,23 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
             initial_baseline = copy.deepcopy(deployment.REGISTRATION_INITIAL_BASELINE)
             continuation_baseline['liveServices'] = states
             initial_baseline['liveServices'] = states
+            email_baseline = copy.deepcopy(deployment.REGISTRATION_EMAIL_BASELINE)
+            email_baseline['liveServices'] = states
             profile = copy.deepcopy(self.profile)
-            if continuation or initial:
+            if continuation or initial or email:
                 profile = json.loads((self.root / contract['file']).read_text())
-                profile.update(enabled=True, runtimeBaseline=initial_baseline if initial else continuation_baseline)
+                profile.update(enabled=True, runtimeBaseline=email_baseline if email else initial_baseline if initial else continuation_baseline)
                 profile['controlSourceSha256'] = copy.deepcopy(self.profile['controlSourceSha256'])
             profile['financeValidator'] = finance
             selected_file = contract['file']
             candidate = {**self.candidate, selected_file: (json.dumps(profile).encode(), '100644'),
                 'apps/api/UNRELATED_MAIN_API': (b'must-never-enter-release', '100644')}
-            if continuation or initial:
+            if continuation or initial or email:
                 candidate[deployment.REGISTRATION_SCOPE_FILE] = ((self.root / deployment.REGISTRATION_SCOPE_FILE).read_bytes(), '100644')
-                if initial:
+                if initial or email:
                     candidate[deployment.REGISTRATION_CONTINUATION_FILE] = ((self.root / deployment.REGISTRATION_CONTINUATION_FILE).read_bytes(), '100644')
+                if email:
+                    candidate[deployment.REGISTRATION_INITIAL_FILE] = ((self.root / deployment.REGISTRATION_INITIAL_FILE).read_bytes(), '100644')
                 for path, digest in profile['registrationSourceSha256'].items():
                     raw = (self.root / path).read_bytes()
                     if deployment.hashlib.sha256(raw).hexdigest() != digest:
@@ -7483,6 +7487,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                 image_commit=None, image_run_id=None, image_run_attempt=None)
             args.registration_worker_956 = continuation
             args.registration_worker_85 = initial
+            args.registration_worker_86 = email
             args.registration_worker_b8_80 = False
             for field in ('historical_finance_exception', 'historical_finance_continuation',
                 'historical_finance_recharge_diagnostics', 'historical_finance_maintenance_continuation',
@@ -7521,6 +7526,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                     ('REGISTRATION_FINANCE', {'new': finance}),
                     ('REGISTRATION_CONTINUATION_BASELINE', {'new': continuation_baseline}),
                     ('REGISTRATION_INITIAL_BASELINE', {'new': initial_baseline}),
+                    ('REGISTRATION_EMAIL_BASELINE', {'new': email_baseline}),
                     ('registration_runtime_baseline', {'return_value': (old, previous)}),
                     ('registration_download', {'side_effect': download}),
                     ('prepare_registration_finance_source', {'return_value': base}),
@@ -8034,6 +8040,223 @@ class FixedRegistrationInitialFormTests(unittest.TestCase):
         for change in ('compose.release.json', '.env.aws.production', 'after-audit.json', 'audit-identity'):
             with self.subTest(change=change):
                 value = self.legacy.publication(initial=True, readback=True, readback_changed=change)
+                self.assertEqual(value.verified, 'REJECTED')
+
+
+class FixedRegistrationEmailSubmitTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        FixedRegistrationRuntimeScopeTests.setUpClass()
+        cls.root = FixedRegistrationRuntimeScopeTests.root
+        cls.runtime = cls.root / '.runtime/registration-email-submit-release-20261006/remote-tests'
+        cls.runtime.mkdir(parents=True, exist_ok=True)
+        cls.profile = json.loads((cls.root / deployment.REGISTRATION_EMAIL_FILE).read_text())
+        cls.profile['enabled'] = True
+        cls.legacy = FixedRegistrationRuntimeScopeTests(); cls.legacy.runtime = cls.runtime
+
+    def test_86_runtime_contract_preserves_three_previous_profiles_and_finance_bytes(self):
+        self.assertEqual(deployment.registration_profile(self.profile,
+            profile_id=deployment.REGISTRATION_EMAIL_ID), self.profile)
+        self.assertEqual(self.profile['expectedCurrent'], deployment.REGISTRATION_EMAIL_CURRENT)
+        self.assertEqual(self.profile['runtimeBaseline'], deployment.REGISTRATION_EMAIL_BASELINE)
+        for key, expected in [('baselineRelease', deployment.REGISTRATION_BASELINE),
+                ('financeValidator', deployment.REGISTRATION_FINANCE), ('financeClearance', deployment.REGISTRATION_CLEARANCE)]:
+            self.assertEqual(self.profile[key], expected)
+        for path in (deployment.REGISTRATION_SCOPE_FILE, deployment.REGISTRATION_CONTINUATION_FILE, deployment.REGISTRATION_INITIAL_FILE,
+                'scripts/v2-registration-finance-audit.mjs'):
+            self.assertEqual((self.root / path).read_bytes(), subprocess.check_output(['git', 'show',
+                deployment.REGISTRATION_EMAIL_CURRENT + ':' + path], cwd=self.root))
+        for field in ('runtimeBaseline', 'baselineRelease', 'financeValidator', 'financeClearance', 'scope'):
+            for key in self.profile[field]:
+                changed = copy.deepcopy(self.profile); changed[field][key] = None
+                with self.subTest(field=field, key=key), self.assertRaises(RuntimeError):
+                    deployment.registration_profile(changed, profile_id=deployment.REGISTRATION_EMAIL_ID)
+
+    def test_86_adds_only_the_exact_auto_code_test_source_and_rejects_other_paths(self):
+        added = deployment.REGISTRATION_WORKER_PREFIX + 'test_registration_auto_code.py'
+        self.assertEqual(deployment.REGISTRATION_EMAIL_FILES, deployment.REGISTRATION_FILES | {added})
+        for profile_id in (deployment.REGISTRATION_SCOPE_ID, deployment.REGISTRATION_CONTINUATION_ID,
+                deployment.REGISTRATION_INITIAL_ID):
+            old = deployment.registration_contract(profile_id)
+            self.assertNotIn(added, old['sourceSha256'])
+            old_value = json.loads((self.root / old['file']).read_text())
+            old_value['registrationSourceSha256'][added] = 'a' * 64
+            with self.subTest(old=profile_id), self.assertRaises(RuntimeError):
+                deployment.registration_profile(old_value, profile_id=profile_id)
+        value = copy.deepcopy(self.profile)
+        value['workerProjectionSha256'] = deployment.historical_fingerprint(value['workerProjection'])
+        with patch.object(deployment, 'REGISTRATION_EMAIL_PROJECTION_SHA256', value['workerProjectionSha256']):
+            self.assertEqual(deployment.registration_profile(value,
+                profile_id=deployment.REGISTRATION_EMAIL_ID), value)
+            missing = copy.deepcopy(value); del missing['registrationSourceSha256'][added]
+            extra = copy.deepcopy(value); extra['registrationSourceSha256'][added + '.backup'] = 'a' * 64
+            changed = copy.deepcopy(value); changed['registrationSourceSha256'][added] = 'f' * 64
+            projection = copy.deepcopy(value); projection['workerProjection'][added]['sha256'] = 'f' * 64
+            for mutated in (missing, extra, changed, projection):
+                with self.assertRaises(RuntimeError):
+                    deployment.registration_profile(mutated, profile_id=deployment.REGISTRATION_EMAIL_ID)
+
+    def test_disabled_86_scope_and_build_reject_before_download_or_write(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); source = root / 'scripts/production-release/remote-deploy.py'
+            source.parent.mkdir(parents=True); source.write_text('synthetic controller')
+            path = root / deployment.REGISTRATION_EMAIL_FILE; path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({**self.profile, 'enabled': False})); path.chmod(0o644)
+            with patch.object(deployment, '__file__', str(source)), \
+                    patch.object(deployment, 'registration_download') as download, \
+                    patch.object(deployment, 'write_registration_files') as write:
+                for action in (deployment.check_fixed_registration_scope, deployment.prepare_fixed_registration_build):
+                    with self.subTest(action=action.__name__), self.assertRaises(RuntimeError):
+                        action(deployment.REGISTRATION_EMAIL_ID)
+                download.assert_not_called(); write.assert_not_called()
+
+    def test_86_cli_rejects_other_runtime_baselines_and_combined_selection_or_reuse(self):
+        base = ['remote-deploy.py', '--commit', 'a' * 40, '--repository',
+            '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--run-id', '123', '--run-attempt', '1', '--source-tree', 'b' * 40,
+            '--ci-run-id', '456', '--expected-current', deployment.REGISTRATION_EMAIL_CURRENT,
+            '--registration-worker-86']
+        bad = [base + [flag] for flag in ('--registration-worker-b8-80', '--registration-worker-956', '--registration-worker-85',
+            '--recharge-pro-main80', '--recharge-pro-menu-b8', '--historical-finance-order-archive', '--admin-only')]
+        bad.extend([[other if value == deployment.REGISTRATION_EMAIL_CURRENT else value for value in base]
+            for other in (deployment.REGISTRATION_CURRENT, deployment.REGISTRATION_CONTINUATION_CURRENT, deployment.REGISTRATION_INITIAL_CURRENT, 'f' * 40)])
+        bad.extend([base + ['--image-commit', 'c' * 40], base + ['--image-run-id', '234']])
+        for argv in bad:
+            with self.subTest(argv=argv[-2:]), patch.object(deployment.sys, 'argv', argv), \
+                    patch.object(deployment, 'registration_runtime_baseline') as baseline, \
+                    patch.object(deployment, 'registration_download') as download, self.assertRaises(RuntimeError):
+                deployment.main()
+            baseline.assert_not_called(); download.assert_not_called()
+
+    @contextmanager
+    def baseline_fixture(self):
+        chain = FixedRegistrationInitialFormTests(); chain.root = self.root; chain.runtime = self.runtime
+        chain.legacy = self.legacy
+        with chain.baseline_fixture() as prior:
+            previous = prior.previous.parent / 'fixed-fd3a'; previous.mkdir()
+            fixed = copy.deepcopy(deployment.REGISTRATION_EMAIL_BASELINE)
+            fixed['current'] = str(previous); fixed['manifest']['previousRelease'] = str(prior.previous)
+            profile_raw = subprocess.check_output(['git', 'show',
+                deployment.REGISTRATION_EMAIL_CURRENT + ':' + deployment.REGISTRATION_INITIAL_FILE], cwd=self.root)
+            old_profile = json.loads(profile_raw)
+            for path in old_profile['registrationSourceSha256'].keys() | old_profile['controlSourceSha256'].keys() \
+                    | {deployment.REGISTRATION_SCOPE_FILE, deployment.REGISTRATION_CONTINUATION_FILE, deployment.REGISTRATION_INITIAL_FILE}:
+                target = previous / path; target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(subprocess.check_output(['git', 'show',
+                    deployment.REGISTRATION_EMAIL_CURRENT + ':' + path], cwd=self.root)); target.chmod(0o644)
+            # Only fixture paths/receipt hashes change; public control/source bytes retain their deployed Git pins.
+            old_profile['runtimeBaseline'] = copy.deepcopy(prior.fixed)
+            for name in (deployment.REGISTRATION_SCOPE_FILE, deployment.REGISTRATION_CONTINUATION_FILE):
+                (previous / name).write_bytes((prior.previous / name).read_bytes())
+            profile_raw = json.dumps(old_profile).encode()
+            (previous / deployment.REGISTRATION_INITIAL_FILE).write_bytes(profile_raw)
+            fixed['manifest']['fixedRegistrationRelease']['profileRawSha256'] = deployment.hashlib.sha256(profile_raw).hexdigest()
+            reports, frozen, _policy, _seal = self.legacy.zero_fixture()
+            manifest = copy.deepcopy(fixed['manifest'])
+            manifest['databaseGrants'] = {'status': 'SKIPPED', 'reason': 'FIXED_REGISTRATION_NO_MIGRATIONS'}
+            manifest['fixedRegistrationPreservedStates'] = {'before': deployment.registration_preserved_states(fixed['liveServices']),
+                'after': deployment.registration_preserved_states(fixed['liveServices'])}
+            for stage, report in reports.items():
+                target = previous / (stage + '-audit.json'); target.write_text(json.dumps(report)); target.chmod(0o600)
+                manifest['dataAudit' + stage.title()] = deployment.require_registration_zero_report(report, stage, frozen)
+                fixed['audits'][stage] = {'checkCount': 49, 'violationCount': 0,
+                    'checksSha256': deployment.historical_fingerprint(report['checks']),
+                    'gateSha256': deployment.historical_fingerprint(report['gate']),
+                    'identitySha256': deployment.historical_fingerprint(report['identity'])}
+            override = {'services': {service: {'image': manifest['images'][service]['reference'], 'pull_policy': 'never'}
+                for service in (*deployment.SERVICES, 'migrate')}}
+            (previous / 'compose.release.json').write_text(json.dumps(override)); fixed['overrideCanonicalSha256'] = deployment.historical_fingerprint(override)
+            (previous / 'docker-compose.aws-mysql.yml').write_text('synthetic unchanged compose')
+            (previous / '.env.aws.production').write_text('SYNTHETIC_PRIVATE_ENV=unchanged\n'); (previous / '.env.aws.production').chmod(0o600)
+            (previous / 'release-manifest.json').write_text(json.dumps(manifest)); (previous / 'release-manifest.json').chmod(0o600)
+            fixed['fileSha256'] = {path: deployment.hashlib.sha256((previous / path).read_bytes()).hexdigest()
+                for path in fixed['fileSha256']}
+            with patch.object(deployment, 'REGISTRATION_EMAIL_BASELINE', fixed):
+                yield SimpleNamespace(previous=previous, prior=prior, origin=prior.origin, fixed=fixed, manifest=manifest,
+                    states=copy.deepcopy(fixed['liveServices']), sealed=prior.sealed, worker=prior.worker)
+
+    def test_native_fd3a_files_bind_deployed_controller_and_complete_85_to_956_to_80_chain(self):
+        with self.baseline_fixture() as f:
+            manifest, origin = deployment.registration_runtime_baseline(f.previous, f.states,
+                profile_id=deployment.REGISTRATION_EMAIL_ID)
+            self.assertEqual(manifest, f.manifest); self.assertEqual(origin, f.origin)
+            f.sealed.assert_called_once_with(f.origin); f.worker.assert_called_once()
+            old_hash = f.worker.call_args.args[1]['controlSourceSha256']['scripts/production-release/remote-deploy.py']
+            self.assertEqual(old_hash, 'ed0bb4852033445ca670caca5bd94f9896fb2b0adf1de2d8ad1c639c22c945b2')
+            self.assertEqual(deployment.hashlib.sha256((f.previous / 'scripts/production-release/remote-deploy.py').read_bytes()).hexdigest(), old_hash)
+            self.assertNotEqual(old_hash, deployment.hashlib.sha256((self.root / 'scripts/production-release/remote-deploy.py').read_bytes()).hexdigest())
+
+    def test_changed_86_receipts_controls_prior_profiles_or_any_runtime_state_reject(self):
+        with self.baseline_fixture() as f:
+            paths = list(f.fixed['fileSha256']) + [deployment.REGISTRATION_SCOPE_FILE,
+                'scripts/production-release/remote-deploy.py']
+            for name in paths:
+                target = f.previous / name; raw = target.read_bytes(); target.write_bytes(raw + b' ')
+                with self.subTest(path=name), self.assertRaises(RuntimeError):
+                    deployment.registration_runtime_baseline(f.previous, f.states, profile_id=deployment.REGISTRATION_EMAIL_ID)
+                target.write_bytes(raw)
+            for name in ('release-manifest.json', deployment.REGISTRATION_SCOPE_FILE):
+                target = f.prior.previous / name; raw = target.read_bytes(); target.write_bytes(raw + b' ')
+                with self.subTest(prior=name), self.assertRaises(RuntimeError):
+                    deployment.registration_runtime_baseline(f.previous, f.states, profile_id=deployment.REGISTRATION_EMAIL_ID)
+                target.write_bytes(raw)
+            for service in f.states:
+                for key in ('containerId', 'image', 'reference', 'environmentSha256', 'status', 'health'):
+                    changed = copy.deepcopy(f.states); changed[service][key] = 'unreviewed'
+                    with self.subTest(service=service, key=key), self.assertRaises(RuntimeError):
+                        deployment.registration_runtime_baseline(f.previous, changed, profile_id=deployment.REGISTRATION_EMAIL_ID)
+
+    def test_actual_node_86_profile_gate_keeps_original80_finance_and_rejects_fact_drift(self):
+        fixture = FixedRegistrationRuntimeScopeTests(); fixture.profile = self.profile
+        reports, frozen, _policy, _seal = fixture.zero_fixture()
+        self.assertEqual(frozen['candidateCommit'], deployment.REGISTRATION_CURRENT)
+        for stage, report in reports.items():
+            self.assertEqual(deployment.require_registration_zero_report(report, stage, frozen)['violationCount'], 0)
+            self.assertEqual(report['gate']['clearanceSealSha256'], deployment.historical_fingerprint(deployment.REGISTRATION_CLEARANCE))
+            for key, value in [('checkCount', 48), ('unavailableCheckCount', 1), ('violationCount', 5)]:
+                changed = copy.deepcopy(report); changed[key] = value
+                with self.subTest(stage=stage, key=key), self.assertRaises(RuntimeError):
+                    deployment.require_registration_zero_report(changed, stage, frozen)
+            changed = copy.deepcopy(report); changed['gate']['sources']['accounts']['sha256'] = '0' * 64
+            with self.assertRaises(RuntimeError): deployment.require_registration_zero_report(changed, stage, frozen)
+
+    def test_86_publication_replaces_worker_only_preserves_three_profiles_and_closed24_readback(self):
+        value = self.legacy.publication(email=True, readback=True)
+        self.assertEqual(value.result, 0); self.assertIsInstance(value.verified, dict)
+        self.assertEqual(len(value.verified), 24)
+        self.assertEqual(value.verified['previousCommit'], deployment.REGISTRATION_EMAIL_CURRENT)
+        self.assertEqual(value.manifest['fixedRegistrationRelease']['financeSourceCommit'], deployment.REGISTRATION_CURRENT)
+        self.assertEqual(value.manifest['servicesUpdated'], ['auto-registration'])
+        self.assertEqual(value.manifest['newMigrations'], []); self.assertFalse(value.manifest['migrationApplied'])
+        self.assertEqual([call[0][1:] for call in value.calls], [('up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'auto-registration')])
+        for path in (deployment.REGISTRATION_SCOPE_FILE, deployment.REGISTRATION_CONTINUATION_FILE, deployment.REGISTRATION_INITIAL_FILE):
+            self.assertEqual(value.runtime_files[path], (self.root / path).read_bytes())
+        self.assertNotIn('apps/api/UNRELATED_MAIN_API', value.runtime_files)
+        self.assertEqual(value.runtime_files['.env.aws.production'], b'SYNTHETIC_PRIVATE_ENV=unchanged\n')
+        self.assertEqual(len(value.manifest['fixedRegistrationPreservedStates']['before']), 6)
+        self.assertEqual(value.manifest['fixedRegistrationPreservedStates']['before'], value.manifest['fixedRegistrationPreservedStates']['after'])
+        receipt = deployment.registration_readback_receipt('a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_EMAIL_ID)
+        for key, new in [('previousCommit', deployment.REGISTRATION_CONTINUATION_CURRENT), ('id', deployment.REGISTRATION_CONTINUATION_ID),
+                ('violationCount', 5), ('registrationSourceCommit', 'f' * 40), ('extra', True)]:
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                deployment.validate_fixed_registration_readback_projection({**receipt, key: new}, 'a' * 40, 'b' * 40,
+                    'c' * 64, profile_id=deployment.REGISTRATION_EMAIL_ID)
+
+    def test_retained_pre_switch_and_rollback_windows_stop_86_service_actions(self):
+        value = self.legacy.publication(email=True, retained=True)
+        self.assertEqual(value.result, 'BLOCKED'); self.assertFalse(value.calls); self.assertFalse(value.downloads)
+        value = self.legacy.publication(email=True, late_retained=True)
+        self.assertEqual(value.result, 1); self.assertFalse(value.calls); self.assertFalse(value.rollback)
+        value = self.legacy.publication(email=True, retained_rollback=True, fail_after=True)
+        self.assertEqual(value.result, 1); self.assertFalse(value.rollback); self.assertFalse(json.loads(value.output)['rollbackOk'])
+        for service in deployment.ALL_SERVICES:
+            if service == 'auto-registration': continue
+            with self.subTest(service=service):
+                value = self.legacy.publication(email=True, preserved_drift=service)
+                self.assertEqual(value.result, 1); self.assertEqual(value.current, value.previous)
+        for change in ('compose.release.json', '.env.aws.production', 'after-audit.json', 'audit-identity'):
+            with self.subTest(change=change):
+                value = self.legacy.publication(email=True, readback=True, readback_changed=change)
                 self.assertEqual(value.verified, 'REJECTED')
 
 

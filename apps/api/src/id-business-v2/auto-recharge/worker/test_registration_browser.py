@@ -2187,15 +2187,15 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.page.set_default_timeout(10000)
         removed = False
         if missing == 'button':
-            button = self.flow.button
-            async def disappearing_button(page, pattern, role='button'):
+            control = self.flow.email_submit_control
+            async def disappearing_button(email):
                 nonlocal removed
-                result = await button(page, pattern, role)
-                if result and not removed:
-                    await page.locator('#continue').evaluate('(node) => node.remove()')
+                result = await control(email)
+                if result[1] and not removed:
+                    await result[1].evaluate('(node) => node.remove()')
                     removed = True
                 return result
-            self.flow.button = disappearing_button
+            self.flow.email_submit_control = disappearing_button
         else:
             from registration_browser import EMAIL_INPUT
             field = self.flow.field
@@ -2216,7 +2216,8 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(removed)
         self.job.manual.assert_awaited_once_with('form_unrecognized')
         self.assertEqual(self.job.registration_observation_error,
-                         {'reason': 'session_load_timeout', 'error_type': 'TimeoutError'})
+                         {'reason': 'registration_page_changing', 'error_type': 'Error'} if missing == 'button'
+                         else {'reason': 'session_load_timeout', 'error_type': 'TimeoutError'})
         self.job.prepare_mail.assert_not_called()
         self.assertEqual(self.navigation_methods.count('POST'), 0)
         self.assertEqual(self.submissions, [])
@@ -2228,6 +2229,210 @@ class EmailSubmitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disappearing_email_value_read_is_bounded_before_mail_request(self):
         await self.bounded_email_read_fixture('email')
+
+    async def email_guard_fixture(self, mode):
+        """Real native event handlers and anonymous session reads; no identity mock."""
+        self.submissions.clear()
+        button = '<button>Continue</button>'
+        outside = ''
+        if mode == 'outside':
+            button = ''; outside = '<aside><button type="button">Continue</button></aside>'
+        elif mode == 'external_associated':
+            button = ''; outside = '<button form="email-form">Continue</button>'
+        pattern = ' pattern="allowed-only@example.test"' if mode == 'invalid' else ''
+        html = '<!doctype html><html><body><form id="email-form"><input type="email" required' + pattern + '>' + button + '</form>' + outside + '''<script>
+        document.querySelector('#email-form').onsubmit=async e=>{
+          e.preventDefault();await fetch('/fixture/email',{method:'POST'});
+        };
+        __EXTRA__
+        </script></body></html>'''
+        extra = ("document.querySelector('button').onclick=()=>fetch('/fixture/wrong',{method:'POST'});" if mode == 'outside' else
+                 '''document.querySelector('input').oninput=()=>setTimeout(()=>{
+                   document.body.innerHTML='<form id="code-form"><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';
+                   document.querySelector('form').onsubmit=e=>{e.preventDefault();fetch('/fixture/code',{method:'POST'});};
+                 },150);''' if mode == 'callback_race' else '')
+        html = html.replace('__EXTRA__', extra)
+        async def local(route):
+            path = urlsplit(route.request.url).path
+            self.navigation_methods.append(route.request.method)
+            if path == '/api/auth/session':
+                await route.fulfill(content_type='application/json', body='{}')
+            elif path.startswith('/fixture/'):
+                self.submissions.append(path)
+                await route.fulfill(content_type='application/json', body='{}')
+            else:
+                await route.fulfill(content_type='text/html', body=html)
+        await self.context.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
+        def prepare(_step, *, new_request=False):
+            self.job.awaiting_code = True
+            if mode == 'callback_race': time.sleep(.4)
+            if mode == 'callback_timeout': time.sleep(1.05)
+        self.job.prepare_mail = MagicMock(side_effect=prepare)
+        self.job.wait_code = AsyncMock(side_effect=Stop('fixture_code_observed'))
+        if mode == 'click_error':
+            from playwright.async_api import Error
+            control = self.flow.email_submit_control
+            injected = False
+            async def interrupted_control(email):
+                nonlocal injected
+                result = await control(email)
+                if result[1] and not injected:
+                    injected = True
+                    original_click = result[1].click
+                    async def interrupted_click(**kwargs):
+                        await original_click(**kwargs)
+                        raise Error('Element is not attached to the DOM: synthetic private failure')
+                    result[1].click = interrupted_click
+                return result
+            self.flow.email_submit_control = interrupted_control
+        category_mode = mode in {'prepare_context_error', 'callback_context_error'}
+        if category_mode:
+            from playwright.async_api import Error
+            self.context_error_injection_reached = False
+            method = 'email_submit_control' if mode == 'prepare_context_error' else 'email_submit_unchanged'
+            original = getattr(self.flow, method)
+            async def changing_context(*args):
+                await original(*args)  # Complete actual native DOM reads before the injected browser error.
+                try:
+                    await self.page.evaluate('''() => { throw new Error('Execution context was destroyed synthetic-private'); }''')
+                except Error as error:
+                    self.context_error_injection_reached = (
+                        type(error).__name__ == 'Error'
+                        and 'Execution context was destroyed synthetic-private' in str(error))
+                    if self.context_error_injection_reached:
+                        # The category test stops at its next observation after recording the actual injected error.
+                        self.flow.registration_view = AsyncMock(side_effect=Stop('form_unrecognized'))
+                    raise
+            setattr(self.flow, method, changing_context)
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 15 if category_mode else 1):
+            with self.assertRaises(Error if mode == 'click_error' else Stop) as stopped:
+                await asyncio.wait_for(self.flow.register(), timeout=10 if category_mode else 7)
+        return 'fixture_click_interrupted' if mode == 'click_error' else stopped.exception.report['reason']
+
+    async def test_unrelated_global_continue_never_prepares_or_clicks(self):
+        self.assertEqual(await self.email_guard_fixture('outside'), 'fixture_paused')
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_not_called()
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+        self.assertEqual(self.flow.registration_state['email_form_first_failure']['gate'], 'wrong_scope')
+
+    async def test_html_invalid_email_never_prepares_or_submits(self):
+        self.assertEqual(await self.email_guard_fixture('invalid'), 'fixture_paused')
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_not_called()
+        first = self.flow.registration_state['email_form_first_failure']
+        self.assertEqual((first['gate'], first['target'], first['validity']), ('invalid', 'matches', 'invalid'))
+
+    async def test_external_button_form_attribute_submits_exact_email_form_once(self):
+        self.assertEqual(await self.email_guard_fixture('external_associated'), 'fixture_paused')
+        self.assertEqual(self.submissions, ['/fixture/email'])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertTrue(self.flow.registration_state['email_click_returned'])
+
+    async def test_callback_navigation_never_clicks_replaced_code_continue(self):
+        self.assertEqual(await self.email_guard_fixture('callback_race'), 'fixture_code_observed')
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.job.wait_code.assert_awaited_once()
+        self.assertTrue(self.flow.registration_state['email_submit_prepared'])
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+        self.assertFalse(self.flow.registration_state.get('code_submitted'))
+
+    async def test_callback_exhausting_original_budget_never_clicks_or_refills(self):
+        self.assertEqual(await self.email_guard_fixture('callback_timeout'), 'fixture_paused')
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+        self.assertEqual(self.job.registration_observation_error['reason'], 'session_load_timeout')
+
+    async def test_prepare_context_error_is_closed_before_any_submission(self):
+        self.assertEqual(await self.email_guard_fixture('prepare_context_error'), 'fixture_paused')
+        self.assertTrue(self.context_error_injection_reached)
+        self.assertEqual(self.job.registration_observation_error,
+                         {'reason':'registration_page_changing', 'error_type':'Error'})
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_not_called()
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+
+    async def test_callback_context_error_keeps_request_and_never_clicks(self):
+        self.assertEqual(await self.email_guard_fixture('callback_context_error'), 'fixture_paused')
+        self.assertTrue(self.context_error_injection_reached)
+        self.assertEqual(self.job.registration_observation_error,
+                         {'reason':'registration_page_changing', 'error_type':'Error'})
+        self.assertEqual(self.submissions, [])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertFalse(self.flow.registration_state.get('email_submit_started'))
+
+    async def test_post_click_detach_preserves_possible_write_and_resume_never_repeats(self):
+        self.assertEqual(await self.email_guard_fixture('click_error'), 'fixture_click_interrupted')
+        self.assertEqual(self.submissions, ['/fixture/email'])
+        self.assertTrue(self.flow.registration_state['email_submit_started'])
+        self.assertTrue(self.flow.registration_state['email_submitted'])
+        self.assertFalse(self.flow.registration_state.get('email_click_returned'))
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1):
+            with self.assertRaises(Stop):
+                await asyncio.wait_for(self.flow.register(), timeout=7)
+        self.assertEqual(self.submissions, ['/fixture/email'])
+        self.job.prepare_mail.assert_called_once_with('email_code', new_request=True)
+        self.assertTrue(self.flow.registration_state['email_submit_started'])
+        self.assertTrue(self.flow.registration_state['email_submitted'])
+
+    async def test_email_diagnostic_is_closed_and_preserves_first_failure(self):
+        from browser_session import SessionBudget
+        await self.email_fixture('click')
+        await self.page.locator('input').fill('owner@example.test')
+        await self.page.evaluate('''() => {
+          document.querySelector('input').pattern='allowed-only@example.test';
+          document.querySelector('input').setAttribute('data-secret','synthetic-password-OTP-987654-token');
+          document.querySelector('form').insertAdjacentHTML('beforeend','<p role="alert">synthetic-password-OTP-987654-token owner@example.test</p>');
+        }''')
+        await self.flow.email_diagnostic('prepare', SessionBudget(1), 'invalid')
+        first = dict(self.flow.registration_state['email_form_first_failure'])
+        self.assertEqual((first['alert_count'], first['email_error']), (1, 'unknown'))
+        await self.page.locator('input').fill('')
+        await self.flow.email_diagnostic('observe', SessionBudget(1))
+        self.assertEqual(self.flow.registration_state['email_form_first_failure'], first)
+        self.assertEqual(first['target'], 'matches')
+        self.assertEqual(self.flow.registration_state['email_form_current']['target'], 'differs')
+        with self.assertLogs('registration', level='WARNING') as logs:
+            self.flow.log_email_diagnostic('before_safe_get')
+            self.flow.log_pause('form_unrecognized')
+        text = '\n'.join(logs.output)
+        for secret in ['synthetic-password', '987654', 'owner@example.test', 'https://chatgpt.com']:
+            self.assertNotIn(secret, text)
+        self.assertIn('gate=invalid', text)
+        self.assertEqual(self.submissions, [])
+        self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
+
+    async def test_email_business_alert_first_snapshot_survives_safe_get(self):
+        from browser_session import SessionBudget
+        await self.email_fixture('click')
+        await self.page.locator('input').fill('owner@example.test')
+        await self.page.locator('form').evaluate('''form => form.insertAdjacentHTML('beforeend',
+            '<p role="alert">This email address is not supported.</p>')''')
+        await self.flow.email_diagnostic('observe', SessionBudget(1))
+        first = dict(self.flow.registration_state['email_form_first_failure'])
+        self.assertEqual((first['email_error'], first['target']), ('not_supported', 'matches'))
+        self.assertTrue(await self.flow.refresh_registration())
+        await self.flow.email_diagnostic('observe', SessionBudget(1))
+        self.assertEqual(self.flow.registration_state['email_form_first_failure'], first)
+        current = self.flow.registration_state['email_form_current']
+        self.assertEqual((current['email_error'], current['target']), ('none', 'differs'))
+        self.assertEqual(self.submissions, [])
+
+    async def test_diagnostic_timeout_is_not_a_primary_failure_or_new_budget(self):
+        from browser_session import SessionBudget
+        await self.email_fixture('click')
+        budget = SessionBudget(.001)
+        await asyncio.sleep(.01)
+        self.job.registration_observation_error = {'reason':'session_network_error', 'error_type':'Error'}
+        started = time.monotonic()
+        await self.flow.email_diagnostic('prepare', budget, 'invalid')
+        self.assertLess(time.monotonic() - started, .1)
+        self.assertEqual(self.flow.registration_state['email_form_current']['read'], 'not_measured')
+        self.assertEqual(self.job.registration_observation_error, {'reason':'session_network_error', 'error_type':'Error'})
+        self.assertEqual(self.submissions, [])
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
@@ -2906,6 +3111,7 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         flow=RegistrationBrowser(job,context)
         flow.page=SimpleNamespace(url='https://chatgpt.com/onboarding?token=private-token',goto=AsyncMock(),reload=AsyncMock())
         flow.refresh_registration=AsyncMock(return_value=False)
+        flow.email_diagnostic=AsyncMock()  # These unit cases exercise existing pause facts, not native DOM classification.
         async def settle(seconds):
             if seconds==.5:await asyncio.sleep(.05)
         flow.settle=settle
@@ -2913,9 +3119,13 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
     async def email_flow(self, *, fill_error=None, click_error=None):
         flow=self.flow()
-        field=SimpleNamespace(fill=AsyncMock(side_effect=fill_error),input_value=AsyncMock(return_value=flow.data['email']))
+        form=SimpleNamespace()
+        field=SimpleNamespace(fill=AsyncMock(side_effect=fill_error),input_value=AsyncMock(return_value=flow.data['email']),
+            evaluate_handle=AsyncMock(return_value=SimpleNamespace(as_element=lambda:form)))
         submit=SimpleNamespace(is_enabled=AsyncMock(return_value=True),click=AsyncMock())
         flow.field=AsyncMock(return_value=field);flow.button=AsyncMock(return_value=submit)
+        flow.email_submit_control=AsyncMock(return_value=(field,submit,None))
+        flow.email_submit_unchanged=AsyncMock(return_value=True)
         flow.challenge=AsyncMock(return_value=False)
         async def observed():
             return 'email',field
@@ -3020,3 +3230,25 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.exception.report['reason'],'operation_cancelled')
         logger.return_value.warning.assert_not_called();flow.job.manual.assert_not_awaited()
         flow.job.prepare_mail.assert_not_called();flow.page.goto.assert_not_awaited()
+
+    async def test_prepare_and_callback_context_failures_are_closed_and_keep_first_reason(self):
+        class Error(Exception):
+            pass
+        for method in ['email_submit_control', 'email_submit_unchanged']:
+            for marker in ['Execution context was destroyed', 'Cannot find context with specified id']:
+                for retained in [False, True]:
+                    with self.subTest(method=method, marker=marker, retained=retained):
+                        flow, field, submit = await self.email_flow()
+                        expected = {'reason':'registration_page_changing', 'error_type':'Error'}
+                        if retained:
+                            expected = {'reason':'session_network_error', 'error_type':'Error'}
+                            flow.job.registration_observation_error = expected
+                        getattr(flow, method).side_effect = Error(marker + ' private-token')
+                        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', .1), self.assertLogs('registration', level='WARNING') as logs:
+                            with self.assertRaises(Stop):
+                                await flow.register()
+                        self.assertEqual(flow.job.registration_observation_error, expected)
+                        submit.click.assert_not_awaited()
+                        field.fill.assert_awaited_once_with(flow.data['email'])
+                        self.assertFalse(flow.registration_state.get('email_submit_started'))
+                        self.assertNotIn('private-token', '\n'.join(logs.output))
