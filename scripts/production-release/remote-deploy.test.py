@@ -6512,7 +6512,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
     """Synthetic native receipts never activate the real disabled profile."""
 
     def setUp(self):
-        self.runtime = Path(__file__).resolve().parents[2] / '.runtime/recharge-pro-main80-integration-20261006'
+        self.runtime = Path(__file__).resolve().parents[2] / '.runtime/recharge-pro-b91-integration-20261006'
         self.runtime.mkdir(parents=True, exist_ok=True)
         self.repository = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
         self.commit, self.tree = 'a' * 40, 'b' * 40
@@ -6533,12 +6533,14 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             changed = patch.object(deployment, name, value); changed.start(); self.addCleanup(changed.stop)
         self.contents = {name: (project / name).read_bytes() for name in
             deployment.RECHARGE_SCOPE_CANDIDATES | deployment.RECHARGE_MAIN80_CONTROLS | set(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)}
-        for source_commit, bindings in ((deployment.RECHARGE_MAIN80_CARRIED_COMMIT, deployment.RECHARGE_MAIN80_FD_CARRIED_SOURCE),
-                                       (deployment.RECHARGE_MAIN80_FA_CARRIED_COMMIT, deployment.RECHARGE_MAIN80_FA_CARRIED_SOURCE)):
-            for name, digest in bindings.items():
-                raw = subprocess.check_output(['git', 'show', source_commit + ':' + name], cwd=project)
-                self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest)
-                self.contents[name] = raw
+        # Historical carried files retain their reviewed b91 bytes and modes
+        # when the candidate introduces newer registration or control sources.
+        for name, digest in deployment.RECHARGE_MAIN80_CARRIED_SOURCE.items():
+            raw = subprocess.check_output(['git', 'show', deployment.RECHARGE_MAIN80_CURRENT + ':' + name], cwd=project)
+            entry = subprocess.check_output(['git', 'ls-tree', deployment.RECHARGE_MAIN80_CURRENT, '--', name], cwd=project).decode().strip().split()
+            self.assertEqual(entry[:2], ['100644', 'blob'])
+            self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest)
+            self.contents[name] = raw
         self.profile.update(enabled=True, approvalStatus='APPROVED')
         self.profile['carriedSourceOnlySha256'] = copy.deepcopy(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)
         self.profile['sourceModes'] = {name: 0o644 for name in self.contents}
@@ -6565,18 +6567,23 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         return {'ok': False, 'checkCount': 49, 'violationCount': 5, 'checks': rows,
             'gate': deployment.main80_recharge_gate(self.profile, self.policy, self.seal, stage)}
 
-    def fixture(self, root):
-        base = root / 'native-runtime'; previous = base / 'releases' / ('20261006T000001Z-' + deployment.RECHARGE_MAIN80_CURRENT[:12])
+    def finance_fixture(self, root):
+        base = root / 'native-runtime'; previous = base / 'releases' / ('20261006T000001Z-' + deployment.RECHARGE_MAIN80_FINANCE_CURRENT[:12])
         previous.mkdir(parents=True); (base / 'current').symlink_to(previous)
         images = {}
         for service in (*deployment.SERVICES, 'migrate'):
             native = service in ('api', 'admin', 'migrate')
-            source = deployment.RECHARGE_MAIN80_CURRENT if native else deployment.HISTORY_ORDER_ARCHIVE_BASELINE
+            source = deployment.RECHARGE_MAIN80_FINANCE_CURRENT if native else deployment.HISTORY_ORDER_ARCHIVE_BASELINE
             run = '999002' if native else '37346732072'
             images[service] = {'sourceCommit': source,
                 'reference': self.repository + ':' + source + '-' + run + '-1-' + service,
                 'digest': self.profile['financeValidator']['images'][service] if native
                     else 'sha256:' + deployment.hashlib.sha256(service.encode()).hexdigest()}
+        # Native main80 retains this sealed historical record without declaring
+        # a seventh runtime override service.
+        images['caddy'] = {'sourceCommit': deployment.HISTORY_ORDER_ARCHIVE_BASELINE,
+            'reference': 'caddy:synthetic-pinned-history',
+            'digest': 'sha256:' + deployment.hashlib.sha256(b'caddy').hexdigest()}
         states = {service: {'image': images[service]['digest'] if service in images else
                     'sha256:' + deployment.hashlib.sha256(service.encode()).hexdigest(),
                 'reference': images[service]['reference'] if service in images else 'synthetic:' + service,
@@ -6605,7 +6612,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             path = previous / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw); path.chmod(mode)
         finance = self.profile['financeValidator']
         reports = {stage: self.report(stage) for stage in ('before', 'after')}
-        manifest = {'commit': deployment.RECHARGE_MAIN80_CURRENT, 'sourceTree': deployment.RECHARGE_MAIN80_TREE,
+        manifest = {'commit': deployment.RECHARGE_MAIN80_FINANCE_CURRENT, 'sourceTree': deployment.RECHARGE_MAIN80_FINANCE_TREE,
             'previousCommit': deployment.HISTORY_ORDER_ARCHIVE_BASELINE,
             'previousRelease': str(base / 'releases' / ('20261005T000001Z-' + deployment.HISTORY_ORDER_ARCHIVE_BASELINE[:12])),
             'deploymentRun': 'github-actions-999001-1', 'imageBuildRun': 'github-actions-999002-1',
@@ -6637,7 +6644,81 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         baseline['overrideCanonicalSha256'] = deployment.historical_fingerprint(override)
         return SimpleNamespace(base=base, previous=previous, states=states, manifest=manifest,
             reports=reports, override=override, frozen=frozen, seal=seal, cleanup=cleanup,
-            environment=environment, archive=self.source_archive(deployment.RECHARGE_MAIN80_CURRENT, frozen))
+            environment=environment, archive=self.source_archive(deployment.RECHARGE_MAIN80_FINANCE_CURRENT, frozen))
+
+
+    def zero_report(self, stage, historical):
+        checks = copy.deepcopy(historical['checks'])
+        for row in checks:
+            row.update(status='OK', count=0, samples=[])
+        clearance = copy.deepcopy(deployment.REGISTRATION_CLEARANCE)
+        clearance['checksSha256'] = deployment.historical_fingerprint(checks)
+        for source in clearance['sources'].values():
+            source['ids'] = [f'55555555-5555-5555-5555-{index:012d}' for index in range(len(source['ids']))]
+        with patch.object(deployment, 'REGISTRATION_CLEARANCE', clearance):
+            gate = deployment.registration_zero_gate(stage, historical['gate'])
+        identity = {'currentUser':'id_business_audit@synthetic', 'databaseName':deployment.MAINTENANCE_DATABASE,
+            'transactionIsolation':'REPEATABLE-READ','foreignKeyChecks':1,'readOnly':0,'superReadOnly':0,'sessionReadOnly':1}
+        return {'ok':True,'checkCount':49,'violationCount':0,'failedChecks':[], 'identity':identity,
+            'checks':checks,'gate':gate,'generatedAt':'2026-10-06T00:00:01.000Z'}, clearance
+
+    def fixture(self, root):
+        origin = self.finance_fixture(root)
+        previous = origin.base/'releases'/('20261006T000002Z-'+deployment.RECHARGE_MAIN80_CURRENT[:12])
+        previous.mkdir()
+        predecessor = origin.base/'releases'/('20261006T000003Z-'+deployment.REGISTRATION_EMAIL_REQUEST_CURRENT[:12])
+        predecessor.mkdir(); (predecessor/'.env.aws.production').write_bytes(origin.environment)
+        project = Path(__file__).resolve().parents[2]
+        registration=json.loads((project/deployment.REGISTRATION_EMAIL_REQUEST_FILE).read_bytes())
+        registration_sources=set(registration['registrationSourceSha256'])|set(registration['controlSourceSha256'])
+        baseline_git = {**origin.frozen, **{name:(subprocess.check_output(['git','show',deployment.RECHARGE_MAIN80_CURRENT+':'+name],cwd=project),0o644)
+            for name in set(self.contents)|registration_sources},deployment.RECHARGE_MAIN80_FILE:((project/deployment.RECHARGE_MAIN80_FILE).read_bytes(),0o644)}
+        overrides = {name:(deployment.hashlib.sha256(origin.frozen[name][0]).hexdigest(),0o644)
+            for name in deployment.RECHARGE_MAIN80_RUNTIME_SOURCE_OVERRIDES}
+        runtime = {**baseline_git, **{name:origin.frozen[name] for name in overrides}}
+        runtime.pop(deployment.RECHARGE_MAIN80_FILE)
+        for name,(raw,mode) in runtime.items():
+            path=previous/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(mode)
+        states=copy.deepcopy(origin.states);images=copy.deepcopy(origin.manifest['images'])
+        images['auto-registration']={'sourceCommit':deployment.RECHARGE_MAIN80_CURRENT,
+            'reference':self.repository+':'+deployment.RECHARGE_MAIN80_CURRENT+'-999001-1-auto-recharge',
+            'digest':'sha256:'+deployment.hashlib.sha256(b'synthetic-b91-registration-image').hexdigest()}
+        states['auto-registration'].update(image=images['auto-registration']['digest'],reference=images['auto-registration']['reference'],
+            containerId=deployment.hashlib.sha256(b'synthetic-b91-registration-container').hexdigest())
+        reports={}
+        for stage in ('before','after'):
+            reports[stage],clearance=self.zero_report(stage,origin.reports[stage])
+        contract=deployment.registration_contract(deployment.REGISTRATION_EMAIL_REQUEST_ID)
+        manifest={**copy.deepcopy(origin.manifest),'commit':deployment.RECHARGE_MAIN80_CURRENT,'sourceTree':deployment.RECHARGE_MAIN80_TREE,
+            'previousCommit':deployment.REGISTRATION_EMAIL_REQUEST_CURRENT,'previousRelease':str(predecessor),
+            'deploymentRun':'github-actions-999001-1','imageBuildRun':'github-actions-999001-1',
+            'servicesUpdated':['auto-registration'],'migrationApplied':False,'newMigrations':[], 'images':images,
+            'databaseGrants':{'status':'SKIPPED','reason':'FIXED_REGISTRATION_NO_MIGRATIONS'},
+            'fixedRegistrationRelease':{'id':contract['id'],'profileRawSha256':deployment.hashlib.sha256((previous/contract['file']).read_bytes()).hexdigest(),
+                'registrationSourceCommit':contract['source'],'workerBasisCommit':deployment.RECHARGE_SCOPE_CURRENT,
+                'workerProjectionSha256':contract['projectionSha256'],'financeSourceCommit':deployment.REGISTRATION_CURRENT,
+                'financePolicyId':deployment.HISTORY_ORDER_ARCHIVE_POLICY_ID,'financeMode':clearance['mode'],
+                'clearanceSealSha256':deployment.historical_fingerprint(clearance),'environmentUnchanged':True,
+                'migrationStatus':'SKIPPED','databaseGrantSyncStatus':'SKIPPED','cacheStatus':'SKIPPED'},
+            'fixedRegistrationPreservedStates':{'before':deployment.registration_preserved_states(states),'after':deployment.registration_preserved_states(states)},
+            **{'dataAudit'+stage.title():{'checkCount':49,'violationCount':0,'registrationFinanceGate':reports[stage]['gate']} for stage in reports}}
+        for name,value in {'release-manifest.json':manifest,**{stage+'-audit.json':report for stage,report in reports.items()}}.items():
+            path=previous/name;path.write_text(json.dumps(value));path.chmod(0o600)
+        (previous/'.env.aws.production').write_bytes(origin.environment);(previous/'.env.aws.production').chmod(0o600)
+        override={'services':{service:{'image':images[service]['reference'],'pull_policy':'never'} for service in (*deployment.SERVICES,'migrate')}}
+        (previous/'compose.release.json').write_text(json.dumps(override));(previous/'compose.release.json').chmod(0o600)
+        for filename,original in (('order-archive-seal.reader.json',origin.seal),('order-archive-cleanup.reader.json',origin.cleanup)):
+            (previous/filename).write_bytes(original.read_bytes());(previous/filename).chmod(0o400)
+        (origin.base/'current').unlink();(origin.base/'current').symlink_to(previous)
+        baseline=self.profile['baselineRelease']
+        for filename,key in (('release-manifest.json','manifestSha256'),('before-audit.json','beforeAuditSha256'),('after-audit.json','afterAuditSha256'),
+                ('docker-compose.aws-mysql.yml','composeSha256'),('compose.release.json','overrideRawSha256')):
+            baseline[key]=deployment.hashlib.sha256((previous/filename).read_bytes()).hexdigest()
+        baseline['overrideCanonicalSha256']=deployment.historical_fingerprint(override)
+        return SimpleNamespace(**{**vars(origin),'previous':previous,'origin':origin.previous,'states':states,'manifest':manifest,
+            'reports':reports,'historicalReports':origin.reports,'override':override,'frozen':baseline_git,
+            'archive':self.source_archive(deployment.RECHARGE_MAIN80_CURRENT,baseline_git),'runtimeOverrides':overrides,'clearance':clearance,
+            'predecessor':predecessor,'predecessorManifest':origin.manifest,'registrationProfile':registration})
 
     def patches(self, fixture):
         stack = ExitStack()
@@ -6646,6 +6727,16 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         stack.enter_context(patch.object(deployment, 'POST_CLEANUP_RECEIPT', fixture.cleanup))
         stack.enter_context(patch.object(deployment, 'has_registration_worker', return_value=True))
         reviewed = stack.enter_context(patch.object(deployment, 'reviewed_order_archive_seal', return_value=(self.policy, self.seal)))
+        stack.enter_context(patch.object(deployment, 'REGISTRATION_CLEARANCE', fixture.clearance))
+        stack.enter_context(patch.object(deployment, 'REGISTRATION_BASELINE', {**deployment.REGISTRATION_BASELINE,
+            **{stage+'AuditSha256':deployment.hashlib.sha256((fixture.origin/(stage+'-audit.json')).read_bytes()).hexdigest() for stage in ('before','after')}}))
+        stack.enter_context(patch.object(deployment, 'RECHARGE_MAIN80_RUNTIME_SOURCE_OVERRIDES', fixture.runtimeOverrides))
+        stack.enter_context(patch.object(deployment, 'RECHARGE_MAIN80_RUNTIME_STATES_SHA256', deployment.historical_fingerprint(fixture.states)))
+        stack.enter_context(patch.object(deployment, 'registration_runtime_baseline', return_value=(fixture.predecessorManifest,fixture.origin)))
+        stack.enter_context(patch.object(deployment, 'registration_profile', return_value=fixture.registrationProfile))
+        stack.enter_context(patch.object(deployment, 'registration_worker_hashes'))
+        metadata=fixture.previous.stat()
+        stack.enter_context(patch.object(deployment, 'compose', return_value=json.dumps({'uid':metadata.st_uid,'gid':metadata.st_gid,'user':'node'})))
         return stack, reviewed
 
     @staticmethod
@@ -6680,24 +6771,24 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         draft['carriedSourceOnlySha256'][next(iter(draft['carriedSourceOnlySha256']))] = '0' * 64
         self.assertEqual(source, before)
 
-    def test_main80_carried_source_scope_requires_exact_seven_fd_fa_pins_and_modes(self):
+    def test_main80_carried_source_scope_requires_exact_thirteen_b91_pins_and_modes(self):
         self.assertEqual(len(deployment.RECHARGE_MAIN80_FD_CARRIED_SOURCE), 5)
         self.assertEqual(len(deployment.RECHARGE_MAIN80_FA_CARRIED_SOURCE), 2)
-        self.assertEqual(len(deployment.RECHARGE_MAIN80_CARRIED_SOURCE), 7)
+        self.assertEqual(len(deployment.RECHARGE_MAIN80_CARRIED_SOURCE), 13)
         self.assertEqual(deployment.fixed_recharge_binding(deployment.RECHARGE_MAIN80_ID)['carried'],
             frozenset(deployment.RECHARGE_MAIN80_CARRIED_SOURCE))
         self.assertEqual(deployment.main80_recharge_scope(self.profile), self.profile)
         for name, digest in deployment.RECHARGE_MAIN80_CARRIED_SOURCE.items():
             self.assertEqual(deployment.hashlib.sha256(self.contents[name]).hexdigest(), digest)
             mutations = ('wrong-pin', 'missing', 'mode') + (
-                ('old80-pin',) if name in deployment.RECHARGE_MAIN80_FD_CARRIED_SOURCE else ())
+                ('old80-pin',) if name in deployment.RECHARGE_MAIN80_FD_CARRIED_SOURCE and name != 'docs/AUTO_REGISTRATION.md' else ())
             for mutation in mutations:
                 bad = copy.deepcopy(self.profile)
                 if mutation == 'wrong-pin': bad['carriedSourceOnlySha256'][name] = '0' * 64
                 elif mutation == 'missing': bad['carriedSourceOnlySha256'].pop(name)
                 elif mutation == 'mode': bad['sourceModes'][name] = 0o755
                 else:
-                    old = subprocess.run(['git', 'show', deployment.RECHARGE_MAIN80_CURRENT + ':' + name],
+                    old = subprocess.run(['git', 'show', deployment.RECHARGE_MAIN80_FINANCE_CURRENT + ':' + name],
                         cwd=Path(__file__).resolve().parents[2], capture_output=True, check=True).stdout
                     bad['carriedSourceOnlySha256'][name] = deployment.hashlib.sha256(old).hexdigest()
                 with self.subTest(name=name, mutation=mutation), self.assertRaises(RuntimeError):
@@ -6719,7 +6810,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 for path in deployment.RECHARGE_MAIN80_CARRIED_SOURCE:
                     target = f.previous / path; raw = target.read_bytes()
                     for mutation in ('bytes', 'mode', 'missing'):
-                        if mutation == 'bytes': target.write_bytes(f.frozen.get(path, (b'synthetic unreviewed FA source',))[0])
+                        if mutation == 'bytes': target.write_bytes(raw+b'synthetic-unreviewed-bytes')
                         elif mutation == 'mode': target.chmod(0o755)
                         else: target.unlink()
                         with self.subTest(path=path, mutation=mutation), self.assertRaises(RuntimeError):
@@ -6728,9 +6819,9 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 extra = f.previous / 'docs/UNREVIEWED_REGISTRATION.md'; extra.write_bytes(b'synthetic unreviewed eighth file'); extra.chmod(0o644)
                 with self.assertRaises(RuntimeError): deployment.verify_main80_recharge_candidate_source(f.previous, f.archive, self.profile)
 
-    def test_main80_fa_sources_are_original_bytes_and_only_the_exact_carried_group_can_inherit_them(self):
-        for name, digest in deployment.RECHARGE_MAIN80_FA_CARRIED_SOURCE.items():
-            raw = subprocess.run(['git', 'show', deployment.RECHARGE_MAIN80_FA_CARRIED_COMMIT + ':' + name],
+    def test_main80_b91_registration_sources_are_original_bytes_and_only_the_exact_carried_group_can_inherit_them(self):
+        for name, digest in deployment.RECHARGE_MAIN80_CARRIED_SOURCE.items():
+            raw = subprocess.run(['git', 'show', deployment.RECHARGE_MAIN80_CURRENT + ':' + name],
                 cwd=Path(__file__).resolve().parents[2], capture_output=True, check=True).stdout
             self.assertEqual(raw, self.contents[name])
             self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest)
@@ -6746,7 +6837,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 with self.subTest(name=name, mutation=mutation), self.assertRaises(RuntimeError):
                     deployment.main80_recharge_scope(bad)
 
-    def test_main80_candidate_rejects_new_d55_registration_job_and_test_bytes(self):
+    def test_main80_candidate_rejects_stale_fd_registration_job_and_test_bytes(self):
         project = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             fixture = self.fixture(Path(name)); stack, _ = self.patches(fixture)
@@ -6758,7 +6849,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 deployment.verify_main80_recharge_candidate_source(fixture.previous, fixture.archive, self.profile)
                 for basename in ('registration_job.py', 'test_registration.py'):
                     path = deployment.REGISTRATION_WORKER_PREFIX + basename
-                    current = subprocess.check_output(['git', 'show', deployment.REGISTRATION_SOURCE + ':' + path], cwd=project)
+                    current = subprocess.check_output(['git', 'show', deployment.RECHARGE_MAIN80_CARRIED_COMMIT + ':' + path], cwd=project)
                     self.assertNotEqual(deployment.hashlib.sha256(current).hexdigest(),
                         deployment.RECHARGE_MAIN80_CARRIED_SOURCE[path])
                     target = fixture.previous / path; original = target.read_bytes(); target.write_bytes(current)
@@ -6776,9 +6867,10 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         argv = ['remote-deploy.py', '--commit', self.commit, '--source-tree', self.tree,
             '--repository', self.repository, '--expected-current', deployment.RECHARGE_MAIN80_CURRENT,
             '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111']
-        for flag in ('--recharge-pro-main80', '--recharge-pro-menu-b8', '--recharge-pro-menu-7f'):
-            with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', argv +
-                    [flag, '--registration-worker-b8-80']), patch.object(deployment, 'registration_release') as dispatch, \
+        for flag,registration_flag in ((flag,registration) for flag in ('--recharge-pro-main80', '--recharge-pro-menu-b8', '--recharge-pro-menu-7f')
+                for registration in ('--registration-worker-b8-80','--registration-worker-956','--registration-worker-85','--registration-worker-86')):
+            with self.subTest(flag=flag,registration=registration_flag), patch.object(deployment.sys, 'argv', argv +
+                    [flag, registration_flag]), patch.object(deployment, 'registration_release') as dispatch, \
                     patch.object(deployment, 'run') as commands, patch.object(deployment.urllib.request, 'urlopen') as download:
                 with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
                 dispatch.assert_not_called(); commands.assert_not_called(); download.assert_not_called()
@@ -6815,7 +6907,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         return {'version': 1, 'id': deployment.RECHARGE_MAIN80_ID, 'status': 'VERIFIED', 'currentCommit': self.commit,
             'sourceTree': self.tree, 'previousCommit': deployment.RECHARGE_MAIN80_CURRENT, 'profileSha256': 'c'*64,
             'servicesUpdated': ['auto-recharge'], 'preservedServiceCount': 6, 'checkCount': 49,
-            'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 5, 'storedGatesMatched': True,
+            'executedCheckCount': 49, 'unavailableCheckCount': 0, 'violationCount': 0, 'storedGatesMatched': True,
             'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True, 'migrationStatus': 'SKIPPED',
             'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED', 'liveServicesHealthy': True, 'rechargeImageMatched': True}
 
@@ -6830,13 +6922,45 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): deployment.validate_main80_recharge_readback_projection(wrong,self.commit,self.tree,'c'*64)
         with self.assertRaises(RuntimeError): deployment.validate_main80_recharge_readback_projection(good,deployment.RECHARGE_MAIN80_CURRENT,self.tree,'c'*64)
 
+    def test_main80_old_4c_runtime_and_historical_five_cannot_authorize_currentb91(self):
+        self.assertNotEqual(deployment.RECHARGE_MAIN80_CURRENT,deployment.REGISTRATION_EMAIL_REQUEST_CURRENT)
+        for old in (deployment.REGISTRATION_EMAIL_REQUEST_CURRENT,deployment.REGISTRATION_CALLBACK_CURRENT,
+                deployment.REGISTRATION_EMAIL_CURRENT,
+                deployment.RECHARGE_MAIN80_FINANCE_CURRENT):
+            for field in ('expectedCurrent','commit'):
+                value=copy.deepcopy(self.profile)
+                if field=='expectedCurrent':value[field]=old
+                else:value['baselineRelease'][field]=old
+                with self.subTest(old=old,field=field),self.assertRaises(RuntimeError):deployment.main80_recharge_scope(value)
+        for field,alternate in (('previousCommit',deployment.REGISTRATION_EMAIL_REQUEST_CURRENT),('violationCount',5)):
+            receipt=self.projection();receipt[field]=alternate
+            with self.subTest(field=field),self.assertRaises(RuntimeError):
+                deployment.validate_main80_recharge_readback_projection(receipt,self.commit,self.tree,'c'*64)
+
+    def test_main80_88_origin_remains_closed_after_recharge_current_switch_and_rejects_87_identity(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name))
+            result=self.publication(f)
+            self.assertEqual(result.result,0,result.error or result.output)
+            self.assertNotEqual(result.current,f.previous)
+            self.assertEqual(result.proof['previousCommit'],deployment.RECHARGE_MAIN80_CURRENT)
+            self.assertEqual(result.proof['violationCount'],0)
+            stack,_=self.patches(f)
+            with stack,patch.object(deployment,'registration_runtime_baseline',
+                    return_value=(f.predecessorManifest,f.origin)) as chain:
+                self.assertEqual(deployment.main80_recharge_origin(f.previous,f.manifest),f.origin)
+                chain.assert_called_once_with(f.predecessor,profile_id=deployment.REGISTRATION_EMAIL_REQUEST_ID)
+                bad=copy.deepcopy(f.manifest)
+                bad['fixedRegistrationRelease']['id']=deployment.REGISTRATION_CALLBACK_ID
+                with self.assertRaises(RuntimeError):deployment.main80_recharge_origin(f.previous,bad)
+                self.assertEqual((f.base/'current').resolve(),result.current)
     def test_main80_native_baseline_binds_actual_private_bytes_and_all_public_sources(self):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             f = self.fixture(Path(name)); stack, reviewed = self.patches(f)
             with stack:
-                self.assertEqual(deployment.main80_recharge_baseline(f.previous,self.profile,f.manifest,f.states,source_archive=f.archive),f.previous)
-                reviewed.assert_called_with(f.previous,self.profile['financeValidator']['releaseSealSha256'],deployment.RECHARGE_MAIN80_CURRENT,
-                    deployment.RECHARGE_MAIN80_TREE,'f'*64,'999002','1')
+                self.assertEqual(deployment.main80_recharge_baseline(f.previous,self.profile,f.manifest,f.states,source_archive=f.archive),f.origin)
+                reviewed.assert_called_with(f.origin,self.profile['financeValidator']['releaseSealSha256'],deployment.RECHARGE_MAIN80_FINANCE_CURRENT,
+                    deployment.RECHARGE_MAIN80_FINANCE_TREE,'f'*64,'999002','1')
                 for path in (f.seal,f.cleanup,f.previous/'release-manifest.json',f.previous/'before-audit.json',
                         f.previous/'after-audit.json',f.previous/'docker-compose.aws-mysql.yml',f.previous/'compose.release.json',f.previous/'package.json'):
                     raw = path.read_bytes(); path.write_bytes(raw+b' ')
@@ -6845,6 +6969,31 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                     path.write_bytes(raw)
                 extra=f.previous/'scripts/unapproved.py';extra.write_text('synthetic')
                 with self.assertRaises(RuntimeError): deployment.main80_recharge_baseline(f.previous,self.profile,f.manifest,f.states,source_archive=f.archive)
+
+    def test_main80_fixture_keeps_reviewed_runtime_controls_when_candidate_head_changes(self):
+        project=Path(__file__).resolve().parents[2]
+        producer='scripts/production-release/remote-deploy.py'
+        git_output=subprocess.check_output
+        original=git_output(['git','show',deployment.RECHARGE_MAIN80_CURRENT+':'+producer],cwd=project)
+        self.assertNotEqual(original,self.contents[producer])
+        refs=[]
+        def candidate_git(command,*args,**kwargs):
+            if command[:2]==['git','show']:
+                refs.append(command[2])
+                if command[2]=='HEAD:'+producer:
+                    return b'synthetic changed candidate control; never the original runtime source'
+            return git_output(command,*args,**kwargs)
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name,patch.object(subprocess,'check_output',side_effect=candidate_git):
+            f=self.fixture(Path(name))
+            self.assertEqual((f.previous/producer).read_bytes(),original)
+            self.assertEqual(deployment.hashlib.sha256(original).hexdigest(),f.registrationProfile['controlSourceSha256'][producer])
+            result=self.publication(f)
+            self.assertEqual(result.result,0,result.error or result.output)
+            self.assertNotEqual(result.current,f.previous)
+            self.assertEqual(result.proof['previousCommit'],deployment.RECHARGE_MAIN80_CURRENT)
+            self.assertEqual(result.proof['violationCount'],0)
+            self.assertTrue(refs)
+            self.assertTrue(all(ref.startswith(deployment.RECHARGE_MAIN80_CURRENT+':') for ref in refs))
 
     def test_main80_native_gate_rejects_every_changed_fact_or_incomplete_checks(self):
         report=self.report('before')
@@ -6857,27 +7006,27 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             bad=copy.deepcopy(report);mutate(bad)
             with self.assertRaises(RuntimeError): deployment.main80_recharge_report(bad,self.profile,self.policy,self.seal,'before')
 
-    def test_main80_fresh_audit_calls_original_native_identity_and_rejects_fingerprint_drift(self):
+    def test_main80_fresh_zero_audit_keeps_original_finance_source_and_rejects_fingerprint_drift(self):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             f=self.fixture(Path(name));stack,_=self.patches(f)
             new=f.base/'new';new.mkdir();receipt=new/'receipt.json'
             def native(directory,receipt,**kwargs):
                 report=copy.deepcopy(f.reports[kwargs['stage']]);receipt.write_text(json.dumps(report));receipt.chmod(0o600)
-                return {'checkCount':49,'violationCount':5,'historicalException':report['gate']}
-            with stack,patch.object(deployment,'order_archive_audit',side_effect=native) as original:
-                result=deployment.main80_recharge_audit(new,receipt,stage='before',source=f.previous,profile=self.profile)
-                self.assertEqual(result['checkCount'],49)
+                return {'checkCount':49,'violationCount':0,'registrationFinanceGate':report['gate']}
+            with stack,patch.object(deployment,'registration_finance_audit',side_effect=native) as original:
+                result=deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,profile=self.profile,control_source=f.previous)
+                self.assertEqual(result['checkCount'],49);self.assertEqual(result['violationCount'],0)
                 kwargs=original.call_args.kwargs
-                self.assertEqual(kwargs['source'],f.previous);self.assertEqual(kwargs['candidate_commit'],deployment.RECHARGE_MAIN80_CURRENT)
-                self.assertEqual(kwargs['candidate_tree'],deployment.RECHARGE_MAIN80_TREE)
-                self.assertEqual(kwargs['image_run'],'999002');self.assertEqual(kwargs['image_attempt'],'1')
-                bad=copy.deepcopy(f.reports['before']);bad['checks'][0]['samples'][0]['detailSha256']='b'*64
-                def drift(directory,receipt,**kwargs):
-                    receipt.write_text(json.dumps(bad));receipt.chmod(0o600)
-                    return {'checkCount':49,'violationCount':5,'historicalException':bad['gate']}
-                original.side_effect=drift
-                with self.assertRaisesRegex(RuntimeError,'fresh native integrity'):
-                    deployment.main80_recharge_audit(new,receipt,stage='before',source=f.previous,profile=self.profile)
+                self.assertEqual(kwargs['source'],f.origin);self.assertEqual(kwargs['control_source'],f.previous)
+                self.assertEqual(kwargs['profile_id'],deployment.REGISTRATION_EMAIL_REQUEST_ID)
+                for mutate in (lambda value:value['checks'][0].update(count=1),lambda value:value['identity'].update(currentUser='unreviewed@synthetic')):
+                    bad=copy.deepcopy(f.reports['before']);mutate(bad)
+                    def drift(directory,receipt,**kwargs):
+                        receipt.write_text(json.dumps(bad));receipt.chmod(0o600)
+                        return {'checkCount':49,'violationCount':0,'registrationFinanceGate':bad['gate']}
+                    original.side_effect=drift
+                    with self.assertRaises(RuntimeError):
+                        deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,profile=self.profile,control_source=f.previous)
 
     def publication(self, f, *, busy=None, failed_after=False, preserved_drift=False,
             readback_mutation=None, readiness_mutation=None):
@@ -6887,6 +7036,8 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         live=copy.deepcopy(f.states);output=io.StringIO();error=None;result=None
         def state(directory,service,**kwargs):return copy.deepcopy(live[service])
         def compose(directory,*args,**kwargs):
+            if args[:4]==('exec','-T','api','node'):
+                metadata=f.previous.stat();return json.dumps({'uid':metadata.st_uid,'gid':metadata.st_gid,'user':'node'})
             if args==('config','--format','json'):return '{"name":"synthetic"}'
             if args[:2]==('up','-d'):
                 self.assertEqual(args[-1],'auto-recharge')
@@ -6905,7 +7056,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 reader = directory / filename
                 if reader.exists(): self.assertEqual(reader.read_bytes(), original.read_bytes())
                 else: reader.write_bytes(original.read_bytes()); reader.chmod(0o400)
-            return {'checkCount':49,'violationCount':5,'historicalException':report['gate']}
+            return {'checkCount':49,'violationCount':0,'registrationFinanceGate':report['gate']}
         def opened(url,**kwargs):
             if url == 'https://synthetic.local/' and readiness_mutation is not None:
                 readiness_mutation(f, live)
@@ -6929,14 +7080,16 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 stack.enter_context(patch.object(deployment,'wait_healthy'))
                 stack.enter_context(patch.object(deployment,'migration_plan',return_value=[]))
                 recharge=stack.enter_context(patch.object(deployment,'assert_no_active_recharge',
-                    side_effect=RuntimeError('Active recharge jobs prevent release') if busy=='recharge' else None))
+                    side_effect=[None, RuntimeError('Active recharge jobs prevent release')]
+                        if busy=='recharge-late' else RuntimeError('Active recharge jobs prevent release')
+                        if busy=='recharge' else None))
                 registration=stack.enter_context(patch.object(deployment,'assert_no_active_registration',
                     side_effect=RuntimeError('Active registration jobs prevent release') if busy=='registration' else None))
                 grants=stack.enter_context(patch.object(deployment,'sync_new_table_grants'))
                 drive=stack.enter_context(patch.object(deployment,'configure_google_drive_sync'))
                 registration_dispatch=stack.enter_context(patch.object(deployment,'registration_release',
                     side_effect=AssertionError('Main80 must never enter registration publication')))
-                audited=stack.enter_context(patch.object(deployment,'order_archive_audit',side_effect=native))
+                audited=stack.enter_context(patch.object(deployment,'registration_finance_audit',side_effect=native))
                 rollback=stack.enter_context(patch.object(deployment,'rollback_service'))
                 try:result=deployment.main()
                 except Exception as caught:error=type(caught).__name__
@@ -6956,7 +7109,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             f=self.fixture(Path(name));result=self.publication(f)
             self.assertEqual(result.result,0,result.error or result.output)
-            self.assertEqual(result.registration,2);self.assertEqual(result.recharge,2)
+            self.assertEqual(result.registration,0);self.assertEqual(result.recharge,2)
             self.assertEqual(result.manifest['servicesUpdated'],['auto-recharge'])
             self.assertFalse(result.manifest['migrationApplied']);self.assertEqual(result.manifest['newMigrations'],[])
             self.assertEqual(result.grants,0);self.assertEqual(result.drive,0)
@@ -6964,18 +7117,141 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             self.assertFalse(any('migrate' in call.args for call in result.compose))
             self.assertEqual(len([call for call in result.run if call.args[:2]==('docker','pull')]),1)
             self.assertEqual([call.kwargs['stage'] for call in result.audit],['before','after'])
-            self.assertTrue(all(call.kwargs['candidate_commit']==deployment.RECHARGE_MAIN80_CURRENT for call in result.audit))
-            self.assertEqual(result.proof['checkCount'],49);self.assertEqual(result.proof['violationCount'],5)
+            self.assertTrue(all(call.kwargs['profile_id']==deployment.REGISTRATION_EMAIL_REQUEST_ID for call in result.audit))
+            self.assertEqual(result.proof['checkCount'],49);self.assertEqual(result.proof['violationCount'],0)
             self.assertEqual(len(result.proof),21);self.assertNotIn('SYNTHETIC_PRIVATE_LOGIN',result.output)
-            for service in (*deployment.SERVICES,'migrate'):
+            for service in f.manifest['images']:
                 if service!='auto-recharge':self.assertEqual(result.manifest['images'][service],f.manifest['images'][service])
 
-    def test_main80_either_active_executor_blocks_all_switches(self):
-        for busy in ('recharge','registration'):
-            with self.subTest(busy=busy),tempfile.TemporaryDirectory(dir=self.runtime) as name:
-                f=self.fixture(Path(name));result=self.publication(f,busy=busy)
-                self.assertEqual(result.error,'RuntimeError');self.assertEqual(result.current,f.previous)
-                self.assertEqual(result.compose,[]);self.assertEqual(result.audit,[]);self.assertEqual(result.rollback,[])
+    def test_main80_active_recharge_blocks_before_any_release_action(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));result=self.publication(f,busy='recharge')
+            self.assertEqual(result.error,'RuntimeError');self.assertEqual(result.current,f.previous)
+            self.assertTrue(all(call.args[1:5]==('exec','-T','api','node') for call in result.compose))
+            self.assertEqual(result.audit,[]);self.assertEqual(result.rollback,[])
+            self.assertFalse(any(call.args[:2]==('docker','pull') for call in result.run))
+
+    def test_main80_b91_runtime_and_original_finance_anchor_are_distinct_and_closed(self):
+        self.assertEqual(self.profile['expectedCurrent'],deployment.RECHARGE_MAIN80_CURRENT)
+        self.assertEqual(self.profile['baselineRelease']['commit'],deployment.RECHARGE_MAIN80_CURRENT)
+        self.assertEqual(self.profile['financeValidator']['sourceCommit'],deployment.RECHARGE_MAIN80_FINANCE_CURRENT)
+        self.assertNotEqual(deployment.RECHARGE_MAIN80_CURRENT,deployment.RECHARGE_MAIN80_FINANCE_CURRENT)
+        self.assertEqual(len(self.contents),30);self.assertEqual(len(deployment.RECHARGE_MAIN80_CONTROLS),14)
+        project=Path(__file__).resolve().parents[2]
+        for path in ('scripts/v2-registration-finance-audit.mjs','scripts/v2-registration-finance-audit.test.mjs'):
+            self.assertIn(path,self.profile['controlSourceSha256'])
+            self.assertEqual(self.contents[path],subprocess.check_output(['git','show',deployment.RECHARGE_MAIN80_CURRENT+':'+path],cwd=project))
+        for group,key,value in (('financeValidator','sourceCommit',deployment.RECHARGE_MAIN80_CURRENT),
+                ('financeValidator','sourceTree',deployment.RECHARGE_MAIN80_TREE),
+                ('baselineRelease','commit',deployment.RECHARGE_MAIN80_FINANCE_CURRENT),
+                ('baselineRelease','sourceTree',deployment.RECHARGE_MAIN80_FINANCE_TREE)):
+            bad=copy.deepcopy(self.profile);bad[group][key]=value
+            with self.subTest(group=group,key=key),self.assertRaises(RuntimeError):deployment.main80_recharge_scope(bad)
+
+    def test_main80_current_zero_and_historical_five_reports_cannot_replace_each_other(self):
+        for stage in ('before','after'):
+            with self.subTest(stage=stage),tempfile.TemporaryDirectory(dir=self.runtime) as name:
+                f=self.fixture(Path(name));stack,_=self.patches(f)
+                frozen=f.historicalReports['before']['gate']
+                with stack:
+                    deployment.require_registration_zero_report(f.reports[stage],stage,frozen)
+                    deployment.main80_recharge_report(f.historicalReports[stage],self.profile,self.policy,self.seal,stage)
+                    with self.assertRaises(RuntimeError):deployment.require_registration_zero_report(f.historicalReports[stage],stage,frozen)
+                    with self.assertRaises(RuntimeError):deployment.main80_recharge_report(f.reports[stage],self.profile,self.policy,self.seal,stage)
+                    path=f.previous/(stage+'-audit.json');path.write_text(json.dumps(f.historicalReports[stage]));path.chmod(0o600)
+                    self.profile['baselineRelease'][stage+'AuditSha256']=deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+                    with self.assertRaises(RuntimeError):deployment.main80_recharge_baseline(f.previous,self.profile,f.manifest,f.states,source_archive=f.archive)
+
+    def test_main80_runtime_projection_accepts_only_four_frozen_overrides_and_missing_profile(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));stack,_=self.patches(f)
+            self.assertEqual(set(f.runtimeOverrides),set(deployment.RECHARGE_MAIN80_RUNTIME_SOURCE_OVERRIDES))
+            self.assertFalse((f.previous/deployment.RECHARGE_MAIN80_FILE).exists())
+            with stack:
+                deployment.verify_main80_recharge_finance_source(f.previous,f.archive)
+                for path in f.runtimeOverrides:
+                    target=f.previous/path;raw=target.read_bytes()
+                    for mutation in ('bytes','executable-mode','missing'):
+                        if mutation=='bytes':target.write_bytes(raw+b'synthetic drift')
+                        elif mutation=='executable-mode':target.chmod(0o755)
+                        else:target.unlink()
+                        with self.subTest(path=path,mutation=mutation),self.assertRaises(RuntimeError):
+                            deployment.verify_main80_recharge_finance_source(f.previous,f.archive)
+                        target.write_bytes(raw);target.chmod(0o644)
+                target=f.previous/deployment.RECHARGE_MAIN80_FILE;target.write_text(json.dumps(self.profile));target.chmod(0o644)
+                with self.assertRaises(RuntimeError):deployment.verify_main80_recharge_finance_source(f.previous,f.archive)
+
+    def test_main80_reader_owner_is_actual_api_node_and_allows_root_before_then_node_private(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));stack,_=self.patches(f);before=f.previous/'before-audit.json'
+            with stack:
+                original_lstat=deployment.Path.lstat
+                def root_before(path,*args,**kwargs):
+                    info=original_lstat(path,*args,**kwargs)
+                    if path==before:
+                        fields=list(info);fields[4]=0;fields[5]=0;return deployment.os.stat_result(fields)
+                    return info
+                before.chmod(0o600)
+                with patch.object(deployment.Path,'lstat',root_before):deployment.main80_recharge_reader_evidence(f.previous)
+                before.chmod(0o400);deployment.main80_recharge_reader_evidence(f.previous)
+                uid,gid=before.stat().st_uid,before.stat().st_gid
+                for identity in ({'uid':0,'gid':gid,'user':'node'},{'uid':uid,'gid':gid,'user':'root'},
+                        {'uid':True,'gid':gid,'user':'node'},{'uid':uid+1,'gid':gid,'user':'node'}):
+                    with self.subTest(identity=identity),patch.object(deployment,'compose',return_value=json.dumps(identity)),self.assertRaises(RuntimeError):
+                        deployment.main80_recharge_reader_evidence(f.previous)
+
+    def test_main80_retained_registration_does_not_block_its_independent_recharge_worker(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));result=self.publication(f,busy='registration')
+            self.assertEqual(result.result,0,result.error or result.output)
+            self.assertEqual(result.registration,0);self.assertEqual(result.recharge,2)
+            self.assertEqual([call.args[-1] for call in result.compose if call.args[1:3]==('up','-d')],['auto-recharge'])
+            for service in deployment.ALL_SERVICES:
+                if service!='auto-recharge':self.assertEqual(result.live[service],f.states[service])
+
+    def test_main80_late_recharge_blocks_before_switch_and_preserves_all_services(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));result=self.publication(f,busy='recharge-late')
+            self.assertEqual(result.result,1);self.assertEqual(result.current,f.previous)
+            self.assertEqual(result.recharge,2);self.assertEqual(result.registration,0)
+            self.assertEqual([call.kwargs['stage'] for call in result.audit],['before'])
+            self.assertFalse(any(call.args[1:3]==('up','-d') for call in result.compose))
+            self.assertEqual(result.rollback,[]);self.assertEqual(result.live,f.states)
+
+    def test_main80_historical_image_records_remain_sealed_without_becoming_runtime_services(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));stack,_=self.patches(f)
+            self.assertEqual(set(f.manifest['images']),{*deployment.SERVICES,'migrate','caddy'})
+            self.assertEqual(set(f.override['services']),{*deployment.SERVICES,'migrate'})
+            with stack:
+                deployment.main80_recharge_baseline(f.previous,self.profile,f.manifest,f.states,source_archive=f.archive)
+                original=json.loads(json.dumps(f.manifest));path=f.previous/'release-manifest.json';raw=path.read_bytes()
+                for changed in ('historical-metadata','extra-image','missing-runtime-image'):
+                    value=copy.deepcopy(original)
+                    if changed=='historical-metadata':value['images']['caddy']['sourceCommit']='0'*40
+                    elif changed=='extra-image':value['images']['unreviewed']=copy.deepcopy(value['images']['caddy'])
+                    else:value['images'].pop('api')
+                    path.write_text(json.dumps(value));path.chmod(0o600)
+                    with self.subTest(changed=changed),self.assertRaisesRegex(RuntimeError,'baseline changed'):
+                        deployment.main80_recharge_baseline(f.previous,self.profile,value,f.states,source_archive=f.archive)
+                    path.write_bytes(raw)
+
+    def test_main80_readback_requires_the_complete_unchanged_historical_image_map(self):
+        for changed in ('historical-metadata','missing-history','extra-image','extra-runtime-override'):
+            with self.subTest(changed=changed),tempfile.TemporaryDirectory(dir=self.runtime) as name:
+                f=self.fixture(Path(name))
+                def mutate(current,fixture,live):
+                    if changed=='extra-runtime-override':
+                        path=current/'compose.release.json';value=json.loads(path.read_text())
+                        value['services']['caddy']={'image':fixture.manifest['images']['caddy']['reference'],'pull_policy':'never'}
+                    else:
+                        path=current/'release-manifest.json';value=json.loads(path.read_text())
+                        if changed=='historical-metadata':value['images']['caddy']['sourceCommit']='0'*40
+                        elif changed=='missing-history':value['images'].pop('caddy')
+                        else:value['images']['unreviewed']=copy.deepcopy(value['images']['caddy'])
+                    path.write_text(json.dumps(value));path.chmod(0o600)
+                with self.assertRaisesRegex(RuntimeError,'deployment verification unavailable'):
+                    self.publication(f,readback_mutation=mutate)
 
     def test_main80_native_after_failure_or_protected_environment_drift_rolls_back_only_worker(self):
         for kwargs in ({'failed_after':True},{'preserved_drift':True}):
@@ -7080,7 +7356,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 def mutate(fixture,live):
                     if changed=='protected-environment':live['api']['environmentSha256']='0'*64
                     else:
-                        release=next(path for path in (fixture.base/'releases').iterdir() if path!=fixture.previous)
+                        release=next(path for path in (fixture.base/'releases').iterdir() if path.name.endswith(self.commit[:12]))
                         path=fixture.previous/'package.json' if changed=='native-source' else release/next(iter(self.contents))
                         path.write_bytes(path.read_bytes()+b' ')
                 result=self.publication(f,readiness_mutation=mutate)
