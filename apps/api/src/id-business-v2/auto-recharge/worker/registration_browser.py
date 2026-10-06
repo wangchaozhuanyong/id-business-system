@@ -70,6 +70,139 @@ class RegistrationBrowser:
             closed(observation.get('reason'), {'session_network_error', 'session_load_timeout', 'registration_page_changing'}),
             closed(observation.get('error_type'), {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}),
             closed(observation.get('browser_error_code'), RETRYABLE_NETWORK_CODES))
+        self.log_email_diagnostic('pause')
+
+    def log_email_diagnostic(self, point):
+        job_id = getattr(self.job, 'id', None)
+        attempt = getattr(self.job, 'attempt', None)
+        for slot in ('email_form_first_failure', 'email_form_current'):
+            value = self.registration_state.get(slot)
+            if type(value) is not dict or set(value) != {
+                    'phase', 'read', 'gate', 'path', 'email_count', 'code_count',
+                    'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error'}:
+                continue
+            allowed = {
+                'phase': {'prepare', 'after_callback', 'observe'},
+                'read': {'measured', 'not_measured'},
+                'gate': {'none', 'invalid', 'wrong_scope', 'ambiguous', 'target_changed'},
+                'path': {'login', 'email_code', 'password', 'profile', 'other'},
+                'target': {'matches', 'differs', 'missing', 'ambiguous', 'not_measured'},
+                'validity': {'valid', 'invalid', 'missing', 'ambiguous', 'not_measured'},
+                'email_error': {'none', 'invalid', 'not_supported', 'already_exists', 'request_rejected', 'unknown', 'not_measured'}}
+            if (any(type(value[key]) is not str or value[key] not in values
+                    for key, values in allowed.items())
+                    or any(type(value[key]) is not int or value[key] not in {0, 1, 2}
+                           for key in ('email_count', 'code_count', 'continue_count', 'same_form_count', 'alert_count'))):
+                continue
+            logging.getLogger('registration').warning(
+                'Registration email form job=%s attempt=%s point=%s slot=%s phase=%s read=%s gate=%s '
+                'path=%s email_count=%s code_count=%s continue_count=%s same_form_count=%s target=%s validity=%s alert_count=%s email_error=%s',
+                job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
+                attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
+                point if point in {'before_safe_get', 'pause'} else 'unknown', slot,
+                *(value[key] for key in ('phase', 'read', 'gate', 'path', 'email_count',
+                                        'code_count', 'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error')))
+
+    async def email_diagnostic(self, phase, budget, gate='none'):
+        """Closed observations only; no events, extra requests or extra budget."""
+        phase = phase if phase in {'prepare', 'after_callback', 'observe'} else 'observe'
+        gate = gate if gate in {'none', 'invalid', 'wrong_scope', 'ambiguous', 'target_changed'} else 'none'
+        path_class = 'other'
+        try:
+            path = urlsplit(self.page.url).path.casefold()
+            path_class = ('login' if path in {'/auth/login', '/log-in', '/login', '/u/login/identifier'}
+                          else 'email_code' if re.search(r'email-verification|email-otp|email-code', path)
+                          else 'password' if re.search(r'(?:^|/)password(?:/|$)', path)
+                          else 'profile' if re.search(r'(?:^|/)(?:profile|about-you)(?:/|$)', path) else 'other')
+        except Exception:
+            pass
+        value = dict(phase=phase, read='not_measured', gate=gate, path=path_class,
+                     email_count=0, code_count=0, continue_count=0, same_form_count=0,
+                     target='not_measured', validity='not_measured', alert_count=0, email_error='not_measured')
+        try:
+            milliseconds = budget.remaining_ms()
+            if milliseconds >= 25:
+                self.official(self.page)
+                result = await asyncio.wait_for(self.page.evaluate('''args => {
+                  const shown = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+                  const emails = [...document.querySelectorAll(args.emailSelector)].filter(shown);
+                  const codes = [...document.querySelectorAll(args.codeSelector)].filter(shown);
+                  const buttons = [...document.querySelectorAll('button,[role="button"]')].filter(e =>
+                    shown(e) && /^(continue|继续)$/i.test((e.getAttribute('aria-label') || e.innerText || '').trim()));
+                  const email = emails.length === 1 ? emails[0] : null;
+                  const count = list => Math.min(2, list.length);
+                  const alerts = email && email.form ? [...email.form.querySelectorAll('[role="alert"],[aria-live="assertive"]')].filter(shown) : [];
+                  const known = new Map([
+                    ['please enter a valid email address.', 'invalid'], ['invalid email address.', 'invalid'],
+                    ['this email address is not supported.', 'not_supported'],
+                    ['this email address is already registered.', 'already_exists'],
+                    ['your request was rejected. please try again.', 'request_rejected']]);
+                  const errors = [...new Set(alerts.map(e => known.get((e.innerText || '').trim().replace(/\\s+/g, ' ').toLowerCase()) || 'unknown'))];
+                  return {email_count:count(emails), code_count:count(codes), continue_count:count(buttons),
+                    same_form_count:count(buttons.filter(b => email && email.form && b.form === email.form)),
+                    alert_count:count(alerts), email_error:errors.length === 1 ? errors[0] : errors.length ? 'unknown' : 'none',
+                    target:email ? (email.value === args.expected ? 'matches' : 'differs')
+                      : (emails.length ? 'ambiguous' : 'missing'),
+                    validity:email ? (email.validity.valid ? 'valid' : 'invalid')
+                      : (emails.length ? 'ambiguous' : 'missing')};
+                }''', {'emailSelector': EMAIL_INPUT, 'codeSelector': CODE_INPUT,
+                        'expected': self.data['email']}), timeout=min(.1, milliseconds / 1000))
+                if (type(result) is dict and set(result) == {
+                        'email_count', 'code_count', 'continue_count', 'same_form_count', 'target', 'validity', 'alert_count', 'email_error'}
+                        and all(type(result[key]) is int and result[key] in {0, 1, 2}
+                                for key in ('email_count', 'code_count', 'continue_count', 'same_form_count', 'alert_count'))
+                        and result['target'] in {'matches', 'differs', 'missing', 'ambiguous'}
+                        and result['validity'] in {'valid', 'invalid', 'missing', 'ambiguous'}
+                        and result['email_error'] in {'none', 'invalid', 'not_supported', 'already_exists', 'request_rejected', 'unknown'}):
+                    value.update(result, read='measured')
+        except Exception:
+            pass  # Diagnostic failures neither replace the primary error nor delay recovery.
+        self.registration_state['email_form_current'] = value
+        if (gate != 'none' or value['email_error'] not in {'none', 'not_measured'}) and 'email_form_first_failure' not in self.registration_state:
+            self.registration_state['email_form_first_failure'] = dict(value)
+
+    async def email_submit_control(self, email):
+        """Resolve one actual button associated with the exact email form."""
+        self.official(self.page)
+        handle = await email.element_handle()
+        if not handle or not await handle.evaluate('(node) => node.isConnected && !!node.form'):
+            return None, None, 'wrong_scope'
+        if not await handle.evaluate('(node) => node.validity.valid'):
+            return handle, None, 'invalid'
+        candidates = self.page.get_by_role('button', name=re.compile(r'^(continue|继续)$', re.I))
+        associated = []
+        for index in range(await candidates.count()):
+            candidate = candidates.nth(index)
+            if await candidate.is_visible():
+                button = await candidate.element_handle()
+                if button and await button.evaluate(
+                        '(node, email) => node.isConnected && email.isConnected && node.form && node.form === email.form', handle):
+                    associated.append(button)
+        if len(associated) != 1:
+            return handle, None, 'ambiguous' if len(associated) > 1 else 'wrong_scope'
+        return handle, associated[0], None
+
+    async def email_submit_unchanged(self, email, button, form, page, url):
+        if self.page is not page or page.url != url:
+            return False
+        self.official(page)
+        current = await self.field(page, EMAIL_INPUT)
+        if not current or not await current.evaluate('(node, old) => node === old', email):
+            return False
+        if not await email.evaluate('''(node, args) => node.isConnected && node.form === args.form
+                && node.value === args.expected && node.validity.valid''',
+                {'form': form, 'expected': self.data['email']}):
+            return False
+        _, resolved_button, reason = await self.email_submit_control(current)
+        if reason or not resolved_button or not await resolved_button.evaluate('(node, old) => node === old', button):
+            return False
+        if not await button.is_visible() or not await button.is_enabled() or await self.challenge():
+            return False
+        # Recheck after challenge reads; a fixed handle cannot resolve to a new code button.
+        return bool(await button.evaluate('''(node, args) => node.isConnected && args.email.isConnected
+            && node.form === args.form && args.email.form === args.form
+            && args.email.value === args.expected && args.email.validity.valid''',
+            {'email': email, 'form': form, 'expected': self.data['email']}))
 
     async def guard(self, route):
         # A new attempt's guard is registered last; delegate to the exact retained
@@ -285,7 +418,7 @@ class RegistrationBrowser:
         # any submission may have happened, identity keeps priority over stale UI.
         initial_form = (self.data.get('registered') is not True and all(
             self.registration_state.get(key, False) is False for key in (
-                'email_submit_started', 'email_submitted', 'code_submitted', 'profile_submitted')))
+                'email_submit_prepared', 'email_submit_started', 'email_submitted', 'code_submitted', 'profile_submitted')))
         if initial_form:
             self.official(self.page)
             if await unique_visible(self.page, PASSWORD_INPUT):
@@ -446,6 +579,8 @@ class RegistrationBrowser:
                 self.observation_budget = budget
                 view, field = await budget.run(self.registration_view, 'registration_observe')
                 self.job.registration_last_observed_view = view if type(view) is str and view in REGISTRATION_VIEWS else 'unknown'
+                if self.registration_state.get('email_submit_prepared') and view in {'email', 'unknown'}:
+                    await self.email_diagnostic('observe', budget)
             except Exception as exc:
                 if isinstance(exc, Stop) and exc.report.get('reason') == 'verification_required':
                     await self.manual_registration('verification_required')
@@ -526,7 +661,8 @@ class RegistrationBrowser:
                     continue
             if view == 'existing':
                 raise Stop('existing_account_requires_review')
-            if view == 'email' and not self.registration_state.get('email_submitted'):
+            if (view == 'email' and not self.registration_state.get('email_submitted')
+                    and not self.registration_state.get('email_submit_prepared')):
                 await self.end_recovery()
                 self.job.event('progress', step='email')
                 self.operation('email_submit')
@@ -534,37 +670,69 @@ class RegistrationBrowser:
                                        cancelled=self.job.cancelled.is_set)
                 async def prepare_email_submit():
                     await field.fill(self.data['email'])
-                    submit = await self.button(self.page, r'^(continue|继续)$')
+                    current_email = await self.field(self.page, EMAIL_INPUT)
+                    if not current_email or await current_email.input_value() != self.data['email']:
+                        return None, None, None, 'form_unrecognized', 'target_changed'
+                    email_handle, submit, gate = await self.email_submit_control(current_email)
                     while submit and not await submit.is_enabled():
                         await self.settle(.5)
-                        submit = await self.button(self.page, r'^(continue|继续)$')
+                        current_email = await self.field(self.page, EMAIL_INPUT)
+                        if not current_email:
+                            return None, None, None, 'form_unrecognized', 'target_changed'
+                        email_handle, submit, gate = await self.email_submit_control(current_email)
                     current_email = await self.field(self.page, EMAIL_INPUT)
                     if (not submit or not await submit.is_enabled() or not current_email
                             or await current_email.input_value() != self.data['email']):
-                        return None, 'form_unrecognized'
+                        return None, None, None, 'form_unrecognized', gate or 'target_changed'
                     if await self.challenge():
-                        return None, 'verification_required'
-                    return submit, None
+                        return None, None, None, 'verification_required', 'none'
+                    form = (await email_handle.evaluate_handle('(node) => node.form')).as_element()
+                    return email_handle, submit, form, None, 'none'
                 try:
-                    submit, reason = await budget.run(prepare_email_submit, 'email_submit_observe')
+                    email_handle, submit, form, reason, gate = await budget.run(prepare_email_submit, 'email_submit_observe')
                     budget.remaining_ms()
-                except Stop as exc:
-                    if exc.report.get('reason') != 'session_load_timeout':
+                except Exception as exc:
+                    detached = type(exc).__name__ == 'Error' and 'Element is not attached to the DOM' in str(exc)
+                    if not detached and not self.retryable_observation(exc):
                         raise
                     if not getattr(self.job, 'registration_observation_error', None):
+                        details = exc.report if isinstance(exc, Stop) else session_failure(exc)
                         self.job.registration_observation_error = {
-                            key: exc.report[key] for key in ('reason', 'error_type', 'browser_error_code')
-                            if key in exc.report}
+                            key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
+                        if detached:
+                            self.job.registration_observation_error['reason'] = 'registration_page_changing'
                     reason = 'form_unrecognized'
+                    gate = 'target_changed' if detached else 'none'
                 if reason:
+                    await self.email_diagnostic('prepare', budget, gate)
                     await self.manual_registration(reason)
                     observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                     continue
                 # Timestamp the expected mail BEFORE submission triggers sending.
                 self.operation('email_submit')
+                prepared_page, prepared_url = self.page, self.page.url
+                self.registration_state['email_submit_prepared'] = True
                 self.job.prepare_mail('email_code', new_request=True)
+                try:
+                    unchanged = await budget.run(lambda: self.email_submit_unchanged(
+                        email_handle, submit, form, prepared_page, prepared_url), 'email_submit_reobserve')
+                except Exception as exc:
+                    detached = type(exc).__name__ == 'Error' and 'Element is not attached to the DOM' in str(exc)
+                    if not detached and not self.retryable_observation(exc):
+                        raise
+                    if not getattr(self.job, 'registration_observation_error', None):
+                        details = exc.report if isinstance(exc, Stop) else session_failure(exc)
+                        self.job.registration_observation_error = {
+                            key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
+                        if detached:
+                            self.job.registration_observation_error['reason'] = 'registration_page_changing'
+                    unchanged = False
+                if not unchanged:
+                    await self.email_diagnostic('after_callback', budget, 'target_changed')
+                    continue
                 self.registration_state['email_submitted'] = True
                 self.registration_state['email_submit_started'] = True
+                self.operation('email_submit')
                 await submit.click(timeout=budget.remaining_ms())
                 self.registration_state['email_click_returned'] = True
                 await self.settle(3)
@@ -581,6 +749,7 @@ class RegistrationBrowser:
             if time.monotonic() < observation_deadline:
                 await self.settle(.5)
                 continue
+            self.log_email_diagnostic('before_safe_get')
             if await self.refresh_registration():
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue

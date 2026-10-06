@@ -116,8 +116,10 @@ class AutoMailEventTests(unittest.IsolatedAsyncioTestCase):
     async def test_resumed_email_form_marks_a_new_request_before_continue_click(self):
         job, api, stack = fixture([], prepare=False)
         job.step = 'email_code'
+        form = SimpleNamespace()
         field = SimpleNamespace(fill=AsyncMock(), press=AsyncMock(),
-                                input_value=AsyncMock(return_value=job.payload['email']))
+                                input_value=AsyncMock(return_value=job.payload['email']),
+                                evaluate_handle=AsyncMock(return_value=SimpleNamespace(as_element=lambda: form)))
         async def submit(*, timeout):
             self.assertGreater(timeout, 0)
             waiting = [event for event in api.events if event['type'] == 'waiting_email']
@@ -132,6 +134,8 @@ class AutoMailEventTests(unittest.IsolatedAsyncioTestCase):
         flow.page = SimpleNamespace(url='https://auth.openai.com/email-verification')
         flow.registration_view = AsyncMock(return_value=('email', field))
         flow.button = AsyncMock(return_value=button)
+        flow.email_submit_control = AsyncMock(return_value=(field, button, None))
+        flow.email_submit_unchanged = AsyncMock(return_value=True)
         flow.field = AsyncMock(return_value=field)
         flow.challenge = AsyncMock(return_value=False)
         with stack:
@@ -140,6 +144,8 @@ class AutoMailEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
         field.fill.assert_awaited_once_with(job.payload['email'])
         button.click.assert_awaited_once()
+        flow.email_submit_unchanged.assert_awaited_once_with(
+            field, button, form, flow.page, flow.page.url)
         field.press.assert_not_awaited()
         self.assertEqual([event['type'] for event in api.events], ['progress', 'waiting_email'])
 
