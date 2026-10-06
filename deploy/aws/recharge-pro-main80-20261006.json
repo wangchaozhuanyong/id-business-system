@@ -22,20 +22,26 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "727ead31c878f1d829aae2ef2f6ed6626147ad184615d8a09d52505760414e2c",
     "docs/V2_TASKS.md": "0cb1a9a3ba1a7af1eef367ba584c57a9fee84b3faa99f8a4e46c69bea92e20c0"
   },
-  "carriedSourceOnlySha256": {},
+  "carriedSourceOnlySha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5",
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": "a4256d8ac85f17064c29485b16e48888346c88a61abe315c5924622486530ad1",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": "4593b2eaab271dd9c16ab12adac07b42f87c79173b432982cef178c17c9767e0",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06",
+    "docs/AUTO_REGISTRATION.md": "3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c"
+  },
   "controlSourceSha256": {
     ".github/workflows/production-release.yml": "f7e479e5c6132499704b8337d9e8c17a426c2bf0cff591aab08aacc5152c8d29",
-    "docs/PRODUCTION_RELEASE_OIDC.md": "0b86f4553a62a40be24f023fd431cd090c770f979e8c8e98df64f21921ef6fa6",
+    "docs/PRODUCTION_RELEASE_OIDC.md": "bc7edddd0c362e74a2b05c33ab39433d94e89c0b39ca009be6897508200b7b9d",
     "scripts/ci-recharge-check.mjs": "925a4bb2bad82ea9f00c2d3e278057393db17e66636db8cb9b7d75f2c0937389",
-    "scripts/ci-recharge-release.test.mjs": "20be72f4de9fdc52534993159640df24c503281049ebf3da1abaa73618fd6a45",
+    "scripts/ci-recharge-release.test.mjs": "8ab30eb12dcc1492e6b2f377dc5a9b5f3ea0134b4c5db6a04801a5786f9471e2",
     "scripts/ci-recharge-scope.mjs": "ff3dab50adeb115f6ffedf7629f2099e8a594aab92a47b13e18220a0c5cce9b9",
     "scripts/ci-recharge-scope.test.mjs": "bdb0f605f7a54388bf8d28a0f3b3ee4eca77fd4fc485fddfa919c4cbbec03d9c",
     "scripts/production-release/build-images.sh": "cb6798e522183cfbe4322dbd3a4e5636a444acc70c47bbfb0c09027c12a199b1",
     "scripts/production-release/dispatch.sh": "afa9c40e1214a68b774a46ce60922bd37103905bc4ebd79ba191c95d241ff03e",
     "scripts/production-release/push-images.sh": "23f8dd5d94aee6b5170385d9f74b0251f00aa3e8af72812fd1c17f5f6260f295",
     "scripts/production-release/validate-release-selection.sh": "3c674d4c9289e100265be9d8a99232f5c3f426089ad5a22256526cad1b583e0f",
-    "scripts/production-release/remote-deploy.py": "5b4ec20755fc90e6adf6470f05c28c5e18a63a1f20d626bc15446677f709d06c",
-    "scripts/production-release/remote-deploy.test.py": "d28b7584ec8035d6d68b8ca7f1cf3bd4d30aa9fd92bfeef3310ab2a336554f18"
+    "scripts/production-release/remote-deploy.py": "dc3ed36babab41457e55c7bda4429a0be82b57950a81fe7bb71e803c9f4fb6bd",
+    "scripts/production-release/remote-deploy.test.py": "56f9095bbce35357bb296f8c8d9976e726527ee034443f7447d22c2038dcde82"
   },
   "sourceModes": {
     ".github/workflows/production-release.yml": 420,
@@ -52,7 +58,12 @@
     "scripts/production-release/push-images.sh": 420,
     "scripts/production-release/remote-deploy.py": 420,
     "scripts/production-release/remote-deploy.test.py": 420,
-    "scripts/production-release/validate-release-selection.sh": 420
+    "scripts/production-release/validate-release-selection.sh": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": 420,
+    "docs/AUTO_REGISTRATION.md": 420
   },
   "scope": {
     "servicesUpdated": ["auto-recharge"],

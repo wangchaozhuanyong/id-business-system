@@ -205,7 +205,55 @@ class RegistrationBrowser:
     async def manual_registration(self, reason):
         # An explicit administrator handoff may perform writes in the same window.
         await self.end_recovery()
-        await self.job.manual(reason)
+        if reason == 'verification_required' and not self.data.get('registered'):
+            await self.job.manual(reason, can_resume=self.verification_resolved)
+        else:
+            await self.job.manual(reason)
+
+    async def verification_resolved(self):
+        """Reobserve an interstitial that may clear itself; never act on a challenge."""
+        if self.data.get('registered'):
+            return False
+        budget = SessionBudget(3, cancelled=self.job.cancelled.is_set)
+        previous_budget = self.observation_budget
+        self.observation_budget = budget
+        async def observe():
+            self.official(self.page)
+            if await self.challenge() or self.registration_loading:
+                return False
+            code = await unique_visible(self.page, CODE_INPUT)
+            if code:
+                return (not self.registration_state.get('code_submitted')
+                        and await code.is_enabled()
+                        and await login_code_type(self.page, code) == 'email')
+            profile = await self.profile_fields()
+            if profile:
+                return bool(not self.registration_state.get('profile_submitted')
+                            and profile[0] and (profile[1] or profile[2])
+                            and profile[3] and await profile[3].is_enabled())
+            if self.registration_loading:
+                return False
+            # A fully verified identity can be observed, but the ordinary flow
+            # must read it again and emit its own durable completion evidence.
+            return bool(await self.identity())
+        try:
+            resolved = await budget.run(observe, 'verification_reobserve')
+            self.job.check()
+            return resolved
+        except Stop as exc:
+            if exc.report.get('reason') in {
+                    'verification_required', 'form_unrecognized', 'login_form_ambiguous',
+                    'session_load_timeout', 'session_network_error', 'http_error'}:
+                return False
+            raise
+        except Exception as exc:
+            page_changing = (type(exc).__name__ == 'Error' and bool(re.search(
+                r'Execution context was destroyed|Cannot find context with specified id', str(exc))))
+            if page_changing or retryable_page_load_error(exc):
+                return False
+            raise
+        finally:
+            self.observation_budget = previous_budget
 
     async def refresh_registration(self):
         self.operation('page_refresh')

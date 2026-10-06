@@ -1902,6 +1902,18 @@ RECHARGE_MAIN80_BUSINESS = {
         '5b5db9c3fa650c1940f26a5685d4601ac2c6b19d3dd9077664d062ed69d74c09',
     'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py':
         '727ead31c878f1d829aae2ef2f6ed6626147ad184615d8a09d52505760414e2c'}
+RECHARGE_MAIN80_CARRIED_COMMIT = 'fd173815aac0048011fe1583acfe345575bca286'
+RECHARGE_MAIN80_CARRIED_SOURCE = {
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py':
+        'ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5',
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py':
+        'a4256d8ac85f17064c29485b16e48888346c88a61abe315c5924622486530ad1',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py':
+        '4593b2eaab271dd9c16ab12adac07b42f87c79173b432982cef178c17c9767e0',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py':
+        'fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06',
+    'docs/AUTO_REGISTRATION.md':
+        '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c'}
 
 
 def main80_recharge_scope(value, *, require_approved=True):
@@ -1932,11 +1944,12 @@ def main80_recharge_scope(value, *, require_approved=True):
             'afterAuditSha256', 'composeSha256', 'overrideRawSha256', 'overrideCanonicalSha256')), message)
     names = set()
     for key, expected in (('candidateSourceSha256', RECHARGE_SCOPE_CANDIDATES),
-            ('carriedSourceOnlySha256', frozenset()), ('controlSourceSha256', RECHARGE_MAIN80_CONTROLS)):
+            ('carriedSourceOnlySha256', set(RECHARGE_MAIN80_CARRIED_SOURCE)), ('controlSourceSha256', RECHARGE_MAIN80_CONTROLS)):
         group = value[key]
         require(isinstance(group, dict) and set(group) == expected and all(digest(item) for item in group.values()), message)
         names.update(group)
     require(all(value['candidateSourceSha256'].get(name) == item for name, item in RECHARGE_MAIN80_BUSINESS.items())
+        and historical_fingerprint(value['carriedSourceOnlySha256']) == historical_fingerprint(RECHARGE_MAIN80_CARRIED_SOURCE)
         and isinstance(value['sourceModes'], dict) and set(value['sourceModes']) == names
         and all(type(mode) is int and mode == 0o644 for mode in value['sourceModes'].values())
         and historical_fingerprint(value['scope']) == historical_fingerprint(RECHARGE_SCOPE_EXPECTED), message)
@@ -2091,7 +2104,7 @@ def verify_main80_recharge_candidate_source(release, data, profile):
     main80_recharge_reader_evidence(release)
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         names = set(fixed_recharge_archive(archive, profile_id=RECHARGE_MAIN80_ID))
-    approved = set(profile['candidateSourceSha256']) | set(profile['controlSourceSha256'])
+    approved = set(profile['candidateSourceSha256']) | set(profile['carriedSourceOnlySha256']) | set(profile['controlSourceSha256'])
     generated = ('.env.aws.production', 'compose.release.json', 'release-manifest.json', 'before-audit.json',
         'after-audit.json', 'backup-verification.json', 'order-archive-seal.reader.json', 'order-archive-cleanup.reader.json')
     files = fixed_recharge_file_map(release, allowed=names | approved | {RECHARGE_MAIN80_FILE}, omitted=generated)
@@ -2252,7 +2265,7 @@ def fixed_recharge_binding(profile_id=RECHARGE_SCOPE_ID):
             'Fixed recharge runtime scope unavailable')
     if profile_id == RECHARGE_MAIN80_ID:
         return {'id': RECHARGE_MAIN80_ID, 'current': RECHARGE_MAIN80_CURRENT, 'tree': RECHARGE_MAIN80_TREE,
-            'file': RECHARGE_MAIN80_FILE, 'previous': HISTORY_ORDER_ARCHIVE_BASELINE, 'carried': frozenset()}
+            'file': RECHARGE_MAIN80_FILE, 'previous': HISTORY_ORDER_ARCHIVE_BASELINE, 'carried': frozenset(RECHARGE_MAIN80_CARRIED_SOURCE)}
     if profile_id == RECHARGE_7F_ID:
         return {'id': RECHARGE_7F_ID, 'current': RECHARGE_7F_CURRENT, 'tree': RECHARGE_7F_TREE,
             'run': RECHARGE_7F_RUN, 'file': RECHARGE_7F_FILE, 'previous': RECHARGE_SCOPE_CURRENT,
@@ -2986,7 +2999,7 @@ def check_main80_recharge_deployment(expected_current, source_tree, profile_sha2
         context = main80_recharge_context(argparse.Namespace(commit=expected_current, source_tree=source_tree,
             expected_current=RECHARGE_MAIN80_CURRENT), profile, gates['before'], gates['after'])
         require(historical_fingerprint(manifest.get('fixedRechargeRelease')) == historical_fingerprint(context), message)
-        approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+        approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
         for name, digest in approved.items():
             require(hashlib.sha256(read(current / name, modes=(profile['sourceModes'][name],))).hexdigest() == digest, message)
         require(read(current / 'docker-compose.aws-mysql.yml', modes=(0o644, 0o664))

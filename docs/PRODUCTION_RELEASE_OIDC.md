@@ -139,7 +139,7 @@ b8 入口的实际发布在切换服务前被额外源码目录拒绝；诊断�
 
 `recharge-pro-main80-20261006` 独立绑定订单归档主线 `80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b`，初始禁用且未批准。该主线必须先由原授权窗口成功发布并完成独立回读，才可填入实际发布运行、三份私有回执、Compose／override 及原生订单归档 seal、prepared-images 和镜像摘要。缺失值保持未测量，不能用准备运行、示例回执或旧 3ca 批准替代实际生产证明。
 
-候选与 main80 完整源码归档逐字节及权限比较，仅允许三份 Pro 源码／任务文档和十二份明确控制源码变化；`validate-release-selection.sh` 属于这份新控制集合。原订单、财务、schema、migration、查询、依赖、配置和 `check-source.sh` 保持原字节。源码与检查结果冻结并取得本对象的明确批准后才激活；候选必须为远端当前 main，且相同 SHA 的 push Quality Gate 已通过。
+候选与 main80 完整源码归档逐字节及权限比较，本次修改仍限于三份 Pro 源码／任务文档和十二份明确控制源码；`validate-release-selection.sh` 属于这份控制集合。主线 `fd173815aac0048011fe1583acfe345575bca286` 的五份 PR321 注册源码／文档必须原样继承，作为精确 SHA256 和 0644 权限锁定的 source-only 集合：`registration_browser.py`、`registration_job.py`、`test_registration.py`、`test_registration_browser.py` 和 `docs/AUTO_REGISTRATION.md`。不修改或重启注册执行器，不允许其他继承文件。原订单、财务、schema、migration、查询、依赖、配置和 `check-source.sh` 保持原字节。包含该五份继承来源的新固定对象须完成验证并明确批准后才激活；原 15 份无继承来源的批准不能覆盖这份扩展对象。候选必须为远端当前 main，且相同 SHA 的 push Quality Gate 已通过。
 
 财务子证明使用未经修改的原订单归档验证器：完整执行 49 项，49 项已执行、0 项不可用，恰好原冻结五项差异，并继续核对原 native policy、seal、候选 SHA／tree、API digest、prepared run、查询及资料和元数据指纹。历史成功回执不能替代切换前后的新只读核对，也不能回退到旧 M11 48 项／六项来源。原归档迁移必须已完成，本次不运行迁移。
 

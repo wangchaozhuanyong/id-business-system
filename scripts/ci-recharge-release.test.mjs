@@ -1919,10 +1919,11 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       for (const name of Object.keys(profile[key]))
         if (
           identity !== 'recharge-pro-main80-20261006' ||
-          ![
-            'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
-            'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py'
-          ].includes(name)
+          (key !== 'carriedSourceOnlySha256' &&
+            ![
+              'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+              'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py'
+            ].includes(name))
         )
           profile[key][name] = 'e'.repeat(64);
     const profileFile = join(root, `deploy/aws/${identity}.json`);
@@ -2610,42 +2611,131 @@ test('main80 profile guard and workflow choose its approval readback and skipped
 
 test('main80 actual readback parser accepts the 21-field 49-check proof and rejects old gates and raw extras', () => {
   const identity = 'recharge-pro-main80-20261006';
-  fixedRechargeReadbackFixture(({ root, execute, receipt, digest, awsLog }) => {
-    assert.equal(Object.keys(receipt).length, 21);
-    assert.deepEqual(JSON.parse(execute()), receipt);
-    const parameters = JSON.parse(
-      readFileSync(join(root, '.deploy/production-release/fixed-recharge-readback.json'), 'utf8')
-    );
-    assert.ok(Buffer.byteLength(JSON.stringify(parameters)) < 20 * 1024);
-    assert.ok(parameters.commands[0].includes(identity));
-    assert.ok(parameters.commands[0].includes(digest));
-    for (const changed of [
-      { id: 'recharge-pro-menu-7f-20261005' },
-      { previousCommit: '3ca300486d0edfadda83c094a48474a63959fce7' },
-      { checkCount: 48 },
-      { executedCheckCount: 48 },
-      { violationCount: 6 },
-      { checkCount: true },
-      { unavailableCheckCount: 1 },
-      { servicesUpdated: ['auto-recharge', 'auto-registration'] },
-      { migrationStatus: 'APPLIED' },
-      { unexpected: 'PRIVATE_SYNTHETIC_SENTINEL' }
-    ])
-      assert.throws(
-        () =>
-          execute(
-            `FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...changed })}\n`
-          ),
-        (error) =>
-          error.status !== 0 &&
-          error.stdout === '' &&
-          String(error.stderr).includes('raw output suppressed') &&
-          !String(error.stderr).includes('PRIVATE_SYNTHETIC_SENTINEL')
+  fixedRechargeReadbackFixture(
+    ({ root, execute, receipt, digest, awsLog, profile, profileFile }) => {
+      const inheritedCommit = 'fd173815aac0048011fe1583acfe345575bca286';
+      const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/';
+      const inheritedNames = [
+        `${worker}registration_browser.py`,
+        `${worker}registration_job.py`,
+        `${worker}test_registration.py`,
+        `${worker}test_registration_browser.py`,
+        'docs/AUTO_REGISTRATION.md'
+      ];
+      const inherited = Object.fromEntries(
+        inheritedNames.map((name) => [
+          name,
+          createHash('sha256')
+            .update(execFileSync('git', ['show', `${inheritedCommit}:${name}`]))
+            .digest('hex')
+        ])
       );
-    writeFileSync(awsLog, '');
-    for (const wrongProfile of ['recharge-pro-menu-7f-20261005', 'recharge-pro-main80-20261007']) {
-      assert.throws(() => execute(undefined, { FIXED_RECHARGE_PROFILE: wrongProfile }));
-      assert.equal(readFileSync(awsLog, 'utf8'), '');
-    }
-  }, identity);
+      assert.equal(profile.enabled, true);
+      assert.equal(profile.approvalStatus, 'APPROVED');
+      assert.deepEqual(profile.carriedSourceOnlySha256, inherited);
+      assert.equal(Object.keys(profile.sourceModes).length, 20);
+      for (const name of inheritedNames) assert.equal(profile.sourceModes[name], 0o644);
+      assert.equal(Object.keys(receipt).length, 21);
+      assert.deepEqual(JSON.parse(execute()), receipt);
+      const parameters = JSON.parse(
+        readFileSync(join(root, '.deploy/production-release/fixed-recharge-readback.json'), 'utf8')
+      );
+      assert.ok(Buffer.byteLength(JSON.stringify(parameters)) < 20 * 1024);
+      assert.ok(parameters.commands[0].includes(identity));
+      assert.ok(parameters.commands[0].includes(digest));
+      const originalProfile = readFileSync(profileFile, 'utf8');
+      const inheritedName = inheritedNames[0];
+      const oldSourceHash = createHash('sha256')
+        .update(
+          execFileSync('git', ['show', `80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b:${inheritedName}`])
+        )
+        .digest('hex');
+      assert.notEqual(oldSourceHash, inherited[inheritedName]);
+      const mutations = [
+        (value) => {
+          value.carriedSourceOnlySha256 = {};
+          for (const name of inheritedNames) delete value.sourceModes[name];
+        },
+        (value) => {
+          delete value.carriedSourceOnlySha256[inheritedName];
+          delete value.sourceModes[inheritedName];
+        },
+        (value) => {
+          value.carriedSourceOnlySha256['unreviewed/source.py'] = '1'.repeat(64);
+          value.sourceModes['unreviewed/source.py'] = 0o644;
+        },
+        (value) => {
+          value.carriedSourceOnlySha256[inheritedName] = '1'.repeat(64);
+        },
+        (value) => {
+          value.carriedSourceOnlySha256[inheritedName] = oldSourceHash;
+        },
+        (value) => {
+          value.sourceModes[inheritedName] = 0o755;
+        },
+        (value) => {
+          value.candidateSourceSha256[inheritedName] = value.carriedSourceOnlySha256[inheritedName];
+          delete value.carriedSourceOnlySha256[inheritedName];
+        }
+      ];
+      for (const mutate of mutations) {
+        const changed = structuredClone(profile);
+        mutate(changed);
+        writeFileSync(profileFile, JSON.stringify(changed));
+        const previousAws = readFileSync(awsLog, 'utf8');
+        const previousParameters = readFileSync(
+          join(root, '.deploy/production-release/fixed-recharge-readback.json'),
+          'utf8'
+        );
+        try {
+          assert.throws(
+            () => execute(),
+            (error) => error.status !== 0 && error.stdout === ''
+          );
+          assert.equal(readFileSync(awsLog, 'utf8'), previousAws);
+          assert.equal(
+            readFileSync(
+              join(root, '.deploy/production-release/fixed-recharge-readback.json'),
+              'utf8'
+            ),
+            previousParameters
+          );
+        } finally {
+          writeFileSync(profileFile, originalProfile);
+        }
+      }
+      for (const changed of [
+        { id: 'recharge-pro-menu-7f-20261005' },
+        { previousCommit: '3ca300486d0edfadda83c094a48474a63959fce7' },
+        { checkCount: 48 },
+        { executedCheckCount: 48 },
+        { violationCount: 6 },
+        { checkCount: true },
+        { unavailableCheckCount: 1 },
+        { servicesUpdated: ['auto-recharge', 'auto-registration'] },
+        { migrationStatus: 'APPLIED' },
+        { unexpected: 'PRIVATE_SYNTHETIC_SENTINEL' }
+      ])
+        assert.throws(
+          () =>
+            execute(
+              `FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...changed })}\n`
+            ),
+          (error) =>
+            error.status !== 0 &&
+            error.stdout === '' &&
+            String(error.stderr).includes('raw output suppressed') &&
+            !String(error.stderr).includes('PRIVATE_SYNTHETIC_SENTINEL')
+        );
+      writeFileSync(awsLog, '');
+      for (const wrongProfile of [
+        'recharge-pro-menu-7f-20261005',
+        'recharge-pro-main80-20261007'
+      ]) {
+        assert.throws(() => execute(undefined, { FIXED_RECHARGE_PROFILE: wrongProfile }));
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      }
+    },
+    identity
+  );
 });

@@ -6532,8 +6532,10 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 ('RECHARGE_MAIN80_FINANCE', {**deployment.RECHARGE_MAIN80_FINANCE, 'policySha256': policy_digest})):
             changed = patch.object(deployment, name, value); changed.start(); self.addCleanup(changed.stop)
         self.contents = {name: (project / name).read_bytes() for name in
-            deployment.RECHARGE_SCOPE_CANDIDATES | deployment.RECHARGE_MAIN80_CONTROLS}
+            deployment.RECHARGE_SCOPE_CANDIDATES | deployment.RECHARGE_MAIN80_CONTROLS | set(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)}
         self.profile.update(enabled=True, approvalStatus='APPROVED')
+        self.profile['carriedSourceOnlySha256'] = copy.deepcopy(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)
+        self.profile['sourceModes'] = {name: 0o644 for name in self.contents}
         for group in ('candidateSourceSha256', 'controlSourceSha256'):
             self.profile[group] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest()
                 for name in self.profile[group]}
@@ -6639,22 +6641,81 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         reviewed = stack.enter_context(patch.object(deployment, 'reviewed_order_archive_seal', return_value=(self.policy, self.seal)))
         return stack, reviewed
 
-    def test_main80_draft_unknowns_are_local_preview_only(self):
-        project = Path(__file__).resolve().parents[2]
-        draft = json.loads((project / deployment.RECHARGE_MAIN80_FILE).read_text())
-        draft['financeValidator']['policySha256'] = deployment.RECHARGE_MAIN80_POLICY_SHA256
+    @staticmethod
+    def unknown_draft_fixture(source):
+        draft = copy.deepcopy(source)
+        draft.update(enabled=False, approvalStatus='NOT_APPROVED')
         # A synthetic not-yet-measured preview is independent of actual root evidence.
         for key in ('deploymentRun', 'manifestSha256', 'beforeAuditSha256', 'afterAuditSha256',
                 'composeSha256', 'overrideRawSha256', 'overrideCanonicalSha256'):
             draft['baselineRelease'][key] = None
         for key in ('releaseSealSha256', 'preparedImagesSha256', 'preparationRunId', 'preparationRunAttempt', 'images'):
             draft['financeValidator'][key] = None
+        return draft
+
+    def test_main80_draft_unknowns_are_local_preview_only(self):
+        draft = self.unknown_draft_fixture(self.profile)
         self.assertFalse(draft['enabled']); self.assertIsNone(draft['financeValidator']['images'])
         self.assertEqual(deployment.fixed_recharge_scope(draft, require_approved=False), draft)
         with self.assertRaisesRegex(RuntimeError, 'not approved'): deployment.fixed_recharge_scope(draft)
         draft.update(enabled=True, approvalStatus='APPROVED')
         with self.assertRaises(RuntimeError): deployment.fixed_recharge_scope(draft, require_approved=False)
         self.assertEqual(deployment.main80_recharge_scope(self.profile), self.profile)
+
+    def test_main80_draft_fixture_is_independent_of_approved_source_state_and_evidence(self):
+        source = copy.deepcopy(self.profile)
+        before = copy.deepcopy(source)
+        draft = self.unknown_draft_fixture(source)
+        self.assertTrue(source['enabled']); self.assertEqual(source['approvalStatus'], 'APPROVED')
+        self.assertEqual(source, before)
+        self.assertFalse(draft['enabled']); self.assertEqual(draft['approvalStatus'], 'NOT_APPROVED')
+        self.assertEqual(deployment.main80_recharge_scope(draft, require_approved=False), draft)
+        draft['carriedSourceOnlySha256'][next(iter(draft['carriedSourceOnlySha256']))] = '0' * 64
+        self.assertEqual(source, before)
+
+    def test_main80_carried_source_scope_requires_exact_five_fd_pins_and_modes(self):
+        self.assertEqual(len(deployment.RECHARGE_MAIN80_CARRIED_SOURCE), 5)
+        self.assertEqual(deployment.fixed_recharge_binding(deployment.RECHARGE_MAIN80_ID)['carried'],
+            frozenset(deployment.RECHARGE_MAIN80_CARRIED_SOURCE))
+        self.assertEqual(deployment.main80_recharge_scope(self.profile), self.profile)
+        for name, digest in deployment.RECHARGE_MAIN80_CARRIED_SOURCE.items():
+            self.assertEqual(deployment.hashlib.sha256(self.contents[name]).hexdigest(), digest)
+            for mutation in ('wrong-pin', 'missing', 'mode', 'old80-pin'):
+                bad = copy.deepcopy(self.profile)
+                if mutation == 'wrong-pin': bad['carriedSourceOnlySha256'][name] = '0' * 64
+                elif mutation == 'missing': bad['carriedSourceOnlySha256'].pop(name)
+                elif mutation == 'mode': bad['sourceModes'][name] = 0o755
+                else:
+                    old = subprocess.run(['git', 'show', deployment.RECHARGE_MAIN80_CURRENT + ':' + name],
+                        cwd=Path(__file__).resolve().parents[2], capture_output=True, check=True).stdout
+                    bad['carriedSourceOnlySha256'][name] = deployment.hashlib.sha256(old).hexdigest()
+                with self.subTest(name=name, mutation=mutation), self.assertRaises(RuntimeError):
+                    deployment.main80_recharge_scope(bad)
+        extra = copy.deepcopy(self.profile)
+        extra['carriedSourceOnlySha256']['docs/UNREVIEWED_REGISTRATION.md'] = 'a' * 64
+        extra['sourceModes']['docs/UNREVIEWED_REGISTRATION.md'] = 0o644
+        with self.assertRaises(RuntimeError): deployment.main80_recharge_scope(extra)
+
+    def test_main80_candidate_source_verifies_all_inherited_file_bytes_modes_and_missing_entries(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f = self.fixture(Path(name)); stack, _ = self.patches(f)
+            for path, raw in self.contents.items():
+                target = f.previous / path; target.write_bytes(raw); target.chmod(0o644)
+            target = f.previous / deployment.RECHARGE_MAIN80_FILE
+            target.write_text(json.dumps(self.profile)); target.chmod(0o644)
+            with stack:
+                deployment.verify_main80_recharge_candidate_source(f.previous, f.archive, self.profile)
+                for path in deployment.RECHARGE_MAIN80_CARRIED_SOURCE:
+                    target = f.previous / path; raw = target.read_bytes()
+                    for mutation in ('bytes', 'mode', 'missing'):
+                        if mutation == 'bytes': target.write_bytes(f.frozen[path][0])
+                        elif mutation == 'mode': target.chmod(0o755)
+                        else: target.unlink()
+                        with self.subTest(path=path, mutation=mutation), self.assertRaises(RuntimeError):
+                            deployment.verify_main80_recharge_candidate_source(f.previous, f.archive, self.profile)
+                        target.write_bytes(raw); target.chmod(0o644)
+                extra = f.previous / 'docs/UNREVIEWED_REGISTRATION.md'; extra.write_bytes(b'synthetic unreviewed sixth file'); extra.chmod(0o644)
+                with self.assertRaises(RuntimeError): deployment.verify_main80_recharge_candidate_source(f.previous, f.archive, self.profile)
 
     def test_main80_scope_rejects_stale_finance_carried_sources_and_expanded_services(self):
         mutations = [lambda p:p.update(expectedCurrent=deployment.RECHARGE_7F_CURRENT),
