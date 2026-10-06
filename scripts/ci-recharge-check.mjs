@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   adminCheckCommands,
   adminUiGuardChecks,
@@ -85,6 +86,7 @@ if (part === 'guards') {
   if (
     changed.includes('deploy/aws/recharge-pro-menu-b8-20261005.json') ||
     changed.includes('deploy/aws/recharge-pro-menu-7f-20261005.json') ||
+    changed.includes('deploy/aws/recharge-pro-main80-20261006.json') ||
     changed.some((path) => path.startsWith('scripts/production-release/'))
   )
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
@@ -179,6 +181,20 @@ if (part === 'guards') {
 } else if (part === 'migration') {
   run('python3', ['scripts/ci-recharge-migration.py']);
 } else if (part === 'connector') {
+  const workerDirectory = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  const fullPro = changed.some((path) =>
+    [`${workerDirectory}/plan_selection.py`, `${workerDirectory}/test_pro.py`].includes(path)
+  );
+  const workerOptions = {
+    cwd: workerDirectory,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ...(fullPro ? { PLAYWRIGHT_BROWSERS_PATH: resolve(workerDirectory, '.browsers') } : {})
+    }
+  };
+  if (fullPro) execFileSync('python3', ['-m', 'playwright', 'install', 'chromium'], workerOptions);
   execFileSync(
     'python3',
     [
@@ -190,7 +206,7 @@ if (part === 'guards') {
       'test_bitbrowser_upgrade',
       'test_connector_health',
       'test_session_retry',
-      'test_pro.ProMenuDiagnosticsTests',
+      fullPro ? 'test_pro' : 'test_pro.ProMenuDiagnosticsTests',
       'test_server',
       'test_worker_isolation',
       'test_server_proxy',
@@ -211,11 +227,7 @@ if (part === 'guards') {
       'test_upgrade_card_flow',
       'test_go.GoStateTests'
     ],
-    {
-      cwd: 'apps/api/src/id-business-v2/auto-recharge/worker',
-      stdio: 'inherit',
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
-    }
+    workerOptions
   );
 } else if (part === 'security') {
   run('python3', ['-B', 'scripts/audit-python-dependencies.test.py']);

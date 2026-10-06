@@ -574,3 +574,24 @@ test('fixed 7f runtime scope is exact and retains worker checks', () => {
     assert.equal(checkMode([path, other], schema, schema), 'full', other);
   }
 });
+
+test('fixed main80 recharge profile remains an exact control path and keeps Pro business checks', () => {
+  const path = 'deploy/aws/recharge-pro-main80-20261006.json';
+  assert.equal(isCiOnly([path]), true);
+  assert.equal(checkMode([path], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([path]), ['guards']);
+  for (const worker of ['plan_selection.py', 'test_pro.py']) {
+    const changed = `apps/api/src/id-business-v2/auto-recharge/worker/${worker}`;
+    assert.equal(checkMode([path, changed], schema, schema), 'recharge');
+    assert.deepEqual(selectedParts([path, changed]), ['guards', 'connector']);
+  }
+  for (const other of [
+    'deploy/aws/recharge-pro-main80-20261007.json',
+    path + '.backup',
+    path + '/future.json',
+    'deploy/aws/recharge-pro-main81-20261006.json'
+  ]) {
+    assert.equal(isCiOnly([other]), false, other);
+    assert.equal(checkMode([path, other], schema, schema), 'full', other);
+  }
+});
