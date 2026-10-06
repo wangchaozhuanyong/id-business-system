@@ -27,13 +27,13 @@
       "mysql": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299"
     }
   },
-  "registrationSourceCommit": "d55d0dd55594c98c96c2f4d7352f5580a7e8b5bf",
+  "registrationSourceCommit": "8dc096085ddb78fcf23c257257f5dc512fac1cf5",
   "workerBasisCommit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0",
   "registrationSourceSha256": {
-    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5",
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "6a484c2bf081a5fea20f650b66e9368c200930882635179e3a25c294faabc53b",
     "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": "78cc204cc4e4b63494d42019b075a51c3ac4ee7494e6f55aee5d127ef7ce2590",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": "b49b874d9cfb5af42c9ddfa3fc348f7dc8470af0e140424c8035b446cd4dc471",
-    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "af9778d037be3c7644371173a4a1a8143880ad2f385efd77d0739dae2ff91b53",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py": "1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe",
     "docs/AUTO_REGISTRATION.md": "3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c"
   },
@@ -124,7 +124,7 @@
     },
     "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": {
       "mode": "100644",
-      "sha256": "ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5"
+      "sha256": "6a484c2bf081a5fea20f650b66e9368c200930882635179e3a25c294faabc53b"
     },
     "apps/api/src/id-business-v2/auto-recharge/worker/registration_builtin.py": {
       "mode": "100644",
@@ -224,7 +224,7 @@
     },
     "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": {
       "mode": "100644",
-      "sha256": "fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06"
+      "sha256": "af9778d037be3c7644371173a4a1a8143880ad2f385efd77d0739dae2ff91b53"
     },
     "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py": {
       "mode": "100644",
@@ -279,7 +279,7 @@
       "sha256": "ee65947bca3509b0ff68c0fd45effc648f436e8ba507ec7a59b2beb95f32178e"
     }
   },
-  "workerProjectionSha256": "b1520e5119c036a0287e4f454920d47c557d1b77a54ba3191c46ab83550119b6",
+  "workerProjectionSha256": "778547eff19ff80059f8aea605369cbe0820c44bfcb366fbf7fe307533870b83",
   "buildInputSha256": {
     ".dockerignore": "9f69c1f476e723f1d8de9892058c34abc3817481b6d8259da4175c3f6293c05d",
     "scripts/audit-python-dependencies.py": "99b90a53943699d44c3fca8642db0ef7917ce618d2f3e09a4e30f31c127ee41c"
@@ -294,7 +294,7 @@
     "scripts/production-release/dispatch.sh": "85637e66747bc88432a5613119029bff531ac51cb8cf52759fdc47f5b810f585",
     "scripts/production-release/push-images.sh": "fbf2b45690fd0a89b4d4759744f013c846e165f6043dd3978c4f850ff18ed680",
     "scripts/production-release/registration-only-transport.test.py": "8ff9a7eb48b918b91336239757eef85261c4d7399dcb1a2c4aa2db0d814782ab",
-    "scripts/production-release/remote-deploy.py": "c436fc3ebaf77e0294adab8f2c77272e4653dbab7b223bdc180ac2e86cbf61af",
+    "scripts/production-release/remote-deploy.py": "4cfce8c7f3ec275ab7eb5c5d9cc04adc4b0943d61735068f6334f7d116cb2ed1",
     "scripts/production-release/remote-deploy.test.py": "800341fbd59016cb02eaab01650f55e1f65b4d9ac2843432569ccfae30c50a8d",
     "scripts/production-release/validate-release-selection.sh": "a75e07eeba6fdb896f9a2061ee938f9bc17ed6a0615301629cbea1c9f793b0d2",
     "scripts/v2-registration-finance-audit.mjs": "4d0726ba795569bc70e256141847cfe8ee57354d2936f35341c6e8a599ed8e67",

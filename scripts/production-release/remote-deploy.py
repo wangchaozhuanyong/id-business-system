@@ -3064,9 +3064,9 @@ def run_release_migrations(release, admin_only, historical_diagnostics=False):
 REGISTRATION_SCOPE_ID = 'registration-worker-b8-80-20261006'
 REGISTRATION_SCOPE_FILE = 'deploy/aws/' + REGISTRATION_SCOPE_ID + '.json'
 REGISTRATION_CURRENT = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
-REGISTRATION_SOURCE = 'd55d0dd55594c98c96c2f4d7352f5580a7e8b5bf'
+REGISTRATION_SOURCE = '8dc096085ddb78fcf23c257257f5dc512fac1cf5'
 REGISTRATION_WORKER_PREFIX = 'apps/api/src/id-business-v2/auto-recharge/worker/'
-REGISTRATION_PROJECTION_SHA256 = 'b1520e5119c036a0287e4f454920d47c557d1b77a54ba3191c46ab83550119b6'
+REGISTRATION_PROJECTION_SHA256 = '778547eff19ff80059f8aea605369cbe0820c44bfcb366fbf7fe307533870b83'
 REGISTRATION_FILES = frozenset(REGISTRATION_WORKER_PREFIX + name for name in (
     'registration_browser.py', 'registration_job.py', 'test_registration.py',
     'test_registration_browser.py', 'test_registration_builtin.py'))
@@ -3079,10 +3079,10 @@ REGISTRATION_CONTROLS = frozenset({
     'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-release.test.mjs',
     'scripts/v2-registration-finance-audit.mjs', 'scripts/v2-registration-finance-audit.test.mjs'})
-REGISTRATION_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': 'ccaa855d4dbc35f98ea22765011ca16e989c04622d911a9410673c6ace92dac5',
+REGISTRATION_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': '6a484c2bf081a5fea20f650b66e9368c200930882635179e3a25c294faabc53b',
  'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py': '78cc204cc4e4b63494d42019b075a51c3ac4ee7494e6f55aee5d127ef7ce2590',
  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py': 'b49b874d9cfb5af42c9ddfa3fc348f7dc8470af0e140424c8035b446cd4dc471',
- 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': 'fa1a98dd51208f9686732f9122b01d1023d7ce5977a08db17c0e86c7d3f5ad06',
+ 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': 'af9778d037be3c7644371173a4a1a8143880ad2f385efd77d0739dae2ff91b53',
  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py': '1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe',
  'docs/AUTO_REGISTRATION.md': '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c'}
 REGISTRATION_BASELINE = {'commit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
