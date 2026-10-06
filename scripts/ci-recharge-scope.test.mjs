@@ -574,3 +574,25 @@ test('fixed 7f runtime scope is exact and retains worker checks', () => {
     assert.equal(checkMode([path, other], schema, schema), 'full', other);
   }
 });
+
+test('fixed registration 80 controls retain worker checks and reject the disabled 3ca draft', () => {
+  const profile = 'deploy/aws/registration-worker-b8-80-20261006.json';
+  const transport = 'scripts/production-release/registration-only-transport.test.py';
+  assert.equal(isCiOnly([profile, transport]), true);
+  assert.equal(checkMode([profile, transport], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([profile, transport]), ['guards']);
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py';
+  assert.deepEqual(selectedParts([profile, worker]), ['guards', 'connector']);
+  for (const other of [
+    'deploy/aws/registration-worker-b8-3ca-20261006.json',
+    profile + '.backup',
+    profile + '/future.json',
+    'deploy/aws/registration-worker-b8-80-other.json',
+    'scripts/production-release/registration-only-other.test.py',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json'
+  ]) {
+    assert.equal(isCiOnly([other]), false, other);
+    assert.equal(checkMode([profile, other], schema, schema), 'full', other);
+  }
+});

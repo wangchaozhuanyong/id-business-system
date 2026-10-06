@@ -10,6 +10,11 @@ validate_release_selection() {
   fi
   case "$policy" in
     none|historical-finance-20261005|historical-finance-20261005-registration-continuation|historical-finance-20261005-recharge-diagnostics) ;;
+    registration-worker-b8-80-20261006)
+      [[ "${EXPECTED_CURRENT:-}" == 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      return 0 ;;
     historical-finance-20261005-maintenance-continuation)
       [[ "${EXPECTED_CURRENT:-}" == 6a82a774f2a65e00d4f260c629f7152bf7935d1d ]] || {
         echo 'Maintenance continuation requires its exact running baseline' >&2
