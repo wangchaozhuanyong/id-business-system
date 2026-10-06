@@ -432,6 +432,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'historical-finance-20261005-order-archive'), false);
   assert.equal(selected('release', 'recharge-pro-menu-b8-20261005'), false);
   assert.equal(selected('release', 'recharge-pro-menu-7f-20261005'), false);
+  assert.equal(selected('release', 'recharge-pro-main80-20261006'), false);
   assert.equal(selected('release', 'registration-worker-b8-80-20261006'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
@@ -441,6 +442,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'historical-finance-20261005-order-archive',
         'recharge-pro-menu-b8-20261005',
         'recharge-pro-menu-7f-20261005',
+        'recharge-pro-main80-20261006',
         'registration-worker-b8-80-20261006',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
@@ -1642,7 +1644,9 @@ function approvedRuntimeTransport(
     EXPECTED_CURRENT:
       identity === 'recharge-pro-menu-b8-20261005'
         ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
-        : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+        : identity === 'recharge-pro-main80-20261006'
+          ? '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
+          : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
@@ -1891,6 +1895,21 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
     profile.approvalStatus = 'APPROVED';
     if (identity === 'recharge-pro-menu-7f-20261005')
       profile.baselineRelease.deploymentRun = 'github-actions-37333706418-1';
+    if (identity === 'recharge-pro-main80-20261006') {
+      profile.baselineRelease.deploymentRun = 'github-actions-999001-1';
+      Object.assign(profile.financeValidator, {
+        releaseSealSha256: 'f'.repeat(64),
+        preparedImagesSha256: 'f'.repeat(64),
+        preparationRunId: 999002,
+        preparationRunAttempt: 1,
+        images: Object.fromEntries(
+          ['api', 'admin', 'migrate'].map((service, index) => [
+            service,
+            `sha256:${['a', 'b', 'c'][index].repeat(64)}`
+          ])
+        )
+      });
+    }
     for (const key of [
       'manifestSha256',
       'beforeAuditSha256',
@@ -1899,10 +1918,19 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       'overrideRawSha256',
       'overrideCanonicalSha256'
     ])
-      if (key !== 'composeSha256' || identity === 'recharge-pro-menu-7f-20261005')
+      if (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
         profile.baselineRelease[key] = 'd'.repeat(64);
     for (const key of ['candidateSourceSha256', 'carriedSourceOnlySha256', 'controlSourceSha256'])
-      for (const name of Object.keys(profile[key])) profile[key][name] = 'e'.repeat(64);
+      for (const name of Object.keys(profile[key]))
+        if (
+          identity !== 'recharge-pro-main80-20261006' ||
+          (key !== 'carriedSourceOnlySha256' &&
+            ![
+              'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+              'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py'
+            ].includes(name))
+        )
+          profile[key][name] = 'e'.repeat(64);
     const profileFile = join(root, `deploy/aws/${identity}.json`);
     writeFileSync(profileFile, JSON.stringify(profile));
     const digest = execFileSync(
@@ -1924,10 +1952,10 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       profileSha256: digest,
       servicesUpdated: ['auto-recharge'],
       preservedServiceCount: 6,
-      checkCount: 48,
-      executedCheckCount: 48,
+      checkCount: identity === 'recharge-pro-main80-20261006' ? 49 : 48,
+      executedCheckCount: identity === 'recharge-pro-main80-20261006' ? 49 : 48,
       unavailableCheckCount: 0,
-      violationCount: 6,
+      violationCount: identity === 'recharge-pro-main80-20261006' ? 5 : 6,
       storedGatesMatched: true,
       unchangedServiceContainersPreserved: true,
       environmentUnchanged: true,
@@ -2264,4 +2292,466 @@ test('fixed 7f actual independent readback binds its own profile and rejects cro
       assert.equal(readFileSync(awsLog, 'utf8'), '');
     }
   }, identity);
+});
+
+test('Pro business CI prepares the locked Python Chromium before the full Pro module in one worker cache', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  for (const changed of [`${worker}/plan_selection.py`, `${worker}/test_pro.py`])
+    fixture(({ root, env }) => {
+      const log = join(root, 'pro-ci-commands.txt');
+      writeFileSync(env.TASK_CHANGED_PATHS, changed);
+      writeFileSync(
+        join(root, 'bin', 'python3'),
+        '#!/bin/sh\nprintf "%s\\n" "$*" "$PWD" "$PLAYWRIGHT_BROWSERS_PATH" "$PYTHONDONTWRITEBYTECODE" >> "$TASK_PRO_CI_LOG"\n',
+        { mode: 0o755 }
+      );
+      execFileSync(
+        process.execPath,
+        ['scripts/ci-recharge-check.mjs', 'connector', 'a'.repeat(40)],
+        {
+          env: { ...env, TASK_PRO_CI_LOG: log, PLAYWRIGHT_BROWSERS_PATH: 'unrelated-cache' },
+          stdio: 'pipe'
+        }
+      );
+      const commands = readFileSync(log, 'utf8').trim().split('\n');
+      assert.equal(commands.length, 8, changed);
+      assert.equal(commands[0], '-m playwright install chromium');
+      assert.equal(commands[1], join(process.cwd(), worker));
+      assert.equal(commands[2], join(process.cwd(), worker, '.browsers'));
+      assert.equal(commands[3], '1');
+      const tests = commands[4].split(' ');
+      assert.deepEqual(tests.slice(0, 2), ['-m', 'unittest']);
+      assert.equal(tests.filter((name) => name === 'test_pro').length, 1);
+      assert.equal(tests.includes('test_pro.ProMenuDiagnosticsTests'), false);
+      for (const regression of [
+        'test_worker_isolation',
+        'test_registration_browser',
+        'test_server_proxy'
+      ])
+        assert.ok(tests.includes(regression), regression);
+      assert.deepEqual(commands.slice(5), commands.slice(1, 4));
+    });
+});
+
+test('control-only and other worker CI changes keep the existing Pro subset without installing Chromium', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  for (const changed of [
+    'deploy/aws/recharge-pro-main80-20261006.json',
+    `${worker}/pay.py`,
+    `${worker}/plan_selection.py.backup`,
+    `${worker}/test_pro.py/extra`
+  ])
+    fixture(({ root, env }) => {
+      const log = join(root, 'pro-subset-commands.txt');
+      writeFileSync(env.TASK_CHANGED_PATHS, changed);
+      writeFileSync(
+        join(root, 'bin', 'python3'),
+        '#!/bin/sh\nprintf "%s\\n" "$*" "$PLAYWRIGHT_BROWSERS_PATH" >> "$TASK_PRO_CI_LOG"\n',
+        { mode: 0o755 }
+      );
+      execFileSync(
+        process.execPath,
+        ['scripts/ci-recharge-check.mjs', 'connector', 'a'.repeat(40)],
+        {
+          env: { ...env, TASK_PRO_CI_LOG: log, PLAYWRIGHT_BROWSERS_PATH: 'existing-cache' },
+          stdio: 'pipe'
+        }
+      );
+      const commands = readFileSync(log, 'utf8').trim().split('\n');
+      assert.equal(commands.length, 2);
+      const tests = commands[0].split(' ');
+      assert.equal(tests.filter((name) => name === 'test_pro.ProMenuDiagnosticsTests').length, 1);
+      assert.equal(tests.includes('test_pro'), false);
+      assert.equal(commands[1], 'existing-cache');
+    });
+});
+
+test('Pro CI Chromium preparation failure prevents the unittest command from running', () => {
+  fixture(({ root, env }) => {
+    const log = join(root, 'failed-pro-ci-commands.txt');
+    writeFileSync(
+      env.TASK_CHANGED_PATHS,
+      'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py'
+    );
+    writeFileSync(
+      join(root, 'bin', 'python3'),
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_PRO_CI_LOG"\nexit 29\n',
+      { mode: 0o755 }
+    );
+    assert.throws(() =>
+      execFileSync(
+        process.execPath,
+        ['scripts/ci-recharge-check.mjs', 'connector', 'a'.repeat(40)],
+        {
+          env: { ...env, TASK_PRO_CI_LOG: log },
+          stdio: 'pipe'
+        }
+      )
+    );
+    assert.equal(readFileSync(log, 'utf8'), '-m playwright install chromium\n');
+  });
+});
+
+test('fixed main80 approved transport builds and pushes one fresh recharge image only', () => {
+  fixture(({ root, env, log }) => {
+    const transport = approvedRuntimeTransport(root, env, false, 'recharge-pro-main80-20261006');
+    execFileSync('bash', ['scripts/production-release/build-images.sh'], {
+      env: transport,
+      stdio: 'pipe'
+    });
+    execFileSync('bash', ['scripts/production-release/push-images.sh'], {
+      env: transport,
+      stdio: 'pipe'
+    });
+    const operations = readFileSync(log, 'utf8').trim().split('\n');
+    const builds = operations.filter((line) => line.startsWith('build '));
+    const pushes = operations.filter((line) => line.startsWith('push '));
+    assert.equal(builds.length, 1);
+    assert.ok(builds[0].includes('auto-recharge/worker/Dockerfile'));
+    assert.ok(builds[0].includes(`${env.RELEASE_COMMIT}-999999-1-auto-recharge`));
+    assert.equal(pushes.length, 1);
+    assert.ok(pushes[0].endsWith('-auto-recharge'));
+    assert.equal(
+      operations.some((line) => /-auto-registration|-api|-admin|-migrate/.test(line)),
+      false
+    );
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+    assert.deepEqual(readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8').trim().split('\n'), [
+      'checked',
+      'checked'
+    ]);
+  });
+});
+
+const main80RejectedSelections = [
+  { EXPECTED_CURRENT: '3ca300486d0edfadda83c094a48474a63959fce7' },
+  { EXPECTED_CURRENT: '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' },
+  { RELEASE_ADMIN_ONLY: 'true' },
+  { RELEASE_ADMIN_ONLY: 'unexpected' },
+  { RELEASE_OPERATION: 'prepare_order_archive_release' },
+  { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
+  { RELEASE_OPERATION: 'verify_access' },
+  { RELEASE_OPERATION: 'cleanup_unused_cache' },
+  { REUSE_IMAGE_RUN: '222' },
+  { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+  { REUSE_IMAGE_RUN_ID: '222' },
+  { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+  { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+  { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
+  { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'f'.repeat(64) },
+  { HISTORICAL_EXCEPTION: 'recharge-pro-menu-b8-20261005' },
+  { HISTORICAL_EXCEPTION: 'recharge-pro-menu-7f-20261005' },
+  { HISTORICAL_EXCEPTION: 'historical-finance-20261005-order-archive' },
+  { HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261007' },
+  { HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006 --admin-only' },
+  { rejectedApproval: true },
+  { TASK_EXPECTED_FIXED_PROFILE: 'recharge-pro-menu-b8-20261005' }
+];
+
+test('fixed main80 build push and dispatch reject cross-wiring reuse external seals and preparation before effects', () => {
+  const identity = 'recharge-pro-main80-20261006';
+  const baseline = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b';
+  for (const override of main80RejectedSelections) {
+    const { rejectedApproval, ...fields } = override;
+    for (const entry of ['build-images', 'push-images'])
+      fixture(({ root, env, log }) => {
+        const transport = approvedRuntimeTransport(root, env, rejectedApproval, identity);
+        assert.throws(() =>
+          execFileSync('bash', [`scripts/production-release/${entry}.sh`], {
+            env: { ...transport, ...fields },
+            stdio: 'pipe'
+          })
+        );
+        assert.equal(readFileSync(log, 'utf8'), '', `${entry}: external command attempted`);
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+    dispatchFixture(identity, baseline, ({ execute, parametersFile, awsLog, root, env }) => {
+      const transport = approvedRuntimeTransport(root, env, rejectedApproval, identity);
+      assert.throws(
+        () => execute({ ...transport, EXPECTED_CURRENT: baseline, ...fields }),
+        JSON.stringify(fields)
+      );
+      assert.equal(existsSync(parametersFile), false);
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+    });
+  }
+});
+
+test('fixed main80 dispatch binds one exclusive flag and the fresh candidate image identity', () => {
+  const identity = 'recharge-pro-main80-20261006';
+  const baseline = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b';
+  dispatchFixture(identity, baseline, ({ execute, parametersFile, awsLog, root, env }) => {
+    const transport = approvedRuntimeTransport(root, env, false, identity);
+    execute({ ...transport, EXPECTED_CURRENT: baseline });
+    const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
+    assert.equal(args.filter((arg) => arg === '--recharge-pro-main80').length, 1);
+    assert.equal(args[args.indexOf('--expected-current') + 1], baseline);
+    assert.equal(args[args.indexOf('--image-commit') + 1], env.RELEASE_COMMIT);
+    assert.equal(args[args.indexOf('--image-run-id') + 1], '999999');
+    assert.equal(args[args.indexOf('--image-run-attempt') + 1], '1');
+    assert.equal(
+      args.some((arg) =>
+        /^(--historical-finance-|--recharge-pro-menu-|--admin-only|--order-archive-|--post-cleanup-)/.test(
+          arg
+        )
+      ),
+      false
+    );
+    assert.equal(
+      readFileSync(awsLog, 'utf8')
+        .split('\n')
+        .filter((line) => line.startsWith('ssm send-command ')).length,
+      1
+    );
+  });
+});
+
+test('fixed main80 dispatch rejects malformed candidate bindings before generating parameters or calling AWS', () => {
+  const identity = 'recharge-pro-main80-20261006';
+  const baseline = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b';
+  for (const fields of [
+    { RELEASE_COMMIT: 'B'.repeat(40) },
+    { RELEASE_COMMIT: 'b'.repeat(40) + ' --admin-only' },
+    { SOURCE_TREE: 'c'.repeat(39) },
+    { QUALITY_RUN_ID: '0' },
+    { QUALITY_RUN_ID: '111 --historical-finance-order-archive' },
+    { RELEASE_REPOSITORY: 'unreviewed.example/id-business-v2-release' }
+  ])
+    dispatchFixture(identity, baseline, ({ execute, parametersFile, awsLog, root, env }) => {
+      const transport = approvedRuntimeTransport(root, env, false, identity);
+      assert.throws(
+        () => execute({ ...transport, EXPECTED_CURRENT: baseline, ...fields }),
+        JSON.stringify(fields)
+      );
+      assert.equal(existsSync(parametersFile), false);
+      assert.equal(readFileSync(awsLog, 'utf8'), '');
+    });
+});
+
+test('main80 disabled real-parser profile refuses all entries before Docker AWS parameters or env changes', () => {
+  const identity = 'recharge-pro-main80-20261006';
+  for (const entry of ['build-images', 'push-images', 'dispatch'])
+    fixture(({ root, env, log }) => {
+      const scripts = join(root, 'scripts/production-release');
+      mkdirSync(scripts, { recursive: true });
+      for (const name of [
+        'build-images.sh',
+        'push-images.sh',
+        'dispatch.sh',
+        'validate-release-selection.sh',
+        'remote-deploy.py'
+      ])
+        writeFileSync(join(scripts, name), readFileSync(`scripts/production-release/${name}`));
+      mkdirSync(join(root, 'deploy/aws'), { recursive: true });
+      const disabledProfile = JSON.parse(readFileSync(`deploy/aws/${identity}.json`, 'utf8'));
+      disabledProfile.enabled = false;
+      disabledProfile.approvalStatus = 'NOT_APPROVED';
+      writeFileSync(join(root, `deploy/aws/${identity}.json`), JSON.stringify(disabledProfile));
+      assert.throws(
+        () =>
+          execFileSync('bash', [join(scripts, `${entry}.sh`)], {
+            cwd: root,
+            env: {
+              ...env,
+              HISTORICAL_EXCEPTION: identity,
+              EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+              RELEASE_ADMIN_ONLY: 'false',
+              SOURCE_TREE: 'c'.repeat(40),
+              QUALITY_RUN_ID: '111'
+            },
+            stdio: 'pipe'
+          }),
+        (error) => error.status !== 0 && String(error.stderr).includes('raw output suppressed')
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+      assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+    });
+});
+
+test('main80 profile guard and workflow choose its approval readback and skipped cache independently', () => {
+  const identity = 'recharge-pro-main80-20261006';
+  const commands = guardCommands([`deploy/aws/${identity}.json`]);
+  assert.equal(
+    commands.filter(
+      (value) => value === 'python3 -B scripts/production-release/remote-deploy.test.py'
+    ).length,
+    1
+  );
+  assert.ok(workflowInputs.historical_exception.options.includes(identity));
+  const input = { operation: 'release', historical_exception: identity, reuse_image_run: '' };
+  const enabled = workflowSteps
+    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(input))
+    .map((step) => step.name);
+  for (const name of [
+    'Verify fixed recharge runtime approval',
+    'Validate release policy and reviewed seal selection',
+    'Build images on the GitHub runner',
+    'Verify fixed recharge deployment independently',
+    'Record skipped cache maintenance for fixed recharge release'
+  ])
+    assert.ok(enabled.includes(name), name);
+  for (const name of [
+    'Verify fixed mailbox release selection',
+    'Verify reusable build and unchanged application source',
+    'Verify or maintain recoverable unused project image cache'
+  ])
+    assert.equal(enabled.includes(name), false, name);
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge runtime approval'
+  );
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge deployment independently'
+  );
+  assert.ok(
+    approval.run.includes(
+      `recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b`
+    )
+  );
+  assert.equal(
+    new Function('inputs', `return (${readback.env.FIXED_RECHARGE_PROFILE.slice(3, -2)});`)(input),
+    identity
+  );
+});
+
+test('main80 actual readback parser accepts the 21-field 49-check proof and rejects old gates and raw extras', () => {
+  const identity = 'recharge-pro-main80-20261006';
+  fixedRechargeReadbackFixture(
+    ({ root, execute, receipt, digest, awsLog, profile, profileFile }) => {
+      const inheritedCommit = 'fd173815aac0048011fe1583acfe345575bca286';
+      const registrationControlCommit = '602f3d1f95f5e2be0605e46223b8703a69cb54a4';
+      const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/';
+      const inheritedBusinessNames = [
+        `${worker}registration_browser.py`,
+        `${worker}registration_job.py`,
+        `${worker}test_registration.py`,
+        `${worker}test_registration_browser.py`,
+        'docs/AUTO_REGISTRATION.md'
+      ];
+      const inheritedControlNames = [
+        'deploy/aws/registration-worker-b8-80-20261006.json',
+        'scripts/production-release/registration-only-transport.test.py'
+      ];
+      const inheritedNames = [...inheritedBusinessNames, ...inheritedControlNames];
+      const inherited = Object.fromEntries(
+        inheritedNames.map((name) => [
+          name,
+          createHash('sha256')
+            .update(
+              execFileSync('git', [
+                'show',
+                `${inheritedControlNames.includes(name) ? registrationControlCommit : inheritedCommit}:${name}`
+              ])
+            )
+            .digest('hex')
+        ])
+      );
+      assert.equal(profile.enabled, true);
+      assert.equal(profile.approvalStatus, 'APPROVED');
+      assert.deepEqual(profile.carriedSourceOnlySha256, inherited);
+      assert.equal(Object.keys(profile.sourceModes).length, 22);
+      for (const name of inheritedNames) assert.equal(profile.sourceModes[name], 0o644);
+      assert.equal(Object.keys(receipt).length, 21);
+      assert.deepEqual(JSON.parse(execute()), receipt);
+      const parameters = JSON.parse(
+        readFileSync(join(root, '.deploy/production-release/fixed-recharge-readback.json'), 'utf8')
+      );
+      assert.ok(Buffer.byteLength(JSON.stringify(parameters)) < 20 * 1024);
+      assert.ok(parameters.commands[0].includes(identity));
+      assert.ok(parameters.commands[0].includes(digest));
+      const originalProfile = readFileSync(profileFile, 'utf8');
+      const inheritedName = inheritedNames[0];
+      const oldSourceHash = createHash('sha256')
+        .update(
+          execFileSync('git', ['show', `80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b:${inheritedName}`])
+        )
+        .digest('hex');
+      assert.notEqual(oldSourceHash, inherited[inheritedName]);
+      const mutations = [
+        (value) => {
+          value.carriedSourceOnlySha256 = {};
+          for (const name of inheritedNames) delete value.sourceModes[name];
+        },
+        (value) => {
+          delete value.carriedSourceOnlySha256[inheritedName];
+          delete value.sourceModes[inheritedName];
+        },
+        (value) => {
+          value.carriedSourceOnlySha256['unreviewed/source.py'] = '1'.repeat(64);
+          value.sourceModes['unreviewed/source.py'] = 0o644;
+        },
+        (value) => {
+          value.carriedSourceOnlySha256[inheritedName] = '1'.repeat(64);
+        },
+        (value) => {
+          value.carriedSourceOnlySha256[inheritedName] = oldSourceHash;
+        },
+        (value) => {
+          value.sourceModes[inheritedName] = 0o755;
+        },
+        (value) => {
+          value.candidateSourceSha256[inheritedName] = value.carriedSourceOnlySha256[inheritedName];
+          delete value.carriedSourceOnlySha256[inheritedName];
+        }
+      ];
+      for (const mutate of mutations) {
+        const changed = structuredClone(profile);
+        mutate(changed);
+        writeFileSync(profileFile, JSON.stringify(changed));
+        const previousAws = readFileSync(awsLog, 'utf8');
+        const previousParameters = readFileSync(
+          join(root, '.deploy/production-release/fixed-recharge-readback.json'),
+          'utf8'
+        );
+        try {
+          assert.throws(
+            () => execute(),
+            (error) => error.status !== 0 && error.stdout === ''
+          );
+          assert.equal(readFileSync(awsLog, 'utf8'), previousAws);
+          assert.equal(
+            readFileSync(
+              join(root, '.deploy/production-release/fixed-recharge-readback.json'),
+              'utf8'
+            ),
+            previousParameters
+          );
+        } finally {
+          writeFileSync(profileFile, originalProfile);
+        }
+      }
+      for (const changed of [
+        { id: 'recharge-pro-menu-7f-20261005' },
+        { previousCommit: '3ca300486d0edfadda83c094a48474a63959fce7' },
+        { checkCount: 48 },
+        { executedCheckCount: 48 },
+        { violationCount: 6 },
+        { checkCount: true },
+        { unavailableCheckCount: 1 },
+        { servicesUpdated: ['auto-recharge', 'auto-registration'] },
+        { migrationStatus: 'APPLIED' },
+        { unexpected: 'PRIVATE_SYNTHETIC_SENTINEL' }
+      ])
+        assert.throws(
+          () =>
+            execute(
+              `FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...changed })}\n`
+            ),
+          (error) =>
+            error.status !== 0 &&
+            error.stdout === '' &&
+            String(error.stderr).includes('raw output suppressed') &&
+            !String(error.stderr).includes('PRIVATE_SYNTHETIC_SENTINEL')
+        );
+      writeFileSync(awsLog, '');
+      for (const wrongProfile of [
+        'recharge-pro-menu-7f-20261005',
+        'recharge-pro-main80-20261007'
+      ]) {
+        assert.throws(() => execute(undefined, { FIXED_RECHARGE_PROFILE: wrongProfile }));
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      }
+    },
+    identity
+  );
 });
