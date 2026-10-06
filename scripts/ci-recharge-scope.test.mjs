@@ -603,6 +603,7 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
   const email = 'deploy/aws/registration-worker-86-20261006.json';
   const callback = 'deploy/aws/registration-worker-87-20261006.json';
   const emailRequest = 'deploy/aws/registration-worker-88-20261006.json';
+  const emailObservation = 'deploy/aws/registration-worker-89-20261006.json';
   const transport = 'scripts/production-release/registration-only-transport.test.py';
   const auditors = [
     'scripts/v2-registration-finance-audit.mjs',
@@ -634,6 +635,14 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
   assert.equal(isCiOnly([emailRequest]), true);
   assert.equal(checkMode([emailRequest], schema, schema), 'ci-only');
   assert.deepEqual(selectedParts([emailRequest]), ['guards']);
+  assert.equal(isCiOnly([emailObservation]), true);
+  assert.equal(checkMode([emailObservation], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([emailObservation]), ['guards']);
+  for (const path of ['registration_browser.py', 'test_registration_browser.py'])
+    assert.deepEqual(
+      selectedParts([emailObservation, 'apps/api/src/id-business-v2/auto-recharge/worker/' + path]),
+      ['guards', 'connector']
+    );
   for (const path of ['registration_browser.py', 'test_registration_browser.py'])
     assert.deepEqual(
       selectedParts([emailRequest, 'apps/api/src/id-business-v2/auto-recharge/worker/' + path]),
@@ -659,6 +668,8 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
     callback + '.backup',
     'deploy/aws/registration-worker-88-20261007.json',
     emailRequest + '.backup',
+    'deploy/aws/registration-worker-89-20261007.json',
+    emailObservation + '.backup',
     'scripts/production-release/registration-only-other.test.py',
     'scripts/v2-registration-finance-audit-other.mjs',
     'scripts/v2-registration-finance-audit.mjs.backup',
