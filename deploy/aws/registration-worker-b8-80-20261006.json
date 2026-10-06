@@ -294,8 +294,8 @@
     "scripts/production-release/dispatch.sh": "3fba215f7036c4eab39c72deec0e34b89f56fc643667b732e63c7e1ab99609e5",
     "scripts/production-release/push-images.sh": "e6877fe869a70132932824a66c063b9ee0d6746362ee8726715f63723f23d994",
     "scripts/production-release/registration-only-transport.test.py": "8ff9a7eb48b918b91336239757eef85261c4d7399dcb1a2c4aa2db0d814782ab",
-    "scripts/production-release/remote-deploy.py": "b9470168700bc2c950c19ae3cee0f95683cc25d3c9a3873df6e7780a121bd1f2",
-    "scripts/production-release/remote-deploy.test.py": "9aee76cff388dcd49bd3d6b479eba418adf9e6c23f243714d5ca9adb21f227ee",
+    "scripts/production-release/remote-deploy.py": "3243aa5c74ad3aee5574e935d98523956ce1850a09cb313524c738b651084761",
+    "scripts/production-release/remote-deploy.test.py": "cbd79ed7a7cda691c74718e5fa8d4ad88d3f74d8ec52a959b30042534a420cee",
     "scripts/production-release/validate-release-selection.sh": "9b2c22239f8ea3e9e4cc748a87dbdcb74ed030c76e8b2d9bf97b9f125c567419"
   },
   "scope": {

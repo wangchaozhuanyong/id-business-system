@@ -6602,6 +6602,30 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                 deployment.prepare_registration_finance_source(SimpleNamespace(), b'unreviewed')
         write.assert_not_called()
 
+    def test_public_audit_directories_are_traversable_under_private_umask(self):
+        files = {'scripts/lib/audit.mjs': (b'public audit source', '100644'),
+                 'deploy/aws/policy.json': (b'{}', '100644'),
+                 'scripts/audit.sh': (b'#!/bin/sh\n', '100755')}
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            outer = Path(name); source = outer / 'source'
+            secret = outer / 'private-receipt.json'
+            secret.write_bytes(b'private synthetic receipt'); secret.chmod(0o600)
+            outer_mode = outer.stat().st_mode & 0o777
+            previous_umask = deployment.os.umask(0o077)
+            try:
+                deployment.write_registration_files(source, files)
+            finally:
+                deployment.os.umask(previous_umask)
+            self.assertEqual(source.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(outer.stat().st_mode & 0o777, outer_mode)
+            self.assertEqual(secret.stat().st_mode & 0o777, 0o600)
+            for directory in ('scripts', 'scripts/lib', 'deploy', 'deploy/aws'):
+                self.assertEqual((source / directory).stat().st_mode & 0o777, 0o755)
+            for path, (data, mode) in files.items():
+                self.assertEqual((source / path).read_bytes(), data)
+                self.assertEqual((source / path).stat().st_mode & 0o777,
+                                 0o755 if mode == '100755' else 0o644)
+
     def test_original_80_finance_full_git_projection_preserves_existing_policy_and_schema(self):
         raw = subprocess.check_output(['git', 'archive',
             '--prefix=id-business-system-' + deployment.REGISTRATION_CURRENT + '/',
