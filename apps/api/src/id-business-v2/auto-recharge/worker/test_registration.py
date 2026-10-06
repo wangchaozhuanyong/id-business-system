@@ -1,12 +1,16 @@
 import asyncio
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date
+from http.client import HTTPResponse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 import unittest
 from unittest.mock import patch, AsyncMock, MagicMock
 from types import SimpleNamespace
 import threading
+import time
 from urllib.error import HTTPError, URLError
 
 from checkout_core import Stop
@@ -436,7 +440,8 @@ class RegistrationCallbackDiagnosticsTests(unittest.TestCase):
         self.assertEqual(type(job.registration_callback_error['elapsed_ms']), int)
         self.assertGreaterEqual(job.registration_callback_error['elapsed_ms'], 0)
         opener.open.assert_called_once()
-        self.assertEqual(opener.open.call_args.kwargs, {'timeout': 10})
+        self.assertGreater(opener.open.call_args.kwargs['timeout'], 9.9)
+        self.assertLessEqual(opener.open.call_args.kwargs['timeout'], 10)
         self.assert_private(job, logger)
         return job, logger
 
@@ -596,6 +601,360 @@ class RegistrationCallbackDiagnosticsTests(unittest.TestCase):
         self.assertEqual(job.registration_callback_error['http_status'], 500)
         logger.warning.assert_called_once()
         self.assert_private(job, logger)
+
+
+class RegistrationCallbackConflictTests(unittest.TestCase):
+    secret = RegistrationCallbackDiagnosticsTests.secret
+    Response = RegistrationCallbackDiagnosticsTests.Response
+    job = RegistrationCallbackDiagnosticsTests.job
+    assert_private = RegistrationCallbackDiagnosticsTests.assert_private
+
+    @staticmethod
+    def envelope(message='数据已被其他操作修改，请刷新后重试', **changes):
+        value = dict(success=False, errorCode='CONFLICT', message=message,
+                     requestId='fixture-request-0001', retryable=False,
+                     timestamp='2026-10-06T12:18:27.241Z')
+        value.update(changes)
+        return json.dumps(value, ensure_ascii=False).encode()
+
+    def conflict(self, message='数据已被其他操作修改，请刷新后重试', *, raw=None, body=None):
+        return HTTPError(self.secret, 409, self.secret, {},
+                         body if body is not None else io.BytesIO(self.envelope(message) if raw is None else raw))
+
+    def execute(self, job, responses, *, event='progress', **data):
+        opener, logger = MagicMock(), MagicMock()
+        opener.open.side_effect = responses
+        with patch('registration_job.build_opener', return_value=opener), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            try:
+                job.event(event, **({'reason': 'proxy_verifying'} | data))
+            except Stop as error:
+                result = error.report['reason']
+            else:
+                result = 'success'
+        self.assert_private(job, logger)
+        for call in logger.warning.call_args_list:
+            output = call.args[0] % call.args[1:]
+            self.assertNotIn('数据已被', output)
+            self.assertNotIn('浏览器指纹', output)
+        return result, opener, logger
+
+    def test_known_api_conflicts_are_closed_exact_categories(self):
+        from registration_job import CALLBACK_CONFLICT_MESSAGES
+        for message, kind in CALLBACK_CONFLICT_MESSAGES.items():
+            with self.subTest(kind=kind, message_index=list(CALLBACK_CONFLICT_MESSAGES).index(message)):
+                job = self.job()
+                # An email-stage request can classify but cannot retry.
+                result, opener, _logger = self.execute(job, [self.conflict(message)], step='email')
+                self.assertEqual(result, 'durable_state_unavailable')
+                self.assertEqual(job.registration_callback_error['conflict_kind'], kind)
+                opener.open.assert_called_once()
+
+    def test_exact_write_conflict_retries_identical_internal_request_once(self):
+        job = self.job()
+        result, opener, logger = self.execute(job, [self.conflict(), self.Response()],
+                                              browserProfileId='reg_' + 'b' * 64)
+        self.assertEqual(result, 'success')
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertIs(opener.open.call_args_list[0].args[0], opener.open.call_args_list[1].args[0])
+        self.assertEqual(json.loads(opener.open.call_args.args[0].data), {
+            'type': 'progress', 'attempt': 1, 'step': 'queued', 'reason': 'proxy_verifying',
+            'browserProfileId': 'reg_' + 'b' * 64})
+        self.assertLess(opener.open.call_args_list[1].kwargs['timeout'],
+                        opener.open.call_args_list[0].kwargs['timeout'])
+        self.assertEqual(job.registration_callback_error['conflict_kind'], 'write_conflict')
+        logger.warning.assert_called_once()
+
+    def test_current_second_failure_is_logged_without_replacing_first(self):
+        for second, kind, failure in [
+                (self.conflict('浏览器指纹与已有任务重复，请重新生成'), 'fingerprint_duplicate', 'HTTP_STATUS'),
+                (self.conflict('回执步骤已过期'), 'stale_step', 'HTTP_STATUS'),
+                (self.conflict(), 'write_conflict', 'HTTP_STATUS'),
+                (TimeoutError(self.secret), 'unknown', 'TIMEOUT')]:
+            with self.subTest(kind=kind, failure=failure):
+                job = self.job()
+                result, opener, logger = self.execute(job, [self.conflict(), second, self.Response()])
+                self.assertEqual(result, 'durable_state_unavailable')
+                self.assertEqual(opener.open.call_count, 2)
+                first = job.registration_callback_error
+                self.assertEqual(first['conflict_kind'], 'write_conflict')
+                self.assertEqual(first['failure_kind'], 'HTTP_STATUS')
+                output = [call.args[0] % call.args[1:] for call in logger.warning.call_args_list]
+                self.assertEqual(len(output), 2)
+                self.assertIn('conflict_kind=' + kind, output[-1])
+                self.assertIn('failure_kind=' + failure, output[-1])
+                with patch('registration_job.build_opener', side_effect=OSError(self.secret)), \
+                        patch('registration_job.logging.getLogger', return_value=logger):
+                    with self.assertRaises(Stop):
+                        job.event('partial', reason='durable_state_unavailable')
+                self.assertIs(job.registration_callback_error, first)
+                self.assertEqual(logger.warning.call_count, 2)
+
+    def test_malformed_or_unknown_conflict_envelopes_never_retry(self):
+        raw_cases = [
+            self.envelope(message=self.secret), self.envelope(message='数据已被其他操作修改，请刷新后重试 '),
+            self.envelope(success=True), self.envelope(success=0), self.envelope(errorCode='OTHER'),
+            self.envelope(retryable=True), self.envelope(requestId='bad'), self.envelope(timestamp='today'),
+            self.envelope(fieldErrors={}), self.envelope(retryAfterMs=1),
+            self.envelope().replace(b'"success": false', b'"success": false,"success": false'),
+            self.envelope().replace(b'false', b'NaN', 1), b'[]', b'{', b'\xff',
+            json.dumps(dict(success=False, errorCode='CONFLICT', message=self.secret)).encode(),
+        ]
+        for index, raw in enumerate(raw_cases):
+            with self.subTest(case=index):
+                job = self.job()
+                result, opener, _logger = self.execute(job, [self.conflict(raw=raw), self.Response()])
+                self.assertEqual(result, 'durable_state_unavailable')
+                self.assertEqual(job.registration_callback_error['conflict_kind'], 'unknown')
+                opener.open.assert_called_once()
+
+    def test_conflict_body_read_is_capped_at_two_kib_and_boundary_is_unknown(self):
+        class LimitedBody(io.BytesIO):
+            limit = None
+            def read(self, size=-1):
+                self.limit = size
+                return super().read(size)
+        for size in [2048, 20000]:
+            with self.subTest(size=size):
+                body = LimitedBody(self.envelope() + b' ' * size)
+                job = self.job()
+                result, opener, _logger = self.execute(job, [self.conflict(body=body), self.Response()])
+                self.assertEqual(result, 'durable_state_unavailable')
+                self.assertEqual(body.limit, 2048)
+                self.assertTrue(body.closed)
+                self.assertEqual(job.registration_callback_error['conflict_kind'], 'unknown')
+                opener.open.assert_called_once()
+
+    def test_body_read_and_close_failures_preserve_http_first_cause_and_forbid_retry(self):
+        class BrokenBody(io.BytesIO):
+            def read(self, _size=-1):
+                raise TimeoutError(RegistrationCallbackDiagnosticsTests.secret)
+            def close(self):
+                raise OSError(RegistrationCallbackDiagnosticsTests.secret)
+        job = self.job()
+        result, opener, logger = self.execute(job, [self.conflict(body=BrokenBody()), self.Response()])
+        self.assertEqual(result, 'durable_state_unavailable')
+        opener.open.assert_called_once()
+        self.assertEqual(job.registration_callback_error['failure_kind'], 'HTTP_STATUS')
+        self.assertEqual(job.registration_callback_error['http_status'], 409)
+        self.assertEqual(job.registration_callback_error['conflict_kind'], 'unknown')
+        self.assertEqual(job.registration_callback_body_error, 'TimeoutError')
+        self.assertEqual(job.registration_callback_cleanup_error, 'OSError')
+        self.assertEqual(logger.warning.call_count, 3)
+
+        class CloseFailure(io.BytesIO):
+            def close(self):
+                raise OSError(RegistrationCallbackDiagnosticsTests.secret)
+        job = self.job()
+        result, opener, _logger = self.execute(job, [self.conflict(body=CloseFailure(self.envelope())), self.Response()])
+        self.assertEqual(result, 'durable_state_unavailable')
+        self.assertEqual(job.registration_callback_error['conflict_kind'], 'write_conflict')
+        self.assertEqual(job.registration_callback_cleanup_error, 'OSError')
+        opener.open.assert_called_once()
+
+    def test_retry_excludes_non_preparation_stages_and_any_flow_or_submission_state(self):
+        variants = [
+            ('payload', 'browserProfileId', 'reg_' + 'a' * 64),
+            ('payload', 'registered', True), ('payload', 'passwordVerified', True),
+            ('payload', 'mfaVerified', True), ('payload', 'step', 'email'),
+            ('job', 'step', 'email'), ('job', 'registration_state', {}),
+            ('job', 'registration_operation', 'email_submit'), ('job', 'awaiting_code', True),
+            ('job', 'pending_code', ('123456', None)), ('job', 'waiting_for_user', True),
+            ('job', 'last_delivered_mail_id', 'fixture-mail'),
+            ('body', 'step', 'email_code'), ('body', 'reason', 'email_submit'),
+            ('body', 'browserProfileId', 'arbitrary-profile'), ('body', 'registered', False),
+            ('body', 'attempt', True), ('body', 'attempt', 2),
+        ]
+        for index, (where, key, value) in enumerate(variants):
+            with self.subTest(case=index):
+                job, data = self.job(), {}
+                if where == 'payload':
+                    job.payload[key] = value
+                elif where == 'job':
+                    setattr(job, key, value)
+                else:
+                    data[key] = value
+                result, opener, _logger = self.execute(job, [self.conflict(), self.Response()], **data)
+                self.assertEqual(result, 'durable_state_unavailable')
+                opener.open.assert_called_once()
+        result, opener, _logger = self.execute(self.job(), [self.conflict(), self.Response()],
+                                              event='registered', type='progress')
+        self.assertEqual(result, 'durable_state_unavailable')
+        opener.open.assert_called_once()
+        for event in ['waiting_email', 'waiting_user', 'registered', 'password_verified',
+                      'mfa_verified', 'partial', 'cancelled', 'complete']:
+            with self.subTest(event=event):
+                result, opener, _logger = self.execute(self.job(), [self.conflict(), self.Response()], event=event)
+                self.assertEqual(result, 'durable_state_unavailable')
+                opener.open.assert_called_once()
+
+    def test_cancellation_or_deadline_after_conflict_wins_before_retry(self):
+        for cancelled in [True, False]:
+            with self.subTest(cancelled=cancelled):
+                job, logger, opener = self.job(), MagicMock(), MagicMock()
+                error = self.conflict()
+                original_close = error.close
+                def close():
+                    original_close()
+                    if cancelled:
+                        job.cancelled.set()
+                    else:
+                        job.deadline = time.monotonic() - 1
+                error.close = close
+                opener.open.side_effect = [error, self.Response()]
+                with patch('registration_job.build_opener', return_value=opener), \
+                        patch('registration_job.logging.getLogger', return_value=logger):
+                    with self.assertRaises(Stop) as stopped:
+                        job.event('progress', reason='proxy_ready')
+                self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled' if cancelled else 'mailbox_timeout')
+                opener.open.assert_called_once()
+                self.assertEqual(job.registration_callback_error['conflict_kind'], 'write_conflict')
+
+    def test_opener_creation_and_response_close_share_original_deadline(self):
+        job, opener, clock = self.job(), MagicMock(), [100.]
+        job.deadline = 110.
+        def create(_handler):
+            clock[0] += 3
+            return opener
+        class SlowClose(self.Response):
+            def __exit__(self, *_args):
+                clock[0] = 110.1
+        opener.open.return_value = SlowClose(b'{"success":true,"data":{"step":"email"}}')
+        with patch('registration_job.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('registration_job.build_opener', side_effect=create), \
+                patch('registration_job.logging.getLogger', return_value=MagicMock()):
+            with self.assertRaises(Stop) as stopped:
+                job.event('progress', reason='proxy_ready')
+        self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 7)
+        self.assertEqual(job.step, 'queued')
+        self.assertEqual(job.registration_callback_error['failure_kind'], 'TIMEOUT')
+
+    @contextmanager
+    def local_server(self, responses):
+        requests, responses = [], list(responses)
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+            def do_POST(self):
+                requests.append(self.rfile.read(int(self.headers['Content-Length'])))
+                status, raw, header_delay, chunk_delay = responses.pop(0)
+                try:
+                    if header_delay:
+                        time.sleep(header_delay)
+                    self.send_response(status)
+                    self.send_header('Content-Length', str(len(raw)))
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    if chunk_delay:
+                        for byte in raw:
+                            self.wfile.write(bytes([byte])); self.wfile.flush()
+                            time.sleep(chunk_delay)
+                    else:
+                        self.wfile.write(raw); self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True)
+        thread.start()
+        data = payload()
+        origin = f'http://127.0.0.1:{server.server_port}'
+        data['callbackUrl'] = origin + '/api/id-business-v2/auto-registration/local/' + data['id']
+        job = RegistrationJob(data, origin, object)
+        try:
+            yield job, requests
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=1)
+
+    def test_real_http_response_retries_once_with_remaining_socket_budget(self):
+        responses = [(409, self.envelope(), .04, 0),
+                     (200, b'{"success":true,"data":{"step":"queued"}}', 0, 0)]
+        with self.local_server(responses) as (job, requests):
+            job.deadline = time.monotonic() + 1
+            budgets, types, logger = [], [], MagicMock()
+            original = job._callback_socket_budget
+            def observe(response, deadline):
+                original(response, deadline)
+                types.append(type(response))
+                if response.fp is not None:
+                    budgets.append(response.fp.raw._sock.gettimeout())
+            with patch.object(job, '_callback_socket_budget', side_effect=observe), \
+                    patch('registration_job.logging.getLogger', return_value=logger):
+                job.event('progress', reason='proxy_verifying')
+            self.assertEqual(len(requests), 2)
+            self.assertEqual(requests[0], requests[1])
+            self.assertTrue(all(issubclass(value, HTTPResponse) for value in types))
+            self.assertTrue(budgets)
+            self.assertTrue(all(0 < value < .98 for value in budgets))
+            self.assertEqual(job.registration_callback_error['conflict_kind'], 'write_conflict')
+            self.assert_private(job, logger)
+
+    def test_real_http_response_caps_conflict_body_without_reading_tail(self):
+        raw = self.envelope() + b' ' * 20000
+        with self.local_server([(409, raw, 0, 0)]) as (job, requests):
+            lengths, original, logger = [], job._callback_read, MagicMock()
+            def observe(response, limit, deadline):
+                self.assertIsInstance(response, HTTPResponse)
+                value = original(response, limit, deadline)
+                lengths.append((limit, len(value)))
+                return value
+            with patch.object(job, '_callback_read', side_effect=observe), \
+                    patch('registration_job.logging.getLogger', return_value=logger):
+                with self.assertRaises(Stop):
+                    job.event('progress', reason='proxy_ready')
+            self.assertEqual(lengths, [(2048, 2048)])
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(job.registration_callback_error['conflict_kind'], 'unknown')
+            self.assert_private(job, logger)
+
+    def test_real_second_response_uses_time_left_after_first_conflict(self):
+        with self.local_server([(409, self.envelope(), .06, 0),
+                                (200, b'{"success":true,"data":{"step":"email"}}', .2, 0)]) as (job, requests):
+            started, logger = time.monotonic(), MagicMock()
+            job.deadline = started + .15
+            with patch('registration_job.logging.getLogger', return_value=logger):
+                with self.assertRaises(Stop):
+                    job.event('progress', reason='proxy_ready')
+            self.assertLess(time.monotonic() - started, .6)
+            self.assertEqual(len(requests), 2)
+            self.assertEqual(requests[0], requests[1])
+            self.assertEqual(job.step, 'queued')
+            self.assertEqual(job.registration_callback_error['conflict_kind'], 'write_conflict')
+            output = [call.args[0] % call.args[1:] for call in logger.warning.call_args_list]
+            self.assertEqual(len(output), 2)
+            self.assertIn('failure_kind=TIMEOUT', output[-1])
+            self.assertIn('conflict_kind=unknown', output[-1])
+            self.assert_private(job, logger)
+
+    def test_real_conflict_trickle_cannot_extend_shared_read_deadline(self):
+        with self.local_server([(409, self.envelope(), 0, .01)]) as (job, requests):
+            started = time.monotonic()
+            job.deadline = started + .15
+            logger = MagicMock()
+            with patch('registration_job.logging.getLogger', return_value=logger):
+                with self.assertRaises(Stop) as stopped:
+                    job.event('progress', reason='proxy_ready')
+            elapsed = time.monotonic() - started
+            self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+            self.assertLess(elapsed, .6)
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(job.registration_callback_error['failure_kind'], 'HTTP_STATUS')
+            self.assertEqual(job.registration_callback_error['conflict_kind'], 'unknown')
+            self.assertEqual(job.registration_callback_body_error, 'TimeoutError')
+            self.assert_private(job, logger)
+
+    def test_real_success_trickle_cannot_accept_receipt_after_deadline(self):
+        with self.local_server([(200, b'{"success":true,"data":{"step":"email"}}', 0, .02)]) as (job, requests):
+            started = time.monotonic()
+            job.deadline = started + .15
+            with patch('registration_job.logging.getLogger', return_value=MagicMock()):
+                with self.assertRaises(Stop):
+                    job.event('progress', reason='proxy_ready')
+            self.assertLess(time.monotonic() - started, .6)
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(job.registration_callback_error['failure_kind'], 'TIMEOUT')
+            self.assertEqual(job.step, 'queued')
 
 
 if __name__ == '__main__':

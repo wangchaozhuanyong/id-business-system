@@ -57,7 +57,7 @@ class MemoryMailApi:
             self.job.signal_cancel()
 
     def open(self, request, timeout):
-        if timeout != 10 or request.get_method() != 'POST':
+        if type(timeout) not in (int, float) or not 0 < timeout <= 10 or request.get_method() != 'POST':
             raise AssertionError('Unexpected automatic email API request')
         body = json.loads(request.data)
         if request.full_url == self.job.payload['callbackUrl'] + '/code':
