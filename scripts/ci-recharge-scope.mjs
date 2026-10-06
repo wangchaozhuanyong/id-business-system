@@ -11,6 +11,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-956-20261006.json',
   'deploy/aws/registration-worker-85-20261006.json',
   'deploy/aws/registration-worker-86-20261006.json',
+  'deploy/aws/registration-worker-87-20261006.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',

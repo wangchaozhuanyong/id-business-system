@@ -62,7 +62,7 @@ with open(os.environ['LOCAL_TOOL_LOG'],'a') as target:
 if name=='python3':
     if args and args[0].endswith('remote-deploy.py'):
         if os.environ.get('LOCAL_SCOPE_FAILURE')=='true':sys.exit(19)
-        if args[1:] in (['--prepare-fixed-registration-build'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-956-20261006'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-85-20261006'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-86-20261006']):
+        if args[1:] in (['--prepare-fixed-registration-build'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-956-20261006'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-85-20261006'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-86-20261006'], ['--prepare-fixed-registration-build','--registration-profile','registration-worker-87-20261006']):
             context=pathlib.Path('.deploy/production-release/registration-build-context')
             dockerfile=context/'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
             dockerfile.parent.mkdir(parents=True);dockerfile.write_text('FROM synthetic-fixture\\n')
@@ -371,6 +371,51 @@ class Registration86TransportTests(TransportTests):
     def test_86_readback_rejects_implicit_old_profile_validation(self):
         _block,script=self.workflow_step(self.readback_step)
         script,count=re.subn(r",\n\s+profile_id='registration-worker-86-20261006'",'',script)
+        self.assertEqual(count,1)
+        with self.fixture() as (root,env):
+            profile_sha=hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest()
+            receipt={'status':'VERIFIED','currentCommit':COMMIT,'sourceTree':TREE,'profileSha256':profile_sha}
+            env['LOCAL_READBACK_OUTPUT']='FIXED_REGISTRATION_RELEASE_VERIFIED '+json.dumps(receipt)
+            result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertEqual(result.stdout,'')
+            self.assertNotIn('RAW_SECRET_SENTINEL',result.stderr)
+
+
+class Registration87TransportTests(TransportTests):
+    profile = 'registration-worker-87-20261006'
+    output_directory = '.runtime/registration-callback-release-20261006/transport'
+    baseline = '651f62902fba74ddd189b34932084573b39d245c'
+    profile_file = 'deploy/aws/' + profile + '.json'
+    scope_args = ['--registration-profile', profile]
+    release_flag = '--registration-worker-87'
+    artifact_step = 'Save fixed 87 registration Worker build projection'
+    readback_step = 'Verify fixed 87 registration deployment independently'
+    readback_parameters = 'fixed-registration-87-readback.json'
+
+    def test_other_profile_and_foreign_finance_seals_fail_before_transport(self):
+        mutations=[('HISTORICAL_EXCEPTION','registration-worker-b8-80-20261006'),
+                   ('HISTORICAL_EXCEPTION','registration-worker-956-20261006'),
+                   ('HISTORICAL_EXCEPTION','registration-worker-85-20261006'),
+                   ('HISTORICAL_EXCEPTION','registration-worker-86-20261006'),
+                   ('EXPECTED_CURRENT','fd3a6da610c505c2b7a51601cf854182991ffd12'),
+                   ('EXPECTED_CURRENT','9560d8038a39d4ded1e560d484bdcb941a5d9c43'),
+                   ('HISTORICAL_EXCEPTION','registration-worker-arbitrary'),
+                   ('EXPECTED_CURRENT',BASELINE),('RELEASE_OPERATION','verify_unused_cache'),
+                   ('POST_CLEANUP_SEAL_SHA256','a'*64),('ORDER_ARCHIVE_SEAL_SHA256','a'*64),
+                   ('ORDER_ARCHIVE_PREPARED_IMAGES_SHA256','a'*64)]
+        for script in ('build-images.sh','push-images.sh','dispatch.sh'):
+            for field,value in mutations:
+                with self.subTest(script=script,field=field),self.fixture() as (root,env):
+                    env[field]=value
+                    result=self.run_script(root,env,script)
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(self.calls(env,'aws'),[])
+                    self.assertEqual(self.calls(env,'docker'),[])
+
+    def test_87_readback_rejects_implicit_old_profile_validation(self):
+        _block,script=self.workflow_step(self.readback_step)
+        script,count=re.subn(r",\n\s+profile_id='registration-worker-87-20261006'",'',script)
         self.assertEqual(count,1)
         with self.fixture() as (root,env):
             profile_sha=hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest()

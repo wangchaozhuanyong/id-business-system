@@ -601,6 +601,7 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
   const continuation = 'deploy/aws/registration-worker-956-20261006.json';
   const initial = 'deploy/aws/registration-worker-85-20261006.json';
   const email = 'deploy/aws/registration-worker-86-20261006.json';
+  const callback = 'deploy/aws/registration-worker-87-20261006.json';
   const transport = 'scripts/production-release/registration-only-transport.test.py';
   const auditors = [
     'scripts/v2-registration-finance-audit.mjs',
@@ -626,6 +627,14 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
   const autoCodeTest =
     'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py';
   assert.deepEqual(selectedParts([email, autoCodeTest]), ['guards', 'connector']);
+  assert.equal(isCiOnly([callback]), true);
+  assert.equal(checkMode([callback], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([callback]), ['guards']);
+  for (const path of ['registration_job.py', 'test_registration.py'])
+    assert.deepEqual(
+      selectedParts([callback, 'apps/api/src/id-business-v2/auto-recharge/worker/' + path]),
+      ['guards', 'connector']
+    );
   for (const other of [
     'deploy/aws/registration-worker-b8-3ca-20261006.json',
     profile + '.backup',
@@ -637,6 +646,8 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
     initial + '.backup',
     'deploy/aws/registration-worker-86-20261007.json',
     email + '.backup',
+    'deploy/aws/registration-worker-87-20261007.json',
+    callback + '.backup',
     'scripts/production-release/registration-only-other.test.py',
     'scripts/v2-registration-finance-audit-other.mjs',
     'scripts/v2-registration-finance-audit.mjs.backup',

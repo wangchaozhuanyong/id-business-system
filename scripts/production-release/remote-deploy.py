@@ -3637,9 +3637,159 @@ REGISTRATION_EMAIL_BASELINE = {'current': '/opt/id-business-v2/releases/20261006
               'liveServicesHealthy': True}}
 
 
+# Fixed callback-contract Worker source; all four predecessors and original finance seals remain separate.
+REGISTRATION_CALLBACK_ID = 'registration-worker-87-20261006'
+REGISTRATION_CALLBACK_FILE = 'deploy/aws/' + REGISTRATION_CALLBACK_ID + '.json'
+REGISTRATION_CALLBACK_CURRENT = '651f62902fba74ddd189b34932084573b39d245c'
+REGISTRATION_CALLBACK_SOURCE = '8dd12f19b1dc5187facdb070c7b644ca1221ee59'
+REGISTRATION_CALLBACK_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': '7b3e374c94ab704d3837d92028f857744b7f4188cd597a4a8b3443af58f7dbe9', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': '5f4a5c5e71a65ebf61e3afa2e081a91d0667987f58f601f3ca0875a302513073', 'docs/AUTO_REGISTRATION.md': '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py': 'c409f1d4a36fc759aa3bf649d08e93938ff5497b9261b635f28cc02e324bcec0', 'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py': 'f1878abdf27e6760bd63c602136ae14ff06902d136bbd47cf2d036fd1fb393ae', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py': '680699426cbbf517c4792b5ff6fcf83d692d7a9e084cbbd2b8d8a9eb20ffdf17', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py': '1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe'}
+REGISTRATION_CALLBACK_PROJECTION_SHA256 = '94be2e8e7094628c69657954f974f1f67eabb00c4a10b0e553684d8177d9b39c'
+REGISTRATION_CALLBACK_BASELINE = {'current': '/opt/id-business-v2/releases/20261006T120146Z-651f62902fba',
+ 'manifest': {'commit': '651f62902fba74ddd189b34932084573b39d245c',
+              'sourceTree': 'b8e28b33bc6cc9be899de88fd05aa12a04b4a46e',
+              'previousCommit': 'fd3a6da610c505c2b7a51601cf854182991ffd12',
+              'previousRelease': '/opt/id-business-v2/releases/20261006T103328Z-fd3a6da610c5',
+              'deploymentRun': 'github-actions-37459942600-1',
+              'imageBuildRun': 'github-actions-37459942600-1',
+              'sourceArchiveSha256': '06c58e2a336054e59e86572b24cc44b92b9c7833635eecb7d15b6ded19fcf38e',
+              'servicesUpdated': ['auto-registration'],
+              'migrationApplied': False,
+              'newMigrations': [],
+              'images': {'admin': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                                   'digest': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                                   'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'},
+                         'caddy': {'digest': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510'},
+                         'api': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                                 'digest': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                                 'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'},
+                         'migrate': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-migrate',
+                                     'digest': 'sha256:6f2c0d6f71c23ee2ec0565c1dae9a0a79f42dcf5ccb589bf0583c2b9e78414f9',
+                                     'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'},
+                         'auto-recharge': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:3ca300486d0edfadda83c094a48474a63959fce7-37346732072-1-auto-recharge',
+                                           'digest': 'sha256:86b5d98fa6e0cb55b89862c4b952362428efc21dc6002ff48ca89c6d9f9f7cdc',
+                                           'sourceCommit': '3ca300486d0edfadda83c094a48474a63959fce7'},
+                         'media-resolver': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                            'digest': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                            'sourceCommit': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'},
+                         'auto-registration': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:651f62902fba74ddd189b34932084573b39d245c-37459942600-1-auto-recharge',
+                                               'digest': 'sha256:3407c38cb84226022496ce55068180d33f325ad833d180a67cecbefdd3ad447b',
+                                               'sourceCommit': '651f62902fba74ddd189b34932084573b39d245c'}},
+              'fixedRegistrationRelease': {'id': 'registration-worker-86-20261006',
+                                           'profileRawSha256': '81946a081a13d6787a5a1e16782ef780065c6e81440b8500e55dbca155fef7f2',
+                                           'registrationSourceCommit': '932a03d3c9231c3c28ff295060f9c267e5597831',
+                                           'workerBasisCommit': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+                                           'workerProjectionSha256': '2b746ef23153633d2b4032f61cfc210979b72cc19fc8f6f43b66619b6c992d3f',
+                                           'financeSourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+                                           'financePolicyId': 'historical-finance-20261005-order-archive',
+                                           'financeMode': 'STRICT_ZERO_AFTER_APPROVED_REVERSALS_49',
+                                           'clearanceSealSha256': '46f1b091459ba540af2c26a2fad3136d1ca4b7f269d2a77bd6c97c48976ee520',
+                                           'environmentUnchanged': True,
+                                           'migrationStatus': 'SKIPPED',
+                                           'databaseGrantSyncStatus': 'SKIPPED',
+                                           'cacheStatus': 'SKIPPED'}},
+ 'fileSha256': {'release-manifest.json': '2e9eea6b0954ccf1f33e7918b6d889f9b0aa722c36e961350467cec58169a58a',
+                'before-audit.json': '9acb3730c88c91474a983b431780c0828ec6b15f96ed661c1a2dbe592f0b2d50',
+                'after-audit.json': '6a62c84c05d04c0fc63ab31900dbe46564880df2a491ec91ba38d554d2495661',
+                'docker-compose.aws-mysql.yml': '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8',
+                'compose.release.json': '2483b1eb0da21cf00e4643959748619fb0334b6176b5b4968ec8abc16a04935f',
+                '.env.aws.production': 'a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af',
+                'deploy/aws/registration-worker-b8-80-20261006.json': 'd5c023887b22f6a555abe0f8e4627113d5a45dec0668ae2abc1bb8fbf8cbdb28',
+                'deploy/aws/registration-worker-956-20261006.json': '60226df9c51cb222bf8c0cc09a7783b52a8f0082f728189ec3ada9554b6dbfc1',
+                'deploy/aws/registration-worker-85-20261006.json': '02fc3375314ee75b6e5b8ec47ce715f1e02f9b744ce77c5a4804d9110ba4daec',
+                'deploy/aws/registration-worker-86-20261006.json': '81946a081a13d6787a5a1e16782ef780065c6e81440b8500e55dbca155fef7f2'},
+ 'overrideCanonicalSha256': 'a2480420f4005768a8d352170ebee8a0477841b04442a8d53cd107c03bc2c46a',
+ 'audits': {'before': {'checkCount': 49,
+                       'violationCount': 0,
+                       'checksSha256': '94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2',
+                       'gateSha256': 'ec68038c2606fabc6f5408a0e79784a6dc1b142acfc9cc6b78035581f907041f',
+                       'identitySha256': '6458d529956db12370d7c9339a73e597b187aa0ef3a5fb475591b311ec9fdee1'},
+            'after': {'checkCount': 49,
+                      'violationCount': 0,
+                      'checksSha256': '94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2',
+                      'gateSha256': '80be54958db3f671aca657fe52949f42b36fda1679d88e1fdb0c1655f54c79fb',
+                      'identitySha256': '6458d529956db12370d7c9339a73e597b187aa0ef3a5fb475591b311ec9fdee1'}},
+ 'liveServices': {'admin': {'image': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                            'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                            'status': 'running',
+                            'health': 'healthy',
+                            'containerId': '8c34a75da43b9877b1ebf8110c41c726f3f7756473ab91c86fdc4f767dd2f075',
+                            'startedAtSha256': '499f832cd2baf51fa672a43d21922953ae003854a1678facee86a6c5f68423b8',
+                            'environmentSha256': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4'},
+                  'api': {'image': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                          'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                          'status': 'running',
+                          'health': 'healthy',
+                          'containerId': '8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff',
+                          'startedAtSha256': '2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12',
+                          'environmentSha256': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c'},
+                  'auto-recharge': {'image': 'sha256:86b5d98fa6e0cb55b89862c4b952362428efc21dc6002ff48ca89c6d9f9f7cdc',
+                                    'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:3ca300486d0edfadda83c094a48474a63959fce7-37346732072-1-auto-recharge',
+                                    'status': 'running',
+                                    'health': 'healthy',
+                                    'containerId': '2c7dafce90530efa1f1afbdf031f07ed07e9a6ad3b23a92d418c3cb700deed35',
+                                    'startedAtSha256': '6e263adbdd786eb3c27b34deefab967124700b7a6d14d497f65e0e5975b5a45e',
+                                    'environmentSha256': '5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae'},
+                  'auto-registration': {'image': 'sha256:3407c38cb84226022496ce55068180d33f325ad833d180a67cecbefdd3ad447b',
+                                        'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:651f62902fba74ddd189b34932084573b39d245c-37459942600-1-auto-recharge',
+                                        'status': 'running',
+                                        'health': 'healthy',
+                                        'containerId': 'b61fdd50596ea906c52c7f10403f6f480109ac8d6b7730675251f3eaf7caa4da',
+                                        'startedAtSha256': '0a7132e11752cf3824321c44116badc30d3db00d4a97d4c25558b34ddce148c1',
+                                        'environmentSha256': 'de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17'},
+                  'caddy': {'image': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510',
+                            'reference': 'caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d',
+                            'status': 'running',
+                            'health': None,
+                            'containerId': '60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab',
+                            'startedAtSha256': '7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc',
+                            'environmentSha256': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181'},
+                  'media-resolver': {'image': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                     'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                     'status': 'running',
+                                     'health': 'healthy',
+                                     'containerId': '0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471',
+                                     'startedAtSha256': '8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f',
+                                     'environmentSha256': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163'},
+                  'mysql': {'image': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb',
+                            'reference': 'mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb',
+                            'status': 'running',
+                            'health': 'healthy',
+                            'containerId': '7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074',
+                            'startedAtSha256': 'de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7',
+                            'environmentSha256': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'}},
+ 'readback': {'version': 1,
+              'id': 'registration-worker-86-20261006',
+              'status': 'VERIFIED',
+              'currentCommit': '651f62902fba74ddd189b34932084573b39d245c',
+              'sourceTree': 'b8e28b33bc6cc9be899de88fd05aa12a04b4a46e',
+              'profileSha256': '81946a081a13d6787a5a1e16782ef780065c6e81440b8500e55dbca155fef7f2',
+              'previousCommit': 'fd3a6da610c505c2b7a51601cf854182991ffd12',
+              'registrationSourceCommit': '932a03d3c9231c3c28ff295060f9c267e5597831',
+              'workerBasisCommit': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+              'workerProjectionSha256': '2b746ef23153633d2b4032f61cfc210979b72cc19fc8f6f43b66619b6c992d3f',
+              'servicesUpdated': ['auto-registration'],
+              'preservedServiceCount': 6,
+              'checkCount': 49,
+              'executedCheckCount': 49,
+              'unavailableCheckCount': 0,
+              'violationCount': 0,
+              'financeMode': 'STRICT_ZERO_AFTER_APPROVED_REVERSALS_49',
+              'runningSourceMatched': True,
+              'unchangedServiceContainersPreserved': True,
+              'environmentUnchanged': True,
+              'migrationStatus': 'SKIPPED',
+              'databaseGrantSyncStatus': 'SKIPPED',
+              'cacheStatus': 'SKIPPED',
+              'liveServicesHealthy': True}}
+
+
 def registration_contract(profile_id=REGISTRATION_SCOPE_ID):
-    require(profile_id in (REGISTRATION_SCOPE_ID, REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID),
+    require(profile_id in (REGISTRATION_SCOPE_ID, REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID),
             'Fixed registration selection changed')
+    if profile_id == REGISTRATION_CALLBACK_ID:
+        return {'id': profile_id, 'file': REGISTRATION_CALLBACK_FILE, 'current': REGISTRATION_CALLBACK_CURRENT,
+            'source': REGISTRATION_CALLBACK_SOURCE, 'sourceSha256': REGISTRATION_CALLBACK_SOURCE_SHA256,
+            'projectionSha256': REGISTRATION_CALLBACK_PROJECTION_SHA256, 'runtimeBaseline': REGISTRATION_CALLBACK_BASELINE}
     if profile_id == REGISTRATION_EMAIL_ID:
         return {'id': profile_id, 'file': REGISTRATION_EMAIL_FILE, 'current': REGISTRATION_EMAIL_CURRENT,
             'source': REGISTRATION_EMAIL_SOURCE, 'sourceSha256': REGISTRATION_EMAIL_SOURCE_SHA256,
@@ -3679,7 +3829,7 @@ def registration_profile(value, *, profile_id=REGISTRATION_SCOPE_ID):
         and historical_fingerprint(value['financeClearance']) == historical_fingerprint(REGISTRATION_CLEARANCE),
         'Fixed registration scope changed')
     digest = lambda x: isinstance(x, str) and re.fullmatch(r'[a-f0-9]{64}', x) is not None
-    worker_files = REGISTRATION_EMAIL_FILES if profile_id == REGISTRATION_EMAIL_ID else REGISTRATION_FILES
+    worker_files = REGISTRATION_EMAIL_FILES if profile_id in (REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID) else REGISTRATION_FILES
     names = worker_files | {'docs/AUTO_REGISTRATION.md'}
     require(isinstance(value['registrationSourceSha256'], dict)
         and set(value['registrationSourceSha256']) == names
@@ -3746,7 +3896,7 @@ def registration_source(profile, files):
 def registration_worker_projection(profile, basis, candidate):
     registration_source(profile, candidate)
     result = {name: row for name, row in basis.items() if name.startswith(REGISTRATION_WORKER_PREFIX)}
-    worker_files = REGISTRATION_EMAIL_FILES if profile['id'] == REGISTRATION_EMAIL_ID else REGISTRATION_FILES
+    worker_files = REGISTRATION_EMAIL_FILES if profile['id'] in (REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID) else REGISTRATION_FILES
     result.update({name: candidate[name] for name in worker_files})
     actual = {name: {'mode': mode, 'sha256': hashlib.sha256(data).hexdigest()}
               for name, (data, mode) in result.items()}
@@ -3889,11 +4039,12 @@ def registration_runtime_baseline(previous, states=None, *, profile_id=REGISTRAT
     manifest = fixed_recharge_json(private_maintenance_receipt(previous / 'release-manifest.json'))
     require({key: manifest.get(key) for key in fixed['manifest']} == fixed['manifest'],
         'Fixed registration continuation manifest changed')
-    predecessor_id = (REGISTRATION_INITIAL_ID if profile_id == REGISTRATION_EMAIL_ID else
+    predecessor_id = (REGISTRATION_EMAIL_ID if profile_id == REGISTRATION_CALLBACK_ID else
+        REGISTRATION_INITIAL_ID if profile_id == REGISTRATION_EMAIL_ID else
         REGISTRATION_CONTINUATION_ID if profile_id == REGISTRATION_INITIAL_ID else REGISTRATION_SCOPE_ID)
     predecessor = registration_contract(predecessor_id)
     original, origin = (registration_runtime_baseline(Path(manifest['previousRelease']), profile_id=predecessor_id)
-        if profile_id in (REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID) else registration_baseline(Path(manifest['previousRelease'])))
+        if profile_id in (REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID) else registration_baseline(Path(manifest['previousRelease'])))
     require(manifest['previousCommit'] == predecessor['current']
         and manifest['commit'] == contract['current']
         and manifest['servicesUpdated'] == ['auto-registration'] and manifest['migrationApplied'] is False
@@ -3911,6 +4062,11 @@ def registration_runtime_baseline(previous, states=None, *, profile_id=REGISTRAT
             'Fixed registration original profile changed')
     if profile_id == REGISTRATION_EMAIL_ID:
         for name in (REGISTRATION_SCOPE_FILE, REGISTRATION_CONTINUATION_FILE, REGISTRATION_INITIAL_FILE):
+            raw = fixed_recharge_bytes(previous / name, modes=(0o644, 0o664), limit=128 * 1024)
+            require(hashlib.sha256(raw).hexdigest() == fixed['fileSha256'][name],
+                'Fixed registration original profile changed')
+    if profile_id == REGISTRATION_CALLBACK_ID:
+        for name in (REGISTRATION_SCOPE_FILE, REGISTRATION_CONTINUATION_FILE, REGISTRATION_INITIAL_FILE, REGISTRATION_EMAIL_FILE):
             raw = fixed_recharge_bytes(previous / name, modes=(0o644, 0o664), limit=128 * 1024)
             require(hashlib.sha256(raw).hexdigest() == fixed['fileSha256'][name],
                 'Fixed registration original profile changed')
@@ -4092,9 +4248,10 @@ def registration_release(args):
     continuation = getattr(args, 'registration_worker_956', False)
     initial = getattr(args, 'registration_worker_85', False)
     email = getattr(args, 'registration_worker_86', False)
-    profile_id = REGISTRATION_EMAIL_ID if email else REGISTRATION_INITIAL_ID if initial else REGISTRATION_CONTINUATION_ID if continuation else REGISTRATION_SCOPE_ID
+    callback = getattr(args, 'registration_worker_87', False)
+    profile_id = REGISTRATION_CALLBACK_ID if callback else REGISTRATION_EMAIL_ID if email else REGISTRATION_INITIAL_ID if initial else REGISTRATION_CONTINUATION_ID if continuation else REGISTRATION_SCOPE_ID
     contract = registration_contract(profile_id)
-    require(sum((email, initial, continuation, getattr(args, 'registration_worker_b8_80', False))) <= 1,
+    require(sum((callback, email, initial, continuation, getattr(args, 'registration_worker_b8_80', False))) <= 1,
         'Fixed registration selection changed')
     require(args.expected_current == contract['current'] and not args.admin_only
         and not getattr(args, 'recharge_pro_main80', False)
@@ -4139,8 +4296,10 @@ def registration_release(args):
             runtime.update({name: row for name, row in worker.items() if name.startswith(REGISTRATION_WORKER_PREFIX)})
             runtime.update({name: candidate[name] for name in REGISTRATION_CONTROLS | {contract['file']}})
             runtime.update({name: candidate[name] for name in profile['registrationSourceSha256']})
-            if continuation or initial or email:
+            if continuation or initial or email or callback:
                 prior_profiles = ({name: contract['runtimeBaseline']['fileSha256'][name]
+                    for name in (REGISTRATION_SCOPE_FILE, REGISTRATION_CONTINUATION_FILE, REGISTRATION_INITIAL_FILE, REGISTRATION_EMAIL_FILE)}
+                    if callback else {name: contract['runtimeBaseline']['fileSha256'][name]
                     for name in (REGISTRATION_SCOPE_FILE, REGISTRATION_CONTINUATION_FILE, REGISTRATION_INITIAL_FILE)}
                     if email else {REGISTRATION_SCOPE_FILE: REGISTRATION_CONTINUATION_BASELINE['fileSha256'][REGISTRATION_SCOPE_FILE],
                     REGISTRATION_CONTINUATION_FILE: contract['runtimeBaseline']['fileSha256'][REGISTRATION_CONTINUATION_FILE]}
@@ -4393,11 +4552,12 @@ def main():
     parser.add_argument('--registration-worker-956', action='store_true')
     parser.add_argument('--registration-worker-85', action='store_true')
     parser.add_argument('--registration-worker-86', action='store_true')
+    parser.add_argument('--registration-worker-87', action='store_true')
     args = parser.parse_args()
     recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_main80
-    require(not ((args.registration_worker_b8_80 or args.registration_worker_956 or args.registration_worker_85 or args.registration_worker_86) and recharge_requested),
+    require(not ((args.registration_worker_b8_80 or args.registration_worker_956 or args.registration_worker_85 or args.registration_worker_86 or args.registration_worker_87) and recharge_requested),
             'Historical release selection is ambiguous')
-    if args.registration_worker_b8_80 or args.registration_worker_956 or args.registration_worker_85 or args.registration_worker_86:
+    if args.registration_worker_b8_80 or args.registration_worker_956 or args.registration_worker_85 or args.registration_worker_86 or args.registration_worker_87:
         return registration_release(args)
     recharge_profile_id = (RECHARGE_MAIN80_ID if args.recharge_pro_main80 else
         RECHARGE_7F_ID if args.recharge_pro_menu_7f else RECHARGE_SCOPE_ID)
@@ -4947,7 +5107,7 @@ if __name__ == '__main__':
         try:
             tokens = sys.argv[2:]
             require(not tokens or len(tokens) == 2 and tokens[0] == '--registration-profile'
-                and tokens[1] in (REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID),
+                and tokens[1] in (REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID),
                 'Fixed registration selection changed')
             profile_id = tokens[1] if tokens else REGISTRATION_SCOPE_ID
             if sys.argv[1] == '--prepare-fixed-registration-build':
@@ -4964,7 +5124,7 @@ if __name__ == '__main__':
             profile_id = REGISTRATION_SCOPE_ID
             if len(tokens) == 8:
                 require(tokens[-2] == '--registration-profile'
-                    and tokens[-1] in (REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID),
+                    and tokens[-1] in (REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID),
                     'Fixed registration readback unavailable')
                 profile_id = tokens[-1]
                 tokens = tokens[:-2]
