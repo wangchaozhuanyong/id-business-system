@@ -14,6 +14,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-87-20261006.json',
   'deploy/aws/registration-worker-88-20261006.json',
   'deploy/aws/registration-worker-89-20261006.json',
+  'deploy/aws/registration-worker-90-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -65,6 +66,24 @@ export function isCiOnly(paths) {
   );
 }
 const adminPublicDocument = /^apps\/admin\/public\/[^/]+\.(?:html|css)$/;
+const registrationHydrationSourcePaths = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py',
+  'apps/admin/src/api/requestPolicy.ts',
+  'apps/admin/src/api/requestPolicy.spec.ts',
+  'apps/admin/src/v2/features/auto-registration/useRegistrationStart.ts',
+  'apps/admin/src/v2/features/auto-registration/useRegistrationPage.spec.ts'
+]);
+
+function isRegistrationHydrationOnly(paths) {
+  return (
+    paths.includes('deploy/aws/registration-worker-90-20261007.json') &&
+    paths.some((path) => registrationHydrationSourcePaths.has(path)) &&
+    paths.every((path) => registrationHydrationSourcePaths.has(path) || isCiOnly([path]))
+  );
+}
+
 export function isAdminOnly(paths) {
   return (
     paths.some(
@@ -129,6 +148,19 @@ export function adminUiGuardChecks(mode, paths) {
 
 export function adminCheckCommands(mode, paths) {
   const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
+  if (isRegistrationHydrationOnly(paths)) {
+    commands.push([
+      'run',
+      'test',
+      '--workspace',
+      '@apple-business/admin',
+      '--',
+      'src/api/requestPolicy.spec.ts',
+      'src/v2/features/auto-registration/useRegistrationPage.spec.ts'
+    ]);
+    commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
+    return commands;
+  }
   if (mode === 'mailbox') {
     commands.push([
       'run',
@@ -227,6 +259,7 @@ const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
   return (
+    isRegistrationHydrationOnly(paths) ||
     isRechargeOnly(paths, oldSchema, newSchema) ||
     (paths.some((p) => securityPaths.test(p)) &&
       paths.every(

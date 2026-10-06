@@ -40,6 +40,7 @@ const registrationControlPaths = [
   'deploy/aws/registration-worker-87-20261006.json',
   'deploy/aws/registration-worker-88-20261006.json',
   'deploy/aws/registration-worker-89-20261006.json',
+  'deploy/aws/registration-worker-90-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -113,6 +114,7 @@ if (part === 'guards') {
     changed.includes('deploy/aws/registration-worker-87-20261006.json') ||
     changed.includes('deploy/aws/registration-worker-88-20261006.json') ||
     changed.includes('deploy/aws/registration-worker-89-20261006.json') ||
+    changed.includes('deploy/aws/registration-worker-90-20261007.json') ||
     changed.some((path) => path.startsWith('scripts/production-release/'))
   )
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);

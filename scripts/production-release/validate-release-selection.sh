@@ -1,6 +1,31 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+read_registration_admin_projection() {
+  python3 - <<'PY_ADMIN_PROJECTION'
+import json, re
+from pathlib import Path
+
+def unique(items):
+    values = {}
+    for key, value in items:
+        if key in values:
+            raise ValueError('Fixed registration Admin projection changed')
+        values[key] = value
+    return values
+
+raw = Path('.deploy/production-release/registration-build-projection.json').read_bytes()
+if len(raw) > 128 * 1024:
+    raise SystemExit('Fixed registration Admin projection unavailable')
+value = json.loads(raw, object_pairs_hook=unique)
+if (value.get('adminContextPath') != '.deploy/production-release/registration-admin-build-context'
+        or not isinstance(value.get('adminProjectionSha256'), str)
+        or not re.fullmatch(r'[a-f0-9]{64}', value['adminProjectionSha256'])):
+    raise SystemExit('Fixed registration Admin projection unavailable')
+print(value['adminProjectionSha256'])
+PY_ADMIN_PROJECTION
+}
+
 # Selection only; the remote policy still verifies the reviewed source proof.
 validate_release_selection() {
   local policy="${HISTORICAL_EXCEPTION:-none}"
@@ -32,6 +57,11 @@ validate_release_selection() {
       return 0 ;;
     registration-worker-87-20261006)
       [[ "${EXPECTED_CURRENT:-}" == 651f62902fba74ddd189b34932084573b39d245c ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      return 0 ;;
+    registration-worker-90-20261007)
+      [[ "${EXPECTED_CURRENT:-}" == c3cad767b372738b2193e60584b0a53daa53b65f ]] || return 1
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;
