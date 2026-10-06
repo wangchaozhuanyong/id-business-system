@@ -302,20 +302,9 @@
     "scripts/v2-registration-finance-audit.test.mjs": "b9b32f040ad062f978d447d7f08b7d5dccdc1fd65e10297519f2a6e9fc063470"
   },
   "scope": {
-    "servicesUpdated": [
-      "auto-registration"
-    ],
-    "imageServices": [
-      "auto-recharge"
-    ],
-    "preservedServices": [
-      "auto-recharge",
-      "api",
-      "admin",
-      "media-resolver",
-      "mysql",
-      "caddy"
-    ],
+    "servicesUpdated": ["auto-registration"],
+    "imageServices": ["auto-recharge"],
+    "preservedServices": ["auto-recharge", "api", "admin", "media-resolver", "mysql", "caddy"],
     "imageReuseAllowed": false,
     "cacheCleanupAllowed": false,
     "migrationDeploymentAllowed": false,
@@ -387,26 +376,17 @@
     "rulesSha256": "fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a",
     "sources": {
       "accounts": {
-        "ids": [
-          "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
-          "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
-        ],
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
         "rowCount": 2,
         "sha256": "7e3f38a53838c3edc387498e6bb0ea8585af89b3606a0979c6d10441680172fb"
       },
       "cashJournals": {
-        "ids": [
-          "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
-          "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
-        ],
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
         "rowCount": 15,
         "sha256": "eba994ee593ab87b49e2c9d772e6b81dd5f84a8a5376c0a946e8f9258d61aa96"
       },
       "cashLines": {
-        "ids": [
-          "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
-          "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
-        ],
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
         "rowCount": 15,
         "sha256": "6564164dd9d17c0617120e483ba79fbadeb0148c8c522066d137aa6a79059b79"
       },
@@ -475,9 +455,7 @@
       "deploymentRun": "github-actions-37496968953-1",
       "imageBuildRun": "github-actions-37496968953-1",
       "sourceArchiveSha256": "c1fd43663c32c89dd925355b5da1f3b665227e38a967d763a0efcf0cb212582a",
-      "servicesUpdated": [
-        "auto-recharge"
-      ],
+      "servicesUpdated": ["auto-recharge"],
       "migrationApplied": false,
       "newMigrations": [],
       "images": {
@@ -537,9 +515,7 @@
         "expectedCurrent": "b91b626a71ed2c7c2473d080551b3b10b693b0cb",
         "sourceCommit": "d2e22e623d0e19851c79ffe43396f5f97a99b8d3",
         "sourceTree": "d2d938a176fab2a99cc1edd1b25c1cd1ffb59357",
-        "servicesUpdated": [
-          "auto-recharge"
-        ],
+        "servicesUpdated": ["auto-recharge"],
         "financeValidator": "STRICT_ZERO_AFTER_APPROVED_REVERSALS_49",
         "sourceCommitForFinance": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
         "originCommitForFinance": "3ca300486d0edfadda83c094a48474a63959fce7",
@@ -889,9 +865,7 @@
       "sourceTree": "d2d938a176fab2a99cc1edd1b25c1cd1ffb59357",
       "previousCommit": "b91b626a71ed2c7c2473d080551b3b10b693b0cb",
       "profileSha256": "889afca1d21c9af22d95d7ac45f3323e18e793204f7098490c29e70cb627d2f0",
-      "servicesUpdated": [
-        "auto-recharge"
-      ],
+      "servicesUpdated": ["auto-recharge"],
       "preservedServiceCount": 6,
       "checkCount": 49,
       "executedCheckCount": 49,
