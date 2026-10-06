@@ -62,7 +62,7 @@ validate_release_selection() {
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1
       return 0 ;;
     recharge-pro-main80-20261006)
-      [[ "${EXPECTED_CURRENT:-}" == 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b ]] || return 1
+      [[ "${EXPECTED_CURRENT:-}" == 651f62902fba74ddd189b34932084573b39d245c ]] || return 1
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;

@@ -1651,7 +1651,7 @@ function approvedRuntimeTransport(
       identity === 'recharge-pro-menu-b8-20261005'
         ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
         : identity === 'recharge-pro-main80-20261006'
-          ? '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
+          ? '651f62902fba74ddd189b34932084573b39d245c'
           : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
@@ -1901,21 +1901,6 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
     profile.approvalStatus = 'APPROVED';
     if (identity === 'recharge-pro-menu-7f-20261005')
       profile.baselineRelease.deploymentRun = 'github-actions-37333706418-1';
-    if (identity === 'recharge-pro-main80-20261006') {
-      profile.baselineRelease.deploymentRun = 'github-actions-999001-1';
-      Object.assign(profile.financeValidator, {
-        releaseSealSha256: 'f'.repeat(64),
-        preparedImagesSha256: 'f'.repeat(64),
-        preparationRunId: 999002,
-        preparationRunAttempt: 1,
-        images: Object.fromEntries(
-          ['api', 'admin', 'migrate'].map((service, index) => [
-            service,
-            `sha256:${['a', 'b', 'c'][index].repeat(64)}`
-          ])
-        )
-      });
-    }
     for (const key of [
       'manifestSha256',
       'beforeAuditSha256',
@@ -1924,7 +1909,10 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       'overrideRawSha256',
       'overrideCanonicalSha256'
     ])
-      if (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
+      if (
+        identity !== 'recharge-pro-main80-20261006' &&
+        (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
+      )
         profile.baselineRelease[key] = 'd'.repeat(64);
     for (const key of ['candidateSourceSha256', 'carriedSourceOnlySha256', 'controlSourceSha256'])
       for (const name of Object.keys(profile[key]))
@@ -1933,7 +1921,9 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
           (key !== 'carriedSourceOnlySha256' &&
             ![
               'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
-              'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py'
+              'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py',
+              'scripts/v2-registration-finance-audit.mjs',
+              'scripts/v2-registration-finance-audit.test.mjs'
             ].includes(name))
         )
           profile[key][name] = 'e'.repeat(64);
@@ -1961,7 +1951,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       checkCount: identity === 'recharge-pro-main80-20261006' ? 49 : 48,
       executedCheckCount: identity === 'recharge-pro-main80-20261006' ? 49 : 48,
       unavailableCheckCount: 0,
-      violationCount: identity === 'recharge-pro-main80-20261006' ? 5 : 6,
+      violationCount: identity === 'recharge-pro-main80-20261006' ? 0 : 6,
       storedGatesMatched: true,
       unchangedServiceContainersPreserved: true,
       environmentUnchanged: true,
@@ -2430,6 +2420,8 @@ test('fixed main80 approved transport builds and pushes one fresh recharge image
 });
 
 const main80RejectedSelections = [
+  { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
+  { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
   { EXPECTED_CURRENT: '3ca300486d0edfadda83c094a48474a63959fce7' },
   { EXPECTED_CURRENT: '7f70688b9bf53a071a0a324ca558aeabc4ced2e3' },
   { RELEASE_ADMIN_ONLY: 'true' },
@@ -2456,7 +2448,7 @@ const main80RejectedSelections = [
 
 test('fixed main80 build push and dispatch reject cross-wiring reuse external seals and preparation before effects', () => {
   const identity = 'recharge-pro-main80-20261006';
-  const baseline = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b';
+  const baseline = '651f62902fba74ddd189b34932084573b39d245c';
   for (const override of main80RejectedSelections) {
     const { rejectedApproval, ...fields } = override;
     for (const entry of ['build-images', 'push-images'])
@@ -2485,7 +2477,7 @@ test('fixed main80 build push and dispatch reject cross-wiring reuse external se
 
 test('fixed main80 dispatch binds one exclusive flag and the fresh candidate image identity', () => {
   const identity = 'recharge-pro-main80-20261006';
-  const baseline = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b';
+  const baseline = '651f62902fba74ddd189b34932084573b39d245c';
   dispatchFixture(identity, baseline, ({ execute, parametersFile, awsLog, root, env }) => {
     const transport = approvedRuntimeTransport(root, env, false, identity);
     execute({ ...transport, EXPECTED_CURRENT: baseline });
@@ -2514,7 +2506,7 @@ test('fixed main80 dispatch binds one exclusive flag and the fresh candidate ima
 
 test('fixed main80 dispatch rejects malformed candidate bindings before generating parameters or calling AWS', () => {
   const identity = 'recharge-pro-main80-20261006';
-  const baseline = '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b';
+  const baseline = '651f62902fba74ddd189b34932084573b39d245c';
   for (const fields of [
     { RELEASE_COMMIT: 'B'.repeat(40) },
     { RELEASE_COMMIT: 'b'.repeat(40) + ' --admin-only' },
@@ -2560,7 +2552,7 @@ test('main80 disabled real-parser profile refuses all entries before Docker AWS 
             env: {
               ...env,
               HISTORICAL_EXCEPTION: identity,
-              EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+              EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c',
               RELEASE_ADMIN_ONLY: 'false',
               SOURCE_TREE: 'c'.repeat(40),
               QUALITY_RUN_ID: '111'
@@ -2611,7 +2603,7 @@ test('main80 profile guard and workflow choose its approval readback and skipped
   );
   assert.ok(
     approval.run.includes(
-      `recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b`
+      `recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = 651f62902fba74ddd189b34932084573b39d245c`
     )
   );
   assert.equal(
@@ -2624,40 +2616,51 @@ test('main80 actual readback parser accepts the 21-field 49-check proof and reje
   const identity = 'recharge-pro-main80-20261006';
   fixedRechargeReadbackFixture(
     ({ root, execute, receipt, digest, awsLog, profile, profileFile }) => {
-      const inheritedCommit = 'fd173815aac0048011fe1583acfe345575bca286';
-      const registrationControlCommit = '602f3d1f95f5e2be0605e46223b8703a69cb54a4';
+      const inheritedCommit = '651f62902fba74ddd189b34932084573b39d245c';
       const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/';
       const inheritedBusinessNames = [
         `${worker}registration_browser.py`,
         `${worker}registration_job.py`,
         `${worker}test_registration.py`,
         `${worker}test_registration_browser.py`,
+        `${worker}test_registration_auto_code.py`,
         'docs/AUTO_REGISTRATION.md'
       ];
       const inheritedControlNames = [
         'deploy/aws/registration-worker-b8-80-20261006.json',
-        'scripts/production-release/registration-only-transport.test.py'
+        'scripts/production-release/registration-only-transport.test.py',
+        'deploy/aws/registration-worker-956-20261006.json',
+        'deploy/aws/registration-worker-85-20261006.json',
+        'deploy/aws/registration-worker-86-20261006.json'
       ];
       const inheritedNames = [...inheritedBusinessNames, ...inheritedControlNames];
       const inherited = Object.fromEntries(
         inheritedNames.map((name) => [
           name,
           createHash('sha256')
-            .update(
-              execFileSync('git', [
-                'show',
-                `${inheritedControlNames.includes(name) ? registrationControlCommit : inheritedCommit}:${name}`
-              ])
-            )
+            .update(execFileSync('git', ['show', `${inheritedCommit}:${name}`]))
             .digest('hex')
         ])
       );
       assert.equal(profile.enabled, true);
       assert.equal(profile.approvalStatus, 'APPROVED');
+      assert.equal(profile.expectedCurrent, inheritedCommit);
+      assert.equal(profile.baselineRelease.commit, inheritedCommit);
+      assert.equal(profile.baselineRelease.sourceTree, 'b8e28b33bc6cc9be899de88fd05aa12a04b4a46e');
+      assert.equal(
+        profile.baselineRelease.previousCommit,
+        'fd3a6da610c505c2b7a51601cf854182991ffd12'
+      );
+      assert.equal(
+        profile.financeValidator.sourceCommit,
+        '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'
+      );
       assert.deepEqual(profile.carriedSourceOnlySha256, inherited);
-      assert.equal(Object.keys(profile.sourceModes).length, 22);
+      assert.equal(Object.keys(profile.sourceModes).length, 28);
       for (const name of inheritedNames) assert.equal(profile.sourceModes[name], 0o644);
       assert.equal(Object.keys(receipt).length, 21);
+      assert.equal(receipt.previousCommit, inheritedCommit);
+      assert.equal(receipt.violationCount, 0);
       assert.deepEqual(JSON.parse(execute()), receipt);
       const parameters = JSON.parse(
         readFileSync(join(root, '.deploy/production-release/fixed-recharge-readback.json'), 'utf8')
@@ -2729,8 +2732,11 @@ test('main80 actual readback parser accepts the 21-field 49-check proof and reje
       for (const changed of [
         { id: 'recharge-pro-menu-7f-20261005' },
         { previousCommit: '3ca300486d0edfadda83c094a48474a63959fce7' },
+        { previousCommit: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
+        { previousCommit: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
         { checkCount: 48 },
         { executedCheckCount: 48 },
+        { violationCount: 5 },
         { violationCount: 6 },
         { checkCount: true },
         { unavailableCheckCount: 1 },

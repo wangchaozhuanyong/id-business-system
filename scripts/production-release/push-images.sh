@@ -34,7 +34,7 @@ elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${H
   case "$HISTORICAL_EXCEPTION" in
     recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
     recharge-pro-menu-7f-20261005) test "$EXPECTED_CURRENT" = 7f70688b9bf53a071a0a324ca558aeabc4ced2e3 ;;
-    recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = 80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b ;;
+    recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = 651f62902fba74ddd189b34932084573b39d245c ;;
     *) exit 1 ;;
   esac
   test "${RELEASE_ADMIN_ONLY:-false}" = false
