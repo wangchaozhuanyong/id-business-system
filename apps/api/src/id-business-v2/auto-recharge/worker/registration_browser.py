@@ -636,6 +636,83 @@ class RegistrationBrowser:
         code = await self.field(self.page, CODE_INPUT)
         return bool(code and re.search(r'authenticator|authentication app|验证器|身份验证应用|phone verification|text message|短信|手机验证码', text, re.I))
 
+
+    async def profile_native_get(self, button):
+        return bool(await button.evaluate("""node => {
+            const form = node.form;
+            return !!form && (node.hasAttribute('formmethod') ? node.formMethod : form.method).toLowerCase() === 'get';
+        }"""))
+
+    async def profile_get_control(self, fields, budget):
+        name, birth, age, button = fields
+        if not await self.profile_native_get(button):
+            return None, 'reobserve'
+        name = await name.element_handle(timeout=budget.remaining_ms())
+        value = await (birth or age).element_handle(timeout=budget.remaining_ms())
+        button = await button.element_handle(timeout=budget.remaining_ms())
+        if not name or not value or not button:
+            return None, 'form_unrecognized'
+        form = (await button.evaluate_handle('node => node.form')).as_element()
+        if not form or not await button.evaluate("""(node, args) => node.isConnected
+            && args.name.isConnected && args.value.isConnected && args.form.isConnected
+            && node.form === args.form && args.name.form === args.form && args.value.form === args.form""",
+                {'name': name, 'value': value, 'form': form}):
+            return None, 'form_unrecognized'
+        expected = (self.data['birthDate'] if birth else str(
+            registration_age(self.data['registrationAge'], self.data['birthDate'])
+            if 'registrationAge' in self.data else birth_age(self.data['birthDate'])))
+        return {'name': name, 'value': value, 'button': button, 'form': form,
+                'birth': bool(birth), 'expected': expected, 'page': self.page, 'url': self.page.url}, None
+
+    async def profile_get_unchanged(self, control):
+        page = control['page']
+        if self.page is not page or page.url != control['url']:
+            return False
+        self.official(page)
+        if await self.challenge():
+            raise Stop('verification_required')
+        try:
+            current = await self.profile_fields()
+        except Stop as exc:
+            if exc.report.get('reason') in {'form_unrecognized', 'login_form_ambiguous'} and await self.challenge():
+                raise Stop('verification_required') from None
+            raise
+        if not current or not current[0] or not (current[1] or current[2]) or not current[3]:
+            return False
+        for locator, handle in ((current[0], control['name']), (current[1] or current[2], control['value']),
+                                (current[3], control['button'])):
+            if not await locator.evaluate('(node, old) => node === old', handle):
+                return False
+        if not await control['button'].is_visible() or not await control['button'].is_enabled():
+            return False
+        if await self.challenge():
+            raise Stop('verification_required')
+        return bool(await control['button'].evaluate("""(node, args) => {
+            const readiness = """ + EMAIL_SUBMIT_READINESS + """;
+            return node.isConnected && args.form.isConnected && args.name.isConnected && args.value.isConnected
+                && node.form === args.form && args.name.form === args.form && args.value.form === args.form
+                && !node.matches(':disabled') && !args.name.matches(':disabled') && !args.value.matches(':disabled')
+                && args.name.value === args.expectedName && args.value.value === args.expectedValue
+                && args.name.validity.valid && args.value.validity.valid
+                && ['native_handler','react_handler','not_required'].includes(readiness(args.form, node));
+        }""", {'form': control['form'], 'name': control['name'], 'value': control['value'],
+                'expectedName': self.data['displayName'], 'expectedValue': control['expected']}))
+
+    def profile_observation_reason(self, exc):
+        if isinstance(exc, Stop) and exc.report.get('reason') in {'verification_required', 'form_unrecognized', 'login_form_ambiguous'}:
+            return 'verification_required' if exc.report['reason'] == 'verification_required' else 'form_unrecognized'
+        detached = type(exc).__name__ == 'Error' and 'Element is not attached to the DOM' in str(exc)
+        if not detached and not self.retryable_observation(exc):
+            raise exc
+        if not getattr(self.job, 'registration_observation_error', None):
+            details = exc.report if isinstance(exc, Stop) else session_failure(exc)
+            self.job.registration_observation_error = {
+                key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
+            if detached or (type(exc).__name__ == 'Error' and re.search(
+                    r'Execution context was destroyed|Cannot find context with specified id', str(exc))):
+                self.job.registration_observation_error['reason'] = 'registration_page_changing'
+        return 'form_unrecognized'
+
     async def profile_fields(self):
         self.official(self.page)
         self.operation('profile_read')
@@ -860,11 +937,22 @@ class RegistrationBrowser:
         email_prepare_budget = None
         first_not_ready = None
         email_readiness_reached = False
+        profile_ambiguity_pending = False
+        profile_prepare_budget = None
         observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
         for _ in range(160):
             self.job.check()
+            if (profile_ambiguity_pending or profile_prepare_budget is not None) and time.monotonic() >= observation_deadline:
+                await self.manual_registration('form_unrecognized')
+                # Only an explicit owner continuation can return from manual.
+                profile_ambiguity_pending = False
+                profile_prepare_budget = None
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                continue
             try:
-                budget = SessionBudget(10, cancelled=self.job.cancelled.is_set)
+                seconds = (min(10, max(0, observation_deadline - time.monotonic()))
+                           if profile_ambiguity_pending or profile_prepare_budget is not None else 10)
+                budget = SessionBudget(seconds, cancelled=self.job.cancelled.is_set)
                 self.observation_budget = budget
                 view, field = await budget.run(self.registration_view, 'registration_observe')
                 self.job.registration_last_observed_view = view if type(view) is str and view in REGISTRATION_VIEWS else 'unknown'
@@ -873,22 +961,31 @@ class RegistrationBrowser:
             except Exception as exc:
                 if isinstance(exc, Stop) and exc.report.get('reason') == 'verification_required':
                     await self.manual_registration('verification_required')
+                    profile_ambiguity_pending = False
+                    profile_prepare_budget = None
+                    observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                     continue
                 if isinstance(exc, Stop) and exc.report.get('reason') in {'form_unrecognized', 'login_form_ambiguous'}:
-                    await self.manual_registration('form_unrecognized')
-                    continue
-                page_changing = (type(exc).__name__ == 'Error' and bool(re.search(
-                    r'Execution context was destroyed|Cannot find context with specified id', str(exc))))
-                if not page_changing and not retryable_page_load_error(exc):
-                    raise
-                # Only controlled transport diagnostics survive; never exception text or session data.
-                details = exc.report if isinstance(exc, Stop) else session_failure(exc)
-                if not getattr(self.job, 'registration_observation_error', None):
-                    self.job.registration_observation_error = {
-                        key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
-                    if page_changing:
-                        self.job.registration_observation_error['reason'] = 'registration_page_changing'
-                view, field = 'unknown', None
+                    if not self.registration_state.get('profile_submitted'):
+                        await self.manual_registration('form_unrecognized')
+                        continue
+                    # The submitted form may overlap its replacement briefly.
+                    # Preserve every write flag and the original deadline.
+                    profile_ambiguity_pending = True
+                    view, field = 'unknown', None
+                else:
+                    page_changing = (type(exc).__name__ == 'Error' and bool(re.search(
+                        r'Execution context was destroyed|Cannot find context with specified id', str(exc))))
+                    if not page_changing and not retryable_page_load_error(exc):
+                        raise
+                    # Only controlled transport diagnostics survive; never exception text or session data.
+                    details = exc.report if isinstance(exc, Stop) else session_failure(exc)
+                    if not getattr(self.job, 'registration_observation_error', None):
+                        self.job.registration_observation_error = {
+                            key: details[key] for key in ('reason', 'error_type', 'browser_error_code') if key in details}
+                        if page_changing:
+                            self.job.registration_observation_error['reason'] = 'registration_page_changing'
+                    view, field = 'unknown', None
             finally:
                 self.observation_budget = None
             if view in {'code', 'profile', 'registered', 'existing'} and self.email_request_page is not None:
@@ -896,10 +993,29 @@ class RegistrationBrowser:
                 self.log_email_requests('transition')
             if view == 'verification':
                 await self.manual_registration('verification_required')
+                profile_ambiguity_pending = False
+                profile_prepare_budget = None
+                observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                continue
+            if profile_ambiguity_pending and view not in {'registered', 'existing'}:
+                remaining = max(0, observation_deadline - time.monotonic())
+                if remaining:
+                    wait_budget = SessionBudget(remaining, cancelled=self.job.cancelled.is_set)
+                    try:
+                        await wait_budget.run(lambda: self.settle(min(.5, remaining)), 'profile_reobserve')
+                    except Stop as exc:
+                        if exc.report.get('reason') != 'session_load_timeout':
+                            raise
+                    else:
+                        continue
+                await self.manual_registration('form_unrecognized')
+                profile_ambiguity_pending = False
+                profile_prepare_budget = None
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
             if view == 'code':
-                if self.registration_state.get('code_submitted'):
+                if (self.registration_state.get('code_submitted')
+                        or self.registration_state.get('profile_submitted')):
                     # The old input may remain while the accepted code navigates.
                     # Observe within the existing budget without submitting again.
                     if time.monotonic() < observation_deadline:
@@ -928,32 +1044,120 @@ class RegistrationBrowser:
                 await self.end_recovery()
                 self.job.event('progress', step='profile')
                 self.operation('profile_submit')
-                await name.fill(self.data['displayName'])
-                if birth:
-                    await birth.fill(self.data['birthDate'])
+                control = None
+                budget = profile_prepare_budget or SessionBudget(
+                    max(0, observation_deadline - time.monotonic()), cancelled=self.job.cancelled.is_set)
+                try:
+                    native_get = await budget.run(lambda: self.profile_native_get(button), 'profile_form_observe')
+                except Exception as exc:
+                    reason = self.profile_observation_reason(exc)
+                    await self.manual_registration(reason)
+                    profile_prepare_budget = None
+                    observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                    continue
+                if native_get:
+                    profile_prepare_budget = budget
+                    async def prepare_profile_get():
+                        while True:
+                            if await self.challenge():
+                                return None, 'verification_required'
+                            current = await self.profile_fields()
+                            if not current or not current[0] or not (current[1] or current[2]) or not current[3]:
+                                await self.settle(.1)
+                                continue
+                            prepared, reason = await self.profile_get_control(current, budget)
+                            if reason:
+                                return None, reason
+                            if await self.email_submit_ready(prepared['name'], prepared['button']):
+                                break
+                            await self.settle(.1)
+                        await prepared['name'].fill(self.data['displayName'], timeout=budget.remaining_ms())
+                        if prepared['birth']:
+                            await prepared['value'].fill(prepared['expected'], timeout=budget.remaining_ms())
+                        else:
+                            existing = await prepared['value'].input_value(timeout=budget.remaining_ms())
+                            if existing != prepared['expected']:
+                                if existing:
+                                    await prepared['value'].fill('', timeout=budget.remaining_ms())
+                                    if await prepared['value'].input_value(timeout=budget.remaining_ms()):
+                                        return None, 'form_unrecognized'
+                                await prepared['value'].fill(prepared['expected'], timeout=budget.remaining_ms())
+                        while True:
+                            if await self.challenge():
+                                return None, 'verification_required'
+                            if await prepared['button'].is_enabled():
+                                break
+                            if not await prepared['button'].evaluate('(node, form) => node.isConnected && node.form === form', prepared['form']):
+                                return None, 'form_unrecognized'
+                            await self.settle(.1)
+                        return (prepared, None) if await self.profile_get_unchanged(prepared) else (None, 'form_unrecognized')
+                    try:
+                        control, reason = await budget.run(prepare_profile_get, 'profile_submit_observe')
+                        budget.remaining_ms()
+                    except Exception as exc:
+                        reason = self.profile_observation_reason(exc)
+                    if reason == 'reobserve':
+                        continue
+                    if reason:
+                        await self.manual_registration(reason)
+                        profile_prepare_budget = None
+                        observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                        continue
+                    button = control['button']
                 else:
-                    value = (registration_age(self.data['registrationAge'], self.data['birthDate'])
-                             if 'registrationAge' in self.data else birth_age(self.data['birthDate']))
-                    expected = str(value)
-                    current = await age.input_value()
-                    if current != expected:
-                        if current:
-                            await age.fill('')
-                            if await age.input_value():
-                                raise Stop('form_unrecognized')
-                        await age.fill(expected)
-                    if await age.input_value() != expected:
-                        raise Stop('form_unrecognized')
-                # Input validation may enable the initially disabled submit button.
-                if await button.is_enabled():
+                    profile_prepare_budget = None
+                    await name.fill(self.data['displayName'])
+                    if birth:
+                        await birth.fill(self.data['birthDate'])
+                    else:
+                        value = (registration_age(self.data['registrationAge'], self.data['birthDate'])
+                                 if 'registrationAge' in self.data else birth_age(self.data['birthDate']))
+                        expected = str(value)
+                        current = await age.input_value()
+                        if current != expected:
+                            if current:
+                                await age.fill('')
+                                if await age.input_value():
+                                    raise Stop('form_unrecognized')
+                            await age.fill(expected)
+                        if await age.input_value() != expected:
+                            raise Stop('form_unrecognized')
+                    try:
+                        changed_to_get = await budget.run(lambda: self.profile_native_get(button), 'profile_form_reobserve')
+                    except Exception as exc:
+                        await self.manual_registration(self.profile_observation_reason(exc))
+                        continue
+                    if changed_to_get:
+                        await self.manual_registration('form_unrecognized')
+                        continue
+                # A GET control's final guard checks enabled state after challenge reads.
+                if control:
+                    try:
+                        unchanged = await budget.run(lambda: self.profile_get_unchanged(control), 'profile_submit_reobserve')
+                    except Exception as exc:
+                        await self.manual_registration(self.profile_observation_reason(exc))
+                        profile_prepare_budget = None
+                        observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                        continue
+                    if not unchanged:
+                        await self.manual_registration('form_unrecognized')
+                        profile_prepare_budget = None
+                        observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
+                        continue
+                if control or await button.is_enabled():
                     self.registration_state['profile_submitted'] = True
-                    await button.click()
+                    if control:
+                        await button.click(timeout=budget.remaining_ms())
+                    else:
+                        await button.click()
                     await self.settle(4)
+                    profile_prepare_budget = None
                     observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                     continue
             if view == 'existing':
                 raise Stop('existing_account_requires_review')
-            if (view == 'email' and not self.registration_state.get('email_submitted')
+            if (view == 'email' and not self.registration_state.get('profile_submitted')
+                    and not self.registration_state.get('email_submitted')
                     and not self.registration_state.get('email_submit_prepared')):
                 await self.end_recovery()
                 self.job.event('progress', step='email')
@@ -1071,7 +1275,7 @@ class RegistrationBrowser:
                 await self.settle(3)
                 observation_deadline = time.monotonic() + REGISTRATION_OBSERVE_SECONDS
                 continue
-            if view == 'signup' and not signup_clicked:
+            if view == 'signup' and not signup_clicked and not self.registration_state.get('profile_submitted'):
                 await self.end_recovery()
                 signup_clicked = True
                 self.operation('signup_click')
