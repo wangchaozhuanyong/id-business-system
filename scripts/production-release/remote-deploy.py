@@ -2284,7 +2284,7 @@ def main80_recharge_baseline(previous, profile, manifest, states, *, source_arch
     return origin
 
 
-def main80_recharge_audit(directory, receipt, *, stage, source, profile, before_receipt=None, control_source=None):
+def main80_recharge_audit(directory, receipt, *, stage, source, auditor_source, profile, before_receipt=None, control_source=None):
     """Reuse the released zero49 auditor while preserving the sealed original 80 policy."""
     main80_recharge_scope(profile)
     policy, seal = main80_recharge_seal(source, profile)
@@ -2292,7 +2292,7 @@ def main80_recharge_audit(directory, receipt, *, stage, source, profile, before_
         main80_recharge_report(fixed_recharge_json(fixed_recharge_bytes(source / (stored_stage + '-audit.json'))),
             profile, policy, seal, stored_stage)
     control_source = control_source or directory
-    result = registration_finance_audit(directory, receipt, stage=stage, source=source,
+    result = registration_finance_audit(directory, receipt, stage=stage, source=auditor_source,
         before_receipt=before_receipt, control_source=control_source, profile_id=REGISTRATION_EMAIL_REQUEST_ID)
     report = fixed_recharge_json(fixed_recharge_bytes(receipt))
     frozen = fixed_recharge_json(fixed_recharge_bytes(source / 'before-audit.json'))['gate']
@@ -4014,11 +4014,11 @@ REGISTRATION_EMAIL_REQUEST_BASELINE = {'current': '/opt/id-business-v2/releases/
 # Fixed email-submit observation Worker source; all six predecessors and original finance seals remain separate.
 REGISTRATION_EMAIL_OBSERVATION_ID = 'registration-worker-89-20261006'
 REGISTRATION_EMAIL_OBSERVATION_FILE = 'deploy/aws/registration-worker-89-20261006.json'
-REGISTRATION_EMAIL_OBSERVATION_CURRENT = 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+REGISTRATION_EMAIL_OBSERVATION_CURRENT = 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3'
 REGISTRATION_EMAIL_OBSERVATION_SOURCE = '83909af3df8655295984c427565731fc8bde0293'
 REGISTRATION_EMAIL_OBSERVATION_SOURCE_SHA256 = {'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py': '2299a372aada6f356fa45f67e3c55028a476080f4c3bc8015b274df1ec855348', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py': '6414b113b27b062598bfabad03ae3bda49640bca1573c0e1e61bebe497d6aa42', 'docs/AUTO_REGISTRATION.md': '3cb74e1f7269a5fa8dec5e6ca530147a310b261d43f44a62fbb979ad2aa6b11c', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py': 'c409f1d4a36fc759aa3bf649d08e93938ff5497b9261b635f28cc02e324bcec0', 'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py': 'f1878abdf27e6760bd63c602136ae14ff06902d136bbd47cf2d036fd1fb393ae', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py': '680699426cbbf517c4792b5ff6fcf83d692d7a9e084cbbd2b8d8a9eb20ffdf17', 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py': '1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe'}
 REGISTRATION_EMAIL_OBSERVATION_PROJECTION_SHA256 = 'd40c58deefb8cc5fe39fa2f711f9ca6416adab31ba68602d6910e8d090edde68'
-REGISTRATION_EMAIL_OBSERVATION_BASELINE = {'current': '/opt/id-business-v2/releases/20261006T152201Z-b91b626a71ed',
+REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE = {'current': '/opt/id-business-v2/releases/20261006T152201Z-b91b626a71ed',
  'manifest': {'commit': 'b91b626a71ed2c7c2473d080551b3b10b693b0cb',
               'sourceTree': '0108ff3dda67337102d96bef08280ee93d8bcb36',
               'previousCommit': '4c200c4ae08bb8214ff8e0955f8237ce85069cc6',
@@ -4157,6 +4157,344 @@ REGISTRATION_EMAIL_OBSERVATION_BASELINE = {'current': '/opt/id-business-v2/relea
               'databaseGrantSyncStatus': 'SKIPPED',
               'cacheStatus': 'SKIPPED',
               'liveServicesHealthy': True}}
+
+REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE = {'status': 'VERIFIED_PRO_AFTER_88_RUNTIME_BASELINE',
+ 'current': '/opt/id-business-v2/releases/20261006T163935Z-d2e22e623d0e',
+ 'controllerSha256': 'f421e37c9c4b9562c8fe6b5fe5ee74643aa612e4a05ed99153a2b2c7643d7d67',
+ 'profileSha256': '6d10faabd632157233099dfce5d558d89f3a841a0556fc42f91b384f049cbdc0',
+ 'manifest': {'commit': 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3',
+              'sourceTree': 'd2d938a176fab2a99cc1edd1b25c1cd1ffb59357',
+              'previousCommit': 'b91b626a71ed2c7c2473d080551b3b10b693b0cb',
+              'previousRelease': '/opt/id-business-v2/releases/20261006T152201Z-b91b626a71ed',
+              'deploymentRun': 'github-actions-37496968953-1',
+              'imageBuildRun': 'github-actions-37496968953-1',
+              'sourceArchiveSha256': 'c1fd43663c32c89dd925355b5da1f3b665227e38a967d763a0efcf0cb212582a',
+              'servicesUpdated': ['auto-recharge'],
+              'migrationApplied': False,
+              'newMigrations': [],
+              'images': {'admin': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                                   'digest': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                                   'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'},
+                         'caddy': {'digest': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510'},
+                         'api': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                                 'digest': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                                 'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'},
+                         'migrate': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-migrate',
+                                     'digest': 'sha256:6f2c0d6f71c23ee2ec0565c1dae9a0a79f42dcf5ccb589bf0583c2b9e78414f9',
+                                     'sourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b'},
+                         'auto-recharge': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:d2e22e623d0e19851c79ffe43396f5f97a99b8d3-37496968953-1-auto-recharge',
+                                           'digest': 'sha256:bd7f4b9b5012cc06f265b2ebf9a1c49c646dfd141695bc51cc1f24a197a3de51',
+                                           'sourceCommit': 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3'},
+                         'media-resolver': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                            'digest': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                            'sourceCommit': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'},
+                         'auto-registration': {'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b91b626a71ed2c7c2473d080551b3b10b693b0cb-37481121792-2-auto-recharge',
+                                               'digest': 'sha256:f369dcfc8a59dd5598eb00c857c9ddeba01520d24e3e78585bcd5ce11371491e',
+                                               'sourceCommit': 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'}},
+              'fixedRegistrationRelease': {'id': 'registration-worker-88-20261006',
+                                           'profileRawSha256': 'cce9a098659ba3bc5bec6e7fd8eb294d3ef075dc4676c86f5b4c38de1ff67d67',
+                                           'registrationSourceCommit': '613419cfd245d3884b856856ed23737f2bbddff1',
+                                           'workerBasisCommit': 'b8d643450ffa9012ccc09ead15e4681e3dee98d0',
+                                           'workerProjectionSha256': '54a5de8c2a847aee3ba21dc7fa48a46fcb26d67ae8f767bd3478fab430e59a01',
+                                           'financeSourceCommit': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+                                           'financePolicyId': 'historical-finance-20261005-order-archive',
+                                           'financeMode': 'STRICT_ZERO_AFTER_APPROVED_REVERSALS_49',
+                                           'clearanceSealSha256': '46f1b091459ba540af2c26a2fad3136d1ca4b7f269d2a77bd6c97c48976ee520',
+                                           'environmentUnchanged': True,
+                                           'migrationStatus': 'SKIPPED',
+                                           'databaseGrantSyncStatus': 'SKIPPED',
+                                           'cacheStatus': 'SKIPPED'},
+              'fixedRechargeRelease': {'version': 1,
+                                       'id': 'recharge-pro-main80-20261006',
+                                       'profileSha256': '889afca1d21c9af22d95d7ac45f3323e18e793204f7098490c29e70cb627d2f0',
+                                       'expectedCurrent': 'b91b626a71ed2c7c2473d080551b3b10b693b0cb',
+                                       'sourceCommit': 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3',
+                                       'sourceTree': 'd2d938a176fab2a99cc1edd1b25c1cd1ffb59357',
+                                       'servicesUpdated': ['auto-recharge'],
+                                       'financeValidator': 'STRICT_ZERO_AFTER_APPROVED_REVERSALS_49',
+                                       'sourceCommitForFinance': '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b',
+                                       'originCommitForFinance': '3ca300486d0edfadda83c094a48474a63959fce7',
+                                       'beforeGateSha256': 'ec68038c2606fabc6f5408a0e79784a6dc1b142acfc9cc6b78035581f907041f',
+                                       'afterGateSha256': '80be54958db3f671aca657fe52949f42b36fda1679d88e1fdb0c1655f54c79fb',
+                                       'unchangedServiceContainersPreserved': True,
+                                       'environmentUnchanged': True,
+                                       'migrationStatus': 'SKIPPED',
+                                       'databaseGrantSyncStatus': 'SKIPPED',
+                                       'cacheStatus': 'SKIPPED'},
+              'fixedRechargePreservedStates': {'before': {'media-resolver': {'image': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                                                             'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                                                             'status': 'running',
+                                                                             'health': 'healthy',
+                                                                             'containerId': '0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471',
+                                                                             'startedAtSha256': '8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f',
+                                                                             'environmentSha256': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163'},
+                                                          'auto-registration': {'image': 'sha256:f369dcfc8a59dd5598eb00c857c9ddeba01520d24e3e78585bcd5ce11371491e',
+                                                                                'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b91b626a71ed2c7c2473d080551b3b10b693b0cb-37481121792-2-auto-recharge',
+                                                                                'status': 'running',
+                                                                                'health': 'healthy',
+                                                                                'containerId': 'a5036814eaa7207ed41ccb0cda8dcaf34a433bba5d7d854d1463bcabda3fc590',
+                                                                                'startedAtSha256': 'ac39959777db37812c6a969a3faf58a91ee0563467eef71e9ace1f698544f3ab',
+                                                                                'environmentSha256': 'de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17'},
+                                                          'api': {'image': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                                                                  'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                                                                  'status': 'running',
+                                                                  'health': 'healthy',
+                                                                  'containerId': '8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff',
+                                                                  'startedAtSha256': '2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12',
+                                                                  'environmentSha256': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c'},
+                                                          'admin': {'image': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                                                                    'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                                                                    'status': 'running',
+                                                                    'health': 'healthy',
+                                                                    'containerId': '8c34a75da43b9877b1ebf8110c41c726f3f7756473ab91c86fdc4f767dd2f075',
+                                                                    'startedAtSha256': '499f832cd2baf51fa672a43d21922953ae003854a1678facee86a6c5f68423b8',
+                                                                    'environmentSha256': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4'},
+                                                          'mysql': {'image': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb',
+                                                                    'reference': 'mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb',
+                                                                    'status': 'running',
+                                                                    'health': 'healthy',
+                                                                    'containerId': '7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074',
+                                                                    'startedAtSha256': 'de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7',
+                                                                    'environmentSha256': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'},
+                                                          'caddy': {'image': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510',
+                                                                    'reference': 'caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d',
+                                                                    'status': 'running',
+                                                                    'health': None,
+                                                                    'containerId': '60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab',
+                                                                    'startedAtSha256': '7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc',
+                                                                    'environmentSha256': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181'}},
+                                               'after': {'media-resolver': {'image': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                                                            'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                                                            'status': 'running',
+                                                                            'health': 'healthy',
+                                                                            'containerId': '0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471',
+                                                                            'startedAtSha256': '8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f',
+                                                                            'environmentSha256': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163'},
+                                                         'auto-registration': {'image': 'sha256:f369dcfc8a59dd5598eb00c857c9ddeba01520d24e3e78585bcd5ce11371491e',
+                                                                               'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b91b626a71ed2c7c2473d080551b3b10b693b0cb-37481121792-2-auto-recharge',
+                                                                               'status': 'running',
+                                                                               'health': 'healthy',
+                                                                               'containerId': 'a5036814eaa7207ed41ccb0cda8dcaf34a433bba5d7d854d1463bcabda3fc590',
+                                                                               'startedAtSha256': 'ac39959777db37812c6a969a3faf58a91ee0563467eef71e9ace1f698544f3ab',
+                                                                               'environmentSha256': 'de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17'},
+                                                         'api': {'image': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                                                                 'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                                                                 'status': 'running',
+                                                                 'health': 'healthy',
+                                                                 'containerId': '8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff',
+                                                                 'startedAtSha256': '2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12',
+                                                                 'environmentSha256': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c'},
+                                                         'admin': {'image': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                                                                   'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                                                                   'status': 'running',
+                                                                   'health': 'healthy',
+                                                                   'containerId': '8c34a75da43b9877b1ebf8110c41c726f3f7756473ab91c86fdc4f767dd2f075',
+                                                                   'startedAtSha256': '499f832cd2baf51fa672a43d21922953ae003854a1678facee86a6c5f68423b8',
+                                                                   'environmentSha256': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4'},
+                                                         'mysql': {'image': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb',
+                                                                   'reference': 'mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb',
+                                                                   'status': 'running',
+                                                                   'health': 'healthy',
+                                                                   'containerId': '7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074',
+                                                                   'startedAtSha256': 'de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7',
+                                                                   'environmentSha256': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'},
+                                                         'caddy': {'image': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510',
+                                                                   'reference': 'caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d',
+                                                                   'status': 'running',
+                                                                   'health': None,
+                                                                   'containerId': '60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab',
+                                                                   'startedAtSha256': '7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc',
+                                                                   'environmentSha256': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181'}}},
+              'fixedRegistrationPreservedStates': {'before': {'media-resolver': {'image': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                                                                 'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                                                                 'status': 'running',
+                                                                                 'health': 'healthy',
+                                                                                 'containerId': '0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471',
+                                                                                 'startedAtSha256': '8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f',
+                                                                                 'environmentSha256': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163'},
+                                                              'auto-recharge': {'image': 'sha256:86b5d98fa6e0cb55b89862c4b952362428efc21dc6002ff48ca89c6d9f9f7cdc',
+                                                                                'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:3ca300486d0edfadda83c094a48474a63959fce7-37346732072-1-auto-recharge',
+                                                                                'status': 'running',
+                                                                                'health': 'healthy',
+                                                                                'containerId': '2c7dafce90530efa1f1afbdf031f07ed07e9a6ad3b23a92d418c3cb700deed35',
+                                                                                'startedAtSha256': '6e263adbdd786eb3c27b34deefab967124700b7a6d14d497f65e0e5975b5a45e',
+                                                                                'environmentSha256': '5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae'},
+                                                              'api': {'image': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                                                                      'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                                                                      'status': 'running',
+                                                                      'health': 'healthy',
+                                                                      'containerId': '8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff',
+                                                                      'startedAtSha256': '2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12',
+                                                                      'environmentSha256': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c'},
+                                                              'admin': {'image': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                                                                        'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                                                                        'status': 'running',
+                                                                        'health': 'healthy',
+                                                                        'containerId': '8c34a75da43b9877b1ebf8110c41c726f3f7756473ab91c86fdc4f767dd2f075',
+                                                                        'startedAtSha256': '499f832cd2baf51fa672a43d21922953ae003854a1678facee86a6c5f68423b8',
+                                                                        'environmentSha256': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4'},
+                                                              'mysql': {'image': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb',
+                                                                        'reference': 'mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb',
+                                                                        'status': 'running',
+                                                                        'health': 'healthy',
+                                                                        'containerId': '7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074',
+                                                                        'startedAtSha256': 'de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7',
+                                                                        'environmentSha256': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'},
+                                                              'caddy': {'image': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510',
+                                                                        'reference': 'caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d',
+                                                                        'status': 'running',
+                                                                        'health': None,
+                                                                        'containerId': '60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab',
+                                                                        'startedAtSha256': '7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc',
+                                                                        'environmentSha256': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181'}},
+                                                   'after': {'media-resolver': {'image': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                                                                'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                                                                'status': 'running',
+                                                                                'health': 'healthy',
+                                                                                'containerId': '0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471',
+                                                                                'startedAtSha256': '8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f',
+                                                                                'environmentSha256': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163'},
+                                                             'auto-recharge': {'image': 'sha256:86b5d98fa6e0cb55b89862c4b952362428efc21dc6002ff48ca89c6d9f9f7cdc',
+                                                                               'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:3ca300486d0edfadda83c094a48474a63959fce7-37346732072-1-auto-recharge',
+                                                                               'status': 'running',
+                                                                               'health': 'healthy',
+                                                                               'containerId': '2c7dafce90530efa1f1afbdf031f07ed07e9a6ad3b23a92d418c3cb700deed35',
+                                                                               'startedAtSha256': '6e263adbdd786eb3c27b34deefab967124700b7a6d14d497f65e0e5975b5a45e',
+                                                                               'environmentSha256': '5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae'},
+                                                             'api': {'image': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                                                                     'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                                                                     'status': 'running',
+                                                                     'health': 'healthy',
+                                                                     'containerId': '8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff',
+                                                                     'startedAtSha256': '2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12',
+                                                                     'environmentSha256': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c'},
+                                                             'admin': {'image': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                                                                       'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                                                                       'status': 'running',
+                                                                       'health': 'healthy',
+                                                                       'containerId': '8c34a75da43b9877b1ebf8110c41c726f3f7756473ab91c86fdc4f767dd2f075',
+                                                                       'startedAtSha256': '499f832cd2baf51fa672a43d21922953ae003854a1678facee86a6c5f68423b8',
+                                                                       'environmentSha256': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4'},
+                                                             'mysql': {'image': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb',
+                                                                       'reference': 'mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb',
+                                                                       'status': 'running',
+                                                                       'health': 'healthy',
+                                                                       'containerId': '7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074',
+                                                                       'startedAtSha256': 'de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7',
+                                                                       'environmentSha256': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'},
+                                                             'caddy': {'image': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510',
+                                                                       'reference': 'caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d',
+                                                                       'status': 'running',
+                                                                       'health': None,
+                                                                       'containerId': '60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab',
+                                                                       'startedAtSha256': '7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc',
+                                                                       'environmentSha256': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181'}}},
+              'databaseGrants': {'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}},
+ 'fileSha256': {'release-manifest.json': 'd35ac7ee8c1ed397c1db9478ce5f1eca2166267ec66f5db730634e238a72803e',
+                'before-audit.json': 'bd97be325b3bbf0f4e0a3501cf47ce22d2550f3408ab50824fc5aac32ee42d4f',
+                'after-audit.json': '9e65ad1000c29620aeeba7f3cea8113784f93ebdfb0fc552d960e6bf49cbee53',
+                'docker-compose.aws-mysql.yml': '05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8',
+                'compose.release.json': 'c61a9944f1f8691218c4a5c41e3b8d49fe04102533fe51340176838a09b04b9c',
+                '.env.aws.production': 'a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af',
+                'deploy/aws/registration-worker-b8-80-20261006.json': 'd5c023887b22f6a555abe0f8e4627113d5a45dec0668ae2abc1bb8fbf8cbdb28',
+                'deploy/aws/registration-worker-956-20261006.json': '60226df9c51cb222bf8c0cc09a7783b52a8f0082f728189ec3ada9554b6dbfc1',
+                'deploy/aws/registration-worker-85-20261006.json': '02fc3375314ee75b6e5b8ec47ce715f1e02f9b744ce77c5a4804d9110ba4daec',
+                'deploy/aws/registration-worker-86-20261006.json': '81946a081a13d6787a5a1e16782ef780065c6e81440b8500e55dbca155fef7f2',
+                'deploy/aws/registration-worker-87-20261006.json': '3742920452e28992595c7d31d8ea5c03915f3a3218435a7714cf6e2fe1c2aea7',
+                'deploy/aws/registration-worker-88-20261006.json': 'cce9a098659ba3bc5bec6e7fd8eb294d3ef075dc4676c86f5b4c38de1ff67d67',
+                'deploy/aws/recharge-pro-main80-20261006.json': '6d10faabd632157233099dfce5d558d89f3a841a0556fc42f91b384f049cbdc0'},
+ 'overrideCanonicalSha256': '1e3129f0d94c00f12e31fbf55216f73439fc7b52525a7faa4538d271e40dc59e',
+ 'audits': {'before': {'checkCount': 49,
+                       'violationCount': 0,
+                       'checksSha256': '94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2',
+                       'gateSha256': 'ec68038c2606fabc6f5408a0e79784a6dc1b142acfc9cc6b78035581f907041f',
+                       'identitySha256': '6458d529956db12370d7c9339a73e597b187aa0ef3a5fb475591b311ec9fdee1'},
+            'after': {'checkCount': 49,
+                      'violationCount': 0,
+                      'checksSha256': '94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2',
+                      'gateSha256': '80be54958db3f671aca657fe52949f42b36fda1679d88e1fdb0c1655f54c79fb',
+                      'identitySha256': '6458d529956db12370d7c9339a73e597b187aa0ef3a5fb475591b311ec9fdee1'}},
+ 'liveServices': {'media-resolver': {'image': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56',
+                                     'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver',
+                                     'status': 'running',
+                                     'health': 'healthy',
+                                     'containerId': '0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471',
+                                     'startedAtSha256': '8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f',
+                                     'environmentSha256': '8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163'},
+                  'auto-recharge': {'image': 'sha256:bd7f4b9b5012cc06f265b2ebf9a1c49c646dfd141695bc51cc1f24a197a3de51',
+                                    'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:d2e22e623d0e19851c79ffe43396f5f97a99b8d3-37496968953-1-auto-recharge',
+                                    'status': 'running',
+                                    'health': 'healthy',
+                                    'containerId': 'b221d3c3d23a2aba49f2e0ffa02365aa368e17d7efd55171da6f5e7a40102f53',
+                                    'startedAtSha256': '5a50f0b801c6069121648ab0cf3965b779eb9a18861b20f1a9995724455d61a7',
+                                    'environmentSha256': '5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae'},
+                  'auto-registration': {'image': 'sha256:f369dcfc8a59dd5598eb00c857c9ddeba01520d24e3e78585bcd5ce11371491e',
+                                        'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b91b626a71ed2c7c2473d080551b3b10b693b0cb-37481121792-2-auto-recharge',
+                                        'status': 'running',
+                                        'health': 'healthy',
+                                        'containerId': 'a5036814eaa7207ed41ccb0cda8dcaf34a433bba5d7d854d1463bcabda3fc590',
+                                        'startedAtSha256': 'ac39959777db37812c6a969a3faf58a91ee0563467eef71e9ace1f698544f3ab',
+                                        'environmentSha256': 'de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17'},
+                  'api': {'image': 'sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0',
+                          'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api',
+                          'status': 'running',
+                          'health': 'healthy',
+                          'containerId': '8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff',
+                          'startedAtSha256': '2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12',
+                          'environmentSha256': '9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c'},
+                  'admin': {'image': 'sha256:9e7420702d1a2995efb16206a8736f94490ab60bc10d2156135ee09610ca3693',
+                            'reference': '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-admin',
+                            'status': 'running',
+                            'health': 'healthy',
+                            'containerId': '8c34a75da43b9877b1ebf8110c41c726f3f7756473ab91c86fdc4f767dd2f075',
+                            'startedAtSha256': '499f832cd2baf51fa672a43d21922953ae003854a1678facee86a6c5f68423b8',
+                            'environmentSha256': '03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4'},
+                  'mysql': {'image': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb',
+                            'reference': 'mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb',
+                            'status': 'running',
+                            'health': 'healthy',
+                            'containerId': '7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074',
+                            'startedAtSha256': 'de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7',
+                            'environmentSha256': 'bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299'},
+                  'caddy': {'image': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510',
+                            'reference': 'caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d',
+                            'status': 'running',
+                            'health': None,
+                            'containerId': '60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab',
+                            'startedAtSha256': '7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc',
+                            'environmentSha256': '33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181'}},
+ 'readback': {'version': 1,
+              'id': 'recharge-pro-main80-20261006',
+              'status': 'VERIFIED',
+              'currentCommit': 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3',
+              'sourceTree': 'd2d938a176fab2a99cc1edd1b25c1cd1ffb59357',
+              'previousCommit': 'b91b626a71ed2c7c2473d080551b3b10b693b0cb',
+              'profileSha256': '889afca1d21c9af22d95d7ac45f3323e18e793204f7098490c29e70cb627d2f0',
+              'servicesUpdated': ['auto-recharge'],
+              'preservedServiceCount': 6,
+              'checkCount': 49,
+              'executedCheckCount': 49,
+              'unavailableCheckCount': 0,
+              'violationCount': 0,
+              'storedGatesMatched': True,
+              'unchangedServiceContainersPreserved': True,
+              'environmentUnchanged': True,
+              'migrationStatus': 'SKIPPED',
+              'databaseGrantSyncStatus': 'SKIPPED',
+              'cacheStatus': 'SKIPPED',
+              'liveServicesHealthy': True,
+              'rechargeImageMatched': True},
+ 'actualWorkerSourceSha256': {'browser_password_login.py': '39a7d789098ed167c0b3e6e4b592553487bddf9e3d43bf64c1ff3a2667913ef6',
+                              'registration_browser.py': '704d5c1fb4de91c727453208907ca1c4f98cf10c00235facb2ff73aec68192d4',
+                              'registration_builtin.py': 'bf646db25d342c1ce1c8cbfebf74ec1b8f470f837f98a097d9c20cea1fbb5def',
+                              'registration_job.py': 'f1878abdf27e6760bd63c602136ae14ff06902d136bbd47cf2d036fd1fb393ae'},
+ 'original80SealMatched': True,
+ 'databaseWrites': 0,
+ 'windowRestarted': False}
+# Enabled only after the independently collected Pro runtime is frozen.
+REGISTRATION_EMAIL_OBSERVATION_BASELINE = {key: REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE[key]
+    for key in REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE}
+REGISTRATION_EMAIL_OBSERVATION_PRO_PROFILE_MODE = 0o664
 
 def registration_contract(profile_id=REGISTRATION_SCOPE_ID):
     require(profile_id in (REGISTRATION_SCOPE_ID, REGISTRATION_CONTINUATION_ID, REGISTRATION_INITIAL_ID, REGISTRATION_EMAIL_ID, REGISTRATION_CALLBACK_ID, REGISTRATION_EMAIL_REQUEST_ID, REGISTRATION_EMAIL_OBSERVATION_ID),
@@ -4405,8 +4743,150 @@ def registration_baseline(previous, states=None):
     return manifest, previous
 
 
+def registration_observation_pro_profile(directory):
+    fixed = REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE
+    require(isinstance(fixed, dict) and isinstance(fixed.get('fileSha256'), dict)
+        and RECHARGE_MAIN80_FILE in fixed['fileSha256'], 'Fixed registration Pro bridge unavailable')
+    pinned_mode = REGISTRATION_EMAIL_OBSERVATION_PRO_PROFILE_MODE
+    require(type(pinned_mode) is int and pinned_mode in (0o644, 0o664), 'Fixed registration Pro profile mode unavailable')
+    mode = pinned_mode if str(directory) == fixed['current'] else 0o644
+    raw = fixed_recharge_bytes(directory / RECHARGE_MAIN80_FILE, modes=(mode,), limit=128 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == fixed['fileSha256'][RECHARGE_MAIN80_FILE]
+        == fixed['profileSha256'], 'Fixed registration Pro profile changed')
+    profile = parse_fixed_recharge_scope(raw)
+    validate_fixed_recharge_readback_projection(fixed['readback'], fixed['manifest']['commit'],
+        fixed['manifest']['sourceTree'], historical_fingerprint(profile), profile_id=RECHARGE_MAIN80_ID)
+    return raw
+
+
+def registration_observation_pro_baseline(previous, states=None):
+    """Verify the fixed Pro predecessor without applying its old worker checks to worker 89."""
+    message = 'Fixed registration Pro bridge changed'
+    fixed, anchor = REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE, REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE
+    require(isinstance(fixed, dict) and set(fixed) == {'status', 'current', 'controllerSha256', 'profileSha256',
+        'manifest', 'fileSha256', 'overrideCanonicalSha256', 'audits', 'liveServices', 'readback',
+        'actualWorkerSourceSha256', 'original80SealMatched', 'databaseWrites', 'windowRestarted'}
+        and fixed['status'] == 'VERIFIED_PRO_AFTER_88_RUNTIME_BASELINE' and fixed['original80SealMatched'] is True
+        and type(fixed['databaseWrites']) is int and fixed['databaseWrites'] == 0 and fixed['windowRestarted'] is False,
+        message)
+    contract = registration_contract(REGISTRATION_EMAIL_OBSERVATION_ID)
+    require(contract['runtimeBaseline'] == {key: fixed[key] for key in anchor}
+        and fixed['manifest']['commit'] == contract['current'] and contract['current'] != RECHARGE_MAIN80_CURRENT
+        and previous.is_absolute() and previous.resolve() == previous and previous.parent == BASE / 'releases'
+        and str(previous) == fixed['current'] and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + contract['current'][:12], previous.name)
+        and set(fixed['fileSha256']) == set(anchor['fileSha256']) | {RECHARGE_MAIN80_FILE}, message)
+    pointer = (BASE / 'current').resolve()
+    live = {name: service_state(pointer, name, include_container_id=True, include_environment_hash=True)
+        for name in ALL_SERVICES}
+    require(set(fixed['liveServices']) == set(ALL_SERVICES)
+        and registration_preserved_states(live) == registration_preserved_states(fixed['liveServices'])
+        and all(row['status'] == 'running' for row in live.values())
+        and all(live[name]['health'] == 'healthy' for name in ALL_SERVICES if name != 'caddy'), message)
+    observed = {}
+    def read(path, **options):
+        raw = fixed_recharge_bytes(path, **options)
+        require(path not in observed or observed[path][0] == raw, message)
+        observed[path] = (raw, options)
+        return raw
+    def frozen_files(directory, hashes):
+        for name, digest in hashes.items():
+            modes = (0o600,) if name in ('.env.aws.production', 'release-manifest.json', 'before-audit.json', 'after-audit.json') else (0o400, 0o600, 0o644, 0o664)
+            require(hashlib.sha256(read(directory / name, modes=modes, limit=128 * 1024)).hexdigest() == digest, message)
+    frozen_files(previous, fixed['fileSha256'])
+    require(hashlib.sha256(read(previous / 'scripts/production-release/remote-deploy.py', modes=(0o644, 0o664))).hexdigest()
+        == fixed['controllerSha256'], message)
+    manifest = fixed_recharge_json(read(previous / 'release-manifest.json'))
+    require(set(fixed['manifest']) == set(anchor['manifest']) | {'databaseGrants', 'fixedRegistrationPreservedStates',
+        'fixedRechargeRelease', 'fixedRechargePreservedStates'}
+        and {key: manifest.get(key) for key in fixed['manifest']} == fixed['manifest']
+        and manifest['previousCommit'] == RECHARGE_MAIN80_CURRENT and manifest['servicesUpdated'] == ['auto-recharge']
+        and manifest['migrationApplied'] is False and manifest['newMigrations'] == []
+        and manifest['databaseGrants'] == {'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}, message)
+    pro_raw = registration_observation_pro_profile(previous)
+    profile = parse_fixed_recharge_scope(pro_raw)
+    before = Path(manifest['previousRelease'])
+    require(str(before) == anchor['current'] and before.resolve() == before and before.parent == BASE / 'releases', message)
+    frozen_files(before, anchor['fileSha256'])
+    old = fixed_recharge_json(read(before / 'release-manifest.json'))
+    require({key: old.get(key) for key in anchor['manifest']} == anchor['manifest']
+        and old['commit'] == RECHARGE_MAIN80_CURRENT and manifest['fixedRegistrationRelease'] == old['fixedRegistrationRelease']
+        and set(manifest['images']) == set(old['images'])
+        and all(manifest['images'][name] == old['images'][name] for name in old['images'] if name != 'auto-recharge')
+        and manifest['fixedRechargePreservedStates'] == {'before': main80_recharge_preserved_states(fixed['liveServices']),
+            'after': main80_recharge_preserved_states(fixed['liveServices'])}
+        and main80_recharge_preserved_states(fixed['liveServices']) == main80_recharge_preserved_states(anchor['liveServices']), message)
+    origin = main80_recharge_origin(before, old)
+    for path in (ORDER_ARCHIVE_SEAL, POST_CLEANUP_RECEIPT): read(path)
+    for directory in (origin, before, previous):
+        for name in ('order-archive-seal.reader.json', 'order-archive-cleanup.reader.json'):
+            read(directory / name, modes=(0o400,))
+        main80_recharge_reader_evidence(directory)
+    policy, seal = main80_recharge_seal(origin, profile)
+    frozen = fixed_recharge_json(read(origin / 'before-audit.json'))['gate']
+    gates, facts = {}, []
+    for stage in ('before', 'after'):
+        main80_recharge_report(fixed_recharge_json(read(origin / (stage + '-audit.json'))), profile, policy, seal, stage)
+        for directory, baseline, saved in ((before, anchor, old), (previous, fixed, manifest)):
+            report = fixed_recharge_json(read(directory / (stage + '-audit.json')))
+            summary = require_registration_zero_report(report, stage, frozen)
+            measured = {'checkCount': report['checkCount'], 'violationCount': report['violationCount'],
+                'checksSha256': historical_fingerprint(report['checks']), 'gateSha256': historical_fingerprint(report['gate']),
+                'identitySha256': historical_fingerprint(report['identity'])}
+            require(summary == saved['dataAudit' + stage.title()] and measured == baseline['audits'][stage], message)
+            facts.append((report['checks'], report['identity']))
+            if directory == previous: gates[stage] = summary
+    require(all(value == facts[0] for value in facts), message)
+    context = main80_recharge_context(argparse.Namespace(commit=contract['current'], source_tree=manifest['sourceTree'],
+        expected_current=RECHARGE_MAIN80_CURRENT), profile, gates['before'], gates['after'])
+    require(manifest['fixedRechargeRelease'] == context and read(previous / '.env.aws.production') == read(before / '.env.aws.production')
+        and read(previous / 'docker-compose.aws-mysql.yml', modes=(0o644, 0o664)) == read(before / 'docker-compose.aws-mysql.yml', modes=(0o644, 0o664)), message)
+    override = fixed_recharge_json(read(previous / 'compose.release.json', modes=(0o400, 0o600, 0o644)))
+    require(historical_fingerprint(override) == fixed['overrideCanonicalSha256']
+        and override == {'services': {name: {'image': manifest['images'][name]['reference'], 'pull_policy': 'never'}
+            for name in (*SERVICES, 'migrate')}}, message)
+    worker_profile = registration_profile(fixed_recharge_json(read(before / REGISTRATION_EMAIL_REQUEST_FILE,
+        modes=(0o644, 0o664), limit=128 * 1024)), profile_id=REGISTRATION_EMAIL_REQUEST_ID)
+    require(fixed['actualWorkerSourceSha256'] == {name: worker_profile['workerProjection'][REGISTRATION_WORKER_PREFIX + name]['sha256']
+        for name in ('browser_password_login.py', 'registration_browser.py', 'registration_builtin.py', 'registration_job.py')}, message)
+    for name, digest in fixed['actualWorkerSourceSha256'].items():
+        require(hashlib.sha256(read(previous / (REGISTRATION_WORKER_PREFIX + name), modes=(0o644, 0o664))).hexdigest() == digest, message)
+    archive = fixed_recharge_runtime_archive(profile)
+    native = verify_main80_recharge_finance_source(before, archive)
+    public = verify_main80_recharge_candidate_source(previous, archive, profile)
+    pro_image = manifest['images']['auto-recharge']
+    require(fixed['liveServices']['auto-recharge']['image'] == pro_image['digest']
+        and fixed['liveServices']['auto-recharge']['reference'] == pro_image['reference']
+        and pro_image['sourceCommit'] == contract['current'] and manifest['imageBuildRun'] == manifest['deploymentRun']
+        and re.fullmatch(r'github-actions-[1-9][0-9]*-[1-9][0-9]*', manifest['deploymentRun'])
+        and pro_image['reference'].endswith(':' + contract['current'] + '-' + manifest['deploymentRun'].removeprefix('github-actions-') + '-auto-recharge'), message)
+    metadata = json.loads(run('docker', 'image', 'inspect', pro_image['digest']))
+    require(isinstance(metadata, list) and len(metadata) == 1 and metadata[0]['Id'] == pro_image['digest']
+        and metadata[0]['Architecture'] == 'amd64'
+        and metadata[0]['Config']['Labels'].get('org.opencontainers.image.revision') == contract['current'], message)
+    if pointer == previous:
+        require(live == fixed['liveServices'] and (states is None or states == live), message)
+        require(check_fixed_recharge_deployment(contract['current'], manifest['sourceTree'], historical_fingerprint(profile),
+            profile_id=RECHARGE_MAIN80_ID) == fixed['readback'], message)
+    else:
+        require(states is None, message)
+        current_manifest = fixed_recharge_json(read(pointer / 'release-manifest.json', modes=(0o600,)))
+        require(current_manifest.get('previousRelease') == str(previous) and current_manifest.get('previousCommit') == contract['current']
+            and current_manifest.get('servicesUpdated') == ['auto-registration']
+            and current_manifest.get('fixedRegistrationRelease', {}).get('id') == REGISTRATION_EMAIL_OBSERVATION_ID
+            and current_manifest['fixedRegistrationRelease'].get('registrationSourceCommit') == REGISTRATION_EMAIL_OBSERVATION_SOURCE
+            and current_manifest['fixedRegistrationRelease'].get('workerProjectionSha256') == REGISTRATION_EMAIL_OBSERVATION_PROJECTION_SHA256, message)
+    require((BASE / 'current').resolve() == pointer and {name: service_state(pointer, name,
+        include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES} == live, message)
+    require(all(fixed_recharge_bytes(path, **options) == raw for path, (raw, options) in observed.items()), message)
+    require_main80_recharge_public_snapshot(native); require_main80_recharge_public_snapshot(public)
+    registration_observation_pro_profile(previous)
+    return manifest, origin
+
+
 def registration_runtime_baseline(previous, states=None, *, profile_id=REGISTRATION_SCOPE_ID):
     contract = registration_contract(profile_id)
+    if profile_id == REGISTRATION_EMAIL_OBSERVATION_ID and REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE is not None:
+        return registration_observation_pro_baseline(previous, states)
     if contract['runtimeBaseline'] is None:
         return registration_baseline(previous, states)
     fixed = contract['runtimeBaseline']
@@ -4709,6 +5189,8 @@ def registration_release(args):
                     require(hashlib.sha256(candidate[name][0]).hexdigest() == digest,
                         'Fixed registration original profile changed')
                     runtime[name] = candidate[name]
+            if email_observation and REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE is not None:
+                runtime[RECHARGE_MAIN80_FILE] = (registration_observation_pro_profile(previous), '100644')
             write_registration_files(release, runtime)
             # Only the running baseline's Compose and secrets determine the new service configuration.
             for name in ('docker-compose.aws-mysql.yml', '.env.aws.production'):
@@ -4854,6 +5336,8 @@ def check_fixed_registration_deployment(expected_current, source_tree, profile_r
     profile_raw = fixed_recharge_bytes(current / contract['file'], modes=(0o644, 0o664), limit=128 * 1024)
     require(hashlib.sha256(profile_raw).hexdigest() == profile_raw_sha256, 'Fixed registration profile changed')
     profile = registration_profile(fixed_recharge_json(profile_raw), profile_id=profile_id)
+    if profile_id == REGISTRATION_EMAIL_OBSERVATION_ID and REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE is not None:
+        registration_observation_pro_profile(current)
     reviewed = {name: (fixed_recharge_bytes(current / name, modes=(0o644, 0o664, 0o755, 0o775)), '100644')
                 for name in profile['registrationSourceSha256'].keys() | profile['controlSourceSha256'].keys()}
     registration_source(profile, reviewed)
@@ -4920,6 +5404,8 @@ def check_fixed_registration_deployment(expected_current, source_tree, profile_r
     require((BASE / 'current').resolve() == current, 'Fixed registration current changed')
     require({name: service_state(current, name, include_container_id=True, include_environment_hash=True)
              for name in ALL_SERVICES} == live, 'Fixed registration current service changed')
+    if profile_id == REGISTRATION_EMAIL_OBSERVATION_ID and REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE is not None:
+        registration_observation_pro_profile(current)
     return validate_fixed_registration_readback_projection(receipt, expected_current, source_tree, profile_raw_sha256, profile_id=profile_id)
 
 
@@ -5011,6 +5497,7 @@ def main():
     baseline_archive = None
     finance_archive = None
     finance_source = None
+    auditor_source = None
     if recharge_requested:
         require(args.expected_current == recharge_binding['current'], 'Fixed recharge baseline changed')
         require_diagnostics_release_arguments(args, image_commit, image_run, image_attempt)
@@ -5081,6 +5568,10 @@ def main():
     step = 'source'
     changed = []
     try:
+        if args.recharge_pro_main80:
+            step = 'finance-source'
+            auditor_source = prepare_registration_finance_source(args, registration_download(REGISTRATION_CURRENT))
+            step = 'source'
         if args.recharge_pro_menu_7f:
             step = 'finance-source'
             finance_source = prepare_fixed_recharge_finance_source(args, finance_archive)
@@ -5224,7 +5715,8 @@ def main():
         step = 'audit-before'
         before_audit = (None if args.historical_finance_order_archive else
                        main80_recharge_audit(previous, release / 'before-audit.json',
-                           stage='before', source=finance_source, profile=recharge_profile, control_source=previous)
+                           stage='before', source=finance_source, auditor_source=auditor_source,
+                           profile=recharge_profile, control_source=previous)
                        if args.recharge_pro_main80 else fixed_recharge_audit(previous, release / 'before-audit.json',
                              stage='before', source=finance_source, origin=finance_origin)
                        if recharge_requested else audit(previous, release / 'before-audit.json',
@@ -5329,7 +5821,7 @@ def main():
 
         step = 'audit-after'
         after_audit = (main80_recharge_audit(release, release / 'after-audit.json',
-                            stage='after', source=finance_source, profile=recharge_profile,
+                            stage='after', source=finance_source, auditor_source=auditor_source, profile=recharge_profile,
                             before_receipt=release / 'before-audit.json', control_source=previous)
                       if args.recharge_pro_main80 else fixed_recharge_audit(release, release / 'after-audit.json',
                             stage='after', source=finance_source, origin=finance_origin,

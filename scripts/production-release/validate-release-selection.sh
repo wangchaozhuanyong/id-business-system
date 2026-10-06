@@ -36,7 +36,7 @@ validate_release_selection() {
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;
     registration-worker-89-20261006)
-      [[ "${EXPECTED_CURRENT:-}" == b91b626a71ed2c7c2473d080551b3b10b693b0cb ]] || return 1
+      [[ "${EXPECTED_CURRENT:-}" == d2e22e623d0e19851c79ffe43396f5f97a99b8d3 ]] || return 1
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;

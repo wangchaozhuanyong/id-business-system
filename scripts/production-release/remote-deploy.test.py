@@ -7010,14 +7010,16 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             f=self.fixture(Path(name));stack,_=self.patches(f)
             new=f.base/'new';new.mkdir();receipt=new/'receipt.json'
+            auditor_source=f.base/'.staging'/'clean-finance'
             def native(directory,receipt,**kwargs):
                 report=copy.deepcopy(f.reports[kwargs['stage']]);receipt.write_text(json.dumps(report));receipt.chmod(0o600)
                 return {'checkCount':49,'violationCount':0,'registrationFinanceGate':report['gate']}
             with stack,patch.object(deployment,'registration_finance_audit',side_effect=native) as original:
-                result=deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,profile=self.profile,control_source=f.previous)
+                result=deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,
+                    auditor_source=auditor_source,profile=self.profile,control_source=f.previous)
                 self.assertEqual(result['checkCount'],49);self.assertEqual(result['violationCount'],0)
                 kwargs=original.call_args.kwargs
-                self.assertEqual(kwargs['source'],f.origin);self.assertEqual(kwargs['control_source'],f.previous)
+                self.assertEqual(kwargs['source'],auditor_source);self.assertEqual(kwargs['control_source'],f.previous)
                 self.assertEqual(kwargs['profile_id'],deployment.REGISTRATION_EMAIL_REQUEST_ID)
                 for mutate in (lambda value:value['checks'][0].update(count=1),lambda value:value['identity'].update(currentUser='unreviewed@synthetic')):
                     bad=copy.deepcopy(f.reports['before']);mutate(bad)
@@ -7026,7 +7028,65 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                         return {'checkCount':49,'violationCount':0,'registrationFinanceGate':bad['gate']}
                     original.side_effect=drift
                     with self.assertRaises(RuntimeError):
-                        deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,profile=self.profile,control_source=f.previous)
+                        deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,
+                            auditor_source=auditor_source,profile=self.profile,control_source=f.previous)
+
+    def test_main80_audit_requires_explicit_clean_auditor_source_before_native_audit(self):
+        with patch.object(deployment,'registration_finance_audit') as audited:
+            with self.assertRaises(TypeError):
+                deployment.main80_recharge_audit(Path('runtime'),Path('receipt.json'),stage='before',
+                    source=Path('historical-origin'),profile=self.profile)
+            audited.assert_not_called()
+
+    def test_main80_real_complete_finance_validator_rejects_runtime_origin_and_routes_both_stages_to_clean_source(self):
+        project=Path(__file__).resolve().parents[2]
+        raw=subprocess.check_output(['git','archive','--prefix=id-business-system-'+deployment.REGISTRATION_CURRENT+'/',
+            deployment.REGISTRATION_CURRENT],cwd=project)
+        files=deployment.registration_archive(raw,deployment.REGISTRATION_CURRENT)
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));stack,_=self.patches(f)
+            # A real original source tree plus release artifacts reproduces the production failure.
+            running_origin=f.base/'runtime-finance-origin';deployment.write_registration_files(running_origin,files)
+            (running_origin/'release-manifest.json').write_text('{"syntheticRuntime":true}');(running_origin/'release-manifest.json').chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError,'complete source projection changed'):
+                deployment.require_registration_finance_source(running_origin)
+            args=SimpleNamespace(commit=self.commit,run_id='123',run_attempt='1')
+            finance={**deployment.REGISTRATION_FINANCE,**{key:self.profile['financeValidator'][key]
+                for key in ('releaseSealSha256','preparedImagesSha256','preparationRunId','preparationRunAttempt')}}
+            native=deployment.registration_finance_audit
+            with stack,patch.object(deployment,'REGISTRATION_FINANCE',finance), \
+                    patch.object(deployment,'REGISTRATION_BASELINE',{**deployment.REGISTRATION_BASELINE,
+                        'sourceArchiveSha256':deployment.hashlib.sha256(raw).hexdigest()}), \
+                    patch.object(deployment,'require_registration_finance_source',wraps=deployment.require_registration_finance_source) as verified, \
+                    patch.object(deployment,'run',return_value=json.dumps([{'Id':self.seal['images']['api']}])), \
+                    patch.object(deployment,'maintenance_container_audit_url',return_value='synthetic-readonly-url'), \
+                    patch.object(deployment,'historical_audit_reader',return_value={'uid':1000,'gid':1000,'user':'node'}), \
+                    patch.object(deployment,'prepare_post_cleanup_reader_copy',side_effect=lambda *args:f.previous/args[3]), \
+                    patch.object(deployment,'prepare_historical_before_receipt'), \
+                    patch.object(deployment,'compose',side_effect=lambda *args,**kwargs:json.dumps(f.reports[
+                        'after' if '--stage=after' in args else 'before'])) as composed, \
+                    patch.object(deployment,'registration_finance_audit',wraps=native) as audited:
+                clean=deployment.prepare_registration_finance_source(args,raw)
+                self.assertEqual(clean,f.base/'.staging'/('oidc-'+self.commit)/'fixed-80-finance-123-1')
+                self.assertNotEqual(clean,f.origin)
+                receipts={stage:f.base/(stage+'-fresh.json') for stage in ('before','after')}
+                for stage in ('before','after'):
+                    result=deployment.main80_recharge_audit(f.previous,receipts[stage],stage=stage,source=f.origin,
+                        auditor_source=clean,profile=self.profile,control_source=f.previous,
+                        before_receipt=receipts['before'] if stage=='after' else None)
+                    self.assertEqual(result['checkCount'],49);self.assertEqual(result['violationCount'],0)
+                self.assertEqual([call.kwargs['stage'] for call in audited.call_args_list],['before','after'])
+                self.assertTrue(all(call.kwargs['source']==clean for call in audited.call_args_list))
+                self.assertEqual(verified.call_count,3)
+                self.assertTrue(all(call.args==(clean,) for call in verified.call_args_list))
+                self.assertTrue(all(str(clean/'scripts')+':/app/scripts:ro' in call.args for call in composed.call_args_list))
+                self.assertTrue(all(str(clean/'deploy/aws')+':/release-policy:ro' in call.args for call in composed.call_args_list))
+                composed.reset_mock()
+                with self.assertRaisesRegex(RuntimeError,'complete source projection changed'):
+                    deployment.main80_recharge_audit(f.previous,f.base/'rejected.json',stage='before',source=f.origin,
+                        auditor_source=running_origin,profile=self.profile,control_source=f.previous)
+                composed.assert_not_called()
+                self.assertFalse((f.base/'rejected.json').exists())
 
     def publication(self, f, *, busy=None, failed_after=False, preserved_drift=False,
             readback_mutation=None, readiness_mutation=None):
@@ -7034,6 +7094,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             deployment.RECHARGE_MAIN80_FILE:(json.dumps(self.profile).encode(),0o644)}
         archive = self.source_archive(self.commit,candidate)
         live=copy.deepcopy(f.states);output=io.StringIO();error=None;result=None
+        auditor_source=f.base/'.staging'/('oidc-'+self.commit)/'fixed-80-finance-123-1'
         def state(directory,service,**kwargs):return copy.deepcopy(live[service])
         def compose(directory,*args,**kwargs):
             if args[:4]==('exec','-T','api','node'):
@@ -7089,6 +7150,8 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 drive=stack.enter_context(patch.object(deployment,'configure_google_drive_sync'))
                 registration_dispatch=stack.enter_context(patch.object(deployment,'registration_release',
                     side_effect=AssertionError('Main80 must never enter registration publication')))
+                finance_download=stack.enter_context(patch.object(deployment,'registration_download',return_value=b'synthetic-pinned-finance-archive'))
+                finance_prepare=stack.enter_context(patch.object(deployment,'prepare_registration_finance_source',return_value=auditor_source))
                 audited=stack.enter_context(patch.object(deployment,'registration_finance_audit',side_effect=native))
                 rollback=stack.enter_context(patch.object(deployment,'rollback_service'))
                 try:result=deployment.main()
@@ -7102,7 +7165,8 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                     proof=deployment.check_main80_recharge_deployment(self.commit,self.tree,deployment.historical_fingerprint(self.profile))
                 return SimpleNamespace(result=result,error=error,output=output.getvalue(),current=current,manifest=manifest,
                     compose=composed.call_args_list,run=commands.call_args_list,recharge=recharge.call_count,registration=registration.call_count,
-                    grants=grants.call_count,drive=drive.call_count,audit=audited.call_args_list,rollback=rollback.call_args_list,proof=proof,live=live)
+                    grants=grants.call_count,drive=drive.call_count,audit=audited.call_args_list,rollback=rollback.call_args_list,proof=proof,live=live,
+                    auditor_source=auditor_source,finance_download=finance_download.call_args_list,finance_prepare=finance_prepare.call_args_list)
         finally:deployment.os.umask(old_umask)
 
     def test_main80_only_fresh_worker_publication_and_independent_readback_preserve_native_services(self):
@@ -7118,6 +7182,10 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             self.assertEqual(len([call for call in result.run if call.args[:2]==('docker','pull')]),1)
             self.assertEqual([call.kwargs['stage'] for call in result.audit],['before','after'])
             self.assertTrue(all(call.kwargs['profile_id']==deployment.REGISTRATION_EMAIL_REQUEST_ID for call in result.audit))
+            self.assertEqual([call.args for call in result.finance_download],[(deployment.REGISTRATION_CURRENT,)])
+            self.assertEqual(len(result.finance_prepare),1)
+            self.assertTrue(all(call.kwargs['source']==result.auditor_source and call.kwargs['source']!=f.origin
+                for call in result.audit))
             self.assertEqual(result.proof['checkCount'],49);self.assertEqual(result.proof['violationCount'],0)
             self.assertEqual(len(result.proof),21);self.assertNotIn('SYNTHETIC_PRIVATE_LOGIN',result.output)
             for service in f.manifest['images']:
@@ -7695,7 +7763,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                     'a' * 40, 'b' * 40, 'c' * 64)
 
     def publication(self, *, retained=False, retained_rollback=False, fail_after=False, preserved_drift=None,
-                    readback=False, readback_changed=None, continuation=False, late_retained=False, initial=False, email=False, callback=False, email_request=False, email_observation=False):
+                    readback=False, readback_changed=None, continuation=False, late_retained=False, initial=False, email=False, callback=False, email_request=False, email_observation=False, pro_profile=None):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             profile_id = (deployment.REGISTRATION_EMAIL_OBSERVATION_ID if email_observation else deployment.REGISTRATION_EMAIL_REQUEST_ID if email_request else deployment.REGISTRATION_CALLBACK_ID if callback else deployment.REGISTRATION_EMAIL_ID if email else deployment.REGISTRATION_INITIAL_ID if initial else deployment.REGISTRATION_CONTINUATION_ID
                 if continuation else deployment.REGISTRATION_SCOPE_ID)
@@ -7713,6 +7781,10 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
             (previous / 'docker-compose.aws-mysql.yml').write_bytes(b'unchanged-running-compose')
             (previous / '.env.aws.production').write_bytes(b'SYNTHETIC_PRIVATE_ENV=unchanged\n')
             (previous / '.env.aws.production').chmod(0o600)
+            if email_observation and deployment.REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE is not None:
+                target = previous / deployment.RECHARGE_MAIN80_FILE; target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(pro_profile if pro_profile is not None else (self.root / deployment.RECHARGE_MAIN80_FILE).read_bytes())
+                target.chmod(0o644)
             states = {service: {'image': old_images[service]['digest'] if service in old_images else 'infra-' + service,
                 'reference': old_images[service]['reference'] if service in old_images else 'infra-' + service,
                 'status': 'running', 'health': None if service == 'caddy' else 'healthy',
@@ -9016,11 +9088,20 @@ class FixedRegistrationEmailObservationTests(unittest.TestCase):
         else:
             self.assertEqual(pending['registrationSourceCommit'], 'UNFROZEN')
             self.assertEqual(pending['workerProjectionSha256'], 'UNFROZEN')
+        anchor = deployment.REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE
+        self.assertEqual(len(anchor['fileSha256']), 12)
+        self.assertEqual(len(anchor['liveServices']), 7)
+        self.assertEqual(len(anchor['readback']), 24)
+        self.assertEqual(anchor['manifest']['deploymentRun'], 'github-actions-37481121792-2')
         baseline = deployment.REGISTRATION_EMAIL_OBSERVATION_BASELINE
-        self.assertEqual(len(baseline['fileSha256']), 12)
-        self.assertEqual(len(baseline['liveServices']), 7)
-        self.assertEqual(len(baseline['readback']), 24)
-        self.assertEqual(baseline['manifest']['deploymentRun'], 'github-actions-37481121792-2')
+        if deployment.REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE is None:
+            self.assertEqual(baseline, anchor)
+        else:
+            pro = deployment.REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE
+            self.assertEqual(baseline, {key: pro[key] for key in anchor})
+            self.assertEqual(len(baseline['fileSha256']), 13)
+            self.assertEqual(len(baseline['readback']), 21)
+            self.assertEqual(pro['status'], 'VERIFIED_PRO_AFTER_88_RUNTIME_BASELINE')
         for path in (deployment.REGISTRATION_SCOPE_FILE, deployment.REGISTRATION_CONTINUATION_FILE,
                 deployment.REGISTRATION_INITIAL_FILE, deployment.REGISTRATION_EMAIL_FILE,
                 deployment.REGISTRATION_CALLBACK_FILE, deployment.REGISTRATION_EMAIL_REQUEST_FILE):
@@ -9112,7 +9193,10 @@ class FixedRegistrationEmailObservationTests(unittest.TestCase):
     def baseline_fixture(self):
         chain = FixedRegistrationEmailRequestTests(); chain.root = self.root; chain.runtime = self.runtime
         chain.legacy = self.legacy
-        with chain.baseline_fixture() as prior:
+        with patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_CURRENT', deployment.RECHARGE_MAIN80_CURRENT), \
+                patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE', None), \
+                patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_BASELINE', deployment.REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE), \
+                chain.baseline_fixture() as prior:
             previous = prior.previous.parent / 'fixed-b91'; previous.mkdir()
             fixed = copy.deepcopy(deployment.REGISTRATION_EMAIL_OBSERVATION_BASELINE)
             fixed['current'] = str(previous); fixed['manifest']['previousRelease'] = str(prior.previous)
@@ -9238,6 +9322,203 @@ class FixedRegistrationEmailObservationTests(unittest.TestCase):
             with self.subTest(change=change):
                 value = self.legacy.publication(email_observation=True, readback=True, readback_changed=change)
                 self.assertEqual(value.verified, 'REJECTED')
+
+
+class Registration89ProBridgeTests(unittest.TestCase):
+    """A real synthetic Pro publication, explicit history, and RAM-only runtime probes."""
+    @contextmanager
+    def fixture(self, switched=False):
+        case = FixedRechargeMain80NativeTests(); case.setUp(); self.addCleanup(case.doCleanups)
+        with tempfile.TemporaryDirectory(dir=case.runtime) as name:
+            f = case.fixture(Path(name))
+            project = Path(__file__).resolve().parents[2]
+            for filename in ('browser_password_login.py', 'registration_builtin.py'):
+                source = deployment.REGISTRATION_WORKER_PREFIX + filename
+                raw = subprocess.check_output(['git', 'show', deployment.RECHARGE_MAIN80_CURRENT + ':' + source], cwd=project)
+                f.frozen[source] = (raw, 0o644)
+                path = f.previous / source; path.write_bytes(raw); path.chmod(0o644)
+            f.archive = case.source_archive(deployment.RECHARGE_MAIN80_CURRENT, f.frozen)
+            f.manifest['sourceArchiveSha256'] = deployment.hashlib.sha256(f.archive).hexdigest()
+            path = f.previous / 'release-manifest.json'; path.write_text(json.dumps(f.manifest)); path.chmod(0o600)
+            case.profile['baselineRelease']['manifestSha256'] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+            result = case.publication(f)
+            self.assertEqual(result.result, 0, result.error or result.output)
+            keys = deployment.REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE.keys()
+            manifest_keys = deployment.REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE['manifest'].keys()
+            def audits(directory):
+                out = {}
+                for stage in ('before', 'after'):
+                    report = json.loads((directory / (stage + '-audit.json')).read_bytes())
+                    out[stage] = {'checkCount': report['checkCount'], 'violationCount': report['violationCount'],
+                        **{key + 'Sha256': deployment.historical_fingerprint(report[key]) for key in ('checks', 'gate', 'identity')}}
+                return out
+            def baseline(directory, manifest, live, extra=False):
+                names = set(deployment.REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE['fileSha256'])
+                if extra: names.add(deployment.RECHARGE_MAIN80_FILE)
+                return {'current': str(directory), 'manifest': {key: manifest[key] for key in manifest_keys},
+                    'fileSha256': {key: deployment.hashlib.sha256((directory / key).read_bytes()).hexdigest() for key in names},
+                    'overrideCanonicalSha256': deployment.historical_fingerprint(json.loads((directory / 'compose.release.json').read_bytes())),
+                    'audits': audits(directory), 'liveServices': copy.deepcopy(live),
+                    'readback': deployment.registration_readback_receipt(manifest['commit'], manifest['sourceTree'],
+                        manifest['fixedRegistrationRelease']['profileRawSha256'], profile_id=deployment.REGISTRATION_EMAIL_REQUEST_ID)}
+            anchor = baseline(f.previous, f.manifest, f.states)
+            fixed = baseline(result.current, result.manifest, result.live, extra=True)
+            fixed['manifest'].update({key: result.manifest[key] for key in ('databaseGrants', 'fixedRegistrationPreservedStates',
+                'fixedRechargeRelease', 'fixedRechargePreservedStates')})
+            fixed.update(status='VERIFIED_PRO_AFTER_88_RUNTIME_BASELINE', readback=result.proof,
+                controllerSha256=deployment.hashlib.sha256((result.current / 'scripts/production-release/remote-deploy.py').read_bytes()).hexdigest(),
+                profileSha256=deployment.hashlib.sha256((result.current / deployment.RECHARGE_MAIN80_FILE).read_bytes()).hexdigest(),
+                actualWorkerSourceSha256={key: deployment.hashlib.sha256((result.current / (deployment.REGISTRATION_WORKER_PREFIX + key)).read_bytes()).hexdigest()
+                    for key in ('browser_password_login.py', 'registration_browser.py', 'registration_builtin.py', 'registration_job.py')},
+                original80SealMatched=True, databaseWrites=0, windowRestarted=False)
+            live = copy.deepcopy(result.live); pointer = result.current
+            if switched:
+                pointer = f.base / 'releases' / ('20261006T000099Z-' + 'c' * 12); pointer.mkdir()
+                (pointer / 'release-manifest.json').write_text(json.dumps({'commit': 'c' * 40,
+                    'previousCommit': result.manifest['commit'], 'previousRelease': str(result.current),
+                    'servicesUpdated': ['auto-registration'], 'fixedRegistrationRelease': {'id': deployment.REGISTRATION_EMAIL_OBSERVATION_ID,
+                        'registrationSourceCommit': deployment.REGISTRATION_EMAIL_OBSERVATION_SOURCE,
+                        'workerProjectionSha256': deployment.REGISTRATION_EMAIL_OBSERVATION_PROJECTION_SHA256}}))
+                (pointer / 'release-manifest.json').chmod(0o600)
+                target = pointer / deployment.RECHARGE_MAIN80_FILE; target.parent.mkdir(parents=True)
+                target.write_bytes((result.current / deployment.RECHARGE_MAIN80_FILE).read_bytes()); target.chmod(0o644)
+                live['auto-registration'].update(image='sha256:' + 'e' * 64, containerId='e' * 64, startedAtSha256='e' * 64)
+                (f.base / 'current').unlink(); (f.base / 'current').symlink_to(pointer)
+            stack, _ = case.patches(f)
+            with stack:
+                stack.enter_context(patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_CURRENT', result.manifest['commit']))
+                stack.enter_context(patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_B91_BASELINE', anchor))
+                stack.enter_context(patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE', fixed))
+                stack.enter_context(patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_PROFILE_MODE', 0o644))
+                stack.enter_context(patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_BASELINE', {key: fixed[key] for key in keys}))
+                stack.enter_context(patch.object(deployment, 'service_state', side_effect=lambda *_args, **_kwargs: copy.deepcopy(live[_args[1]])))
+                stack.enter_context(patch.object(deployment, 'fixed_recharge_runtime_archive', return_value=f.archive))
+                stack.enter_context(patch.object(deployment, 'run', return_value=json.dumps([{'Id': live['auto-recharge']['image'],
+                    'Architecture': 'amd64', 'Config': {'Labels': {'org.opencontainers.image.revision': result.manifest['commit']}}}])))
+                yield SimpleNamespace(case=case, before=f, result=result, anchor=anchor, fixed=fixed, live=live, pointer=pointer)
+
+    def test_native_pro_preflight_reuses_complete21_verifier_and_exact_seven_runtime_states(self):
+        with self.fixture() as f, patch.object(deployment, 'check_fixed_recharge_deployment', wraps=deployment.check_fixed_recharge_deployment) as proof:
+            manifest, origin = deployment.registration_observation_pro_baseline(f.result.current, f.live)
+            self.assertEqual(manifest, f.result.manifest); self.assertEqual(origin, f.before.origin)
+            proof.assert_called_once(); self.assertEqual(proof.call_args.kwargs, {'profile_id': deployment.RECHARGE_MAIN80_ID})
+
+    def test_native_explicit_pro_history_survives89_switch_without_current_rebinding(self):
+        with self.fixture(switched=True) as f, patch.object(deployment, 'check_fixed_recharge_deployment') as live_pro:
+            manifest, origin = deployment.registration_observation_pro_baseline(f.result.current)
+            self.assertEqual(manifest, f.result.manifest); self.assertEqual(origin, f.before.origin)
+            live_pro.assert_not_called(); self.assertEqual((deployment.BASE / 'current').resolve(), f.pointer)
+            self.assertEqual(deployment.registration_observation_pro_profile(f.pointer),
+                (f.result.current / deployment.RECHARGE_MAIN80_FILE).read_bytes())
+
+    def test_native89_publication_carries_exact_pro_profile_and_keeps_closed24_readback(self):
+        FixedRegistrationEmailObservationTests.setUpClass()
+        with self.fixture() as f:
+            raw = (f.result.current / deployment.RECHARGE_MAIN80_FILE).read_bytes()
+            fixed = copy.deepcopy(f.fixed)
+        with patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE', fixed), \
+                patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_PROFILE_MODE', 0o644):
+            value = FixedRegistrationEmailObservationTests.legacy.publication(email_observation=True, readback=True, pro_profile=raw)
+            self.assertEqual(value.result, 0, value.output)
+            self.assertEqual(value.runtime_files[deployment.RECHARGE_MAIN80_FILE], raw)
+            self.assertEqual(len(value.verified), 24)
+            self.assertEqual(value.verified['servicesUpdated'], ['auto-registration'])
+            self.assertEqual(value.manifest['fixedRegistrationPreservedStates']['before'], value.manifest['fixedRegistrationPreservedStates']['after'])
+
+    def test_pro_profile_exact_mode_and_current89_manifest_tail_change_reject(self):
+        with self.fixture(switched=True) as f:
+            for directory in (f.result.current, f.pointer):
+                path = directory / deployment.RECHARGE_MAIN80_FILE; path.chmod(0o664)
+                with self.subTest(directory=directory), self.assertRaises(RuntimeError): deployment.registration_observation_pro_profile(directory)
+                path.chmod(0o644)
+            original = deployment.fixed_recharge_bytes; reads = [0]
+            def changed(path, **options):
+                if path == f.pointer / 'release-manifest.json':
+                    reads[0] += 1
+                    if reads[0] == 2: path.write_bytes(path.read_bytes() + b' ')
+                return original(path, **options)
+            with patch.object(deployment, 'fixed_recharge_bytes', side_effect=changed), self.assertRaises(RuntimeError):
+                deployment.registration_observation_pro_baseline(f.result.current)
+            self.assertEqual(reads[0], 2)
+
+    def test_historical_pro_mode664_is_exactly_pinned_and_new89_copy_requires644(self):
+        with self.fixture(switched=True) as f, patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_PROFILE_MODE', 0o664):
+            previous = f.result.current / deployment.RECHARGE_MAIN80_FILE
+            copied = f.pointer / deployment.RECHARGE_MAIN80_FILE
+            raw = previous.read_bytes(); previous.chmod(0o664)
+            self.assertEqual(deployment.registration_observation_pro_profile(f.result.current), raw)
+            self.assertEqual(deployment.registration_observation_pro_profile(f.pointer), raw)
+            self.assertEqual(deployment.registration_observation_pro_baseline(f.result.current)[0], f.result.manifest)
+            for mode in (0o644, 0o600, 0o640, 0o666, 0o755):
+                previous.chmod(mode)
+                with self.subTest(historicalMode=mode), self.assertRaises(RuntimeError):
+                    deployment.registration_observation_pro_profile(f.result.current)
+            previous.chmod(0o664)
+            for mode in (0o664, 0o600, 0o640, 0o666, 0o755):
+                copied.chmod(mode)
+                with self.subTest(carriedMode=mode), self.assertRaises(RuntimeError):
+                    deployment.registration_observation_pro_profile(f.pointer)
+            copied.chmod(0o644)
+            for mode in (None, True, '664', 0o600, 0o666):
+                with patch.object(deployment, 'REGISTRATION_EMAIL_OBSERVATION_PRO_PROFILE_MODE', mode):
+                    with self.subTest(unfrozenOrInvalidMode=mode), self.assertRaises(RuntimeError):
+                        deployment.registration_observation_pro_profile(f.result.current)
+                    with self.subTest(unfrozenOrInvalidMode=mode, carried=True), self.assertRaises(RuntimeError):
+                        deployment.registration_observation_pro_profile(f.pointer)
+
+    def test_pro_private_profiles_controller_sources_and_readers_drift_reject(self):
+        with self.fixture(switched=True) as f:
+            names = list(f.fixed['fileSha256']) + ['scripts/production-release/remote-deploy.py',
+                'order-archive-seal.reader.json', 'order-archive-cleanup.reader.json',
+                deployment.REGISTRATION_WORKER_PREFIX + 'registration_browser.py']
+            for name in names:
+                path = f.result.current / name; raw = path.read_bytes(); mode = path.stat().st_mode & 0o777
+                path.chmod(0o600); path.write_bytes(raw + b' '); path.chmod(mode)
+                with self.subTest(path=name), self.assertRaises(RuntimeError): deployment.registration_observation_pro_baseline(f.result.current)
+                path.chmod(0o600); path.write_bytes(raw); path.chmod(mode)
+            path = f.pointer / deployment.RECHARGE_MAIN80_FILE; path.write_bytes(path.read_bytes() + b' ')
+            with self.assertRaises(RuntimeError): deployment.registration_observation_pro_profile(f.pointer)
+
+    def test_every_seven_prefight_or_six_historical_environment_or_container_drift_rejects(self):
+        for switched in (False, True):
+            with self.fixture(switched=switched) as f:
+                for name in f.live:
+                    if switched and name == 'auto-registration': continue
+                    for field in ('containerId', 'image', 'reference', 'environmentSha256', 'health'):
+                        old = f.live[name][field]; f.live[name][field] = 'unreviewed'
+                        with self.subTest(switched=switched, name=name, field=field), self.assertRaises(RuntimeError):
+                            deployment.registration_observation_pro_baseline(f.result.current, None if switched else f.fixed['liveServices'])
+                        f.live[name][field] = old
+
+    def test_closed_pro_binding_readback_false_baseline_and_49_fact_drift_reject(self):
+        with self.fixture(switched=True) as f:
+            for field, value in (('current', str(f.before.previous)), ('status', 'VERIFIED'), ('controllerSha256', 'f' * 64),
+                    ('profileSha256', 'f' * 64), ('databaseWrites', False), ('windowRestarted', True)):
+                old = f.fixed[field]; f.fixed[field] = value
+                with self.subTest(field=field), self.assertRaises(RuntimeError): deployment.registration_observation_pro_baseline(f.result.current)
+                f.fixed[field] = old
+            f.fixed['readback']['unavailableCheckCount'] = 1
+            with self.assertRaises(RuntimeError): deployment.registration_observation_pro_baseline(f.result.current)
+            f.fixed['readback']['unavailableCheckCount'] = 0
+            path = f.result.current / 'before-audit.json'; raw = path.read_bytes(); report = json.loads(raw)
+            report['checkCount'] = 48; path.write_text(json.dumps(report))
+            # A falsely coherent raw hash still cannot weaken the native 49 gate.
+            f.fixed['fileSha256']['before-audit.json'] = deployment.hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.assertRaises(RuntimeError): deployment.registration_observation_pro_baseline(f.result.current)
+
+    def test_late_seven_state_current_pointer_or_private_file_change_rejects(self):
+        for kind in ('worker', 'pointer', 'private'):
+            with self.fixture(switched=True) as f:
+                original = deployment.verify_main80_recharge_candidate_source
+                def late(*args, **kwargs):
+                    value = original(*args, **kwargs)
+                    if kind == 'worker': f.live['auto-registration']['containerId'] = 'f' * 64
+                    elif kind == 'pointer': deployment.point_current(f.result.current, 'synthetic-late')
+                    else:
+                        path = f.result.current / '.env.aws.production'; path.write_bytes(path.read_bytes() + b' ')
+                    return value
+                with patch.object(deployment, 'verify_main80_recharge_candidate_source', side_effect=late), self.assertRaises(RuntimeError):
+                    deployment.registration_observation_pro_baseline(f.result.current)
 
 
 if __name__ == '__main__':

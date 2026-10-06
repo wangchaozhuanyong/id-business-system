@@ -477,7 +477,7 @@ class Registration88TransportTests(TransportTests):
 class Registration89TransportTests(TransportTests):
     profile = 'registration-worker-89-20261006'
     output_directory = '.runtime/registration-email-submit-observation-release-20261006/transport'
-    baseline = 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+    baseline = 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3'
     profile_file = 'deploy/aws/' + profile + '.json'
     scope_args = ['--registration-profile', profile]
     release_flag = '--registration-worker-89'

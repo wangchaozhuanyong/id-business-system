@@ -10,7 +10,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "$RELEASE_REPOSITORY" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release$ ]] || exit 1
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-89-20261006 ]]; then
-  test "$EXPECTED_CURRENT" = b91b626a71ed2c7c2473d080551b3b10b693b0cb
+  test "$EXPECTED_CURRENT" = d2e22e623d0e19851c79ffe43396f5f97a99b8d3
   test "${RELEASE_ADMIN_ONLY:-false}" = false
   test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-89-20261006
@@ -163,7 +163,7 @@ elif history_policy == 'registration-worker-88-20261006':
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-88'
 elif history_policy == 'registration-worker-89-20261006':
-    assert previous == 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' and admin_only == 'false'
+    assert previous == 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-89'
