@@ -286,17 +286,19 @@
   },
   "controlSourceSha256": {
     ".github/workflows/production-release.yml": "29bcd186d2cd571e0e308e37afe16c5f776689735092e467100922c9ff7af280",
-    "scripts/ci-recharge-check.mjs": "c34f27597f805b202e6ac5f9473925669f2958560aa67b56dc2c7db34e57c465",
-    "scripts/ci-recharge-release.test.mjs": "cf4cbd62dedb622079c98e4a8126c9aa3fe82396a4681dd877be37b22e66b22e",
-    "scripts/ci-recharge-scope.mjs": "ac9171f68888534744d843eb1fc5ab8b00c58c245ffbf8dba659e6a97e59272a",
-    "scripts/ci-recharge-scope.test.mjs": "d9ff06e1d32cabecf39a5c333c5a9ba96c66925fd4fb0c1610393de95577f07f",
+    "scripts/ci-recharge-check.mjs": "47d271550f3cdc70cdb5858f7b3a61e7484ba5c7258a7216fb95ba44680b8c11",
+    "scripts/ci-recharge-release.test.mjs": "39a818b58d69316bea1db91953e8d9e9e77c37f8a803df7dd3afe61392c4ed4c",
+    "scripts/ci-recharge-scope.mjs": "6273e83c863f274b2ad08302dca378aa5dcb0dc0f591af5cf7ff3f179092283e",
+    "scripts/ci-recharge-scope.test.mjs": "d5db30f394e9432fe284ebc5093e16e78e4e957b9053598b86233f73e043627c",
     "scripts/production-release/build-images.sh": "43a6fef3dc9affbcc783d96297aa173b192ea53686e2c7d78e34240e13ec5a0b",
     "scripts/production-release/dispatch.sh": "3fba215f7036c4eab39c72deec0e34b89f56fc643667b732e63c7e1ab99609e5",
     "scripts/production-release/push-images.sh": "e6877fe869a70132932824a66c063b9ee0d6746362ee8726715f63723f23d994",
     "scripts/production-release/registration-only-transport.test.py": "8ff9a7eb48b918b91336239757eef85261c4d7399dcb1a2c4aa2db0d814782ab",
-    "scripts/production-release/remote-deploy.py": "3243aa5c74ad3aee5574e935d98523956ce1850a09cb313524c738b651084761",
-    "scripts/production-release/remote-deploy.test.py": "cbd79ed7a7cda691c74718e5fa8d4ad88d3f74d8ec52a959b30042534a420cee",
-    "scripts/production-release/validate-release-selection.sh": "9b2c22239f8ea3e9e4cc748a87dbdcb74ed030c76e8b2d9bf97b9f125c567419"
+    "scripts/production-release/remote-deploy.py": "a1a9694ab3df6e45868e87b523bb0437d5c26fa4ad8a7ef5b0f6b9a3a65b9fcc",
+    "scripts/production-release/remote-deploy.test.py": "9b0c8f3e72e5a5bf1067052945150216ebc9df0660baf22a794ff94429d94aca",
+    "scripts/production-release/validate-release-selection.sh": "9b2c22239f8ea3e9e4cc748a87dbdcb74ed030c76e8b2d9bf97b9f125c567419",
+    "scripts/v2-registration-finance-audit.mjs": "4d0726ba795569bc70e256141847cfe8ee57354d2936f35341c6e8a599ed8e67",
+    "scripts/v2-registration-finance-audit.test.mjs": "b9b32f040ad062f978d447d7f08b7d5dccdc1fd65e10297519f2a6e9fc063470"
   },
   "scope": {
     "servicesUpdated": ["auto-registration"],
@@ -361,5 +363,85 @@
     "sourceProjectionTree": "d9c2e534f0e71d5c88ffc4db492c4db2e79a9370",
     "sourceAnchorSha256": "39dd801292f081560fdaf7db2feb6cdd6f3c1bc8b730ca9add4d33a472466920",
     "cleanupReceiptSha256": "f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f"
+  },
+  "financeClearance": {
+    "version": 1,
+    "mode": "STRICT_ZERO_AFTER_APPROVED_REVERSALS_49",
+    "sourceCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "checkCount": 49,
+    "executedCheckCount": 49,
+    "unavailableCheckCount": 0,
+    "violationCount": 0,
+    "rulesSha256": "fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a",
+    "sources": {
+      "accounts": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 2,
+        "sha256": "7e3f38a53838c3edc387498e6bb0ea8585af89b3606a0979c6d10441680172fb"
+      },
+      "cashJournals": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 15,
+        "sha256": "eba994ee593ab87b49e2c9d772e6b81dd5f84a8a5376c0a946e8f9258d61aa96"
+      },
+      "cashLines": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 15,
+        "sha256": "6564164dd9d17c0617120e483ba79fbadeb0148c8c522066d137aa6a79059b79"
+      },
+      "expenses": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 5,
+        "sha256": "740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c"
+      },
+      "journals": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 5,
+        "sha256": "51b7f09183c5cfeb4c107cefde6ce1c652d1f0167dbd7c567c34b7e50964f4fb"
+      },
+      "lines": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 10,
+        "sha256": "f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c"
+      }
+    },
+    "metadataSha256": "4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb",
+    "checksSha256": "94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2",
+    "reversalCount": 5,
+    "reversalAuditSha256": "d90da27ad60e57116ef68f8e9e8a4f2af110cbd0e50b67d06937cf0946d8e3fc",
+    "reversalChainSha256": "22b06da04b6aca6af194b7ed1053eb8f5f9851926c0a68478bf0f614a613aea9",
+    "scope": {
+      "deletedOrderSha256": [
+        "a2ffdcf9fc09b3731b9b7fbdf41581ba5a810084ffc15172175b3ae67daed82d",
+        "c06d6d101d1525ffdc8e8fd7790a7a038a20a71f8a833020698ca3010fc9df79"
+      ],
+      "protectedOrderSha256": "4b95901aeeb2fdd34d0fe8784ebf0d4da58ccf2341bf27469f71bb3114e6332b"
+    },
+    "evidence": {
+      "cash-five-clearance-completion-source-index-20261006-v2.json": "f92fc07094fe7aacdf7762d331b96f5fe1b5cf1ebdb0267df59f7ac7c59cc8a2",
+      "cash-five-clearance-inventory-fresh-before-20261006-v4.report.json": "a458e31568c3810d229c0696a81cc185269bd50d426330837750a632d51cec0d",
+      "cash-five-clearance-inventory-after-20261006-v4.report.json": "2921c7d8f81bfdac3f7e8b17a8bba85fe2fc3c3d17fd52b07c482b57c3f7cc1d",
+      "cash-five-clearance-real49-after-20261006-v1.report.json": "b89ed31f7b2f948c441a8d25fc412c0d8278182adec19386ff541bda54669788",
+      "cash-five-clearance-five-real-ui-actions-20261006-v1.json": "28a07113cc4f399c885ba66e2afe4d55dbe5a70fe3841749e7fbda99a390dde8",
+      "cash-five-clearance-independent-actual-final-review-20261006-v1.json": "a74b8c4631a36d182eca28266e50f36e62db72518a4a3ea8d4f78f4783e094fe"
+    }
   }
 }

@@ -578,9 +578,13 @@ test('fixed 7f runtime scope is exact and retains worker checks', () => {
 test('fixed registration 80 controls retain worker checks and reject the disabled 3ca draft', () => {
   const profile = 'deploy/aws/registration-worker-b8-80-20261006.json';
   const transport = 'scripts/production-release/registration-only-transport.test.py';
-  assert.equal(isCiOnly([profile, transport]), true);
-  assert.equal(checkMode([profile, transport], schema, schema), 'ci-only');
-  assert.deepEqual(selectedParts([profile, transport]), ['guards']);
+  const auditors = [
+    'scripts/v2-registration-finance-audit.mjs',
+    'scripts/v2-registration-finance-audit.test.mjs'
+  ];
+  assert.equal(isCiOnly([profile, transport, ...auditors]), true);
+  assert.equal(checkMode([profile, transport, ...auditors], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([profile, transport, ...auditors]), ['guards']);
   const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py';
   assert.deepEqual(selectedParts([profile, worker]), ['guards', 'connector']);
   for (const other of [
@@ -589,6 +593,8 @@ test('fixed registration 80 controls retain worker checks and reject the disable
     profile + '/future.json',
     'deploy/aws/registration-worker-b8-80-other.json',
     'scripts/production-release/registration-only-other.test.py',
+    'scripts/v2-registration-finance-audit-other.mjs',
+    'scripts/v2-registration-finance-audit.mjs.backup',
     'apps/api/prisma-mysql/schema.prisma',
     'package-lock.json'
   ]) {

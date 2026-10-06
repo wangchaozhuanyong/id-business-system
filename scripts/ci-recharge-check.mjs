@@ -33,6 +33,8 @@ const preparedControlPaths = [
 ];
 const registrationControlPaths = [
   'deploy/aws/registration-worker-b8-80-20261006.json',
+  'scripts/v2-registration-finance-audit.mjs',
+  'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
   '.github/workflows/production-release.yml',
   'scripts/production-release/build-images.sh',
@@ -100,8 +102,10 @@ if (part === 'guards') {
     changed.some((path) => path.startsWith('scripts/production-release/'))
   )
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
-  if (changed.some((path) => registrationControlPaths.includes(path)))
+  if (changed.some((path) => registrationControlPaths.includes(path))) {
+    run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
+  }
   if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
     run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
   if (
@@ -146,8 +150,10 @@ if (part === 'guards') {
     )
   )
     run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
-  if (changed.some((path) => registrationControlPaths.includes(path)))
+  if (changed.some((path) => registrationControlPaths.includes(path))) {
+    run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
+  }
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
   releaseMaintenanceControls();
