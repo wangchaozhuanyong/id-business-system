@@ -2469,6 +2469,11 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
         };</script>'''
         script = script.replace('__AFTER__', "window.location.assign('/auth/login');" if mode == 'accepted_login'
                                 else "document.querySelector('input').value='';")
+        if mode == 'finished_burst':
+            script = '''<script>document.querySelector('form').onsubmit=async event=>{
+              event.preventDefault();for(let i=0;i<20;i++)await fetch('/fixture/read').then(r=>r.text());
+              try{await fetch('/fixture/email',{method:'POST'});}catch(_){document.querySelector('input').value='';}
+            };</script>'''
         html = html.replace('__SCRIPT__', script)
         async def local(route):
             request = route.request
@@ -2476,9 +2481,11 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.navigation_methods.append(request.method)
             if path == '/api/auth/session':
                 await route.fulfill(content_type='application/json', body='{}')
+            elif path == '/fixture/read':
+                await route.fulfill(content_type='application/json', body='{}')
             elif path == '/fixture/email':
                 self.submissions.append(request.method)
-                if mode == 'transport_failed':
+                if mode in {'transport_failed', 'finished_burst'}:
                     await route.abort('connectionreset')
                 else:
                     await route.fulfill(status=400 if mode == 'rejected' else 200,
@@ -2487,7 +2494,7 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await route.fulfill(content_type='text/html', body=html)
         await self.context.route('**/*', local)
         await self.page.goto('https://chatgpt.com/auth/login', wait_until='domcontentloaded')
-        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 1), self.assertLogs('registration', level='WARNING') as logs:
+        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 3 if mode == 'finished_burst' else 1), self.assertLogs('registration', level='WARNING') as logs:
             with self.assertRaises(Stop) as stopped:
                 await asyncio.wait_for(self.flow.register(), timeout=12)
         self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
@@ -2499,7 +2506,7 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.flow.registration_state.get('profile_submitted', False))
         self.assertFalse(self.flow.data['registered'])
         self.assertEqual(self.installed, self.removed)
-        self.assertEqual([name for name, _handler in self.installed], ['request', 'response', 'requestfailed', 'framenavigated'])
+        self.assertEqual([name for name, _handler in self.installed], ['request', 'response', 'requestfailed', 'requestfinished', 'framenavigated'])
         self.assertEqual(self.flow.email_requests, {})
         self.assertIsNone(self.flow.email_request_page)
         state = self.flow.email_request_observation
@@ -2539,6 +2546,32 @@ class EmailRequestBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['failed_count'], 1)
         self.assertEqual((state['first_failure']['event'], state['first_failure']['http_status'],
                           state['first_failure']['failure']), ('requestfailed', None, 'network'))
+
+    async def test_finished_burst_keeps_late_failure_and_closed_submit_semantics(self):
+        from browser_session import SessionBudget
+        state, text = await self.fixture('finished_burst')
+        self.assertEqual(self.submissions, ['POST'])
+        self.assertEqual((state['first_failure']['method'], state['first_failure']['failure']), ('POST', 'network'))
+        self.assertEqual(state['failed_count'], 1)
+        self.assertTrue(state['overflow'])  # Saturated counters do not stop request observation.
+        prepared = self.flow.registration_state['email_form_pre_submit']
+        self.assertEqual((prepared['effective_method'], prepared['action_host'], prepared['action_path'],
+                          prepared['submitter_type'], prepared['target'], prepared['value_nonempty']),
+                         ('get', 'chatgpt', 'login', 'submit', 'matches', 'true'))
+        self.assertEqual((prepared['busy'], prepared['email_disabled'], prepared['submit_disabled']), ('false', 'false', 'false'))
+        self.assertIn('slot=email_form_pre_submit', text)
+        await self.page.evaluate('''() => {
+          const form=document.querySelector('form'),button=form.querySelector('button');
+          form.setAttribute('aria-busy','true');button.setAttribute('formmethod','post');
+          button.setAttribute('formaction','https://auth.openai.com/email-verification?token=synthetic-private-OTP');
+          button.disabled=true;form.querySelector('input').disabled=true;
+        }''')
+        await self.flow.email_diagnostic('observe', SessionBudget(1))
+        current = self.flow.registration_state['email_form_current']
+        self.assertEqual((current['effective_method'], current['action_host'], current['action_path']), ('post', 'openai_auth', 'email_code'))
+        self.assertEqual((current['busy'], current['email_disabled'], current['submit_disabled']), ('true', 'true', 'true'))
+        self.assertEqual(self.flow.registration_state['email_form_pre_submit'], prepared)
+        self.assertEqual(self.submissions, ['POST'])
 
     async def test_post_2xx_then_login_preserves_http_outcome_without_registration_claim(self):
         state, text = await self.fixture('accepted_login')
@@ -3527,12 +3560,84 @@ class EmailRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Stop) as stopped:
             await flow.register()
         self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
-        self.assertEqual(page.remove_listener.call_count, 4)
+        self.assertEqual(page.remove_listener.call_count, 5)
         self.assertIsNone(flow.email_request_page)
         handlers['request'](request)
         self.assertEqual(flow.email_request_observation['request_count'], 0)
         self.assertEqual(flow.email_requests, {})
         self.assertEqual(flow.email_request_observation['read'], 'unavailable')
+
+    async def test_finished_first_16_allow_seventeenth_failure_with_request_phase(self):
+        flow, page, handlers = self.fixture()
+        flow.email_request_phase = 'click'
+        for _ in range(16):
+            request = self.request(page, method='GET')
+            handlers['request'](request)
+            handlers['response'](SimpleNamespace(request=request, status=200))
+            handlers['requestfinished'](request)
+        self.assertEqual(flow.email_requests, {})
+        late = self.request(page)
+        handlers['request'](late)
+        flow.email_request_phase = 'safe_get'
+        handlers['requestfailed'](late)
+        state = flow.email_request_observation
+        self.assertEqual((state['first_failure']['phase'], state['first_failure']['method'], state['first_failure']['failure']), ('click', 'POST', 'network'))
+        self.assertEqual(state['failed_count'], 1)
+        self.assertEqual(flow.email_requests, {})
+        self.assertTrue(state['overflow'])
+        flow.end_email_requests()
+
+    async def test_concurrent_overflow_terminal_fallback_keeps_first_failure(self):
+        flow, page, handlers = self.fixture()
+        requests = [self.request(page) for _ in range(17)]
+        for request in requests:handlers['request'](request)
+        self.assertEqual(len(flow.email_requests), 16)
+        self.assertNotIn(requests[0], flow.email_requests)
+        handlers['response'](SimpleNamespace(request=requests[0], status=429))
+        first = dict(flow.email_request_observation['first_failure'])
+        self.assertEqual((first['phase'], first['http_status']), ('unknown', 429))
+        handlers['requestfailed'](requests[0])
+        self.assertEqual(flow.email_request_observation['first_failure'], first)
+        self.assertEqual(flow.email_request_observation['last_write']['failure'], 'network')
+        self.assertLessEqual(len(flow.email_requests), 16)
+        flow.end_email_requests()
+
+    async def test_response_headers_do_not_release_before_failure_and_finished_cleanup(self):
+        flow, page, handlers = self.fixture()
+        flow.email_request_phase = 'click'
+        request = self.request(page)
+        handlers['request'](request)
+        flow.email_request_phase = 'after_click'
+        handlers['response'](SimpleNamespace(request=request, status=200))
+        self.assertIn(request, flow.email_requests)
+        self.assertEqual(flow.email_request_observation['last_write']['phase'], 'click')
+        handlers['requestfailed'](request)
+        self.assertEqual(flow.email_request_observation['first_failure']['phase'], 'click')
+        self.assertNotIn(request, flow.email_requests)
+        handlers['requestfinished'](request)
+        self.assertEqual(flow.email_requests, {})
+        flow.end_email_requests()
+
+    async def test_background_post_cannot_overwrite_main_navigation_evidence(self):
+        flow, page, handlers = self.fixture()
+        navigation = self.request(page, method='GET', navigation=True)
+        navigation.url = 'https://chatgpt.com/auth/login?email=synthetic-private'
+        handlers['request'](navigation)
+        first = dict(flow.email_request_observation['first_navigation'])
+        handlers['response'](SimpleNamespace(request=navigation, status=200))
+        background = self.request(page)
+        background.url = 'https://chatgpt.com/unclassified-background'
+        handlers['request'](background)
+        handlers['response'](SimpleNamespace(request=background, status=200))
+        self.assertEqual(flow.email_request_observation['first_navigation'], first)
+        self.assertEqual(flow.email_request_observation['last_navigation']['method'], 'GET')
+        self.assertEqual(flow.email_request_observation['last_write']['path'], 'other')
+        self.assertFalse(flow.data.get('registered', False))
+        subframe = self.request(page, navigation=True)
+        subframe.frame = SimpleNamespace(page=page)
+        handlers['request'](subframe)
+        self.assertEqual(flow.email_request_observation['last_navigation']['method'], 'GET')
+        flow.end_email_requests()
 
     async def test_invalid_state_and_records_are_not_logged(self):
         flow, page, handlers = self.fixture()
