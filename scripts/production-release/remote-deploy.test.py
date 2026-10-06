@@ -7002,14 +7002,16 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             f=self.fixture(Path(name));stack,_=self.patches(f)
             new=f.base/'new';new.mkdir();receipt=new/'receipt.json'
+            auditor_source=f.base/'.staging'/'clean-finance'
             def native(directory,receipt,**kwargs):
                 report=copy.deepcopy(f.reports[kwargs['stage']]);receipt.write_text(json.dumps(report));receipt.chmod(0o600)
                 return {'checkCount':49,'violationCount':0,'registrationFinanceGate':report['gate']}
             with stack,patch.object(deployment,'registration_finance_audit',side_effect=native) as original:
-                result=deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,profile=self.profile,control_source=f.previous)
+                result=deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,
+                    auditor_source=auditor_source,profile=self.profile,control_source=f.previous)
                 self.assertEqual(result['checkCount'],49);self.assertEqual(result['violationCount'],0)
                 kwargs=original.call_args.kwargs
-                self.assertEqual(kwargs['source'],f.origin);self.assertEqual(kwargs['control_source'],f.previous)
+                self.assertEqual(kwargs['source'],auditor_source);self.assertEqual(kwargs['control_source'],f.previous)
                 self.assertEqual(kwargs['profile_id'],deployment.REGISTRATION_EMAIL_REQUEST_ID)
                 for mutate in (lambda value:value['checks'][0].update(count=1),lambda value:value['identity'].update(currentUser='unreviewed@synthetic')):
                     bad=copy.deepcopy(f.reports['before']);mutate(bad)
@@ -7018,7 +7020,65 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                         return {'checkCount':49,'violationCount':0,'registrationFinanceGate':bad['gate']}
                     original.side_effect=drift
                     with self.assertRaises(RuntimeError):
-                        deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,profile=self.profile,control_source=f.previous)
+                        deployment.main80_recharge_audit(new,receipt,stage='before',source=f.origin,
+                            auditor_source=auditor_source,profile=self.profile,control_source=f.previous)
+
+    def test_main80_audit_requires_explicit_clean_auditor_source_before_native_audit(self):
+        with patch.object(deployment,'registration_finance_audit') as audited:
+            with self.assertRaises(TypeError):
+                deployment.main80_recharge_audit(Path('runtime'),Path('receipt.json'),stage='before',
+                    source=Path('historical-origin'),profile=self.profile)
+            audited.assert_not_called()
+
+    def test_main80_real_complete_finance_validator_rejects_runtime_origin_and_routes_both_stages_to_clean_source(self):
+        project=Path(__file__).resolve().parents[2]
+        raw=subprocess.check_output(['git','archive','--prefix=id-business-system-'+deployment.REGISTRATION_CURRENT+'/',
+            deployment.REGISTRATION_CURRENT],cwd=project)
+        files=deployment.registration_archive(raw,deployment.REGISTRATION_CURRENT)
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f=self.fixture(Path(name));stack,_=self.patches(f)
+            # A real original source tree plus release artifacts reproduces the production failure.
+            running_origin=f.base/'runtime-finance-origin';deployment.write_registration_files(running_origin,files)
+            (running_origin/'release-manifest.json').write_text('{"syntheticRuntime":true}');(running_origin/'release-manifest.json').chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError,'complete source projection changed'):
+                deployment.require_registration_finance_source(running_origin)
+            args=SimpleNamespace(commit=self.commit,run_id='123',run_attempt='1')
+            finance={**deployment.REGISTRATION_FINANCE,**{key:self.profile['financeValidator'][key]
+                for key in ('releaseSealSha256','preparedImagesSha256','preparationRunId','preparationRunAttempt')}}
+            native=deployment.registration_finance_audit
+            with stack,patch.object(deployment,'REGISTRATION_FINANCE',finance), \
+                    patch.object(deployment,'REGISTRATION_BASELINE',{**deployment.REGISTRATION_BASELINE,
+                        'sourceArchiveSha256':deployment.hashlib.sha256(raw).hexdigest()}), \
+                    patch.object(deployment,'require_registration_finance_source',wraps=deployment.require_registration_finance_source) as verified, \
+                    patch.object(deployment,'run',return_value=json.dumps([{'Id':self.seal['images']['api']}])), \
+                    patch.object(deployment,'maintenance_container_audit_url',return_value='synthetic-readonly-url'), \
+                    patch.object(deployment,'historical_audit_reader',return_value={'uid':1000,'gid':1000,'user':'node'}), \
+                    patch.object(deployment,'prepare_post_cleanup_reader_copy',side_effect=lambda *args:f.previous/args[3]), \
+                    patch.object(deployment,'prepare_historical_before_receipt'), \
+                    patch.object(deployment,'compose',side_effect=lambda *args,**kwargs:json.dumps(f.reports[
+                        'after' if '--stage=after' in args else 'before'])) as composed, \
+                    patch.object(deployment,'registration_finance_audit',wraps=native) as audited:
+                clean=deployment.prepare_registration_finance_source(args,raw)
+                self.assertEqual(clean,f.base/'.staging'/('oidc-'+self.commit)/'fixed-80-finance-123-1')
+                self.assertNotEqual(clean,f.origin)
+                receipts={stage:f.base/(stage+'-fresh.json') for stage in ('before','after')}
+                for stage in ('before','after'):
+                    result=deployment.main80_recharge_audit(f.previous,receipts[stage],stage=stage,source=f.origin,
+                        auditor_source=clean,profile=self.profile,control_source=f.previous,
+                        before_receipt=receipts['before'] if stage=='after' else None)
+                    self.assertEqual(result['checkCount'],49);self.assertEqual(result['violationCount'],0)
+                self.assertEqual([call.kwargs['stage'] for call in audited.call_args_list],['before','after'])
+                self.assertTrue(all(call.kwargs['source']==clean for call in audited.call_args_list))
+                self.assertEqual(verified.call_count,3)
+                self.assertTrue(all(call.args==(clean,) for call in verified.call_args_list))
+                self.assertTrue(all(str(clean/'scripts')+':/app/scripts:ro' in call.args for call in composed.call_args_list))
+                self.assertTrue(all(str(clean/'deploy/aws')+':/release-policy:ro' in call.args for call in composed.call_args_list))
+                composed.reset_mock()
+                with self.assertRaisesRegex(RuntimeError,'complete source projection changed'):
+                    deployment.main80_recharge_audit(f.previous,f.base/'rejected.json',stage='before',source=f.origin,
+                        auditor_source=running_origin,profile=self.profile,control_source=f.previous)
+                composed.assert_not_called()
+                self.assertFalse((f.base/'rejected.json').exists())
 
     def publication(self, f, *, busy=None, failed_after=False, preserved_drift=False,
             readback_mutation=None, readiness_mutation=None):
@@ -7026,6 +7086,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             deployment.RECHARGE_MAIN80_FILE:(json.dumps(self.profile).encode(),0o644)}
         archive = self.source_archive(self.commit,candidate)
         live=copy.deepcopy(f.states);output=io.StringIO();error=None;result=None
+        auditor_source=f.base/'.staging'/('oidc-'+self.commit)/'fixed-80-finance-123-1'
         def state(directory,service,**kwargs):return copy.deepcopy(live[service])
         def compose(directory,*args,**kwargs):
             if args[:4]==('exec','-T','api','node'):
@@ -7081,6 +7142,8 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                 drive=stack.enter_context(patch.object(deployment,'configure_google_drive_sync'))
                 registration_dispatch=stack.enter_context(patch.object(deployment,'registration_release',
                     side_effect=AssertionError('Main80 must never enter registration publication')))
+                finance_download=stack.enter_context(patch.object(deployment,'registration_download',return_value=b'synthetic-pinned-finance-archive'))
+                finance_prepare=stack.enter_context(patch.object(deployment,'prepare_registration_finance_source',return_value=auditor_source))
                 audited=stack.enter_context(patch.object(deployment,'registration_finance_audit',side_effect=native))
                 rollback=stack.enter_context(patch.object(deployment,'rollback_service'))
                 try:result=deployment.main()
@@ -7094,7 +7157,8 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
                     proof=deployment.check_main80_recharge_deployment(self.commit,self.tree,deployment.historical_fingerprint(self.profile))
                 return SimpleNamespace(result=result,error=error,output=output.getvalue(),current=current,manifest=manifest,
                     compose=composed.call_args_list,run=commands.call_args_list,recharge=recharge.call_count,registration=registration.call_count,
-                    grants=grants.call_count,drive=drive.call_count,audit=audited.call_args_list,rollback=rollback.call_args_list,proof=proof,live=live)
+                    grants=grants.call_count,drive=drive.call_count,audit=audited.call_args_list,rollback=rollback.call_args_list,proof=proof,live=live,
+                    auditor_source=auditor_source,finance_download=finance_download.call_args_list,finance_prepare=finance_prepare.call_args_list)
         finally:deployment.os.umask(old_umask)
 
     def test_main80_only_fresh_worker_publication_and_independent_readback_preserve_native_services(self):
@@ -7110,6 +7174,10 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             self.assertEqual(len([call for call in result.run if call.args[:2]==('docker','pull')]),1)
             self.assertEqual([call.kwargs['stage'] for call in result.audit],['before','after'])
             self.assertTrue(all(call.kwargs['profile_id']==deployment.REGISTRATION_EMAIL_REQUEST_ID for call in result.audit))
+            self.assertEqual([call.args for call in result.finance_download],[(deployment.REGISTRATION_CURRENT,)])
+            self.assertEqual(len(result.finance_prepare),1)
+            self.assertTrue(all(call.kwargs['source']==result.auditor_source and call.kwargs['source']!=f.origin
+                for call in result.audit))
             self.assertEqual(result.proof['checkCount'],49);self.assertEqual(result.proof['violationCount'],0)
             self.assertEqual(len(result.proof),21);self.assertNotIn('SYNTHETIC_PRIVATE_LOGIN',result.output)
             for service in f.manifest['images']:

@@ -42,8 +42,8 @@
     "scripts/production-release/build-images.sh": "65fe75b365e391ee1f0404915670434fd2521a92eccd8ddffd2abe6939a1bcb5",
     "scripts/production-release/dispatch.sh": "668f737857fd3972c8a2c4560c797c6081c47608b2e3e772480825f94a83c1a4",
     "scripts/production-release/push-images.sh": "7602f6cede9834e7a38957f9879fe3860ee45c30e1364203a1d2efd70869acf2",
-    "scripts/production-release/remote-deploy.py": "4c656e693fdde7e4e42e643fad553b97290807781cde5c48f7491f52cae0f3a6",
-    "scripts/production-release/remote-deploy.test.py": "172bc844efcf7d307b73ceb9b405360d5762fa4317743c61ec5b6fcac5aa8b02",
+    "scripts/production-release/remote-deploy.py": "f421e37c9c4b9562c8fe6b5fe5ee74643aa612e4a05ed99153a2b2c7643d7d67",
+    "scripts/production-release/remote-deploy.test.py": "326f43ca1e43f9f7f6d69d0658f14a40db9fb359b5333eb6cec4e9c987363d88",
     "scripts/production-release/validate-release-selection.sh": "5bbffc75392a67f16d874558c5f9f6ee5fec785f7a4bbbb3480460cbff4a4619",
     "scripts/v2-registration-finance-audit.mjs": "4d0726ba795569bc70e256141847cfe8ee57354d2936f35341c6e8a599ed8e67",
     "scripts/v2-registration-finance-audit.test.mjs": "b9b32f040ad062f978d447d7f08b7d5dccdc1fd65e10297519f2a6e9fc063470"
