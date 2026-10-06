@@ -4790,7 +4790,7 @@ def registration_observation_pro_baseline(previous, states=None):
         return raw
     def frozen_files(directory, hashes):
         for name, digest in hashes.items():
-            modes = (0o600,) if name in ('.env.aws.production', 'release-manifest.json', 'before-audit.json', 'after-audit.json') else (0o400, 0o600, 0o644, 0o664)
+            modes = (0o400, 0o600) if name in ('.env.aws.production', 'release-manifest.json', 'before-audit.json', 'after-audit.json') else (0o400, 0o600, 0o644, 0o664)
             require(hashlib.sha256(read(directory / name, modes=modes, limit=128 * 1024)).hexdigest() == digest, message)
     frozen_files(previous, fixed['fileSha256'])
     require(hashlib.sha256(read(previous / 'scripts/production-release/remote-deploy.py', modes=(0o644, 0o664))).hexdigest()

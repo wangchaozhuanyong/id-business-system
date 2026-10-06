@@ -9403,6 +9403,24 @@ class Registration89ProBridgeTests(unittest.TestCase):
             self.assertEqual(manifest, f.result.manifest); self.assertEqual(origin, f.before.origin)
             proof.assert_called_once(); self.assertEqual(proof.call_args.kwargs, {'profile_id': deployment.RECHARGE_MAIN80_ID})
 
+    def test_private_before_audit_owner_read_only_in_pro_and_b91_bridges(self):
+        for location in ('pro', 'b91'):
+            with self.subTest(location=location), self.fixture() as f:
+                directory = f.result.current if location == 'pro' else f.before.previous
+                path = directory / 'before-audit.json'
+                raw = path.read_bytes()
+                pinned = f.fixed if location == 'pro' else f.anchor
+                self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), pinned['fileSha256']['before-audit.json'])
+                path.chmod(0o400)
+                manifest, origin = deployment.registration_observation_pro_baseline(f.result.current, f.live)
+                self.assertEqual(manifest, f.result.manifest)
+                self.assertEqual(origin, f.before.origin)
+                self.assertEqual(path.read_bytes(), raw)
+                # The private receipt contract accepts owner read-only, never public permissions.
+                path.chmod(0o644)
+                with self.assertRaises(RuntimeError):
+                    deployment.registration_observation_pro_baseline(f.result.current, f.live)
+
     def test_native_explicit_pro_history_survives89_switch_without_current_rebinding(self):
         with self.fixture(switched=True) as f, patch.object(deployment, 'check_fixed_recharge_deployment') as live_pro:
             manifest, origin = deployment.registration_observation_pro_baseline(f.result.current)
