@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const autoRegistrationFeature = defineV2Feature({
   key: 'auto-registration',
   title: '自动注册 GPT',
@@ -10,6 +9,9 @@ export const autoRegistrationFeature = defineV2Feature({
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [{ key: 'keyword', label: '搜索', kind: 'search', placeholder: '注册邮箱' }],
-  tables: v2TablesByFeature['auto-registration'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['auto-registration']
+    ),
   loadView: () => import('./V2AutoRegistrationView.vue')
 });

@@ -9,9 +9,6 @@
   border: 1px solid var(--v2-border);
   border-radius: var(--v3-radius);
   background: var(--v2-surface);
-}
-
-.v2-audit-navigation {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) auto;
   align-items: center;

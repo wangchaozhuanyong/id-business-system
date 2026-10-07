@@ -11,11 +11,12 @@ import {
   Rate8,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  type V2CommandContext,
   type V2CommandTransaction,
   type V2DecimalInput,
   type V2JsonDocument
 } from '../runtime/public-api';
-import { toIdBusinessV2BusinessDate } from './id-business-v2-finance-input';
+import { normalizeFinanceRate, toIdBusinessV2BusinessDate } from './id-business-v2-finance-input';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
 import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
@@ -26,6 +27,16 @@ interface ResolveFinanceRateInput {
   manualRate?: V2DecimalInput | null;
   manualReason?: string | null;
   operator?: AuthenticatedUser;
+}
+
+export interface ResolveStoredFinanceRateInput {
+  currency: IdBusinessV2FinanceCurrency;
+  previousSnapshotId?: string | null;
+  manualRate?: unknown;
+  manualReason?: unknown;
+  label: string;
+  operator?: AuthenticatedUser;
+  auditRemark?: string;
 }
 
 @Injectable()
@@ -70,24 +81,16 @@ export class IdBusinessV2FinanceFxService {
         throw new BadRequestException('人工汇率必须填写原因');
       }
       return this.commandTransactions.execute(
-        async (tx) => {
-          const snapshot = await this.commandRepository.createFxSnapshot(tx, {
-            id: randomUUID(),
+        (tx, context) =>
+          this.createManualInTransaction(tx, context, {
             currency: input.currency,
-            rateToCny: manualRate.toString(),
-            source: 'manual',
+            rateToCny: manualRate,
             businessDate: toIdBusinessV2BusinessDate(input.occurredAt).date,
             capturedAt: new Date(),
-            manualReason: reason,
-            createdByUserId: input.operator?.id
-          });
-          await this.writeAudit(tx, input.operator, snapshot.id, {
-            currency: input.currency,
-            rateToCny: manualRate.toString(),
-            reason
-          });
-          return this.normalizeResolvedRate(snapshot);
-        },
+            reason,
+            operator: input.operator,
+            auditData: { currency: input.currency, rateToCny: manualRate.toString(), reason }
+          }),
         {
           changedScopes: ['exchange-rates', 'finance-reports'],
           requestId: randomUUID(),
@@ -96,6 +99,61 @@ export class IdBusinessV2FinanceFxService {
       );
     }
     return this.normalizeResolvedRate(await this.ensureAutomaticRate(input));
+  }
+
+  async resolveStoredRateInTransaction(
+    tx: V2CommandTransaction,
+    context: V2CommandContext,
+    input: ResolveStoredFinanceRateInput
+  ) {
+    const hasManualRate =
+      input.manualRate !== undefined && input.manualRate !== null && input.manualRate !== '';
+    const manualRate = hasManualRate
+      ? normalizeFinanceRate(input.manualRate, input.currency)
+      : null;
+    const previous = input.previousSnapshotId
+      ? await this.commandRepository.findFxSnapshotInTransaction(
+          tx,
+          input.currency,
+          input.previousSnapshotId
+        )
+      : null;
+    // 已锁定在原记录上的历史快照可继续沿用；新选快照必须在本次业务时间有效。
+    if (
+      previous &&
+      (input.manualRate === undefined ||
+        input.manualRate === '' ||
+        manualRate?.equals(previous.rateToCny))
+    ) {
+      return previous;
+    }
+    if (manualRate) {
+      const reason = typeof input.manualReason === 'string' ? input.manualReason.trim() : '';
+      if (
+        !reason ||
+        reason.length > 500 ||
+        [...reason].some(
+          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127
+        )
+      ) {
+        throw new BadRequestException(`${input.label}人工汇率原因格式无效`);
+      }
+      return this.createManualInTransaction(tx, context, {
+        currency: input.currency,
+        rateToCny: manualRate,
+        businessDate: toIdBusinessV2BusinessDate(context.businessTime).date,
+        capturedAt: context.businessTime,
+        reason,
+        operator: input.operator,
+        auditData: { currency: input.currency, rateToCny: manualRate.toString(), reason },
+        auditRemark: input.auditRemark
+      });
+    }
+    const latest = await this.commandRepository.findFxSnapshotInTransaction(tx, input.currency);
+    if (!latest || (latest.expiresAt && latest.expiresAt <= context.businessTime)) {
+      throw new BadRequestException(`${input.label}缺少有效汇率，请填写人工汇率及原因`);
+    }
+    return latest;
   }
 
   async quoteOrderRate(
@@ -141,31 +199,58 @@ export class IdBusinessV2FinanceFxService {
       throw new BadRequestException('CNY 汇率固定为 1');
     }
     return this.commandTransactions.execute(
-      async (tx) => {
-        const snapshot = await this.commandRepository.createFxSnapshot(tx, {
-          id: randomUUID(),
+      (tx, context) =>
+        this.createManualInTransaction(tx, context, {
           currency,
-          rateToCny: rateToCny.toString(),
-          source: currency === 'CNY' ? 'cny_fixed' : 'manual',
+          rateToCny,
           sourceReference,
           businessDate,
-          manualReason: currency === 'CNY' ? null : reason,
-          createdByUserId: operator?.id
-        });
-        await this.writeAudit(tx, operator, snapshot.id, {
-          currency,
-          rateToCny: rateToCny.toString(),
-          businessDate: businessDate.toISOString(),
-          reason
-        });
-        return snapshot;
-      },
+          reason,
+          operator,
+          auditData: {
+            currency,
+            rateToCny: rateToCny.toString(),
+            businessDate: businessDate.toISOString(),
+            reason
+          }
+        }),
       {
         changedScopes: ['exchange-rates', 'finance-reports'],
         requestId: randomUUID(),
         operator
       }
     );
+  }
+
+  private async createManualInTransaction(
+    tx: V2CommandTransaction,
+    context: V2CommandContext,
+    input: {
+      currency: IdBusinessV2FinanceCurrency;
+      rateToCny: Rate8;
+      businessDate: Date;
+      capturedAt?: Date;
+      reason: string;
+      sourceReference?: string | null;
+      operator?: AuthenticatedUser;
+      auditData: V2JsonDocument;
+      auditRemark?: string;
+    }
+  ) {
+    const snapshot = await this.commandRepository.createFxSnapshot(tx, {
+      id: randomUUID(),
+      currency: input.currency,
+      rateToCny: input.rateToCny.toString(),
+      source: input.currency === 'CNY' ? 'cny_fixed' : 'manual',
+      businessDate: input.businessDate,
+      ...(input.capturedAt ? { capturedAt: input.capturedAt } : {}),
+      ...(input.sourceReference !== undefined ? { sourceReference: input.sourceReference } : {}),
+      manualReason: input.currency === 'CNY' ? null : input.reason,
+      createdByUserId: input.operator?.id
+    });
+    await this.writeAudit(tx, input.operator, snapshot.id, input.auditData, input.auditRemark);
+    context.markChangedScopes(['exchange-rates', 'finance-reports']);
+    return snapshot;
   }
 
   async listLatest() {
@@ -391,7 +476,8 @@ export class IdBusinessV2FinanceFxService {
     tx: V2CommandTransaction,
     operator: AuthenticatedUser | undefined,
     objectId: string,
-    afterData: V2JsonDocument
+    afterData: V2JsonDocument,
+    remark = '记录财务人工汇率'
   ) {
     return this.audit.append(tx, {
       userId: operator?.id,
@@ -400,7 +486,7 @@ export class IdBusinessV2FinanceFxService {
       objectType: 'id_business_v2_finance_fx_rate_snapshot',
       objectId,
       afterData,
-      remark: '记录财务人工汇率'
+      remark
     });
   }
 }

@@ -2,7 +2,7 @@ import { computed, onScopeDispose, shallowRef } from 'vue';
 import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
 import { rechargeApi } from './api';
 import { DirectBrowserError } from './bitbrowser-direct-api';
-import { runDirectLogin, type DirectLoginCredential } from './bitbrowser-direct-login';
+import type { DirectLoginCredential } from './bitbrowser-direct-credential';
 
 export function useBitBrowserDirectOpen(
   refresh: () => Promise<unknown>,
@@ -71,6 +71,9 @@ export function useBitBrowserDirectOpen(
     }
     task.done = (async () => {
       try {
+        const { runDirectLogin } = await import('./bitbrowser-direct-login');
+        if (task.controller.signal.aborted)
+          throw new DirectBrowserError('bitbrowser_direct_cancelled');
         const result = await runDirectLogin(
           launch.bitBrowser,
           credential,

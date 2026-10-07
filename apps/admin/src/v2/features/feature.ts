@@ -77,7 +77,7 @@ export interface V2RuntimeFeatureManifest {
 export interface V2FeatureManifest extends V2RuntimeFeatureManifest {
   sourceSheet: string;
   filters: readonly V2FilterDefinition[];
-  tables: readonly V2TableSchema[];
+  loadTables: () => Promise<readonly V2TableSchema[]>;
 }
 
 export interface V2NavigationSection {
@@ -87,11 +87,5 @@ export interface V2NavigationSection {
 }
 
 export function defineV2Feature<const TFeature extends V2FeatureManifest>(feature: TFeature) {
-  return feature;
-}
-
-export function defineV2RuntimeFeature<const TFeature extends V2RuntimeFeatureManifest>(
-  feature: TFeature
-) {
   return feature;
 }

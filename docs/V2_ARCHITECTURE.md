@@ -17,6 +17,11 @@ contracts 和模块样式。跨模块能力优先放在 `components`、`composab
 引用其内部页面、组件、composable 或工具文件。feature 实现必须通过本模块 `api.ts` 和
 `contracts.ts` 访问全局 API 与类型实现。页面不得复制另一模块的业务状态和 API 逻辑。
 
+模块的路由、权限、导航、数据作用域与刷新策略只在各 feature 的 manifest 中定义，
+`features/registry.ts` 汇总；`runtimeRegistry.ts` 仅保留同源导出，不允许维护第二份配置。
+页面通过 `loadRoute`、表格定义通过 `loadTables` 按需加载，模块元数据不得静态引入页面或表格实现。
+带到期状态的模块使用 `event-with-deadline`，由共享查询层同时处理变更事件和到期重查。
+
 ## 3. 后端模块
 
 业务模块全部位于 `apps/api/src/id-business-v2`：
@@ -64,6 +69,10 @@ PostgreSQL 兼容断言时，测试名称和变量必须明确标识 PostgreSQL 
 Prisma migration 目录是现有数据库的执行历史，不属于运行模块。业务代码不得读取当前模块未声明的
 数据表。
 
+Prisma 边界检查从当前 MySQL schema 获取全部模型委托，包含认证、敏感访问与审计模型；
+不能仅检查 `idBusinessV2*` 名称。后端、共享契约或 schema 变更即使进入充值／邮箱精简 CI，
+也必须执行模块架构、Prisma 运行边界和并发事务检查；纯检查脚本变更执行相应控制测试。
+
 受管邮箱应用专用密码和 Microsoft OAuth2 刷新令牌通过 `FieldEncryptionService` 加密保存；买家查询码
 保留 HMAC 作为公开查询索引，同时加密保存供管理员在邮箱池直接复制。
 公开查询尝试只记录邮箱/IP 哈希、受管邮箱标识、受控结果枚举和时间，不记录查询码、应用专用密码或
@@ -84,12 +93,19 @@ Prisma migration 目录是现有数据库的执行历史，不属于运行模块
 - 所有写命令使用唯一入口 `V2CommandTransactionManager`，默认 Serializable，并携带 request ID、
   操作人、业务时间和显式幂等策略。业务记录、不可变流水、财务凭证与审计必须同事务等待完成；
   财务或审计失败必须回滚整单。
+- 跨域写入复用调用方事务和 `V2CommandContext`，由数据所属模块通过公开能力完成写入。
+  银充人工汇率使用财务域 `resolveStoredRateInTransaction`；新快照及审计与银充业务同事务提交。
+  实际新增的数据作用域通过 `context.markChangedScopes` 登记，版本号随事务写入，提交后才通知。
+  事务失败、冲突重试及幂等重放分别隔离本次登记，沿用历史快照不额外登记汇率变更。
 - 只有能在新事务中重读并核验完整请求证据的稳定幂等命令才允许冲突重试。相同键、相同请求返回
   原结果；相同键、不同请求返回 409。非幂等命令遇到事务冲突直接返回冲突，不自动重放写操作。
 - 财务账户和资金账户按稳定 ID 顺序锁定；余额校验与写入使用同一锁定快照。嵌套礼品卡报损复用
   外层事务，不允许开启第二个事务。
 - 加卡使用移动加权平均成本。
 - 订单利润由服务端按 `实收 - 平台手续费 - 余额成本 - 实际计入的 ID 成本 - 退款成本` 计算。
+- 普通订单收款币种以共享包 `V2_ORDER_RECEIPT_CURRENCIES` 为唯一契约，当前为 CNY、MYR、USD、USDT。
+  页面、API 类型及后端入口共用该边界；不支持的币种须在汇率查询、快照或业务写入前拒绝。
+  财务和银行卡支持的完整币种集合独立保留，不能直接用作普通订单收款范围。
 - 订单通过 `accountSource=inventory|customer_owned` 区分库存 ID 与客户已购 ID。
   `customer_owned` 必须保存后端生成的 `sourceSoldOrderId`，并固定为 `retained`。
 - 订单保留 `accountCostAmount` 购买成本快照；只有首次

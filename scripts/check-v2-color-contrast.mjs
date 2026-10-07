@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseVue } from '@vue/compiler-sfc';
 import postcss from 'postcss';
+import { inspectSharedSkinStyles } from './admin-skin-rules.mjs';
 
 const rootDir = process.cwd();
 const baseCssPath = path.join(rootDir, 'apps/admin/src/v2/styles/base.css');
@@ -31,13 +32,17 @@ for (const { filename, source } of skinSources) {
       failures.push(`${path.relative(rootDir, filename)}: 未定义皮肤变量 ${token}`);
     }
   }
-  if (filename === baseCssPath || filename.includes(`${path.sep}testing${path.sep}`)) continue;
+  if (filename.includes(`${path.sep}testing${path.sep}`)) continue;
   const styles = filename.endsWith('.css')
     ? [source]
     : filename.endsWith('.vue')
       ? parseVue(source).descriptor.styles.map((style) => style.content)
       : [];
   for (const style of styles) {
+    for (const issue of inspectSharedSkinStyles(style, path.relative(rootDir, filename))) {
+      failures.push(`${path.relative(rootDir, filename)}: ${issue}`);
+    }
+    if (filename === baseCssPath) continue;
     postcss.parse(style).walkDecls((declaration) => {
       const selector = declaration.parent.selector || '';
       if (/#[a-f\d]{3,8}\b|rgba?\(/i.test(declaration.value)) {
@@ -163,7 +168,7 @@ requireProperties('.app-button.el-button', baseButtonRule, [
   '--el-mask-color-extra-light'
 ]);
 
-for (const variant of ['primary', 'soft', 'danger', 'success', 'ghost']) {
+for (const variant of ['primary', 'soft', 'danger', 'success', 'warning', 'ghost']) {
   const selector = `.app-button--${variant}.el-button`;
   const rule = extractBlock(baseCss, selector);
   requireProperties(selector, rule, [
@@ -245,7 +250,7 @@ if (failures.length) {
 }
 
 console.log(
-  `V2 color contrast check passed (${contrastPairs.length} pairs x 2 themes, 6 button variants, Element Plus theme bridge, no undefined skin tokens, no page palettes or duplicate label skins).`
+  `V2 color contrast check passed (${contrastPairs.length} pairs x 2 themes, 7 button variants, Element Plus theme bridge, no undefined skin tokens, no page palettes or duplicate label skins).`
 );
 
 function collectSkinSources(directory) {

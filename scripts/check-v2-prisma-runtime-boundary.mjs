@@ -7,6 +7,14 @@ const rootDir = process.cwd();
 const v2Root = 'apps/api/src/id-business-v2';
 const showDetails = process.argv.includes('--details');
 const failures = [];
+const mysqlSchema = readFileSync(path.join(rootDir, 'apps/api/prisma-mysql/schema.prisma'), 'utf8');
+const prismaDelegates = new Set(
+  [
+    ...mysqlSchema.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '').matchAll(/^\s*model\s+(\w+)\s*\{/gm)
+  ].map(([, model]) => model[0].toLowerCase() + model.slice(1))
+);
+if (!prismaDelegates.size)
+  throw new Error('MySQL schema 中没有找到 Prisma 模型，无法校验数据库边界');
 const legacyDecimalPolicyPath = `${v2Root}/decimal-policy.ts`;
 const inventories = {
   directPrismaClient: new Set(),
@@ -88,7 +96,11 @@ for (const relativePath of listSourceFiles(v2Root)) {
         }
       }
 
-      if (!persistencePath && isPrismaDelegateProperty(property, expressionText)) {
+      if (
+        !persistencePath &&
+        !transactionInfrastructure &&
+        isPrismaDelegateProperty(property, node.expression, sourceFile)
+      ) {
         record(
           inventories.directModelAccess,
           relativePath,
@@ -146,7 +158,8 @@ for (const relativePath of listSourceFiles(v2Root)) {
       }
       if (
         !persistencePath &&
-        isPrismaDelegateProperty(property, node.expression.getText(sourceFile))
+        !transactionInfrastructure &&
+        isPrismaDelegateProperty(property, node.expression, sourceFile)
       ) {
         record(
           inventories.directModelAccess,
@@ -166,6 +179,30 @@ for (const relativePath of listSourceFiles(v2Root)) {
             'raw SQL 只能位于 persistence adapter'
           );
         }
+      }
+    }
+
+    if (
+      !persistencePath &&
+      !transactionInfrastructure &&
+      ts.isBindingElement(node) &&
+      ts.isObjectBindingPattern(node.parent) &&
+      ts.isVariableDeclaration(node.parent.parent)
+    ) {
+      const key = node.propertyName ?? node.name;
+      const property = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : null;
+      if (
+        property &&
+        prismaDelegates.has(property) &&
+        isClientExpression(node.parent.parent.initializer, sourceFile)
+      ) {
+        record(
+          inventories.directModelAccess,
+          relativePath,
+          sourceFile,
+          key,
+          'Prisma 模型访问只能位于 persistence adapter'
+        );
       }
     }
 
@@ -398,9 +435,102 @@ function isRawSqlProperty(property) {
   return /^\$(?:query|execute)Raw(?:Unsafe)?$/.test(property);
 }
 
-function isPrismaDelegateProperty(property, expressionText) {
+function isPrismaDelegateProperty(property, expression, sourceFile) {
   if (/^idBusinessV2[A-Z]/.test(property)) return true;
-  return property === 'auditLog' && /^(?:tx|client|prisma|this\.prisma)$/.test(expressionText);
+  return prismaDelegates.has(property) && isClientExpression(expression, sourceFile);
+}
+
+function isClientExpression(expression, sourceFile, seen = new Set(), kind = 'client') {
+  if (!expression || seen.has(expression)) return false;
+  seen.add(expression);
+  if (ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)) {
+    if (hasInfrastructureType(expression.type, sourceFile, kind)) return true;
+    return isClientExpression(expression.expression, sourceFile, seen, kind);
+  }
+  if (ts.isParenthesizedExpression(expression) || ts.isNonNullExpression(expression)) {
+    return isClientExpression(expression.expression, sourceFile, seen, kind);
+  }
+  const declaration = findLocalDeclaration(expression);
+  if (!declaration) return false;
+  if (hasInfrastructureType(declaration.type, sourceFile, kind)) return true;
+  if (declaration.initializer) {
+    return isClientExpression(declaration.initializer, sourceFile, seen, kind);
+  }
+  if (kind === 'client' && ts.isParameter(declaration)) {
+    const callback = declaration.parent;
+    const call = callback.parent;
+    if (
+      callback.parameters[0] === declaration &&
+      ts.isCallExpression(call) &&
+      ts.isPropertyAccessExpression(call.expression)
+    ) {
+      const method = call.expression.name.text;
+      if (method === 'execute' || method === '$transaction') {
+        return isClientExpression(
+          call.expression.expression,
+          sourceFile,
+          seen,
+          method === 'execute' ? 'manager' : 'client'
+        );
+      }
+    }
+  }
+  return false;
+}
+
+function hasInfrastructureType(type, sourceFile, kind) {
+  if (!type || !ts.isTypeReferenceNode(type)) return false;
+  let name = type.typeName.getText(sourceFile);
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamedImports(bindings)) {
+      const binding = bindings.elements.find((element) => element.name.text === name);
+      if (binding) name = binding.propertyName?.text ?? binding.name.text;
+    }
+  }
+  return kind === 'manager'
+    ? name === 'V2CommandTransactionManager'
+    : /^(?:V2CommandTransaction|PrismaService|PrismaClient|Prisma\.TransactionClient)$/.test(name);
+}
+
+function findLocalDeclaration(expression) {
+  if (
+    ts.isPropertyAccessExpression(expression) &&
+    expression.expression.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    for (let ancestor = expression.parent; ancestor; ancestor = ancestor.parent) {
+      if (!ts.isClassDeclaration(ancestor) && !ts.isClassExpression(ancestor)) continue;
+      for (const member of ancestor.members) {
+        if (ts.isPropertyDeclaration(member) && member.name.getText() === expression.name.text)
+          return member;
+        if (ts.isConstructorDeclaration(member)) {
+          const parameter = member.parameters.find(
+            (item) => item.name.getText() === expression.name.text
+          );
+          if (parameter) return parameter;
+        }
+      }
+      return null;
+    }
+  }
+  if (!ts.isIdentifier(expression)) return null;
+  for (let ancestor = expression.parent; ancestor; ancestor = ancestor.parent) {
+    if (ts.isFunctionLike(ancestor)) {
+      const parameter = ancestor.parameters.find((item) => item.name.getText() === expression.text);
+      if (parameter) return parameter;
+    }
+    if (ts.isBlock(ancestor) || ts.isSourceFile(ancestor)) {
+      for (const statement of ancestor.statements) {
+        if (!ts.isVariableStatement(statement)) continue;
+        const declaration = statement.declarationList.declarations.find(
+          (item) => ts.isIdentifier(item.name) && item.name.text === expression.text
+        );
+        if (declaration) return declaration;
+      }
+    }
+  }
+  return null;
 }
 
 function isLegacyDecimalIdentifier(identifier) {

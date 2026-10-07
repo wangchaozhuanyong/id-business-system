@@ -14,7 +14,10 @@ export type {
   ReverseIdBusinessV2FinanceJournalDto,
   UpdateIdBusinessV2FinanceAccountDto
 } from './dto/id-business-v2-finance.dto';
-export { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
+export {
+  IdBusinessV2FinanceFxService,
+  type ResolveStoredFinanceRateInput
+} from './id-business-v2-finance-fx.service';
 export {
   decimalJson,
   normalizeFinanceCurrency,

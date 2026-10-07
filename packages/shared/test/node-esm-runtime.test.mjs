@@ -221,3 +221,22 @@ test('换汇扣费计算使用十进制且币种中文目录完整', async () =>
       })
     );
 });
+
+test('普通订单币种契约与持久化兼容映射一致，财务扩展币种保持独立', async () => {
+  const {
+    V2_ORDER_RECEIPT_CURRENCIES,
+    V2_FINANCE_CURRENCIES,
+    isV2OrderReceiptCurrency,
+    legacyFinanceCurrency
+  } = await import('../dist/index.js');
+  assert.deepEqual(V2_ORDER_RECEIPT_CURRENCIES, ['CNY', 'MYR', 'USD', 'USDT']);
+  for (const currency of V2_FINANCE_CURRENCIES) {
+    const supported = V2_ORDER_RECEIPT_CURRENCIES.includes(currency);
+    assert.equal(isV2OrderReceiptCurrency(currency), supported);
+    if (supported) assert.equal(legacyFinanceCurrency(currency), currency);
+    else assert.throws(() => legacyFinanceCurrency(currency), /原业务不支持该币种/);
+  }
+  for (const value of [null, undefined, '', 'cny', 'UNKNOWN', 1])
+    assert.equal(isV2OrderReceiptCurrency(value), false);
+  assert.equal(V2_FINANCE_CURRENCIES.length, 26);
+});

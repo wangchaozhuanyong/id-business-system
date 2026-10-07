@@ -290,11 +290,6 @@
   grid-template-columns: 1fr;
 }
 
-.v2-form-drawer__body .el-select,
-.v2-form-drawer__body .el-input-number {
-  width: 100%;
-}
-
 @media (max-width: 1180px) {
   .v2-records-toolbar,
   .v2-records-toolbar--accounts {

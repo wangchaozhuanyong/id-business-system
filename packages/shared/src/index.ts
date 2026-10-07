@@ -187,6 +187,11 @@ export {
   type V2WorkspaceShortcutList
 } from './v2/workspace.js';
 export {
+  V2_ORDER_RECEIPT_CURRENCIES,
+  isV2OrderReceiptCurrency,
+  type V2OrderReceiptCurrency
+} from './v2/order-receipt.js';
+export {
   V2_FINANCE_ACCOUNT_TYPES,
   V2_FINANCE_CURRENCIES,
   V2_FINANCE_CURRENCY_OPTIONS,

@@ -1,3 +1,5 @@
+import type { V2OrderReceiptCurrency } from '@apple-business/shared';
+
 export type V2OrderStatus =
   | 'draft'
   | 'pending'
@@ -71,7 +73,7 @@ export interface V2Order {
   hasWebsiteAccount: boolean;
   receivedAmount: string;
   receivedOriginalAmount: string;
-  receivedCurrency: V2FinanceCurrency;
+  receivedCurrency: V2OrderReceiptCurrency;
   receivedFxRateToCny: string;
   receivedFxSnapshotId: string | null;
   receivedFinanceAccountId: string | null;
@@ -260,7 +262,7 @@ export interface CreateV2OrderInput {
   websiteAccount?: string | null;
   receivedAmount?: string;
   receivedOriginalAmount: string;
-  receivedCurrency: V2FinanceCurrency;
+  receivedCurrency: V2OrderReceiptCurrency;
   receivedFinanceAccountId?: string | null;
   receivedFxRateToCny?: string;
   receivedFxSnapshotId?: string;

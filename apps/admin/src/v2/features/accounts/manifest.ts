@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const accountsFeature = defineV2Feature({
   key: 'accounts',
@@ -26,6 +25,9 @@ export const accountsFeature = defineV2Feature({
       options: ['正常', '冻结', '余额封控']
     }
   ],
-  tables: v2TablesByFeature['accounts'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['accounts']
+    ),
   loadView: () => import('./V2AccountsView.vue')
 });

@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const dashboardFeature = defineV2Feature({
   key: 'dashboard',
@@ -11,6 +10,9 @@ export const dashboardFeature = defineV2Feature({
   freshnessPolicy: 'event-with-deadline',
   summary: '按权限汇总今日业务、待办风险、ID 库存成本和团队审计摘要。',
   filters: [],
-  tables: v2TablesByFeature['dashboard'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['dashboard']
+    ),
   loadView: () => import('./V2DashboardView.vue')
 });

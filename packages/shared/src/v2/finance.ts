@@ -1,4 +1,5 @@
 import type { DecimalString, IsoDateTimeString, PaginatedResult } from './common.js';
+import { isV2OrderReceiptCurrency, type V2OrderReceiptCurrency } from './order-receipt.js';
 
 export const V2_FINANCE_CURRENCIES = [
   'CNY',
@@ -536,7 +537,7 @@ export type V2FinanceInflowPage = PaginatedResult<V2FinanceInflow> & {
 };
 export type V2FinanceSupplierLedgerPage = PaginatedResult<V2FinanceSupplierLedgerEntry>;
 
-export function legacyFinanceCurrency(value: string): 'CNY' | 'MYR' | 'USD' | 'USDT' {
-  if (value === 'CNY' || value === 'MYR' || value === 'USD' || value === 'USDT') return value;
+export function legacyFinanceCurrency(value: string): V2OrderReceiptCurrency {
+  if (isV2OrderReceiptCurrency(value)) return value;
   throw new Error('原业务不支持该币种');
 }

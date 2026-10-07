@@ -21,7 +21,7 @@ defineOptions({
 
 const props = withDefaults(
   defineProps<{
-    variant?: 'default' | 'primary' | 'soft' | 'danger' | 'success' | 'ghost';
+    variant?: 'default' | 'primary' | 'soft' | 'danger' | 'success' | 'warning' | 'ghost';
     loading?: boolean;
     disabled?: boolean;
     iconOnly?: boolean;

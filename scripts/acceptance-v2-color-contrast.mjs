@@ -16,7 +16,7 @@ const screenshotDirectory = process.env.V2_COLOR_CONTRAST_SCREENSHOT_DIR
   : null;
 const themes = ['light', 'dark'];
 const viewportWidths = [1440, 390];
-const variants = ['default', 'primary', 'soft', 'danger', 'success', 'ghost'];
+const variants = ['default', 'primary', 'soft', 'danger', 'success', 'warning', 'ghost'];
 const statusTypes = ['primary', 'success', 'warning', 'danger', 'info'];
 
 assert.ok(

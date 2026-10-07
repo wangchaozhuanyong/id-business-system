@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const brandingFeature = defineV2Feature({
   key: 'branding',
@@ -11,6 +10,9 @@ export const brandingFeature = defineV2Feature({
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [{ key: 'keyword', label: '搜索', kind: 'search', placeholder: '品牌文案' }],
-  tables: v2TablesByFeature['branding'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['branding']
+    ),
   loadView: () => import('./V2BrandingSettingsView.vue')
 });

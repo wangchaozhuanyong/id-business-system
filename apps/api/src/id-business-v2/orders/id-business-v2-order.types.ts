@@ -1,6 +1,7 @@
 import type { Amount4, Rate8 } from '../runtime/public-api';
+import type { V2OrderReceiptCurrency } from '@apple-business/shared';
 
-export type IdBusinessV2FinanceCurrency = 'CNY' | 'MYR' | 'USD' | 'USDT';
+export type IdBusinessV2FinanceCurrency = V2OrderReceiptCurrency;
 
 export type IdBusinessV2OrderStatus =
   | 'draft'
