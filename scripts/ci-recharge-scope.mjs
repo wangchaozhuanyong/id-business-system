@@ -27,6 +27,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/recharge-pro-main80-20261006.json',
   'deploy/aws/recharge-pro-974-20261007.json',
   'deploy/aws/recharge-pro-2f-20261007.json',
+  'deploy/aws/recharge-pro-4c-20261008.json',
   'scripts/v2-release-mailbox-audit.mjs',
   'scripts/v2-release-mailbox-audit.test.mjs',
   'deploy/aws/historical-finance-20261005-mailbox-batch.json',
@@ -64,6 +65,33 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/maintain-image-cache.py',
   'scripts/production-release/maintain-image-cache.test.py'
 ]);
+const recharge4cProfile = 'deploy/aws/recharge-pro-4c-20261008.json';
+const recharge4cSources = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py'
+]);
+const recharge4cControls = new Set([
+  recharge4cProfile,
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/remote-deploy.test.py',
+  'scripts/production-release/maintain-image-cache.py',
+  'scripts/production-release/maintain-image-cache.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'docs/V2_TASKS.md'
+]);
+function isRecharge4cOnly(paths) {
+  return (
+    paths.includes(recharge4cProfile) &&
+    paths.every((path) => recharge4cSources.has(path) || recharge4cControls.has(path))
+  );
+}
 const registrationProfileObservationProfile = 'deploy/aws/registration-worker-91-20261007.json';
 const registrationProfileObservationSources = new Set([
   'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
@@ -179,6 +207,7 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (paths.includes(recharge4cProfile)) return paths.every((path) => recharge4cControls.has(path));
   if (paths.includes(registrationFollowupProfile))
     return paths.every(isRegistrationFollowupControl);
   if (paths.includes(registrationLoginProfile)) return paths.every(isRegistrationLoginControl);
@@ -254,6 +283,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(recharge4cProfile)) {
+    if (!isRecharge4cOnly(paths)) return 'full';
+    return paths.some((path) => recharge4cSources.has(path)) ? 'recharge' : 'ci-only';
+  }
   if (paths.includes(registrationFollowupProfile)) {
     return paths.every(isRegistrationFollowupControl) ? 'ci-only' : 'full';
   }
@@ -405,6 +438,8 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(recharge4cProfile))
+    return isRecharge4cOnly(paths) && paths.some((path) => recharge4cSources.has(path));
   if (paths.includes(registrationLoginProfile))
     return (
       isRegistrationLoginOnly(paths) && paths.some((path) => registrationLoginSources.has(path))
@@ -446,6 +481,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(recharge4cProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationLoginProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationRecoveryProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
@@ -461,6 +497,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (isRecharge4cOnly(paths))
+    return paths.some((path) => recharge4cSources.has(path)) ? ['guards', 'connector'] : ['guards'];
   if (paths.includes(registrationFollowupProfile) && paths.every(isRegistrationFollowupControl))
     return ['guards'];
   if (isRegistrationRecoveryOnly(paths))

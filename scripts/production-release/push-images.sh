@@ -117,6 +117,54 @@ elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]
   test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
   python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope
   services=(auto-recharge)
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}"
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+  services=(auto-recharge)
+  recharge_worker_projection="$(python3 - <<'PY_D3FB_PUSH_PROJECTION'
+import hashlib, json, re
+from pathlib import Path
+
+def unique(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError('Fixed 4c push projection changed')
+        result[key] = value
+    return result
+
+def read(path):
+    raw = path.read_bytes()
+    if not 0 < len(raw) <= 128 * 1024:
+        raise ValueError('Fixed 4c push projection unavailable')
+    return json.loads(raw, object_pairs_hook=unique)
+
+profile = read(Path('deploy/aws/recharge-pro-4c-20261008.json'))
+marker = read(Path('.deploy/production-release/fixed-recharge-build-projection.json'))
+projection = profile.get('workerProjection') if isinstance(profile, dict) else None
+if (not isinstance(projection, dict) or len(projection) != 60
+        or not isinstance(marker, dict)
+        or set(marker) != {'version', 'id', 'contextPath', 'workerProjectionSha256'}
+        or type(marker['version']) is not int or marker['version'] != 1
+        or marker['id'] != 'recharge-pro-4c-20261008'
+        or not isinstance(marker['contextPath'], str)
+        or Path(marker['contextPath']).resolve() != Path('.deploy/production-release/fixed-recharge-context').resolve()
+        or not isinstance(marker['workerProjectionSha256'], str)
+        or not re.fullmatch(r'[a-f0-9]{64}', marker['workerProjectionSha256'])):
+    raise SystemExit('Fixed 4c push projection unavailable')
+digest = hashlib.sha256(json.dumps(projection, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+if digest != marker['workerProjectionSha256']:
+    raise SystemExit('Fixed 4c push projection changed')
+print(digest)
+PY_D3FB_PUSH_PROJECTION
+  )"
+  recharge_reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-auto-recharge"
+  test "$(docker image inspect "$recharge_reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+  test "$(docker image inspect "$recharge_reference" --format '{{ index .Config.Labels "id-business-v2.worker-projection-sha256" }}')" = "$recharge_worker_projection"
 elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1

@@ -62,6 +62,96 @@ test('the fixed 2f recharge profile selects deployment controls without business
   assert.equal(checkMode([...controls, worker], schema, schema), 'recharge');
   assert.deepEqual(selectedParts([...controls, worker]), ['guards', 'connector']);
 });
+test('the fixed 4c successor keeps its two Worker sources and reviewed controls in a single service scope', () => {
+  const profile = 'deploy/aws/recharge-pro-4c-20261008.json';
+  const sources = [
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py'
+  ];
+  const controls = [
+    profile,
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/maintain-image-cache.test.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(isCiOnly([profile]), true);
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const selected of [sources, ...sources.map((source) => [source])]) {
+    const paths = [...controls, ...selected];
+    assert.equal(isCiOnly(paths), false);
+    assert.equal(isRechargeOnly(paths, schema, schema), true);
+    assert.equal(isTargetedOnly(paths, schema, schema), true);
+    assert.equal(checkMode(paths, schema, schema), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+    assert.deepEqual(adminUiGuardChecks('recharge', paths), []);
+    assert.deepEqual(backendArchitectureGuardChecks('recharge', paths), []);
+  }
+  for (const outside of [
+    'deploy/aws/recharge-pro-4c-20261009.json',
+    profile + '.backup',
+    'deploy/aws/recharge-pro-4c-unreviewed.json',
+    'deploy/aws/recharge-pro-815-20261007.json',
+    'deploy/aws/recharge-pro-d3fb-20261007.json',
+    'deploy/aws/recharge-pro-2f-20261007.json',
+    'deploy/aws/registration-worker-93-20261007.json',
+    'deploy/aws/registration-worker-94-20261007.json',
+    'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile',
+    'apps/api/src/id-business-v2/auto-recharge/worker/payment.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/features/auto-recharge/AutoRechargePage.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/service-image-retention.py',
+    'scripts/production-release/browser-cache-input.py',
+    'scripts/production-release/browser-cache-input.test.py',
+    'scripts/production-release/build-image-cache.test.py',
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-readonly.py',
+    'scripts/production-release/api-admin-scope.test.py',
+    'scripts/check-v2-module-architecture.mjs',
+    'scripts/check-v2-prisma-runtime-boundary.mjs',
+    'scripts/check-v2-concurrency-standard.mjs',
+    'apps/admin/src/components/ui/AppButton.vue',
+    'scripts/admin-skin-rules.mjs',
+    'scripts/acceptance-v2-skin-consistency.mjs',
+    'docs/AUTO_REGISTRATION.md',
+    '.env.example',
+    'package-lock.json'
+  ]) {
+    for (const paths of [
+      [...controls, outside],
+      [...controls, ...sources, outside]
+    ]) {
+      assert.equal(checkMode(paths, schema, schema), 'full', outside);
+      assert.equal(isCiOnly(paths), false, outside);
+      assert.equal(isRechargeOnly(paths, schema, schema), false, outside);
+      assert.equal(isTargetedOnly(paths, schema, schema), false, outside);
+    }
+  }
+  for (const unknown of [
+    'deploy/aws/recharge-pro-4c-20261009.json',
+    profile + '.backup',
+    'deploy/aws/recharge-pro-4c-unreviewed.json',
+    'deploy/aws/recharge-pro-815-20261007.json',
+    'deploy/aws/recharge-pro-d3fb-20261007.json'
+  ]) {
+    assert.equal(isCiOnly([unknown]), false);
+    assert.equal(checkMode([unknown], schema, schema), 'full');
+  }
+});
 test('historical audit controls use their four exact reviewed paths', () => {
   const controls = [
     'deploy/aws/historical-finance-20261005-registration-continuation.json',
@@ -987,6 +1077,8 @@ test('fixed94 control-only runtime followup never widens unchanged Worker or API
     'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
     'deploy/aws/registration-worker-93-20261007.json',
     'deploy/aws/recharge-pro-2f-20261007.json',
+    'deploy/aws/recharge-pro-815-20261007.json',
+    'deploy/aws/recharge-pro-4c-20261008.json',
     'package-lock.json',
     'apps/api/prisma-mysql/schema.prisma',
     'docs/UNREVIEWED.md',

@@ -94,6 +94,14 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; 
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope
 fi
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}"
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+fi
 if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1
@@ -150,6 +158,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'recharge-pro-main80-20261006',
                          'recharge-pro-974-20261007',
                          'recharge-pro-2f-20261007',
+                         'recharge-pro-4c-20261008',
                          'registration-worker-b8-80-20261006',
                          'registration-worker-956-20261006',
                          'registration-worker-85-20261006',
@@ -189,6 +198,13 @@ elif history_policy == 'recharge-pro-menu-7f-20261005':
 elif history_policy == 'recharge-pro-main80-20261006':
     assert previous == 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' and admin_only == 'false'
     scope_flag += ' --recharge-pro-main80'
+elif history_policy == 'recharge-pro-4c-20261008':
+    assert previous == '4c170e661c871dc14dccc98a8d6e5cf983141341' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT',
+        'POST_CLEANUP_SEAL_SHA256', 'ORDER_ARCHIVE_SEAL_SHA256', 'ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'))
+    assert not os.environ.get('RELEASE_BROWSER_CACHE_IMAGE') and not os.environ.get('RELEASE_BROWSER_CACHE_IMAGE_ID')
+    scope_flag += ' --recharge-pro-d3fb'
 elif history_policy == 'recharge-pro-2f-20261007':
     assert previous == '2f24cf81007429ea474da404a30bc74da9d43ce1' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
