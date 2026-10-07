@@ -4880,7 +4880,7 @@ REGISTRATION_RECOVERY_VALIDATION_SHA256 = {'apps/api/src/id-business-v2/auto-rec
  'apps/api/src/id-business-v2/auto-registration/registration-jobs.service.spec.ts': 'c0a8ea2589823971cf691f0ebf3aeb26e9a7a2881d4d31e33a4c1a165afd9638',
  'apps/api/src/id-business-v2/auto-registration/registration-mysql.integration.spec.ts': 'fd8f09b6368d34e40b9e97e1d931aa152c3329d48413a7fd84f8c2fec2bf30cb',
  'apps/api/src/id-business-v2/auto-registration/registration-worker.spec.ts': '5bfe2d7e0d41ec9bc6bc9303ab75b9694639bc0ba7bfb2cf538dee2919412c24',
- 'docs/V2_TASKS.md': 'cc7be73eca3aa77cc05eba17c3cdde46e55edb4da26f96bc766e195b6ba6bd68'}
+ 'docs/V2_TASKS.md': '4cd5d2924af13bbab521cc5dedb8bc464d0b09e6c223ee3a0bcb3eb0bf0e7200'}
 REGISTRATION_RECOVERY_PROJECTION_SHA256 = '7da05ef7e0d74d84f84d33c2bbcc9a3f7daa67270cb87ecc7ac468016f714907'
 REGISTRATION_RECOVERY_API_PROJECTION_SHA256 = '4100a9186d94b81aacc6f4f0d2f3d7c6277adac7cad3a2a6ffea50d56815f454'
 REGISTRATION_RECOVERY_HANDOFF = {'attempt': 5,

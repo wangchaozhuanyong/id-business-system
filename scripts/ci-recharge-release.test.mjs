@@ -3410,6 +3410,43 @@ test('fixed 974 workflow chooses independent approval readback and cache skip pr
   );
 });
 
+test('formatting excludes only the generated Worker browser cache and retains full CI fallback', async () => {
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const manifest = require.resolve('prettier/package.json');
+  const config = JSON.parse(readFileSync(manifest, 'utf8'));
+  const binary = typeof config.bin === 'string' ? config.bin : config.bin.prettier;
+  const prettier = join(manifest, '..', binary);
+  const output = join(process.cwd(), '.runtime/registration-fingerprint-prepare-repair-20261007');
+  mkdirSync(output, { recursive: true });
+  const root = mkdtempSync(join(output, 'formatter-browser-cache-'));
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  const cache = join(root, worker, '.browsers/chromium-123/browser');
+  const source = join(root, worker, 'inspected-source.js');
+  try {
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(root, '.prettierignore'), readFileSync('.prettierignore'));
+    writeFileSync(join(cache, 'third-party.js'), 'if (');
+    writeFileSync(join(cache, 'third-party.json'), 'not valid JSON');
+    writeFileSync(source, 'const checked = 1;\n');
+    const check = () => execFileSync(process.execPath, [prettier, '--check', '.'], { cwd: root });
+    assert.doesNotThrow(check);
+    writeFileSync(source, 'const checked=1\n');
+    assert.throws(
+      check,
+      (error) => error.status === 1 && error.stderr.toString().includes('inspected-source.js')
+    );
+    assert.equal(readFileSync(join(cache, 'third-party.js'), 'utf8'), 'if (');
+    assert.equal(readFileSync(join(cache, 'third-party.json'), 'utf8'), 'not valid JSON');
+    assert.equal(
+      checkMode(['deploy/aws/registration-worker-92-20261007.json', '.prettierignore']),
+      'full'
+    );
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
 test('fixed92 transport and workflow bind API80 plus actual91 projections without generic services or cache maintenance', () => {
   const profile = 'registration-worker-92-20261007';
   const baseline = '974c62cc1681012ecff897aefc90d2cd9900004a';
