@@ -632,21 +632,170 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', 0): await flow.register()
         flow.page.goto.assert_awaited_once()
 
-    async def test_old_registered_checkpoint_requires_manual_onboarding_without_step_replay(self):
+    async def test_transient_registered_profile_clears_without_manual_or_step_replay(self):
         flow = self.flow(); flow.challenge = AsyncMock(return_value=False)
-        flow.profile_fields = AsyncMock(side_effect=[(None, None, None, None), None])
+        flow.profile_fields = AsyncMock(side_effect=[(None, None, None, None), None, None])
         flow.job.manual = AsyncMock()
         await flow.guard_registered_onboarding()
-        flow.job.manual.assert_awaited_once_with('form_unrecognized')
+        flow.job.manual.assert_not_awaited()
         flow.page.goto.assert_not_awaited()
 
     async def test_old_registered_checkpoint_cannot_continue_while_profile_is_pending(self):
         flow = self.flow(); flow.challenge = AsyncMock(return_value=False)
         flow.profile_fields = AsyncMock(return_value=(None, None, None, None))
+        from browser_session import SessionBudget
+        flow.observation_budget = SessionBudget(.04, cancelled=flow.job.cancelled.is_set)
+        async def settle(_seconds): await asyncio.sleep(.01)
+        flow.settle = settle
         flow.job.manual = AsyncMock()
         with self.assertRaises(Stop) as stopped: await flow.guard_registered_onboarding()
         self.assertEqual(stopped.exception.report['reason'], 'form_unrecognized')
         flow.page.goto.assert_not_awaited()
+
+
+class RegisteredOnboardingObservationTests(unittest.IsolatedAsyncioTestCase):
+    def flow(self, seconds=.08):
+        from browser_session import SessionBudget
+        from registration_browser import REGISTERED_AUTH_RECOVERY
+        flow = RecoveryTests().flow('https://chatgpt.com/')
+        flow.data['registered'] = True
+        flow.registration_state[REGISTERED_AUTH_RECOVERY] = {'guard': None}
+        flow.challenge = AsyncMock(return_value=False)
+        flow.profile_fields = AsyncMock(return_value=None)
+        flow.observation_budget = SessionBudget(seconds, cancelled=flow.job.cancelled.is_set)
+        async def settle(_seconds): await asyncio.sleep(.005)
+        flow.settle = settle
+        return flow
+
+    def untouched(self, flow):
+        flow.page.goto.assert_not_awaited(); flow.page.reload.assert_not_awaited()
+        self.assertFalse(any(flow.registration_state.get(key) for key in (
+            'email_submitted', 'code_submitted', 'profile_submitted',
+            'password_submitted', 'mfa_submitted')))
+
+    async def test_transient_code_and_loading_reobserve_without_replaying(self):
+        for kind in ['code', 'loading', 'ambiguous']:
+            with self.subTest(kind=kind):
+                flow = self.flow()
+                codes = [object(), None, None] if kind == 'code' else [None, None, None]
+                if kind == 'loading':
+                    async def challenge():
+                        flow.registration_loading = flow.challenge.await_count == 1
+                        return False
+                    flow.challenge.side_effect = challenge
+                if kind == 'ambiguous':
+                    flow.profile_fields.side_effect = [Stop('form_unrecognized'), None, None]
+                with patch('registration_browser.unique_visible', AsyncMock(side_effect=codes)):
+                    await flow.guard_registered_onboarding()
+                flow.job.manual.assert_not_awaited(); self.untouched(flow)
+                self.assertEqual(flow.job.registration_last_observed_view, 'unknown')
+
+    async def test_stable_code_profile_and_ambiguity_pause_with_closed_view(self):
+        for kind, view in [('code', 'code'), ('profile', 'profile'), ('ambiguous', 'unknown')]:
+            with self.subTest(kind=kind):
+                flow = self.flow(.03)
+                if kind == 'profile': flow.profile_fields.return_value = (None, None, None, None)
+                if kind == 'ambiguous': flow.profile_fields.side_effect = Stop('form_unrecognized')
+                with patch('registration_browser.unique_visible', AsyncMock(return_value=object() if kind == 'code' else None)):
+                    with self.assertRaises(Stop) as stopped: await flow.guard_registered_onboarding()
+                self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+                flow.job.manual.assert_awaited_once_with('form_unrecognized')
+                self.assertEqual(flow.job.registration_last_observed_view, view)
+                self.untouched(flow)
+
+    async def test_explicit_challenge_pauses_immediately(self):
+        flow = self.flow(15); flow.challenge.return_value = True
+        with self.assertRaises(Stop): await flow.guard_registered_onboarding()
+        flow.job.manual.assert_awaited_once_with('verification_required')
+        self.assertEqual(flow.challenge.await_count, 1)
+        self.assertEqual(flow.job.registration_last_observed_view, 'verification')
+        self.untouched(flow)
+
+    async def test_consumed_observation_budget_is_not_restarted(self):
+        flow = self.flow(.10); budget = flow.observation_budget
+        budget.started -= .08
+        flow.profile_fields.return_value = (None, None, None, None)
+        started = time.monotonic()
+        with patch.object(flow, 'recovery_budget', side_effect=AssertionError('budget restarted')):
+            with patch('registration_browser.unique_visible', AsyncMock(return_value=None)):
+                with self.assertRaises(Stop): await flow.guard_registered_onboarding()
+        self.assertLess(time.monotonic() - started, .08)
+        self.assertIs(flow.observation_budget, budget); self.untouched(flow)
+
+    async def test_task_deadline_bounds_hanging_dom_read_even_with_supplied_budget(self):
+        flow = self.flow(15); budget = flow.observation_budget
+        flow.job.deadline = time.monotonic() + .04
+        from registration_job import RegistrationJob
+        flow.job.waiting_for_user = False; flow.job.manual_reason = None
+        flow.job.check = lambda: RegistrationJob.check(flow.job)
+        cancelled = asyncio.Event()
+        async def hanging():
+            try: await asyncio.Event().wait()
+            finally: cancelled.set()
+        flow.challenge.side_effect = hanging
+        started = time.monotonic()
+        with self.assertRaises(Stop) as stopped: await flow.guard_registered_onboarding()
+        self.assertEqual(stopped.exception.report['reason'], 'mailbox_timeout')
+        flow.job.manual.assert_not_awaited()
+        self.assertLess(time.monotonic() - started, .2)
+        self.assertTrue(cancelled.is_set()); self.assertIs(flow.observation_budget, budget)
+        self.untouched(flow)
+
+    async def test_clear_pending_clear_clear_cannot_exit_on_first_clear(self):
+        flow = self.flow()
+        with patch('registration_browser.unique_visible', AsyncMock(side_effect=[None, object(), None, None])) as codes:
+            await flow.guard_registered_onboarding()
+        self.assertEqual(codes.await_count, 4)
+        flow.job.manual.assert_not_awaited(); self.untouched(flow)
+
+    async def test_timed_out_read_preserves_last_completed_closed_observation(self):
+        flow = self.flow(.04)
+        async def challenge():
+            if flow.challenge.await_count > 1: await asyncio.Event().wait()
+            return False
+        flow.challenge.side_effect = challenge
+        with patch('registration_browser.unique_visible', AsyncMock(return_value=object())):
+            with self.assertRaises(Stop): await flow.guard_registered_onboarding()
+        self.assertEqual(flow.job.registration_last_observed_view, 'code')
+        flow.job.manual.assert_awaited_once_with('form_unrecognized'); self.untouched(flow)
+
+    async def test_cancel_during_dom_read_or_settle_never_manual(self):
+        for kind in ['read', 'settle']:
+            with self.subTest(kind=kind):
+                flow = self.flow(.08)
+                async def cancel():
+                    flow.job.cancelled.set(); await asyncio.sleep(.01); return False
+                if kind == 'read': flow.challenge.side_effect = cancel
+                else:
+                    flow.profile_fields.return_value = (None, None, None, None)
+                    async def settle(_seconds): await cancel()
+                    flow.settle = settle
+                with patch('registration_browser.unique_visible', AsyncMock(return_value=None)):
+                    with self.assertRaises(Stop) as stopped: await flow.guard_registered_onboarding()
+                self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+                flow.job.manual.assert_not_awaited(); self.untouched(flow)
+
+    async def test_explicit_resume_rechecks_once_and_cannot_restart_passive_loop(self):
+        for resolved in [True, False]:
+            with self.subTest(resolved=resolved):
+                flow = self.flow(.03); budget = flow.observation_budget
+                flow.profile_fields.return_value = (None, None, None, None)
+                async def owner_resume(_reason):
+                    if resolved: flow.profile_fields.return_value = None
+                flow.job.manual = AsyncMock(side_effect=owner_resume)
+                with patch('registration_browser.unique_visible', AsyncMock(return_value=None)):
+                    if resolved: await flow.guard_registered_onboarding()
+                    else:
+                        with self.assertRaises(Stop) as stopped: await flow.guard_registered_onboarding()
+                        self.assertEqual(stopped.exception.report['reason'], 'form_unrecognized')
+                flow.job.manual.assert_awaited_once_with('form_unrecognized')
+                self.assertIs(flow.observation_budget, budget); self.untouched(flow)
+
+    async def test_unclassified_observation_failure_is_not_hidden(self):
+        flow = self.flow(); flow.challenge.side_effect = Stop('official_login_not_verified')
+        with self.assertRaises(Stop) as stopped: await flow.guard_registered_onboarding()
+        self.assertEqual(stopped.exception.report['reason'], 'official_login_not_verified')
+        flow.job.manual.assert_not_awaited(); self.untouched(flow)
 
 
 class RegisteredPasswordRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -1309,7 +1458,7 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.goto.await_count, 2)
         for call in page.goto.await_args_list:
             self.assertEqual(call.args, ('https://chatgpt.com/auth/login',))
-            self.assertEqual(call.kwargs, {'wait_until':'domcontentloaded', 'timeout':0})
+            self.assertEqual(call.kwargs, {'wait_until':'commit', 'timeout':0})
         flow.job.prepare_mail.assert_not_called()
         context.close.assert_awaited_once()
 
@@ -1536,6 +1685,129 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow.job.registration_operation, 'verification_cleanup')
         self.assertEqual(field.press.await_count, 2)
         self.assertFalse(hasattr(flow.job, 'registration_verification_error'))
+
+
+class VerificationCheckpointTests(unittest.IsolatedAsyncioTestCase):
+    def flow(self, owned=False):
+        factory = OwnedRegisteredAuthenticationTests if owned else VerificationFailureDiagnosticsTests
+        flow, context, page = factory.flow(self)
+        fields = VerificationFailureDiagnosticsTests.login_fields(self,flow,password=True)
+        flow.job.id = '11111111-1111-4111-8111-111111111111'; flow.job.attempt = 9
+        flow.identity = AsyncMock(side_effect=[None,None,('private-target','private-account')])
+        return flow, context, page, fields
+
+    def checkpoints(self, logger):
+        return [call for call in logger.warning.call_args_list
+                if call.args[0].startswith('Registration verification checkpoint ')]
+
+    async def test_recognized_email_enter_return_precedes_identity_and_never_proves_security(self):
+        for owned in [False,True]:
+            with self.subTest(owned=owned):
+                flow, context, page, fields = self.flow(owned)
+                with patch('registration_browser.login_code_type',AsyncMock(return_value='email')), patch(
+                        'registration_browser.logging.getLogger') as logger:
+                    self.assertIs(await flow.verify_login(_owned_context=owned),not owned)
+                calls = self.checkpoints(logger.return_value)
+                self.assertEqual([call.args[3] for call in calls],['email_code_returned','same_email_identity_confirmed'])
+                for call in calls:
+                    self.assertEqual(call.args[1:],(flow.job.id,9,call.args[3],owned,True))
+                    self.assertEqual(len(call.args),6)
+                    self.assertNotIn('accepted',call.args[0])
+                flow.job.wait_code.assert_awaited_once();self.assertEqual(flow.identity.await_count,3)
+                for field in fields:field.press.assert_awaited_once_with('Enter')
+                page.goto.assert_awaited_once()
+                self.assertFalse(flow.data.get('passwordVerified',False));self.assertFalse(flow.data.get('mfaVerified',False))
+                output=repr([call.args for call in calls])
+                for private in [flow.data['email'],flow.data['password'],'123456','private-target','private-account']:
+                    self.assertNotIn(private,output)
+                self.assertEqual(context.close.await_count,0 if owned else 1)
+
+    async def test_wait_or_enter_failure_never_records_code_return_or_identity(self):
+        for location in ['wait','enter']:
+            with self.subTest(location=location):
+                flow, _context, _page, fields = self.flow()
+                original = Stop('verification_required')
+                if location=='wait':flow.job.wait_code.side_effect=original
+                else:fields[2].press.side_effect=original
+                with patch('registration_browser.login_code_type',AsyncMock(return_value='email')), patch(
+                        'registration_browser.logging.getLogger') as logger:
+                    with self.assertRaises(Stop) as stopped:await flow.verify_login()
+                self.assertIs(stopped.exception,original)
+                self.assertEqual(self.checkpoints(logger.return_value),[])
+                self.assertEqual(flow.identity.await_count,2)
+                flow.job.wait_code.assert_awaited_once()
+
+    async def test_identity_without_email_code_records_false_after_flag(self):
+        flow, _context, _page, fields = self.flow()
+        flow.identity.side_effect=[None,('private-target','private-account')]
+        with patch('registration_browser.logging.getLogger') as logger:
+            self.assertTrue(await flow.verify_login())
+        calls=self.checkpoints(logger.return_value);self.assertEqual(len(calls),1)
+        self.assertEqual(calls[0].args[3:],('same_email_identity_confirmed',False,False))
+        fields[2].press.assert_not_awaited();flow.job.wait_code.assert_not_awaited()
+
+    async def test_wrong_identity_and_unknown_code_cannot_record_identity_confirmation(self):
+        for kind in ['identity','code']:
+            with self.subTest(kind=kind):
+                flow, _context, _page, _fields = self.flow()
+                flow.identity.side_effect=[Stop('official_login_email_mismatch')] if kind=='identity' else [None,None]
+                with patch('registration_browser.login_code_type',AsyncMock(return_value='unknown')), patch(
+                        'registration_browser.logging.getLogger') as logger:
+                    with self.assertRaises(Stop):await flow.verify_login()
+                self.assertEqual(self.checkpoints(logger.return_value),[])
+                flow.job.wait_code.assert_not_awaited()
+
+    async def test_invalid_metadata_is_skipped_without_stringifying_private_objects(self):
+        class Private:
+            def __str__(self):raise AssertionError('Do not stringify private metadata')
+        for job_id,attempt in [(Private(),9),('email=private',9),
+                ('11111111-1111-4111-8111-111111111111',Private()),
+                ('11111111-1111-4111-8111-111111111111',True),
+                ('11111111-1111-4111-8111-111111111111',0),
+                ('11111111-1111-4111-8111-111111111111',2147483648)]:
+            with self.subTest(attempt_type=type(attempt).__name__):
+                flow, _context, _page, _fields=self.flow();flow.job.id=job_id;flow.job.attempt=attempt
+                flow.identity.side_effect=[None,('private-target','private-account')]
+                with patch('registration_browser.logging.getLogger') as logger:
+                    self.assertTrue(await flow.verify_login())
+                logger.assert_not_called()
+
+    async def test_nonboolean_owned_context_is_rejected_without_canary_logging(self):
+        class Private:
+            def __str__(self):raise AssertionError('Do not stringify owned context')
+        for value in ['CANARY-private-owned-context',Private(),1,None]:
+            flow, _context, _page, _fields=self.flow()
+            with patch('registration_browser.logging.getLogger') as logger:
+                with self.assertRaises(Stop) as stopped:await flow.verify_login(_owned_context=value)
+            self.assertEqual(stopped.exception.report['reason'],'builtin_profile_missing')
+            logger.assert_not_called();flow.job.new_verification_context.assert_not_awaited()
+
+    async def test_checkpoint_logger_failure_cannot_change_login_or_repeat_writes(self):
+        class PrivateError(Exception):
+            def __str__(self):raise AssertionError('Do not read logger failure text')
+        flow, context, page, fields=self.flow()
+        with patch('registration_browser.login_code_type',AsyncMock(return_value='email')), patch(
+                'registration_browser.logging.getLogger') as logger:
+            logger.return_value.warning.side_effect=PrivateError()
+            self.assertTrue(await flow.verify_login())
+        self.assertEqual(logger.return_value.warning.call_count,2)
+        for field in fields:field.press.assert_awaited_once_with('Enter')
+        page.goto.assert_awaited_once();context.close.assert_awaited_once()
+        self.assertFalse(hasattr(flow.job,'registration_verification_error'))
+
+    async def test_checkpoint_logger_failure_preserves_later_primary_and_cleanup_failures(self):
+        flow, context, _page, fields=self.flow();primary=Stop('official_login_email_mismatch')
+        flow.identity.side_effect=[None,None,primary];context.close.side_effect=RuntimeError('private cleanup')
+        def log(message,*_args):
+            if message.startswith('Registration verification checkpoint '):raise RuntimeError('private logger')
+        with patch('registration_browser.login_code_type',AsyncMock(return_value='email')), patch(
+                'registration_browser.logging.getLogger') as logger:
+            logger.return_value.warning.side_effect=log
+            with self.assertRaises(Stop) as stopped:await flow.verify_login()
+        self.assertIs(stopped.exception,primary)
+        self.assertEqual(flow.job.registration_verification_error['reason'],'official_login_email_mismatch')
+        self.assertEqual(flow.job.registration_verification_cleanup_error['error_type'],'UnexpectedError')
+        fields[2].press.assert_awaited_once();context.close.assert_awaited_once()
 
 
 class VerificationEmailReadinessTests(unittest.IsolatedAsyncioTestCase):
@@ -2818,6 +3090,7 @@ class VerificationIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.requests = []; self.blocked = []; self.verifications = []
         self.session_reads = 0; self.account_reads = 0; self.authenticated = False
         self.verify_page = None; self.clean_cookie_context = False
+        self.peripheral_reads = 0; self.login_dcl = 0; self.native_form_ready = False
         await self.context.add_cookies([{'name':'original_only', 'value':'synthetic', 'domain':'chatgpt.com', 'path':'/'}])
         async def guard(route):await route.fallback()
         self.flow.guard = guard
@@ -2835,6 +3108,10 @@ class VerificationIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
           app.querySelector('form').onsubmit=async event=>{event.preventDefault();
             await fetch('/fixture/password',{method:'POST'});app.innerHTML='<main>Welcome</main>';};};
         </script></body></html>'''
+        if mode == 'deferred_login':
+            # The inline form handler is usable while a later peripheral script
+            # keeps DOMContentLoaded pending beyond the navigation budget.
+            html = html.replace('</body>', '<script defer src="/fixture/peripheral.js"></script></body>')
         if mode in {'owned_email','owned_email_pending'}:
             html=html.replace('<input type="password" autocomplete="current-password">',
                 '<p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code">').replace(
@@ -2855,7 +3132,22 @@ class VerificationIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.requests.append((request.method,path))
             if path == '/auth/login':
                 self.assertEqual(request.method,'GET')
-                await route.fulfill(content_type='text/html',body=html)
+                if mode == 'document_timeout':await asyncio.sleep(18)
+                try:
+                    await route.fulfill(content_type='text/html',body=html)
+                except Exception:
+                    if mode != 'document_timeout' or not self.verify_page.is_closed():raise
+            elif path == '/fixture/peripheral.js' and mode == 'deferred_login':
+                self.assertEqual(request.method,'GET'); self.peripheral_reads += 1
+                await asyncio.sleep(.2)
+                self.native_form_ready = await self.verify_page.evaluate('''() =>
+                    typeof document.querySelector('form')?.onsubmit === 'function'
+                    && !!document.querySelector('input[type=email]')?.getClientRects().length''')
+                await asyncio.sleep(18)
+                try:
+                    await route.fulfill(content_type='application/javascript',body='window.peripheralLoaded=true;')
+                except Exception:
+                    if not self.verify_page.is_closed():raise
             elif path == '/':
                 self.assertEqual(request.method,'GET'); self.assertTrue(self.authenticated)
                 await route.fulfill(content_type='text/html',body='''<!doctype html><html><title>Home</title><body><main>Welcome</main>
@@ -2892,6 +3184,9 @@ class VerificationIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
             await context.route('**/*',local)
             def page_created(page):
                 self.verify_page = page
+                if mode in {'deferred_login','document_timeout'}:
+                    page.on('domcontentloaded',lambda:setattr(self,'login_dcl',self.login_dcl+1)
+                        if urlsplit(page.url).path == '/auth/login' else None)
                 page.on('requestfailed',lambda request:self.blocked.append((request.method,urlsplit(request.url).path)))
             context.on('page',page_created)
             return context
@@ -2904,6 +3199,33 @@ class VerificationIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.job.prepare_mail.assert_called_once_with('password',new_request=True)
         self.assertFalse(self.job.payload['passwordVerified']); self.assertFalse(self.job.payload['mfaVerified'])
         self.assertIs(self.flow.page,self.page); self.assertEqual(self.context.pages,[self.page])
+
+    async def test_ready_login_ignores_deferred_peripheral_without_replaying_writes(self):
+        # Use the actual production settling delay and the unchanged 15s budget.
+        self.flow.settle = RegistrationBrowser.settle.__get__(self.flow)
+        await self.fixture('deferred_login')
+        self.assertTrue(await self.flow.verify_login())
+        self.assertTrue(self.native_form_ready)
+        self.assertEqual(self.peripheral_reads,1); self.assertEqual(self.login_dcl,0)
+        self.assertEqual([path for method,path in self.requests if path in {'/','/auth/login'}],['/auth/login'])
+        self.assertEqual(self.session_reads,3); self.assertEqual(self.account_reads,1)
+        self.assert_no_replay()
+
+    async def test_main_document_timeout_keeps_budget_and_never_enters_login(self):
+        self.flow.settle = RegistrationBrowser.settle.__get__(self.flow)
+        await self.fixture('document_timeout'); started = time.monotonic()
+        with self.assertLogs('registration',level='WARNING'):
+            with self.assertRaises(Stop) as stopped:await self.flow.verify_login()
+        self.assertEqual(stopped.exception.report['reason'],'session_load_timeout')
+        self.assertGreaterEqual(time.monotonic()-started,14)
+        self.assertLess(time.monotonic()-started,19)
+        self.assertEqual(self.job.registration_verification_error['subphase'],'get_first')
+        self.assertEqual(self.job.registration_verification_last_error['subphase'],'retry_budget')
+        self.assertEqual([path for method,path in self.requests if path=='/auth/login'],['/auth/login'])
+        self.assertEqual(self.login_dcl,0); self.assertEqual(self.session_reads,0)
+        self.assertFalse(any(method=='POST' for method,_path in self.requests))
+        self.job.prepare_mail.assert_not_called(); self.job.wait_code.assert_not_awaited()
+        self.assertFalse(self.job.payload['passwordVerified']); self.assertFalse(self.job.payload['mfaVerified'])
 
     async def test_network_failure_recovers_by_passive_identity_read_without_get(self):
         await self.fixture('network')
@@ -5396,6 +5718,28 @@ class VerificationEmailHydrationBrowserTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(context.pages,[self.flow.page]);await context.close()
                 else:self.assertIs(self.flow.page,original)
 
+    async def test_native_email_code_return_and_same_email_identity_checkpoints_are_closed(self):
+        for owned in [False,True]:
+            with self.subTest(owned=owned):
+                context, original = await self.login_fixture(owned,'post','post')
+                self.job.id='11111111-1111-4111-8111-111111111111';self.job.attempt=9
+                with self.assertLogs('registration',level='WARNING') as logs:
+                    self.assertIs(await self.flow.verify_login(_owned_context=owned),not owned)
+                self.assertEqual(len(logs.output),2)
+                self.assertIn('checkpoint=email_code_returned',logs.output[0])
+                self.assertIn('checkpoint=same_email_identity_confirmed',logs.output[1])
+                for line in logs.output:
+                    self.assertIn('owned_context='+str(owned),line)
+                    self.assertIn('after_email_code_returned=True',line)
+                    for private in [self.job.payload['email'],self.job.payload['password'],'123456','https://','accepted']:
+                        self.assertNotIn(private,line)
+                self.assertEqual([path for method,path in self.requests if method=='POST' and path not in {'/fixture/input','/fixture/preinput'}],
+                                 ['/auth/login','/fixture/password','/fixture/code'])
+                self.job.wait_code.assert_awaited_once();self.job.prepare_mail.assert_called_once()
+                self.assertFalse(self.job.payload['passwordVerified']);self.assertFalse(self.job.payload['mfaVerified'])
+                if owned:await context.close()
+                else:self.assertIs(self.flow.page,original)
+
     async def test_never_ready_get_form_never_fills_prepares_or_submits_mail(self):
         from registration_browser import REGISTERED_AUTH_RECOVERY
         for owned in [False, True]:
@@ -5764,3 +6108,117 @@ class VerificationInterstitialBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.requests.count(('GET','/auth/login')),1)
         self.assertGreater(self.session_reads,0);self.assertGreater(self.account_reads,0)
         self.assertEqual(context.pages,[]);self.assertEqual(self.errors,[])
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class RegisteredOnboardingObservationBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await ProfileBrowserTests.asyncSetUp(self)
+        self.job.payload['registered'] = True
+        self.flow.data['registered'] = True
+
+    async def asyncTearDown(self):
+        await ProfileBrowserTests.asyncTearDown(self)
+
+    async def fixture(self, markup, *, transient=False, seconds=3):
+        from browser_session import SessionBudget
+        from registration_browser import REGISTERED_AUTH_RECOVERY
+        self.requests = []; self.inputs = []; self.navigations = []
+        def part(value):
+            return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+        # All identity responses remain in RAM and use synthetic fixture data.
+        token = '.'.join((part({'alg': 'RS256'}), part({'exp': int(time.time()) + 3600,
+            'https://api.openai.com/auth': {'chatgpt_account_id': 'guard-fixture-account'},
+            'https://api.openai.com/profile': {'email': 'owner@example.test'}}), 'c3ludGhldGlj'))
+        session = {'accessToken': token, 'user': {'id': 'guard-fixture-user', 'email': 'owner@example.test'},
+            'account': {'id': 'guard-fixture-account'}}
+        async def local(route):
+            request = route.request; path = urlsplit(request.url).path
+            self.requests.append((request.method, path))
+            if request.method != 'GET':
+                await route.abort('blockedbyclient')
+            elif path == '/':
+                await route.fulfill(content_type='text/html', body='''<!doctype html><html><title>Welcome</title>
+                    <body><main id="root">Welcome</main><script>
+                    document.addEventListener('input',()=>fetch('/fixture/input',{method:'POST'}));
+                    document.addEventListener('submit',e=>{e.preventDefault();fetch('/fixture/submit',{method:'POST'});});
+                    </script></body></html>''')
+            elif path == '/api/auth/session':
+                await route.fulfill(content_type='application/json', body=json.dumps(session))
+            elif path == '/backend-api/accounts/check/v4-2023-04-27':
+                await route.fulfill(content_type='application/json', body=json.dumps({
+                    'accounts': {'guard-fixture-account': {'account': {'plan_type': 'free'}}}}))
+            else:
+                await route.abort('blockedbyclient')
+        await self.page.unroute('**/*')
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
+        self.flow.registration_state.clear()
+        self.flow.registration_state[REGISTERED_AUTH_RECOVERY] = {
+            'context': self.context, 'page': self.page, 'submitted': True, 'guard': None}
+        self.flow.observation_budget = None
+        self.assertTrue(await self.flow.identity())
+        self.assertGreater(self.requests.count(('GET', '/api/auth/session')), 0)
+        self.assertGreater(self.requests.count(('GET', '/backend-api/accounts/check/v4-2023-04-27')), 0)
+        self.requests_before_guard = list(self.requests)
+        self.contexts_before_guard = list(self.browser.contexts)
+        await self.page.evaluate('(html)=>{document.getElementById("root").innerHTML=html}', markup)
+        if transient:
+            await self.page.evaluate('()=>setTimeout(()=>{document.getElementById("root").textContent="Welcome"},500)')
+        self.flow.observation_budget = SessionBudget(seconds, cancelled=self.job.cancelled.is_set)
+        self.job.manual.reset_mock()
+
+    def untouched(self):
+        # Actual browser reads, selectors and official identity requests are used.
+        self.assertEqual(self.requests, self.requests_before_guard)
+        self.assertFalse(any(method != 'GET' for method, _path in self.requests))
+        self.assertEqual(self.browser.contexts, self.contexts_before_guard)
+        self.assertEqual(self.context.pages, [self.page])
+        self.assertEqual(self.page_errors, [])
+        self.assertFalse(any(self.flow.registration_state.get(key) for key in (
+            'email_submitted', 'code_submitted', 'profile_submitted',
+            'password_submitted', 'mfa_submitted')))
+
+    async def test_transient_native_controls_clear_after_verified_identity(self):
+        markup = {
+            'code': '<form><p>Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>',
+            'loading': '<div role="progressbar">Loading</div>',
+            'profile': '<form><input name="name"><input name="age"><button>Continue</button></form>',
+            'duplicate_code': '<form><p>Email verification code</p><input name="code"><input name="code"><button>Continue</button></form>',
+            'duplicate_name': '<form><input name="name"><input name="name"><input name="age"><button>Continue</button></form>',
+            'detached_profile': '<input name="name"><input name="age">'}
+        for kind, html in markup.items():
+            with self.subTest(kind=kind):
+                await self.fixture(html, transient=True)
+                await self.flow.guard_registered_onboarding()
+                self.job.manual.assert_not_awaited()
+                self.assertEqual(await self.page.locator('#root').inner_text(), 'Welcome')
+                self.untouched()
+
+    async def test_stable_native_pending_controls_preserve_pause(self):
+        markup = {
+            'code': ('code', '<form><p>Email verification code</p><input name="code"><button>Continue</button></form>'),
+            'profile': ('profile', '<form><input name="name"><input name="age"><button>Continue</button></form>'),
+            'loading': ('unknown', '<div role="progressbar">Loading</div>'),
+            'ambiguous': ('unknown', '<form><input name="name"><input name="age"><input name="age"><button>Continue</button></form>')}
+        for kind, (view, html) in markup.items():
+            with self.subTest(kind=kind):
+                await self.fixture(html, seconds=.8)
+                with self.assertRaises(Stop) as stopped: await self.flow.guard_registered_onboarding()
+                self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+                self.job.manual.assert_awaited_once_with('form_unrecognized')
+                self.assertEqual(self.job.registration_last_observed_view, view)
+                self.untouched()
+
+    async def test_native_clear_and_explicit_human_verification_boundaries(self):
+        await self.fixture('Welcome')
+        await self.flow.guard_registered_onboarding()
+        self.job.manual.assert_not_awaited(); self.untouched()
+        for html in ['<p>Verify you are human</p>',
+                     '<p>Authenticator app</p><input name="code" autocomplete="one-time-code">']:
+            with self.subTest(html=html):
+                await self.fixture(html)
+                with self.assertRaises(Stop): await self.flow.guard_registered_onboarding()
+                self.job.manual.assert_awaited_once_with('verification_required')
+                self.assertEqual(self.job.registration_last_observed_view, 'verification')
+                self.untouched()
