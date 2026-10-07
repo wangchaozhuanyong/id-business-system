@@ -134,6 +134,10 @@ const isRegistrationLoginControl = (path) =>
 const registrationFollowupProfile = 'deploy/aws/registration-worker-94-20261007.json';
 const isRegistrationFollowupControl = (path) =>
   path === registrationFollowupProfile ||
+  [
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-scope.test.py'
+  ].includes(path) ||
   (path !== registrationLoginProfile && isRegistrationLoginControl(path));
 function isRegistrationLoginOnly(paths) {
   return (

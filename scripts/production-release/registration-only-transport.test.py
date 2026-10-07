@@ -855,7 +855,7 @@ class Registration93TransportTests(TransportTests):
 class Registration94TransportTests(TransportTests):
     profile = 'registration-worker-94-20261007'
     output_directory = '.runtime/registration-login-runtime-followup-20261007/transport94'
-    baseline = 'd3fb510a40d6ee1f0a84c66b95d31f92b730cf7d'
+    baseline = '815fae391b172d6c368ea2ad25225f52a1272808'
     profile_file = 'deploy/aws/' + profile + '.json'
     scope_args = ['--registration-profile', profile]
     release_flag = '--registration-worker-94'

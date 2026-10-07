@@ -251,6 +251,66 @@ class PreservationTests(unittest.TestCase):
 
 
 class BaselineAndReadbackTests(unittest.TestCase):
+    def test_worker94_retains815_build_proof_through_closed_registration_getter(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); current = base / 'releases/current'; current.mkdir(parents=True)
+            (base / 'current').symlink_to(current)
+            before = states(); origin = d.REGISTRATION_FOLLOWUP_RELEASE_CURRENT
+            proof = {'apiRuntimeRevision': origin, 'apiBuildProofSha256': 'd' * 64,
+                'apiContentSha256': 'e' * 64, 'adminContentSha256': 'f' * 64}
+            provenance = {'id': d.REGISTRATION_FOLLOWUP_ID, **proof}
+            manifest = {'commit': COMMIT, 'sourceTree': TREE, 'servicesUpdated': ['auto-registration'],
+                'images': {name: {'reference': before[name]['reference'], 'digest': before[name]['image'],
+                    'sourceCommit': origin if name in ('api','admin') else OLD} for name in d.SERVICES},
+                'fixedRegistrationRelease': provenance}
+            path = current / 'release-manifest.json'; path.write_text(json.dumps(manifest))
+            (current / '.env.aws.production').write_text('preserved')
+            profile = current / d.REGISTRATION_FOLLOWUP_FILE; profile.parent.mkdir(parents=True)
+            raw = b'{"controlled94Fixture":true}'; profile.write_bytes(raw)
+            controller = SimpleNamespace(**vars(d)); controller.BASE = base
+            controller.run = MagicMock(return_value=json.dumps([{'Id': before['api']['image'], 'Config': {'Labels': {
+                'org.opencontainers.image.revision': origin}}}]))
+            controller.check_registration_followup_deployment = MagicMock(return_value=proof)
+            stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
+            result = scope.baseline(controller, COMMIT, check_jobs=False)
+            self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_RETAINED_API_ADMIN_PUBLICATION')
+            self.assertEqual(result[3]['apiSource']['revision'], origin)
+            self.assertEqual(result[3]['apiSource']['buildProofSha256'], proof['apiBuildProofSha256'])
+            controller.check_registration_followup_deployment.assert_called_once_with(COMMIT, TREE, scope.hashlib.sha256(raw).hexdigest())
+            for key in proof:
+                broken = dict(proof); broken[key] = '0' * (40 if key=='apiRuntimeRevision' else 64)
+                controller.check_registration_followup_deployment.return_value = broken
+                with self.subTest(field=key), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_RETAINED_PUBLICATION_CHANGED$'):
+                    scope.baseline(controller, COMMIT, check_jobs=False)
+            controller.check_registration_followup_deployment.return_value = proof
+            controller.check_registration_followup_deployment.side_effect = RuntimeError('RAW_PRIVATE_DIAGNOSTIC_SENTINEL')
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_PROJECTION_FAILED$'):
+                scope.baseline(controller, COMMIT, check_jobs=False)
+            controller.check_registration_followup_deployment.side_effect = None
+            manifest['apiAdminPublication'] = {}; path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS$'):
+                scope.baseline(controller, COMMIT, check_jobs=False)
+
+    def test_registration94_getter_uses_pinned815_scope_without_new_baseline_recursion(self):
+        import ast
+        tree = ast.parse((ROOT / 'scripts/production-release/remote-deploy.py').read_bytes())
+        functions = {n.name:n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        relevant = ('check_registration_followup_deployment', 'registration_followup_baseline',
+            'registration_followup_api_admin_running', 'registration_followup_api_admin_states',
+            'registration_followup_api_admin_history')
+        for name in relevant:
+            node = functions[name]
+            with self.subTest(function=name):
+                self.assertFalse(any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr=='baseline' for n in ast.walk(node)))
+        loader = ast.unparse(functions['registration_followup_api_admin_module'])
+        self.assertIn('REGISTRATION_FOLLOWUP_API_ADMIN_SCOPE', loader)
+        self.assertIn('types.SimpleNamespace', loader)
+        release = ast.unparse(functions['registration_followup_release'])
+        self.assertIn("manifest.pop('apiAdminPublication', None)", release)
+        self.assertNotEqual(d.REGISTRATION_FOLLOWUP_API_ADMIN_SCOPE,
+            scope.hashlib.sha256((ROOT/'scripts/production-release/api-admin-scope.py').read_bytes()).hexdigest())
+
     def test_existing_mixed_api_requires_projection_and_compiled_file_proof(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             base = Path(temporary); current = base / 'releases' / 'current'; current.mkdir(parents=True)

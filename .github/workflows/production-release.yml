@@ -298,7 +298,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           test "$RELEASE_OPERATION" = release
-          test "$EXPECTED_CURRENT" = d3fb510a40d6ee1f0a84c66b95d31f92b730cf7d
+          test "$EXPECTED_CURRENT" = 815fae391b172d6c368ea2ad25225f52a1272808
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-94-20261007
 

@@ -973,6 +973,8 @@ test('fixed94 control-only runtime followup never widens unchanged Worker or API
   const controls = [
     profile,
     'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-scope.test.py',
     'scripts/production-release/maintain-image-cache.py',
     'scripts/ci-recharge-release.test.mjs'
   ];
@@ -987,7 +989,8 @@ test('fixed94 control-only runtime followup never widens unchanged Worker or API
     'deploy/aws/recharge-pro-2f-20261007.json',
     'package-lock.json',
     'apps/api/prisma-mysql/schema.prisma',
-    'docs/UNREVIEWED.md'
+    'docs/UNREVIEWED.md',
+    'scripts/production-release/api-admin-readonly.py'
   ]) {
     assert.equal(checkMode([...controls, foreign], schema, schema), 'full', foreign);
     assert.equal(isCiOnly([...controls, foreign]), false, foreign);

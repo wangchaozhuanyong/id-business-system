@@ -24,7 +24,7 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; the
 fi
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-94-20261007 ]]; then
-  test "$EXPECTED_CURRENT" = d3fb510a40d6ee1f0a84c66b95d31f92b730cf7d
+  test "$EXPECTED_CURRENT" = 815fae391b172d6c368ea2ad25225f52a1272808
   test "${RELEASE_ADMIN_ONLY:-false}" = false
   test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-94-20261007
@@ -237,7 +237,7 @@ elif history_policy == 'registration-worker-92-20261007':
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-92'
 elif history_policy == 'registration-worker-94-20261007':
-    assert previous == 'd3fb510a40d6ee1f0a84c66b95d31f92b730cf7d' and admin_only == 'false'
+    assert previous == '815fae391b172d6c368ea2ad25225f52a1272808' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-94'

@@ -4006,10 +4006,15 @@ test('fixed93 and fixed 2f workflow approvals remain exclusive after integration
   }
 });
 
-test('fixed94 preserves D3 Pro while rebuilding the reviewed registration92 basis only', () => {
+test('fixed94 preserves815 API Admin and D3 Pro while rebuilding the reviewed registration92 basis only', () => {
   const profile = 'registration-worker-94-20261007';
   const raw = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
-  assert.equal(raw.expectedCurrent, 'd3fb510a40d6ee1f0a84c66b95d31f92b730cf7d');
+  assert.equal(raw.expectedCurrent, '815fae391b172d6c368ea2ad25225f52a1272808');
+  assert.equal(raw.runtimeBaseline.status, 'VERIFIED_815_RUNTIME_BASELINE');
+  assert.equal(raw.runtimeBaseline.manifest.commit, raw.expectedCurrent);
+  assert.equal(Object.keys(raw.controlSourceSha256).length, 23);
+  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.py']);
+  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.test.py']);
   assert.equal(raw.workerBasisCommit, '2f24cf81007429ea474da404a30bc74da9d43ce1');
   assert.deepEqual(raw.scope.servicesUpdated, ['auto-registration']);
   assert.deepEqual(raw.scope.imageServices, ['auto-recharge']);
