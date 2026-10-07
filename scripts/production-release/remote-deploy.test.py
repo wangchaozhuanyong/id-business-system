@@ -10406,6 +10406,117 @@ class FixedRecharge974NativeTests(unittest.TestCase):
         self.profile['financeValidator'].update(releaseSealSha256='f' * 64, preparedImagesSha256='f' * 64,
             preparationRunId=999002, preparationRunAttempt=1, images={name: 'sha256:' + letter * 64 for name, letter in zip(('api', 'admin', 'migrate'), 'abc')})
 
+    @contextmanager
+    def source_publication_fixture(self, *, existing=False):
+        # Keep the writer, archive parser and source/environment/migration guards real.
+        # Native production observations and every external/service action are isolated.
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
+            base = Path(name).resolve(); (base / 'releases').mkdir()
+            previous = base / 'releases' / ('20261007T010100Z-' + deployment.RECHARGE_974_CURRENT[:12])
+            previous.mkdir(mode=0o700); (base / 'current').symlink_to(previous)
+            manifest = {'commit': deployment.RECHARGE_974_CURRENT, 'sourceTree': deployment.RECHARGE_974_TREE}
+            (previous / 'release-manifest.json').write_text(json.dumps(manifest))
+            (previous / 'release-manifest.json').chmod(0o600)
+            public = {'docker-compose.aws-mysql.yml': b'services: {}\n',
+                'deploy/caddy/Caddyfile.aws': b':80 { respond "synthetic" }\n',
+                'apps/api/prisma-mysql/migrations/synthetic/migration.sql': b'-- synthetic unchanged baseline\n',
+                'package.json': b'{"name":"synthetic-source-fixture"}\n'}
+            for relative, raw in public.items():
+                path = previous / relative; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw); path.chmod(0o644)
+            environment = b'LOCAL_SYNTHETIC_VALUE=safe-placeholder\n'
+            (previous / '.env.aws.production').write_bytes(environment)
+            (previous / '.env.aws.production').chmod(0o600)
+            states = {service: {'status': 'running', 'containerId': 'synthetic-' + service,
+                'environmentSha256': 'e' * 64} for service in deployment.ALL_SERVICES}
+            profile = copy.deepcopy(self.profile)
+            profile['nativeBaseline']['runtimeStatesSha256'] = deployment.historical_fingerprint(states)
+            profile_raw = (json.dumps(profile, sort_keys=True) + '\n').encode()
+            source_files = {relative: (raw, 0o644) for relative, raw in {**public, **self.contents}.items()}
+            baseline = FixedRechargeRuntimeScopeTests.source_archive(deployment.RECHARGE_974_CURRENT, source_files)
+            args = SimpleNamespace(commit='a' * 40, source_tree='b' * 40,
+                expected_current=deployment.RECHARGE_974_CURRENT, recharge_pro_974=True, admin_only=False,
+                repository='123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+                run_id='123', run_attempt='1', ci_run_id='456', image_commit=None,
+                image_run_id=None, image_run_attempt=None)
+            candidate = FixedRechargeRuntimeScopeTests.source_archive(args.commit,
+                {**source_files, deployment.RECHARGE_974_FILE: (profile_raw, 0o644)})
+            release = base / 'releases' / ('20261007T120000Z-' + args.commit[:12])
+            sentinel = release / 'existing-sentinel.txt'
+            if existing:
+                release.mkdir(mode=0o700); sentinel.write_bytes(b'synthetic-existing-directory-must-survive\n')
+                sentinel.chmod(0o600)
+            original_umask = deployment.os.umask(0o077); deployment.os.umask(original_umask)
+            stack.callback(deployment.os.umask, original_umask)
+            stack.enter_context(patch.object(deployment, 'BASE', base))
+            stack.enter_context(patch.object(deployment.time, 'strftime', return_value='20261007T120000Z'))
+            def profile_response(url, **kwargs):
+                self.assertEqual(url, 'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'
+                    + args.commit + '/' + deployment.RECHARGE_974_FILE)
+                return io.BytesIO(profile_raw)
+            stack.enter_context(patch.object(deployment.urllib.request, 'urlopen', side_effect=profile_response))
+            def download(commit):
+                if commit == args.commit: return candidate
+                self.assertEqual(commit, deployment.REGISTRATION_CURRENT)
+                return b'synthetic-public-finance-source'
+            downloads = stack.enter_context(patch.object(deployment, 'registration_download', side_effect=download))
+            stack.enter_context(patch.object(deployment, 'recharge_974_baseline', return_value=(previous, None)))
+            stack.enter_context(patch.object(deployment, 'service_state', side_effect=lambda _path, service, **kwargs: copy.deepcopy(states[service])))
+            stack.enter_context(patch.object(deployment, 'assert_release_jobs_idle'))
+            stack.enter_context(patch.object(deployment, 'fixed_recharge_runtime_archive', return_value=baseline))
+            stack.enter_context(patch.object(deployment, 'prepare_registration_finance_source', return_value=base))
+            stack.enter_context(patch.object(deployment.shutil, 'disk_usage', return_value=SimpleNamespace(free=20 * 1024**3)))
+            real = {function: stack.enter_context(patch.object(deployment, function, wraps=getattr(deployment, function)))
+                for function in ('registration_archive', 'write_registration_files', 'normalize_fixed_recharge_modes',
+                    'verify_fixed_recharge_archive', 'require_diagnostics_environment_unchanged',
+                    'migration_plan', 'require_diagnostics_migration_scope')}
+            audit = stack.enter_context(patch.object(deployment, 'recharge_974_audit',
+                side_effect=RuntimeError('synthetic-audit-before-stop')))
+            forbidden = {function: stack.enter_context(patch.object(deployment, function,
+                side_effect=AssertionError('unexpected service action: ' + function)))
+                for function in ('recharge_974_pull_image', 'fresh_backup', 'compose', 'point_current',
+                    'rollback_service', 'wait_healthy', 'run')}
+            yield SimpleNamespace(base=base, previous=previous, release=release, sentinel=sentinel,
+                args=args, profile_raw=profile_raw, environment=environment, real=real,
+                audit=audit, forbidden=forbidden, downloads=downloads)
+
+    def test_974_source_uses_real_writer_and_scope_before_audit_without_service_actions(self):
+        with self.source_publication_fixture() as f:
+            output = io.StringIO(); error = io.StringIO()
+            with redirect_stdout(output), patch.object(deployment.sys, 'stderr', error):
+                result = deployment.recharge_974_release(f.args)
+            self.assertEqual(result, 1)
+            for action in f.forbidden.values(): action.assert_not_called()
+            self.assertEqual((f.base / 'current').resolve(), f.previous)
+            self.assertEqual(output.getvalue(), '')
+            receipt = json.loads(error.getvalue())
+            self.assertEqual(receipt['status'], 'FAILED_ROLLED_BACK')
+            self.assertEqual(receipt['step'], 'audit-before')
+            for function in f.real.values(): function.assert_called_once()
+            f.audit.assert_called_once()
+            self.assertEqual(f.audit.call_args.args[:2], (f.previous, f.release / 'before-audit.json'))
+            self.assertEqual(f.audit.call_args.kwargs['stage'], 'before')
+            self.assertEqual((f.release / deployment.RECHARGE_974_FILE).read_bytes(), f.profile_raw)
+            self.assertEqual((f.release / '.env.aws.production').read_bytes(), f.environment)
+            self.assertEqual(f.release.stat().st_mode & 0o777, 0o700)
+            for relative, raw in self.contents.items():
+                self.assertEqual((f.release / relative).read_bytes(), raw)
+                self.assertEqual((f.release / relative).stat().st_mode & 0o777, 0o644)
+
+    def test_974_source_rejects_existing_directory_without_overwriting_sentinel(self):
+        with self.source_publication_fixture(existing=True) as f:
+            original = f.sentinel.read_bytes()
+            with self.assertRaisesRegex(RuntimeError, '^Fixed 974 recharge release unavailable$'):
+                deployment.recharge_974_release(f.args)
+            self.assertEqual(f.sentinel.read_bytes(), original)
+            self.assertEqual(f.sentinel.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(f.release.iterdir()), [f.sentinel])
+            self.assertEqual((f.base / 'current').resolve(), f.previous)
+            f.downloads.assert_called_once_with(deployment.REGISTRATION_CURRENT)
+            for function in f.real.values(): function.assert_not_called()
+            f.audit.assert_not_called()
+            for action in f.forbidden.values(): action.assert_not_called()
+
     def chain_fixture(self, directory):
         base = Path(directory); releases = base / 'releases'; releases.mkdir()
         chain = [releases / (f'20261007T0101{index:02d}Z-' + commit[:12]) for index, (commit, _tree) in enumerate(deployment.RECHARGE_974_CHAIN)]
@@ -10565,6 +10676,292 @@ class FixedRecharge974NativeTests(unittest.TestCase):
                 patch.object(deployment, 'check_main80_recharge_deployment', side_effect=AssertionError('old global current entry')):
             self.assertEqual(deployment.check_fixed_recharge_deployment('a' * 40, 'b' * 40, 'c' * 64, deployment.RECHARGE_974_ID), {'synthetic': True})
             c3.assert_called_once_with('a' * 40, 'b' * 40, 'c' * 64)
+
+class FixedRecharge2fNativeTests(unittest.TestCase):
+    """Keep source, archive, scope and migration checks real in local closed fixtures."""
+    @classmethod
+    def setUpClass(cls):
+        cls.project = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.project / '.runtime/recharge-pro-f812-integration-20261007/fixed2f-control-tests'
+        cls.runtime.mkdir(parents=True, exist_ok=True)
+        def archive(commit, *paths):
+            raw = subprocess.check_output(['git', 'archive', '--prefix=id-business-system-' + commit + '/',
+                commit, *paths], cwd=cls.project)
+            return raw, deployment.registration_archive(raw, commit)
+        cls.basis_raw, cls.basis = archive(deployment.RECHARGE_SCOPE_CURRENT,
+            deployment.REGISTRATION_WORKER_PREFIX, '.dockerignore', 'scripts/audit-python-dependencies.py')
+        cls.previous_raw, cls.previous = archive(deployment.RECHARGE_974_CURRENT)
+        _, cls.native_source = archive(deployment.RECHARGE_2F_CURRENT)
+        cls.profile92 = json.loads((cls.project / deployment.REGISTRATION_RECOVERY_FILE).read_bytes())
+        cls.worker92 = {name: row for name, row in cls.basis.items() if name.startswith(deployment.REGISTRATION_WORKER_PREFIX)}
+        cls.worker92.update({name: cls.previous[name] for name in deployment.REGISTRATION_EMAIL_FILES})
+        cls.worker92.update({name: cls.native_source[name] for name in deployment.REGISTRATION_RECOVERY_WORKER_FILES})
+        assert Registration92RecoveryScopeTests.fingerprint(cls.worker92) == cls.profile92['workerProjection']
+
+    def setUp(self):
+        self.profile = json.loads((self.project / deployment.RECHARGE_2F_FILE).read_bytes())
+        self.profile.update(enabled=True, approvalStatus='APPROVED')
+        for group in ('baselineRelease', 'nativeBaseline'):
+            for key, value in self.profile[group].items():
+                if value is None:
+                    self.profile[group][key] = 100 if key.endswith('Count') else 'e' * 64
+        self.contents = {name: (self.project / name).read_bytes()
+            for name in deployment.RECHARGE_2F_CANDIDATES | deployment.RECHARGE_2F_CONTROLS}
+        for key, names in (('candidateSourceSha256', deployment.RECHARGE_2F_CANDIDATES),
+                ('controlSourceSha256', deployment.RECHARGE_2F_CONTROLS)):
+            self.profile[key] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in names}
+        worker = dict(self.worker92)
+        worker.update({name: (self.contents[name], '100644') for name in deployment.RECHARGE_2F_WORKER})
+        self.profile['workerProjection'] = Registration92RecoveryScopeTests.fingerprint(worker)
+
+    @contextmanager
+    def publication_fixture(self, *, carried_mode=0o644):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
+            base = Path(name).resolve(); (base / 'releases').mkdir()
+            previous = base / 'releases' / ('20261007T102436Z-' + deployment.RECHARGE_2F_CURRENT[:12])
+            previous.mkdir(mode=0o700); (base / 'current').symlink_to(previous)
+            public = {**self.worker92, 'docker-compose.aws-mysql.yml': (b'services: {}\n', '100644'),
+                'deploy/caddy/Caddyfile.aws': (b':80 { respond "local-fixture" }\n', '100644'),
+                'apps/api/prisma-mysql/migrations/fixture/migration.sql': (b'-- unchanged fixture migration\n', '100644'),
+                'apps/api/src/id-business-v2/retained-api.ts': (b'// retained original API\n', '100644')}
+            for relative, (raw, mode) in public.items():
+                path = previous / relative; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw); path.chmod(0o755 if mode == '100755' else 0o644)
+            (previous / 'docker-compose.aws-mysql.yml').chmod(carried_mode)
+            manifest = {'commit': deployment.RECHARGE_2F_CURRENT, 'sourceTree': deployment.RECHARGE_2F_TREE}
+            (previous / 'release-manifest.json').write_text(json.dumps(manifest)); (previous / 'release-manifest.json').chmod(0o600)
+            environment = b'LOCAL_FIXTURE_VALUE=safe-placeholder\n'
+            (previous / '.env.aws.production').write_bytes(environment); (previous / '.env.aws.production').chmod(0o600)
+            (previous / 'compose.release.json').write_text('{"services":{}}'); (previous / 'compose.release.json').chmod(0o600)
+            states = {service: {'status': 'running', 'containerId': 'local-fixture-' + service,
+                'environmentSha256': 'e' * 64} for service in deployment.ALL_SERVICES}
+            profile = copy.deepcopy(self.profile); profile['nativeBaseline']['runtimeStatesSha256'] = deployment.historical_fingerprint(states)
+            raw = (json.dumps(profile, sort_keys=True) + '\n').encode()
+            candidate = {name: (data, 0o644) for name, data in self.contents.items()}
+            candidate[deployment.RECHARGE_2F_FILE] = (raw, 0o644)
+            for suffix in ('test_registration.py', 'test_registration_browser.py', 'test_registration_builtin.py'):
+                candidate[deployment.REGISTRATION_WORKER_PREFIX + suffix] = (b'new-main-content-must-not-enter-runtime', 0o644)
+            args = SimpleNamespace(commit='a' * 40, source_tree='b' * 40, expected_current=deployment.RECHARGE_2F_CURRENT,
+                recharge_pro_2f=True, recharge_pro_974=False, admin_only=False,
+                repository='123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+                run_id='123', run_attempt='1', ci_run_id='456', image_commit=None, image_run_id=None, image_run_attempt=None)
+            candidate_raw = FixedRechargeRuntimeScopeTests.source_archive(args.commit, candidate)
+            release = base / 'releases' / ('20261007T120000Z-' + args.commit[:12])
+            original_umask = deployment.os.umask(0o077); deployment.os.umask(original_umask); stack.callback(deployment.os.umask, original_umask)
+            stack.enter_context(patch.object(deployment, 'BASE', base))
+            stack.enter_context(patch.object(deployment.time, 'strftime', return_value='20261007T120000Z'))
+            stack.enter_context(patch.object(deployment.urllib.request, 'urlopen', return_value=io.BytesIO(raw)))
+            stack.enter_context(patch.object(deployment, 'registration_download', side_effect=lambda commit:
+                candidate_raw if commit == args.commit else b'isolated-finance-archive'))
+            stack.enter_context(patch.object(deployment, 'prepare_registration_finance_source', return_value=base))
+            stack.enter_context(patch.object(deployment, 'recharge_2f_baseline', return_value=(previous, self.profile92)))
+            stack.enter_context(patch.object(deployment, 'service_state', side_effect=lambda _path, service, **kwargs: copy.deepcopy(states[service])))
+            stack.enter_context(patch.object(deployment, 'assert_release_jobs_idle'))
+            stack.enter_context(patch.object(deployment.shutil, 'disk_usage', return_value=SimpleNamespace(free=20 * 1024**3)))
+            real = {function: stack.enter_context(patch.object(deployment, function, wraps=getattr(deployment, function)))
+                for function in ('registration_archive', 'recharge_2f_source_files', 'write_registration_files',
+                    'verify_recharge_2f_candidate_source', 'normalize_fixed_recharge_modes',
+                    'recharge_2f_carried_modes',
+                    'require_diagnostics_environment_unchanged', 'migration_plan', 'require_diagnostics_migration_scope')}
+            audit = stack.enter_context(patch.object(deployment, 'recharge_2f_audit', side_effect=RuntimeError('local-audit-before-stop')))
+            forbidden = {function: stack.enter_context(patch.object(deployment, function,
+                side_effect=AssertionError('unexpected service action: ' + function)))
+                for function in ('recharge_974_pull_image', 'fresh_backup', 'compose', 'point_current', 'rollback_service', 'wait_healthy', 'run')}
+            yield SimpleNamespace(base=base, previous=previous, release=release, profile=profile, raw=raw,
+                args=args, environment=environment, public=public, real=real, audit=audit, forbidden=forbidden)
+
+    def test_real_writer_preserves_native92_source_and_excludes_new_main_registration_tests(self):
+        with self.publication_fixture() as f:
+            error = io.StringIO()
+            with redirect_stdout(io.StringIO()), patch.object(deployment.sys, 'stderr', error):
+                result = deployment.recharge_2f_release(f.args)
+            self.assertEqual(result, 1); self.assertEqual(json.loads(error.getvalue())['step'], 'audit-before')
+            self.assertEqual((f.base / 'current').resolve(), f.previous)
+            for action in f.forbidden.values(): action.assert_not_called()
+            for action in f.real.values(): action.assert_called_once()
+            f.audit.assert_called_once()
+            self.assertEqual((f.release / '.env.aws.production').read_bytes(), f.environment)
+            self.assertEqual(f.release.stat().st_mode & 0o777, 0o700)
+            for path, (data, _mode) in f.public.items():
+                expected = self.contents.get(path, data)
+                self.assertEqual((f.release / path).read_bytes(), expected)
+            self.assertEqual((f.release / deployment.RECHARGE_2F_FILE).read_bytes(), f.raw)
+
+    def test_real_writer_restores_inherited_compose_664_mode_before_scope_verification(self):
+        with self.publication_fixture(carried_mode=0o664) as f:
+            error = io.StringIO()
+            with redirect_stdout(io.StringIO()), patch.object(deployment.sys, 'stderr', error):
+                self.assertEqual(deployment.recharge_2f_release(f.args), 1)
+            self.assertEqual(json.loads(error.getvalue())['step'], 'audit-before')
+            self.assertEqual((f.release / 'docker-compose.aws-mysql.yml').stat().st_mode & 0o777, 0o664)
+            self.assertEqual((f.previous / 'docker-compose.aws-mysql.yml').stat().st_mode & 0o777, 0o664)
+            for action in f.forbidden.values(): action.assert_not_called()
+            f.real['recharge_2f_carried_modes'].assert_called_once()
+
+    def test_source_rejects_unreviewed_bytes_modes_and_preserved_source_drift(self):
+        with self.publication_fixture() as f:
+            candidate = {name: (data, '100644') for name, data in self.contents.items()}
+            candidate[deployment.RECHARGE_2F_FILE] = (f.raw, '100644')
+            for changed in ('bytes', 'mode', 'profile'):
+                bad = dict(candidate); path = next(iter(deployment.RECHARGE_2F_WORKER))
+                if changed == 'bytes': bad[path] = (b'unreviewed', '100644')
+                elif changed == 'mode': bad[path] = (bad[path][0], '100755')
+                else: bad[deployment.RECHARGE_2F_FILE] = (b'{}', '100644')
+                with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                    deployment.recharge_2f_source_files(f.previous, f.profile, bad)
+            valid = deployment.recharge_2f_source_files(f.previous, f.profile, candidate)
+            deployment.write_registration_files(f.release, valid)
+            deployment.verify_recharge_2f_candidate_source(f.release, f.previous, f.profile)
+            preserved = f.release / 'apps/api/src/id-business-v2/retained-api.ts'
+            preserved.write_bytes(b'changed-after-writer')
+            with self.assertRaises(RuntimeError): deployment.verify_recharge_2f_candidate_source(f.release, f.previous, f.profile)
+
+    def test_scope_rejects_finance_changes_extra_services_and_missing_native_proof(self):
+        self.assertEqual(deployment.parse_fixed_recharge_scope(json.dumps(self.profile).encode()), self.profile)
+        self.assertEqual(len(self.profile['workerProjection']), 60)
+        for group, key, value in (('financeClearance', 'violationCount', 5), ('financeClearance', 'mode', 'OLD_EXCEPTIONS'),
+                ('financeValidator', 'checkCount', 48), ('financeValidator', 'preparationRunAttempt', True),
+                ('scope', 'financialWritesAllowed', True),
+                ('scope', 'servicesUpdated', ['auto-recharge', 'auto-registration']), ('nativeBaseline', 'nativeChainSha256', None),
+                ('nativeBaseline', 'nativeFileCount', True), ('nativeBaseline', 'retainedMigrateSha256', None),
+                ('sourceBasis', 'commit', deployment.RECHARGE_2F_CURRENT)):
+            bad = copy.deepcopy(self.profile); bad[group][key] = value
+            with self.subTest(group=group, key=key), self.assertRaises(RuntimeError): deployment.recharge_2f_scope(bad)
+        bad = copy.deepcopy(self.profile); bad['workerProjection'].pop(next(iter(bad['workerProjection'])))
+        with self.assertRaises(RuntimeError): deployment.recharge_2f_scope(bad)
+
+    def test_context_and_public_receipt_require_zero_49_and_strict_types(self):
+        args = SimpleNamespace(commit='a' * 40, source_tree='b' * 40, expected_current=deployment.RECHARGE_2F_CURRENT)
+        gates = {stage: {'checkCount': 49, 'violationCount': 0, 'registrationFinanceGate':
+            {'stage': stage, 'status': deployment.REGISTRATION_CLEARANCE['mode']}} for stage in ('before', 'after')}
+        context = deployment.recharge_2f_context(args, self.profile, gates['before'], gates['after'])
+        self.assertEqual(context['financeValidator'], 'STRICT_ZERO_AFTER_APPROVED_REVERSALS_49')
+        for field, value in (('checkCount', 48), ('violationCount', 1), ('violationCount', False)):
+            bad = copy.deepcopy(gates['after']); bad[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
+                deployment.recharge_2f_context(args, self.profile, gates['before'], bad)
+        receipt = deployment.recharge_2f_readback_receipt('a' * 40, 'b' * 40, 'c' * 64)
+        self.assertEqual(receipt['previousCommit'], deployment.RECHARGE_2F_CURRENT)
+        self.assertEqual(deployment.validate_recharge_2f_readback_projection(receipt, 'a' * 40, 'b' * 40, 'c' * 64), receipt)
+        for key in receipt:
+            bad = copy.deepcopy(receipt); bad[key] = None
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                deployment.validate_recharge_2f_readback_projection(bad, 'a' * 40, 'b' * 40, 'c' * 64)
+
+    def test_mixed_selection_stops_before_native_files_network_or_docker(self):
+        base = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', deployment.RECHARGE_2F_CURRENT, '--run-id', '123', '--run-attempt', '1',
+            '--ci-run-id', '111', '--recharge-pro-2f']
+        for flag in ('--recharge-pro-974', '--recharge-pro-main80', '--recharge-pro-menu-b8', '--recharge-pro-menu-7f',
+                '--registration-worker-92', '--registration-worker-91', '--historical-finance-order-archive', '--admin-only'):
+            with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', base + [flag]), \
+                    patch.object(deployment, 'recharge_2f_observe_native') as observe, \
+                    patch.object(deployment, 'run') as command, patch.object(deployment.urllib.request, 'urlopen') as external:
+                with self.assertRaises(RuntimeError): deployment.main()
+                observe.assert_not_called(); command.assert_not_called(); external.assert_not_called()
+
+    def test_post_readback_never_calls_global_current_92_checker(self):
+        tree = ast.parse((self.project / 'scripts/production-release/remote-deploy.py').read_text())
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        before = ast.unparse(functions['recharge_2f_observe_native'])
+        after = ast.unparse(functions['check_recharge_2f_deployment'])
+        self.assertIn("namespace['check_registration_recovery_deployment']", before)
+        for name in ('recharge_2f_observe_native(', 'check_registration_recovery_deployment(', 'check_fixed_registration_deployment('):
+            self.assertNotIn(name, after)
+        baseline = functions['recharge_2f_baseline']
+        branches = [node for node in ast.walk(baseline) if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name) and node.test.id == 'verify_native']
+        self.assertEqual(len(branches), 1)
+        self.assertIn('recharge_2f_observe_native(', ast.unparse(branches[0]))
+        for node in ast.walk(functions['check_recharge_2f_deployment']):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'recharge_2f_baseline':
+                self.assertFalse(any(keyword.arg == 'verify_native' for keyword in node.keywords))
+        with patch.object(deployment, 'check_recharge_2f_deployment', return_value={'local': True}) as check:
+            self.assertEqual(deployment.check_fixed_recharge_deployment('a' * 40, 'b' * 40, 'c' * 64, deployment.RECHARGE_2F_ID), {'local': True})
+            check.assert_called_once_with('a' * 40, 'b' * 40, 'c' * 64)
+
+    def test_native_chain_binds_all_12_releases_without_accepting_arbitrary_chains(self):
+        fixture = FixedRecharge974NativeTests(); fixture.runtime = self.runtime
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f = fixture.chain_fixture(name)
+            with f.stack:
+                path = f.base / 'releases' / ('20261007T102436Z-' + deployment.RECHARGE_2F_CURRENT[:12]); path.mkdir(mode=0o700)
+                (path / 'release-manifest.json').write_text(json.dumps({'commit': deployment.RECHARGE_2F_CURRENT,
+                    'sourceTree': deployment.RECHARGE_2F_TREE, 'previousCommit': deployment.RECHARGE_974_CURRENT,
+                    'previousRelease': str(f.paths[0])})); (path / 'release-manifest.json').chmod(0o600)
+                good = deployment.recharge_974_native_chain(path, chain=deployment.RECHARGE_2F_CHAIN)
+                self.assertEqual(len(deployment.RECHARGE_2F_CHAIN), 12); self.assertEqual(good['origin'], f.paths[-1])
+                for old in f.paths:
+                    file = old / 'public.py'; original = file.read_bytes(); file.write_bytes(b'changed-native-source\n')
+                    self.assertNotEqual(deployment.recharge_974_native_chain(path, chain=deployment.RECHARGE_2F_CHAIN)['sha256'], good['sha256'])
+                    file.write_bytes(original)
+                with self.assertRaises(RuntimeError): deployment.recharge_974_native_chain(path, chain=deployment.RECHARGE_2F_CHAIN[:2])
+
+    def test_retained_migration_binds_identity_image_start_environment_and_host_config(self):
+        row = {'Id': 'a' * 64, 'Image': 'sha256:' + 'b' * 64,
+            'State': {'Status': 'exited', 'ExitCode': 1, 'StartedAt': '2026-10-01T00:00:00Z'},
+            'Config': {'Image': 'local-project:retained-migrate', 'Env': ['LOCAL_FIXTURE=placeholder']},
+            'HostConfig': {'NetworkMode': 'local-fixture-network'}}
+        with patch.object(deployment, 'compose', return_value=row['Id']) as compose:
+            def fingerprint(value):
+                with patch.object(deployment, 'run', return_value=json.dumps([value])):
+                    return deployment.recharge_2f_retained_migrate(Path('/local-fixture'))
+            expected = fingerprint(row)
+            for group, key, value in ((None, 'Image', 'sha256:' + 'c' * 64), ('State', 'StartedAt', 'later'),
+                    ('Config', 'Image', 'changed-reference'), ('Config', 'Env', ['LOCAL_FIXTURE=changed']),
+                    ('HostConfig', 'NetworkMode', 'changed-network')):
+                bad = copy.deepcopy(row)
+                if group is None: bad[key] = value
+                else: bad[group][key] = value
+                with self.subTest(group=group, key=key): self.assertNotEqual(fingerprint(bad), expected)
+            for group, key, value in ((None, 'Id', 'd' * 64), ('State', 'Status', 'running'),
+                    ('State', 'ExitCode', 0), ('State', 'ExitCode', False), ('Config', 'Env', None)):
+                bad = copy.deepcopy(row)
+                if group is None: bad[key] = value
+                else: bad[group][key] = value
+                with self.subTest(group=group, key=key), self.assertRaises(RuntimeError): fingerprint(bad)
+            self.assertTrue(all(call.args[1:] == ('ps', '-a', '-q', 'migrate') for call in compose.call_args_list))
+
+    def test_build_uses_complete_native92_projection_and_only_six_recharge_overlays(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
+            root = Path(name).resolve()
+            profile = copy.deepcopy(self.profile)
+            for relative, data in self.contents.items():
+                path = root / relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(data); path.chmod(0o644)
+            (root / deployment.RECHARGE_2F_FILE).parent.mkdir(parents=True, exist_ok=True)
+            (root / deployment.RECHARGE_2F_FILE).write_text(json.dumps(profile)); (root / deployment.RECHARGE_2F_FILE).chmod(0o644)
+            native = dict(self.native_source); profile92 = copy.deepcopy(self.profile92)
+            baseline = copy.deepcopy(deployment.REGISTRATION_RECOVERY_BASELINE)
+            baseline['manifest']['sourceArchiveSha256'] = deployment.hashlib.sha256(self.previous_raw).hexdigest()
+            profile92['runtimeBaseline'] = baseline
+            raw92 = json.dumps(profile92).encode(); native[deployment.REGISTRATION_RECOVERY_FILE] = (raw92, '100644')
+            profile['nativeBaseline']['registrationProfileRawSha256'] = deployment.hashlib.sha256(raw92).hexdigest()
+            (root / deployment.RECHARGE_2F_FILE).write_text(json.dumps(profile))
+            source_raw = FixedRechargeRuntimeScopeTests.source_archive(deployment.RECHARGE_2F_CURRENT,
+                {path: (data, 0o755 if mode == '100755' else 0o644) for path, (data, mode) in native.items()})
+            stack.enter_context(patch.object(deployment, 'REGISTRATION_RECOVERY_BASELINE', baseline))
+            stack.enter_context(patch.object(deployment, 'RECHARGE_2F_PROFILE_RAW', deployment.hashlib.sha256(raw92).hexdigest()))
+            stack.enter_context(patch.object(deployment, '__file__', str(root / 'scripts/production-release/remote-deploy.py')))
+            def command(*args):
+                if 'rev-parse' in args: return deployment.RECHARGE_2F_SOURCE_BASIS['tree']
+                self.assertIn(args[3], ('diff', 'ls-files')); return ''
+            stack.enter_context(patch.object(deployment, 'run', side_effect=command))
+            archives = {deployment.RECHARGE_2F_CURRENT: source_raw, deployment.RECHARGE_SCOPE_CURRENT: self.basis_raw,
+                deployment.RECHARGE_974_CURRENT: self.previous_raw}
+            download = stack.enter_context(patch.object(deployment, 'registration_download', side_effect=lambda commit: archives[commit]))
+            with redirect_stdout(io.StringIO()): deployment.prepare_recharge_2f_build()
+            context = root / '.deploy/production-release/fixed-recharge-context'
+            measured = deployment.fixed_recharge_file_map(context,
+                names=self.profile['workerProjection'])
+            self.assertEqual({path: digest for path, (digest, _mode) in measured.items()},
+                {path: row['sha256'] for path, row in profile['workerProjection'].items()})
+            for suffix in ('test_registration.py', 'test_registration_browser.py', 'test_registration_builtin.py'):
+                path = deployment.REGISTRATION_WORKER_PREFIX + suffix
+                self.assertEqual((context / path).read_bytes(), self.worker92[path][0])
+            self.assertEqual(set(call.args[0] for call in download.call_args_list), set(archives))
+            with self.assertRaises(RuntimeError): deployment.prepare_recharge_2f_build()
+
 
 class Registration92RecoveryScopeTests(unittest.TestCase):
     """Every archive/image/window operation is a local closed fixture for the two-service lane."""

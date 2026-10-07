@@ -73,6 +73,7 @@ on:
           - recharge-pro-menu-7f-20261005
           - recharge-pro-main80-20261006
           - recharge-pro-974-20261007
+          - recharge-pro-2f-20261007
           - registration-worker-b8-80-20261006
           - registration-worker-956-20261006
           - registration-worker-85-20261006
@@ -196,6 +197,16 @@ jobs:
           test "$EXPECTED_CURRENT" = 974c62cc1681012ecff897aefc90d2cd9900004a
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile recharge-pro-974-20261007
+      - name: Verify fixed 2f recharge runtime approval
+        if: inputs.operation == 'release' && inputs.historical_exception == 'recharge-pro-2f-20261007'
+        env:
+          REQUESTED_REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
+        run: |
+          set -Eeuo pipefail
+          test "$RELEASE_OPERATION" = release
+          test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1
+          test -z "$REQUESTED_REUSE_IMAGE_RUN"
+          python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile recharge-pro-2f-20261007
       - name: Validate release policy and reviewed seal selection
         run: bash scripts/production-release/validate-release-selection.sh
 
@@ -1906,7 +1917,7 @@ jobs:
         run: bash scripts/production-release/dispatch.sh
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -1972,9 +1983,9 @@ jobs:
           exit 1
 
       - name: Verify fixed recharge deployment independently
-        if: inputs.operation == 'verify_recharge_release' || (inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005' || inputs.historical_exception == 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-974-20261007'))
+        if: inputs.operation == 'verify_recharge_release' || (inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005' || inputs.historical_exception == 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-974-20261007' || inputs.historical_exception == 'recharge-pro-2f-20261007'))
         env:
-          FIXED_RECHARGE_PROFILE: ${{ inputs.historical_exception == 'recharge-pro-974-20261007' && 'recharge-pro-974-20261007' || inputs.historical_exception == 'recharge-pro-main80-20261006' && 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-menu-b8-20261005' && 'recharge-pro-menu-b8-20261005' || 'recharge-pro-menu-7f-20261005' }}
+          FIXED_RECHARGE_PROFILE: ${{ inputs.historical_exception == 'recharge-pro-2f-20261007' && 'recharge-pro-2f-20261007' || inputs.historical_exception == 'recharge-pro-974-20261007' && 'recharge-pro-974-20261007' || inputs.historical_exception == 'recharge-pro-main80-20261006' && 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-menu-b8-20261005' && 'recharge-pro-menu-b8-20261005' || 'recharge-pro-menu-7f-20261005' }}
           RELEASE_OPERATION: ${{ inputs.operation }}
         run: |
           set -Eeuo pipefail
@@ -1996,7 +2007,7 @@ jobs:
           namespace = {'__name__': 'fixed_recharge_readback_builder', '__file__': str(source_path)}
           exec(compile(source, str(source_path), 'exec'), namespace)
           identity = os.environ['FIXED_RECHARGE_PROFILE']
-          if identity not in ('recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005', 'recharge-pro-main80-20261006', 'recharge-pro-974-20261007'):
+          if identity not in ('recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005', 'recharge-pro-main80-20261006', 'recharge-pro-974-20261007', 'recharge-pro-2f-20261007'):
               raise SystemExit('Fixed recharge identity unavailable')
           profile = namespace['parse_fixed_recharge_scope'](Path('deploy/aws/' + identity + '.json').read_bytes())
           profile_sha = hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -2049,7 +2060,7 @@ jobs:
               source = source_path.read_bytes()
               exec(compile(source, str(source_path), 'exec'), namespace)
               identity = os.environ['FIXED_RECHARGE_PROFILE']
-              if identity not in ('recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005', 'recharge-pro-main80-20261006', 'recharge-pro-974-20261007'):
+              if identity not in ('recharge-pro-menu-b8-20261005', 'recharge-pro-menu-7f-20261005', 'recharge-pro-main80-20261006', 'recharge-pro-974-20261007', 'recharge-pro-2f-20261007'):
                   raise ValueError()
               profile = namespace['parse_fixed_recharge_scope'](Path('deploy/aws/' + identity + '.json').read_bytes())
               digest = hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -2064,7 +2075,7 @@ jobs:
           exit "$wait_status"
 
       - name: Record skipped cache maintenance for fixed recharge release
-        if: inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005' || inputs.historical_exception == 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-974-20261007')
+        if: inputs.operation == 'release' && (inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005' || inputs.historical_exception == 'recharge-pro-main80-20261006' || inputs.historical_exception == 'recharge-pro-974-20261007' || inputs.historical_exception == 'recharge-pro-2f-20261007')
         run: printf '%s\n' RECHARGE_ONLY_CACHE_SKIPPED
 
       - name: Verify fixed registration deployment independently
