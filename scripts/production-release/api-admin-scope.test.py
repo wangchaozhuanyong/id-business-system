@@ -190,13 +190,16 @@ class BaselineAndReadbackTests(unittest.TestCase):
             manifest = {'commit': OLD, 'images': {name: {'reference': before[name]['reference'],
                 'digest': before[name]['image'], 'sourceCommit': OLD} for name in d.SERVICES},
                 'fixedRegistrationRelease': {'id': d.REGISTRATION_RECOVERY_ID}}
+            manifest['images']['api']['sourceCommit'] = d.RECHARGE_2F_CURRENT
             (current / 'release-manifest.json').write_text(json.dumps(manifest))
             (current / '.env.aws.production').write_text('preserved')
             profile_path = current / d.REGISTRATION_RECOVERY_FILE
-            profile_path.parent.mkdir(parents=True); profile_path.write_text('{}')
+            profile_path.parent.mkdir(parents=True)
+            profile_raw = (ROOT / d.REGISTRATION_RECOVERY_FILE).read_bytes()
+            profile_path.write_bytes(profile_raw)
             controller = SimpleNamespace(**vars(d)); controller.BASE = base
             controller.run = MagicMock(return_value=json.dumps([{'Id': before['api']['image'], 'Config': {'Labels': {
-                'org.opencontainers.image.revision': OLD, 'id-business-v2.api-projection-sha256': 'projection'}}}]))
+                'org.opencontainers.image.revision': d.RECHARGE_2F_CURRENT, 'id-business-v2.api-projection-sha256': 'projection'}}}]))
             controller.registration_profile = MagicMock(return_value={'apiProjectionSha256': 'projection',
                 'apiCompiledSourceProjectionSha256': 'compiled'})
             controller.registration_recovery_api_hashes = MagicMock()
@@ -207,6 +210,28 @@ class BaselineAndReadbackTests(unittest.TestCase):
             self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_EXISTING_API_PROJECTION')
             controller.registration_recovery_api_hashes.assert_called_once()
             controller.registration_recovery_image_labels.assert_called_once()
+            self.assertEqual(result[3]['apiSource']['revision'], d.RECHARGE_2F_CURRENT)
+            self.assertEqual(result[3]['apiSource']['profileRawSha256'], d.RECHARGE_2F_PROFILE_RAW)
+            # The publication manifest can now describe only a later recharge release.
+            manifest.pop('fixedRegistrationRelease')
+            manifest['fixedRechargeRelease'] = {'id': d.RECHARGE_2F_ID}
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            self.assertEqual(scope.baseline(controller, OLD, check_jobs=False)[3]['apiSource']['kind'],
+                             'VERIFIED_EXISTING_API_PROJECTION')
+            profile_path.write_bytes(profile_raw + b'\n')
+            with self.assertRaisesRegex(RuntimeError, 'UNKNOWN_API_PROJECTION'):
+                scope.baseline(controller, OLD, check_jobs=False)
+            profile_path.write_bytes(profile_raw)
+            controller.registration_recovery_image_labels.side_effect = RuntimeError('wrong projection label')
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_PROJECTION_FAILED$'):
+                scope.baseline(controller, OLD, check_jobs=False)
+            controller.registration_recovery_image_labels.side_effect = None
+            manifest['images']['api']['sourceCommit'] = OLD
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RuntimeError, 'BASELINE_API_REVISION_CHANGED'):
+                scope.baseline(controller, OLD, check_jobs=False)
+            manifest['images']['api']['sourceCommit'] = d.RECHARGE_2F_CURRENT
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
             controller.registration_recovery_api_hashes.side_effect = RuntimeError('raw private diagnostic')
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_PROJECTION_FAILED$'):
                 scope.baseline(controller, OLD, check_jobs=False)
@@ -300,6 +325,18 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(transport.safe_failure(raw), {key: raw[key] for key in ('status', 'code', 'errorType')})
         raw['code'] = 'PRIVATE raw error'
         self.assertEqual(transport.safe_failure(raw)['code'], 'API_ADMIN_REMOTE_VERIFICATION_FAILED')
+
+    def test_new_recharge_selection_is_mutually_exclusive_with_api_admin(self):
+        arguments = ['remote-deploy.py', '--commit', COMMIT, '--source-tree', TREE,
+            '--repository', REPOSITORY, '--expected-current', OLD, '--run-id', '123',
+            '--run-attempt', '1', '--ci-run-id', '456', '--api-admin-only', '--recharge-pro-2f']
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.object(d, 'BASE', Path(temporary)), \
+             patch.object(sys, 'argv', arguments), patch.object(d, 'recharge_2f_release') as recharge:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(d.main(), 1)
+            self.assertEqual(json.loads(output.getvalue())['code'], 'API_ADMIN_SCOPE_CONFLICT')
+            recharge.assert_not_called()
 
     def test_selection_rejects_reuse_history_and_cache_inputs(self):
         environment = {'RELEASE_OPERATION': 'release_api_admin', 'HISTORICAL_EXCEPTION': 'none'}

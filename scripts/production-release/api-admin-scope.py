@@ -139,13 +139,18 @@ def baseline(d, expected, *, check_jobs=True):
             verify_running(d, previous, proof)
             source['kind'] = 'API_ADMIN_BUILD_PROVEN'
         elif labels.get('id-business-v2.api-projection-sha256'):
-            d.require(manifest.get('fixedRegistrationRelease', {}).get('id') == d.REGISTRATION_RECOVERY_ID,
+            # A later worker-only publication changes the manifest commit/classification,
+            # while this immutable API image still comes from the fixed92 build.
+            profile_raw = (previous / d.REGISTRATION_RECOVERY_FILE).read_bytes()
+            profile_sha256 = hashlib.sha256(profile_raw).hexdigest()
+            d.require(source['revision'] == d.RECHARGE_2F_CURRENT
+                      and profile_sha256 == d.RECHARGE_2F_PROFILE_RAW,
                       'API_ADMIN_UNKNOWN_API_PROJECTION')
-            profile = d.registration_profile(json.loads((previous / d.REGISTRATION_RECOVERY_FILE).read_text()),
-                                             profile_id=d.REGISTRATION_RECOVERY_ID)
+            profile = d.registration_profile(json.loads(profile_raw), profile_id=d.REGISTRATION_RECOVERY_ID)
             d.registration_recovery_api_hashes(previous, profile)
             d.registration_recovery_image_labels('api', metadata, profile)
             source.update(kind='VERIFIED_EXISTING_API_PROJECTION',
+                          profileId=d.REGISTRATION_RECOVERY_ID, profileRawSha256=profile_sha256,
                           projectionSha256=profile['apiProjectionSha256'],
                           compiledSourceSha256=profile['apiCompiledSourceProjectionSha256'])
         else:

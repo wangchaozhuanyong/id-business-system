@@ -24,6 +24,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/recharge-pro-menu-7f-20261005.json',
   'deploy/aws/recharge-pro-main80-20261006.json',
   'deploy/aws/recharge-pro-974-20261007.json',
+  'deploy/aws/recharge-pro-2f-20261007.json',
   'scripts/v2-release-mailbox-audit.mjs',
   'scripts/v2-release-mailbox-audit.test.mjs',
   'deploy/aws/historical-finance-20261005-mailbox-batch.json',

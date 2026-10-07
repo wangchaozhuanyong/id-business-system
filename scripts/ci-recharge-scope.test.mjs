@@ -34,6 +34,34 @@ test('documentation and CI selectors do not start business or database checks', 
   ])
     assert.equal(checkMode([path], schema, schema), 'full');
 });
+test('the fixed 2f recharge profile selects deployment controls without business or database suites', () => {
+  const profile = 'deploy/aws/recharge-pro-2f-20261007.json';
+  const controls = [
+    profile,
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(isCiOnly([profile]), true);
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const unknown of [
+    'deploy/aws/recharge-pro-2f-20261008.json',
+    profile + '.backup',
+    'deploy/aws/recharge-pro-2f-unreviewed.json'
+  ]) {
+    assert.equal(isCiOnly([unknown]), false);
+    assert.equal(checkMode([...controls, unknown], schema, schema), 'full');
+  }
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py';
+  assert.equal(checkMode([...controls, worker], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, worker]), ['guards', 'connector']);
+});
 test('historical audit controls use their four exact reviewed paths', () => {
   const controls = [
     'deploy/aws/historical-finance-20261005-registration-continuation.json',
