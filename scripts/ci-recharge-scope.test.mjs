@@ -996,3 +996,50 @@ test('fixed94 control-only runtime followup never widens unchanged Worker or API
     assert.equal(isCiOnly([...controls, foreign]), false, foreign);
   }
 });
+
+test('fixed95 control-only interstitial never widens unchanged Worker or API checks', () => {
+  const profile = 'deploy/aws/registration-worker-95-20261008.json';
+  const controls = [
+    profile,
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-scope.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/ci-recharge-release.test.mjs'
+  ];
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.equal(isCiOnly(controls), true);
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const foreign of [
+    'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+    'deploy/aws/registration-worker-93-20261007.json',
+    'deploy/aws/registration-worker-94-20261007.json',
+    'deploy/aws/recharge-pro-2f-20261007.json',
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'docs/UNREVIEWED.md',
+    'scripts/production-release/api-admin-readonly.py'
+  ]) {
+    assert.equal(checkMode([...controls, foreign], schema, schema), 'full', foreign);
+    assert.equal(isCiOnly([...controls, foreign]), false, foreign);
+  }
+});
+
+test('fixed95 exact browser pair selects only guards connector and rejects other runtime sources', () => {
+  const controls = [
+    'deploy/aws/registration-worker-95-20261008.json',
+    'scripts/production-release/remote-deploy.py'
+  ];
+  for (const file of ['registration_browser.py', 'test_registration_browser.py']) {
+    const paths = [...controls, 'apps/api/src/id-business-v2/auto-recharge/worker/' + file];
+    assert.equal(checkMode(paths, schema, schema), 'recharge');
+    assert.equal(isCiOnly(paths), false);
+    assert.equal(isRechargeOnly(paths, schema, schema), true);
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+  }
+  for (const file of ['server.py', 'registration_builtin.py', 'plan_selection.py', 'Dockerfile']) {
+    const paths = [...controls, 'apps/api/src/id-business-v2/auto-recharge/worker/' + file];
+    assert.equal(checkMode(paths, schema, schema), 'full');
+    assert.equal(isRechargeOnly(paths, schema, schema), false);
+  }
+});

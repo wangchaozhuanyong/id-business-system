@@ -942,5 +942,97 @@ class Registration94TransportTests(TransportTests):
                     self.assertEqual(self.calls(env, 'aws'), [])
                     self.assertEqual(self.calls(env, 'docker'), [])
 
+class Registration95TransportTests(TransportTests):
+    profile = 'registration-worker-95-20261008'
+    output_directory = '.runtime/registration-login-interstitial-20261008/transport95'
+    baseline = '4c170e661c871dc14dccc98a8d6e5cf983141341'
+    profile_file = 'deploy/aws/' + profile + '.json'
+    scope_args = ['--registration-profile', profile]
+    release_flag = '--registration-worker-95'
+    artifact_step = 'Save fixed 95 registration Worker build projection'
+    readback_step = 'Verify fixed 95 registration deployment independently'
+    readback_parameters = 'fixed-registration-95-readback.json'
+
+    @contextmanager
+    def fixture(self):
+        with super().fixture() as (root,env):
+            controller=root/'scripts/production-release/remote-deploy.py'
+            controller.write_text(controller.read_text()+'\nvalidate_registration_interstitial_readback=validate_fixed_registration_readback_projection\n')
+            profile = {'id': self.profile, 'enabled': True, 'registrationSourceCommit': '9'*40, 'workerBasisCommit': '2f24cf81007429ea474da404a30bc74da9d43ce1',
+                'workerProjectionSha256': 'b'*64, 'registrationSourceSha256': {}, 'validationSourceSha256': {}}
+            (root/self.profile_file).write_text(json.dumps(profile))
+            for executable in (root/'.fixture').iterdir():
+                if executable.name not in ('python3','docker','aws','node'): continue
+                source=executable.read_text()
+                marker="['--prepare-fixed-registration-build','--registration-profile','registration-worker-91-20261007']):"
+                assert source.count(marker)==1
+                source=source.replace(marker,marker[:-2]+", ['--prepare-fixed-registration-build','--registration-profile','registration-worker-95-20261008']):")
+                marker='            projection={}\n'
+                insertion="""            if os.environ['LOCAL_TEST_PROFILE']=='registration-worker-95-20261008':
+                p=json.loads(pathlib.Path('deploy/aws/registration-worker-95-20261008.json').read_bytes())
+                projection={'version':1,'id':p['id'],'sourceCommit':os.environ['RELEASE_COMMIT'],'sourceTree':os.environ['SOURCE_TREE'],
+                    'contextPath':str(context),**{k:v for k,v in p.items() if k not in ('id','enabled')}}
+"""
+                assert source.count(marker)==1; source=source.replace(marker,marker+insertion)
+                marker="        if 'id-business-v2.admin-projection-sha256' in args[-1]:"
+                source=source.replace(marker,"        if 'id-business-v2.worker-projection-sha256' in args[-1]:print(('0' if os.environ.get('LOCAL_LOGIN_LABEL_DRIFT') else 'b')*64)\n        elif 'id-business-v2.admin-projection-sha256' in args[-1]:",1)
+                executable.write_text(source)
+            target=root/'.deploy/production-release/registration-build-projection.json';target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_text(json.dumps({'version':1,'id':profile['id'],'sourceCommit':COMMIT,'sourceTree':TREE,'contextPath':CONTEXT,
+                **{k:v for k,v in profile.items() if k not in ('id','enabled')}}))
+            yield root,env
+
+    def test_registration_build_uses_only_prepared_worker_context(self):
+        with self.fixture() as (root,env):
+            result=self.run_script(root,env,'build-images.sh');self.assertEqual(result.returncode,0,result.stderr)
+            builds=[x for x in self.calls(env,'docker') if x and x[0]=='build']
+            self.assertEqual(len(builds),1);self.assertEqual(builds[0][-1],CONTEXT)
+            self.assertIn('id-business-v2.worker-projection-sha256='+('b'*64),builds[0])
+            self.assertEqual(self.calls(env,'python3'),[
+                ['scripts/production-release/remote-deploy.py','--check-fixed-registration-scope',*self.scope_args],
+                ['scripts/production-release/remote-deploy.py','--prepare-fixed-registration-build',*self.scope_args],['-']])
+
+    def test_registration_push_verifies_and_pushes_only_worker_tag(self):
+        with self.fixture() as (root,env):
+            result=self.run_script(root,env,'push-images.sh');self.assertEqual(result.returncode,0,result.stderr)
+            pushes=[x for x in self.calls(env,'docker') if x and x[0]=='push']
+            self.assertEqual(pushes,[['push',REPOSITORY+':'+COMMIT+'-456-1-auto-recharge']])
+            self.assertEqual(self.calls(env,'python3'),[['scripts/production-release/remote-deploy.py','--check-fixed-registration-scope',*self.scope_args],['-']])
+
+    def test_foreign_profile_or_cache_seal_fails_before_transport(self):
+        for key,value in [('EXPECTED_CURRENT','974c62cc1681012ecff897aefc90d2cd9900004a'),
+            ('RELEASE_OPERATION','verify_order_archive_release'),('RELEASE_ADMIN_ONLY','true'),
+            ('REUSE_IMAGE_RUN','123'),('ORDER_ARCHIVE_SEAL_SHA256','0'*64)]:
+            for name in ('build-images.sh','push-images.sh','dispatch.sh'):
+                with self.subTest(key=key,name=name),self.fixture() as (root,env):
+                    env[key]=value;result=self.run_script(root,env,name)
+                    self.assertNotEqual(result.returncode,0);self.assertEqual(self.calls(env,'aws'),[]);self.assertEqual(self.calls(env,'docker'),[])
+
+    def test_worker_label_drift_rejects_push_before_any_push(self):
+        with self.fixture() as (root,env):
+            env['LOCAL_LOGIN_LABEL_DRIFT']='true'
+            result=self.run_script(root,env,'push-images.sh')
+            self.assertNotEqual(result.returncode,0)
+            self.assertEqual([x for x in self.calls(env,'docker') if x and x[0]=='push'],[])
+
+    def test_cache_input_is_not_a_new_build_input(self):
+        with self.fixture() as (root,env):
+            env['RELEASE_BROWSER_CACHE_IMAGE']=REPOSITORY+':'+('a'*40)+'-1-1-auto-recharge'
+            env['RELEASE_BROWSER_CACHE_IMAGE_ID']='sha256:'+('a'*64)
+            result=self.run_script(root,env,'build-images.sh')
+            self.assertNotEqual(result.returncode,0)
+            self.assertEqual([x for x in self.calls(env,'docker') if x and x[0] in ('pull','build')],[])
+
+
+    def test_api_admin_operation_cannot_select_registration95(self):
+        for operation in ('release_api_admin', 'verify_api_admin'):
+            for name in ('build-images.sh', 'push-images.sh', 'dispatch.sh'):
+                with self.subTest(operation=operation, script=name), self.fixture() as (root, env):
+                    env['RELEASE_OPERATION'] = operation
+                    result = self.run_script(root, env, name)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(self.calls(env, 'aws'), [])
+                    self.assertEqual(self.calls(env, 'docker'), [])
+
 if __name__ == '__main__':
     unittest.main()

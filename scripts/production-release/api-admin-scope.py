@@ -163,6 +163,22 @@ def baseline(d, expected, *, check_jobs=True):
                           profileId=d.REGISTRATION_FOLLOWUP_ID, profileRawSha256=profile_sha256,
                           buildProofSha256=receipt['apiBuildProofSha256'],
                           apiContentSha256=receipt['apiContentSha256'], adminContentSha256=receipt['adminContentSha256'])
+        elif manifest.get('fixedRegistrationRelease', {}).get('id') == getattr(d, 'REGISTRATION_INTERSTITIAL_ID', 'registration-worker-95-20261008'):
+            # 95 keeps the 815 API/Admin image; its own manifest revision describes only the Worker.
+            d.require('apiAdminPublication' not in manifest, 'API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS')
+            profile_raw = (previous / d.REGISTRATION_INTERSTITIAL_FILE).read_bytes()
+            profile_sha256 = hashlib.sha256(profile_raw).hexdigest()
+            receipt = d.check_registration_interstitial_deployment(expected, manifest['sourceTree'], profile_sha256)
+            provenance = manifest['fixedRegistrationRelease']
+            d.require(receipt['apiRuntimeRevision'] == source['revision'] == provenance['apiRuntimeRevision']
+                      and receipt['apiBuildProofSha256'] == provenance['apiBuildProofSha256']
+                      and receipt['apiContentSha256'] == provenance['apiContentSha256']
+                      and receipt['adminContentSha256'] == provenance['adminContentSha256'],
+                      'API_ADMIN_RETAINED_PUBLICATION_CHANGED')
+            source.update(kind='VERIFIED_RETAINED_API_ADMIN_PUBLICATION',
+                          profileId=d.REGISTRATION_INTERSTITIAL_ID, profileRawSha256=profile_sha256,
+                          buildProofSha256=receipt['apiBuildProofSha256'],
+                          apiContentSha256=receipt['apiContentSha256'], adminContentSha256=receipt['adminContentSha256'])
         elif labels.get('id-business-v2.api-projection-sha256'):
             # A later worker-only publication changes the manifest commit/classification,
             # while this immutable API image still comes from the fixed92 build.
