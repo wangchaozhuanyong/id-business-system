@@ -2946,7 +2946,7 @@ test('fixed 90 hydration workflow confines dual builds and explicit readback to 
     const source = readFileSync(`scripts/production-release/${name}`, 'utf8');
     const branch = source
       .split(
-        '\nif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then'
+        /\n(?:if|elif) \[\[ "\$\{HISTORICAL_EXCEPTION:-none\}" == registration-worker-90-20261007 \]\]; then/
       )[1]
       .split(/\n(?:fi|elif )/)[0];
     assert.ok(
