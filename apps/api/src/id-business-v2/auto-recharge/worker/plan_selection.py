@@ -100,6 +100,10 @@ async def pro_card(scope, *, details=False):
     if heading_count != 1:
         raise region_ambiguous(heading_count)
     product_count = await product.count()
+    if product_count == 0:
+        # 保留原 Pro 子节点归属；新标题仅接受同一标记内唯一语义 Pro 标题。
+        product = card.get_by_role('heading', name=PRO_HEADING).filter(visible=True)
+        product_count = await product.count()
     if product_count != 1:
         raise region_ambiguous(product_count)
     if not await product.evaluate("""node => {
@@ -108,14 +112,24 @@ async def pro_card(scope, *, details=False):
                 return Boolean(heading && card && card.contains(heading));
             }"""):
         raise region_ambiguous(product_count)
+    region = card
+    if not await card.get_by_role('button').filter(visible=True).count():
+        # 仅允许紧邻标记的直接父区域，不爬祖先，不接受区域外泛型按钮。
+        parent = card.locator('..')
+        if (await parent.count() == 1
+                and await pro_cards(parent).count() == 1
+                and await parent.get_by_role('heading').filter(visible=True).count() == 1
+                and await parent.get_by_role('button').filter(visible=True).count() == 1
+                and await buttons(parent, PRO).count() == 1):
+            region = parent
     if details:
-        groups = pro_detail_groups(card)
+        groups = pro_detail_groups(region)
         count = await groups.count()
         if count != 1:
             raise region_ambiguous(count) if count > 1 else Stop('official_plan_tier_not_found')
         if not (await groups.get_attribute('aria-label') or '').strip():
             raise Stop('official_plan_tier_not_found')
-    return card
+    return region
 
 
 async def pro_button(scope, target_plan, require_upgrade=False):
@@ -361,7 +375,8 @@ class Selection:
                 await entry.click(timeout=self.timeout())
                 scope = await plan_scope(self.page)
                 self.diagnostics['role'] = 'region'
-                await self.ready(pro_detail_groups(pro_cards(scope)), 'official_plan_tier_not_found')
+                details_card = await pro_card(scope) if await pro_cards(scope).count() else pro_cards(scope)
+                await self.ready(pro_detail_groups(details_card), 'official_plan_tier_not_found')
                 scope = await plan_scope(self.page)
             return await pro_card(scope, details=True)
         return scope

@@ -20,7 +20,7 @@ from pay import choose_plan, run_payment, verify_identity_again
 from payment_state import PaymentLedger, outcome, quote_digest
 from payment_recovery import recheck_in_context
 from plans import checkout_option_plan, checkout_text_plan, plan_spec, selection_spec
-from plan_selection import Selection, select_plan, verify_selected_plan, price_pattern
+from plan_selection import PRO_HEADING, Selection, select_plan, verify_selected_plan, price_pattern
 from test_payment import details
 from test_subscribe import fixture, account
 
@@ -863,6 +863,174 @@ class ProRegionDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                     diagnostics['matched_count'] = expected
                 self.assertEqual(stopped.exception.report['diagnostics'], diagnostics)
                 self.assertNotIn('PRIVATE', json.dumps(stopped.exception.report))
+
+
+class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
+    """语义标题和直属父区域的选择边界；不启动浏览器或连接网络。"""
+    def setUp(self):
+        self.page = MagicMock(name='synthetic-page')
+        self.selection = Selection(self.page, MagicMock())
+        self.enterContext(patch('plan_selection.expect', side_effect=self.expect))
+
+    @staticmethod
+    def collection(count, *, enabled=True, attributes=None, owned=True):
+        locator = MagicMock(name='synthetic-locator')
+        locator.filter.return_value = locator
+        locator.first = locator
+        locator.count = AsyncMock(return_value=count)
+        locator.is_visible = AsyncMock(return_value=count == 1)
+        locator.is_enabled = AsyncMock(return_value=enabled)
+        locator.get_attribute = AsyncMock(side_effect=lambda key: (attributes or {}).get(key))
+        locator.evaluate = AsyncMock(return_value=owned)
+        locator.click = AsyncMock()
+        return locator
+
+    @classmethod
+    def region(cls, *, headings=(), button_names=(), enabled=True, group_label=None):
+        """根据独立夹具的可访问名称回答查询，不预先指定选择结果。"""
+        region = cls.collection(1)
+        roles = {'heading': headings, 'button': button_names,
+                 'radiogroup': () if group_label is None else (group_label,)}
+        queries = {}
+        def query(role, *, name=None):
+            key = role, str(name)
+            if key not in queries:
+                labels = roles.get(role, ())
+                matches = labels if name is None else [label for label in labels if
+                    (name.search(label) if hasattr(name, 'search') else label == name)]
+                queries[key] = cls.collection(len(matches), enabled=enabled,
+                    attributes={'aria-label': group_label} if role == 'radiogroup' else None)
+            return queries[key]
+        region.get_by_role.side_effect = query
+        return region
+
+    def scene(self, *, headings=('ChatGPT Pro',), exact_pro_count=0, owned=True,
+              inside_buttons=(), parent_buttons=(), parent_headings=None,
+              parent_markers=1, enabled=True):
+        card = self.region(headings=headings, button_names=inside_buttons)
+        product = self.collection(exact_pro_count, owned=owned)
+        card.get_by_text.return_value = product
+        # Exact text and accessible heading queries exercise distinct paths.
+        semantic = card.get_by_role('heading', name=PRO_HEADING)
+        semantic.evaluate.return_value = owned
+        parent = self.region(headings=headings if parent_headings is None else parent_headings,
+                             button_names=parent_buttons, enabled=enabled)
+        markers = self.collection(parent_markers)
+        def parent_locator(selector):
+            self.assertEqual(selector, '[data-testid="pro-pricing-modal-column-top-half"]')
+            return markers
+        parent.locator.side_effect = parent_locator
+        def card_locator(selector):
+            self.assertEqual(selector, '..')
+            return parent
+        card.locator.side_effect = card_locator
+        scope = self.collection(1)
+        scope.locator.return_value = card
+        return scope, card, parent
+
+    @staticmethod
+    def expect(locator):
+        assertion = MagicMock()
+        async def count(expected, **_kwargs):
+            if await locator.count() != expected:
+                raise AssertionError('synthetic count mismatch')
+        async def visible(**_kwargs):
+            if not await locator.is_visible():
+                raise AssertionError('synthetic control hidden')
+        async def enabled(**_kwargs):
+            if not await locator.is_enabled():
+                raise AssertionError('synthetic control disabled')
+        assertion.to_have_count = count
+        assertion.to_be_visible = visible
+        assertion.to_be_enabled = enabled
+        return assertion
+
+    async def expand(self, scene):
+        scope, card, parent = scene
+        details = self.region(headings=('Pro',), button_names=('Synthetic final action',),
+                              group_label='Pro 用量')
+        details.get_by_text.return_value = self.collection(1)
+        detail_scope = self.collection(1)
+        detail_scope.locator.return_value = details
+        self.scope_after_click = self.enterContext(patch('plan_selection.plan_scope',
+            new=AsyncMock(return_value=detail_scope)))
+        result = await self.selection.open_pro_details(scope)
+        self.assertIs(result, details)
+        details.get_by_role('button').click.assert_not_awaited()
+        self.page.goto.assert_not_called()
+        return card, parent
+
+    async def assert_entry_blocked(self, scene, reason):
+        scope, card, parent = scene
+        with self.assertRaises(Stop) as stopped:
+            await self.selection.open_pro_details(scope)
+        self.assertEqual(stopped.exception.report['reason'], reason)
+        card.get_by_role('button').click.assert_not_awaited()
+        parent.get_by_role('button').click.assert_not_awaited()
+        self.page.goto.assert_not_called()
+        return stopped.exception.report
+
+    async def test_unique_accessible_pro_heading_keeps_existing_inside_entry(self):
+        for heading in ('ChatGPT Pro', 'Pro', '  ChatGPT Pro  '):
+            with self.subTest(heading=heading):
+                card, parent = await self.expand(self.scene(headings=(heading,),
+                    inside_buttons=('Synthetic details action',)))
+                card.get_by_role('button').click.assert_awaited_once()
+                parent.get_by_role.assert_not_called()
+
+    async def test_wrong_product_or_unowned_text_cannot_replace_pro_heading(self):
+        for heading, count, owned in (('Plus', 0, True), ('ChatGPT Plus', 0, True),
+                                     ('ChatGPT Pro Max', 0, True), ('Plus', 1, False)):
+            with self.subTest(heading=heading, count=count):
+                await self.assert_entry_blocked(self.scene(headings=(heading,),
+                    exact_pro_count=count, owned=owned, parent_buttons=('Get Pro',)),
+                    'official_plan_region_ambiguous')
+
+    async def test_semantic_heading_does_not_rescue_existing_exact_text_ambiguity(self):
+        for count, owned in ((1, False), (2, True)):
+            with self.subTest(count=count):
+                await self.assert_entry_blocked(self.scene(exact_pro_count=count, owned=owned,
+                    parent_buttons=('Get Pro',)), 'official_plan_region_ambiguous')
+
+    async def test_duplicate_or_missing_marker_headings_stop_before_parent_entry(self):
+        for headings in ((), ('ChatGPT Pro', 'Pro'), ('ChatGPT Pro', 'Plus')):
+            with self.subTest(headings=headings):
+                report = await self.assert_entry_blocked(self.scene(headings=headings,
+                    parent_buttons=('Get Pro',)), 'official_plan_region_ambiguous')
+                self.assertEqual(report['diagnostics']['matched_count'], len(headings))
+
+    async def test_unique_direct_parent_pro_entry_expands_but_does_not_submit(self):
+        card, parent = await self.expand(self.scene(headings=('Pro',), exact_pro_count=1,
+                                                    parent_buttons=('Get Pro',)))
+        card.get_by_role('button').click.assert_not_awaited()
+        parent.get_by_role('button').click.assert_awaited_once()
+        self.scope_after_click.assert_awaited()
+
+    async def test_extra_parent_buttons_headings_or_markers_are_not_owned(self):
+        cases = (
+            {'parent_buttons': ('Get Pro', 'Get Pro')},
+            {'parent_buttons': ('Get Pro', 'Synthetic other action')},
+            {'parent_buttons': ('Get Pro',), 'parent_headings': ('ChatGPT Pro', 'Plus')},
+            {'parent_buttons': ('Get Pro',), 'parent_markers': 2},
+        )
+        for changed in cases:
+            with self.subTest(changed=changed):
+                await self.assert_entry_blocked(self.scene(headings=('Pro',), exact_pro_count=1,
+                                                           **changed),
+                                                'official_plan_option_not_found')
+
+    async def test_generic_wrong_product_or_grandparent_cta_is_not_a_pro_entry(self):
+        for names in (('Synthetic details action',), ('Get Plus',), ()):
+            with self.subTest(names=names):
+                scene = self.scene(headings=('Pro',), exact_pro_count=1, parent_buttons=names)
+                await self.assert_entry_blocked(scene, 'official_plan_option_not_found')
+                self.page.get_by_role.assert_not_called()
+
+    async def test_disabled_unique_parent_pro_entry_never_clicks(self):
+        await self.assert_entry_blocked(self.scene(headings=('Pro',), exact_pro_count=1,
+                                                   parent_buttons=('Get Pro',), enabled=False),
+                                        'official_plan_option_disabled')
+        self.assertFalse(self.selection.diagnostics['enabled'])
 
 
 class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):

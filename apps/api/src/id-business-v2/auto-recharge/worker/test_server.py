@@ -852,7 +852,7 @@ class ServerTests(unittest.TestCase):
             second = runtime.run_isolated(identity)
             with self.assertRaisesRegex(RuntimeError, 'synthetic failure'):
                 runtime.run_isolated(failure)
-            self.assertEqual(len(browsers), 4)  # 预热进程 + 三笔独立任务。
+            self.assertEqual(len(browsers), 3)  # 充值不预热；三笔独立任务。
             self.assertIsNot(first, second)
             self.assertTrue(all(browser.closed == 1 for browser in browsers))
             shared = runtime.run(identity)
@@ -1187,6 +1187,188 @@ class ServerTests(unittest.TestCase):
                 self.assertIs(run.await_args_list[0].kwargs['browser'], browser)
                 self.assertIs(run.await_args_list[1].kwargs['browser'], browser)
         asyncio.run(exercise())
+
+
+
+
+class RechargeDriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_two_isolated_jobs_use_distinct_drivers_and_execute_once_each(self):
+        runtime = server.PersistentBrowserRuntime()
+        drivers = [MagicMock(stop=AsyncMock()), MagicMock(stop=AsyncMock())]
+        browsers = [MagicMock(close=AsyncMock()), MagicMock(close=AsyncMock())]
+        starter = MagicMock(start=AsyncMock(side_effect=drivers))
+        operation = AsyncMock(side_effect=["first", "second"])
+        with (patch("playwright.async_api.async_playwright", return_value=starter),
+              patch.object(server.fingerprint_runtime, "launch_fingerprint_browser",
+                           AsyncMock(side_effect=browsers)) as launch):
+            self.assertEqual(await runtime._execute_isolated(operation), "first")
+            self.assertIsNone(runtime.playwright)
+            self.assertEqual(await runtime._execute_isolated(operation), "second")
+        self.assertEqual(starter.start.await_count, 2)
+        self.assertEqual([call.args[0] for call in launch.await_args_list], drivers)
+        self.assertEqual(operation.await_count, 2)
+        for browser, driver in zip(browsers, drivers):
+            browser.close.assert_awaited_once()
+            driver.stop.assert_awaited_once()
+
+    async def test_entry_discards_old_browser_and_dead_driver_before_launch(self):
+        runtime = server.PersistentBrowserRuntime()
+        sequence = []
+        async def old_browser_close(): sequence.append("old_browser_close")
+        async def old_driver_stop(): sequence.append("old_driver_stop")
+        async def new_driver_start():
+            sequence.append("new_driver_start")
+            return fresh
+        async def new_launch(driver, **options):
+            self.assertIs(driver, fresh)
+            sequence.append("new_browser_launch")
+            return browser
+        async def operation(current):
+            self.assertIs(current, browser)
+            sequence.append("operation")
+            return "ok"
+        runtime.browser = MagicMock(close=AsyncMock(side_effect=old_browser_close))
+        runtime.playwright = MagicMock(stop=AsyncMock(side_effect=old_driver_stop))
+        fresh = MagicMock(stop=AsyncMock())
+        browser = MagicMock(close=AsyncMock())
+        starter = MagicMock(start=AsyncMock(side_effect=new_driver_start))
+        with (patch("playwright.async_api.async_playwright", return_value=starter),
+              patch.object(server.fingerprint_runtime, "launch_fingerprint_browser", new_launch)):
+            self.assertEqual(await runtime._execute_isolated(operation), "ok")
+        self.assertEqual(sequence, ["old_browser_close", "old_driver_stop", "new_driver_start",
+                                    "new_browser_launch", "operation"])
+        fresh.stop.assert_awaited_once()
+        self.assertIsNone(runtime.playwright)
+
+    async def test_failed_entry_browser_cleanup_never_launches_or_executes(self):
+        runtime = server.PersistentBrowserRuntime()
+        old_browser = MagicMock(close=AsyncMock(side_effect=RuntimeError("synthetic")))
+        runtime.browser = old_browser
+        runtime.playwright = MagicMock(stop=AsyncMock())
+        operation, factory = AsyncMock(), AsyncMock()
+        with self.assertRaises(Stop) as stopped:
+            await runtime._execute_isolated(operation, browser_factory=factory)
+        self.assertEqual(stopped.exception.report["reason"], "fingerprint_cleanup_failed")
+        self.assertIs(runtime.browser, old_browser)
+        runtime.playwright.stop.assert_not_awaited()
+        factory.assert_not_awaited()
+        operation.assert_not_awaited()
+
+    async def test_failed_entry_driver_cleanup_never_launches_or_executes(self):
+        runtime = server.PersistentBrowserRuntime()
+        old = MagicMock(stop=AsyncMock(side_effect=RuntimeError("synthetic")))
+        runtime.playwright = old
+        operation, factory = AsyncMock(), AsyncMock()
+        for _ in range(2):
+            with self.assertRaises(Stop) as stopped:
+                await runtime._execute_isolated(operation, browser_factory=factory)
+            self.assertEqual(stopped.exception.report["reason"], "fingerprint_cleanup_failed")
+        self.assertTrue(runtime.driver_cleanup_failed)
+        self.assertIs(runtime.playwright, old)
+        old.stop.assert_awaited_once()
+        factory.assert_not_awaited()
+        operation.assert_not_awaited()
+
+    async def test_failed_launch_still_discards_created_driver_without_retry(self):
+        runtime = server.PersistentBrowserRuntime()
+        driver = MagicMock(stop=AsyncMock())
+        starter = MagicMock(start=AsyncMock(return_value=driver))
+        operation = AsyncMock()
+        with (patch("playwright.async_api.async_playwright", return_value=starter),
+              patch.object(server.fingerprint_runtime, "launch_fingerprint_browser",
+                           AsyncMock(side_effect=Stop("fingerprint_start_timeout"))) as launch):
+            with self.assertRaises(Stop) as stopped:
+                await runtime._execute_isolated(operation)
+        self.assertEqual(stopped.exception.report["reason"], "fingerprint_start_timeout")
+        starter.start.assert_awaited_once()
+        launch.assert_awaited_once()
+        operation.assert_not_awaited()
+        driver.stop.assert_awaited_once()
+        self.assertIsNone(runtime.playwright)
+
+    async def test_operation_failure_is_not_replayed_and_driver_is_closed(self):
+        runtime = server.PersistentBrowserRuntime()
+        driver = MagicMock(stop=AsyncMock())
+        browser = MagicMock(close=AsyncMock())
+        async def factory(_runtime):
+            runtime.playwright = driver
+            return browser
+        operation = AsyncMock(side_effect=Stop("official_plan_browser_error"))
+        with self.assertRaises(Stop) as stopped:
+            await runtime._execute_isolated(operation, browser_factory=factory)
+        self.assertEqual(stopped.exception.report["reason"], "official_plan_browser_error")
+        operation.assert_awaited_once_with(browser)
+        browser.close.assert_awaited_once()
+        driver.stop.assert_awaited_once()
+        self.assertIsNone(runtime.playwright)
+
+    async def test_final_driver_cleanup_failure_preserves_result_and_fences_next_job(self):
+        runtime = server.PersistentBrowserRuntime()
+        driver = MagicMock(stop=AsyncMock(side_effect=RuntimeError("synthetic")))
+        browser = MagicMock(close=AsyncMock())
+        async def factory(_runtime):
+            runtime.playwright = driver
+            return browser
+        result = {"status": "blocked", "payment_requests_sent": 1}
+        operation = AsyncMock(return_value=result)
+        self.assertIs(await runtime._execute_isolated(operation, browser_factory=factory), result)
+        operation.assert_awaited_once()
+        self.assertTrue(runtime.driver_cleanup_failed)
+        next_operation, next_factory = AsyncMock(), AsyncMock()
+        with self.assertRaises(Stop):
+            await runtime._execute_isolated(next_operation, browser_factory=next_factory)
+        next_operation.assert_not_awaited()
+        next_factory.assert_not_awaited()
+        driver.stop.assert_awaited_once()
+
+    async def test_final_browser_cleanup_failure_preserves_result_and_fences_next_job(self):
+        runtime = server.PersistentBrowserRuntime()
+        browser = MagicMock(close=AsyncMock(side_effect=RuntimeError("synthetic")))
+        driver = MagicMock(stop=AsyncMock())
+        async def factory(_runtime):
+            runtime.playwright = driver
+            return browser
+        result = {"status": "blocked", "payment_requests_sent": 1}
+        operation = AsyncMock(return_value=result)
+        self.assertIs(await runtime._execute_isolated(operation, browser_factory=factory), result)
+        self.assertIs(runtime.browser, browser)
+        next_operation, next_factory = AsyncMock(), AsyncMock()
+        with self.assertRaises(Stop):
+            await runtime._execute_isolated(next_operation, browser_factory=next_factory)
+        next_operation.assert_not_awaited()
+        next_factory.assert_not_awaited()
+        operation.assert_awaited_once()
+        driver.stop.assert_awaited_once()
+
+    async def test_registration_isolated_path_retains_existing_driver(self):
+        runtime = server.PersistentBrowserRuntime(registration_owner=True)
+        old, fresh = MagicMock(stop=AsyncMock()), MagicMock(stop=AsyncMock())
+        runtime.playwright = old
+        browser = MagicMock(close=AsyncMock())
+        async def factory(_runtime):
+            self.assertIs(runtime.playwright, old)
+            runtime.playwright = fresh
+            return browser
+        operation = AsyncMock(return_value="ok")
+        self.assertEqual(await runtime._execute_isolated(operation, browser_factory=factory), "ok")
+        old.stop.assert_not_awaited()
+        fresh.stop.assert_not_awaited()
+        self.assertIs(runtime.playwright, fresh)
+        operation.assert_awaited_once()
+
+    async def test_public_driver_stop_timeout_is_bounded_and_fences_repeated_calls(self):
+        runtime = server.PersistentBrowserRuntime()
+        driver = MagicMock(stop=AsyncMock())
+        runtime.playwright = driver
+        async def fail_wait(awaitable, *, timeout):
+            await awaitable
+            self.assertEqual(timeout, 5)
+            raise asyncio.TimeoutError()
+        with patch.object(server.asyncio, "wait_for", fail_wait):
+            self.assertFalse(await runtime._discard_playwright())
+        self.assertFalse(await runtime._discard_playwright())
+        self.assertTrue(runtime.driver_cleanup_failed)
+        driver.stop.assert_awaited_once()
 
 
 if __name__ == '__main__':

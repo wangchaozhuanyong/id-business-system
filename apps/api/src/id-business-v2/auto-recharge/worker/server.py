@@ -56,6 +56,7 @@ class PersistentBrowserRuntime:
         self.loop = None
         self.thread = None
         self.playwright = None
+        self.driver_cleanup_failed = False
         self.browser = None
         self.ready = threading.Event()
         self.guard = threading.Lock()
@@ -91,29 +92,57 @@ class PersistentBrowserRuntime:
                 self.browser = None
 
     async def _execute_isolated(self, operation, *, proxy_factory=None, browser_factory=None):
-        # 单笔服务器充值不复用预热进程，也不与旧流程同时占用两份指纹浏览器内存。
-        await self._discard()
-        if browser_factory is not None:
-            browser = await browser_factory(self)
-        else:
-            proxy = await proxy_factory() if proxy_factory else None
-            browser = await self._new_browser(proxy=proxy)
+        # 注册保留原常驻驱动；服务器充值在单笔边界独占驱动，不重放业务操作。
+        closed = await self._discard()
+        if not self.registration_owner:
+            if not closed or not await self._discard_playwright():
+                raise Stop("fingerprint_cleanup_failed")
+        browser = None
         try:
+            if browser_factory is not None:
+                browser = await browser_factory(self)
+            else:
+                proxy = await proxy_factory() if proxy_factory else None
+                browser = await self._new_browser(proxy=proxy)
             return await operation(browser)
         finally:
             try:
-                await fingerprint_runtime.close_fingerprint_resource(browser)
+                closed = await fingerprint_runtime.close_fingerprint_resource(browser)
             except Exception:
-                # 浏览器崩溃后的关闭异常不能覆盖可能已经发生的付款结果。
-                pass
+                closed = False
+            if not self.registration_owner:
+                if not closed:
+                    # 关闭未确认时保留所有权，下一笔不能越过入口清理检查。
+                    self.browser = browser
+                # 清理失败不得覆盖可能已经发生的业务结果，也不得重放 operation。
+                await self._discard_playwright()
 
     async def _discard(self):
         browser, self.browser = self.browser, None
-        if browser is not None:
-            try:
-                await fingerprint_runtime.close_fingerprint_resource(browser)
-            except Exception:
-                pass
+        if browser is None:
+            return True
+        try:
+            closed = await fingerprint_runtime.close_fingerprint_resource(browser)
+        except Exception:
+            closed = False
+        if not closed and not self.registration_owner:
+            self.browser = browser
+        return closed
+
+    async def _discard_playwright(self):
+        if self.driver_cleanup_failed:
+            return False
+        playwright = self.playwright
+        if playwright is None:
+            return True
+        try:
+            await asyncio.wait_for(playwright.stop(), timeout=5)
+        except Exception:
+            # 公共 stop() 失败后不能凭重复调用返回值认定旧进程已经关闭。
+            self.driver_cleanup_failed = True
+            return False
+        self.playwright = None
+        return True
 
     async def _shutdown(self):
         if self.registration_owner and registration_builtin.PROFILES.profile:
@@ -131,7 +160,8 @@ class PersistentBrowserRuntime:
         asyncio.set_event_loop(loop)
         self.loop = loop
         try:
-            loop.run_until_complete(self._ensure_browser())
+            if self.registration_owner:
+                loop.run_until_complete(self._ensure_browser())
         except BaseException as exc:
             self.startup_error = exc
             self.ready.set()

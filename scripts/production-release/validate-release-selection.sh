@@ -116,6 +116,17 @@ validate_release_selection() {
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;
+    recharge-pro-974-20261007)
+      [[ "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      case "${RELEASE_OPERATION:-release}" in
+        release)
+          [[ "${EXPECTED_CURRENT:-}" == 974c62cc1681012ecff897aefc90d2cd9900004a ]] || return 1 ;;
+        verify_recharge_release)
+          [[ "${RELEASE_COMMIT:-}" =~ ^[0-9a-f]{40}$ && "${EXPECTED_CURRENT:-}" == "$RELEASE_COMMIT" && "$RELEASE_COMMIT" != 974c62cc1681012ecff897aefc90d2cd9900004a ]] || return 1 ;;
+        *) return 1 ;;
+      esac
+      return 0 ;;
     historical-finance-20261005-order-archive)
       [[ "${EXPECTED_CURRENT:-}" == 3ca300486d0edfadda83c094a48474a63959fce7 ]] || return 1
       [[ "${RELEASE_ADMIN_ONLY:-false}" == false && -z "${POST_CLEANUP_SEAL_SHA256:-}" ]] || return 1
