@@ -1278,7 +1278,10 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
           historical_order_archive=False, order_archive_seal_sha256=None,
           order_archive_prepared_sha256=None, image_run=None, image_attempt=None,
           candidate_commit=None, candidate_tree=None, stage=None, source=None,
-          before_receipt=None, origin=None):
+          before_receipt=None, origin=None, api_admin_only=False):
+    require(not api_admin_only or not any((historical_exception, historical_continuation,
+        historical_diagnostics, historical_maintenance, historical_mailbox, historical_post_cleanup,
+        historical_order_archive)), "API_ADMIN_AUDIT_SCOPE_CONFLICT")
     require(sum((historical_exception, historical_continuation, historical_diagnostics,
                  historical_maintenance, historical_mailbox, historical_post_cleanup,
                  historical_order_archive)) <= 1,
@@ -1302,7 +1305,7 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
                 HISTORY_CONTINUATION_BASELINE if historical_continuation else HISTORY_BASELINE)
     historical = historical_exception or historical_continuation or historical_diagnostics or historical_post_cleanup
     policy = continuation_policy(source, policy_id) if historical_continuation or historical_diagnostics else None
-    audit_service = 'api' if historical_post_cleanup else 'migrate'
+    audit_service = 'api' if historical_post_cleanup or api_admin_only else 'migrate'
     if historical_post_cleanup:
         require(source is not None, 'Post-cleanup candidate source missing')
         policy, release_seal = reviewed_post_cleanup_seal(source, post_cleanup_seal_sha256, candidate_commit, candidate_tree)
@@ -8141,6 +8144,13 @@ def recharge_974_release(args):
             return 1
 
 
+def api_admin_scope():
+    # Only the explicitly selected scope loads its separate controller.
+    import types
+    namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')))
+    return types.SimpleNamespace(**namespace), types.SimpleNamespace(**globals())
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
@@ -8154,6 +8164,8 @@ def main():
     parser.add_argument('--image-run-id')
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
+    parser.add_argument('--api-admin-only', action='store_true')
+    parser.add_argument('--api-admin-build-proof')
     parser.add_argument('--historical-finance-exception', action='store_true')
     parser.add_argument('--historical-finance-continuation', action='store_true')
     parser.add_argument('--historical-finance-recharge-diagnostics', action='store_true')
@@ -8179,6 +8191,10 @@ def main():
     parser.add_argument('--registration-worker-91', action='store_true')
     parser.add_argument('--registration-worker-92', action='store_true')
     args = parser.parse_args()
+    if args.api_admin_only:
+        scope, controller = api_admin_scope()
+        return scope.release(controller, args)
+    require(not args.api_admin_build_proof, "API_ADMIN_SCOPE_REQUIRED")
     if args.recharge_pro_974:
         return recharge_974_release(args)
     recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_main80
@@ -8730,7 +8746,28 @@ def main():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--summarize-command-result']:
+    if sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):
+        try:
+            scope, controller = api_admin_scope()
+            if sys.argv[1:] == ['--write-api-admin-build-proof']:
+                scope.build_proof(controller)
+            else:
+                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                        and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'API_ADMIN_INPUT_INVALID')
+                if sys.argv[1] == '--api-admin-readback':
+                    result = scope.readback(controller, sys.argv[3])
+                else:
+                    previous, manifest, states, evidence = scope.baseline(controller, sys.argv[3])
+                    result = {'status': 'API_ADMIN_BASELINE_VERIFIED', 'commit': sys.argv[3],
+                              'services': states, **evidence}
+                print(json.dumps(result))
+        except Exception as error:
+            message = str(error)
+            code = message if re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', message) else 'API_ADMIN_READ_UNAVAILABLE'
+            print(json.dumps({'status': 'API_ADMIN_VERIFICATION_FAILED', 'code': code,
+                              'errorType': type(error).__name__}))
+            raise SystemExit(1) from None
+    elif sys.argv[1:] == ['--summarize-command-result']:
         print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_failure_summary(json.load(sys.stdin))))
     elif sys.argv[1:2] in (['--check-fixed-registration-scope'], ['--prepare-fixed-registration-build']):
         try:

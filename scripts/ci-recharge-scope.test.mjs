@@ -900,3 +900,15 @@ test('shared button skin and exact skin controls stay frontend only without omit
   ])
     assert.equal(checkMode([...paths, other], schema, schema), 'full', other);
 });
+
+test('explicit API Admin controls stay in control-only CI', () => {
+  for (const path of [
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-readonly.py',
+    'scripts/production-release/api-admin-scope.test.py'
+  ]) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts([path]), ['guards']);
+  }
+});

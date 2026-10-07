@@ -2,7 +2,9 @@
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
+if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
+  services=(api admin)
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 974c62cc1681012ecff897aefc90d2cd9900004a
   test "${RELEASE_ADMIN_ONLY:-false}" = false

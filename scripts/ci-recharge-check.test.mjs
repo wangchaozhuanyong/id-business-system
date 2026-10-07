@@ -11,7 +11,7 @@ const gates = [
   'check:v2-concurrency-standard'
 ];
 
-function recordGuardCommands(mode, paths) {
+function recordGuardCommands(mode, paths, part = 'guards') {
   // Run the real dispatcher with process execution replaced before its named import resolves.
   // No Git command, nested test, database command or business operation is executed.
   const script = `
@@ -25,7 +25,7 @@ function recordGuardCommands(mode, paths) {
       return '';
     };
     syncBuiltinESMExports();
-    process.argv = ['node', 'scripts/ci-recharge-check.mjs', 'guards', 'a'.repeat(40)];
+    process.argv = ['node', 'scripts/ci-recharge-check.mjs', process.env.GUARD_TEST_PART, 'a'.repeat(40)];
     await import('./scripts/ci-recharge-check.mjs');
     process.stdout.write(JSON.stringify(calls));
   `;
@@ -33,7 +33,12 @@ function recordGuardCommands(mode, paths) {
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       encoding: 'utf8',
-      env: { ...process.env, CHECK_MODE: mode, GUARD_TEST_PATHS: JSON.stringify(paths) }
+      env: {
+        ...process.env,
+        CHECK_MODE: mode,
+        GUARD_TEST_PART: part,
+        GUARD_TEST_PATHS: JSON.stringify(paths)
+      }
     })
   );
 }
@@ -74,4 +79,24 @@ test('full quality workflow includes each backend architecture gate', () => {
   );
   const full = workflow.split('  full-quality:')[1].split('\n  recharge:')[0];
   for (const gate of gates) assert.ok(full.includes(`run: npm run ${gate}`), gate);
+});
+
+test('API Admin control edits execute their suite in both CI entry points', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of [
+      'scripts/production-release/api-admin-scope.py',
+      'scripts/production-release/api-admin-readonly.py',
+      'scripts/production-release/api-admin-scope.test.py'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') === 'python3 -B scripts/production-release/api-admin-scope.test.py'
+        ).length,
+        1
+      );
+      assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+    }
+  }
 });

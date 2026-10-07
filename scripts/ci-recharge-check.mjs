@@ -121,6 +121,15 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);
     run('node', ['--test', 'scripts/v2-release-mailbox-audit.test.mjs']);
   }
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/') ||
+        path === '.github/workflows/production-release.yml' ||
+        path === 'scripts/ci-recharge-check.mjs'
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
   releaseMaintenanceControls();
   archiveReleaseControls();
   if (
@@ -214,6 +223,15 @@ if (part === 'guards') {
   }
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/') ||
+        path === '.github/workflows/production-release.yml' ||
+        path === 'scripts/ci-recharge-check.mjs'
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
   releaseMaintenanceControls();
   archiveReleaseControls();
 } else if (part === 'admin') {

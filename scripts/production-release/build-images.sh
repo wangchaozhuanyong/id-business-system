@@ -32,6 +32,9 @@ build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
+  if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
+    options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
+  fi
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
   if [[ "$service" == admin ]]; then
     options+=(--build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api)
@@ -80,6 +83,14 @@ build_image() {
   fi
   echo "Built image: $service"
 }
+
+if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api apps/api/Dockerfile.mysql runtime
+  build_image admin apps/admin/Dockerfile runtime
+  python3 -B scripts/production-release/remote-deploy.py --write-api-admin-build-proof
+  exit 0
+fi
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
