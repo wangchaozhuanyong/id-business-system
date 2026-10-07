@@ -17,6 +17,13 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; the
       test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.admin-projection-sha256" }}')" = "$registration_admin_projection"
     fi
   done
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-91-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-91-20261007
+  services=(auto-recharge)
 elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-89-20261006 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = d2e22e623d0e19851c79ffe43396f5f97a99b8d3

@@ -680,3 +680,66 @@ test('fixed registration 80, 956 and 85 controls retain worker checks and reject
     assert.equal(checkMode([profile, other], schema, schema), 'full', other);
   }
 });
+
+test('fixed 91 profile observation CI accepts only two Worker files and reviewed controls', () => {
+  const profile = 'deploy/aws/registration-worker-91-20261007.json';
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/';
+  const sources = [worker + 'registration_browser.py', worker + 'test_registration_browser.py'];
+  const controls = [
+    profile,
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/registration-only-transport.test.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/v2-registration-finance-audit.mjs',
+    'scripts/v2-registration-finance-audit.test.mjs',
+    'docs/AUTO_REGISTRATION.md',
+    'docs/PRODUCTION_RELEASE_OIDC.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(isCiOnly([profile]), true);
+  assert.equal(checkMode(controls), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const inputs of [sources, sources.slice(0, 1), sources.slice(1)]) {
+    const paths = [...controls, ...inputs];
+    assert.equal(checkMode(paths), 'recharge');
+    assert.equal(isRechargeOnly(paths), true);
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+    assert.deepEqual(adminUiGuardChecks('recharge', paths), []);
+  }
+  for (const extra of [
+    worker + 'test_registration_auto_code.py',
+    worker + 'registration_job.py',
+    worker + 'plan_selection.py',
+    worker + 'test_pro.py',
+    worker + 'Dockerfile',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/id-business-v2-auto-recharge.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/api/requestPolicy.ts',
+    'apps/admin/src/v2/features/auto-registration/useRegistrationStart.ts',
+    'deploy/aws/registration-worker-90-20261007.json',
+    'deploy/aws/recharge-pro-main80-20261006.json',
+    'scripts/production-release/reuse-images.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/production-release/unreviewed.py',
+    'scripts/ci-recharge-unreviewed.mjs',
+    'docker-compose.aws-mysql.yml',
+    'package-lock.json'
+  ]) {
+    const paths = [...controls, ...sources, extra];
+    assert.equal(checkMode(paths), 'full', extra);
+    assert.equal(isRechargeOnly(paths), false, extra);
+    assert.equal(isTargetedOnly(paths), false, extra);
+    assert.equal(checkMode([profile, extra]), 'full', extra);
+    assert.equal(isCiOnly([profile, extra]), false, extra);
+  }
+});

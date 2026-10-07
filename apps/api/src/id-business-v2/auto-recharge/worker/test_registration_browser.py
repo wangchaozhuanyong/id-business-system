@@ -1426,6 +1426,313 @@ class ProfileBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session_reads, 2)
         self.assertTrue(all(method == 'GET' for method in self.navigation_methods))
 
+
+
+    async def profile_get_fixture(self, mode):
+        self.events.clear(); self.submissions.clear(); self.navigation_methods.clear()
+        self.job.manual.reset_mock(); self.job.cancelled.clear()
+        self.job.registration_observation_error = None
+        self.flow = RegistrationBrowser(self.job, self.context); self.flow.page = self.page
+        self.flow.registration_country = AsyncMock(return_value='US')
+        async def settle(_seconds=2):
+            await asyncio.sleep(.02)
+        self.flow.settle = settle
+        self.flow.registration_state.update(email_submitted=True, code_submitted=True)
+        self.job.prepare_mail = MagicMock(); self.job.wait_code = AsyncMock()
+        self.job.payload['registered'] = False
+        if mode == 'nonform':
+            body = '<div role="dialog" id="profile"><input name="name" required><input name="age" type="number" required><button>Continue</button></div>'
+        else:
+            body = '<form id="profile" method="'+('post' if mode == 'post' else 'get')+'" action="/fixture/profile"><input name="name" required><input name="age" type="number" required><button>Continue</button></form>'
+        script = '''<script>
+        const mode=__MODE__;const root=document.querySelector('#profile');
+        const name=root.querySelector('[name=name]');const age=root.querySelector('[name=age]');
+        document.documentElement.dataset.submitCount='0';
+        document.documentElement.dataset.preReadyInputs='0';
+        document.documentElement.dataset.handlerReady='false';
+        document.documentElement.dataset.mutation='none';
+        root.addEventListener('input',()=>{
+          if(document.documentElement.dataset.handlerReady!=='true'){
+            document.documentElement.dataset.preReadyInputs=String(Number(document.documentElement.dataset.preReadyInputs)+1);
+          }
+          if(mode==='replaced'&&name.value===__NAME__&&document.documentElement.dataset.mutation==='none'){
+            document.documentElement.dataset.mutation='replaced';root.replaceWith(root.cloneNode(true));
+          }else if(mode==='challenge_ambiguous'&&age.value==='45'){
+            document.documentElement.dataset.mutation='challenge_ambiguous';
+            document.body.insertAdjacentHTML('afterbegin','<h1>Verify you are human</h1>');
+            document.body.appendChild(root.cloneNode(true));
+          }else if(mode==='target_changed'&&age.value==='45'){
+            document.documentElement.dataset.mutation='target_changed';name.value='changed-fixture-name';
+          }
+        });
+        const submit=async event=>{
+          event.preventDefault();document.documentElement.dataset.submitCount=String(Number(document.documentElement.dataset.submitCount)+1);
+          await fetch('/fixture/profile',{method:'POST',body:'{}'});
+          document.body.innerHTML='<main>Welcome</main>';
+        };
+        const attach=()=>{root.onsubmit=submit;document.documentElement.dataset.handlerReady='true';};
+        if(mode==='delayed'){
+          document.addEventListener('fixture-profile-arm',()=>setTimeout(()=>{
+            name.value='';age.value='';document.documentElement.dataset.hydrationReset='true';attach();
+          },80),{once:true});
+        }else if(mode==='nonform'){
+          root.querySelector('button').onclick=submit;
+        }else if(mode!=='no_handler'&&mode!=='post')attach();
+        </script>'''
+        script = script.replace('__MODE__', json.dumps(mode)).replace('__NAME__', json.dumps(self.job.payload['displayName']))
+        html = '<!doctype html><html><head><meta charset="utf-8"></head><body>'+body+script+'</body></html>'
+        async def local(route):
+            self.navigation_methods.append(route.request.method)
+            if urlsplit(route.request.url).path == '/fixture/profile' and route.request.method == 'POST':
+                self.submissions.append(True)
+                if mode == 'post':
+                    from urllib.parse import parse_qs
+                    self.assertEqual(parse_qs(route.request.post_data), {'name':[self.job.payload['displayName']], 'age':['45']})
+                    await route.fulfill(content_type='text/html',body='<html data-submit-count="1"><body><main>Welcome</main></body></html>')
+                else:
+                    await route.fulfill(content_type='application/json',body='{}')
+            else:
+                await route.fulfill(content_type='text/html',body=html)
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/onboarding', wait_until='domcontentloaded')
+        self.readiness_false = 0; self.readiness_armed = False
+        original = self.flow.email_submit_ready
+        async def ready(name, button):
+            result = await original(name, button)
+            if not result:
+                self.readiness_false += 1
+                if mode == 'delayed' and not self.readiness_armed:
+                    self.readiness_armed = True
+                    await self.page.evaluate("document.dispatchEvent(new Event('fixture-profile-arm'))")
+            return result
+        self.flow.email_submit_ready = ready
+
+    async def fixture_profile_identity(self, page, email, **kwargs):
+        self.assertIs(page, self.page)
+        self.assertEqual(email, self.job.payload['email'])
+        return ('fixture', 'identity') if await page.locator('main').count() == 1 else None
+
+    async def test_get_profile_waits_for_handler_before_fill_and_submits_once(self):
+        await self.profile_get_fixture('delayed')
+        with patch('registration_browser.official_identity', self.fixture_profile_identity):
+            await asyncio.wait_for(self.flow.register(), timeout=40)
+        self.assertGreaterEqual(self.readiness_false, 1)
+        self.assertTrue(self.readiness_armed)
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.hydrationReset'), 'true')
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.preReadyInputs'), '0')
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.submitCount'), '1')
+        self.assertEqual(self.submissions, [True]); self.assertEqual(self.navigation_methods.count('POST'), 1)
+        self.assertTrue(self.flow.registration_state['profile_submitted']); self.assertTrue(self.flow.data['registered'])
+        self.job.manual.assert_not_awaited(); self.job.prepare_mail.assert_not_called(); self.job.wait_code.assert_not_awaited()
+        self.assertEqual(self.page_errors, [])
+
+    async def test_get_profile_without_handler_pauses_without_fill_at_original_budget(self):
+        await self.profile_get_fixture('no_handler')
+        started = time.monotonic()
+        with patch('registration_browser.official_identity', AsyncMock()) as identity:
+            with self.assertRaises(Stop) as stopped:
+                await asyncio.wait_for(self.flow.register(), timeout=40)
+        elapsed = time.monotonic()-started
+        self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+        self.assertGreaterEqual(elapsed, 14.9); self.assertLess(elapsed, 17)
+        self.assertGreaterEqual(self.readiness_false, 2)
+        self.assertEqual(await self.page.locator('[name=name]').input_value(), '')
+        self.assertEqual(await self.page.locator('[name=age]').input_value(), '')
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.preReadyInputs'), '0')
+        self.assertEqual(await self.page.evaluate('document.documentElement.dataset.submitCount'), '0')
+        self.assertEqual(self.submissions, []); self.assertEqual(self.navigation_methods.count('POST'), 0)
+        self.assertFalse(self.flow.registration_state.get('profile_submitted',False)); self.assertFalse(self.flow.data['registered'])
+        self.assertFalse(self.flow.registration_refreshed)
+        self.job.manual.assert_awaited_once_with('form_unrecognized'); self.job.prepare_mail.assert_not_called(); self.job.wait_code.assert_not_awaited()
+        identity.assert_not_awaited(); self.assertEqual(self.page_errors, [])
+        print(json.dumps({'fixture':'profile_get_no_handler','elapsedMs':int(elapsed*1000), 'budgetSeconds':15,
+            'readinessFalseCount':self.readiness_false,'submitCount':0,'fillCount':0,'manualCount':1},sort_keys=True))
+
+    async def test_get_profile_replacement_or_changed_value_after_fill_never_clicks(self):
+        for mode in ['replaced','target_changed','challenge_ambiguous']:
+            with self.subTest(mode=mode):
+                await self.profile_get_fixture(mode)
+                with patch('registration_browser.official_identity', AsyncMock()) as identity:
+                    with self.assertRaises(Stop) as stopped:
+                        await asyncio.wait_for(self.flow.register(), timeout=40)
+                self.assertEqual(stopped.exception.report['reason'],'fixture_paused')
+                self.assertEqual(await self.page.evaluate('document.documentElement.dataset.mutation'),mode)
+                self.assertEqual(await self.page.evaluate('document.documentElement.dataset.submitCount'),'0')
+                self.assertEqual(self.submissions,[]); self.assertEqual(self.navigation_methods.count('POST'),0)
+                self.assertFalse(self.flow.registration_state.get('profile_submitted',False))
+                self.assertFalse(self.flow.data['registered']); self.assertFalse(self.flow.registration_refreshed)
+                if mode == 'challenge_ambiguous':
+                    self.job.manual.assert_awaited_once_with('verification_required', can_resume=self.flow.verification_resolved)
+                else:
+                    self.job.manual.assert_awaited_once_with('form_unrecognized')
+                self.job.prepare_mail.assert_not_called(); self.job.wait_code.assert_not_awaited()
+                identity.assert_not_awaited(); self.assertEqual(self.page_errors,[])
+
+    async def test_profile_method_read_detached_button_respects_original_deadline_without_fill(self):
+        await self.profile_get_fixture('no_handler')
+        original = self.flow.profile_native_get
+        reached = []
+        async def detach_before_classification(button):
+            await button.evaluate('node => node.remove()')
+            reached.append(True)
+            return await original(button)
+        self.flow.profile_native_get = detach_before_classification
+        started=time.monotonic()
+        with patch('registration_browser.official_identity', AsyncMock()) as identity:
+            with self.assertRaises(Stop) as stopped:
+                await asyncio.wait_for(self.flow.register(),timeout=40)
+        elapsed=time.monotonic()-started
+        self.assertEqual(stopped.exception.report['reason'],'fixture_paused')
+        self.assertEqual(reached,[True]); self.assertGreaterEqual(elapsed,14.9); self.assertLess(elapsed,17)
+        self.assertEqual(await self.page.locator('[name=name]').input_value(),'')
+        self.assertEqual(await self.page.locator('[name=age]').input_value(),'')
+        self.assertEqual(self.submissions,[]); self.assertFalse(self.flow.registration_state.get('profile_submitted',False))
+        self.job.manual.assert_awaited_once_with('form_unrecognized'); self.job.prepare_mail.assert_not_called(); self.job.wait_code.assert_not_awaited()
+        self.assertFalse(self.flow.registration_refreshed); identity.assert_not_awaited(); self.assertEqual(self.page_errors,[])
+        print(json.dumps({'fixture':'profile_detached_method_read','elapsedMs':int(elapsed*1000),
+            'budgetSeconds':15,'injectionReached':True,'fillCount':0,'submitCount':0},sort_keys=True))
+
+    async def test_post_and_nonform_profile_keep_original_submission_without_handler_gate(self):
+        for mode in ['post','nonform']:
+            with self.subTest(mode=mode):
+                await self.profile_get_fixture(mode)
+                with patch('registration_browser.official_identity', self.fixture_profile_identity):
+                    await asyncio.wait_for(self.flow.register(), timeout=40)
+                self.assertEqual(self.readiness_false,0)
+                self.assertEqual(self.submissions,[True]); self.assertEqual(self.navigation_methods.count('POST'),1)
+                self.assertTrue(self.flow.registration_state['profile_submitted']); self.assertTrue(self.flow.data['registered'])
+                self.job.manual.assert_not_awaited(); self.job.prepare_mail.assert_not_called(); self.job.wait_code.assert_not_awaited()
+                self.assertEqual(self.page_errors,[])
+
+    async def profile_transition_fixture(self, *, persistent, terminal=None):
+        import registration_browser
+        html = '''<!doctype html><html><body>
+        <form><input name="name"><input name="birthdate" type="date"><button>Continue</button></form>
+        <script>document.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();document.documentElement.dataset.submitCount=String(
+            Number(document.documentElement.dataset.submitCount||0)+1);
+          await fetch('/fixture/profile',{method:'POST',body:'{}'});
+        };</script></body></html>'''
+        async def local(route):
+            self.navigation_methods.append(route.request.method)
+            if urlsplit(route.request.url).path == '/fixture/profile':
+                self.submissions.append(True)
+                await route.fulfill(content_type='application/json', body='{}')
+            else:
+                await route.fulfill(content_type='text/html', body=html)
+        await self.page.route('**/*', local)
+        await self.page.goto('https://chatgpt.com/onboarding', wait_until='domcontentloaded')
+        self.flow.registration_state.update(email_submitted=True, code_submitted=True)
+        self.job.prepare_mail = MagicMock()
+        self.job.wait_code = AsyncMock()
+        self.transition_injected = False
+        self.transition_reads = 0
+        self.transition_reasons = []
+        self.profile_observation_started = None
+        self.original_page = self.flow.page
+        original_unique = registration_browser.unique_visible
+        async def exact_visible(page, selector):
+            if selector == registration_browser.NAME_INPUT and self.flow.registration_state.get('profile_submitted'):
+                if not self.transition_injected:
+                    await self.page.wait_for_function("document.documentElement.dataset.submitCount === '1'", timeout=3000)
+                    await self.page.evaluate("document.body.appendChild(document.querySelector('form').cloneNode(true))")
+                    self.transition_injected = True
+                self.transition_reads += 1
+                try:
+                    return await original_unique(page, selector)
+                except Stop as exc:
+                    self.transition_reasons.append(exc.report['reason'])
+                    if not persistent:
+                        await self.page.evaluate("document.body.innerHTML='<main>Welcome</main>'")
+                    elif terminal == 'challenge':
+                        await self.page.evaluate("document.body.innerHTML='<h1>Verify you are human</h1>'")
+                    elif terminal == 'cancel':
+                        self.job.cancelled.set()
+                    raise
+            return await original_unique(page, selector)
+        async def settle(seconds=2):
+            await asyncio.sleep(.02)
+            if seconds == 4:
+                self.profile_observation_started = time.monotonic()
+        self.flow.settle = settle
+        self.native_unique = exact_visible
+
+    async def test_submitted_profile_transient_duplicate_form_reobserves_without_replay(self):
+        await self.profile_transition_fixture(persistent=False)
+        async def identity(page, email, **kwargs):
+            self.assertIs(page, self.original_page)
+            self.assertEqual(email, self.job.payload['email'])
+            return ('fixture', 'identity') if await page.locator('main').count() == 1 else None
+        with patch('registration_browser.unique_visible', self.native_unique), patch('registration_browser.official_identity', identity):
+            await asyncio.wait_for(self.flow.register(), timeout=40)
+        self.assertTrue(self.transition_injected)
+        self.assertEqual(self.transition_reasons, ['login_form_ambiguous'])
+        self.assertGreaterEqual(self.transition_reads, 2)
+        self.assertEqual(self.submissions, [True])
+        self.assertEqual(self.navigation_methods.count('POST'), 1)
+        self.assertEqual(await self.page.evaluate("document.documentElement.dataset.submitCount"), '1')
+        self.assertTrue(self.flow.registration_state['profile_submitted'])
+        self.assertTrue(self.flow.registration_state['email_submitted'])
+        self.assertTrue(self.flow.registration_state['code_submitted'])
+        self.assertIs(self.flow.page, self.original_page)
+        self.assertFalse(self.flow.registration_refreshed)
+        self.assertTrue(self.flow.data['registered'])
+        self.job.manual.assert_not_awaited()
+        self.job.prepare_mail.assert_not_called()
+        self.job.wait_code.assert_not_awaited()
+        self.assertEqual(self.page_errors, [])
+
+    async def test_submitted_profile_persistent_duplicate_form_pauses_at_original_budget(self):
+        for terminal in [None, 'challenge', 'cancel']:
+            with self.subTest(terminal=terminal):
+                self.submissions.clear(); self.navigation_methods.clear(); self.events.clear()
+                self.job.manual.reset_mock(); self.job.cancelled.clear()
+                self.flow = RegistrationBrowser(self.job, self.context); self.flow.page = self.page
+                self.flow.registration_country = AsyncMock(return_value='US')
+                def check():
+                    if self.job.cancelled.is_set():
+                        raise Stop('operation_cancelled')
+                self.job.check = check
+                await self.profile_transition_fixture(persistent=True, terminal=terminal)
+                with patch('registration_browser.unique_visible', self.native_unique), patch('registration_browser.official_identity', AsyncMock()) as identity:
+                    with self.assertRaises(Stop) as stopped:
+                        await asyncio.wait_for(self.flow.register(), timeout=40)
+                elapsed = time.monotonic() - self.profile_observation_started
+                self.assertTrue(self.transition_injected)
+                self.assertTrue(all(reason == 'login_form_ambiguous' for reason in self.transition_reasons))
+                if terminal is None:
+                    self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+                    self.assertGreaterEqual(self.transition_reads, 2)
+                    self.assertGreaterEqual(elapsed, 14.9)
+                    self.assertLess(elapsed, 17)
+                    self.job.manual.assert_awaited_once_with('form_unrecognized')
+                elif terminal == 'challenge':
+                    self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+                    self.assertLess(elapsed, 10)
+                    self.job.manual.assert_awaited_once_with('verification_required', can_resume=self.flow.verification_resolved)
+                else:
+                    self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+                    self.assertLess(elapsed, 10)
+                    self.job.manual.assert_not_awaited()
+                self.assertEqual(self.submissions, [True])
+                self.assertEqual(self.navigation_methods.count('POST'), 1)
+                self.assertEqual(await self.page.evaluate("document.documentElement.dataset.submitCount"), '1')
+                self.assertTrue(self.flow.registration_state['profile_submitted'])
+                self.assertTrue(self.flow.registration_state['email_submitted'])
+                self.assertTrue(self.flow.registration_state['code_submitted'])
+                self.assertIs(self.flow.page, self.original_page)
+                self.assertFalse(self.flow.registration_refreshed)
+                self.assertFalse(self.flow.data['registered'])
+                self.assertNotIn('registered', self.events)
+                self.job.prepare_mail.assert_not_called()
+                self.job.wait_code.assert_not_awaited()
+                identity.assert_not_awaited()
+                self.assertEqual(self.page_errors, [])
+                print(json.dumps({'fixture':'persistent_profile_ambiguity', 'terminal':terminal or 'budget',
+                    'observationElapsedMs':int(elapsed*1000), 'observationBudgetSeconds':15,
+                    'transitionReads':self.transition_reads,'submitCount':len(self.submissions),
+                    'manualCount':self.job.manual.await_count, 'registered':self.flow.data['registered']},sort_keys=True))
+
     async def test_disappearing_submitted_form_reobserves_without_manual_handoff(self):
         import registration_browser
         await self.serve('<form><input name="name"><input name="birthdate" type="date"><button>Continue</button></form>')

@@ -15,6 +15,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-88-20261006.json',
   'deploy/aws/registration-worker-89-20261006.json',
   'deploy/aws/registration-worker-90-20261007.json',
+  'deploy/aws/registration-worker-91-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -53,7 +54,44 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/maintain-image-cache.py',
   'scripts/production-release/maintain-image-cache.test.py'
 ]);
+const registrationProfileObservationProfile = 'deploy/aws/registration-worker-91-20261007.json';
+const registrationProfileObservationSources = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
+]);
+const registrationProfileObservationControls = new Set([
+  registrationProfileObservationProfile,
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/remote-deploy.test.py',
+  'scripts/production-release/registration-only-transport.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/v2-registration-finance-audit.mjs',
+  'scripts/v2-registration-finance-audit.test.mjs'
+]);
+const isRegistrationProfileObservationControl = (path) =>
+  registrationProfileObservationControls.has(path) ||
+  /^(?:docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(path);
+function isRegistrationProfileObservationOnly(paths) {
+  return (
+    paths.includes(registrationProfileObservationProfile) &&
+    paths.every(
+      (path) =>
+        registrationProfileObservationSources.has(path) ||
+        isRegistrationProfileObservationControl(path)
+    )
+  );
+}
 export function isCiOnly(paths) {
+  if (paths.includes(registrationProfileObservationProfile))
+    return paths.every(isRegistrationProfileObservationControl);
   return (
     paths.length > 0 &&
     paths.every(
@@ -118,6 +156,12 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationProfileObservationProfile)) {
+    if (!isRegistrationProfileObservationOnly(paths)) return 'full';
+    return paths.some((path) => registrationProfileObservationSources.has(path))
+      ? 'recharge'
+      : 'ci-only';
+  }
   if (
     paths.includes(auditRetentionMigration) &&
     paths.every((path) => path === auditRetentionMigration || isCiOnly([path]))
@@ -231,6 +275,11 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationProfileObservationProfile))
+    return (
+      isRegistrationProfileObservationOnly(paths) &&
+      paths.some((path) => registrationProfileObservationSources.has(path))
+    );
   if (!paths.length || !paths.some((p) => p.includes('auto-recharge') || p === migration))
     return false;
   if (
@@ -258,6 +307,8 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationProfileObservationProfile))
+    return isRechargeOnly(paths, oldSchema, newSchema);
   return (
     isRegistrationHydrationOnly(paths) ||
     isRechargeOnly(paths, oldSchema, newSchema) ||
@@ -268,6 +319,10 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (isRegistrationProfileObservationOnly(paths))
+    return paths.some((path) => registrationProfileObservationSources.has(path))
+      ? ['guards', 'connector']
+      : ['guards'];
   return parts.filter((part) =>
     part === 'migration'
       ? paths.some((p) => p.startsWith('apps/api/prisma-mysql/'))
