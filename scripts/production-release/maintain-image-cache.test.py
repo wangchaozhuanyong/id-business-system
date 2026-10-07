@@ -801,6 +801,40 @@ class DependencyRetentionTests(unittest.TestCase):
         result = self.collect()
         self.assertEqual(set(result['imageIds']), {self.ids[1], self.ids[3], self.pro_image, *self.ids[4:]})
 
+    def recharge(self, profile_id='recharge-pro-2f-20261007'):
+        path, seal, producer = self.fixed(profile_id)
+        claim = self.rows[0].pop('fixedRegistrationRelease')
+        profile = json.loads(path.read_text())
+        self.rows[0]['fixedRechargeRelease'] = {'id': profile_id,
+            'profileSha256': cache.plan_digest(profile), 'cacheStatus': claim['cacheStatus']}
+        self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+        return path, seal, producer
+
+    def test_released_2f_recharge_keeps_exact_finance_pro_and_service_rollback_dependencies(self):
+        profile, _, _ = self.recharge()
+        result = self.collect()
+        self.assertEqual(set(result['imageIds']), {self.ids[1], self.ids[3], self.pro_image, *self.ids[4:]})
+        self.assertIn(str(profile.relative_to(self.base)), result['evidenceSha256'])
+        self.assertEqual(result['serviceRollback']['auto-registration']['commit'], self.rows[1]['commit'])
+        self.assertEqual(result['serviceRollback']['auto-recharge']['commit'], self.rows[2]['commit'])
+        self.assertTrue(all(command[:5] == ('docker', 'image', 'inspect', '--format', '{{.Id}}')
+            for command in self.commands))
+
+    def test_2f_recharge_changed_profile_seal_or_unknown_id_blocks_before_docker(self):
+        for location in ('profile', 'seal', 'id'):
+            with self.subTest(location=location):
+                profile, seal, _ = self.recharge()
+                if location == 'profile':
+                    value = json.loads(profile.read_text()); value['financeValidator']['releaseSealSha256'] = 'f' * 64
+                    self.write(profile, value)
+                elif location == 'seal':
+                    self.write(seal, {'images': {}})
+                else:
+                    self.rows[0]['fixedRechargeRelease']['id'] = 'recharge-pro-unreviewed'
+                    self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+                with self.assertRaises(RuntimeError): self.collect()
+        self.assertEqual(self.commands, [])
+
     def test_unknown_fixed_profile_finance_or_dynamic_declaration_stops_before_docker(self):
         profile_path, _, producer = self.fixed()
         import hashlib
