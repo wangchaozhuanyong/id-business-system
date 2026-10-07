@@ -29,6 +29,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/recharge-pro-974-20261007.json',
   'deploy/aws/recharge-pro-2f-20261007.json',
   'deploy/aws/recharge-pro-4c-20261008.json',
+  'deploy/aws/recharge-pro-6f5-20261008.json',
   'scripts/v2-release-mailbox-audit.mjs',
   'scripts/v2-release-mailbox-audit.test.mjs',
   'deploy/aws/historical-finance-20261005-mailbox-batch.json',
@@ -91,6 +92,18 @@ function isRecharge4cOnly(paths) {
   return (
     paths.includes(recharge4cProfile) &&
     paths.every((path) => recharge4cSources.has(path) || recharge4cControls.has(path))
+  );
+}
+const recharge6f5Profile = 'deploy/aws/recharge-pro-6f5-20261008.json';
+const recharge6f5Sources = new Set(recharge4cSources);
+const recharge6f5Controls = new Set(
+  [...recharge4cControls].filter((path) => path !== recharge4cProfile)
+);
+recharge6f5Controls.add(recharge6f5Profile);
+function isRecharge6f5Only(paths) {
+  return (
+    paths.includes(recharge6f5Profile) &&
+    paths.every((path) => recharge6f5Sources.has(path) || recharge6f5Controls.has(path))
   );
 }
 const registrationProfileObservationProfile = 'deploy/aws/registration-worker-91-20261007.json';
@@ -222,6 +235,8 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (paths.includes(recharge6f5Profile))
+    return paths.every((path) => recharge6f5Controls.has(path));
   if (paths.includes(registrationInterstitialProfile))
     return isRegistrationInterstitialOnly(paths) && paths.every(isRegistrationInterstitialControl);
   if (paths.includes(recharge4cProfile)) return paths.every((path) => recharge4cControls.has(path));
@@ -302,6 +317,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(recharge6f5Profile)) {
+    if (!isRecharge6f5Only(paths)) return 'full';
+    return paths.some((path) => recharge6f5Sources.has(path)) ? 'recharge' : 'ci-only';
+  }
   if (paths.includes(registrationInterstitialProfile)) {
     if (!isRegistrationInterstitialOnly(paths)) return 'full';
     return paths.some((path) => registrationLoginSources.has(path)) ? 'recharge' : 'ci-only';
@@ -469,6 +488,8 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
       isRegistrationInterstitialOnly(paths) &&
       paths.some((path) => registrationLoginSources.has(path))
     );
+  if (paths.includes(recharge6f5Profile))
+    return isRecharge6f5Only(paths) && paths.some((path) => recharge6f5Sources.has(path));
   if (paths.includes(recharge4cProfile))
     return isRecharge4cOnly(paths) && paths.some((path) => recharge4cSources.has(path));
   if (paths.includes(registrationLoginProfile))
@@ -514,6 +535,7 @@ const securityPaths =
 export function isTargetedOnly(paths, oldSchema, newSchema) {
   if (paths.includes(registrationInterstitialProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
+  if (paths.includes(recharge6f5Profile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(recharge4cProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationLoginProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationRecoveryProfile))
@@ -530,6 +552,10 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (isRecharge6f5Only(paths))
+    return paths.some((path) => recharge6f5Sources.has(path))
+      ? ['guards', 'connector']
+      : ['guards'];
   if (isRecharge4cOnly(paths))
     return paths.some((path) => recharge4cSources.has(path)) ? ['guards', 'connector'] : ['guards'];
   if (isRegistrationInterstitialOnly(paths))

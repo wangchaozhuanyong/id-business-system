@@ -470,6 +470,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'recharge-pro-974-20261007'), false);
   assert.equal(selected('release', 'recharge-pro-2f-20261007'), false);
   assert.equal(selected('release', 'recharge-pro-4c-20261008'), false);
+  assert.equal(selected('release', 'recharge-pro-6f5-20261008'), false);
   assert.equal(selected('release', 'registration-worker-b8-80-20261006'), false);
   assert.equal(selected('release', 'registration-worker-956-20261006'), false);
   assert.equal(selected('release', 'registration-worker-85-20261006'), false);
@@ -494,6 +495,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'recharge-pro-974-20261007',
         'recharge-pro-2f-20261007',
         'recharge-pro-4c-20261008',
+        'recharge-pro-6f5-20261008',
         'registration-worker-b8-80-20261006',
         'registration-worker-956-20261006',
         'registration-worker-85-20261006',
@@ -1765,9 +1767,11 @@ function approvedRuntimeTransport(
             ? '974c62cc1681012ecff897aefc90d2cd9900004a'
             : identity === 'recharge-pro-2f-20261007'
               ? '2f24cf81007429ea474da404a30bc74da9d43ce1'
-              : identity === 'recharge-pro-4c-20261008'
-                ? '4c170e661c871dc14dccc98a8d6e5cf983141341'
-                : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+              : identity === 'recharge-pro-6f5-20261008'
+                ? '6f5e5cc252886d5f86592e307147b40c13577585'
+                : identity === 'recharge-pro-4c-20261008'
+                  ? '4c170e661c871dc14dccc98a8d6e5cf983141341'
+                  : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
@@ -2028,6 +2032,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
         identity !== 'recharge-pro-main80-20261006' &&
         identity !== 'recharge-pro-2f-20261007' &&
         identity !== 'recharge-pro-4c-20261008' &&
+        identity !== 'recharge-pro-6f5-20261008' &&
         (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
       )
         profile.baselineRelease[key] = 'd'.repeat(64);
@@ -2036,6 +2041,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
         if (
           identity !== 'recharge-pro-2f-20261007' &&
           identity !== 'recharge-pro-4c-20261008' &&
+          identity !== 'recharge-pro-6f5-20261008' &&
           (identity !== 'recharge-pro-main80-20261006' ||
             (key !== 'carriedSourceOnlySha256' &&
               ![
@@ -2046,7 +2052,13 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
               ].includes(name)))
         )
           profile[key][name] = 'e'.repeat(64);
-    if (['recharge-pro-2f-20261007', 'recharge-pro-4c-20261008'].includes(identity)) {
+    if (
+      [
+        'recharge-pro-2f-20261007',
+        'recharge-pro-4c-20261008',
+        'recharge-pro-6f5-20261008'
+      ].includes(identity)
+    ) {
       // Exercise the actual parser with private native evidence represented only by hashes.
       for (const key of ['overrideCanonicalSha256'])
         if (profile.baselineRelease[key] === null) profile.baselineRelease[key] = 'd'.repeat(64);
@@ -2078,14 +2090,16 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       checkCount: [
         'recharge-pro-main80-20261006',
         'recharge-pro-2f-20261007',
-        'recharge-pro-4c-20261008'
+        'recharge-pro-4c-20261008',
+        'recharge-pro-6f5-20261008'
       ].includes(identity)
         ? 49
         : 48,
       executedCheckCount: [
         'recharge-pro-main80-20261006',
         'recharge-pro-2f-20261007',
-        'recharge-pro-4c-20261008'
+        'recharge-pro-4c-20261008',
+        'recharge-pro-6f5-20261008'
       ].includes(identity)
         ? 49
         : 48,
@@ -2093,7 +2107,8 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       violationCount: [
         'recharge-pro-main80-20261006',
         'recharge-pro-2f-20261007',
-        'recharge-pro-4c-20261008'
+        'recharge-pro-4c-20261008',
+        'recharge-pro-6f5-20261008'
       ].includes(identity)
         ? 0
         : 6,
@@ -2111,7 +2126,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
     writeFileSync(awsLog, '');
     writeFileSync(
       join(root, 'bin/aws'),
-      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_READBACK_AWS_LOG"\ncase "$2" in\nsend-command) printf "synthetic-command\\n" ;;\nwait) exit "${TASK_READBACK_WAIT_STATUS:-0}" ;;\nget-command-invocation) cat "$TASK_READBACK_OUTPUT" ;;\n*) exit 91 ;;\nesac\n',
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_READBACK_AWS_LOG"\ncase "$2" in\nsend-command) if [ "$TASK_READBACK_PROFILE_ID" = recharge-pro-6f5-20261008 ]; then printf "11111111-1111-4111-8111-111111111111\\n"; else printf "synthetic-command\\n"; fi ;;\nwait) exit "${TASK_READBACK_WAIT_STATUS:-0}" ;;\nget-command-invocation) case "$*" in *"--query Status "*) printf "Success\\n" ;; *) cat "$TASK_READBACK_OUTPUT" ;; esac ;;\n*) exit 91 ;;\nesac\n',
       { mode: 0o755 }
     );
     const execute = (
@@ -2127,7 +2142,11 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
           RELEASE_OPERATION: 'verify_recharge_release',
           FIXED_RECHARGE_PROFILE: identity,
           EXPECTED_CURRENT: receipt.currentCommit,
-          PRODUCTION_INSTANCE_ID: 'i-test-fixture-only',
+          PRODUCTION_INSTANCE_ID:
+            identity === 'recharge-pro-6f5-20261008'
+              ? 'i-0123456789abcdef0'
+              : 'i-test-fixture-only',
+          TASK_READBACK_PROFILE_ID: identity,
           TASK_READBACK_AWS_LOG: awsLog,
           TASK_READBACK_OUTPUT: outputFile,
           ...overrides
@@ -4144,14 +4163,19 @@ test('fixed95 preserves94 and815 API Admin and D3 Pro while rebuilding the revie
 });
 
 const recharge4cIdentity = 'recharge-pro-4c-20261008';
+const recharge6f5Identity = 'recharge-pro-6f5-20261008';
+const recharge6f5Baseline = '6f5e5cc252886d5f86592e307147b40c13577585';
 const recharge4cBaseline = '4c170e661c871dc14dccc98a8d6e5cf983141341';
 const rechargePreviousBaseline815 = '815fae391b172d6c368ea2ad25225f52a1272808';
 const rechargePreviousSourceBasis = 'f51850a9f3466b9884745863e9a5f0fd7e73e356';
 const recharge4cRuntimeBasis = 'd3fb510a40d6ee1f0a84c66b95d31f92b730cf7d';
 function recharge4cTransport(root, env, overrides = {}) {
+  const identity = overrides.identity ?? recharge4cIdentity;
+  assert.ok([recharge4cIdentity, recharge6f5Identity].includes(identity));
+  const baseline = identity === recharge6f5Identity ? recharge6f5Baseline : recharge4cBaseline;
   const transport = approved2fTransport(root, env, {
     ...overrides,
-    identity: recharge4cIdentity
+    identity
   });
   const workerProjection = structuredClone(
     JSON.parse(readFileSync('deploy/aws/recharge-pro-2f-20261007.json', 'utf8')).workerProjection
@@ -4162,15 +4186,15 @@ function recharge4cTransport(root, env, overrides = {}) {
   }
   assert.equal(Object.keys(workerProjection).length, 60);
   mkdirSync(join(root, 'deploy/aws'), { recursive: true });
-  const profilePath = join(root, `deploy/aws/${recharge4cIdentity}.json`);
+  const profilePath = join(root, `deploy/aws/${identity}.json`);
   writeFileSync(
     profilePath,
     JSON.stringify({
       version: 1,
-      id: recharge4cIdentity,
+      id: identity,
       enabled: true,
       approvalStatus: 'APPROVED',
-      expectedCurrent: recharge4cBaseline,
+      expectedCurrent: baseline,
       workerProjection
     })
   );
@@ -4188,7 +4212,7 @@ function recharge4cTransport(root, env, overrides = {}) {
     join(root, '.deploy/production-release/fixed-recharge-build-projection.json'),
     JSON.stringify({
       version: 1,
-      id: recharge4cIdentity,
+      id: identity,
       contextPath: '.deploy/production-release/fixed-recharge-context',
       workerProjectionSha256: projectionSha256
     })
@@ -4201,233 +4225,257 @@ function recharge4cTransport(root, env, overrides = {}) {
   return { ...transport, TASK_RECHARGE_PROJECTION: projectionSha256 };
 }
 
-test('fixed 4c selection binds the successor baseline and refuses old images or browser cache inputs', () => {
-  fixture(({ root, env, log }) => {
-    const transport = recharge4cTransport(root, env);
-    const select = (fields = {}) =>
-      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
-        env: { ...transport, ...fields },
-        stdio: 'pipe'
+for (const [label, identity, baseline, releaseFlag] of [
+  ['4c', recharge4cIdentity, recharge4cBaseline, '--recharge-pro-d3fb'],
+  ['6f5', recharge6f5Identity, recharge6f5Baseline, '--recharge-pro-6f5']
+]) {
+  const projectionTransport = (root, env, overrides = {}) =>
+    recharge4cTransport(root, env, { ...overrides, identity });
+  test(`fixed ${label} selection binds the successor baseline and refuses old images or browser cache inputs`, () => {
+    fixture(({ root, env, log }) => {
+      const transport = projectionTransport(root, env);
+      const select = (fields = {}) =>
+        execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+          env: { ...transport, ...fields },
+          stdio: 'pipe'
+        });
+      select();
+      select({
+        RELEASE_OPERATION: 'verify_recharge_release',
+        EXPECTED_CURRENT: env.RELEASE_COMMIT
       });
-    select();
-    select({ RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: env.RELEASE_COMMIT });
+      for (const fields of [
+        { EXPECTED_CURRENT: label === '4c' ? recharge6f5Baseline : recharge4cBaseline },
+        { EXPECTED_CURRENT: rechargePreviousBaseline815 },
+        { EXPECTED_CURRENT: rechargePreviousSourceBasis },
+        { EXPECTED_CURRENT: recharge4cRuntimeBasis },
+        { EXPECTED_CURRENT: recharge2fBaseline },
+        { EXPECTED_CURRENT: recharge974Baseline },
+        { RELEASE_OPERATION: 'verify_recharge_release' },
+        { RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: 'd'.repeat(40) },
+        { RELEASE_OPERATION: 'verify_recharge_release', RELEASE_COMMIT: baseline },
+        { RELEASE_ADMIN_ONLY: 'true' },
+        { RELEASE_ADMIN_ONLY: 'unexpected' },
+        { RELEASE_OPERATION: 'prepare_order_archive_release' },
+        { RELEASE_OPERATION: 'verify_access' },
+        { REUSE_IMAGE_RUN: '37623452492' },
+        { REUSE_IMAGE_COMMIT: baseline },
+        { REUSE_IMAGE_RUN_ID: '37623452492' },
+        { REUSE_IMAGE_RUN_ATTEMPT: '2' },
+        { RELEASE_BROWSER_CACHE_IMAGE: env.RELEASE_REPOSITORY + ':old-auto-recharge' },
+        { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) },
+        { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+        { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
+        { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
+        { HISTORICAL_EXCEPTION: identity + ' --admin-only' },
+        { HISTORICAL_EXCEPTION: 'recharge-pro-4c-20261009' },
+        { HISTORICAL_EXCEPTION: 'recharge-pro-815-20261007' }
+      ])
+        assert.throws(() => select(fields), JSON.stringify(fields));
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+    });
+  });
+
+  test(`fixed ${label} builds one fresh complete Worker projection and pushes only recharge`, () => {
+    fixture(({ root, env, log }) => {
+      const transport = projectionTransport(root, env);
+      for (const entry of ['build-images', 'push-images'])
+        execFileSync('bash', [join(process.cwd(), `scripts/production-release/${entry}.sh`)], {
+          cwd: root,
+          env: transport,
+          stdio: 'pipe'
+        });
+      const operations = readFileSync(log, 'utf8').trim().split('\n');
+      const builds = operations.filter((line) => line.startsWith('build '));
+      const pushes = operations.filter((line) => line.startsWith('push '));
+      assert.equal(builds.length, 1);
+      assert.ok(
+        builds[0].includes(
+          '-f .deploy/production-release/fixed-recharge-context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
+        )
+      );
+      assert.ok(builds[0].endsWith(' .deploy/production-release/fixed-recharge-context'));
+      assert.ok(
+        builds[0].includes(
+          `--label id-business-v2.worker-projection-sha256=${transport.TASK_RECHARGE_PROJECTION}`
+        )
+      );
+      assert.equal(builds[0].includes('--cache-from'), false);
+      assert.equal(
+        operations.some((line) => /^(pull |tag )/.test(line)),
+        false
+      );
+      assert.equal(pushes.length, 1);
+      assert.ok(pushes[0].endsWith(`${env.RELEASE_COMMIT}-999999-1-auto-recharge`));
+      assert.equal(
+        operations.some((line) => /-auto-registration(?: |$)/.test(line)),
+        false
+      );
+      assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+      assert.equal(
+        readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'),
+        'checked\nprepared\nchecked\n'
+      );
+    });
+  });
+
+  test(`fixed ${label} push rejects wrong or missing image projection labels before any ECR effects`, () => {
+    for (const projectionLabel of ['f'.repeat(64), ''])
+      fixture(({ root, env, log }) => {
+        const transport = projectionTransport(root, env);
+        assert.throws(() =>
+          execFileSync('bash', [join(process.cwd(), 'scripts/production-release/push-images.sh')], {
+            cwd: root,
+            env: { ...transport, TASK_IMAGE_PROJECTION: projectionLabel },
+            stdio: 'pipe'
+          })
+        );
+        const operations = readFileSync(log, 'utf8').trim().split('\n');
+        assert.equal(
+          operations.filter(
+            (line) =>
+              line.startsWith('image inspect ') &&
+              line.includes('org.opencontainers.image.revision')
+          ).length,
+          1
+        );
+        assert.equal(
+          operations.filter(
+            (line) =>
+              line.startsWith('image inspect ') &&
+              line.includes('id-business-v2.worker-projection-sha256')
+          ).length,
+          1
+        );
+        assert.equal(
+          operations.some((line) => /^(push |aws |login )/.test(line)),
+          false
+        );
+        assert.equal(readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'), 'checked\n');
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+  });
+
+  test(`fixed ${label} push binds its build marker to the approved profile projection before image or ECR effects`, () => {
+    for (const change of [
+      'wrongDigest',
+      'profileChanged',
+      'oldProfileId',
+      'otherSuccessorProfileId',
+      'extraField',
+      'missingDigest'
+    ])
+      fixture(({ root, env, log }) => {
+        const transport = projectionTransport(root, env);
+        const markerPath = join(
+          root,
+          '.deploy/production-release/fixed-recharge-build-projection.json'
+        );
+        const profilePath = join(root, `deploy/aws/${identity}.json`);
+        const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+        if (change === 'profileChanged') {
+          const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
+          profile.workerProjection[
+            'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py'
+          ].sha256 = 'f'.repeat(64);
+          writeFileSync(profilePath, JSON.stringify(profile));
+        } else {
+          if (change === 'wrongDigest') marker.workerProjectionSha256 = 'f'.repeat(64);
+          if (change === 'oldProfileId') marker.id = recharge2fIdentity;
+          if (change === 'otherSuccessorProfileId')
+            marker.id = label === '4c' ? recharge6f5Identity : recharge4cIdentity;
+          if (change === 'extraField') marker.unreviewed = true;
+          if (change === 'missingDigest') delete marker.workerProjectionSha256;
+          writeFileSync(markerPath, JSON.stringify(marker));
+        }
+        assert.throws(
+          () =>
+            execFileSync(
+              'bash',
+              [join(process.cwd(), 'scripts/production-release/push-images.sh')],
+              {
+                cwd: root,
+                env: transport,
+                stdio: 'pipe'
+              }
+            ),
+          (error) =>
+            error.status === 1 &&
+            /Fixed 4c push projection (changed|unavailable)/.test(String(error.stderr))
+        );
+        assert.equal(readFileSync(log, 'utf8'), '');
+        assert.equal(readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'), 'checked\n');
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+  });
+
+  test(`fixed ${label} build and push fail before image effects on stale baselines mixed roles or cache injection`, () => {
     for (const fields of [
+      { EXPECTED_CURRENT: label === '4c' ? recharge6f5Baseline : recharge4cBaseline },
       { EXPECTED_CURRENT: rechargePreviousBaseline815 },
       { EXPECTED_CURRENT: rechargePreviousSourceBasis },
       { EXPECTED_CURRENT: recharge4cRuntimeBasis },
       { EXPECTED_CURRENT: recharge2fBaseline },
-      { EXPECTED_CURRENT: recharge974Baseline },
       { RELEASE_OPERATION: 'verify_recharge_release' },
-      { RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: 'd'.repeat(40) },
-      { RELEASE_OPERATION: 'verify_recharge_release', RELEASE_COMMIT: recharge4cBaseline },
       { RELEASE_ADMIN_ONLY: 'true' },
-      { RELEASE_ADMIN_ONLY: 'unexpected' },
-      { RELEASE_OPERATION: 'prepare_order_archive_release' },
-      { RELEASE_OPERATION: 'verify_access' },
-      { REUSE_IMAGE_RUN: '37623452492' },
-      { REUSE_IMAGE_COMMIT: recharge4cBaseline },
       { REUSE_IMAGE_RUN_ID: '37623452492' },
-      { REUSE_IMAGE_RUN_ATTEMPT: '2' },
-      { RELEASE_BROWSER_CACHE_IMAGE: env.RELEASE_REPOSITORY + ':old-auto-recharge' },
-      { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) },
-      { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
-      { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
       { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
-      { HISTORICAL_EXCEPTION: recharge4cIdentity + ' --admin-only' },
-      { HISTORICAL_EXCEPTION: 'recharge-pro-4c-20261009' },
-      { HISTORICAL_EXCEPTION: 'recharge-pro-815-20261007' }
+      { RELEASE_BROWSER_CACHE_IMAGE: 'unreviewed-cache' },
+      { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) },
+      { TASK_EXPECTED_FIXED_PROFILE: recharge2fIdentity }
     ])
-      assert.throws(() => select(fields), JSON.stringify(fields));
-    assert.equal(readFileSync(log, 'utf8'), '');
-    assert.equal(existsSync(env.GITHUB_ENV), false);
-  });
-});
-
-test('fixed 4c builds one fresh complete Worker projection and pushes only recharge', () => {
-  fixture(({ root, env, log }) => {
-    const transport = recharge4cTransport(root, env);
-    for (const entry of ['build-images', 'push-images'])
-      execFileSync('bash', [join(process.cwd(), `scripts/production-release/${entry}.sh`)], {
-        cwd: root,
-        env: transport,
-        stdio: 'pipe'
-      });
-    const operations = readFileSync(log, 'utf8').trim().split('\n');
-    const builds = operations.filter((line) => line.startsWith('build '));
-    const pushes = operations.filter((line) => line.startsWith('push '));
-    assert.equal(builds.length, 1);
-    assert.ok(
-      builds[0].includes(
-        '-f .deploy/production-release/fixed-recharge-context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
-      )
-    );
-    assert.ok(builds[0].endsWith(' .deploy/production-release/fixed-recharge-context'));
-    assert.ok(
-      builds[0].includes(
-        `--label id-business-v2.worker-projection-sha256=${transport.TASK_RECHARGE_PROJECTION}`
-      )
-    );
-    assert.equal(builds[0].includes('--cache-from'), false);
-    assert.equal(
-      operations.some((line) => /^(pull |tag )/.test(line)),
-      false
-    );
-    assert.equal(pushes.length, 1);
-    assert.ok(pushes[0].endsWith(`${env.RELEASE_COMMIT}-999999-1-auto-recharge`));
-    assert.equal(
-      operations.some((line) => /-auto-registration(?: |$)/.test(line)),
-      false
-    );
-    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
-    assert.equal(
-      readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'),
-      'checked\nprepared\nchecked\n'
-    );
-  });
-});
-
-test('fixed 4c push rejects wrong or missing image projection labels before any ECR effects', () => {
-  for (const projectionLabel of ['f'.repeat(64), ''])
-    fixture(({ root, env, log }) => {
-      const transport = recharge4cTransport(root, env);
-      assert.throws(() =>
-        execFileSync('bash', [join(process.cwd(), 'scripts/production-release/push-images.sh')], {
-          cwd: root,
-          env: { ...transport, TASK_IMAGE_PROJECTION: projectionLabel },
-          stdio: 'pipe'
-        })
-      );
-      const operations = readFileSync(log, 'utf8').trim().split('\n');
-      assert.equal(
-        operations.filter(
-          (line) =>
-            line.startsWith('image inspect ') && line.includes('org.opencontainers.image.revision')
-        ).length,
-        1
-      );
-      assert.equal(
-        operations.filter(
-          (line) =>
-            line.startsWith('image inspect ') &&
-            line.includes('id-business-v2.worker-projection-sha256')
-        ).length,
-        1
-      );
-      assert.equal(
-        operations.some((line) => /^(push |aws |login )/.test(line)),
-        false
-      );
-      assert.equal(readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'), 'checked\n');
-      assert.equal(existsSync(env.GITHUB_ENV), false);
-    });
-});
-
-test('fixed 4c push binds its build marker to the approved profile projection before image or ECR effects', () => {
-  for (const change of [
-    'wrongDigest',
-    'profileChanged',
-    'oldProfileId',
-    'extraField',
-    'missingDigest'
-  ])
-    fixture(({ root, env, log }) => {
-      const transport = recharge4cTransport(root, env);
-      const markerPath = join(
-        root,
-        '.deploy/production-release/fixed-recharge-build-projection.json'
-      );
-      const profilePath = join(root, `deploy/aws/${recharge4cIdentity}.json`);
-      const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
-      if (change === 'profileChanged') {
-        const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
-        profile.workerProjection[
-          'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py'
-        ].sha256 = 'f'.repeat(64);
-        writeFileSync(profilePath, JSON.stringify(profile));
-      } else {
-        if (change === 'wrongDigest') marker.workerProjectionSha256 = 'f'.repeat(64);
-        if (change === 'oldProfileId') marker.id = recharge2fIdentity;
-        if (change === 'extraField') marker.unreviewed = true;
-        if (change === 'missingDigest') delete marker.workerProjectionSha256;
-        writeFileSync(markerPath, JSON.stringify(marker));
-      }
-      assert.throws(
-        () =>
-          execFileSync('bash', [join(process.cwd(), 'scripts/production-release/push-images.sh')], {
-            cwd: root,
-            env: transport,
-            stdio: 'pipe'
-          }),
-        (error) =>
-          error.status === 1 &&
-          /Fixed 4c push projection (changed|unavailable)/.test(String(error.stderr))
-      );
-      assert.equal(readFileSync(log, 'utf8'), '');
-      assert.equal(readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'), 'checked\n');
-      assert.equal(existsSync(env.GITHUB_ENV), false);
-    });
-});
-
-test('fixed 4c build and push fail before image effects on stale baselines mixed roles or cache injection', () => {
-  for (const fields of [
-    { EXPECTED_CURRENT: rechargePreviousBaseline815 },
-    { EXPECTED_CURRENT: rechargePreviousSourceBasis },
-    { EXPECTED_CURRENT: recharge4cRuntimeBasis },
-    { EXPECTED_CURRENT: recharge2fBaseline },
-    { RELEASE_OPERATION: 'verify_recharge_release' },
-    { RELEASE_ADMIN_ONLY: 'true' },
-    { REUSE_IMAGE_RUN_ID: '37623452492' },
-    { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
-    { RELEASE_BROWSER_CACHE_IMAGE: 'unreviewed-cache' },
-    { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) },
-    { TASK_EXPECTED_FIXED_PROFILE: recharge2fIdentity }
-  ])
-    for (const entry of ['build-images', 'push-images'])
+      for (const entry of ['build-images', 'push-images'])
+        fixture(({ root, env, log }) => {
+          assert.throws(() =>
+            execFileSync('bash', [join(process.cwd(), `scripts/production-release/${entry}.sh`)], {
+              cwd: root,
+              env: { ...projectionTransport(root, env), ...fields },
+              stdio: 'pipe'
+            })
+          );
+          assert.equal(readFileSync(log, 'utf8'), '');
+          assert.equal(existsSync(env.GITHUB_ENV), false);
+        });
+    for (const options of [{ rejectApproval: true }, { rejectPreparation: true }])
       fixture(({ root, env, log }) => {
         assert.throws(() =>
-          execFileSync('bash', [join(process.cwd(), `scripts/production-release/${entry}.sh`)], {
-            cwd: root,
-            env: { ...recharge4cTransport(root, env), ...fields },
-            stdio: 'pipe'
-          })
+          execFileSync(
+            'bash',
+            [join(process.cwd(), 'scripts/production-release/build-images.sh')],
+            {
+              cwd: root,
+              env: projectionTransport(root, env, options),
+              stdio: 'pipe'
+            }
+          )
         );
         assert.equal(readFileSync(log, 'utf8'), '');
         assert.equal(existsSync(env.GITHUB_ENV), false);
       });
-  for (const options of [{ rejectApproval: true }, { rejectPreparation: true }])
     fixture(({ root, env, log }) => {
       assert.throws(() =>
         execFileSync('bash', [join(process.cwd(), 'scripts/production-release/build-images.sh')], {
           cwd: root,
-          env: recharge4cTransport(root, env, options),
+          env: { ...projectionTransport(root, env), TASK_RECHARGE_PROJECTION: 'invalid' },
           stdio: 'pipe'
         })
       );
       assert.equal(readFileSync(log, 'utf8'), '');
       assert.equal(existsSync(env.GITHUB_ENV), false);
     });
-  fixture(({ root, env, log }) => {
-    assert.throws(() =>
-      execFileSync('bash', [join(process.cwd(), 'scripts/production-release/build-images.sh')], {
-        cwd: root,
-        env: { ...recharge4cTransport(root, env), TASK_RECHARGE_PROJECTION: 'invalid' },
-        stdio: 'pipe'
-      })
-    );
-    assert.equal(readFileSync(log, 'utf8'), '');
-    assert.equal(existsSync(env.GITHUB_ENV), false);
   });
-});
 
-test('fixed 4c dispatch keeps one exclusive recharge flag with fresh candidate provenance', () => {
-  dispatchFixture(
-    recharge4cIdentity,
-    recharge4cBaseline,
-    ({ execute, parametersFile, awsLog, root, env }) => {
-      execute(recharge4cTransport(root, env));
+  test(`fixed ${label} dispatch keeps one exclusive recharge flag with fresh candidate provenance`, () => {
+    dispatchFixture(identity, baseline, ({ execute, parametersFile, awsLog, root, env }) => {
+      execute(projectionTransport(root, env));
       const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
-      assert.equal(args.filter((arg) => arg === '--recharge-pro-d3fb').length, 1);
-      assert.equal(args[args.indexOf('--expected-current') + 1], recharge4cBaseline);
+      assert.equal(args.filter((arg) => arg === releaseFlag).length, 1);
+      assert.equal(
+        args.includes(label === '4c' ? '--recharge-pro-6f5' : '--recharge-pro-d3fb'),
+        false
+      );
+      assert.equal(args[args.indexOf('--expected-current') + 1], baseline);
       assert.equal(args[args.indexOf('--image-commit') + 1], env.RELEASE_COMMIT);
       assert.equal(args[args.indexOf('--image-run-id') + 1], '999999');
       assert.equal(args[args.indexOf('--image-run-attempt') + 1], '1');
@@ -4445,140 +4493,140 @@ test('fixed 4c dispatch keeps one exclusive recharge flag with fresh candidate p
           .filter((line) => line.startsWith('ssm send-command ')).length,
         1
       );
-    }
-  );
-});
+    });
+  });
 
-test('fixed 4c dispatch rejects previous scope invalid provenance and cache input before AWS', () => {
-  for (const fields of [
-    { EXPECTED_CURRENT: rechargePreviousBaseline815 },
-    { EXPECTED_CURRENT: rechargePreviousSourceBasis },
-    { EXPECTED_CURRENT: recharge4cRuntimeBasis },
-    { EXPECTED_CURRENT: recharge2fBaseline },
-    { RELEASE_OPERATION: 'verify_recharge_release' },
-    { RELEASE_ADMIN_ONLY: 'true' },
-    { REUSE_IMAGE_RUN_ID: '37623452492' },
-    { RELEASE_BROWSER_CACHE_IMAGE: 'unreviewed-cache' },
-    { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) },
-    { RELEASE_COMMIT: 'B'.repeat(40) },
-    { SOURCE_TREE: 'c'.repeat(39) },
-    { QUALITY_RUN_ID: '0' },
-    { TASK_EXPECTED_FIXED_PROFILE: recharge2fIdentity },
-    { rejectApproval: true }
-  ])
-    dispatchFixture(
-      recharge4cIdentity,
-      recharge4cBaseline,
-      ({ execute, parametersFile, awsLog, root, env }) => {
+  test(`fixed ${label} dispatch rejects previous scope invalid provenance and cache input before AWS`, () => {
+    for (const fields of [
+      { EXPECTED_CURRENT: label === '4c' ? recharge6f5Baseline : recharge4cBaseline },
+      { EXPECTED_CURRENT: rechargePreviousBaseline815 },
+      { EXPECTED_CURRENT: rechargePreviousSourceBasis },
+      { EXPECTED_CURRENT: recharge4cRuntimeBasis },
+      { EXPECTED_CURRENT: recharge2fBaseline },
+      { RELEASE_OPERATION: 'verify_recharge_release' },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { REUSE_IMAGE_RUN_ID: '37623452492' },
+      { RELEASE_BROWSER_CACHE_IMAGE: 'unreviewed-cache' },
+      { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) },
+      { RELEASE_COMMIT: 'B'.repeat(40) },
+      { SOURCE_TREE: 'c'.repeat(39) },
+      { QUALITY_RUN_ID: '0' },
+      { TASK_EXPECTED_FIXED_PROFILE: recharge2fIdentity },
+      { rejectApproval: true }
+    ])
+      dispatchFixture(identity, baseline, ({ execute, parametersFile, awsLog, root, env }) => {
         const { rejectApproval, ...overrides } = fields;
         assert.throws(() =>
-          execute({ ...recharge4cTransport(root, env, { rejectApproval }), ...overrides })
+          execute({ ...projectionTransport(root, env, { rejectApproval }), ...overrides })
         );
         assert.equal(existsSync(parametersFile), false);
         assert.equal(readFileSync(awsLog, 'utf8'), '');
-      }
-    );
-});
+      });
+  });
 
-test('fixed 4c workflow has independent approval readback and no browser resolver or old release route', () => {
-  assert.ok(workflowInputs.historical_exception.options.includes(recharge4cIdentity));
-  const enabled = (operation) =>
-    workflowSteps
-      .filter(
-        (step) =>
-          !step.if ||
-          workflowPredicate(step.if)({
-            operation,
-            historical_exception: recharge4cIdentity,
-            reuse_image_run: ''
-          })
-      )
-      .map((step) => step.name);
-  for (const name of [
-    'Verify fixed 4c recharge runtime approval',
-    'Build images on the GitHub runner',
-    'Verify fixed recharge deployment independently',
-    'Record skipped cache maintenance for fixed recharge release'
-  ])
-    assert.ok(enabled('release').includes(name), name);
-  for (const name of [
-    'Verify fixed 2f recharge runtime approval',
-    'Verify fixed 974 recharge runtime approval',
-    'Verify fixed 93 registration runtime approval',
-    'Verify fixed 94 registration runtime approval',
-    'Verify fixed 94 registration deployment independently',
-    'Verify fixed recharge runtime approval',
-    'Resolve reviewed immutable browser dependency cache',
-    'Verify or maintain recoverable unused project image cache',
-    'Maintain service rollback image cache independently after fixed release',
-    'Verify reusable build and unchanged application source'
-  ])
-    assert.equal(enabled('release').includes(name), false, name);
-  for (const name of [
-    'Verify fixed 4c recharge runtime approval',
-    'Build images on the GitHub runner',
-    'Push images using short-lived AWS credentials',
-    'Deploy through the production instance',
-    'Record skipped cache maintenance for fixed recharge release'
-  ])
-    assert.equal(enabled('verify_recharge_release').includes(name), false, name);
-  const approval = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 4c recharge runtime approval'
-  );
-  assert.equal(
-    approval.if,
-    `inputs.operation == 'release' && inputs.historical_exception == '${recharge4cIdentity}'`
-  );
-  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${recharge4cBaseline}`));
-  assert.ok(approval.run.includes(`--fixed-recharge-profile ${recharge4cIdentity}`));
-  const readback = workflowSteps.find(
-    (step) => step.name === 'Verify fixed recharge deployment independently'
-  );
-  for (const operation of ['release', 'verify_recharge_release'])
-    assert.equal(
-      new Function('inputs', `return (${readback.env.FIXED_RECHARGE_PROFILE.slice(3, -2)});`)({
-        operation,
-        historical_exception: recharge4cIdentity
-      }),
-      recharge4cIdentity
+  test(`fixed ${label} workflow has independent approval readback and no browser resolver or old release route`, () => {
+    assert.ok(workflowInputs.historical_exception.options.includes(identity));
+    const enabled = (operation) =>
+      workflowSteps
+        .filter(
+          (step) =>
+            !step.if ||
+            workflowPredicate(step.if)({
+              operation,
+              historical_exception: identity,
+              reuse_image_run: ''
+            })
+        )
+        .map((step) => step.name);
+    for (const name of [
+      `Verify fixed ${label} recharge runtime approval`,
+      'Build images on the GitHub runner',
+      'Verify fixed recharge deployment independently',
+      'Record skipped cache maintenance for fixed recharge release'
+    ])
+      assert.ok(enabled('release').includes(name), name);
+    for (const name of [
+      `Verify fixed ${label === '4c' ? '6f5' : '4c'} recharge runtime approval`,
+      'Verify fixed 2f recharge runtime approval',
+      'Verify fixed 974 recharge runtime approval',
+      'Verify fixed 93 registration runtime approval',
+      'Verify fixed 94 registration runtime approval',
+      'Verify fixed 94 registration deployment independently',
+      'Verify fixed 95 registration runtime approval',
+      'Verify fixed 95 registration deployment independently',
+      'Verify fixed recharge runtime approval',
+      'Resolve reviewed immutable browser dependency cache',
+      'Verify or maintain recoverable unused project image cache',
+      'Maintain service rollback image cache independently after fixed release',
+      'Verify reusable build and unchanged application source'
+    ])
+      assert.equal(enabled('release').includes(name), false, name);
+    for (const name of [
+      `Verify fixed ${label} recharge runtime approval`,
+      'Build images on the GitHub runner',
+      'Push images using short-lived AWS credentials',
+      'Deploy through the production instance',
+      'Record skipped cache maintenance for fixed recharge release'
+    ])
+      assert.equal(enabled('verify_recharge_release').includes(name), false, name);
+    const approval = workflowSteps.find(
+      (step) => step.name === `Verify fixed ${label} recharge runtime approval`
     );
-  assert.ok(readback.run.includes(`'${recharge4cIdentity}'`));
-  const commands = guardCommands([`deploy/aws/${recharge4cIdentity}.json`]);
-  assert.ok(
-    commands.some(
-      (command) =>
-        command.startsWith('node --test ') &&
-        command.split(' ').includes('scripts/ci-recharge-release.test.mjs')
-    )
-  );
-  for (const control of [
-    'scripts/ci-recharge-check.test.mjs',
-    'scripts/check-v2-prisma-runtime-boundary.test.mjs',
-    'scripts/check-v2-module-architecture.test.mjs'
-  ])
+    assert.equal(
+      approval.if,
+      `inputs.operation == 'release' && inputs.historical_exception == '${identity}'`
+    );
+    assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+    assert.ok(approval.run.includes(`--fixed-recharge-profile ${identity}`));
+    const readback = workflowSteps.find(
+      (step) => step.name === 'Verify fixed recharge deployment independently'
+    );
+    for (const operation of ['release', 'verify_recharge_release'])
+      assert.equal(
+        new Function('inputs', `return (${readback.env.FIXED_RECHARGE_PROFILE.slice(3, -2)});`)({
+          operation,
+          historical_exception: identity
+        }),
+        identity
+      );
+    assert.ok(readback.run.includes(`'${identity}'`));
+    const commands = guardCommands([`deploy/aws/${identity}.json`]);
     assert.ok(
       commands.some(
-        (command) => command.startsWith('node --test ') && command.split(' ').includes(control)
-      ),
-      control
+        (command) =>
+          command.startsWith('node --test ') &&
+          command.split(' ').includes('scripts/ci-recharge-release.test.mjs')
+      )
     );
-  const runsBusinessOrDatabase = (command) =>
-    /(?:^| )(?:[^ ]*\/)?(?:prisma(?: |:|$)|mysql(?: |$))|acceptance:v2-(?:auto-recharge|financial|data-governance|rollback)|--workspace @apple-business\/api/.test(
-      command
-    );
-  assert.equal(commands.some(runsBusinessOrDatabase), false);
-  for (const forbidden of [
-    'npm run prisma:mysql:generate',
-    'npm run prisma:mysql:migrate:deploy',
-    'npm exec -- prisma migrate deploy',
-    'mysql --execute SELECT 1',
-    '/usr/local/bin/mysql --execute SELECT 1',
-    'npm run acceptance:v2-auto-recharge',
-    'npm run acceptance:v2-financial-integrity',
-    'npm run test --workspace @apple-business/api'
-  ])
-    assert.equal(runsBusinessOrDatabase(forbidden), true, forbidden);
-});
+    for (const control of [
+      'scripts/ci-recharge-check.test.mjs',
+      'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+      'scripts/check-v2-module-architecture.test.mjs'
+    ])
+      assert.ok(
+        commands.some(
+          (command) => command.startsWith('node --test ') && command.split(' ').includes(control)
+        ),
+        control
+      );
+    const runsBusinessOrDatabase = (command) =>
+      /(?:^| )(?:[^ ]*\/)?(?:prisma(?: |:|$)|mysql(?: |$))|acceptance:v2-(?:auto-recharge|financial|data-governance|rollback)|--workspace @apple-business\/api/.test(
+        command
+      );
+    assert.equal(commands.some(runsBusinessOrDatabase), false);
+    for (const forbidden of [
+      'npm run prisma:mysql:generate',
+      'npm run prisma:mysql:migrate:deploy',
+      'npm exec -- prisma migrate deploy',
+      'mysql --execute SELECT 1',
+      '/usr/local/bin/mysql --execute SELECT 1',
+      'npm run acceptance:v2-auto-recharge',
+      'npm run acceptance:v2-financial-integrity',
+      'npm run test --workspace @apple-business/api'
+    ])
+      assert.equal(runsBusinessOrDatabase(forbidden), true, forbidden);
+  });
+}
 
 test('fixed 4c profile only CI runs the actual native successor projection rejection proof', () => {
   execFileSync(
@@ -4611,4 +4659,206 @@ test('fixed 4c actual readonly readback requires its 49 zero proof and all prese
     delete incomplete.storedGatesMatched;
     assert.throws(() => execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify(incomplete)}\n`));
   }, recharge4cIdentity);
+});
+
+test('fixed 6f5 profile only CI runs the actual native successor projection rejection proof', () => {
+  execFileSync(
+    'python3',
+    ['-B', 'scripts/production-release/remote-deploy.test.py', 'FixedRecharge6f5NativeTests'],
+    { stdio: 'pipe', timeout: 180000 }
+  );
+});
+
+test('fixed 6f5 actual readonly readback requires its 49 zero proof and all preserved-service fields', () => {
+  fixedRechargeReadbackFixture(({ execute, receipt }) => {
+    execute();
+    for (const fields of [
+      { previousCommit: rechargePreviousBaseline815 },
+      { previousCommit: recharge4cRuntimeBasis },
+      { previousCommit: recharge2fBaseline },
+      { id: recharge2fIdentity },
+      { checkCount: 48, executedCheckCount: 48 },
+      { violationCount: 5 },
+      { unchangedServiceContainersPreserved: false },
+      { environmentUnchanged: false },
+      { rechargeImageMatched: false },
+      { cacheStatus: 'APPLIED' },
+      { rawOutput: 'unreviewed-extra' }
+    ])
+      assert.throws(() =>
+        execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...fields })}\n`)
+      );
+    const incomplete = { ...receipt };
+    delete incomplete.storedGatesMatched;
+    assert.throws(() => execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify(incomplete)}\n`));
+  }, recharge6f5Identity);
+});
+
+function recharge6f5ReadbackPoller() {
+  const step = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge deployment independently'
+  );
+  const source = step.run.match(
+    /python3 - "\$command_id" "\$PRODUCTION_INSTANCE_ID" <<'PY_WAIT_RECHARGE_6F5' \|\| wait_status=\$\?\n([\s\S]+?)\nPY_WAIT_RECHARGE_6F5/
+  );
+  assert.ok(source, 'The exact 6f5 path must have its own bounded status poller');
+  return source[1];
+}
+
+test('fixed 6f5 readback budgets apply only to its exact identity and preserve the legacy waiter', () => {
+  const step = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge deployment independently'
+  );
+  const builder = step.run.match(
+    /python3 - <<'PY_BUILD_RECHARGE_READBACK'\n([\s\S]+?)\nPY_BUILD_RECHARGE_READBACK/
+  )[1];
+  const actual = JSON.parse(
+    execFileSync(
+      'python3',
+      [
+        '-c',
+        'import ast,json,sys; tree=ast.parse(sys.argv[1]); value=next(n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="parameters" for t in n.targets)); expression=next(v for k,v in zip(value.keys,value.values) if isinstance(k,ast.Constant) and k.value=="executionTimeout"); code=compile(ast.Expression(expression),"actual-fixed-timeout","eval"); print(json.dumps({identity:eval(code,{"identity":identity}) for identity in sys.argv[2:]}))',
+        builder,
+        recharge6f5Identity,
+        recharge4cIdentity,
+        recharge2fIdentity
+      ],
+      { encoding: 'utf8' }
+    )
+  );
+  assert.deepEqual(actual, {
+    [recharge6f5Identity]: ['900'],
+    [recharge4cIdentity]: ['120'],
+    [recharge2fIdentity]: ['120']
+  });
+  assert.ok(step.run.includes(`if [[ "$FIXED_RECHARGE_PROFILE" = ${recharge6f5Identity} ]]; then`));
+  assert.ok(
+    step.run.includes(
+      'aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?'
+    )
+  );
+  const poller = recharge6f5ReadbackPoller();
+  assert.ok(poller.includes('time.monotonic() + 960'));
+  assert.ok(poller.includes('timeout=min(30, remaining)'));
+});
+
+function recharge6f5PollFixture(statuses, run) {
+  fixture(({ root, env }) => {
+    const statusesFile = join(root, 'poll-statuses.json');
+    const countFile = join(root, 'poll-count');
+    const awsLog = join(root, 'poll-aws.log');
+    const interpreter = execFileSync('python3', ['-c', 'import sys;print(sys.executable)'], {
+      encoding: 'utf8'
+    }).trim();
+    writeFileSync(statusesFile, JSON.stringify(statuses));
+    writeFileSync(countFile, '0');
+    writeFileSync(awsLog, '');
+    writeFileSync(
+      join(root, 'bin/aws'),
+      `#!${interpreter}\nimport json,os,sys\nfrom pathlib import Path\na=sys.argv[1:]\nassert a[:2]==['ssm','get-command-invocation']\nassert a[a.index('--query')+1]=='Status'\np=Path(os.environ['TASK_POLL_COUNT']);n=int(p.read_text());p.write_text(str(n+1))\nwith Path(os.environ['TASK_POLL_LOG']).open('a') as f:f.write(' '.join(a)+'\\n')\nrows=json.loads(Path(os.environ['TASK_POLL_STATUSES']).read_text());print(rows[min(n,len(rows)-1)])\n`,
+      { mode: 0o755 }
+    );
+    const execute = (sleepAdvance = 10) =>
+      execFileSync(
+        interpreter,
+        [
+          '-c',
+          'import sys,time; clock=[0.0];time.monotonic=lambda:clock[0];advance=float(sys.argv[2]);time.sleep=lambda value:clock.__setitem__(0,clock[0]+advance);code=sys.argv[1];sys.argv=["actual-6f5-poller","11111111-1111-4111-8111-111111111111","i-0123456789abcdef0"];exec(compile(code,"actual-6f5-poller","exec"),{"__name__":"__main__"})',
+          recharge6f5ReadbackPoller(),
+          String(sleepAdvance)
+        ],
+        {
+          env: {
+            ...env,
+            PRODUCTION_INSTANCE_ID: 'i-local-fixture-only',
+            TASK_POLL_COUNT: countFile,
+            TASK_POLL_LOG: awsLog,
+            TASK_POLL_STATUSES: statusesFile
+          },
+          encoding: 'utf8',
+          stdio: 'pipe',
+          timeout: 10000
+        }
+      );
+    run({ execute, awsLog, countFile });
+  });
+}
+
+test('fixed 6f5 actual readback poller accepts a slow successful proof beyond the old waiter budget', () => {
+  recharge6f5PollFixture(['Pending', 'InProgress', 'Success'], ({ execute, awsLog, countFile }) => {
+    assert.equal(execute(102), '');
+    assert.equal(readFileSync(countFile, 'utf8'), '3');
+    const rows = readFileSync(awsLog, 'utf8').trim().split('\n');
+    assert.equal(rows.length, 3);
+    assert.ok(
+      rows.every(
+        (line) => line.startsWith('ssm get-command-invocation ') && line.includes('--query Status')
+      )
+    );
+    assert.ok(rows.every((line) => !/send-command|wait |StandardOutputContent/.test(line)));
+  });
+});
+
+test('fixed 6f5 actual readback poller separates remote terminal failure from local budget exhaustion', () => {
+  for (const status of ['Failed', 'TimedOut', 'Cancelled'])
+    recharge6f5PollFixture([status], ({ execute, countFile }) => {
+      assert.throws(
+        () => execute(),
+        (error) =>
+          error.status === 1 &&
+          error.stdout === '' &&
+          String(error.stderr).includes(
+            `Fixed 6f5 recharge remote readback ended without proof; status=${status}; raw output suppressed`
+          )
+      );
+      assert.equal(readFileSync(countFile, 'utf8'), '1');
+    });
+  recharge6f5PollFixture(['InProgress'], ({ execute, countFile }) => {
+    assert.throws(
+      () => execute(960),
+      (error) =>
+        error.status === 124 &&
+        error.stdout === '' &&
+        String(error.stderr).includes(
+          'Fixed 6f5 recharge local readback budget exhausted; remote status unavailable; raw output suppressed'
+        )
+    );
+    assert.equal(readFileSync(countFile, 'utf8'), '1');
+  });
+  recharge6f5PollFixture(['unreviewed-status'], ({ execute, countFile }) => {
+    assert.throws(
+      () => execute(),
+      (error) =>
+        error.status === 1 &&
+        error.stdout === '' &&
+        String(error.stderr).includes(
+          'Fixed 6f5 recharge readback status unavailable; raw output suppressed'
+        )
+    );
+    assert.equal(readFileSync(countFile, 'utf8'), '1');
+  });
+});
+
+test('fixed 6f5 actual readback poller distinguishes a bounded CLI timeout from exhausted local budget', () => {
+  const source = recharge6f5ReadbackPoller();
+  const program =
+    'import subprocess,sys,time\nclock=[0.0];expiry=float(sys.argv[2]);code=sys.argv[1]\ntime.monotonic=lambda:clock[0]\ndef timeout_call(*args,**kwargs):\n clock[0]=expiry;raise subprocess.TimeoutExpired("synthetic-readonly-aws",kwargs["timeout"])\nsubprocess.run=timeout_call\nsys.argv=["actual-6f5-poller","11111111-1111-4111-8111-111111111111","i-0123456789abcdef0"]\nexec(compile(code,"actual-6f5-poller","exec"),{"__name__":"__main__"})';
+  for (const [expiry, status, message] of [
+    [30, 1, 'Fixed 6f5 recharge readback status unavailable; raw output suppressed'],
+    [
+      960,
+      124,
+      'Fixed 6f5 recharge local readback budget exhausted; remote status unavailable; raw output suppressed'
+    ]
+  ])
+    assert.throws(
+      () =>
+        execFileSync('python3', ['-c', program, source, String(expiry)], {
+          encoding: 'utf8',
+          stdio: 'pipe',
+          timeout: 10000
+        }),
+      (error) =>
+        error.status === status && error.stdout === '' && String(error.stderr).includes(message)
+    );
 });

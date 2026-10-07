@@ -129,16 +129,20 @@ elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]
   test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
   python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope
   services=(auto-recharge)
-elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 ]]; then
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-6f5-20261008 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
-  test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+  case "$HISTORICAL_EXCEPTION" in
+    recharge-pro-4c-20261008) test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341 ;;
+    recharge-pro-6f5-20261008) test "$EXPECTED_CURRENT" = 6f5e5cc252886d5f86592e307147b40c13577585 ;;
+    *) exit 1 ;;
+  esac
   test "${RELEASE_ADMIN_ONLY:-false}" = false
   test -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}"
   test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
   python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
   services=(auto-recharge)
   recharge_worker_projection="$(python3 - <<'PY_D3FB_PUSH_PROJECTION'
-import hashlib, json, re
+import hashlib, json, os, re
 from pathlib import Path
 
 def unique(items):
@@ -155,14 +159,17 @@ def read(path):
         raise ValueError('Fixed 4c push projection unavailable')
     return json.loads(raw, object_pairs_hook=unique)
 
-profile = read(Path('deploy/aws/recharge-pro-4c-20261008.json'))
+identity = os.environ['HISTORICAL_EXCEPTION']
+if identity not in ('recharge-pro-4c-20261008', 'recharge-pro-6f5-20261008'):
+    raise SystemExit('Fixed recharge push identity unavailable')
+profile = read(Path('deploy/aws/' + identity + '.json'))
 marker = read(Path('.deploy/production-release/fixed-recharge-build-projection.json'))
 projection = profile.get('workerProjection') if isinstance(profile, dict) else None
 if (not isinstance(projection, dict) or len(projection) != 60
         or not isinstance(marker, dict)
         or set(marker) != {'version', 'id', 'contextPath', 'workerProjectionSha256'}
         or type(marker['version']) is not int or marker['version'] != 1
-        or marker['id'] != 'recharge-pro-4c-20261008'
+        or marker['id'] != identity
         or not isinstance(marker['contextPath'], str)
         or Path(marker['contextPath']).resolve() != Path('.deploy/production-release/fixed-recharge-context').resolve()
         or not isinstance(marker['workerProjectionSha256'], str)

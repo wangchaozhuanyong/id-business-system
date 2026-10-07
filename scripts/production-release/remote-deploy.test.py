@@ -11349,29 +11349,106 @@ class FixedRechargeD3fbNativeTests(unittest.TestCase):
         self.assertEqual(deployment.RECHARGE_2F_PROFILE_RAW,'4d9b43c71a300a0043cb9fd179342a82230fddf9e013836d7e14d0ef3d2bb951')
         with self.assertRaises(RuntimeError): deployment.recharge_projected_binding('recharge-pro-arbitrary')
 
-    def test_real_build_emits60_projection_with_exact2_overlays_and_no_main93_worker(self):
+    @contextmanager
+    def real_build_fixture(self):
+        """Replay original2f/91 validation; calibrate only local archive/profile seals."""
         with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
-            root=Path(name).resolve(); profile=copy.deepcopy(self.profile)
-            profile['baselineRelease']['sourceArchiveSha256']=deployment.hashlib.sha256(self.native_raw).hexdigest()
-            profile['baselineRelease']['buildInputSha256']=deployment.historical_fingerprint(json.loads(self.native_source[deployment.REGISTRATION_RECOVERY_FILE][0])['buildInputSha256'])
-            for relative,data in self.contents.items():
-                path=root/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data);path.chmod(0o644)
-            stack.enter_context(patch.object(deployment,'check_recharge_d3fb_scope',return_value=(root,profile)))
-            stack.enter_context(patch.dict(deployment.os.environ,{},clear=True))
-            stack.enter_context(patch.object(deployment,'RECHARGE_D3FB_ORIGIN_ARCHIVE',deployment.hashlib.sha256(self.native_raw).hexdigest()))
-            archives={deployment.RECHARGE_D3FB_ORIGIN:self.native_raw,deployment.RECHARGE_SCOPE_CURRENT:self.basis_raw}
-            download=stack.enter_context(patch.object(deployment,'registration_download',side_effect=lambda commit:archives[commit]))
-            # The original92 reconstruction is covered by unchanged old2f tests; all final60 hashes remain real here.
-            stack.enter_context(patch.object(deployment,'registration_recovery_worker_projection',return_value=dict(self.worker92)))
+            root = Path(name).resolve(); profile = copy.deepcopy(self.profile)
+            baseline = copy.deepcopy(deployment.REGISTRATION_RECOVERY_BASELINE)
+            baseline['manifest']['sourceArchiveSha256'] = deployment.hashlib.sha256(FixedRecharge2fNativeTests.previous_raw).hexdigest()
+            profile92 = json.loads(self.native_source[deployment.REGISTRATION_RECOVERY_FILE][0])
+            profile92['runtimeBaseline'] = baseline
+            raw92 = json.dumps(profile92).encode()
+            old_profile = copy.deepcopy(self.old_profile)
+            old_profile['nativeBaseline']['registrationProfileRawSha256'] = deployment.hashlib.sha256(raw92).hexdigest()
+            old_raw = json.dumps(old_profile).encode()
+            source = dict(self.native_source)
+            source[deployment.REGISTRATION_RECOVERY_FILE] = (raw92, '100644')
+            source[deployment.RECHARGE_2F_FILE] = (old_raw, '100644')
+            original2f = dict(FixedRecharge2fNativeTests.native_source)
+            original2f[deployment.REGISTRATION_RECOVERY_FILE] = (raw92, '100644')
+            def archive(commit, files):
+                return FixedRechargeRuntimeScopeTests.source_archive(commit,
+                    {path: (data, 0o755 if mode == '100755' else 0o644) for path, (data, mode) in files.items()})
+            source_raw = archive(deployment.RECHARGE_D3FB_ORIGIN, source)
+            original2f_raw = archive(deployment.RECHARGE_2F_CURRENT, original2f)
+            login = copy.deepcopy(deployment.REGISTRATION_LOGIN_BASELINE)
+            login['manifest']['sourceArchiveSha256'] = deployment.hashlib.sha256(original2f_raw).hexdigest()
+            profile['baselineRelease']['buildInputSha256'] = deployment.historical_fingerprint(profile92['buildInputSha256'])
+            profile['nativeBaseline']['rechargeProfileRawSha256'] = deployment.hashlib.sha256(old_raw).hexdigest()
+            for relative, data in self.contents.items():
+                path = root / relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(data); path.chmod(0o644)
+            stack.enter_context(patch.object(deployment, 'REGISTRATION_RECOVERY_BASELINE', baseline))
+            stack.enter_context(patch.object(deployment, 'REGISTRATION_LOGIN_BASELINE', login))
+            stack.enter_context(patch.object(deployment, 'RECHARGE_2F_PROFILE_RAW', deployment.hashlib.sha256(raw92).hexdigest()))
+            stack.enter_context(patch.object(deployment, 'RECHARGE_D3FB_PROFILE_RAW', deployment.hashlib.sha256(old_raw).hexdigest()))
+            stack.enter_context(patch.object(deployment, 'RECHARGE_D3FB_PROFILE_CANONICAL', deployment.historical_fingerprint(old_profile)))
+            stack.enter_context(patch.object(deployment, 'RECHARGE_D3FB_ORIGIN_ARCHIVE', deployment.hashlib.sha256(source_raw).hexdigest()))
+            stack.enter_context(patch.object(deployment, 'check_recharge_d3fb_scope', return_value=(root, profile)))
+            stack.enter_context(patch.dict(deployment.os.environ, {}, clear=True))
+            archives = {deployment.RECHARGE_D3FB_ORIGIN: source_raw, deployment.RECHARGE_SCOPE_CURRENT: self.basis_raw,
+                deployment.RECHARGE_2F_CURRENT: original2f_raw, deployment.REGISTRATION_RECOVERY_CURRENT: FixedRecharge2fNativeTests.previous_raw}
+            def local_download(commit):
+                self.assertIn(commit, archives, 'unexpected archive lookup instead of original source guard')
+                return archives[commit]
+            download = stack.enter_context(patch.object(deployment, 'registration_download', side_effect=local_download))
+            yield SimpleNamespace(root=root, profile=profile, source=source, original2f=original2f,
+                login=login, archives=archives, archive=archive, download=download)
+
+    def test_real_build_emits60_projection_with_exact2_overlays_and_no_main93_worker(self):
+        with self.real_build_fixture() as fixture:
             deployment.prepare_recharge_d3fb_build()
-            context=root/'.deploy/production-release/fixed-recharge-context'
-            measured=deployment.fixed_recharge_file_map(context,names=profile['workerProjection'])
-            self.assertEqual({name:digest for name,(digest,_mode) in measured.items()},{name:row['sha256'] for name,row in profile['workerProjection'].items()})
-            for path,(data,_mode) in self.worker_d3.items():
-                self.assertEqual((context/path).read_bytes(),self.contents[path] if path in deployment.RECHARGE_D3FB_WORKER else data)
-            receipt=json.loads((root/'.deploy/production-release/fixed-recharge-build-projection.json').read_text())
-            self.assertEqual(receipt['id'],deployment.RECHARGE_D3FB_ID)
-            self.assertEqual(set(call.args[0] for call in download.call_args_list),set(archives))
+            context = fixture.root / '.deploy/production-release/fixed-recharge-context'
+            measured = deployment.fixed_recharge_file_map(context, names=fixture.profile['workerProjection'])
+            self.assertEqual(len(measured), 60)
+            self.assertEqual({path: {'sha256': digest, 'mode': '100755' if mode & 0o111 else '100644'}
+                for path, (digest, mode) in measured.items()}, fixture.profile['workerProjection'])
+            changed = set()
+            for path, (data, _mode) in self.worker_d3.items():
+                actual = (context / path).read_bytes()
+                self.assertEqual(actual, self.contents[path] if path in deployment.RECHARGE_D3FB_WORKER else data)
+                if actual != data: changed.add(path)
+            self.assertEqual(changed, deployment.RECHARGE_D3FB_WORKER)
+            self.assertEqual(len(set(measured) - changed), 58)
+            receipt_path = fixture.root / '.deploy/production-release/fixed-recharge-build-projection.json'
+            receipt = json.loads(receipt_path.read_text())
+            self.assertEqual(receipt['id'], deployment.RECHARGE_D3FB_ID)
+            self.assertEqual(receipt['workerProjectionSha256'], deployment.historical_fingerprint(fixture.profile['workerProjection']))
+            self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(set(call.args[0] for call in fixture.download.call_args_list), set(fixture.archives))
+
+    def test_original2f_archive_profile_modes_and_controls_are_validated_before_build_output(self):
+        for change in ('archiveRaw', 'profileBytes', 'profileMode', 'reviewedControl'):
+            with self.subTest(change=change), self.real_build_fixture() as fixture:
+                source = dict(fixture.original2f)
+                if change == 'archiveRaw':
+                    fixture.archives[deployment.RECHARGE_2F_CURRENT] += b'unsealed-local-archive'
+                else:
+                    if change == 'profileBytes':
+                        raw, mode = source[deployment.REGISTRATION_RECOVERY_FILE]
+                        source[deployment.REGISTRATION_RECOVERY_FILE] = (raw + b' ', mode)
+                    elif change == 'profileMode':
+                        raw, _mode = source[deployment.REGISTRATION_RECOVERY_FILE]
+                        source[deployment.REGISTRATION_RECOVERY_FILE] = (raw, '100755')
+                    else:
+                        path = '.github/workflows/production-release.yml'
+                        raw, mode = source[path]; source[path] = (raw + b'\n# unreviewed local control\n', mode)
+                    raw = fixture.archive(deployment.RECHARGE_2F_CURRENT, source)
+                    fixture.archives[deployment.RECHARGE_2F_CURRENT] = raw
+                    # Pass the local tar seal to exercise the deeper real profile/source guard.
+                    fixture.login['manifest']['sourceArchiveSha256'] = deployment.hashlib.sha256(raw).hexdigest()
+                with patch.object(deployment, 'registration_recovery_worker_projection',
+                        wraps=deployment.registration_recovery_worker_projection) as reconstruction:
+                    if change == 'reviewedControl':
+                        with self.assertRaisesRegex(RuntimeError, 'Fixed registration reviewed source changed'):
+                            deployment.prepare_recharge_d3fb_build()
+                        reconstruction.assert_called_once()
+                    else:
+                        with self.assertRaises(RuntimeError): deployment.prepare_recharge_d3fb_build()
+                        reconstruction.assert_not_called()
+                self.assertFalse((fixture.root / '.deploy/production-release/fixed-recharge-context').exists())
+                self.assertFalse((fixture.root / '.deploy/production-release/fixed-recharge-build-projection.json').exists())
+
     def test_private600_copies_are_explicit_and_refuse_missing_drift_modes_symlinks(self):
         with self.source_fixture() as f:
             deployment.write_registration_files(f.release,deployment.recharge_d3fb_source_files(f.previous,self.profile,f.candidate))
@@ -12652,14 +12729,45 @@ class Registration95ScopeTests(unittest.TestCase):
         self.assertIs(deployment.registration_interstitial_profile(self.profile),self.profile)
         self.assertEqual(self.profile['registrationHandoff']['attempt'],8)
         self.assertEqual(self.profile['registrationHandoff'],deployment.REGISTRATION_INTERSTITIAL_HANDOFF)
-        with patch.object(deployment,'run')as command,patch.object(deployment,'registration_download')as download:
-            root,profile=deployment.check_registration_interstitial_scope()
-            self.assertEqual(root,self.root);self.assertEqual(profile,self.profile)
-            command.assert_not_called();download.assert_not_called()
+        sealed=self.sealed95_source()
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            root=Path(temporary)
+            for name,raw in sealed.items():
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(0o644)
+            source=root/'scripts/production-release/remote-deploy.py'
+            ns={'__name__':'sealed95_scope_fixture','__file__':str(source)};exec(compile(source.read_bytes(),str(source),'exec'),ns)
+            ns['load_registration_interstitial95']()
+            command=MagicMock();download=MagicMock()
+            with patch.dict(ns,{'run':command,'registration_download':download}):
+                actual_root,profile=ns['check_registration_interstitial_scope']()
+                self.assertEqual(actual_root,root);self.assertEqual(profile,self.profile)
+                command.assert_not_called();download.assert_not_called()
+            source.write_bytes((self.root/'scripts/production-release/remote-deploy.py').read_bytes())
+            with self.assertRaisesRegex(RuntimeError,'Fixed registration interstitial reviewed source changed'):
+                ns['check_registration_interstitial_scope']()
 
-    def staging_fixture(self,base):
+    def sealed95_source(self):
+        commit='6f5e5cc252886d5f86592e307147b40c13577585'
+        profile_path=deployment.REGISTRATION_INTERSTITIAL_FILE
+        profile_raw=subprocess.check_output(['git','show',commit+':'+profile_path],cwd=self.root)
+        self.assertEqual(profile_raw,(self.root/profile_path).read_bytes())
+        profile=json.loads(profile_raw)
+        pinned={**profile['registrationSourceSha256'],**profile['validationSourceSha256'],**profile['controlSourceSha256']}
+        paths=sorted(set(pinned)|{profile_path})
+        tree=subprocess.check_output(['git','ls-tree','-rz',commit,'--',*paths],cwd=self.root)
+        modes={entry.split(b'\t',1)[1].decode():entry.split(b' ',1)[0].decode()for entry in tree.split(b'\0')if entry}
+        self.assertEqual(set(modes),set(paths))
+        sealed={}
+        for name in paths:
+            self.assertEqual(modes[name],'100644',name)
+            raw=subprocess.check_output(['git','show',commit+':'+name],cwd=self.root)
+            if name in pinned:self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(),pinned[name],name)
+            sealed[name]=raw
+        return sealed
+
+    def staging_fixture(self,base,sealed_source=None):
         stage=base/'.staging'/('oidc-'+('a'*40));stage.mkdir(parents=True)
-        source=stage/'remote-deploy.py';raw=(self.root/'scripts/production-release/remote-deploy.py').read_bytes();source.write_bytes(raw);source.chmod(0o644)
+        source=stage/'remote-deploy.py';raw=sealed_source if sealed_source is not None else (self.root/'scripts/production-release/remote-deploy.py').read_bytes();source.write_bytes(raw);source.chmod(0o644)
         profile=stage/Path(deployment.REGISTRATION_INTERSTITIAL_FILE).name
         profile.write_bytes((self.root/deployment.REGISTRATION_INTERSTITIAL_FILE).read_bytes());profile.chmod(0o644)
         module=stage/'registration-interstitial-95.py';module.write_bytes((self.root/'scripts/production-release/registration-interstitial-95.py').read_bytes());module.chmod(0o644)
@@ -12667,8 +12775,9 @@ class Registration95ScopeTests(unittest.TestCase):
         return ns,source,profile
 
     def test_real_controller_staging_contract_carrier_and_readback_without_repository_profile(self):
+        sealed=self.sealed95_source()
         with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
-            base=Path(temporary);ns,source,profile=self.staging_fixture(base)
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base,sealed['scripts/production-release/remote-deploy.py'])
             self.assertFalse((base/deployment.REGISTRATION_INTERSTITIAL_FILE).exists())
             sha=lambda p:deployment.hashlib.sha256(p.read_bytes()).hexdigest()
             self.assertEqual(ns['registration_interstitial_profile_path'](),profile)
@@ -12679,7 +12788,11 @@ class Registration95ScopeTests(unittest.TestCase):
             ns['validate_registration_interstitial_readback'](value,'a'*40,'b'*40,sha(profile))
             with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier']('0'*64,sha(profile))
             with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),'0'*64)
-            source_raw=source.read_bytes();source.chmod(0o600)
+            source_raw=source.read_bytes()
+            source.write_bytes((self.root/'scripts/production-release/remote-deploy.py').read_bytes())
+            with self.assertRaisesRegex(RuntimeError,'Fixed registration interstitial carrier source changed'):
+                ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+            source.write_bytes(source_raw);source.chmod(0o600)
             with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
             source.chmod(0o644);source.write_bytes(source_raw+b'x'*(1024*1024+1-len(source_raw)))
             with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
@@ -12939,6 +13052,323 @@ class Registration95ScopeTests(unittest.TestCase):
         self.assertIn('assert_no_active_registration',release)
         self.assertEqual(deployment.registration_updated_services(deployment.REGISTRATION_INTERSTITIAL_ID),('auto-registration',))
         self.assertEqual(len(deployment.REGISTRATION_INTERSTITIAL_PRIVATE),11)
+
+class FixedRecharge6f5NativeTests(unittest.TestCase):
+    """Local finite-successor fixtures never constitute a measured production receipt."""
+    @classmethod
+    def setUpClass(cls):
+        FixedRechargeD3fbNativeTests.setUpClass()
+        cls.project=FixedRechargeD3fbNativeTests.project
+        cls.runtime=FixedRechargeD3fbNativeTests.runtime
+        cls.original95={name:subprocess.check_output(['git','show',deployment.RECHARGE_6F5_CURRENT+':'+name],cwd=cls.project)
+            for name in ('scripts/production-release/remote-deploy.py','scripts/production-release/registration-interstitial-95.py',
+                'deploy/aws/registration-worker-95-20261008.json')}
+
+    def setUp(self):
+        self.legacy=FixedRechargeD3fbNativeTests();self.legacy.setUp()
+        self.draft=json.loads((self.project/deployment.RECHARGE_6F5_FILE).read_bytes())
+        self.draft.update(enabled=False,approvalStatus='NOT_APPROVED')
+        self.draft['nativeBaseline']={key:None for key in deployment.RECHARGE_D3FB_NATIVE_KEYS}
+        self.contents={name:(self.project/name).read_bytes()
+            for name in deployment.RECHARGE_D3FB_CANDIDATES|deployment.RECHARGE_2F_CONTROLS}
+        for key,names in (('candidateSourceSha256',deployment.RECHARGE_D3FB_CANDIDATES),
+                ('controlSourceSha256',deployment.RECHARGE_2F_CONTROLS)):
+            self.draft[key]={name:deployment.hashlib.sha256(self.contents[name]).hexdigest()for name in names}
+        self.profile=copy.deepcopy(self.draft);self.profile.update(enabled=True,approvalStatus='APPROVED')
+        for key,value in self.profile['baselineRelease'].items():
+            if value is None:self.profile['baselineRelease'][key]='e'*64
+        self.profile['nativeBaseline']={key:100 if key.endswith('Count')else'e'*64
+            for key in deployment.RECHARGE_D3FB_NATIVE_KEYS}
+        self.profile['nativeBaseline'].update(producerSha256=deployment.RECHARGE_6F5_PRODUCER,
+            rechargeProfileRawSha256=deployment.RECHARGE_D3FB_PROFILE_RAW,apiScopeProducerSha256=deployment.RECHARGE_D3FB_API_SCOPE,
+            registrationProfileRawSha256=deployment.RECHARGE_6F5_REGISTRATION_RAW,
+            registrationProfileCanonicalSha256=deployment.RECHARGE_6F5_REGISTRATION_CANONICAL)
+        self.profile['workerProjection']=copy.deepcopy(deployment.RECHARGE_D3FB_WORKER_BASIS)
+        self.profile['workerProjection'].update({name:{'mode':'100644','sha256':self.profile['candidateSourceSha256'][name]}
+            for name in deployment.RECHARGE_D3FB_WORKER})
+        self.draft['workerProjection']=copy.deepcopy(self.profile['workerProjection'])
+
+    @contextmanager
+    def producer_fixture(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary,ExitStack()as stack:
+            base=Path(temporary).resolve();previous=base/'releases'/('20261008T120000Z-'+deployment.RECHARGE_6F5_CURRENT[:12])
+            previous.mkdir(parents=True);(base/'current').symlink_to(previous)
+            for name,raw in self.original95.items():
+                path=previous/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(0o644)
+            manifest={'commit':deployment.RECHARGE_6F5_CURRENT,'sourceTree':deployment.RECHARGE_6F5_TREE,
+                'fixedRegistrationRelease':{'id':'registration-worker-95-20261008',
+                'profileRawSha256':deployment.RECHARGE_6F5_REGISTRATION_RAW}}
+            path=previous/'release-manifest.json';path.write_text(json.dumps(manifest));path.chmod(0o600)
+            stack.enter_context(patch.object(deployment,'BASE',base))
+            stack.enter_context(patch.object(deployment,'RECHARGE_6F5_MANIFEST',deployment.hashlib.sha256(path.read_bytes()).hexdigest()))
+            yield SimpleNamespace(base=base,previous=previous,manifest=manifest,manifest_path=path)
+
+    def test_pending_nullable_measurement_is_reviewable_but_cannot_execute(self):
+        self.assertEqual(set(self.draft),set(self.legacy.draft));self.assertEqual(len(self.draft),17)
+        self.assertEqual(len(self.draft['baselineRelease']),12);self.assertEqual(len(self.draft['nativeBaseline']),20)
+        self.assertTrue(all(value is None for value in self.draft['nativeBaseline'].values()))
+        self.assertIs(deployment.recharge_6f5_scope(self.draft,require_approved=False),self.draft)
+        flipped=copy.deepcopy(self.draft);flipped.update(enabled=True,approvalStatus='APPROVED')
+        with self.assertRaises(RuntimeError):deployment.recharge_6f5_scope(flipped)
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            root=Path(temporary).resolve();unapproved=root/deployment.RECHARGE_6F5_FILE
+            unapproved.parent.mkdir(parents=True);unapproved.write_text(json.dumps(self.draft));unapproved.chmod(0o644)
+            with patch.object(deployment,'__file__',str(root/'scripts/production-release/remote-deploy.py')), \
+                    patch.object(deployment,'registration_download')as download,patch.object(deployment,'run')as command:
+                with self.assertRaisesRegex(RuntimeError,'Fixed recharge runtime scope is not approved'):
+                    deployment.prepare_recharge_d3fb_build(_profile_id=deployment.RECHARGE_6F5_ID)
+                download.assert_not_called();command.assert_not_called()
+        self.assertIs(deployment.recharge_6f5_scope(self.profile),self.profile)
+        self.assertEqual(self.profile['sourceBasis'],deployment.RECHARGE_6F5_SOURCE_BASIS)
+
+    def test_approval_requires_each_measurement_and_exact_only_two_worker_delta(self):
+        for key in self.profile['nativeBaseline']:
+            bad=copy.deepcopy(self.profile);bad['nativeBaseline'][key]=None
+            with self.subTest(missing=key),self.assertRaises(RuntimeError):deployment.recharge_6f5_scope(bad)
+        for key in self.profile['baselineRelease']:
+            bad=copy.deepcopy(self.profile);bad['baselineRelease'][key]=None
+            with self.subTest(missing=key),self.assertRaises(RuntimeError):deployment.recharge_6f5_scope(bad)
+        mutations=[('scope',lambda p:p['scope'].update(registrationRestartAllowed=True)),
+            ('finance',lambda p:p['financeValidator'].update(checkCount=48)),
+            ('current',lambda p:p.update(expectedCurrent=deployment.RECHARGE_D3FB_CURRENT)),
+            ('sourceBasis',lambda p:p['sourceBasis'].update(tree='a'*40)),
+            ('extra',lambda p:p.update(unreviewed=True)),
+            ('countBool',lambda p:p['nativeBaseline'].update(nativeFileCount=True))]
+        for kind,mutate in mutations:
+            bad=copy.deepcopy(self.profile);mutate(bad)
+            with self.subTest(changed=kind),self.assertRaises(RuntimeError):deployment.recharge_6f5_scope(bad)
+        for name in set(self.profile['workerProjection'])-deployment.RECHARGE_D3FB_WORKER:
+            bad=copy.deepcopy(self.profile);bad['workerProjection'][name]['sha256']='a'*64
+            with self.subTest(carried=name),self.assertRaises(RuntimeError):deployment.recharge_6f5_scope(bad)
+
+    def test_local_scope_real_source_hash_mode_and_foreign_delta_guards(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary,ExitStack()as stack:
+            root=Path(temporary).resolve();profile_path=root/deployment.RECHARGE_6F5_FILE
+            for name,raw in self.contents.items():
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(0o644)
+            profile_path.parent.mkdir(parents=True,exist_ok=True);profile_path.write_text(json.dumps(self.profile));profile_path.chmod(0o644)
+            replies={'rev-parse':deployment.RECHARGE_6F5_TREE,'diff':'','ls-files':''}
+            def git(*args,**kwargs):
+                self.assertEqual(args[:3],('git','-C',str(root)));self.assertIn(args[3],replies);return replies[args[3]]
+            stack.enter_context(patch.object(deployment,'__file__',str(root/'scripts/production-release/remote-deploy.py')))
+            stack.enter_context(patch.object(deployment,'run',side_effect=git))
+            self.assertEqual(deployment.check_recharge_6f5_scope(),(root,self.profile))
+            path=root/'scripts/production-release/remote-deploy.py';raw=path.read_bytes()
+            for kind in ('bytes','mode'):
+                if kind=='bytes':path.write_bytes(raw+b'drift')
+                else:path.chmod(0o600)
+                with self.subTest(changed=kind),self.assertRaises(RuntimeError):deployment.check_recharge_6f5_scope()
+                path.write_bytes(raw);path.chmod(0o644)
+            for command in ('diff','ls-files'):
+                replies[command]='unrelated.txt\n'
+                with self.subTest(command=command),self.assertRaises(RuntimeError):deployment.check_recharge_6f5_scope()
+                replies[command]=''
+
+    def test_real_original95_producer_module_profile_and_locations_are_pinned(self):
+        with self.producer_fixture()as f:
+            namespace=deployment.recharge_6f5_native_producer(f.previous)
+            self.assertEqual(namespace['REGISTRATION_INTERSTITIAL_ID'],'registration-worker-95-20261008')
+            self.assertEqual(namespace['REGISTRATION_FINANCE'],deployment.REGISTRATION_FINANCE)
+            self.assertEqual(namespace['REGISTRATION_CLEARANCE'],deployment.REGISTRATION_CLEARANCE)
+            for name in self.original95:
+                path=f.previous/name;raw=path.read_bytes();path.write_bytes(raw+b' ')
+                with self.subTest(changed=name),self.assertRaises(RuntimeError):deployment.recharge_6f5_native_producer(f.previous)
+                path.write_bytes(raw);path.chmod(0o600)
+                with self.subTest(mode=name),self.assertRaises(RuntimeError):deployment.recharge_6f5_native_producer(f.previous)
+                path.chmod(0o644)
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_native_producer(f.previous.parent/'foreign')
+
+    def test_real_derived33_receipt_is_historical_and_before95_checker_stays_failclosed(self):
+        with self.producer_fixture()as f,ExitStack()as stack:
+            native=deployment.recharge_6f5_native_producer;checkers=[];receipts=[]
+            def original(path):
+                namespace=native(path);checker=MagicMock(wraps=namespace['check_registration_interstitial_deployment'])
+                namespace['check_registration_interstitial_deployment']=checker;checkers.append(checker)
+                namespace['run']=MagicMock(side_effect=AssertionError('external command forbidden in local95 proof'))
+                receipts.append(namespace['registration_interstitial_readback_receipt'](deployment.RECHARGE_6F5_CURRENT,
+                    deployment.RECHARGE_6F5_TREE,deployment.RECHARGE_6F5_REGISTRATION_RAW))
+                return namespace
+            stack.enter_context(patch.object(deployment,'recharge_6f5_native_producer',side_effect=original))
+            result=deployment.recharge_6f5_registration_receipt(f.previous)
+            self.assertEqual(len(receipts[-1]),33);checkers[-1].assert_not_called()
+            self.assertEqual(result['registrationReadbackSha256'],deployment.historical_fingerprint(receipts[-1]))
+            # The actual original95 checker runs; missing local production proof is not fabricated as success.
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_registration_receipt(f.previous,verify_native=True)
+            checkers[-1].assert_called_once_with(deployment.RECHARGE_6F5_CURRENT,deployment.RECHARGE_6F5_TREE,deployment.RECHARGE_6F5_REGISTRATION_RAW)
+            candidate=f.base/'candidate';candidate.mkdir();(f.base/'current').unlink();(f.base/'current').symlink_to(candidate)
+            self.assertEqual(deployment.recharge_6f5_registration_receipt(f.previous),result);checkers[-1].assert_not_called()
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_registration_receipt(f.previous,verify_native=True)
+            checkers[-1].assert_not_called()
+            for changed in ({**f.manifest,'apiAdminPublication':{}},
+                    {**f.manifest,'fixedRegistrationRelease':{'id':'foreign','profileRawSha256':deployment.RECHARGE_6F5_REGISTRATION_RAW}}):
+                f.manifest_path.write_text(json.dumps(changed))
+                with self.assertRaises(RuntimeError):deployment.recharge_6f5_registration_receipt(f.previous)
+
+    def test_real_origin4c_manifest_link_and_twelve_baseline_fields_reject_drift(self):
+        with self.producer_fixture()as f,ExitStack()as stack:
+            namespace=deployment.recharge_6f5_native_producer(f.previous)
+            origin=f.base/'releases'/('20261007T120000Z-'+deployment.RECHARGE_D3FB_CURRENT[:12]);origin.mkdir()
+            old_manifest={'commit':deployment.RECHARGE_D3FB_CURRENT,'sourceTree':deployment.RECHARGE_D3FB_TREE}
+            old_raw=json.dumps(old_manifest).encode();(origin/'release-manifest.json').write_bytes(old_raw);(origin/'release-manifest.json').chmod(0o600)
+            locator={'current':str(origin),'manifest':old_manifest,'fileSha256':{'release-manifest.json':deployment.hashlib.sha256(old_raw).hexdigest()}}
+            namespace['registration_interstitial_fixed']=lambda:locator
+            native=deployment.recharge_6f5_native_producer
+            def located(path):native(path);return namespace
+            stack.enter_context(patch.object(deployment,'recharge_6f5_native_producer',side_effect=located))
+            manifest={**f.manifest,'commit':deployment.RECHARGE_6F5_CURRENT,'sourceTree':deployment.RECHARGE_6F5_TREE,
+                'previousCommit':deployment.RECHARGE_D3FB_CURRENT,'previousRelease':str(origin),
+                'previousManifestSha256':locator['fileSha256']['release-manifest.json'],'deploymentRun':'github-actions-37669732029-1',
+                'servicesUpdated':['auto-registration'],'migrationApplied':False,'newMigrations':[],
+                'databaseGrants':{'status':'SKIPPED','reason':'FIXED_REGISTRATION_NO_MIGRATIONS'},'sourceArchiveSha256':'a'*64}
+            raw=json.dumps(manifest).encode();f.manifest_path.write_bytes(raw)
+            stack.enter_context(patch.object(deployment,'RECHARGE_6F5_MANIFEST',deployment.hashlib.sha256(raw).hexdigest()))
+            for name,content,mode in [('before-audit.json',b'{}',0o400),('after-audit.json',b'{}',0o600),
+                    ('docker-compose.aws-mysql.yml',b'controlled-compose',0o664),('compose.release.json',b'{"services":{}}',0o600)]:
+                path=f.previous/name;path.write_bytes(content);path.chmod(mode)
+            d3=f.base/'immutable-D3';d3.mkdir()
+            raw92=self.legacy.native_source[deployment.REGISTRATION_RECOVERY_FILE][0]
+            path=d3/deployment.REGISTRATION_RECOVERY_FILE;path.parent.mkdir(parents=True);path.write_bytes(raw92);path.chmod(0o644)
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_origin',return_value=d3))
+            for name in ('.dockerignore','scripts/audit-python-dependencies.py'):
+                for directory in (f.previous,origin):
+                    path=directory/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes(self.legacy.native_source[name][0]);path.chmod(0o644)
+            self.assertEqual(deployment.recharge_6f5_origin4c(f.previous),origin)
+            fields=deployment.recharge_6f5_baseline_fields(f.previous);self.assertEqual(set(fields),set(self.profile['baselineRelease']))
+            self.assertEqual(len(fields),12);self.assertEqual(fields['previousCommit'],deployment.RECHARGE_D3FB_CURRENT)
+            f.manifest_path.write_bytes(raw+b' ')
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_origin4c(f.previous)
+            f.manifest_path.write_bytes(raw);(origin/'release-manifest.json').write_bytes(old_raw+b' ')
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_origin4c(f.previous)
+            (origin/'release-manifest.json').write_bytes(old_raw)
+            (f.previous/'.dockerignore').write_bytes(b'drift')
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_baseline_fields(f.previous)
+
+    def test_observer_stops_at_real_before95_proof_before_any_api_or_chain_probe(self):
+        with self.producer_fixture()as f,ExitStack()as stack:
+            stack.enter_context(patch.object(deployment,'recharge_6f5_baseline_fields',return_value=self.profile['baselineRelease']))
+            native=deployment.recharge_6f5_native_producer;checkers=[]
+            def original(path):
+                namespace=native(path);checker=MagicMock(wraps=namespace['check_registration_interstitial_deployment'])
+                namespace['check_registration_interstitial_deployment']=checker;checkers.append(checker)
+                namespace['run']=MagicMock(side_effect=AssertionError('external command forbidden in local95 proof'))
+                return namespace
+            stack.enter_context(patch.object(deployment,'recharge_6f5_native_producer',side_effect=original))
+            probes={name:stack.enter_context(patch.object(deployment,name))for name in ('recharge_6f5_api_receipt',
+                'recharge_974_native_chain','recharge_2f_retained_migrate','service_state','check_recharge_d3fb_deployment')}
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_observe_native(f.previous)
+            self.assertEqual(len(checkers),1)
+            checkers[0].assert_called_once_with(deployment.RECHARGE_6F5_CURRENT,deployment.RECHARGE_6F5_TREE,deployment.RECHARGE_6F5_REGISTRATION_RAW)
+            for probe in probes.values():probe.assert_not_called()
+
+    def test_real_sixteen_release_chain_refuses_skips_and_new_leaf_byte_drift(self):
+        fixture=FixedRecharge974NativeTests();fixture.runtime=self.runtime
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            f=fixture.chain_fixture(temporary)
+            with f.stack:
+                previous=f.paths[0]
+                for commit,tree in reversed(deployment.RECHARGE_6F5_CHAIN[:5]):
+                    current=f.base/'releases'/('20261008T120000Z-'+commit[:12]);current.mkdir(mode=0o700)
+                    (current/'release-manifest.json').write_text(json.dumps({'commit':commit,'sourceTree':tree,
+                        'previousCommit':json.loads((previous/'release-manifest.json').read_text())['commit'],'previousRelease':str(previous)}))
+                    (current/'release-manifest.json').chmod(0o600);(current/'public.py').write_bytes(b'local-fixture\n');previous=current
+                good=deployment.recharge_974_native_chain(previous,chain=deployment.RECHARGE_6F5_CHAIN)
+                self.assertEqual(len(deployment.RECHARGE_6F5_CHAIN),16);self.assertEqual(good['origin'],f.paths[-1])
+                (previous/'public.py').write_bytes(b'drift')
+                self.assertNotEqual(deployment.recharge_974_native_chain(previous,chain=deployment.RECHARGE_6F5_CHAIN)['sha256'],good['sha256'])
+                with self.assertRaises(RuntimeError):deployment.recharge_974_native_chain(previous,chain=deployment.RECHARGE_6F5_CHAIN[1:])
+
+    def test_real_complete60_build_preserves58_and_emits_new_four_key_marker(self):
+        with self.legacy.real_build_fixture()as f,ExitStack()as stack:
+            profile=copy.deepcopy(self.profile)
+            profile['baselineRelease']['buildInputSha256']=f.profile['baselineRelease']['buildInputSha256']
+            profile['nativeBaseline']['rechargeProfileRawSha256']=f.profile['nativeBaseline']['rechargeProfileRawSha256']
+            # Archive-only fixture calibration is confined to the already validated original92/D3 seals.
+            path=f.root/deployment.RECHARGE_6F5_FILE;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(json.dumps(profile));path.chmod(0o644)
+            def git(*args,**kwargs):
+                self.assertEqual(args[:3],('git','-C',str(f.root)))
+                self.assertIn(args[3],('rev-parse','diff','ls-files'))
+                return deployment.RECHARGE_6F5_TREE if args[3]=='rev-parse'else''
+            stack.enter_context(patch.object(deployment,'__file__',str(f.root/'scripts/production-release/remote-deploy.py')))
+            stack.enter_context(patch.object(deployment,'run',side_effect=git))
+            deployment.prepare_recharge_d3fb_build(_profile_id=deployment.RECHARGE_6F5_ID)
+            context=f.root/'.deploy/production-release/fixed-recharge-context'
+            measured=deployment.fixed_recharge_file_map(context,names=profile['workerProjection'])
+            self.assertEqual({name:{'sha256':digest,'mode':'100755'if mode&0o111 else'100644'}for name,(digest,mode)in measured.items()},profile['workerProjection'])
+            changed={name for name,(data,_mode)in self.legacy.worker_d3.items()if(context/name).read_bytes()!=data}
+            self.assertEqual(changed,deployment.RECHARGE_D3FB_WORKER);self.assertEqual(len(set(measured)-changed),58)
+            marker=context.parent/'fixed-recharge-build-projection.json';receipt=json.loads(marker.read_bytes())
+            self.assertEqual(receipt,{'version':1,'id':deployment.RECHARGE_6F5_ID,'contextPath':str(context),
+                'workerProjectionSha256':deployment.historical_fingerprint(profile['workerProjection'])})
+            self.assertEqual(marker.stat().st_mode&0o777,0o600);self.assertEqual(len(measured),60)
+
+    def test_real_original815_scope_rejects_each_six_preserved_configuration_change(self):
+        with self.legacy.api4c_fixture()as f,ExitStack()as stack:
+            previous=f.base/'actual95';previous.mkdir()
+            profile=copy.deepcopy(self.profile)
+            profile['nativeBaseline'].update({key:f.profile['nativeBaseline'][key]for key in ('apiScopeProducerSha256',
+                'apiBuildProofRawSha256','apiBuildProofCanonicalSha256','apiStateRawSha256','apiReadbackSha256','configuredPreservedStatesSha256')})
+            for name in deployment.RECHARGE_D3FB_PRIVATE:
+                (previous/name).write_bytes((f.previous/name).read_bytes());(previous/name).chmod(0o600)
+            stack.enter_context(patch.object(deployment,'recharge_6f5_origin4c',return_value=f.previous))
+            old_global=stack.enter_context(patch.object(deployment,'check_recharge_d3fb_deployment',side_effect=AssertionError('old4c global current forbidden')))
+            deployment.recharge_6f5_api_receipt(previous,f.directory,profile)
+            for service in set(deployment.ALL_SERVICES)-{'auto-recharge'}:
+                for kind in ('Config','HostConfig','Mounts','environment'):
+                    old_metadata=copy.deepcopy(f.metadata[service]);old_live=copy.deepcopy(f.live[service])
+                    if kind=='Mounts':f.metadata[service][kind]=[{'Source':'changed','Destination':'/fixture'}]
+                    elif kind=='environment':f.live[service]['environmentSha256']='a'*64
+                    else:f.metadata[service][kind]={'changed':True}
+                    with self.subTest(service=service,kind=kind),self.assertRaises(RuntimeError):deployment.recharge_6f5_api_receipt(previous,f.directory,profile)
+                    f.metadata[service]=old_metadata;f.live[service]=old_live
+            f.metadata['auto-recharge']['Mounts']=[{'Source':'new-charge','Destination':'/fixture'}]
+            deployment.recharge_6f5_api_receipt(previous,f.directory,profile)
+            (previous/'api-admin-preservation.json').chmod(0o644)
+            with self.assertRaises(RuntimeError):deployment.recharge_6f5_api_receipt(previous,f.directory,profile)
+            f.forbidden.assert_not_called();old_global.assert_not_called()
+
+    def test_context_zero49_new21_receipt_and_historical95_binding_reject_each_drift(self):
+        args=SimpleNamespace(commit='a'*40,source_tree='b'*40,expected_current=deployment.RECHARGE_6F5_CURRENT)
+        gates={stage:{'checkCount':49,'violationCount':0,'registrationFinanceGate':{'stage':stage,
+            'status':deployment.REGISTRATION_CLEARANCE['mode']}}for stage in ('before','after')}
+        context=deployment.recharge_6f5_context(args,self.profile,gates['before'],gates['after'])
+        self.assertEqual(context['servicesUpdated'],['auto-recharge']);self.assertEqual(context['id'],deployment.RECHARGE_6F5_ID)
+        self.assertEqual(context['historicalRegistration95']['sourceCommit'],deployment.RECHARGE_6F5_CURRENT)
+        self.assertEqual(context['historicalRegistration95']['moduleSha256'],deployment.RECHARGE_6F5_MODULE)
+        for field,value in [('checkCount',48),('violationCount',1),('violationCount',False)]:
+            bad=copy.deepcopy(gates['after']);bad[field]=value
+            with self.subTest(field=field,value=value),self.assertRaises(RuntimeError):deployment.recharge_6f5_context(args,self.profile,gates['before'],bad)
+        receipt=deployment.recharge_6f5_readback_receipt('a'*40,'b'*40,'c'*64)
+        self.assertEqual(len(receipt),21);self.assertEqual(receipt['previousCommit'],deployment.RECHARGE_6F5_CURRENT)
+        self.assertEqual(receipt['checkCount'],49);self.assertEqual(receipt['violationCount'],0)
+        self.assertIs(deployment.validate_recharge_6f5_readback_projection(receipt,'a'*40,'b'*40,'c'*64),receipt)
+        for key in receipt:
+            bad=copy.deepcopy(receipt);bad[key]=None
+            with self.subTest(field=key),self.assertRaises(RuntimeError):deployment.validate_recharge_6f5_readback_projection(bad,'a'*40,'b'*40,'c'*64)
+
+    def test_real49_report_violations_refuse_context(self):
+        old=SimpleNamespace(root=self.project,profile=json.loads((self.project/deployment.REGISTRATION_SCOPE_FILE).read_bytes()))
+        reports,frozen,_policy,_seal=FixedRegistrationRuntimeScopeTests.zero_fixture(old)
+        gates={stage:deployment.require_registration_zero_report(report,stage,frozen)for stage,report in reports.items()}
+        args=SimpleNamespace(commit='a'*40,source_tree='b'*40,expected_current=deployment.RECHARGE_6F5_CURRENT)
+        deployment.recharge_6f5_context(args,self.profile,gates['before'],gates['after'])
+        for kind in ('rule','count'):
+            bad=copy.deepcopy(reports['after'])
+            if kind=='rule':bad['checks'][0]['count']=1
+            else:bad['checkCount']=48
+            with self.subTest(changed=kind),self.assertRaises(RuntimeError):deployment.require_registration_zero_report(bad,'after',frozen)
+
+    def test_registration_and_api_mixed_release_flags_reject_before_any_service_action(self):
+        for flag in ('registration_worker_94','registration_worker_95','api_admin_only','api_admin_build_proof'):
+            args=SimpleNamespace(**{flag:True})
+            with self.subTest(flag=flag),patch.object(deployment,'recharge_974_release')as release:
+                with self.assertRaises(RuntimeError):deployment.recharge_6f5_release(args)
+                release.assert_not_called()
+        with patch.object(deployment,'recharge_974_release',return_value='selected')as release:
+            args=SimpleNamespace();self.assertEqual(deployment.recharge_6f5_release(args),'selected')
+            release.assert_called_once_with(args,profile_id=deployment.RECHARGE_6F5_ID)
+
 
 if __name__ == '__main__':
     unittest.main()
