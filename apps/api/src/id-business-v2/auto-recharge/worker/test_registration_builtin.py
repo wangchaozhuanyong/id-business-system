@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import fingerprint_runtime
 import registration_builtin as builtin
 from checkout_core import Stop
+import test_registration
 from test_registration import payload
 
 
@@ -22,6 +23,326 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
     def owned_profile(self, job_id='fixture-job'):
         return {'id': 'reg_' + 'a' * 64, 'job_id': job_id, 'context': MagicMock(),
                 'browser': MagicMock(), 'proxy': {'server': 'http://proxy.example.test:8080'}}
+
+    def prepare_job(self):
+        value = server_payload()
+        runtime = MagicMock(_discard=AsyncMock(), playwright=object())
+        job = builtin.RegistrationServerJob(value['id'], value,
+            'http://api:3000/api/id-business-v2/auto-registration/local', runtime)
+        return job, runtime
+
+    def prepared_environments(self, count):
+        return [{'browser': MagicMock(close=AsyncMock(return_value=None)), 'context': MagicMock(),
+                 'proxy': {'server': 'http://proxy.example.test:8080'}} for _ in range(count)]
+
+    async def test_confirmed_duplicate_closes_before_fresh_bind_and_one_flow(self):
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        prepared = self.prepared_environments(2)
+        events, opener = [], MagicMock()
+        conflict = test_registration.RegistrationCallbackConflictTests().conflict('浏览器指纹与已有任务重复，请重新生成')
+        opener.open.side_effect = [conflict, test_registration.RegistrationCallbackConflictTests.Response()]
+        async def prepare(_config, launch, **_kwargs):
+            self.assertIsNone(profiles.profile)
+            events.append('prepare')
+            value = prepared[events.count('prepare') - 1]
+            self.assertIs(await launch(value['proxy']), value['browser'])
+            self.assertIs(profiles.profile['browser'], value['browser'])
+            self.assertIsNone(profiles.profile['context'])
+            return value
+        async def close(resource):
+            events.append('close-A' if resource is prepared[0]['browser'] else 'close-B')
+            return True
+        flow = MagicMock(run=AsyncMock())
+        with (patch.object(builtin, 'PROFILES', profiles),
+              patch.object(builtin.server_proxy, 'prepare_browser', prepare),
+              patch.object(fingerprint_runtime, 'launch_fingerprint_browser', AsyncMock(
+                  side_effect=[value['browser'] for value in prepared])) as launch,
+              patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock(side_effect=['a' * 64, 'b' * 64])),
+              patch.object(fingerprint_runtime, 'close_fingerprint_resource', close),
+              patch('registration_job.build_opener', return_value=opener),
+              patch('registration_job.logging.getLogger', return_value=MagicMock()),
+              patch('registration_browser.RegistrationBrowser', return_value=flow) as create):
+            await job.execute_builtin()
+        self.assertEqual(events, ['prepare', 'close-A', 'prepare', 'close-B'])
+        self.assertEqual(job.payload['browserProfileId'], 'reg_' + 'b' * 64)
+        self.assertEqual((job.id, job.attempt), (server_payload()['id'], 1))
+        self.assertEqual(job.registration_callback_error['conflict_kind'], 'fingerprint_duplicate')
+        create.assert_called_once_with(job, prepared[1]['context'])
+        flow.run.assert_awaited_once()
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(launch.await_count, 2)
+        self.assertIsNot(opener.open.call_args_list[0].args[0], opener.open.call_args_list[1].args[0])
+        self.assertIsNone(profiles.profile)
+        self.assertIsNone(job._profile_prepare_deadline)
+
+    async def helper_interruption(self, reason, cleanup_succeeds):
+        # Exercise the actual helper before it returns its prepared resource.
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        prepared = self.prepared_environments(1)[0]
+        browser, context, proxy = prepared['browser'], prepared['context'], prepared['proxy']
+        original_proxy = dict(proxy)
+        browser.new_context = AsyncMock(return_value=context)
+        context.route = AsyncMock()
+        browser.close = AsyncMock(return_value=None) if cleanup_succeeds else AsyncMock(side_effect=OSError('synthetic-close'))
+        job.event = MagicMock()
+        clock = [100.0]
+        reached = []
+        async def observe(_context, **_kwargs):
+            self.assertIs(_context, context)
+            self.assertIs(profiles.profile['browser'], browser)
+            self.assertIsNone(profiles.profile['context'])
+            self.assertIsNot(profiles.profile['proxy'], proxy)
+            reached.append(True)
+            if reason == 'timeout':
+                clock[0] = 161.0
+            else:
+                job.cancelled.set()
+            await asyncio.Event().wait()
+        with (patch.object(builtin, 'time', SimpleNamespace(monotonic=lambda: clock[0])),
+              patch.object(builtin.server_proxy, 'resolve', AsyncMock(return_value=proxy)),
+              patch.object(builtin.server_proxy, 'observe_exit', observe),
+              patch.object(fingerprint_runtime, 'launch_fingerprint_browser', AsyncMock(return_value=browser)) as launch,
+              patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock()) as signature,
+              patch('registration_browser.RegistrationBrowser') as create):
+            with self.assertRaises(Stop) as stopped:
+                await profiles.open(runtime, job)
+            expected = ('session_load_timeout' if reason == 'timeout' else 'operation_cancelled')
+            self.assertEqual(stopped.exception.report['reason'], expected if cleanup_succeeds else 'fingerprint_cleanup_failed')
+            self.assertEqual(reached, [True])
+            launch.assert_awaited_once()
+            signature.assert_not_awaited(); create.assert_not_called()
+            self.assertEqual(browser.close.await_count, 2)
+            self.assertEqual(proxy, {})
+            self.assertIsNone(job.payload['browserProfileId'])
+            self.assertIsNone(job._profile_prepare_deadline)
+            if cleanup_succeeds:
+                self.assertIsNone(profiles.profile)
+            else:
+                self.assertIs(profiles.profile['browser'], browser)
+                self.assertEqual(profiles.profile['proxy'], original_proxy)
+                with self.assertRaises(Stop) as retained:
+                    await profiles.open(runtime, job)
+                self.assertEqual(retained.exception.report['reason'], 'builtin_original_window_pending')
+                launch.assert_awaited_once()
+                runtime._discard.assert_awaited_once()
+
+    async def test_helper_timeout_before_return_keeps_browser_when_close_fails(self):
+        await self.helper_interruption('timeout', False)
+
+    async def test_helper_cancellation_before_return_keeps_browser_when_close_fails(self):
+        await self.helper_interruption('cancel', False)
+
+    async def test_helper_timeout_and_cancel_before_return_release_confirmed_closed_browser(self):
+        for reason in ['timeout', 'cancel']:
+            with self.subTest(reason=reason):
+                await self.helper_interruption(reason, True)
+
+    async def test_helper_retry_checks_owned_browser_close_before_launching_another(self):
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        prepared = self.prepared_environments(1)[0]
+        browser, context, proxy = prepared['browser'], prepared['context'], prepared['proxy']
+        original_proxy = dict(proxy)
+        browser.new_context = AsyncMock(return_value=context)
+        context.route = AsyncMock()
+        # The helper confirms its first cleanup, but the owner cannot confirm
+        # the resource is released; no subsequent native launch is permitted.
+        browser.close = AsyncMock(side_effect=[None, OSError('synthetic-close'), OSError('synthetic-close')])
+        job.event = MagicMock()
+        with (patch.object(builtin.server_proxy, 'resolve', AsyncMock(side_effect=[proxy, dict(original_proxy)])),
+              patch.object(builtin.server_proxy, 'observe_exit', AsyncMock(side_effect=Stop('proxy_network_unconfirmed'))),
+              patch.object(fingerprint_runtime, 'launch_fingerprint_browser', AsyncMock(return_value=browser)) as launch,
+              patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock()) as signature):
+            with self.assertRaises(Stop) as stopped:
+                await profiles.open(runtime, job)
+        self.assertEqual(stopped.exception.report['reason'], 'fingerprint_cleanup_failed')
+        launch.assert_awaited_once(); signature.assert_not_awaited()
+        self.assertEqual(browser.close.await_count, 3)
+        self.assertIs(profiles.profile['browser'], browser)
+        self.assertEqual(profiles.profile['proxy'], original_proxy)
+
+    async def preparation_diagnostic(self, primary, *, retained=None):
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        browser = self.prepared_environments(1)[0]['browser']
+        if retained is not None:
+            job.registration_prepare_error, job.registration_prepare_cleanup_error = retained
+            job.registration_cleanup_error = 'OSError'
+        async def prepare(_config, launch, **_kwargs):
+            await launch({'syntheticOnly': True})
+            raise primary
+        logger = MagicMock()
+        with (patch.object(builtin.server_proxy, 'prepare_browser', prepare),
+              patch.object(fingerprint_runtime, 'launch_fingerprint_browser', AsyncMock(return_value=browser)),
+              patch.object(fingerprint_runtime, 'close_fingerprint_resource', AsyncMock(return_value=False)),
+              patch.object(builtin.logging, 'getLogger', return_value=logger)):
+            with self.assertRaises(Stop) as stopped:
+                await profiles.open(runtime, job)
+        self.assertEqual(stopped.exception.report['reason'], 'fingerprint_cleanup_failed')
+        self.assertIs(profiles.profile['browser'], browser)
+        self.assertEqual(profiles.profile['proxy'], {'syntheticOnly': True})
+        self.assertIsNone(job.payload['browserProfileId'])
+        logger.warning.assert_called_once()
+        output = logger.warning.call_args.args[0] % logger.warning.call_args.args[1:]
+        self.assertNotIn('synthetic-private-value', output)
+        self.assertNotIn('synthetic-private-value', repr(job.registration_prepare_error))
+        self.assertNotIn('synthetic-private-value', repr(job.registration_prepare_cleanup_error))
+        return job, output
+
+    async def test_preparation_cleanup_logs_closed_first_reason_and_secondary_without_exception_text(self):
+        class PrivateError(Exception):
+            def __str__(self):
+                raise AssertionError('Unknown exception text must never be read')
+        for primary, reason, kind in [(Stop('session_load_timeout'), 'session_load_timeout', 'Stop'),
+                                     (Stop('operation_cancelled'), 'operation_cancelled', 'Stop'),
+                                     (Stop('synthetic-private-value'), 'unknown', 'Stop'),
+                                     (PrivateError('synthetic-private-value'), 'unknown', 'UnexpectedError')]:
+            with self.subTest(kind=kind, reason=reason):
+                job, output = await self.preparation_diagnostic(primary)
+                self.assertEqual(job.registration_prepare_error, {'reason': reason, 'error_type': kind})
+                self.assertEqual(job.registration_prepare_cleanup_error,
+                                 {'reason': 'fingerprint_cleanup_failed', 'error_type': 'Stop'})
+                self.assertEqual(job.registration_cleanup_error, 'Stop')
+                self.assertIn('primary_reason=' + reason, output)
+                self.assertIn('cleanup_reason=fingerprint_cleanup_failed', output)
+
+    async def test_preparation_cleanup_never_replaces_existing_first_diagnostics(self):
+        first = {'reason': 'session_load_timeout', 'error_type': 'Stop'}
+        cleanup = {'reason': 'fingerprint_cleanup_failed', 'error_type': 'Stop'}
+        job, output = await self.preparation_diagnostic(Stop('operation_cancelled'), retained=(first, cleanup))
+        self.assertIs(job.registration_prepare_error, first)
+        self.assertIs(job.registration_prepare_cleanup_error, cleanup)
+        self.assertEqual(job.registration_cleanup_error, 'OSError')
+        self.assertIn('primary_reason=session_load_timeout', output)
+
+    async def test_rejected_signature_is_not_bound_again_and_third_environment_can_succeed(self):
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        prepared, opener = self.prepared_environments(3), MagicMock()
+        opener.open.side_effect = [test_registration.RegistrationCallbackConflictTests().conflict('浏览器指纹与已有任务重复，请重新生成'),
+                                  test_registration.RegistrationCallbackConflictTests.Response()]
+        with (patch.object(builtin.server_proxy, 'prepare_browser', AsyncMock(side_effect=prepared)) as prepare,
+              patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock(side_effect=['a' * 64, 'a' * 64, 'b' * 64])),
+              patch.object(fingerprint_runtime, 'close_fingerprint_resource', AsyncMock(return_value=True)) as close,
+              patch('registration_job.build_opener', return_value=opener),
+              patch('registration_job.logging.getLogger', return_value=MagicMock())):
+            result = await profiles.open(runtime, job)
+        self.assertEqual(result['id'], 'reg_' + 'b' * 64)
+        self.assertEqual(prepare.await_count, 3)
+        self.assertEqual(close.await_count, 2)
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertIs(result['browser'], prepared[2]['browser'])
+
+    async def test_three_rejected_environments_stop_without_a_fourth_or_flow(self):
+        for signatures in [['a' * 64] * 3, ['a' * 64, 'b' * 64, 'c' * 64]]:
+            with self.subTest(distinct=len(set(signatures))):
+                job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+                opener = MagicMock()
+                opener.open.side_effect = [test_registration.RegistrationCallbackConflictTests().conflict(
+                    '浏览器指纹与已有任务重复，请重新生成') for _ in range(3)]
+                with (patch.object(builtin, 'PROFILES', profiles),
+                      patch.object(builtin.server_proxy, 'prepare_browser', AsyncMock(side_effect=self.prepared_environments(4))) as prepare,
+                      patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock(side_effect=signatures)),
+                      patch.object(fingerprint_runtime, 'close_fingerprint_resource', AsyncMock(return_value=True)) as close,
+                      patch('registration_job.build_opener', return_value=opener),
+                      patch('registration_job.logging.getLogger', return_value=MagicMock()),
+                      patch('registration_browser.RegistrationBrowser') as create):
+                    with self.assertRaises(Stop) as stopped: await job.execute_builtin()
+                self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+                self.assertEqual(prepare.await_count, 3)
+                self.assertEqual(close.await_count, 3)
+                self.assertEqual(opener.open.call_count, len(set(signatures)))
+                create.assert_not_called()
+                self.assertIsNone(profiles.profile)
+                self.assertIsNone(job.payload['browserProfileId'])
+
+    async def test_duplicate_cleanup_failure_keeps_owned_resource_and_never_regenerates(self):
+        for close_result in [False, OSError('synthetic-cleanup')]:
+            with self.subTest(raises=isinstance(close_result, Exception)):
+                job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+                prepared = self.prepared_environments(1)[0]
+                job.event = MagicMock(side_effect=builtin.PreparationFingerprintDuplicate(job.id, job.attempt, 'reg_' + 'a' * 64))
+                closer = AsyncMock(side_effect=close_result) if isinstance(close_result, Exception) else AsyncMock(return_value=False)
+                with (patch.object(builtin.server_proxy, 'prepare_browser', AsyncMock(return_value=prepared)) as prepare,
+                      patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock(return_value='a' * 64)),
+                      patch.object(fingerprint_runtime, 'close_fingerprint_resource', closer)):
+                    with self.assertRaises(Stop) as stopped: await profiles.open(runtime, job)
+                self.assertEqual(stopped.exception.report['reason'], 'fingerprint_cleanup_failed')
+                prepare.assert_awaited_once()
+                closer.assert_awaited_once()
+                self.assertIs(profiles.profile['browser'], prepared['browser'])
+                self.assertIn('server', profiles.profile['proxy'])
+
+    async def test_ambiguous_callback_never_regenerates_even_with_old_duplicate_diagnostic(self):
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        job.registration_callback_error = {'conflict_kind': 'fingerprint_duplicate'}
+        job.event = MagicMock(side_effect=Stop('durable_state_unavailable'))
+        with (patch.object(builtin.server_proxy, 'prepare_browser', AsyncMock(return_value=self.prepared_environments(1)[0])) as prepare,
+              patch.object(fingerprint_runtime, 'fingerprint_signature', AsyncMock(return_value='a' * 64)),
+              patch.object(fingerprint_runtime, 'close_fingerprint_resource', AsyncMock(return_value=True)) as close):
+            with self.assertRaises(Stop): await profiles.open(runtime, job)
+        prepare.assert_awaited_once(); close.assert_awaited_once()
+        self.assertEqual(job.registration_callback_error, {'conflict_kind': 'fingerprint_duplicate'})
+
+    async def test_flow_or_submission_state_without_original_window_never_prepares(self):
+        variants = [('payload', 'step', 'email'), ('payload', 'registered', True),
+                    ('payload', 'passwordVerified', True), ('payload', 'mfaVerified', True),
+                    ('job', 'registration_state', {}), ('job', 'registration_operation', 'email_submit'),
+                    ('job', 'awaiting_code', True), ('job', 'pending_code', ('123456', None)),
+                    ('job', 'waiting_for_user', True), ('job', 'last_delivered_mail_id', 'fixture-mail')]
+        for where, key, value in variants:
+            with self.subTest(where=where, key=key):
+                job, runtime = self.prepare_job()
+                if where == 'payload':job.payload[key] = value
+                else:setattr(job, key, value)
+                with patch.object(builtin.server_proxy, 'prepare_browser', AsyncMock()) as prepare:
+                    with self.assertRaises(Stop): await builtin.BuiltinProfiles().open(runtime, job)
+                prepare.assert_not_awaited(); runtime._discard.assert_not_awaited()
+
+    async def test_cancellation_before_prepare_after_close_and_before_bind_never_rebuilds(self):
+        for phase in ['before_prepare', 'after_close', 'before_bind']:
+            with self.subTest(phase=phase):
+                job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+                if phase == 'before_prepare':job.cancelled.set()
+                job.event = MagicMock(side_effect=builtin.PreparationFingerprintDuplicate(job.id, job.attempt, 'reg_' + 'a' * 64))
+                async def signature(_context):
+                    if phase == 'before_bind':job.cancelled.set()
+                    return 'a' * 64
+                async def close(_resource):
+                    if phase == 'after_close':job.cancelled.set()
+                    return True
+                with (patch.object(builtin.server_proxy, 'prepare_browser', AsyncMock(return_value=self.prepared_environments(1)[0])) as prepare,
+                      patch.object(fingerprint_runtime, 'fingerprint_signature', signature),
+                      patch.object(fingerprint_runtime, 'close_fingerprint_resource', close)):
+                    with self.assertRaises(Stop) as stopped: await profiles.open(runtime, job)
+                self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+                self.assertEqual(prepare.await_count, 0 if phase == 'before_prepare' else 1)
+                self.assertEqual(job.event.call_count, 1 if phase == 'after_close' else 0)
+                self.assertIsNone(profiles.profile)
+
+    async def test_one_sixty_second_budget_covers_both_environments_and_cleanup(self):
+        job, runtime = self.prepare_job(); profiles = builtin.BuiltinProfiles()
+        prepared = self.prepared_environments(2); clock = [100.0]; deadlines = []
+        async def prepare(*_args, **_kwargs):
+            deadlines.append(job._profile_prepare_deadline)
+            clock[0] += 15 if len(deadlines) == 1 else 30
+            return prepared[len(deadlines) - 1]
+        async def signature(context):
+            clock[0] += 5 if context is prepared[0]['context'] else 6
+            return 'a' * 64 if context is prepared[0]['context'] else 'b' * 64
+        def event(*_args, **_kwargs):
+            clock[0] += 3
+            raise builtin.PreparationFingerprintDuplicate(job.id, job.attempt, 'reg_' + 'a' * 64)
+        async def close(_resource):clock[0] += 2; return True
+        job.event = MagicMock(side_effect=event)
+        with (patch.object(builtin, 'time', SimpleNamespace(monotonic=lambda: clock[0])),
+              patch.object(builtin.server_proxy, 'prepare_browser', prepare),
+              patch.object(fingerprint_runtime, 'fingerprint_signature', signature),
+              patch.object(fingerprint_runtime, 'close_fingerprint_resource', close)):
+            with self.assertRaises(Stop) as stopped: await profiles.open(runtime, job)
+        self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+        self.assertEqual(deadlines, [160.0, 160.0])
+        job.event.assert_called_once()
+        self.assertLessEqual(clock[0], 165)
+        self.assertIsNone(profiles.profile)
+        self.assertIsNone(job._profile_prepare_deadline)
 
     async def test_optional_age_snapshot_survives_private_payload_validation(self):
         for age in [20, 21, 45]:
@@ -229,13 +550,16 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
             'http://api:3000/api/id-business-v2/auto-registration/local', MagicMock())
         job.event = MagicMock()
         context = MagicMock(route=AsyncMock(), unroute=AsyncMock())
-        browser = MagicMock(new_context=AsyncMock(return_value=context), close=AsyncMock())
+        browsers = [MagicMock(new_context=AsyncMock(return_value=context), close=AsyncMock()) for _ in range(10)]
         runtime = MagicMock(_discard=AsyncMock(), playwright=object())
         with (patch.object(builtin.server_proxy, 'resolve_proxy', return_value={'server': 'http://proxy.example.test:8080'}),
               patch.object(builtin.server_proxy, 'observe_exit', AsyncMock(return_value={'ip': '8.8.8.8', 'country': 'JP'})),
-              patch.object(fingerprint_runtime, 'launch_fingerprint_browser', AsyncMock(return_value=browser))):
-            with self.assertRaises(Stop): await builtin.BuiltinProfiles().open(runtime, job)
-            self.assertEqual(browser.close.await_count, 10)
+              patch.object(fingerprint_runtime, 'launch_fingerprint_browser', AsyncMock(side_effect=browsers)) as launch):
+            profiles = builtin.BuiltinProfiles()
+            with self.assertRaises(Stop): await profiles.open(runtime, job)
+            self.assertEqual(launch.await_count, 10)
+            self.assertEqual([browser.close.await_count for browser in browsers], [2] * 10)
+            self.assertIsNone(profiles.profile)
             self.assertFalse(any('browserProfileId' in call.kwargs for call in job.event.call_args_list))
 
     async def test_private_dispatch_replays_same_attempt_without_second_window(self):

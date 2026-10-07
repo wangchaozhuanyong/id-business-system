@@ -45,6 +45,13 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+class PreparationFingerprintDuplicate(Stop):
+    """Only a confirmed, unbound preparation conflict can replace an environment."""
+    def __init__(self, job_id, attempt, profile_id):
+        super().__init__('durable_state_unavailable')
+        self.job_id, self.attempt, self.profile_id = job_id, attempt, profile_id
+
+
 class RegistrationJob:
     def __init__(self, payload, origin, client_type, *, builtin=False):
         allowed = {'id', 'mode', 'attempt', 'agentToken', 'callbackUrl', 'windowName', 'email',
@@ -121,6 +128,9 @@ class RegistrationJob:
         callback_deadline = started + 10
         if event_type != 'partial':
             callback_deadline = min(callback_deadline, self.deadline)
+            prepare_deadline = getattr(self, '_profile_prepare_deadline', None)
+            if type(prepare_deadline) in {int, float}:
+                callback_deadline = min(callback_deadline, prepare_deadline)
         for callback_attempt in range(2):
             failure_kind = 'TRANSPORT'
             read_error, response_closing = None, False
@@ -160,6 +170,13 @@ class RegistrationJob:
                     conflict_kind, closed = self._callback_conflict(error, callback_deadline)
                 self._callback_failure(event_type, requested, error, failure_kind, started,
                                        conflict_kind=conflict_kind, log_current=callback_attempt == 1)
+                if (event_type == 'progress' and isinstance(error, HTTPError) and type(error.code) is int and error.code == 409
+                        and closed and conflict_kind == 'fingerprint_duplicate'
+                        and body.get('reason') == 'proxy_ready'
+                        and type(body.get('browserProfileId')) is str
+                        and re.fullmatch(r'reg_[a-f0-9]{64}', body['browserProfileId'])
+                        and self._callback_prepare_retry(body)):
+                    raise PreparationFingerprintDuplicate(self.id, self.attempt, body['browserProfileId']) from None
                 # The current response decides retry; the saved first cause is diagnostic only.
                 if (callback_attempt == 0 and event_type == 'progress' and closed and conflict_kind == 'write_conflict'
                         and self._callback_prepare_retry(body)):

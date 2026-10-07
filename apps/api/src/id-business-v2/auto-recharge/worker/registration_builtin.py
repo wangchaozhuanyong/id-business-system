@@ -9,10 +9,13 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
 
 from checkout_core import Stop, unique_object
-from registration_job import RegistrationJob, NoRedirect
+from registration_job import RegistrationJob, NoRedirect, PreparationFingerprintDuplicate
 import server_proxy
 import fingerprint_runtime
-from browser_session import session_failure, RETRYABLE_NETWORK_CODES
+from browser_session import SessionBudget, session_failure, RETRYABLE_NETWORK_CODES
+
+PROFILE_PREPARE_TIMEOUT_SECONDS = 60
+MAX_PROFILE_PREPARE_ATTEMPTS = 3
 
 
 class BuiltinProfiles:
@@ -28,25 +31,110 @@ class BuiltinProfiles:
             return self.profile
         if self.profile:
             raise Stop('builtin_original_window_pending')
-        await runtime._discard()
-        prepared = await server_proxy.prepare_browser(
-            job.settings, lambda proxy: fingerprint_runtime.launch_fingerprint_browser(runtime.playwright, proxy=proxy),
-            expected_country=job.expected_country, target_url='https://chatgpt.com/auth/login',
-            cancelled=job.cancelled.is_set,
-            progress=lambda stage, **details: job.event('progress', reason=stage))
-        browser, context, proxy = prepared['browser'], prepared['context'], prepared['proxy']
-        options = dict(service_workers='block', accept_downloads=False)
-        self.profile = {'id': None, 'job_id': job.id, 'context': context,
-                        'options': options, 'proxy': proxy, 'browser': browser}
+        body = {'type': 'progress', 'attempt': job.attempt, 'step': job.step, 'reason': 'proxy_ready'}
+        if not job._callback_prepare_retry(body):
+            raise Stop('builtin_profile_missing')
+        budget = SessionBudget(min(PROFILE_PREPARE_TIMEOUT_SECONDS, job.deadline - time.monotonic()),
+                               cancelled=job.cancelled.is_set, clock=time.monotonic)
+        previous_deadline = getattr(job, '_profile_prepare_deadline', None)
+        job._profile_prepare_deadline = budget.started + budget.seconds
+        rejected = set()
+        cleanup_started = False
         try:
-            profile_id = 'reg_' + await fingerprint_runtime.fingerprint_signature(context)
-            self.profile['id'] = profile_id
-            job.event('progress', browserProfileId=profile_id, reason='proxy_ready')
-            job.payload['browserProfileId'] = profile_id
-            return self.profile
-        except Exception:
-            await self.close(job.id)
+            await budget.run(runtime._discard, 'fingerprint_discard')
+            for _ in range(MAX_PROFILE_PREPARE_ATTEMPTS):
+                budget.remaining_ms()
+                if not job._callback_prepare_retry(body):
+                    raise Stop('durable_state_unavailable')
+                cleanup_started = False
+                async def launch_owned(proxy):
+                    # The helper can be cancelled before it returns its Context.
+                    # Keep the native browser and a private proxy copy until its
+                    # close receipt is confirmed, including helper-side retries.
+                    if self.profile is not None:
+                        await self.close(job.id)
+                    budget.remaining_ms()
+                    browser = await fingerprint_runtime.launch_fingerprint_browser(runtime.playwright, proxy=proxy)
+                    self.profile = {'id': None, 'job_id': job.id, 'context': None,
+                                    'options': dict(service_workers='block', accept_downloads=False),
+                                    'proxy': dict(proxy), 'browser': browser}
+                    return browser
+                async def prepare():
+                    prepared = await server_proxy.prepare_browser(
+                        job.settings, launch_owned,
+                        expected_country=job.expected_country, target_url='https://chatgpt.com/auth/login',
+                        cancelled=job.cancelled.is_set,
+                        progress=lambda stage, **details: job.event('progress', reason=stage))
+                    # Own the resource before the shared budget's completion check.
+                    self.profile = {'id': None, 'job_id': job.id, 'context': prepared['context'],
+                                    'options': dict(service_workers='block', accept_downloads=False),
+                                    'proxy': prepared['proxy'], 'browser': prepared['browser']}
+                await budget.run(prepare, 'fingerprint_prepare')
+                signature = await budget.run(lambda: fingerprint_runtime.fingerprint_signature(
+                    self.profile['context']), 'fingerprint_signature')
+                profile_id = 'reg_' + signature
+                self.profile['id'] = profile_id
+                if profile_id in rejected:
+                    cleanup_started = True
+                    await self.close(job.id)
+                    continue
+                budget.remaining_ms()
+                try:
+                    # Synchronous HTTP uses the same deadline, rather than a fresh budget.
+                    job.event('progress', browserProfileId=profile_id, reason='proxy_ready')
+                except PreparationFingerprintDuplicate as error:
+                    if (error.job_id != job.id or error.attempt != job.attempt or
+                            error.profile_id != profile_id or not job._callback_prepare_retry(
+                                {**body, 'browserProfileId': profile_id})):
+                        raise
+                    rejected.add(profile_id)
+                    cleanup_started = True
+                    await self.close(job.id)
+                    budget.remaining_ms()
+                    continue
+                job.payload['browserProfileId'] = profile_id
+                return self.profile
+            raise Stop('durable_state_unavailable')
+        except BaseException as primary:
+            if job.payload['browserProfileId'] is None and not cleanup_started:
+                try:
+                    await self.close(job.id)
+                except BaseException as cleanup:
+                    reasons = {'operation_cancelled', 'session_load_timeout', 'durable_state_unavailable',
+                               'fingerprint_cleanup_failed', 'fingerprint_kernel_missing', 'fingerprint_launch_failed',
+                               'fingerprint_probe_failed', 'proxy_cleanup_failed', 'server_proxy_unavailable',
+                               'proxy_network_unconfirmed', 'proxy_country_mismatch', 'proxy_ip_not_rotated', 'http_error'}
+                    types = {'Stop', 'TimeoutError', 'CancelledError', 'OSError', 'RuntimeError',
+                             'Error', 'TargetClosedError', 'UnexpectedError'}
+                    def closed(error):
+                        report = error.report if isinstance(error, Stop) and type(error.report) is dict else {}
+                        reason = report.get('reason')
+                        kind = 'Stop' if isinstance(error, Stop) else type(error).__name__
+                        return {'reason': reason if type(reason) is str and reason in reasons else 'unknown',
+                                'error_type': kind if kind in types else 'UnexpectedError'}
+                    if getattr(job, 'registration_prepare_error', None) is None:
+                        job.registration_prepare_error = closed(primary)
+                    if getattr(job, 'registration_prepare_cleanup_error', None) is None:
+                        job.registration_prepare_cleanup_error = closed(cleanup)
+                    if getattr(job, 'registration_cleanup_error', None) is None:
+                        job.registration_cleanup_error = closed(cleanup)['error_type']
+                    first = job.registration_prepare_error
+                    secondary = job.registration_prepare_cleanup_error
+                    def value(record, key, allowed, default):
+                        result = record.get(key) if type(record) is dict else None
+                        return result if type(result) is str and result in allowed else default
+                    logging.getLogger('registration').warning(
+                        'Registration preparation cleanup failed job=%s attempt=%s primary_reason=%s '
+                        'primary_error_type=%s cleanup_reason=%s cleanup_error_type=%s',
+                        job.id if type(job.id) is str and re.fullmatch(
+                            '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', job.id) else 'unknown',
+                        job.attempt if type(job.attempt) is int and 0 < job.attempt <= 2147483647 else 0,
+                        value(first, 'reason', reasons, 'unknown'), value(first, 'error_type', types, 'UnexpectedError'),
+                        value(secondary, 'reason', reasons, 'unknown'), value(secondary, 'error_type', types, 'UnexpectedError'))
+                    raise
             raise
+        finally:
+            job._profile_prepare_deadline = previous_deadline
 
     async def close(self, job_id):
         if self.profile and self.profile['job_id'] == job_id:

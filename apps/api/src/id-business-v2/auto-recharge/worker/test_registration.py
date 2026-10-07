@@ -14,7 +14,7 @@ import time
 from urllib.error import HTTPError, URLError
 
 from checkout_core import Stop
-from registration_job import RegistrationJob
+from registration_job import RegistrationJob, PreparationFingerprintDuplicate
 from registration_security import offer_from_text, totp, verification_link, validate_birthdate, birth_age, registration_age
 from registration_browser import RegistrationBrowser
 import bitbrowser_options
@@ -638,6 +638,96 @@ class RegistrationCallbackConflictTests(unittest.TestCase):
             self.assertNotIn('数据已被', output)
             self.assertNotIn('浏览器指纹', output)
         return result, opener, logger
+
+    def duplicate_result(self, job, errors=None, **data):
+        opener, logger = MagicMock(), MagicMock()
+        opener.open.side_effect = errors or [self.conflict('浏览器指纹与已有任务重复，请重新生成')]
+        with patch('registration_job.build_opener', return_value=opener), \
+                patch('registration_job.logging.getLogger', return_value=logger):
+            with self.assertRaises(Stop) as stopped:
+                job.event('progress', reason='proxy_ready', browserProfileId='reg_' + 'b' * 64, **data)
+        self.assert_private(job, logger)
+        return stopped.exception, opener
+
+    def test_confirmed_initial_fingerprint_conflict_has_private_recovery_type(self):
+        job = self.job()
+        error, opener = self.duplicate_result(job)
+        self.assertIs(type(error), PreparationFingerprintDuplicate)
+        self.assertEqual(error.report, {'status': 'blocked', 'reason': 'durable_state_unavailable'})
+        self.assertEqual((error.job_id, error.attempt, error.profile_id), (job.id, 1, 'reg_' + 'b' * 64))
+        opener.open.assert_called_once()
+
+    def test_current_duplicate_recovers_without_replacing_first_write_conflict(self):
+        job = self.job()
+        error, opener = self.duplicate_result(job, [self.conflict(), self.conflict('浏览器指纹与已有任务重复，请重新生成')])
+        self.assertIs(type(error), PreparationFingerprintDuplicate)
+        self.assertEqual(job.registration_callback_error['conflict_kind'], 'write_conflict')
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertIs(opener.open.call_args_list[0].args[0], opener.open.call_args_list[1].args[0])
+
+    def test_ambiguous_current_result_cannot_reuse_old_duplicate_diagnostic(self):
+        for current in [TimeoutError(self.secret), OSError(self.secret), self.conflict(raw=b'{'),
+                        HTTPError(self.secret, 401, self.secret, {}, io.BytesIO(self.envelope())),
+                        HTTPError(self.secret, 403, self.secret, {}, io.BytesIO(self.envelope())),
+                        HTTPError(self.secret, 500, self.secret, {}, io.BytesIO(self.envelope())),
+                        HTTPError(self.secret, 409.0, self.secret, {}, io.BytesIO(self.envelope('浏览器指纹与已有任务重复，请重新生成'))),
+                        self.Response(raw=b'{'), self.Response(raw=b'{"success":false}')]:
+            with self.subTest(error_type=type(current).__name__):
+                job = self.job(); job.registration_callback_error = {'conflict_kind': 'fingerprint_duplicate'}
+                error, opener = self.duplicate_result(job, [current])
+                self.assertIs(type(error), Stop)
+                opener.open.assert_called_once()
+
+    def test_duplicate_close_failure_has_no_recovery_type(self):
+        class CloseFailure(io.BytesIO):
+            def close(self):
+                raise OSError(RegistrationCallbackDiagnosticsTests.secret)
+        job = self.job()
+        error, opener = self.duplicate_result(job, [self.conflict(body=CloseFailure(
+            self.envelope('浏览器指纹与已有任务重复，请重新生成')))])
+        self.assertIs(type(error), Stop)
+        self.assertEqual(job.registration_callback_cleanup_error, 'OSError')
+        opener.open.assert_called_once()
+
+    def test_duplicate_recovery_requires_every_initial_preparation_guard(self):
+        variants = [('payload', 'browserProfileId', 'reg_' + 'a' * 64),
+                    ('payload', 'registered', True), ('payload', 'passwordVerified', True),
+                    ('payload', 'mfaVerified', True), ('payload', 'step', 'email'),
+                    ('job', 'step', 'email'), ('job', 'registration_state', {}),
+                    ('job', 'registration_operation', 'email_submit'), ('job', 'awaiting_code', True),
+                    ('job', 'pending_code', ('123456', None)), ('job', 'waiting_for_user', True),
+                    ('job', 'last_delivered_mail_id', 'fixture-mail')]
+        for index, (where, key, value) in enumerate(variants):
+            with self.subTest(case=index):
+                job = self.job()
+                if where == 'payload':
+                    job.payload[key] = value
+                else:
+                    setattr(job, key, value)
+                error, opener = self.duplicate_result(job)
+                self.assertIs(type(error), Stop)
+                opener.open.assert_called_once()
+
+    def test_duplicate_recovery_requires_proxy_ready_and_actual_signature_id(self):
+        for reason, profile in [('proxy_verifying', 'reg_' + 'b' * 64), ('proxy_ready', None),
+                                ('proxy_ready', 'reg_fixture_2'), ('email_submit', 'reg_' + 'b' * 64)]:
+            with self.subTest(reason=reason, profile=profile):
+                job, opener = self.job(), MagicMock()
+                opener.open.side_effect = self.conflict('浏览器指纹与已有任务重复，请重新生成')
+                with patch('registration_job.build_opener', return_value=opener), \
+                        patch('registration_job.logging.getLogger', return_value=MagicMock()):
+                    with self.assertRaises(Stop) as stopped:
+                        job.event('progress', reason=reason, browserProfileId=profile)
+                self.assertIs(type(stopped.exception), Stop)
+                opener.open.assert_called_once()
+
+    def test_callback_timeout_uses_remaining_whole_prepare_budget(self):
+        job = self.job(); job._profile_prepare_deadline = 102
+        opener = MagicMock(); opener.open.return_value = self.Response()
+        with patch.object(job, 'check'), patch('registration_job.time.monotonic', return_value=100), \
+                patch('registration_job.build_opener', return_value=opener):
+            job.event('progress', reason='proxy_ready', browserProfileId='reg_' + 'b' * 64)
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 2)
 
     def test_known_api_conflicts_are_closed_exact_categories(self):
         from registration_job import CALLBACK_CONFLICT_MESSAGES
