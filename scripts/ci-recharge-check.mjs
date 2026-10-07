@@ -108,7 +108,7 @@ if (part === 'guards') {
     changed.includes('deploy/aws/recharge-pro-menu-b8-20261005.json') ||
     changed.includes('deploy/aws/recharge-pro-menu-7f-20261005.json') ||
     changed.includes('deploy/aws/recharge-pro-main80-20261006.json') ||
-    changed.includes('deploy/aws/recharge-pro-01ce-20261007.json') ||
+    changed.includes('deploy/aws/recharge-pro-974-20261007.json') ||
     changed.includes('deploy/aws/registration-worker-b8-80-20261006.json') ||
     changed.includes('deploy/aws/registration-worker-956-20261006.json') ||
     changed.includes('deploy/aws/registration-worker-85-20261006.json') ||

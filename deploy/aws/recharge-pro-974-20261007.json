@@ -1,16 +1,16 @@
 {
   "approvalStatus": "APPROVED",
   "baselineRelease": {
-    "afterAuditSha256": "bc84b9ed955f3b2ff06b75167381a6806e722b114167d4d0f0f22e16ddf0eb34",
-    "beforeAuditSha256": "f4900ff62726712e248204ffb8d8ff70690fd6ad3736c22910315996a055628a",
-    "commit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+    "commit": "974c62cc1681012ecff897aefc90d2cd9900004a",
+    "sourceTree": "866706ef6da1d1ac7b33348ef35c133cdd8d173b",
+    "previousCommit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+    "deploymentRun": "github-actions-37577436927-1",
+    "manifestSha256": "f93fe80499696ff5f77c5dcdfac4ca3020f3de304675673aa68707e57955450d",
+    "beforeAuditSha256": "22f3ed6997f79e531bd92f198d4ee95d8ae22496fb678322e6e65b93e2b04aba",
+    "afterAuditSha256": "aa5fcc6bc2c3064689e890392ac85be030d0404768c1bbef3b53dfc5a3747c17",
     "composeSha256": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
-    "deploymentRun": "github-actions-37543606799-1",
-    "manifestSha256": "1dd29bd5fd09dd63001fdccce066433423b2de4644440cac35fe7987937ea086",
-    "overrideCanonicalSha256": "f36bdb7063cbdf048f05f2ca0e7b34fab641971bad08d6b40da7bfad7ab08a7a",
-    "overrideRawSha256": "eec01cb77c7359ef4e01d5454dc352aeac1e38feabace19f78f97e35f8436cc1",
-    "previousCommit": "c3cad767b372738b2193e60584b0a53daa53b65f",
-    "sourceTree": "1f55cc743d48fdc5f7379c6d136e026d5ebfd558"
+    "overrideRawSha256": "06f014580c4bb0727675c2cc703698851153670bbc07fa87f5a9d655aa4085c1",
+    "overrideCanonicalSha256": "18d36c40e77de79b3f40632bd375c28d903167381eb3977fd75556398c76b3d5"
   },
   "candidateSourceSha256": {
     "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "9eee411ce281b889dd6d3214fb34afbf85e9300a302257ab448e20576482eaa4",
@@ -18,7 +18,7 @@
     "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "812cf84c367c3d7bdbff4f5029015052c281abf15113f935475f96577da126bc",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_server.py": "3fefb10aa4ad38ef7022f29ee74da481b832476016253cb3a043aa9eda7a4fcb",
     "apps/api/src/id-business-v2/auto-recharge/worker/test_worker_isolation.py": "4220256c3ad075ed765017d39a72092864da99bc85a525e0cbded4532e71a99b",
-    "docs/V2_TASKS.md": "13a1613e08d70785f529180999aeede678733c0b094bc756274337acb1ad98ff"
+    "docs/V2_TASKS.md": "a2e6ec7761aa43f6db9181c0e7ac583f6425fe2c8fd6ae4aa9460b38444b2f9e"
   },
   "carriedSourceOnlySha256": {
     "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "0695a7ab960a07407ed16fbfce3368878b9e9c5c3ae4aef137ffbd7553495f9f",
@@ -42,21 +42,21 @@
     "scripts/v2-registration-finance-audit.test.mjs": "b9b32f040ad062f978d447d7f08b7d5dccdc1fd65e10297519f2a6e9fc063470"
   },
   "controlSourceSha256": {
-    ".github/workflows/production-release.yml": "b9678a444fe57c79d5ee4aea3d95764eb7b91fec4da2b1078dc9e63b24e02cbb",
-    "docs/PRODUCTION_RELEASE_OIDC.md": "bbb88d33a339be4468caedff5253043c8999511ecfd7cef9d5a50207b6473d33",
-    "scripts/ci-recharge-check.mjs": "830e7bdc962505f9177438ef6b6a826c5a0f068326c98006f3a5e38e59200e93",
-    "scripts/ci-recharge-release.test.mjs": "fee34ebed675fd38a406f56fef76efef1533fea2e697b7e6a16e23a5c3956ac0",
-    "scripts/ci-recharge-scope.mjs": "a736017c416e7294dd53e73930d164932f949810f68918e799664f65bd1b0036",
-    "scripts/ci-recharge-scope.test.mjs": "20eab071c8726a092ad7a5e805cee50a6b3e91cae8af942281087f687e5bfaca",
-    "scripts/production-release/build-images.sh": "b8c60d328359114eb56f38180acf62063c7d006419359dc596da50122074aa53",
-    "scripts/production-release/dispatch.sh": "227ad2f4bc27dd29a6d07bdec5bc79506833d4b3501d2a403e2f34074f856002",
-    "scripts/production-release/push-images.sh": "054801723a67c98f7e41d8abeb33fb5fa12e8fb63e343d6c16ebc98b98154779",
-    "scripts/production-release/remote-deploy.py": "65ad2db8b5f10db32a9b942181d877c38cc6aef28ecd7c5887bed0d44b8881ee",
-    "scripts/production-release/remote-deploy.test.py": "30415244150c590667334bf4b566baf45279eefc73194263b7e211efb5335832",
-    "scripts/production-release/validate-release-selection.sh": "7034d62dc3ebe1899b5a032c65bca4de906c21d80e9c415fd8e358cd2c98c746"
+    ".github/workflows/production-release.yml": "107a3e329650cd7cfc5e79e06c93fd1c4ccef95075f50cbdc4a57aced903ee82",
+    "docs/PRODUCTION_RELEASE_OIDC.md": "716b13c996c0c0b1453b06702a6c70d854563ba5c405e1b10c35125ab4498e82",
+    "scripts/ci-recharge-check.mjs": "ae4f842c6a28659968639f9ca1acb768bf6778ef3d6258ba254019bd1c78ffd0",
+    "scripts/ci-recharge-release.test.mjs": "95b6c8c6d2037982b1ea0db20f16cad13ed13761894b70c9746ec0cb9d232382",
+    "scripts/ci-recharge-scope.mjs": "8977ab3e68fbb5e586927b90f639c1b73070d2b559d2ea4f2f357783c9b43448",
+    "scripts/ci-recharge-scope.test.mjs": "a58f5a69994201ccb1f03abde6543414bdbfadffbe891d45892ced7d1cdf0ca7",
+    "scripts/production-release/build-images.sh": "f993a6ff4f093711005ee1b3c960065b4b38b2257e782965b0cae095b41c49e7",
+    "scripts/production-release/dispatch.sh": "3190e6cb0ac889c37984470b0de1aac1f325bfe04cc522ab3dc42465160563bc",
+    "scripts/production-release/push-images.sh": "a0dd1b6c27b41a0027a1a3ab08b3e396fe2e41ecb4096f5ec626012428f33e5e",
+    "scripts/production-release/remote-deploy.py": "d37158753a07802d6eb77140ff6e37219c38e81153a8aa77644f1a8f9c6bb4c3",
+    "scripts/production-release/remote-deploy.test.py": "cde0eaa8f8adadada695362eab44dd0a276c8d5b14074bb06875585b95deb660",
+    "scripts/production-release/validate-release-selection.sh": "865440d63038eee16c8994d050747a33a219bf0e2886576303432e153d760baf"
   },
   "enabled": true,
-  "expectedCurrent": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+  "expectedCurrent": "974c62cc1681012ecff897aefc90d2cd9900004a",
   "financeValidator": {
     "checkCount": 49,
     "executedCheckCount": 49,
@@ -86,17 +86,17 @@
     "unavailableCheckCount": 0,
     "violationCount": 5
   },
-  "id": "recharge-pro-01ce-20261007",
+  "id": "recharge-pro-974-20261007",
   "kind": "FIXED_RECHARGE_RUNTIME_SCOPE",
   "nativeBaseline": {
-    "nativeChainSha256": "691c7734a7971401cfbf3572a9f64bbb04cd3902cd9463f2c1162f92808dfb2b",
-    "nativeDirectoryCount": 2980,
-    "nativeFileCount": 21752,
-    "preservedStatesSha256": "6e6b40541a48e2be80937ad3c5262196043e3ca83f4c16c0446e9351f7a51ffd",
-    "producerSha256": "5f5244183c327e1b037e0c3bcf8098cbff04cbbd34328d133a4d0a220ba39f8f",
-    "registrationProfileRawSha256": "56adb736e6081eeaeb31f14bba1ccb22f1a218c3f22abefcd1a9dcdae6625eed",
-    "registrationReadbackSha256": "b9ae316d95edc7b4b9db2931b0d9f380dba52422010ead14d59c4d594f61c268",
-    "runtimeStatesSha256": "1b92f73616360d30411ed013df2e53284cf25a603b77933496144406ddcc7f74"
+    "producerSha256": "484cfa642a9b0071235edf4026759811b17acdceade0373713c0e56f16b47888",
+    "registrationProfileRawSha256": "c5b886a1d6b1a9f5bd34868d298274c1651b2576a22e3f414fab185526f5fa5d",
+    "registrationReadbackSha256": "beb18107141caaa1709be7858dd7d250412017afb9e49bfcb8264e84a6fa58d0",
+    "nativeChainSha256": "c0635fe3ab9d4fd5b22bb906aad1025d8648691b24044e73d5db663592d787ed",
+    "runtimeStatesSha256": "23c23f3c1966209902b97359cc574e5c0a7deb0df384c7ac7c5bbcdc1043a6a4",
+    "preservedStatesSha256": "82b015006fa42c118293a059142b9113d7e316f6d0a6b1b35ba461ea43e72c03",
+    "nativeFileCount": 23933,
+    "nativeDirectoryCount": 3278
   },
   "scope": {
     "cacheCleanupAllowed": false,

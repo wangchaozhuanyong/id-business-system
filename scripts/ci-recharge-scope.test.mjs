@@ -744,8 +744,8 @@ test('fixed 91 profile observation CI accepts only two Worker files and reviewed
   }
 });
 
-test('fixed 01ce recharge profile and twelve controls stay exact without weakening worker checks', () => {
-  const profile = 'deploy/aws/recharge-pro-01ce-20261007.json';
+test('fixed 974 recharge profile and twelve controls stay exact without weakening worker checks', () => {
+  const profile = 'deploy/aws/recharge-pro-974-20261007.json';
   const controls = [
     '.github/workflows/production-release.yml',
     'scripts/production-release/build-images.sh',
@@ -784,11 +784,11 @@ test('fixed 01ce recharge profile and twelve controls stay exact without weakeni
     'connector'
   ]);
   for (const wrong of [
-    'deploy/aws/recharge-pro-01ce-20261008.json',
+    'deploy/aws/recharge-pro-974-20261008.json',
     'deploy/aws/recharge-pro-c4-20261007.json',
     profile + '.backup',
     profile + '/future.json',
-    'deploy/aws/../aws/recharge-pro-01ce-20261007.json'
+    'deploy/aws/../aws/recharge-pro-974-20261007.json'
   ]) {
     assert.equal(isCiOnly([wrong]), false, wrong);
     assert.equal(checkMode([profile, wrong], schema, schema), 'full', wrong);

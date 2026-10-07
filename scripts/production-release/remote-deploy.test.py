@@ -10381,41 +10381,41 @@ class Registration91ProfileObservationTests(unittest.TestCase):
                 and n.targets[0].id.startswith(('REGISTRATION_HYDRATION_', 'REGISTRATION_EMAIL_OBSERVATION_', 'RECHARGE_MAIN80_', 'REGISTRATION_FINANCE', 'REGISTRATION_CLEARANCE', 'REGISTRATION_BASELINE'))}
         self.assertEqual(assignments(old), assignments(new))
 
-class FixedRecharge01ceNativeTests(unittest.TestCase):
+class FixedRecharge974NativeTests(unittest.TestCase):
     def setUp(self):
         self.project = Path(__file__).resolve().parents[2]
         self.runtime = self.project / '.runtime/recharge-pro-b91-integration-20261006'
         self.runtime.mkdir(parents=True, exist_ok=True)
         self.profile = json.loads((self.project / deployment.RECHARGE_MAIN80_FILE).read_text())
-        self.profile.update(id=deployment.RECHARGE_01CE_ID, enabled=True, approvalStatus='APPROVED',
-            expectedCurrent=deployment.RECHARGE_01CE_CURRENT)
-        self.profile['baselineRelease'].update(commit=deployment.RECHARGE_01CE_CURRENT, sourceTree=deployment.RECHARGE_01CE_TREE,
-            previousCommit=deployment.RECHARGE_01CE_CHAIN[1][0], deploymentRun='github-actions-999003-1')
+        self.profile.update(id=deployment.RECHARGE_974_ID, enabled=True, approvalStatus='APPROVED',
+            expectedCurrent=deployment.RECHARGE_974_CURRENT)
+        self.profile['baselineRelease'].update(commit=deployment.RECHARGE_974_CURRENT, sourceTree=deployment.RECHARGE_974_TREE,
+            previousCommit=deployment.RECHARGE_974_CHAIN[1][0], deploymentRun='github-actions-999003-1')
         for key in ('manifestSha256', 'beforeAuditSha256', 'afterAuditSha256', 'composeSha256', 'overrideRawSha256', 'overrideCanonicalSha256'):
             self.profile['baselineRelease'][key] = 'd' * 64
-        self.profile['nativeBaseline'] = {key: 'e' * 64 for key in deployment.RECHARGE_01CE_NATIVE_KEYS}
-        self.profile['nativeBaseline'].update(producerSha256=deployment.RECHARGE_01CE_PRODUCER, nativeFileCount=100, nativeDirectoryCount=20)
-        self.contents = {name: (self.project / name).read_bytes() for name in deployment.RECHARGE_01CE_CANDIDATES | deployment.RECHARGE_01CE_CONTROLS}
-        for name, digest in deployment.RECHARGE_01CE_CARRIED_SOURCE.items():
-            raw = subprocess.check_output(['git', 'show', deployment.RECHARGE_01CE_CARRIED_COMMIT + ':' + name], cwd=self.project)
+        self.profile['nativeBaseline'] = {key: 'e' * 64 for key in deployment.RECHARGE_974_NATIVE_KEYS}
+        self.profile['nativeBaseline'].update(producerSha256=deployment.RECHARGE_974_PRODUCER, nativeFileCount=100, nativeDirectoryCount=20)
+        self.contents = {name: (self.project / name).read_bytes() for name in deployment.RECHARGE_974_CANDIDATES | deployment.RECHARGE_974_CONTROLS}
+        for name, digest in deployment.RECHARGE_974_CARRIED_SOURCE.items():
+            raw = subprocess.check_output(['git', 'show', deployment.RECHARGE_974_CARRIED_COMMIT + ':' + name], cwd=self.project)
             self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest); self.contents[name] = raw
-        self.profile['candidateSourceSha256'] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in deployment.RECHARGE_01CE_CANDIDATES}
-        self.profile['controlSourceSha256'] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in deployment.RECHARGE_01CE_CONTROLS}
-        self.profile['carriedSourceOnlySha256'] = copy.deepcopy(deployment.RECHARGE_01CE_CARRIED_SOURCE)
+        self.profile['candidateSourceSha256'] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in deployment.RECHARGE_974_CANDIDATES}
+        self.profile['controlSourceSha256'] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in deployment.RECHARGE_974_CONTROLS}
+        self.profile['carriedSourceOnlySha256'] = copy.deepcopy(deployment.RECHARGE_974_CARRIED_SOURCE)
         self.profile['sourceModes'] = {name: 0o644 for name in self.contents}
         self.profile['financeValidator'].update(releaseSealSha256='f' * 64, preparedImagesSha256='f' * 64,
             preparationRunId=999002, preparationRunAttempt=1, images={name: 'sha256:' + letter * 64 for name, letter in zip(('api', 'admin', 'migrate'), 'abc')})
 
     def chain_fixture(self, directory):
         base = Path(directory); releases = base / 'releases'; releases.mkdir()
-        chain = [releases / ('20261007T01010' + str(index) + 'Z-' + commit[:12]) for index, (commit, _tree) in enumerate(deployment.RECHARGE_01CE_CHAIN)]
+        chain = [releases / (f'20261007T0101{index:02d}Z-' + commit[:12]) for index, (commit, _tree) in enumerate(deployment.RECHARGE_974_CHAIN)]
         for index, path in enumerate(chain):
             path.mkdir(mode=0o700)
-            commit, tree = deployment.RECHARGE_01CE_CHAIN[index]
-            manifest = {'commit': commit, 'sourceTree': tree, 'previousCommit': deployment.RECHARGE_01CE_CHAIN[index + 1][0] if index < len(deployment.RECHARGE_01CE_CHAIN) - 1 else 'a' * 40,
-                'previousRelease': str(chain[index + 1]) if index < len(deployment.RECHARGE_01CE_CHAIN) - 1 else str(releases / ('20261006T000000Z-' + 'a' * 12))}
+            commit, tree = deployment.RECHARGE_974_CHAIN[index]
+            manifest = {'commit': commit, 'sourceTree': tree, 'previousCommit': deployment.RECHARGE_974_CHAIN[index + 1][0] if index < len(deployment.RECHARGE_974_CHAIN) - 1 else 'a' * 40,
+                'previousRelease': str(chain[index + 1]) if index < len(deployment.RECHARGE_974_CHAIN) - 1 else str(releases / ('20261006T000000Z-' + 'a' * 12))}
             if index == 0:
-                manifest.update(deploymentRun='github-actions-999003-1', servicesUpdated=['admin', 'auto-registration'], migrationApplied=False,
+                manifest.update(deploymentRun='github-actions-999003-1', servicesUpdated=['auto-registration'], migrationApplied=False,
                     newMigrations=[], databaseGrants={'status': 'SKIPPED', 'reason': 'FIXED_REGISTRATION_NO_MIGRATIONS'})
             (path / 'release-manifest.json').write_text(json.dumps(manifest)); (path / 'release-manifest.json').chmod(0o600)
             for name, mode, value in (('before-audit.json', 0o600, b'{"stage":"before"}'), ('after-audit.json', 0o600, b'{"stage":"after"}'),
@@ -10429,9 +10429,25 @@ class FixedRecharge01ceNativeTests(unittest.TestCase):
         stack.enter_context(patch.object(deployment, 'ORDER_ARCHIVE_SEAL', originals[0])); stack.enter_context(patch.object(deployment, 'POST_CLEANUP_RECEIPT', originals[1]))
         return SimpleNamespace(base=base, paths=chain, originals=originals, stack=stack)
 
-    def test_01ce_scope_is_independent_and_exact(self):
-        self.assertEqual(deployment.recharge_01ce_scope(self.profile), self.profile)
-        self.assertEqual(deployment.fixed_recharge_binding(deployment.RECHARGE_01CE_ID)['current'], deployment.RECHARGE_01CE_CURRENT)
+    def test_974_baseline_accepts_only_actual_single_registration_update(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f = self.chain_fixture(name)
+            with f.stack:
+                good = deployment.recharge_974_baseline_fields(f.paths[0])
+                self.assertEqual(good['commit'], deployment.RECHARGE_974_CURRENT)
+                self.assertEqual(good['sourceTree'], deployment.RECHARGE_974_TREE)
+                self.assertEqual(good['previousCommit'], deployment.REGISTRATION_PROFILE_OBSERVATION_CURRENT)
+                path = f.paths[0] / 'release-manifest.json'
+                data = json.loads(path.read_bytes())
+                for services in (['admin', 'auto-registration'], ['auto-recharge'], []):
+                    data['servicesUpdated'] = services
+                    path.write_text(json.dumps(data))
+                    with self.subTest(services=services), self.assertRaises(RuntimeError):
+                        deployment.recharge_974_baseline_fields(f.paths[0])
+
+    def test_974_scope_is_independent_and_exact(self):
+        self.assertEqual(deployment.recharge_974_scope(self.profile), self.profile)
+        self.assertEqual(deployment.fixed_recharge_binding(deployment.RECHARGE_974_ID)['current'], deployment.RECHARGE_974_CURRENT)
         self.assertEqual(deployment.parse_fixed_recharge_scope(json.dumps(self.profile).encode()), self.profile)
         for group, key, value in (('baselineRelease', 'commit', deployment.RECHARGE_MAIN80_CURRENT),
                 ('baselineRelease', 'sourceTree', deployment.RECHARGE_MAIN80_TREE), ('nativeBaseline', 'producerSha256', 'a' * 64),
@@ -10439,41 +10455,41 @@ class FixedRecharge01ceNativeTests(unittest.TestCase):
                 ('financeValidator', 'checkCount', 48), ('financeValidator', 'unavailableCheckCount', 1),
                 ('scope', 'servicesUpdated', ['auto-recharge', 'auto-registration'])):
             bad = copy.deepcopy(self.profile); bad[group][key] = value
-            with self.subTest(group=group, key=key), self.assertRaises(RuntimeError): deployment.recharge_01ce_scope(bad)
-        bad = copy.deepcopy(self.profile); bad['id'] = 'recharge-pro-01ce-other';
-        with self.assertRaises(RuntimeError): deployment.recharge_01ce_scope(bad)
+            with self.subTest(group=group, key=key), self.assertRaises(RuntimeError): deployment.recharge_974_scope(bad)
+        bad = copy.deepcopy(self.profile); bad['id'] = 'recharge-pro-974-other';
+        with self.assertRaises(RuntimeError): deployment.recharge_974_scope(bad)
         bad = copy.deepcopy(self.profile); bad['controlSourceSha256']['other.py'] = 'a' * 64
-        with self.assertRaises(RuntimeError): deployment.recharge_01ce_scope(bad)
+        with self.assertRaises(RuntimeError): deployment.recharge_974_scope(bad)
 
-    def test_01ce_draft_missing_native_evidence_never_authorizes_publication(self):
+    def test_974_draft_missing_native_evidence_never_authorizes_publication(self):
         draft = copy.deepcopy(self.profile); draft.update(enabled=False, approvalStatus='NOT_APPROVED')
-        for key in deployment.RECHARGE_01CE_NATIVE_KEYS - {'producerSha256'}: draft['nativeBaseline'][key] = None
-        self.assertEqual(deployment.recharge_01ce_scope(draft, require_approved=False), draft)
-        with self.assertRaises(RuntimeError): deployment.recharge_01ce_scope(draft)
+        for key in deployment.RECHARGE_974_NATIVE_KEYS - {'producerSha256'}: draft['nativeBaseline'][key] = None
+        self.assertEqual(deployment.recharge_974_scope(draft, require_approved=False), draft)
+        with self.assertRaises(RuntimeError): deployment.recharge_974_scope(draft)
         draft.update(enabled=True, approvalStatus='APPROVED')
-        with self.assertRaises(RuntimeError): deployment.recharge_01ce_scope(draft)
+        with self.assertRaises(RuntimeError): deployment.recharge_974_scope(draft)
 
-    def test_01ce_carries_latest_registration_90_91_and_every_old_profile_unchanged(self):
-        for name in deployment.RECHARGE_01CE_CARRIED_SOURCE:
+    def test_974_carries_latest_registration_90_91_and_every_old_profile_unchanged(self):
+        for name in deployment.RECHARGE_974_CARRIED_SOURCE:
             bad = copy.deepcopy(self.profile); bad['carriedSourceOnlySha256'][name] = 'a' * 64
-            with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.recharge_01ce_scope(bad)
-        for name in deployment.RECHARGE_01CE_CARRIED_SOURCE:
-            self.assertNotIn(name, deployment.RECHARGE_01CE_CANDIDATES | deployment.RECHARGE_01CE_CONTROLS)
+            with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.recharge_974_scope(bad)
+        for name in deployment.RECHARGE_974_CARRIED_SOURCE:
+            self.assertNotIn(name, deployment.RECHARGE_974_CANDIDATES | deployment.RECHARGE_974_CONTROLS)
 
-    def test_native_chain_freezes_private_public_modes_and_all_ten_releases(self):
+    def test_native_chain_freezes_private_public_modes_and_all_eleven_releases(self):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
             f = self.chain_fixture(name)
             with f.stack:
-                good = deployment.recharge_01ce_native_chain(f.paths[0])
-                self.assertEqual(good['fileCount'], 70); self.assertEqual(good['directoryCount'], 10)
+                good = deployment.recharge_974_native_chain(f.paths[0])
+                self.assertEqual(good['fileCount'], 77); self.assertEqual(good['directoryCount'], 11)
                 self.assertEqual(good['origin'], f.paths[-1])
-                self.assertEqual(deployment.recharge_01ce_native_chain(f.paths[0]), good)
+                self.assertEqual(deployment.recharge_974_native_chain(f.paths[0]), good)
                 for path in (*[directory / '.env.aws.production' for directory in f.paths],
                         *[directory / 'public.py' for directory in f.paths], *f.originals):
                     raw = path.read_bytes(); path.write_bytes(raw + b' ')
-                    with self.subTest(path=path.name): self.assertNotEqual(deployment.recharge_01ce_native_chain(f.paths[0])['sha256'], good['sha256'])
+                    with self.subTest(path=path.name): self.assertNotEqual(deployment.recharge_974_native_chain(f.paths[0])['sha256'], good['sha256'])
                     path.write_bytes(raw)
-                f.paths[1].chmod(0o755); self.assertNotEqual(deployment.recharge_01ce_native_chain(f.paths[0])['sha256'], good['sha256'])
+                f.paths[1].chmod(0o755); self.assertNotEqual(deployment.recharge_974_native_chain(f.paths[0])['sha256'], good['sha256'])
 
     def test_native_chain_rejects_wrong_predecessor_missing_file_and_symlink(self):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
@@ -10481,9 +10497,9 @@ class FixedRecharge01ceNativeTests(unittest.TestCase):
             with f.stack:
                 path = f.paths[0] / 'release-manifest.json'; raw = path.read_bytes(); data = json.loads(raw)
                 data['previousCommit'] = 'a' * 40; path.write_text(json.dumps(data))
-                with self.assertRaises(RuntimeError): deployment.recharge_01ce_native_chain(f.paths[0])
+                with self.assertRaises(RuntimeError): deployment.recharge_974_native_chain(f.paths[0])
                 path.write_bytes(raw); target = f.paths[2] / 'public.py'; target.rename(f.paths[2] / 'moved.py'); target.symlink_to(f.paths[2] / 'moved.py')
-                with self.assertRaises(RuntimeError): deployment.recharge_01ce_native_chain(f.paths[0])
+                with self.assertRaises(RuntimeError): deployment.recharge_974_native_chain(f.paths[0])
 
     def test_native_chain_rejects_changes_during_read(self):
         with tempfile.TemporaryDirectory(dir=self.runtime) as name:
@@ -10495,35 +10511,35 @@ class FixedRecharge01ceNativeTests(unittest.TestCase):
                     if path.name == 'public.py': path.write_bytes(data + b' ')
                     return data
                 with patch.object(deployment, 'fixed_recharge_bytes', side_effect=read), self.assertRaises(RuntimeError):
-                    deployment.recharge_01ce_native_chain(f.paths[0])
+                    deployment.recharge_974_native_chain(f.paths[0])
 
-    def test_01ce_public_projection_closes_21_fields_and_strict_types(self):
-        receipt = deployment.recharge_01ce_readback_receipt('a' * 40, 'b' * 40, 'c' * 64)
+    def test_974_public_projection_closes_21_fields_and_strict_types(self):
+        receipt = deployment.recharge_974_readback_receipt('a' * 40, 'b' * 40, 'c' * 64)
         self.assertEqual(len(receipt), 21)
-        self.assertEqual(deployment.validate_recharge_01ce_readback_projection(receipt, 'a' * 40, 'b' * 40, 'c' * 64), receipt)
+        self.assertEqual(deployment.validate_recharge_974_readback_projection(receipt, 'a' * 40, 'b' * 40, 'c' * 64), receipt)
         for key in receipt:
             bad = copy.deepcopy(receipt); bad[key] = None
-            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.validate_recharge_01ce_readback_projection(bad, 'a' * 40, 'b' * 40, 'c' * 64)
+            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.validate_recharge_974_readback_projection(bad, 'a' * 40, 'b' * 40, 'c' * 64)
         for key, value in (('id', deployment.RECHARGE_MAIN80_ID), ('previousCommit', deployment.RECHARGE_MAIN80_CURRENT),
                 ('checkCount', 48), ('violationCount', 5), ('servicesUpdated', ['auto-registration']), ('environmentUnchanged', 1)):
             bad = copy.deepcopy(receipt); bad[key] = value
-            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.validate_recharge_01ce_readback_projection(bad, 'a' * 40, 'b' * 40, 'c' * 64)
+            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.validate_recharge_974_readback_projection(bad, 'a' * 40, 'b' * 40, 'c' * 64)
 
-    def test_01ce_dispatch_rejects_every_other_selection_before_native_or_external_actions(self):
+    def test_974_dispatch_rejects_every_other_selection_before_native_or_external_actions(self):
         base = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40, '--repository',
-            '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release', '--expected-current', deployment.RECHARGE_01CE_CURRENT,
-            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111', '--recharge-pro-01ce']
+            '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release', '--expected-current', deployment.RECHARGE_974_CURRENT,
+            '--run-id', '123', '--run-attempt', '1', '--ci-run-id', '111', '--recharge-pro-974']
         flags = ('--recharge-pro-main80', '--recharge-pro-menu-b8', '--recharge-pro-menu-7f', '--registration-worker-89',
             '--registration-worker-90', '--registration-worker-91', '--registration-worker-88', '--registration-worker-87', '--registration-worker-86', '--registration-worker-85',
             '--registration-worker-956', '--registration-worker-b8-80', '--historical-finance-order-archive', '--admin-only')
         for flag in flags:
-            with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', base + [flag]), patch.object(deployment, 'recharge_01ce_observe_native') as observe, \
+            with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', base + [flag]), patch.object(deployment, 'recharge_974_observe_native') as observe, \
                     patch.object(deployment, 'run') as command, patch.object(deployment.urllib.request, 'urlopen') as external:
                 with self.assertRaises(RuntimeError): deployment.main()
                 observe.assert_not_called(); command.assert_not_called(); external.assert_not_called()
 
     def test_original_global_current_guards_and_49_auditor_functions_keep_original_ast(self):
-        baseline = ast.parse(subprocess.check_output(['git', 'show', deployment.RECHARGE_01CE_CARRIED_COMMIT + ':scripts/production-release/remote-deploy.py'], cwd=self.project).decode())
+        baseline = ast.parse(subprocess.check_output(['git', 'show', deployment.RECHARGE_974_CARRIED_COMMIT + ':scripts/production-release/remote-deploy.py'], cwd=self.project).decode())
         candidate = ast.parse((self.project / 'scripts/production-release/remote-deploy.py').read_text())
         old = {node.name: ast.dump(node, include_attributes=False) for node in baseline.body if isinstance(node, ast.FunctionDef)}
         new = {node.name: ast.dump(node, include_attributes=False) for node in candidate.body if isinstance(node, ast.FunctionDef)}
@@ -10533,16 +10549,21 @@ class FixedRecharge01ceNativeTests(unittest.TestCase):
                 'registration_hydration_history', 'registration_hydration_baseline',
                 'registration_profile_observation_history', 'registration_profile_observation_baseline'):
             with self.subTest(name=name): self.assertEqual(new[name], old[name])
-        before = next(node for node in candidate.body if isinstance(node, ast.FunctionDef) and node.name == 'recharge_01ce_observe_native')
-        after = next(node for node in candidate.body if isinstance(node, ast.FunctionDef) and node.name == 'check_recharge_01ce_deployment')
-        self.assertIn("namespace['check_fixed_registration_deployment']", ast.unparse(before))
-        self.assertNotIn('recharge_01ce_observe_native(', ast.unparse(after))
+        before = next(node for node in candidate.body if isinstance(node, ast.FunctionDef) and node.name == 'recharge_974_observe_native')
+        after = next(node for node in candidate.body if isinstance(node, ast.FunctionDef) and node.name == 'check_recharge_974_deployment')
+        native_source = ast.unparse(before)
+        self.assertIn("namespace['check_fixed_registration_deployment']", native_source)
+        self.assertIn('REGISTRATION_PROFILE_OBSERVATION_FILE', native_source)
+        self.assertIn('profile_id=REGISTRATION_PROFILE_OBSERVATION_ID', native_source)
+        self.assertNotIn('REGISTRATION_HYDRATION_FILE', native_source)
+        self.assertNotIn('REGISTRATION_HYDRATION_ID', native_source)
+        self.assertNotIn('recharge_974_observe_native(', ast.unparse(after))
         self.assertNotIn('check_fixed_registration_deployment(', ast.unparse(after))
 
-    def test_01ce_readback_routes_only_the_new_id(self):
-        with patch.object(deployment, 'check_recharge_01ce_deployment', return_value={'synthetic': True}) as c3, \
+    def test_974_readback_routes_only_the_new_id(self):
+        with patch.object(deployment, 'check_recharge_974_deployment', return_value={'synthetic': True}) as c3, \
                 patch.object(deployment, 'check_main80_recharge_deployment', side_effect=AssertionError('old global current entry')):
-            self.assertEqual(deployment.check_fixed_recharge_deployment('a' * 40, 'b' * 40, 'c' * 64, deployment.RECHARGE_01CE_ID), {'synthetic': True})
+            self.assertEqual(deployment.check_fixed_recharge_deployment('a' * 40, 'b' * 40, 'c' * 64, deployment.RECHARGE_974_ID), {'synthetic': True})
             c3.assert_called_once_with('a' * 40, 'b' * 40, 'c' * 64)
 
 if __name__ == '__main__':
