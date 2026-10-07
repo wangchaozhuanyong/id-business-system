@@ -7876,7 +7876,7 @@ def registration_followup_api_admin_history(previous):
         and scope.configuration_hashes(previous)==record['configurationAfter']
         and scope.configuration_hashes(Path(manifest['previousRelease']))==record['configurationBefore']
         and all(fixed['liveServices'][name]==record['before'][name] for name in ALL_SERVICES if name not in ('api','admin'))
-        and record['configurationBefore']==record['configurationAfter'],message)
+        and all(record['configurationBefore'][name]==record['configurationAfter'][name] for name in scope.CONFIG_FILES),message)
     for stage in ('before','after'):
         require(scope.audit_receipt(d,previous/(stage+'-audit.json'))==fixed['audits'][stage],message)
     override=fixed_recharge_json(read(previous/'compose.release.json',modes=(fixed['privateFileModes']['compose.release.json'],)))
