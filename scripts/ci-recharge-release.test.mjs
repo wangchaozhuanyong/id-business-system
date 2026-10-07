@@ -57,6 +57,13 @@ function fixture(run, outputDirectory = '.deploy') {
   }
 }
 
+const workflowPredicate = (expression) => (inputs) =>
+  new Function('inputs', 'startsWith', `return (${expression});`)(inputs, (value, prefix) =>
+    String(value ?? '')
+      .toLowerCase()
+      .startsWith(String(prefix).toLowerCase())
+  );
+
 function guardCommands(
   paths,
   {
@@ -433,7 +440,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
     (value) => value.name === 'Verify or maintain recoverable unused project image cache'
   );
   const selected = (operation, historical_exception) =>
-    new Function('inputs', `return (${step.if});`)({ operation, historical_exception });
+    workflowPredicate(step.if)({ operation, historical_exception });
   assert.equal(selected('release', postCleanupPolicy), false);
   assert.equal(selected('release', 'historical-finance-20261005-order-archive'), false);
   assert.equal(selected('release', 'recharge-pro-menu-b8-20261005'), false);
@@ -493,14 +500,14 @@ test('preparation permits only build push and evidence and cannot reach dispatch
     diagnostic_command_id: ''
   };
   const enabled = workflowSteps
-    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(inputs))
+    .filter((step) => !step.if || workflowPredicate(step.if)(inputs))
     .map((step) => step.name);
   assert.deepEqual(enabled, [
     'Check out the requested main commit',
     'Verify exact source and passing Quality Gate',
     'Validate release policy and reviewed seal selection',
-    'Build images on the GitHub runner',
     'Obtain short-lived AWS credentials through OIDC',
+    'Build images on the GitHub runner',
     'Verify build-only ECR target',
     'Push immutable images',
     'Record prepared API image source',
@@ -559,7 +566,7 @@ test('post-cleanup release requires preparation reuse and cannot build unreviewe
     diagnostic_command_id: ''
   };
   const enabled = workflowSteps
-    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(inputs))
+    .filter((step) => !step.if || workflowPredicate(step.if)(inputs))
     .map((step) => step.name);
   assert.ok(enabled.includes('Verify reusable build and unchanged application source'));
   assert.ok(enabled.includes('Deploy through the production instance'));
@@ -638,6 +645,10 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/registration-only-transport.test.py',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
+    'python3 -B scripts/production-release/build-image-cache.test.py',
+    'python3 -B scripts/production-release/browser-cache-input.test.py',
+    'python3 -B scripts/production-release/service-image-retention.test.py',
+    'python3 -B scripts/production-release/maintain-image-cache.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
   ]);
   const recharge = guardCommands(paths);
@@ -839,6 +850,48 @@ test('historical CI selection preserves existing deployment and cache control ch
     commands.some((command) => command.startsWith('npm ')),
     false
   );
+});
+
+test('browser dependency cache and service retention controls select their exact checks', () => {
+  for (const path of [
+    '.github/workflows/production-release.yml',
+    'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/build-image-cache.test.py',
+    'scripts/production-release/browser-cache-input.py',
+    'scripts/production-release/browser-cache-input.test.py'
+  ]) {
+    const commands = guardCommands([path]);
+    for (const command of [
+      'python3 -B scripts/production-release/build-image-cache.test.py',
+      'python3 -B scripts/production-release/browser-cache-input.test.py'
+    ])
+      assert.equal(commands.filter((actual) => actual === command).length, 1, path);
+  }
+  for (const path of [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/service-image-retention.py',
+    'scripts/production-release/service-image-retention.test.py'
+  ]) {
+    const commands = guardCommands([path]);
+    for (const command of [
+      'python3 -B scripts/production-release/service-image-retention.test.py',
+      'python3 -B scripts/production-release/maintain-image-cache.test.py'
+    ])
+      assert.equal(commands.filter((actual) => actual === command).length, 1, path);
+  }
+});
+
+test('browser cache preparation skips Admin-only changes before any AWS or Docker access', () => {
+  const step = workflowSteps.find(
+    (entry) => entry.name === 'Resolve reviewed immutable browser dependency cache'
+  );
+  fixture(({ env, log }) => {
+    writeFileSync(env.TASK_CHANGED_PATHS, 'apps/admin/src/v2/features/test.vue\n');
+    execFileSync('bash', ['-c', step.run], { env });
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+  });
 });
 
 test('historical CI test selection is exact and a rejected historical test stops the guard', () => {
@@ -1512,14 +1565,14 @@ test('actual independent archive preparation builds and pushes exactly API migra
     diagnostic_command_id: ''
   };
   const enabled = workflowSteps
-    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(preparationInputs))
+    .filter((step) => !step.if || workflowPredicate(step.if)(preparationInputs))
     .map((step) => step.name);
   assert.deepEqual(enabled, [
     'Check out the requested main commit',
     'Verify exact source and passing Quality Gate',
     'Validate release policy and reviewed seal selection',
-    'Build images on the GitHub runner',
     'Obtain short-lived AWS credentials through OIDC',
+    'Build images on the GitHub runner',
     'Verify build-only ECR target',
     'Push immutable images',
     'Record prepared order archive image source',
@@ -1846,7 +1899,7 @@ test('fixed b8 workflow checks approval before builds and credentials, then skip
     'recharge-pro-menu-7f-20261005'
   ])
     assert.equal(
-      new Function('inputs', `return (${cache.if});`)({
+      workflowPredicate(cache.if)({
         operation: 'release',
         historical_exception
       }),
@@ -2602,7 +2655,7 @@ test('main80 profile guard and workflow choose its approval readback and skipped
   assert.ok(workflowInputs.historical_exception.options.includes(identity));
   const input = { operation: 'release', historical_exception: identity, reuse_image_run: '' };
   const enabled = workflowSteps
-    .filter((step) => !step.if || new Function('inputs', `return (${step.if});`)(input))
+    .filter((step) => !step.if || workflowPredicate(step.if)(input))
     .map((step) => step.name);
   for (const name of [
     'Verify fixed recharge runtime approval',
@@ -3352,7 +3405,7 @@ test('fixed 974 workflow chooses independent approval readback and cache skip pr
       .filter(
         (step) =>
           !step.if ||
-          new Function('inputs', `return (${step.if});`)({
+          workflowPredicate(step.if)({
             operation,
             historical_exception: recharge974Identity,
             reuse_image_run: ''

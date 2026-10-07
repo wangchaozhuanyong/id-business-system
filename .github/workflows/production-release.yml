@@ -309,6 +309,32 @@ jobs:
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-90-20261007
 
+      - name: Obtain short-lived AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.RELEASE_ROLE_ARN }}
+          role-session-name: id-business-v2-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Resolve reviewed immutable browser dependency cache
+        if: inputs.operation == 'release' && inputs.reuse_image_run == '' && (inputs.historical_exception == 'none' || startsWith(inputs.historical_exception, 'recharge-pro-'))
+        run: |
+          set -Eeuo pipefail
+          if [[ "$HISTORICAL_EXCEPTION" == none ]]; then
+            browser_cache_admin_only="$(node --input-type=module - <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { isAdminOnly } from './scripts/ci-recharge-scope.mjs';
+          const changed = execFileSync('git', ['diff', '--name-only', process.env.EXPECTED_CURRENT, process.env.RELEASE_COMMIT], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          console.log(isAdminOnly(changed));
+          JS
+            )"
+            case "$browser_cache_admin_only" in true) exit 0 ;; false) ;; *) exit 1 ;; esac
+          fi
+          python3 -B scripts/production-release/browser-cache-input.py
+          registry="${RELEASE_REPOSITORY%%/*}"
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null
+
       - name: Build images on the GitHub runner
         if: (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
@@ -318,14 +344,6 @@ jobs:
         env:
           REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
         run: python3 scripts/production-release/reuse-images.py
-
-      - name: Obtain short-lived AWS credentials through OIDC
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ env.RELEASE_ROLE_ARN }}
-          role-session-name: id-business-v2-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 3600
 
       - name: Check AWS identity and production target
         if: inputs.operation != 'prepare_post_cleanup_release' && inputs.operation != 'prepare_order_archive_release'
@@ -1923,10 +1941,10 @@ jobs:
               digest = os.environ['CACHE_PLAN_SHA256']
               if not re.fullmatch(r'[0-9a-f]{64}', digest):
                   raise SystemExit('Exact verified unused cache plan digest required')
-              command += ' --apply --approved-policy current-previous-ecr-cache-v1 --approved-plan-sha256 ' + digest
+              command += ' --apply --approved-policy current-service-rollback-explicit-dependencies-ecr-cache-v2 --approved-plan-sha256 ' + digest
           elif operation == 'release':
               deployment = 'github-actions-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
-              command += ' --apply --approved-policy current-previous-ecr-cache-v1 --deployment-run ' + shlex.quote(deployment)
+              command += ' --apply --approved-policy current-service-rollback-explicit-dependencies-ecr-cache-v2 --deployment-run ' + shlex.quote(deployment)
           parameters = {'commands': [command], 'executionTimeout': ['1200']}
           Path('.deploy/production-release/unused-image-cache.json').write_text(json.dumps(parameters))
           PY
@@ -2885,3 +2903,9 @@ jobs:
       - name: Record skipped cache maintenance for fixed 90 registration release
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-90-20261007'
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
+
+      - name: Maintain service rollback image cache independently after fixed release
+        if: inputs.operation == 'release' && (startsWith(inputs.historical_exception, 'registration-worker-') || startsWith(inputs.historical_exception, 'recharge-pro-'))
+        env:
+          RELEASE_OPERATION: ${{ inputs.operation }}
+        run: python3 -B scripts/production-release/service-image-retention.py

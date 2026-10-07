@@ -1,17 +1,28 @@
 """Retain live/rollback images and remove recoverable project release caches only."""
 import argparse
+import ast
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import time
 
 BASE = Path('/opt/id-business-v2')
 REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
-POLICY = 'current-previous-ecr-cache-v1'
+POLICY = 'current-service-rollback-explicit-dependencies-ecr-cache-v2'
+IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
+FIXED_REGISTRATION_IDS = frozenset({
+    'registration-worker-956-20261006', 'registration-worker-b8-80-20261006',
+    *('registration-worker-' + str(number) + '-20261006' for number in range(85, 90)),
+    'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007',
+})
+FIXED_RECHARGE_IDS = frozenset({'recharge-pro-main80-20261006', 'recharge-pro-974-20261007'})
+ORDER_ARCHIVE_SEAL_RELATIVE = 'backups/mysql/partial-two-order-authorized-20261005-v1/reviewed-order-archive-release-seal.json'
 TAG = re.compile(r'[0-9a-f]{40}-[1-9][0-9]*-[1-9][0-9]*-(?:admin|api|migrate|media-resolver|auto-recharge)')
 LEGACY_POLICY = 'reviewed-obsolete-project-cache-20261003'
 LEGACY_PLAN_SHA256 = '0596af43c4fbf904c3b784ebadb2f444aee3747dc6d8d38a6f9f09a845c6e1c9'
@@ -84,14 +95,156 @@ def active_images():
             for container in read('docker', 'ps', '-a', '-q').splitlines()}
 
 
-def protected_images(manifest, previous, containers):
+def protected_images(manifest, previous, containers, dependencies=None):
     return (set(containers)
             | {image['digest'] for release in (manifest, previous)
                for image in release.get('images', {}).values()}
-            | set(manifest.get('rollback', {}).get('images', {}).values()))
+            | set(manifest.get('rollback', {}).get('images', {}).values())
+            | set((dependencies or {}).get('imageIds', [])))
 
 
-def make_plan(expected, previous, protected, inventory):
+def dependency_file(path, evidence, *, limit=2 * 1024 * 1024):
+    """Read metadata only; never execute the old producer or inspect environment files."""
+    require(path.is_absolute() and BASE in path.parents and path.resolve() == path
+        and all(not parent.is_symlink() for parent in path.parents if parent == BASE or BASE in parent.parents),
+        'Dependency evidence path is not a regular project file')
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid,
+        info.st_gid, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as source:
+        before = os.fstat(source.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 < before.st_size <= limit,
+            'Dependency evidence size or type is unavailable')
+        raw = source.read(limit + 1)
+        require(len(raw) == before.st_size and identity(before) == identity(os.fstat(source.fileno()))
+            == identity(path.lstat()), 'Dependency evidence changed during read')
+    evidence[str(path.relative_to(BASE))] = hashlib.sha256(raw).hexdigest()
+    return raw
+
+
+def release_metadata(directory, evidence):
+    require(directory.is_absolute() and directory.parent == BASE / 'releases'
+        and directory.resolve() == directory, 'Rollback metadata path changed')
+    value = json.loads(dependency_file(directory / 'release-manifest.json', evidence, limit=128 * 1024))
+    require(isinstance(value, dict) and re.fullmatch(r'[0-9a-f]{40}', value.get('commit', ''))
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + value['commit'][:12], directory.name)
+        and isinstance(value.get('images'), dict) and value['images'], 'Rollback metadata identity changed')
+    require(all(isinstance(image, dict) and IMAGE_ID.fullmatch(image.get('digest', ''))
+        for image in value['images'].values()), 'Rollback image identity changed')
+    return value
+
+
+def literal_dependency(tree, name):
+    rows = [node.value for node in tree.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
+    require(len(rows) == 1, 'Fixed dependency declaration unavailable')
+    try:
+        value = ast.literal_eval(rows[0])
+    except (ValueError, TypeError, SyntaxError):
+        raise RuntimeError('Unknown fixed dependency declaration') from None
+    require(isinstance(value, dict), 'Unknown fixed dependency declaration')
+    return value
+
+
+def fixed_dependencies(directory, manifest, evidence):
+    """The finance executor and Pro inspect bridge need images; native_chain needs files only."""
+    claims = [('fixedRegistrationRelease', FIXED_REGISTRATION_IDS, 'profileRawSha256'),
+              ('fixedRechargeRelease', FIXED_RECHARGE_IDS, 'profileSha256')]
+    profiles = []
+    for field, allowed, digest_key in claims:
+        claim = manifest.get(field)
+        if claim is None:
+            continue
+        require(isinstance(claim, dict) and claim.get('id') in allowed,
+            'Unknown fixed release dependency requires review')
+        raw = dependency_file(directory / ('deploy/aws/' + claim['id'] + '.json'), evidence, limit=128 * 1024)
+        profile = json.loads(raw)
+        digest = hashlib.sha256(raw).hexdigest() if digest_key == 'profileRawSha256' else plan_digest(profile)
+        require(profile.get('id') == claim['id'] and claim.get(digest_key) == digest,
+            'Fixed dependency profile changed')
+        finance = profile.get('financeValidator', {})
+        require(isinstance(finance, dict) and finance.get('kind') in
+            ('EXISTING_SEALED_ORDER_ARCHIVE_49', 'EXISTING_ORDER_ARCHIVE_49'),
+            'Unknown fixed finance dependency requires review')
+        profiles.append(profile)
+    if not profiles:
+        return set()
+    tree = ast.parse(dependency_file(directory / 'scripts/production-release/remote-deploy.py', evidence))
+    finance = literal_dependency(tree, 'REGISTRATION_FINANCE')
+    require(finance.get('kind') == 'EXISTING_SEALED_ORDER_ARCHIVE_49',
+        'Unknown fixed finance dependency requires review')
+    raw = dependency_file(BASE / ORDER_ARCHIVE_SEAL_RELATIVE, evidence, limit=128 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == finance.get('releaseSealSha256')
+        and all(profile['financeValidator'].get('releaseSealSha256') == finance.get('releaseSealSha256')
+            for profile in profiles), 'Fixed finance dependency seal changed')
+    images = json.loads(raw).get('images')
+    require(isinstance(images, dict) and set(images) == {'admin', 'api', 'migrate'}
+        and all(isinstance(image, str) and IMAGE_ID.fullmatch(image) for image in images.values()),
+        'Unknown sealed image dependency requires review')
+    for profile in profiles:
+        declared = profile['financeValidator'].get('images')
+        require(declared is None or declared == images, 'Fixed finance image dependencies changed')
+    pro = literal_dependency(tree, 'REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE')
+    require(pro.get('status') == 'VERIFIED_PRO_AFTER_88_RUNTIME_BASELINE'
+        and isinstance(pro.get('current'), str) and isinstance(pro.get('manifest'), dict),
+        'Unknown fixed Pro dependency requires review')
+    observed = release_metadata(Path(pro['current']), evidence)
+    image = pro['manifest'].get('images', {}).get('auto-recharge')
+    require(isinstance(image, dict) and IMAGE_ID.fullmatch(image.get('digest', ''))
+        and observed.get('commit') == pro['manifest'].get('commit')
+        and observed.get('sourceTree') == pro['manifest'].get('sourceTree')
+        and observed['images'].get('auto-recharge') == image,
+        'Fixed Pro image dependency changed')
+    return set(images.values()) | {image['digest']}
+
+
+def collect_dependencies(manifest, previous):
+    evidence, rollback, images = {}, {}, set()
+    directory = (BASE / 'current').resolve()
+    observed = release_metadata(directory, evidence)
+    require(observed == manifest, 'Current dependency metadata changed')
+    images |= fixed_dependencies(directory, observed, evidence)
+    prior_directory = Path(manifest['previousRelease'])
+    require(release_metadata(prior_directory, evidence) == previous, 'Previous dependency metadata changed')
+    images |= fixed_dependencies(prior_directory, previous, evidence)
+    # A global previous release may update only registration. Find one different
+    # predecessor per service without protecting every image in the history.
+    missing = set(manifest['images'])
+    seen = {str(directory)}
+    row = observed
+    for _ in range(100):
+        if not missing:
+            break
+        if not row.get('previousRelease'):
+            require(not row.get('previousCommit'), 'Rollback metadata chain is incomplete')
+            break
+        directory = Path(row['previousRelease'])
+        require(str(directory) not in seen, 'Rollback metadata chain contains a cycle')
+        seen.add(str(directory))
+        predecessor = release_metadata(directory, evidence)
+        require(predecessor['commit'] == row.get('previousCommit'), 'Rollback metadata chain changed')
+        for service in sorted(missing.copy()):
+            image = predecessor['images'].get(service)
+            # A service can have been introduced later; its absence ends its chain.
+            if image is None:
+                missing.remove(service)
+                rollback[service] = {'status': 'NO_EARLIER_SERVICE_VERSION'}
+            elif image['digest'] != manifest['images'][service]['digest']:
+                images.add(image['digest']); missing.remove(service)
+                rollback[service] = {'status': 'RETAINED', 'commit': predecessor['commit'], 'imageId': image['digest']}
+        row = predecessor
+    else:
+        require(not missing, 'Rollback dependency chain exceeds reviewed bound')
+    for service in missing:
+        rollback[service] = {'status': 'NO_DISTINCT_PREDECESSOR'}
+    for image in sorted(images):
+        require(read('docker', 'image', 'inspect', '--format', '{{.Id}}', image) == image,
+            'Required rollback or fixed dependency image is unavailable')
+    return {'version': 1, 'imageIds': sorted(images), 'serviceRollback': rollback,
+            'evidenceSha256': dict(sorted(evidence.items()))}
+
+
+def make_plan(expected, previous, protected, inventory, dependencies=None):
     require(len(inventory) <= 500, 'Image inventory exceeds reviewed bound')
     items = []
     for image in inventory:
@@ -109,6 +262,8 @@ def make_plan(expected, previous, protected, inventory):
     plan = {'policy': POLICY, 'expectedCurrent': expected,
             'expectedPrevious': previous['commit'], 'repository': REPOSITORY,
             'protectedImageIds': sorted(protected), 'items': sorted(items, key=lambda item: item['tag'])}
+    if dependencies is not None:
+        plan['dependencies'] = dependencies
     require(len(json.dumps(plan).encode()) <= 18000, 'Cache plan exceeds diagnostic output bound')
     return plan
 
@@ -229,11 +384,14 @@ def apply_plan(plan):
     for item in plan['items']:
         live, previous = current(plan['expectedCurrent'])
         require(live['previousCommit'] == plan['expectedPrevious'], 'Rollback baseline changed')
-        protected = protected_images(live, previous, active_images())
+        dependencies = collect_dependencies(live, previous)
+        require(dependencies == plan.get('dependencies'), 'Reviewed image dependencies changed')
+        protected = protected_images(live, previous, active_images(), dependencies)
         require(item['imageId'] not in protected, 'Cache became used or protected')
         reference = REPOSITORY + ':' + item['tag']
         require(read('docker', 'image', 'inspect', '--format', '{{.Id}}', reference) == item['imageId'],
                 'Local image identity changed')
+        verify_remote({**plan, 'items': [item]})
         read('docker', 'image', 'rm', '--no-prune', reference)
         removed.append(item['tag'])
         print('CACHE_IMAGE_REMOVED ' + item['tag'], flush=True)
@@ -315,19 +473,23 @@ def maintain_legacy(args):
 
 def maintain(args):
     manifest, previous = current(args.expected_current)
-    protected = protected_images(manifest, previous, active_images())
+    dependencies = collect_dependencies(manifest, previous)
+    protected = protected_images(manifest, previous, active_images(), dependencies)
     image_ids = sorted(set(read('docker', 'image', 'ls', '--no-trunc', '--quiet').splitlines()))
     require(len(image_ids) <= 500, 'Image inventory exceeds reviewed bound')
     image_format = '{"id":{{json .Id}},"repoTags":{{json .RepoTags}}}'
     inventory = [json.loads(read('docker', 'image', 'inspect', '--format', image_format, image_id))
                  for image_id in image_ids]
-    plan = make_plan(args.expected_current, previous, protected, inventory)
+    plan = make_plan(args.expected_current, previous, protected, inventory, dependencies)
     digest = plan_digest(plan)
     removed = []
     before = shutil.disk_usage(BASE).free
     if args.apply:
         require(args.approved_policy == POLICY, 'Explicit cache policy approval required')
         if args.deployment_run:
+            require(not any(manifest.get(field, {}).get('cacheStatus') == 'SKIPPED'
+                for field in ('fixedRechargeRelease', 'fixedRegistrationRelease')),
+                'Fixed release cache maintenance requires a separately approved exact plan')
             verify_deployment(manifest, args.deployment_run)
         else:
             require(args.approved_plan_sha256 == digest, 'Reviewed cache plan changed or not approved')

@@ -59,6 +59,38 @@ const releaseMaintenanceControls = () => {
     run('python3', ['-B', 'scripts/production-release/retire-orphan-retention.test.py']);
   if (changed.some((path) => preparedControlPaths.includes(path)))
     run('python3', ['-B', 'scripts/production-release/prepared-images.test.py']);
+  if (
+    changed.some((path) =>
+      [
+        '.github/workflows/production-release.yml',
+        'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile',
+        'scripts/production-release/build-images.sh',
+        'scripts/production-release/build-image-cache.test.py',
+        'scripts/production-release/browser-cache-input.py',
+        'scripts/production-release/browser-cache-input.test.py'
+      ].includes(path)
+    )
+  ) {
+    run('python3', ['-B', 'scripts/production-release/build-image-cache.test.py']);
+    run('python3', ['-B', 'scripts/production-release/browser-cache-input.test.py']);
+  }
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/service-image-retention') ||
+        path === '.github/workflows/production-release.yml'
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/service-image-retention.test.py']);
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/maintain-image-cache') ||
+        path.startsWith('scripts/production-release/service-image-retention') ||
+        path === '.github/workflows/production-release.yml'
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/maintain-image-cache.test.py']);
 };
 const archiveReleaseControls = () => {
   run('node', ['--test', 'scripts/v2-order-archive-release-policy.test.mjs']);
@@ -99,8 +131,6 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/aws-mysql-backup.test.mjs']);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
-  if (changed.some((path) => path.startsWith('scripts/production-release/maintain-image-cache')))
-    run('python3', ['-B', 'scripts/production-release/maintain-image-cache.test.py']);
   if (
     changed.some((path) => path.startsWith('scripts/production-release/cleanup-verified-backups'))
   )

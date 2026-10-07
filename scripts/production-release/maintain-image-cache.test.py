@@ -225,7 +225,8 @@ class RetentionTests(unittest.TestCase):
         self.tags = ['e' * 40 + '-123-1-admin', 'f' * 40 + '-124-1-api']
         self.inventory = [{'id': image_id, 'repoTags': [cache.REPOSITORY + ':' + tag]}
                           for image_id, tag in zip(self.ids, self.tags)]
-        self.plan = cache.make_plan(self.expected, self.previous, {'live'}, self.inventory)
+        self.dependencies = {'version': 1, 'imageIds': [], 'serviceRollback': {}, 'evidenceSha256': {}}
+        self.plan = cache.make_plan(self.expected, self.previous, {'live'}, self.inventory, self.dependencies)
         self.commands = []
 
     def run_command(self, *args):
@@ -244,6 +245,7 @@ class RetentionTests(unittest.TestCase):
 
     def apply(self, active=None, command=None):
         with patch.object(cache, 'current', return_value=(self.manifest, self.previous)), \
+                patch.object(cache, 'collect_dependencies', return_value=self.dependencies), \
                 patch.object(cache, 'active_images', side_effect=active or (lambda: set())), \
                 patch.object(cache, 'read', side_effect=command or self.run_command):
             return cache.apply_plan(self.plan)
@@ -275,7 +277,8 @@ class RetentionTests(unittest.TestCase):
         for changed in ({**self.plan, 'expectedCurrent': 'x'},
                         {**self.plan, 'expectedPrevious': 'x'},
                         {**self.plan, 'protectedImageIds': ['x']},
-                        {**self.plan, 'items': self.plan['items'][:-1]}):
+                        {**self.plan, 'items': self.plan['items'][:-1]},
+                        {**self.plan, 'dependencies': {**self.dependencies, 'evidenceSha256': {'producer': 'f' * 64}}}):
             self.assertNotEqual(cache.plan_digest(changed), digest)
 
     def test_remote_identity_is_verified_for_entire_plan_before_any_removal(self):
@@ -291,6 +294,25 @@ class RetentionTests(unittest.TestCase):
         with patch.object(cache, 'verify_remote', side_effect=RuntimeError('missing')):
             with self.assertRaisesRegex(RuntimeError, 'missing'):
                 self.apply()
+        self.assertEqual(self.removals(), [])
+
+    def test_remote_config_identity_is_rechecked_for_each_exact_reference(self):
+        self.apply()
+        requests = [args for args in self.commands if args[:3] == ('aws', 'ecr', 'batch-get-image')]
+        self.assertEqual(len(requests), 3)
+        self.assertEqual([sum(value.startswith('imageTag=') for value in args) for args in requests], [2, 1, 1])
+
+    def test_remote_recovery_disappearing_after_plan_verification_prevents_first_delete(self):
+        calls = 0
+        def command(*args):
+            nonlocal calls
+            if args[:3] == ('aws', 'ecr', 'batch-get-image'):
+                calls += 1
+                if calls > 1:
+                    return json.dumps({'images': []})
+            return self.run_command(*args)
+        with self.assertRaisesRegex(RuntimeError, 'Remote ECR identity'):
+            self.apply(command=command)
         self.assertEqual(self.removals(), [])
 
     def test_deletion_uses_only_exact_references_without_force_or_prune(self):
@@ -312,6 +334,7 @@ class RetentionTests(unittest.TestCase):
             return self.run_command(*args)
         with patch.object(cache, 'verify_remote'), \
                 patch.object(cache, 'current', return_value=(self.manifest, self.previous)), \
+                patch.object(cache, 'collect_dependencies', return_value=self.dependencies), \
                 patch.object(cache, 'active_images', return_value=set()), \
                 patch.object(cache, 'read', side_effect=command):
             with self.assertRaisesRegex(RuntimeError, 'Local image identity'):
@@ -333,6 +356,7 @@ class RetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=runtime) as root, \
                 patch.object(cache, 'BASE', Path(root)), \
                 patch.object(cache, 'current', return_value=(self.manifest, self.previous)), \
+                patch.object(cache, 'collect_dependencies', return_value=self.dependencies), \
                 patch.object(cache, 'active_images', return_value={'live'}), \
                 patch.object(cache, 'read', return_value=''), \
                 patch.object(cache, 'make_plan', return_value=self.plan), \
@@ -633,6 +657,7 @@ class HistoricalMaintenanceRetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, \
                 patch.object(cache, 'BASE', Path(root)), \
                 patch.object(cache, 'current', return_value=(manifest, retention.previous)), \
+                patch.object(cache, 'collect_dependencies', return_value=retention.dependencies), \
                 patch.object(cache, 'active_images', return_value=set()), \
                 patch.object(cache, 'read', return_value=''), \
                 patch.object(cache, 'make_plan', return_value=retention.plan), \
@@ -673,6 +698,160 @@ class MailboxRetentionGateTests(unittest.TestCase):
         value = self.manifest(); value['dataAuditBefore']['historicalException']['executedCheckCount'] = 47
         with self.assertRaises(RuntimeError):
             cache.verify_deployment(value, 'github-actions-123-1')
+
+
+class DependencyRetentionTests(unittest.TestCase):
+    def setUp(self):
+        runtime = DIRECTORY.parent.parent / '.runtime/cache-retention-tests'
+        runtime.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=runtime)
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name).resolve()
+        self.base_patch = patch.object(cache, 'BASE', self.base)
+        self.base_patch.start(); self.addCleanup(self.base_patch.stop)
+        self.ids = ['sha256:' + str(number) * 64 for number in range(1, 8)]
+        self.paths = []
+        self.rows = []
+        # Registration changes in the latest release while recharge has stayed
+        # unchanged across it. Its usable rollback is in the third release.
+        for index, commit in enumerate(('a' * 40, 'b' * 40, 'c' * 40, 'd' * 40)):
+            path = self.base / ('releases/20261007T00000' + str(index) + 'Z-' + commit[:12])
+            path.mkdir(parents=True)
+            row = {'commit': commit, 'sourceTree': 'f' * 40, 'images': {
+                'auto-registration': {'digest': self.ids[0 if index == 0 else 1]},
+                'auto-recharge': {'digest': self.ids[2 if index < 2 else 3]}}}
+            if index == 3:
+                row['images'] = {'auto-registration': {'digest': self.ids[4]},
+                    'auto-recharge': {'digest': self.ids[5]}}
+            self.paths.append(path); self.rows.append(row)
+        for index, row in enumerate(self.rows):
+            if index + 1 < len(self.rows):
+                row.update(previousCommit=self.rows[index + 1]['commit'], previousRelease=str(self.paths[index + 1]))
+            self.write(self.paths[index] / 'release-manifest.json', row)
+        (self.base / 'current').symlink_to(self.paths[0])
+        self.commands = []
+
+    def write(self, path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+
+    def command(self, *args):
+        self.commands.append(args)
+        self.assertEqual(args[:5], ('docker', 'image', 'inspect', '--format', '{{.Id}}'))
+        return args[-1]
+
+    def collect(self):
+        with patch.object(cache, 'read', side_effect=self.command):
+            return cache.collect_dependencies(self.rows[0], self.rows[1])
+
+    def fixed(self, profile_id='registration-worker-91-20261007'):
+        import hashlib
+        seal = {'images': {'admin': self.ids[4], 'api': self.ids[5], 'migrate': self.ids[6]}}
+        seal_path = self.base / cache.ORDER_ARCHIVE_SEAL_RELATIVE
+        self.write(seal_path, seal)
+        digest = hashlib.sha256(seal_path.read_bytes()).hexdigest()
+        finance = {'kind': 'EXISTING_SEALED_ORDER_ARCHIVE_49', 'releaseSealSha256': digest}
+        profile = {'id': profile_id, 'financeValidator': finance}
+        path = self.paths[0] / ('deploy/aws/' + profile['id'] + '.json')
+        self.write(path, profile)
+        self.rows[0]['fixedRegistrationRelease'] = {'id': profile['id'],
+            'profileRawSha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'cacheStatus': 'SKIPPED'}
+        self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+        self.pro_image = 'sha256:' + '8' * 64
+        self.rows[3]['images']['auto-recharge'] = {'digest': self.pro_image}
+        self.write(self.paths[3] / 'release-manifest.json', self.rows[3])
+        pro = {'status': 'VERIFIED_PRO_AFTER_88_RUNTIME_BASELINE', 'current': str(self.paths[3]),
+            'manifest': self.rows[3]}
+        producer = self.paths[0] / 'scripts/production-release/remote-deploy.py'
+        producer.parent.mkdir(parents=True, exist_ok=True)
+        producer.write_text('REGISTRATION_FINANCE = ' + repr(finance) + '\n'
+            + 'REGISTRATION_EMAIL_OBSERVATION_PRO_BASELINE = ' + repr(pro) + '\n'
+            + 'raise AssertionError("must never execute producer")\n')
+        return path, seal_path, producer
+
+    def test_each_service_keeps_its_last_different_version_without_all_history_images(self):
+        result = self.collect()
+        self.assertEqual(result['imageIds'], [self.ids[1], self.ids[3]])
+        self.assertEqual(result['serviceRollback']['auto-recharge']['commit'], self.rows[2]['commit'])
+        self.assertEqual(result['serviceRollback']['auto-registration']['commit'], self.rows[1]['commit'])
+        self.assertEqual(set(command[-1] for command in self.commands), {self.ids[1], self.ids[3]})
+
+    def test_missing_chain_file_cycle_and_wrong_predecessor_fail_closed(self):
+        original = dict(self.rows[1])
+        cases = ({**original, 'previousCommit': 'e' * 40},
+            {**original, 'previousCommit': self.rows[0]['commit'], 'previousRelease': str(self.paths[0])},
+            {**original, 'previousRelease': str(self.base / 'releases/missing')},
+            {**original, 'previousRelease': None})
+        for row in cases:
+            self.write(self.paths[1] / 'release-manifest.json', row)
+            with self.assertRaises((RuntimeError, FileNotFoundError)):
+                with patch.object(cache, 'read', side_effect=self.command):
+                    cache.collect_dependencies(self.rows[0], row)
+
+    def test_fixed_seal_and_pro_dependencies_are_collected_without_executing_old_producer(self):
+        self.fixed()
+        result = self.collect()
+        self.assertEqual(set(result['imageIds']), {self.ids[1], self.ids[3], self.pro_image, *self.ids[4:]})
+        self.assertIn(cache.ORDER_ARCHIVE_SEAL_RELATIVE, result['evidenceSha256'])
+        self.assertIn(str((self.paths[0] / 'scripts/production-release/remote-deploy.py').relative_to(self.base)),
+            result['evidenceSha256'])
+
+    def test_released_92_profile_preserves_same_sealed_finance_and_pro_dependencies(self):
+        self.fixed('registration-worker-92-20261007')
+        result = self.collect()
+        self.assertEqual(set(result['imageIds']), {self.ids[1], self.ids[3], self.pro_image, *self.ids[4:]})
+
+    def test_unknown_fixed_profile_finance_or_dynamic_declaration_stops_before_docker(self):
+        profile_path, _, producer = self.fixed()
+        import hashlib
+        self.rows[0]['fixedRegistrationRelease']['id'] = 'registration-worker-unreviewed'
+        self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+        with self.assertRaisesRegex(RuntimeError, 'Unknown fixed release dependency'):
+            self.collect()
+        self.fixed()
+        for finance in ({'kind': 'UNREVIEWED'}, {'kind': 'EXISTING_SEALED_ORDER_ARCHIVE_49', 'releaseSealSha256': 'f' * 64}):
+            profile = json.loads(profile_path.read_text()); profile['financeValidator'] = finance
+            self.write(profile_path, profile)
+            self.rows[0]['fixedRegistrationRelease']['profileRawSha256'] = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+            self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+            with self.assertRaises(RuntimeError): self.collect()
+        self.fixed()
+        producer.write_text('REGISTRATION_FINANCE = dangerous()\n')
+        with self.assertRaisesRegex(RuntimeError, 'Unknown fixed dependency'):
+            self.collect()
+        self.assertEqual(self.commands, [])
+
+    def test_tampered_seal_and_symlinked_producer_do_not_produce_a_plan(self):
+        _, seal, producer = self.fixed()
+        seal.write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'seal changed'): self.collect()
+        self.fixed()
+        actual = producer.with_suffix('.saved'); producer.rename(actual); producer.symlink_to(actual)
+        with self.assertRaisesRegex(RuntimeError, 'regular project file'): self.collect()
+
+    def test_unavailable_required_rollback_image_is_not_called_usable(self):
+        with patch.object(cache, 'read', return_value='other-image'):
+            with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+                cache.collect_dependencies(self.rows[0], self.rows[1])
+
+    def test_dependency_change_blocks_delete_even_when_container_set_is_unchanged(self):
+        retention = RetentionTests(); retention.setUp()
+        with patch.object(cache, 'verify_remote'), \
+                patch.object(cache, 'current', return_value=(retention.manifest, retention.previous)), \
+                patch.object(cache, 'collect_dependencies', return_value={**retention.dependencies, 'imageIds': [retention.ids[0]]}), \
+                patch.object(cache, 'read') as command:
+            with self.assertRaisesRegex(RuntimeError, 'dependencies changed'):
+                cache.apply_plan(retention.plan)
+            command.assert_not_called()
+
+    def test_fixed_skipped_cache_requires_manual_exact_plan_instead_of_weakening_finance_gate(self):
+        retention = RetentionTests(); retention.setUp()
+        retention.manifest['fixedRechargeRelease'] = {'cacheStatus': 'SKIPPED'}
+        with self.assertRaisesRegex(RuntimeError, 'separately approved exact plan'):
+            retention.invoke(['--apply', '--approved-policy', cache.POLICY, '--deployment-run', 'github-actions-123-1'])
+        result, calls = retention.invoke(['--apply', '--approved-policy', cache.POLICY,
+            '--approved-plan-sha256', cache.plan_digest(retention.plan)])
+        self.assertEqual((result['mode'], calls), ('APPLIED', 1))
 
 
 if __name__ == '__main__':
