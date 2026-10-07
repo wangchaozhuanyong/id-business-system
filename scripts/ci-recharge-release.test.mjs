@@ -10,7 +10,8 @@ import {
   adminUiGuardChecks,
   checkMode,
   isCiOnly,
-  selectedParts
+  selectedParts,
+  registrationOnboardingControls
 } from './ci-recharge-scope.mjs';
 
 function fixture(run, outputDirectory = '.deploy') {
@@ -483,6 +484,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'registration-worker-93-20261007'), false);
   assert.equal(selected('release', 'registration-worker-94-20261007'), false);
   assert.equal(selected('release', 'registration-worker-95-20261008'), false);
+  assert.equal(selected('release', 'registration-worker-96-20261008'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -509,6 +511,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-93-20261007',
         'registration-worker-94-20261007',
         'registration-worker-95-20261008',
+        'registration-worker-96-20261008',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -4861,4 +4864,68 @@ test('fixed 6f5 actual readback poller distinguishes a bounded CLI timeout from 
       (error) =>
         error.status === status && error.stdout === '' && String(error.stderr).includes(message)
     );
+});
+
+test('registration96 control-only CI executes actual finite and transport guards without connector or database suites', () => {
+  const controls = [...registrationOnboardingControls];
+  assert.equal(controls.length, 15);
+  assert.equal(checkMode(controls, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const part of ['guards', 'release-controls']) {
+    const commands = guardCommands(controls, { part });
+    assert.ok(
+      commands.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py')
+    );
+    assert.ok(
+      commands.includes('python3 -B scripts/production-release/registration-only-transport.test.py')
+    );
+    assert.ok(commands.includes('node --test scripts/v2-registration-finance-audit.test.mjs'));
+    assert.equal(
+      commands.some(
+        (command) => command.includes('-m unittest') || command.includes('prisma:mysql')
+      ),
+      false
+    );
+  }
+});
+
+test('registration96 selects one registration release and complete independent readback while skipping cache and other service releases', () => {
+  const profile = 'registration-worker-96-20261008';
+  const selected = workflowSteps
+    .filter(
+      (step) =>
+        !step.if ||
+        workflowPredicate(step.if)({
+          operation: 'release',
+          historical_exception: profile,
+          reuse_image_run: ''
+        })
+    )
+    .map((step) => step.name);
+  for (const name of [
+    'Verify fixed 96 registration runtime approval',
+    'Save fixed 96 registration Worker build projection',
+    'Verify fixed 96 registration deployment independently',
+    'Save fixed 96 registration independent readback',
+    'Record skipped cache maintenance for fixed 96 registration release'
+  ])
+    assert.ok(selected.includes(name), name);
+  for (const name of [
+    'Verify fixed 95 registration runtime approval',
+    'Verify fixed 95 registration deployment independently',
+    'Verify fixed 94 registration runtime approval',
+    'Verify fixed 6f5 recharge runtime approval',
+    'Verify fixed recharge deployment independently',
+    'Verify reusable build and unchanged application source',
+    'Verify or maintain recoverable unused project image cache',
+    'Maintain service rollback image cache independently after fixed release'
+  ])
+    assert.equal(selected.includes(name), false, name);
+  for (const operation of ['verify_access', 'release_api_admin', 'verify_api_admin']) {
+    const inputs = { operation, historical_exception: profile, reuse_image_run: '' };
+    for (const step of workflowSteps.filter(
+      (step) => step.name.includes('fixed 96') && !step.name.includes('runtime approval')
+    ))
+      assert.equal(workflowPredicate(step.if)(inputs), false, step.name);
+  }
 });

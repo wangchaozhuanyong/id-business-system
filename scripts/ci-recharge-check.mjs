@@ -6,7 +6,8 @@ import {
   adminUiGuardChecks,
   backendArchitectureGuardChecks,
   auditRetentionMigration,
-  historicalReleaseControlPaths
+  historicalReleaseControlPaths,
+  hasRegistrationOnboardingScope
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -35,6 +36,10 @@ const preparedControlPaths = [
   'scripts/production-release/prepared-images.test.py'
 ];
 const registrationControlPaths = [
+  'deploy/aws/registration-worker-96-20261008.json',
+  'deploy/aws/registration-baseline-96-20261008.json',
+  'scripts/production-release/registration-onboarding-96.py',
+  'scripts/production-release/registration-onboarding-96.test.py',
   'deploy/aws/registration-worker-b8-80-20261006.json',
   'deploy/aws/registration-worker-956-20261006.json',
   'deploy/aws/registration-worker-85-20261006.json',
@@ -174,6 +179,8 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
   }
+  if (hasRegistrationOnboardingScope(changed))
+    run('python3', ['-B', 'scripts/production-release/registration-onboarding-96.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/storage-maintenance')))
     run('python3', ['-B', 'scripts/production-release/storage-maintenance.test.py']);
   if (
@@ -222,6 +229,8 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
     run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
   }
+  if (hasRegistrationOnboardingScope(changed))
+    run('python3', ['-B', 'scripts/production-release/registration-onboarding-96.test.py']);
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
   if (

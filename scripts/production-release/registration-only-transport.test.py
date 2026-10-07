@@ -1,6 +1,11 @@
 """Exercise release shell transport with local executables; no Docker/AWS writes."""
 from contextlib import contextmanager
+import ast
+import base64
+import copy
+import gzip
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +16,8 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 PROJECT = Path(__file__).resolve().parents[2]
 PROFILE = 'registration-worker-b8-80-20261006'
@@ -1136,6 +1143,495 @@ class Registration95TransportTests(TransportTests):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(self.calls(env, 'aws'), [])
                     self.assertEqual(self.calls(env, 'docker'), [])
+
+class Registration96TransportTests(unittest.TestCase):
+    """Synthetic shell transport, not an observed runtime or registration receipt."""
+    profile = 'registration-worker-96-20261008'
+    baseline = '04570d75c779fd91a0933ef9416f6d62698b6b91'
+    profile_file = 'deploy/aws/' + profile + '.json'
+    baseline_file = 'deploy/aws/registration-baseline-96-20261008.json'
+    module_file = 'scripts/production-release/registration-onboarding-96.py'
+    output_directory = '.runtime/registration-runtime96-20261008/transport'
+    run_script = staticmethod(TransportTests.run_script)
+    calls = staticmethod(TransportTests.calls)
+    workflow_step = staticmethod(TransportTests.workflow_step)
+
+    @staticmethod
+    def actual_module():
+        path = PROJECT / 'scripts/production-release/registration-onboarding-96.py'
+        spec = importlib.util.spec_from_file_location('actual96_transport_definition', path)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        return module
+
+    @contextmanager
+    def fixture(self):
+        with TransportTests.fixture(self) as (root, env):
+            env['LOCAL_TEST_ROOT'] = str(root)
+            env['RELEASE_REPOSITORY'] = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+            carrier = root / self.baseline_file
+            carrier.write_text(json.dumps({'version':1,'status':'SYNTHETIC_TRANSPORT_ONLY','fixtureOnly':True}))
+            module = root / self.module_file
+            actual_source=(PROJECT/self.module_file).read_text()
+            probe=next(n for n in ast.parse(actual_source).body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='TASK_READ_PROBE'for t in n.targets))
+            fixture_lines=actual_source.splitlines(keepends=True)
+            # This transport fixture never queries a database. Remove only the
+            # unused embedded observer literal so its explicit hook stays under
+            # the real 128 KiB carrier cap as actual adapter definitions grow.
+            fixture_lines[probe.lineno-1:probe.end_lineno]=["TASK_READ_PROBE = 'SYNTHETIC_TRANSPORT_TASK_OBSERVER_DISABLED'\n"]
+            module.write_text(''.join(fixture_lines))
+            module.write_text(module.read_text()+'''
+# Explicit fixture hook: transport tests the workflow call contract; actual
+# validate96_readback_archive semantics have their own complete module tests.
+def validate96_readback_archive(value,carrier_raw,profile_raw,candidate_raw,registration_archive,metadata):
+    require(os.environ.get('LOCAL_TEST_ROOT')==str(Path.cwd()),'SYNTHETIC_FIXTURE_ONLY')
+    require(closed_json(carrier_raw).get('fixtureOnly')is True and closed_json(profile_raw).get('fixtureOnly')is True,'SYNTHETIC_FIXTURE_ONLY')
+    keys(value,READBACK_KEYS,'SYNTHETIC_FULL_RECEIPT_REQUIRED')
+    keys(metadata,CANDIDATE_KEYS,'SYNTHETIC_METADATA_REQUIRED')
+    require(value==json.loads(os.environ['LOCAL_READBACK_EXPECTED']),'SYNTHETIC_RECEIPT_CHANGED')
+    require(candidate_raw==b'SYNTHETIC_CANDIDATE_ARCHIVE' and metadata=={'commit':os.environ['RELEASE_COMMIT'],'tree':os.environ['SOURCE_TREE'],'run':'github-actions-456-1','ciRunId':123,'archiveSha256':sha256(candidate_raw)},'SYNTHETIC_METADATA_CHANGED')
+    require(registration_archive(candidate_raw,metadata['commit'])=={'SYNTHETIC_ONLY':(b'fixture','100644')},'SYNTHETIC_ARCHIVE_CHANGED')
+    require(value['profileRawSha256']==sha256(profile_raw) and value['moduleSha256']==sha256(Path(__file__).read_bytes()),'SYNTHETIC_CARRIER_CHANGED')
+    with open(os.environ['LOCAL_TOOL_LOG'],'a')as f:f.write(json.dumps(['full96_validator',[len(value),metadata,sha256(carrier_raw),sha256(profile_raw)]])+ '\\n')
+    return value
+''')
+            worker = {WORKER+'/fixture_'+str(i)+'.py':{'mode':'100644','sha256':hashlib.sha256(('SYNTHETIC_SOURCE_'+str(i)).encode()).hexdigest()} for i in range(60)}
+            profile = {'id':self.profile,'enabled':True,'fixtureOnly':True,
+                'baselineCarrierSha256':hashlib.sha256(carrier.read_bytes()).hexdigest(),
+                'registrationSourceCommit':'3d71a44b30a798110d43c8b943d3f2cbac99efa9',
+                'workerBasisCommit':'2f24cf81007429ea474da404a30bc74da9d43ce1',
+                'workerProjection':worker,'workerProjectionSha256':hashlib.sha256(json.dumps(worker,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+                'registrationSourceSha256':{},'carriedSourceCommits':{},'carriedSourceSha256':{},'baselineReceiptSha256':'b'*64,
+                'syntheticModuleSha256':hashlib.sha256(module.read_bytes()).hexdigest()}
+            controller = root / 'scripts/production-release/remote-deploy.py'
+            controller.write_text('''# Explicit SYNTHETIC local scope/build producer, never a production controller.
+import hashlib,json,os,pathlib,stat,sys
+def main():
+ assert os.environ.get('LOCAL_TEST_ROOT')==str(pathlib.Path.cwd())
+ p=json.loads(pathlib.Path('deploy/aws/registration-worker-96-20261008.json').read_bytes())
+ assert p['fixtureOnly']is True and p['enabled']is True
+ names=[('scripts/production-release/remote-deploy.py',1024*1024),('deploy/aws/registration-worker-96-20261008.json',128*1024),('scripts/production-release/registration-onboarding-96.py',128*1024),('deploy/aws/registration-baseline-96-20261008.json',4*1024*1024)]
+ for name,cap in names:
+  path=pathlib.Path(name).absolute();s=path.lstat()
+  assert path.resolve()==path and stat.S_ISREG(s.st_mode)and s.st_nlink==1 and stat.S_IMODE(s.st_mode)in(0o644,0o664)and 0<s.st_size<=cap
+ assert hashlib.sha256(pathlib.Path(names[0][0]).read_bytes()).hexdigest()==p['syntheticControllerSha256']
+ assert hashlib.sha256(pathlib.Path(names[2][0]).read_bytes()).hexdigest()==p['syntheticModuleSha256']
+ assert hashlib.sha256(pathlib.Path(names[3][0]).read_bytes()).hexdigest()==p['baselineCarrierSha256']
+ args=sys.argv[1:];assert args.count('--registration96-baseline-sha256')==1 and args[args.index('--registration96-baseline-sha256')+1]==p['baselineCarrierSha256']
+ assert os.environ.get('LOCAL_SCOPE_FAILURE')!='true'
+ if args[0]=='--prepare-fixed-registration-build':
+  context=pathlib.Path('.deploy/production-release/registration-build-context')
+  file=context/'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile';file.parent.mkdir(parents=True,exist_ok=True);file.write_text('FROM SYNTHETIC_LOCAL_ONLY\\n')
+  value={'version':1,'id':p['id'],'sourceCommit':os.environ['RELEASE_COMMIT'],'sourceTree':os.environ['SOURCE_TREE'],'contextPath':str(context),**{k:p[k]for k in('registrationSourceCommit','workerBasisCommit','workerProjectionSha256','registrationSourceSha256','carriedSourceCommits','carriedSourceSha256','baselineReceiptSha256')}}
+  if os.environ.get('LOCAL_PROJECT_DRIFT'):value['workerProjectionSha256']='a'*64
+  (context.parent/'registration-build-projection.json').write_text(json.dumps(value))
+ return 0
+def registration_download(commit):
+ assert commit==os.environ['RELEASE_COMMIT'];return b'SYNTHETIC_CANDIDATE_ARCHIVE'
+def registration_archive(raw,commit):
+ assert raw==b'SYNTHETIC_CANDIDATE_ARCHIVE'and commit==os.environ['RELEASE_COMMIT'];return {'SYNTHETIC_ONLY':(b'fixture','100644')}
+def load_registration96():
+ path=pathlib.Path(__file__).with_name('registration-onboarding-96.py');ns={'__name__':'SYNTHETIC96_TRANSPORT','__file__':str(path)}
+ exec(compile(path.read_bytes(),str(path),'exec'),ns);ns['registration_archive']=registration_archive;return ns
+if __name__=='__main__':
+ try:raise SystemExit(main())
+ except Exception:print('Synthetic96 scope rejected; raw output suppressed',file=sys.stderr);raise SystemExit(2)from None
+''')
+            profile['syntheticControllerSha256'] = hashlib.sha256(controller.read_bytes()).hexdigest()
+            (root / self.profile_file).write_text(json.dumps(profile))
+            prepared = root / '.deploy/production-release/registration-build-projection.json'
+            prepared.parent.mkdir(parents=True,exist_ok=True)
+            prepared.write_text(json.dumps({'version':1,'id':self.profile,'sourceCommit':COMMIT,'sourceTree':TREE,'contextPath':CONTEXT,
+                **{k:profile[k]for k in('registrationSourceCommit','workerBasisCommit','workerProjectionSha256','registrationSourceSha256','carriedSourceCommits','carriedSourceSha256','baselineReceiptSha256')}}))
+            tool = '''import json,os,pathlib,sys
+name=pathlib.Path(sys.argv[0]).name;args=sys.argv[1:]
+with open(os.environ['LOCAL_TOOL_LOG'],'a')as f:f.write(json.dumps([name,args])+'\\n')
+if name=='python3':os.execv(os.environ['LOCAL_REAL_PYTHON'],[os.environ['LOCAL_REAL_PYTHON'],*args])
+if name=='node':print('false');sys.exit(0)
+if name=='docker':
+ if args[:2]==['image','inspect']:
+  p=json.loads(pathlib.Path('deploy/aws/registration-worker-96-20261008.json').read_bytes())
+  print(('0'*64 if os.environ.get('LOCAL_LABEL_DRIFT')else p['workerProjectionSha256'])if'worker-projection-sha256'in args[-1]else os.environ['RELEASE_COMMIT'])
+ if args and args[0]=='login':sys.stdin.read()
+ sys.exit(0)
+if name=='aws':
+ if args[:2]==['ecr','get-login-password']:print('SYNTHETIC_NO_CREDENTIAL')
+ elif args[:2]==['ecr','describe-images']:print('sha256:'+'a'*64)
+ elif 'send-command'in args:print('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+ elif 'wait'in args:pass
+ elif 'get-command-invocation'in args:
+  value=os.environ.get('LOCAL_READBACK_OUTPUT','SYNTHETIC_NOT_A_RUNTIME_RECEIPT')
+  status=os.environ.get('LOCAL_PROVIDER_STATUS','Success')
+  closed={'CommandId':'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Status':status,'ResponseCode':True if os.environ.get('LOCAL_PROVIDER_BOOL_CODE')else 0,'Stdout':value,'Stderr':os.environ.get('LOCAL_PROVIDER_STDERR','')}
+  if os.environ.get('LOCAL_PROVIDER_EXTRA'):closed['RAW_SECRET_SENTINEL']='SYNTHETIC_ONLY'
+  if '--query'in args:
+   query=args[args.index('--query')+1];print(json.dumps(closed)if query.startswith('{')else status if query=='Status'else value)
+  else:print(json.dumps(closed))
+ else:sys.exit(23)
+'''
+            for name in ('python3','node','docker','aws','sleep'):
+                path=root/'.fixture'/name;path.write_text('#!'+sys.executable+'\n'+tool);path.chmod(0o755)
+            for name in ('scripts/production-release/remote-deploy.py',self.profile_file,self.module_file,self.baseline_file):
+                (root/name).chmod(0o644)
+            receipt={n:{}for n in self.actual_module().READBACK_KEYS}
+            receipt.update(version=1,status='VERIFIED_REGISTRATION96_RUNTIME',readOnly=True,runtimeStable=True,
+                current='/opt/id-business-v2/releases/20261008T000000Z-'+COMMIT[:12],previous='/opt/id-business-v2/releases/SYNTHETIC_PREVIOUS',
+                commit=COMMIT,sourceTree=TREE,deploymentRun='github-actions-456-1',
+                profileRawSha256=hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest(),
+                moduleSha256=hashlib.sha256(module.read_bytes()).hexdigest(),manifest={'fixtureOnly':True,'ciWorkflowRunId':123},
+                manifestRawSha256='1'*64,manifestCanonicalSha256='2'*64,
+                configurationProof={'fixtureOnly':True},officialOtpAccepted='NOT_MEASURED',businessAcceptanceConfirmed=False)
+            env['LOCAL_READBACK_EXPECTED']=json.dumps(receipt)
+            yield root,env
+
+    def test_real96_defaults_exit_before_any_file_or_provider_io(self):
+        module=self.actual_module()
+        with patch.object(module.os,'open',side_effect=AssertionError('Unexpected file I/O')),patch.object(module.subprocess,'run',side_effect=AssertionError('Unexpected provider')),patch.object(module,'Registration96IO',side_effect=AssertionError('Unexpected adapter')):
+            result=module.registration96_cli(['--registration-worker-96'],{})
+        self.assertEqual(result,2);self.assertFalse(module.ENABLED)
+
+    def test_disabled_missing_carriers_wrong_h_and_drift_stop_before_provider(self):
+        changes=[('disabled',lambda r: self.mutate_profile(r,enabled=False)),('wrongH',lambda r:self.mutate_profile(r,baselineCarrierSha256='0'*64))]
+        changes += [('missing:'+n,lambda r,n=n:(r/n).unlink())for n in ('scripts/production-release/remote-deploy.py',self.profile_file,self.module_file,self.baseline_file)]
+        changes += [('drift:'+n,lambda r,n=n:(r/n).write_bytes((r/n).read_bytes()+b'\n# SYNTHETIC_DRIFT\n'))for n in ('scripts/production-release/remote-deploy.py',self.module_file,self.baseline_file)]
+        for script in ('build-images.sh','push-images.sh','dispatch.sh'):
+            for label,change in changes:
+                with self.subTest(script=script,case=label),self.fixture()as(root,env):
+                    change(root);result=self.run_script(root,env,script)
+                    self.assertNotEqual(result.returncode,0);self.assertEqual(self.calls(env,'docker'),[]);self.assertEqual(self.calls(env,'aws'),[])
+
+    def mutate_profile(self,root,**changes):
+        p=root/self.profile_file;value=json.loads(p.read_bytes());value.update(changes);p.write_text(json.dumps(value))
+
+    def test_mixed_admin_api_recharge_reuse_cache_and_seals_stop_before_provider(self):
+        mutations=[('RELEASE_ADMIN_ONLY','true'),('RELEASE_OPERATION','release_api_admin'),('RELEASE_OPERATION','verify_api_admin'),
+            ('HISTORICAL_EXCEPTION','recharge-pro-6f5-20261008'),('HISTORICAL_EXCEPTION','registration-worker-95-20261008'),('EXPECTED_CURRENT','6f5e5cc252886d5f86592e307147b40c13577585')]
+        mutations += [(n,'a'*64)for n in ('REUSE_IMAGE_RUN','REUSE_IMAGE_COMMIT','REUSE_IMAGE_RUN_ID','REUSE_IMAGE_RUN_ATTEMPT','POST_CLEANUP_SEAL_SHA256','ORDER_ARCHIVE_SEAL_SHA256','ORDER_ARCHIVE_PREPARED_IMAGES_SHA256','RELEASE_BROWSER_CACHE_IMAGE','RELEASE_BROWSER_CACHE_IMAGE_ID')]
+        for script in ('build-images.sh','push-images.sh','dispatch.sh'):
+            for key,value in mutations:
+                with self.subTest(script=script,key=key),self.fixture()as(root,env):
+                    env[key]=value;result=self.run_script(root,env,script)
+                    self.assertNotEqual(result.returncode,0);self.assertEqual(self.calls(env,'docker'),[]);self.assertEqual(self.calls(env,'aws'),[])
+
+    def test_build_and_push_only_one_fresh_immutable_worker_projection(self):
+        with self.fixture()as(root,env):
+            result=self.run_script(root,env,'build-images.sh');self.assertEqual(result.returncode,0,result.stderr)
+            builds=[c for c in self.calls(env,'docker')if c[0]=='build'];self.assertEqual(len(builds),1)
+            self.assertEqual(builds[0][-1],CONTEXT);self.assertEqual(builds[0][builds[0].index('-f')+1],CONTEXT+'/'+WORKER+'/Dockerfile')
+            tag=env['RELEASE_REPOSITORY']+':'+COMMIT+'-456-1-auto-recharge'
+            self.assertEqual(builds[0][builds[0].index('-t')+1],tag)
+            p=json.loads((root/self.profile_file).read_bytes());self.assertIn('id-business-v2.worker-projection-sha256='+p['workerProjectionSha256'],builds[0])
+            result=self.run_script(root,env,'push-images.sh');self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual([c for c in self.calls(env,'docker')if c[0]=='push'],[['push',tag]])
+            self.assertEqual(len([c for c in self.calls(env,'aws')if c[:2]==['ecr','describe-images']]),1)
+
+    def test_actual_private_projection_writer_matches_real_reader_without_relaxing_profile(self):
+        with self.fixture()as(root,env):
+            target=root/'.deploy/production-release/registration-build-projection.json'
+            raw=target.read_bytes();target.unlink()
+            self.actual_module().write_private_file(target,raw)
+            self.assertEqual(target.stat().st_mode&0o777,0o600)
+            script='source scripts/production-release/validate-release-selection.sh; read_registration_onboarding_projection'
+            result=subprocess.run(['bash','-Eeuo','pipefail','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            expected=json.loads((root/self.profile_file).read_bytes())['workerProjectionSha256']
+            self.assertEqual(result.stdout.splitlines()[-1],expected)
+            self.assertEqual(self.calls(env,'aws'),[]);self.assertEqual(self.calls(env,'docker'),[])
+            (root/self.profile_file).chmod(0o600)
+            rejected=subprocess.run(['bash','-Eeuo','pipefail','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(rejected.returncode,0);self.assertNotIn(expected,rejected.stdout)
+            self.assertEqual(self.calls(env,'aws'),[]);self.assertEqual(self.calls(env,'docker'),[])
+
+    def test_projection_or_image_label_drift_prevents_any_build_or_push(self):
+        for script,flag,operation in (('build-images.sh','LOCAL_PROJECT_DRIFT','build'),('push-images.sh','LOCAL_LABEL_DRIFT','push')):
+            with self.subTest(script=script),self.fixture()as(root,env):
+                env[flag]='true';result=self.run_script(root,env,script);self.assertNotEqual(result.returncode,0)
+                self.assertEqual([c for c in self.calls(env,'docker')if c[0]==operation],[]);self.assertEqual(self.calls(env,'aws'),[])
+
+    def dispatched(self,root,env):
+        result=self.run_script(root,env,'dispatch.sh');self.assertEqual(result.returncode,0,result.stderr)
+        return json.loads((root/'.deploy/production-release/ssm-456.json').read_bytes())
+
+    def test_dispatch_four_pinned_carriers_and_h_bound_no_extra_source_urls(self):
+        with self.fixture()as(root,env):
+            value=self.dispatched(root,env);self.assertLess(len(json.dumps(value).encode()),48*1024)
+            commands=value['commands'];downloads=[shlex.split(c)for c in commands if c.startswith('curl ')]
+            files=('scripts/production-release/remote-deploy.py',self.profile_file,self.module_file,self.baseline_file)
+            self.assertEqual(len(downloads),4)
+            for call,name in zip(downloads,files):
+                self.assertEqual(call[call.index('--max-time')+2],'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+COMMIT+'/'+name)
+                self.assertEqual(call[call.index('-o')+1],'/opt/id-business-v2/.staging/oidc-'+COMMIT+'/'+Path(name).name)
+            actual=shlex.split(commands[-1]);self.assertIn('--registration-worker-96',actual)
+            self.assertNotIn('--admin-only',actual);self.assertNotIn('--recharge-pro-6f5',actual)
+            for key,expected in (('--commit',COMMIT),('--source-tree',TREE),('--expected-current',self.baseline),('--image-commit',COMMIT),('--image-run-id','456'),('--image-run-attempt','1'),('--registration96-baseline-sha256',hashlib.sha256((root/self.baseline_file).read_bytes()).hexdigest())):
+                self.assertEqual(actual[actual.index(key)+1],expected)
+            snippets=[shlex.split(c)[2]for c in commands if c.startswith('python3 -c ')];self.assertEqual(len(snippets),2)
+            checks=ast.parse(snippets[1]);rows=[n for n in checks.body if isinstance(n,ast.Expr)and isinstance(n.value,ast.Call)and isinstance(n.value.func,ast.Name)and n.value.func.id=='read96']
+            self.assertEqual([ast.literal_eval(n.value.args[1])for n in rows],[1024*1024,128*1024,128*1024,4*1024*1024])
+            self.assertEqual([ast.literal_eval(n.value.args[2])for n in rows],[hashlib.sha256((root/n).read_bytes()).hexdigest()for n in files])
+            self.assertTrue(any(c.startswith('chmod 0644 ')for c in commands))
+
+    @staticmethod
+    def execute_root_stat_fixture(code,uid=0,race=False):
+        """Only UID is synthetic; real temp-file bytes/modes/links and fstat are used."""
+        original_fstat=os.fstat;original_lstat=Path.lstat;original_stat=Path.stat;count=[0]
+        def adapted(value):
+            d={n:getattr(value,n)for n in dir(value)if n.startswith('st_')};d['st_uid']=uid;return SimpleNamespace(**d)
+        def fstat(fd):
+            count[0]+=1;value=adapted(original_fstat(fd))
+            if race and count[0]==2:value.st_mtime_ns+=1
+            return value
+        with patch.object(os,'fstat',fstat),patch.object(Path,'lstat',lambda p,*a,**k:adapted(original_lstat(p,*a,**k))),patch.object(Path,'stat',lambda p,*a,**k:adapted(original_stat(p,*a,**k))):
+            namespace={'__name__':'synthetic_carrier_check'}
+            exec(compile(code,'<SYNTHETIC_ROOT_STAT_ONLY>','exec'),namespace)
+            return namespace
+
+    def stage_verifiers(self,root,env):
+        value=self.dispatched(root,env);snippets=[shlex.split(c)[2]for c in value['commands']if c.startswith('python3 -c ')]
+        base=root/'SYNTHETIC-remote-root';stage=base/'.staging'/('oidc-'+COMMIT);stage.mkdir(parents=True)
+        files=('scripts/production-release/remote-deploy.py',self.profile_file,self.module_file,self.baseline_file)
+        targets=[]
+        for n in files:
+            target=stage/Path(n).name;target.write_bytes((root/n).read_bytes());target.chmod(0o644);targets.append(target)
+        return [s.replace('/opt/id-business-v2',str(base))for s in snippets],targets
+
+    def test_remote_verify_root_owner_exact0644_singlelink_and_fstat_identity(self):
+        with self.fixture()as(root,env):
+            snippets,targets=self.stage_verifiers(root,env);self.execute_root_stat_fixture(snippets[1])
+            for uid,race in ((501,False),(0,True)):
+                with self.subTest(uid=uid,race=race),self.assertRaises(RuntimeError):self.execute_root_stat_fixture(snippets[1],uid=uid,race=race)
+            targets[2].chmod(0o664)
+            with self.assertRaises(RuntimeError):self.execute_root_stat_fixture(snippets[1])
+            targets[2].chmod(0o644);os.link(targets[2],root/'SYNTHETIC-hardlink')
+            with self.assertRaises(RuntimeError):self.execute_root_stat_fixture(snippets[1])
+
+    def test_remote_four_sha_caps_missing_and_symlink_reject_before_exec(self):
+        with self.fixture()as(root,env):
+            snippets,targets=self.stage_verifiers(root,env)
+            for target,cap in zip(targets,(1024*1024,128*1024,128*1024,4*1024*1024)):
+                original=target.read_bytes()
+                with self.subTest(target=target.name,case='sha'):
+                    target.write_bytes(original+b'\n# SYNTHETIC_DRIFT\n')
+                    with self.assertRaises(RuntimeError):self.execute_root_stat_fixture(snippets[1])
+                target.write_bytes(b' '*(cap+1))
+                with self.subTest(target=target.name,case='cap'),self.assertRaises(RuntimeError):self.execute_root_stat_fixture(snippets[1])
+                target.unlink()
+                with self.subTest(target=target.name,case='missing'),self.assertRaises(FileNotFoundError):self.execute_root_stat_fixture(snippets[1])
+                never=root/('never-written-'+target.name);target.symlink_to(never)
+                with self.subTest(target=target.name,case='symlink'),self.assertRaises(RuntimeError):exec(compile(snippets[0],'<synthetic-guard>','exec'),{})
+                self.assertFalse(never.exists());target.unlink();target.write_bytes(original);target.chmod(0o644)
+
+    def test_local_four_carriers_caps_links_and_modes_reject_before_provider(self):
+        files=('scripts/production-release/remote-deploy.py',self.profile_file,self.module_file,self.baseline_file)
+        for n,cap in zip(files,(1024*1024,128*1024,128*1024,4*1024*1024)):
+            for kind in ('cap','mode','link','symlink'):
+                with self.subTest(name=n,kind=kind),self.fixture()as(root,env):
+                    path=root/n
+                    if kind=='cap':path.write_bytes(path.read_bytes()+b'\n'+b' '*(cap+1))
+                    elif kind=='mode':path.chmod(0o600)
+                    elif kind=='link':os.link(path,root/'SYNTHETIC-local-hardlink')
+                    else:path.unlink();path.symlink_to(root/'SYNTHETIC-never-written')
+                    result=self.run_script(root,env,'dispatch.sh');self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(self.calls(env,'aws'),[]);self.assertEqual(self.calls(env,'docker'),[])
+
+    def test_actual_readback_decoder_checks_all_bytes_and_rejects_ambiguous_envelopes(self):
+        module=self.actual_module();value={'fixtureOnly':True,'unmeasured':'SYNTHETIC_LOCAL_ONLY'}
+        envelope=module.encode96_readback(value);self.assertEqual(module.decode96_readback(envelope),value)
+        mutations=[lambda e:e.update(extra=True),lambda e:e.update(rawBytes=True),lambda e:e.update(rawBytes=4*1024*1024+1),lambda e:e.update(sha256='0'*64),lambda e:e.update(data=e['data']+'='),lambda e:e.update(data=base64.b64encode(base64.b64decode(e['data'])+b'trailer').decode())]
+        for change in mutations:
+            altered=copy.deepcopy(envelope);change(altered)
+            with self.assertRaises(module.Registration96Error):module.decode96_readback(altered)
+        raw=b'{"fixtureOnly":true,"fixtureOnly":false}'
+        duplicate={'encoding':'gzip+base64','rawBytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'data':base64.b64encode(gzip.compress(raw,mtime=0)).decode()}
+        with self.assertRaises(module.Registration96Error):module.decode96_readback(duplicate)
+
+    def test_workflow96_keeps_lock_artifact_scope_and_skipped_cache_record(self):
+        workflow=(PROJECT/'.github/workflows/production-release.yml').read_text()
+        self.assertIn('group: id-business-v2-production-release\n  cancel-in-progress: false',workflow)
+        block,_=self.workflow_step('Save fixed 96 registration Worker build projection')
+        self.assertIn("inputs.operation == 'release' && inputs.historical_exception == '"+self.profile+"'",block)
+        self.assertIn('path: .deploy/production-release/registration-build-projection.json',block)
+        block,_=self.workflow_step('Record skipped cache maintenance for fixed 96 registration release')
+        self.assertIn(self.profile,block)
+        self.assertNotIn('docker ',block);self.assertNotIn('aws ',block)
+
+    def readback_wire(self,receipt):
+        return 'FIXED_REGISTRATION_RELEASE_VERIFIED '+json.dumps(self.actual_module().encode96_readback(receipt),separators=(',',':'))
+
+    def filter_source(self):
+        _block,script=self.workflow_step('Verify fixed 96 registration deployment independently')
+        begin="<<'PY_FILTER_REGISTRATION96_READBACK'\n"
+        return script.split(begin,1)[1].split('\nPY_FILTER_REGISTRATION96_READBACK',1)[0]
+
+    def run_filter(self,root,env,invocation):
+        target=root/'.deploy/production-release/fixed-registration-96-readback-filter.py'
+        target.write_text(self.filter_source())
+        env={**env,'REGISTRATION96_READBACK_COMMAND_ID':'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}
+        raw=invocation if isinstance(invocation,str)else json.dumps(invocation)
+        return subprocess.run([sys.executable,str(target)],input=raw,cwd=root,env=env,capture_output=True,text=True,timeout=20)
+
+    def test_workflow96_validates_full_receipt_with_fixed_candidate_and_stores_private_evidence(self):
+        block,script=self.workflow_step('Verify fixed 96 registration deployment independently')
+        self.assertIn("inputs.operation == 'release' && inputs.historical_exception == '"+self.profile+"'",block)
+        with self.fixture()as(root,env):
+            receipt=json.loads(env['LOCAL_READBACK_EXPECTED']);env['LOCAL_READBACK_OUTPUT']=self.readback_wire(receipt)
+            result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            summary=json.loads(result.stdout);self.assertEqual(summary['status'],receipt['status'])
+            self.assertEqual(summary['readbackSha256'],self.actual_module().canonical_sha256(receipt))
+            self.assertEqual(summary['officialOtpAccepted'],'NOT_MEASURED');self.assertFalse(summary['businessAcceptanceConfirmed'])
+            evidence=root/'.deploy/production-release/fixed-registration-96.actual.readback.json'
+            self.assertEqual(json.loads(evidence.read_bytes()),receipt);self.assertEqual(evidence.stat().st_mode&0o777,0o600)
+            calls=self.calls(env,'full96_validator');self.assertEqual(len(calls),1);self.assertEqual(calls[0][0],28)
+            self.assertEqual(calls[0][1],{'commit':COMMIT,'tree':TREE,'run':'github-actions-456-1','ciRunId':123,'archiveSha256':hashlib.sha256(b'SYNTHETIC_CANDIDATE_ARCHIVE').hexdigest()})
+            self.assertEqual(self.calls(env,'docker'),[])
+            aws=self.calls(env,'aws');self.assertEqual([c[:2]for c in aws],[['ssm','send-command'],['ssm','get-command-invocation'],['ssm','get-command-invocation']])
+            self.assertIn('--output',aws[-1]);self.assertIn('json',aws[-1])
+            parameters=json.loads((root/'.deploy/production-release/fixed-registration-96-readback.json').read_bytes())
+            self.assertLess(len(json.dumps(parameters).encode()),20000);self.assertEqual(parameters['executionTimeout'],['360'])
+            self.assertEqual(len(parameters['commands']),1);command=shlex.split(parameters['commands'][0])
+            self.assertEqual(command[:3],['python3','-B','-c']);source=command[3]
+            self.assertNotIn('.staging',source);self.assertNotIn('https://',source);self.assertNotIn('curl ',source)
+            self.assertIn("base/'current'",source);self.assertIn('--registration96-budget-seconds',source);self.assertIn("'300'",source)
+            parsed=ast.parse(source);assignment=next(n for n in parsed.body if isinstance(n,ast.Assign)and isinstance(n.targets[0],ast.Name)and n.targets[0].id=='rows')
+            files=('scripts/production-release/remote-deploy.py',self.module_file,self.profile_file,self.baseline_file)
+            self.assertEqual(ast.literal_eval(assignment.value),[(n,cap,hashlib.sha256((root/n).read_bytes()).hexdigest())for n,cap in zip(files,(1024*1024,128*1024,128*1024,4*1024*1024))])
+            self.assertIn(hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest(),source)
+            self.assertIn(hashlib.sha256((root/self.baseline_file).read_bytes()).hexdigest(),source)
+            artifact,_=self.workflow_step('Save fixed 96 registration independent readback')
+            self.assertIn('path: .deploy/production-release/fixed-registration-96.actual.readback.json',artifact)
+            # Exclusive output blocks replacement of an existing evidence file.
+            original=evidence.read_bytes();again=self.run_filter(root,env,{'CommandId':'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Status':'Success','ResponseCode':0,'Stdout':env['LOCAL_READBACK_OUTPUT'],'Stderr':''})
+            self.assertNotEqual(again.returncode,0);self.assertEqual(again.stdout,'');self.assertEqual(evidence.read_bytes(),original)
+
+    def test_workflow96_reads_actual_current_four_carriers_with_strict_stat_and_sha(self):
+        _block,script=self.workflow_step('Verify fixed 96 registration deployment independently')
+        with self.fixture()as(root,env):
+            env['LOCAL_READBACK_OUTPUT']=self.readback_wire(json.loads(env['LOCAL_READBACK_EXPECTED']))
+            result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            command=shlex.split(json.loads((root/'.deploy/production-release/fixed-registration-96-readback.json').read_bytes())['commands'][0])
+            base=root/'SYNTHETIC-current-root';current=base/'releases'/('20261008T000000Z-'+COMMIT[:12]);current.mkdir(parents=True)
+            (base/'current').symlink_to(current)
+            files=('scripts/production-release/remote-deploy.py',self.module_file,self.profile_file,self.baseline_file)
+            targets=[]
+            for name in files:
+                target=current/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((root/name).read_bytes());target.chmod(0o644);targets.append(target)
+            # Run the actual verifier through the last pre-exec check only;
+            # exec itself is inspected below and never invokes a live controller.
+            source=command[3].replace('/opt/id-business-v2',str(base));parsed=ast.parse(source)
+            self.assertIsInstance(parsed.body[-1],ast.Expr);self.assertEqual(parsed.body[-1].value.func.id,'exec')
+            code=ast.unparse(ast.Module(body=parsed.body[:-1],type_ignores=[]))
+            with patch.object(sys,'argv',list(sys.argv)):
+                namespace=self.execute_root_stat_fixture(code)
+                self.assertEqual(namespace['source'],current/files[0])
+                self.assertEqual(namespace['raw'],[(root/n).read_bytes()for n in files])
+                self.assertEqual(sys.argv[:4],[str(current/files[0]),'--check-fixed-registration-deployment','--registration-profile',self.profile])
+                self.assertEqual(sys.argv[sys.argv.index('--expected-current')+1],COMMIT)
+                self.assertEqual(sys.argv[sys.argv.index('--source-tree')+1],TREE)
+            for uid,race in ((501,False),(0,True)):
+                with self.subTest(uid=uid,race=race),self.assertRaises(RuntimeError):self.execute_root_stat_fixture(code,uid=uid,race=race)
+            for target,cap in zip(targets,(1024*1024,128*1024,128*1024,4*1024*1024)):
+                original=target.read_bytes()
+                for failure in ('sha','cap','mode','link','symlink','missing'):
+                    with self.subTest(target=target.name,failure=failure):
+                        hardlink=root/('SYNTHETIC-current-link-'+target.name)
+                        if failure=='sha':target.write_bytes(original+b'changed')
+                        elif failure=='cap':target.write_bytes(b' '*(cap+1))
+                        elif failure=='mode':target.chmod(0o664)
+                        elif failure=='link':os.link(target,hardlink)
+                        else:
+                            target.unlink()
+                            if failure=='symlink':target.symlink_to(root/'SYNTHETIC-never-read')
+                        with self.assertRaises((RuntimeError,FileNotFoundError)):self.execute_root_stat_fixture(code)
+                        if hardlink.exists():hardlink.unlink()
+                        if target.is_symlink()or target.exists():target.unlink()
+                        target.write_bytes(original);target.chmod(0o644)
+            (base/'current').unlink();(base/'current').symlink_to(current.parent/('20261008T000000Z-'+('d'*12)))
+            with self.assertRaises(FileNotFoundError):self.execute_root_stat_fixture(code)
+
+    def test_workflow96_rejects_unclosed_provider_and_full_receipt_without_leaking_raw(self):
+        with self.fixture()as(root,env):
+            receipt=json.loads(env['LOCAL_READBACK_EXPECTED']);good={'CommandId':'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Status':'Success','ResponseCode':0,'Stdout':self.readback_wire(receipt),'Stderr':''}
+            cases=[]
+            for key,value in (('CommandId','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'),('Status','InProgress'),('ResponseCode',True),('ResponseCode',1),('Stderr','RAW_SECRET_SENTINEL'),('Stdout','RAW_SECRET_SENTINEL'),('Stdout','RAW_SECRET_SENTINEL'+'x'*65536),('Extra','RAW_SECRET_SENTINEL')):
+                value={**good,key:value};cases.append((key,value))
+            cases.append(('duplicateInvocation',json.dumps(good)[:-1]+',"Status":"Success"}'))
+            for key in receipt:
+                missing=copy.deepcopy(receipt);del missing[key];cases.append(('missing:'+key,{**good,'Stdout':self.readback_wire(missing)}))
+            for label,changed in (('unknown',{**receipt,'RAW_SECRET_SENTINEL':True}),('nested',{**receipt,'configurationProof':{'changed':'RAW_SECRET_SENTINEL'}}),('sourceCommit',{**receipt,'commit':'d'*40}),('sourceTree',{**receipt,'sourceTree':'d'*40}),('rawProfileSha',{**receipt,'profileRawSha256':'0'*64})):
+                cases.append((label,{**good,'Stdout':self.readback_wire(changed)}))
+            envelope=self.actual_module().encode96_readback(receipt)
+            cases.append(('duplicateEnvelope',{**good,'Stdout':'FIXED_REGISTRATION_RELEASE_VERIFIED '+json.dumps(envelope)[:-1]+',"rawBytes":'+str(envelope['rawBytes'])+'}'}))
+            raw=json.dumps(receipt).encode()[:-1]+b',"version":1}'
+            duplicate={'encoding':'gzip+base64','rawBytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'data':base64.b64encode(gzip.compress(raw,mtime=0)).decode()}
+            cases.append(('duplicateReceipt',{**good,'Stdout':'FIXED_REGISTRATION_RELEASE_VERIFIED '+json.dumps(duplicate)}))
+            for label,invocation in cases:
+                with self.subTest(case=label):
+                    result=self.run_filter(root,env,invocation);self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(result.stdout,'');self.assertNotIn('RAW_SECRET_SENTINEL',result.stderr)
+                    self.assertFalse((root/'.deploy/production-release/fixed-registration-96.actual.readback.json').exists())
+            self.assertEqual(self.calls(env,'aws'),[]);self.assertEqual(self.calls(env,'docker'),[])
+
+    def test_workflow96_local_disabled_bindings_and_file_stat_fail_before_provider(self):
+        _block,script=self.workflow_step('Verify fixed 96 registration deployment independently')
+        files=('scripts/production-release/remote-deploy.py',self.module_file,self.profile_file,self.baseline_file)
+        mutations=[('disabled',lambda r:self.mutate_profile(r,enabled=False)),('wrongH',lambda r:self.mutate_profile(r,baselineCarrierSha256='0'*64))]
+        for name,cap in zip(files,(1024*1024,128*1024,128*1024,4*1024*1024)):
+            mutations += [
+                ('missing:'+name,lambda r,n=name:(r/n).unlink()),
+                ('mode:'+name,lambda r,n=name:(r/n).chmod(0o600)),
+                ('cap:'+name,lambda r,n=name,c=cap:(r/n).write_bytes(b' '*(c+1))),
+                ('link:'+name,lambda r,n=name:os.link(r/n,r/'SYNTHETIC-readback-hardlink')),
+                ('symlink:'+name,lambda r,n=name:((r/n).unlink(),(r/n).symlink_to(r/'SYNTHETIC-never-used'))),
+            ]
+        for label,change in mutations:
+            with self.subTest(case=label),self.fixture()as(root,env):
+                change(root);result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+                self.assertNotEqual(result.returncode,0);self.assertEqual(self.calls(env,'aws'),[]);self.assertEqual(self.calls(env,'docker'),[])
+                self.assertFalse((root/'.deploy/production-release/fixed-registration-96.actual.readback.json').exists())
+        builder=script.split("<<'PY_BUILD_REGISTRATION96_READBACK'\n",1)[1].split('\nPY_BUILD_REGISTRATION96_READBACK',1)[0]
+        # Race and owner changes use the real builder, real file content and
+        # real open/stat; only a single observed stat field is substituted.
+        for kind in ('race','owner'):
+            with self.subTest(case=kind),self.fixture()as(root,env):
+                prefix='''import os
+from types import SimpleNamespace
+original=os.fstat;count=[0]
+def changed(fd):
+ value=original(fd);count[0]+=1
+ row={n:getattr(value,n)for n in dir(value)if n.startswith('st_')}
+ if KIND=='race' and count[0]==2:row['st_mtime_ns']+=1
+ if KIND=='owner':row['st_uid']=os.geteuid()+1
+ return SimpleNamespace(**row)
+os.fstat=changed
+'''.replace('KIND',repr(kind))
+                result=subprocess.run([sys.executable,'-c',prefix+builder],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+                self.assertNotEqual(result.returncode,0);self.assertEqual(self.calls(env,'aws'),[])
+                self.assertFalse((root/'.deploy/production-release/fixed-registration-96-readback.json').exists())
+
+    def test_workflow96_provider_failure_never_filters_or_claims_runtime_success(self):
+        _block,script=self.workflow_step('Verify fixed 96 registration deployment independently')
+        for status in ('Failed','TimedOut','Cancelled','Cancelling'):
+            with self.subTest(status=status),self.fixture()as(root,env):
+                env.update(LOCAL_PROVIDER_STATUS=status,LOCAL_READBACK_OUTPUT='RAW_SECRET_SENTINEL')
+                result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+                self.assertNotEqual(result.returncode,0);self.assertEqual(result.stdout,'');self.assertNotIn('RAW_SECRET_SENTINEL',result.stderr)
+                self.assertEqual(self.calls(env,'full96_validator'),[])
+                self.assertFalse((root/'.deploy/production-release/fixed-registration-96.actual.readback.json').exists())
+
+    def test_workflow96_unfinished_provider_observation_is_bounded_and_never_accepted(self):
+        _block,script=self.workflow_step('Verify fixed 96 registration deployment independently')
+        with self.fixture()as(root,env):
+            env.update(LOCAL_PROVIDER_STATUS='InProgress',LOCAL_READBACK_OUTPUT='RAW_SECRET_SENTINEL')
+            # Fixture sleep records the requested wait without waiting; this
+            # executes all actual 90 loop observations with only local stubs.
+            result=subprocess.run(['bash','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0);self.assertEqual(result.stdout,'');self.assertNotIn('RAW_SECRET_SENTINEL',result.stderr)
+            observations=[c for c in self.calls(env,'aws')if c[:2]==['ssm','get-command-invocation']]
+            self.assertEqual(len(observations),90);self.assertTrue(all(c[c.index('--query')+1]=='Status'for c in observations))
+            self.assertEqual(self.calls(env,'sleep'),[['5']]*90);self.assertEqual(self.calls(env,'full96_validator'),[])
+            self.assertFalse((root/'.deploy/production-release/fixed-registration-96.actual.readback.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
