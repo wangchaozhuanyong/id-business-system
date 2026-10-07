@@ -445,10 +445,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             if self.current_pro_card:
                 html = html.replace('<section role="dialog" hidden><button>Get Plus</button>',
                     '''<section role="dialog" hidden><button role="radio" aria-checked="true">个人</button>
-                    <div id="pro-card" data-testid="pro-pricing-modal-column-top-half"><h3>Pro</h3><button onclick="document.querySelector('#pro-card').hidden=true;
+                    <div id="pro-card" data-testid="pro-pricing-modal-column-top-half" hidden><h3>Pro</h3><button onclick="document.querySelector('#pro-card').hidden=true;
                       document.querySelector('#pro-details').hidden=false">升级订阅，获取更高使用额度</button></div>''')
                 html = html.replace('<div role="radiogroup" aria-label="选择 Pro 套餐档位">',
-                    '<div id="pro-details" data-testid="pro-pricing-modal-column-top-half" hidden><h3>Pro</h3><div role="radiogroup" aria-label="Pro 用量">')
+                    '<div id="pro-details" data-testid="pro-pricing-modal-column-top-half"><h3>Pro</h3><div role="radiogroup" aria-label="Pro 用量">')
                 html = html.replace('<button onclick="create()">升级至 Pro</button></section>',
                     '<button onclick="create()">升级订阅</button></div></section>')
             await route.fulfill(content_type="text/html; charset=utf-8", body=html)
@@ -945,20 +945,17 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
         assertion.to_be_enabled = enabled
         return assertion
 
-    async def expand(self, scene):
+    async def ready_details(self, scene):
         scope, card, parent = scene
-        details = self.region(headings=('Pro',), button_names=('Synthetic final action',),
-                              group_label='Pro 用量')
-        details.get_by_text.return_value = self.collection(1)
-        detail_scope = self.collection(1)
-        detail_scope.locator.return_value = details
-        self.scope_after_click = self.enterContext(patch('plan_selection.plan_scope',
-            new=AsyncMock(return_value=detail_scope)))
-        result = await self.selection.open_pro_details(scope)
-        self.assertIs(result, details)
-        details.get_by_role('button').click.assert_not_awaited()
+        group = self.collection(1, attributes={'aria-label': 'Pro 用量'})
+        with patch('plan_selection.pro_detail_groups', return_value=group):
+            result = await self.selection.open_pro_details(scope)
+        self.assertIs(result, card)
+        card.get_by_role('button').click.assert_not_awaited()
+        parent.get_by_role.assert_not_called()
         self.page.goto.assert_not_called()
         return card, parent
+
 
     async def assert_entry_blocked(self, scene, reason):
         scope, card, parent = scene
@@ -970,13 +967,12 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
         self.page.goto.assert_not_called()
         return stopped.exception.report
 
-    async def test_unique_accessible_pro_heading_keeps_existing_inside_entry(self):
+    async def test_unique_accessible_pro_heading_keeps_existing_ready_details(self):
         for heading in ('ChatGPT Pro', 'Pro', '  ChatGPT Pro  '):
             with self.subTest(heading=heading):
-                card, parent = await self.expand(self.scene(headings=(heading,),
-                    inside_buttons=('Synthetic details action',)))
-                card.get_by_role('button').click.assert_awaited_once()
-                parent.get_by_role.assert_not_called()
+                await self.ready_details(self.scene(headings=(heading,),
+                    inside_buttons=('Synthetic final action',)))
+
 
     async def test_wrong_product_or_unowned_text_cannot_replace_pro_heading(self):
         for heading, count, owned in (('Plus', 0, True), ('ChatGPT Plus', 0, True),
@@ -999,12 +995,18 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
                     parent_buttons=('Get Pro',)), 'official_plan_region_ambiguous')
                 self.assertEqual(report['diagnostics']['matched_count'], len(headings))
 
-    async def test_unique_direct_parent_pro_entry_expands_but_does_not_submit(self):
-        card, parent = await self.expand(self.scene(headings=('Pro',), exact_pro_count=1,
-                                                    parent_buttons=('Get Pro',)))
-        card.get_by_role('button').click.assert_not_awaited()
-        parent.get_by_role('button').click.assert_awaited_once()
-        self.scope_after_click.assert_awaited()
+    async def test_direct_parent_pro_cta_does_not_prove_details_expansion(self):
+        for label in ('Get Pro', 'Upgrade to Pro'):
+            with self.subTest(label=label):
+                await self.assert_entry_blocked(self.scene(headings=('Pro',), exact_pro_count=1,
+                    parent_buttons=(label,)), 'official_plan_tier_not_found')
+
+
+    async def test_inside_named_pro_cta_without_tiers_never_expands(self):
+        for label in ('Get Pro', 'Upgrade to Pro'):
+            with self.subTest(label=label):
+                await self.assert_entry_blocked(self.scene(inside_buttons=(label,)),
+                                                'official_plan_tier_not_found')
 
     async def test_extra_parent_buttons_headings_or_markers_are_not_owned(self):
         cases = (
@@ -1017,20 +1019,23 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(changed=changed):
                 await self.assert_entry_blocked(self.scene(headings=('Pro',), exact_pro_count=1,
                                                            **changed),
-                                                'official_plan_option_not_found')
+                                                'official_plan_tier_not_found')
+
 
     async def test_generic_wrong_product_or_grandparent_cta_is_not_a_pro_entry(self):
         for names in (('Synthetic details action',), ('Get Plus',), ()):
             with self.subTest(names=names):
                 scene = self.scene(headings=('Pro',), exact_pro_count=1, parent_buttons=names)
-                await self.assert_entry_blocked(scene, 'official_plan_option_not_found')
+                await self.assert_entry_blocked(scene, 'official_plan_tier_not_found')
                 self.page.get_by_role.assert_not_called()
 
-    async def test_disabled_unique_parent_pro_entry_never_clicks(self):
+
+    async def test_disabled_parent_pro_cta_is_not_a_details_entry(self):
         await self.assert_entry_blocked(self.scene(headings=('Pro',), exact_pro_count=1,
                                                    parent_buttons=('Get Pro',), enabled=False),
-                                        'official_plan_option_disabled')
-        self.assertFalse(self.selection.diagnostics['enabled'])
+                                        'official_plan_tier_not_found')
+        self.assertNotIn('enabled', self.selection.diagnostics)
+
 
 
 class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
@@ -1048,13 +1053,13 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         self.page = await self.context.new_page()
         await self.page.set_content('''<html><body><section role="dialog" aria-label="升级套餐">
             <button role="radio" aria-checked="true">个人</button>
-            <div id="cards">
+            <div id="cards" hidden>
               <article><h3>Go</h3><button>Get Go</button></article>
               <article><h3>Plus</h3><button>Get Plus</button></article>
               <article id="pro-card" data-testid="pro-pricing-modal-column-top-half"><div><h3>Pro</h3></div>
                 <button id="entry" onclick="openPro()">升级订阅，获取更高使用额度</button></article>
             </div>
-            <div id="pro-details" data-testid="pro-pricing-modal-column-top-half" hidden>
+            <div id="pro-details" data-testid="pro-pricing-modal-column-top-half">
               <div><h3>Pro</h3></div>
               <div role="radiogroup" aria-label="Pro 用量" id="usage-group">
                 <button role="radio" id="tier100" aria-checked="false" onclick="choose(100)">100</button>
@@ -1098,91 +1103,89 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         await self.assert_unsubmitted()
         return stopped.exception.report
 
-    async def test_card_expands_before_maximum_selection_and_returns_only_scoped_cta(self):
+    async def test_ready_details_select_maximum_and_return_only_scoped_cta(self):
         button = await self.select()
-        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'), 'true')
         self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'false')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
 
-    async def test_pro_details_waits_for_transient_dialog_overlap_to_become_unique(self):
-        await self.page.evaluate('''() => {
-            const original=window.openPro;
-            window.openPro=()=>{original();
-              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
-              overlay.textContent='Synthetic transition';document.body.append(overlay);
-              setTimeout(()=>overlay.remove(),120);};
-        }''')
+
+    async def test_ready_details_wait_for_transient_dialog_overlap_to_become_unique(self):
+        await self.page.evaluate("""() => {
+            const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+            overlay.textContent='Synthetic transition';document.body.append(overlay);
+            setTimeout(()=>overlay.remove(),120);
+        }""")
         button = await self.select()
-        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'), 'true')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
 
-    async def test_view_all_waits_for_transient_dialog_overlap_before_card_expansion(self):
-        await self.page.evaluate('''() => {
-            document.querySelector('#cards').hidden=true;
+
+    async def test_view_all_waits_for_transient_dialog_overlap_before_ready_details(self):
+        await self.page.evaluate("""() => {
+            document.querySelector('#pro-details').hidden=true;
             const navigation=document.createElement('button');navigation.textContent='查看所有套餐';
             navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
-              document.querySelector('#cards').hidden=false;navigation.remove();
+              document.querySelector('#pro-details').hidden=false;navigation.remove();
               const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
               overlay.textContent='Synthetic transition';document.body.append(overlay);
               setTimeout(()=>overlay.remove(),120);};
             document.querySelector('section').append(navigation);
-        }''')
+        }""")
         button = await self.select()
         self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
-        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
 
+
     async def test_persistent_dialog_overlap_reports_region_count_without_button_state(self):
-        await self.page.evaluate('''() => {
-            const original=window.openPro;
-            window.openPro=()=>{original();
-              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
-              overlay.textContent='Synthetic persistent overlap';document.body.append(overlay);};
-        }''')
+        await self.page.evaluate("""() => {
+            const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+            overlay.textContent='Synthetic persistent overlap';document.body.append(overlay);
+        }""")
         report = await self.assert_blocked('official_plan_region_ambiguous')
         self.assertEqual(report['diagnostics'], {
-            'step': 'choose_tier', 'role': 'region', 'matched_count': 2, 'available_plans': [],
+            'step': 'open_menu', 'role': 'region', 'matched_count': 2, 'available_plans': [],
             'error_type': 'AssertionError',
         })
         self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
 
+
     async def test_dialog_transition_to_zero_never_falls_back_to_body(self):
-        await self.page.evaluate('''() => {
-            const original=window.openPro;
-            window.openPro=()=>{original();
-              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
-              overlay.textContent='Synthetic transition';document.body.append(overlay);
-              setTimeout(()=>{document.querySelector('section').hidden=true;overlay.remove();},120);};
-        }''')
+        await self.page.evaluate("""() => {
+            const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+            overlay.textContent='Synthetic transition';document.body.append(overlay);
+            setTimeout(()=>{document.querySelector('section').hidden=true;overlay.remove();},120);
+        }""")
         report = await self.assert_blocked('official_plan_region_ambiguous')
         self.assertEqual(report['diagnostics'], {
-            'step': 'choose_tier', 'role': 'region', 'matched_count': 0, 'available_plans': [],
+            'step': 'open_menu', 'role': 'region', 'matched_count': 0, 'available_plans': [],
             'error_type': 'AssertionError',
         })
 
+
     async def test_transient_dialog_overlap_does_not_allow_duplicate_pro_markers(self):
-        await self.page.evaluate('''() => {
-            const original=window.openPro;
-            window.openPro=()=>{original();
-              const details=document.querySelector('#pro-details');const copy=details.cloneNode(true);
-              copy.querySelector('#usage-group').remove();details.after(copy);
-              const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
-              overlay.textContent='Synthetic transition';document.body.append(overlay);
-              setTimeout(()=>overlay.remove(),120);};
-        }''')
+        await self.page.evaluate("""() => {
+            const details=document.querySelector('#pro-details');const copy=details.cloneNode(true);
+            copy.querySelector('#usage-group').remove();details.after(copy);
+            const overlay=document.createElement('section');overlay.setAttribute('role','dialog');
+            overlay.textContent='Synthetic transition';document.body.append(overlay);
+            setTimeout(()=>overlay.remove(),120);
+        }""")
         report = await self.assert_blocked('official_plan_region_ambiguous')
         self.assertEqual(report['diagnostics']['role'], 'region')
         self.assertEqual(report['diagnostics']['matched_count'], 2)
         self.assertNotIn('enabled', report['diagnostics'])
         self.assertNotIn('selected', report['diagnostics'])
+
 
     async def test_duplicate_heading_reports_its_actual_count_before_tier_selection(self):
         await self.page.locator('#pro-details').evaluate('''node => {
@@ -1206,49 +1209,51 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
 
     async def test_existing_pro_details_and_plus_upgrade_reuse_only_verified_pro_scope(self):
-        await self.page.evaluate('openPro()')
         button = await self.select(require_upgrade=True)
-        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         await verify_selected_plan(self.page, 'pro-500', require_upgrade=True)
         await self.assert_unsubmitted()
 
+
     async def test_recommended_pro_heading_is_accepted_only_within_pro_marker(self):
-        await self.page.locator('#pro-card h3').evaluate('''node => {
+        await self.page.locator('#pro-details h3').evaluate("""node => {
             node.innerHTML='<span>Pro</span><span>推荐</span>';
-        }''')
+        }""")
         button = await self.select()
-        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
+
 
     async def test_synthetic_locale_labels_use_only_observed_marker_structure(self):
         await self.page.locator('#entry').evaluate('node=>node.textContent="Synthetic details action"')
         await self.page.locator('#final').evaluate('node=>node.textContent="Synthetic final action"')
         await self.page.locator('#usage-group').evaluate('node=>node.setAttribute("aria-label","Synthetic usage group")')
-        await self.page.locator('#pro-card h3').evaluate('node=>node.innerHTML="<span>Pro</span><span>Synthetic badge</span>"')
+        await self.page.locator('#pro-details h3').evaluate('node=>node.innerHTML="<span>Pro</span><span>Synthetic badge</span>"')
         button = await self.select()
         self.assertEqual(await button.get_attribute('id'), 'final')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
 
-    async def test_view_all_plans_reveals_card_before_expanding_pro(self):
-        await self.page.evaluate('''() => {
-            document.querySelector('#cards').hidden=true;
+    async def test_view_all_plans_reveals_ready_details_without_pro_cta_click(self):
+        await self.page.evaluate("""() => {
+            document.querySelector('#pro-details').hidden=true;
             const navigation=document.createElement('button');navigation.textContent='查看所有套餐';
             navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
-              document.querySelector('#cards').hidden=false;navigation.remove();};
+              document.querySelector('#pro-details').hidden=false;navigation.remove();};
             document.querySelector('section').append(navigation);
-        }''')
+        }""")
         button = await self.select()
         self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
-        self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         await verify_selected_plan(self.page, 'pro-500')
         await self.assert_unsubmitted()
 
-    async def test_view_all_with_legacy_named_entry_still_requires_unique_card(self):
+
+    async def test_view_all_named_pro_cta_cannot_supply_missing_tiers(self):
         async def navigation(entry_name, duplicate=False):
             await self.page.evaluate('''options => {
                 document.querySelector('#cards').hidden=true;
@@ -1267,17 +1272,223 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         for entry_name in ('Get Pro', 'Upgrade to Pro'):
             with self.subTest(entry_name=entry_name):
                 await navigation(entry_name)
-                button = await self.select()
+                await self.assert_blocked('official_plan_tier_not_found')
                 self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
-                self.assertEqual(await self.page.evaluate('window.entryClicks'), 1)
-                self.assertEqual(await button.get_attribute('id'), 'final')
-                await verify_selected_plan(self.page, 'pro-500')
-                await self.assert_unsubmitted()
+                self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
 
         await navigation('Get Pro', duplicate=True)
         await self.assert_blocked('official_plan_region_ambiguous')
         self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
         self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+
+    async def test_pro_cta_or_generic_without_tiers_has_zero_clicks_and_requests(self):
+        await self.page.evaluate("""() => {
+            document.querySelector('#cards').hidden=false;
+            document.querySelector('#pro-details').hidden=true;
+        }""")
+        for placement in ('inside_marker', 'direct_parent'):
+            for label in ('Get Pro', 'Upgrade to Pro', '获取 Pro', '升级至 Pro', 'Synthetic details action'):
+                with self.subTest(placement=placement, label=label):
+                    await self.page.evaluate("""options => {
+                        const card=document.querySelector('#pro-card'), header=card.firstElementChild;
+                        card.removeAttribute('data-testid');header.removeAttribute('data-testid');
+                        const marker=options.placement==='inside_marker'?card:header;
+                        marker.setAttribute('data-testid','pro-pricing-modal-column-top-half');
+                        const entry=document.querySelector('#entry');entry.textContent=options.label;
+                        entry.onclick=()=>{window.entryClicks++;
+                          fetch('https://chatgpt.com/backend-api/payments/checkout',
+                            {method:'POST',body:JSON.stringify({plan_name:'chatgptpro'})});};
+                    }""", {'placement': placement, 'label': label})
+                    selection=Selection(self.page,lambda *_args,**_kwargs:None)
+                    with self.assertRaises(Stop) as stopped:
+                        await selection.open_pro_details(self.page.get_by_role('dialog'))
+                    self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
+                    await self.assert_unsubmitted()
+                    self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+                    self.assertEqual(self.requests, [])
+
+
+    async def test_ready_three_tier_group_selects_500_without_clicking_named_checkout_cta(self):
+        await self.page.evaluate("""() => {
+            openPro();window.entryClicks=0;
+            document.querySelector('#final').textContent='Get Pro';
+        }""")
+        button=await self.select()
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'), 'true')
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'false')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+        await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+    async def native_pricing_redirect(self, *, details=True, duplicate=False, delay=False, group_delay=False):
+        if details:
+            await self.page.evaluate("""() => {
+                document.querySelector('#cards').hidden=true;
+                document.querySelector('#pro-details').hidden=false;
+                document.querySelector('#pro-details h3').textContent='ChatGPT Pro';
+            }""")
+        else:
+            await self.page.evaluate("""() => {
+                document.querySelector('#cards').hidden=false;
+                document.querySelector('#pro-details').hidden=true;
+            }""")
+        if duplicate:
+            await self.page.locator('#pro-details').evaluate('node=>node.after(node.cloneNode(true))')
+        if delay:
+            await self.page.locator('#pro-details').evaluate('node=>node.hidden=true')
+        if group_delay:
+            await self.page.locator('#usage-group').evaluate('node=>node.hidden=true')
+        html=await self.page.content()
+        if group_delay:
+            html=html.replace('</body>',"<script>setTimeout(()=>document.querySelector('#usage-group').hidden=false,100)</script></body>")
+        if delay:
+            html=html.replace('</body>',"<script>setTimeout(()=>document.querySelector('#pro-details').hidden=false,100)</script></body>")
+        paths=[]
+        async def native_route(route):
+            request=route.request
+            parts=urlsplit(request.url)
+            if request.method=='GET' and parts.hostname=='chatgpt.com' and parts.path=='/pricing':
+                paths.append('/pricing')
+                await route.fulfill(content_type='text/html; charset=utf-8',body="<html><body><script>setTimeout(()=>location.replace('/'),0)</script></body></html>")
+            elif request.method=='GET' and parts.hostname=='chatgpt.com' and parts.path=='/':
+                paths.append('/')
+                await route.fulfill(content_type='text/html; charset=utf-8',body=html)
+            else:
+                self.requests.append(request.method)
+                await route.abort()
+        await self.context.route('**/*',native_route)
+        return paths
+
+
+    async def test_pricing_native_redirect_reuses_verified_pro_details_without_marketing_link(self):
+        paths=await self.native_pricing_redirect()
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with patch('plan_selection.STEP_SECONDS', 2),patch('plan_selection.SELECTION_SECONDS',3):
+            scope=await selection.open_pricing_card('pro-500')
+        self.assertEqual(await scope.get_attribute('role'),'dialog')
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(self.page.url,'https://chatgpt.com/')
+        button=await self.select()
+        self.assertEqual(await button.get_attribute('id'),'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await verify_selected_plan(self.page,'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_pricing_native_overview_without_tiers_stops_without_expansion(self):
+        paths=await self.native_pricing_redirect(details=False)
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with patch('plan_selection.STEP_SECONDS', 2),self.assertRaises(Stop) as stopped:
+            await selection.open_pricing_card('pro-500')
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
+
+    async def test_pricing_native_duplicate_pro_details_stop_before_any_click(self):
+        paths=await self.native_pricing_redirect(duplicate=True)
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with patch('plan_selection.STEP_SECONDS', 2),self.assertRaises(Stop) as stopped:
+            await selection.open_pricing_card('pro-500')
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_region_ambiguous')
+        self.assertEqual(stopped.exception.report['diagnostics']['matched_count'],2)
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
+
+    async def test_pricing_native_delayed_details_without_marketing_anchor_use_original_budget(self):
+        paths=await self.native_pricing_redirect(delay=True)
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with patch('plan_selection.STEP_SECONDS', 2),patch('plan_selection.SELECTION_SECONDS',3):
+            scope=await selection.open_pricing_card('pro-500')
+        self.assertEqual(await scope.get_attribute('role'),'dialog')
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(await self.page.get_by_role('link').count(),0)
+        button=await self.select()
+        self.assertEqual(await button.get_attribute('id'),'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
+
+    async def home_overview(self):
+        await self.page.evaluate("""() => {
+            document.querySelector('#cards').hidden=false;
+            document.querySelector('#pro-details').hidden=true;
+            document.querySelector('#entry').textContent='Get Pro';
+            document.querySelector('#entry').onclick=()=>{window.entryClicks++;
+              fetch('https://chatgpt.com/backend-api/payments/checkout',{method:'POST',body:'synthetic'});};
+        }""")
+
+    async def test_home_overview_reads_native_pricing_once_then_selects_ready_500(self):
+        paths=await self.native_pricing_redirect()
+        await self.home_overview()
+        with patch('plan_selection.STEP_SECONDS',2),patch('plan_selection.SELECTION_SECONDS',3):
+            button=await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(await button.get_attribute('id'),'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await verify_selected_plan(self.page,'pro-500')
+        await self.assert_unsubmitted()
+
+    async def test_home_overview_native_overview_stops_after_one_read_without_cta(self):
+        paths=await self.native_pricing_redirect(details=False)
+        await self.home_overview()
+        with patch('plan_selection.STEP_SECONDS',.3),patch('plan_selection.SELECTION_SECONDS',2),self.assertRaises(Stop) as stopped:
+            await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
+
+    async def test_ready_home_details_reuse_scope_without_pricing_navigation(self):
+        button=await self.select()
+        self.assertEqual(await button.get_attribute('id'),'final')
+        self.assertEqual(self.page.url,'about:blank')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
+
+    async def test_pricing_native_marker_before_group_waits_within_original_budget(self):
+        paths=await self.native_pricing_redirect(group_delay=True)
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with patch('plan_selection.STEP_SECONDS',2),patch('plan_selection.SELECTION_SECONDS',3):
+            scope=await selection.open_pricing_card('pro-500')
+        self.assertEqual(await scope.get_attribute('role'),'dialog')
+        self.assertEqual(paths,['/pricing','/'])
+        button=await self.select()
+        self.assertEqual(await button.get_attribute('id'),'final')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
+
+    async def test_native_group_wait_rechecks_unique_dialog_before_any_selection(self):
+        paths=await self.native_pricing_redirect()
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        original_wait=selection.wait_native_pro_details
+        async def dialog_during_wait(scope):
+            self.assertEqual(await self.page.get_by_role('dialog').count(),1)
+            await self.page.evaluate("""() => {
+                document.querySelector('#usage-group').hidden=true;
+                setTimeout(()=>{const other=document.createElement('section');
+                  other.setAttribute('role','dialog');other.setAttribute('aria-label','Synthetic other task');
+                  const control=document.createElement('button');control.textContent='Synthetic action';
+                  other.append(control);document.body.append(other);},50);
+                setTimeout(()=>document.querySelector('#usage-group').hidden=false,150);
+            }""")
+            self.assertFalse(await self.page.locator('#usage-group').is_visible())
+            return await original_wait(scope)
+        with patch.object(selection,'wait_native_pro_details',new=dialog_during_wait), \
+                patch('plan_selection.STEP_SECONDS',2),patch('plan_selection.REGION_TRANSITION_SECONDS',.1), \
+                self.assertRaises(Stop) as stopped:
+            await selection.open_pricing_card('pro-500')
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_region_ambiguous')
+        self.assertEqual(stopped.exception.report['diagnostics']['matched_count'],2)
+        self.assertEqual(paths,['/pricing','/'])
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'false')
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        await self.assert_unsubmitted()
 
     async def test_nested_pro_header_and_group_use_sibling_cta_in_same_card(self):
         await self.page.locator('#pro-details').evaluate('''node => {
@@ -1293,20 +1504,34 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_view_all_navigation_is_not_used(self):
         await self.page.evaluate('''() => {
             document.querySelector('#cards').hidden=true;
+            document.querySelector('#pro-details').hidden=true;
             for(let n=0;n<2;n++){const button=document.createElement('button');
               button.textContent='查看所有套餐';document.querySelector('section').append(button);}
         }''')
         await self.assert_blocked('official_plan_option_ambiguous')
         self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
 
-    async def test_duplicate_or_disabled_expansion_entry_stops_without_final_click(self):
+    async def test_overview_duplicate_or_disabled_generic_entry_never_clicks(self):
+        await self.page.evaluate("""() => {
+            document.querySelector('#cards').hidden=false;
+            document.querySelector('#pro-details').hidden=true;
+        }""")
         await self.page.locator('#entry').evaluate('node=>node.after(node.cloneNode(true))')
-        await self.assert_blocked('official_plan_option_ambiguous')
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with self.assertRaises(Stop) as stopped:
+            await selection.open_pro_details(self.page.get_by_role('dialog'))
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
+        await self.assert_unsubmitted()
         self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         await self.page.locator('#pro-card #entry').last.evaluate('node=>node.remove()')
         await self.page.locator('#entry').evaluate('node=>node.disabled=true')
-        await self.assert_blocked('official_plan_option_disabled')
+        selection=Selection(self.page,lambda *_args,**_kwargs:None)
+        with self.assertRaises(Stop) as stopped:
+            await selection.open_pro_details(self.page.get_by_role('dialog'))
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
+        await self.assert_unsubmitted()
         self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
+
 
     async def test_missing_maximum_cannot_use_unrelated_500_or_lower_tier(self):
         await self.page.locator('#tier500').evaluate('node=>node.remove()')
@@ -1328,6 +1553,7 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(report['diagnostics']['matched_count'], 0)
 
     async def test_go_and_plus_do_not_expand_pro_or_require_its_tiers(self):
+        await self.page.evaluate("() => {document.querySelector('#cards').hidden=false;document.querySelector('#pro-details').hidden=true;}")
         for entry_label in ('升级订阅，获取更高使用额度', 'Get Pro', 'Upgrade to Pro'):
             await self.page.locator('#entry').evaluate('(node,label)=>node.textContent=label', entry_label)
             for target, label in (('go', 'Get Go'), ('plus', 'Get Plus')):
@@ -1351,7 +1577,7 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_pro_group_is_rejected(self):
         await self.page.locator('#usage-group').evaluate('node=>node.after(node.cloneNode(true))')
-        await self.assert_blocked('official_plan_option_ambiguous')
+        await self.assert_blocked('official_plan_region_ambiguous')
 
     async def test_missing_or_duplicate_pro_card_marker_is_rejected(self):
         await self.page.locator('#pro-details').evaluate('node=>node.removeAttribute("data-testid")')
@@ -1382,7 +1608,7 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         await self.assert_blocked('official_plan_option_disabled')
 
     async def test_multiple_visible_pro_headings_never_assign_generic_cta(self):
-        await self.page.locator('#pro-card').evaluate('node=>node.after(node.cloneNode(true))')
+        await self.page.locator('#pro-details').evaluate('node=>node.after(node.cloneNode(true))')
         await self.assert_blocked('official_plan_region_ambiguous')
         self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
 
