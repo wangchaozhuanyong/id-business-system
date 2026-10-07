@@ -113,14 +113,15 @@ async def pro_card(scope, *, details=False):
             }"""):
         raise region_ambiguous(product_count)
     region = card
-    if not await card.get_by_role('button').filter(visible=True).count():
-        # 仅允许紧邻标记的直接父区域，不爬祖先，不接受区域外泛型按钮。
+    if details and not await card.get_by_role('button').filter(visible=True).count():
+        # 仅复用已存在档位组的直属父区域与最终按钮，不能作为详情展开入口。
         parent = card.locator('..')
         if (await parent.count() == 1
                 and await pro_cards(parent).count() == 1
                 and await parent.get_by_role('heading').filter(visible=True).count() == 1
                 and await parent.get_by_role('button').filter(visible=True).count() == 1
-                and await buttons(parent, PRO).count() == 1):
+                and await buttons(parent, PRO).count() == 1
+                and await pro_detail_groups(parent).count() == 1):
             region = parent
     if details:
         groups = pro_detail_groups(region)
@@ -279,6 +280,22 @@ class Selection:
             raise Stop(reason) from None
         self.diagnostics.update(matched_count=1, enabled=True)
 
+    async def wait_native_pro_details(self, scope):
+        # 原生路由可能先挂载标题再挂载档位；只在唯一 Pro 卡片内等待，不点击入口。
+        card = await pro_card(scope)
+        try:
+            return await pro_card(scope, details=True)
+        except Stop as exc:
+            if (exc.report['reason'] != 'official_plan_tier_not_found'
+                    or await pro_detail_groups(card).count()):
+                raise
+        try:
+            await pro_detail_groups(card).first.wait_for(state='visible', timeout=self.timeout())
+        except Exception as exc:
+            self.diagnostics['error_type'] = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
+            raise Stop('official_plan_tier_not_found') from None
+        return await pro_card(scope, details=True)
+
     async def open_pricing_card(self, target_plan):
         """通过官网定价卡进入套餐弹窗；该链接本身不得作为建单按钮返回。"""
         self.step('pricing_page', 'link')
@@ -287,6 +304,24 @@ class Selection:
         heading = self.page.get_by_role(
             'heading', name=GO_HEADING if target_plan == 'go' else PRO_HEADING if pro else PLUS_HEADING
         ).filter(visible=True)
+        if pro:
+            # 原生路由可能异步挂载详情；在原预算内等已知标记或既有营销链接。
+            cue = pro_cards(self.page).or_(
+                self.page.get_by_role('link', name=PRO).filter(visible=True))
+            try:
+                await cue.first.wait_for(state='visible', timeout=self.timeout())
+            except Exception as exc:
+                self.diagnostics['error_type'] = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
+                raise Stop('official_pricing_plan_entry_not_found') from None
+            scope = await plan_scope(self.page)
+            if await pro_cards(scope).count():
+                await self.wait_native_pro_details(scope)
+                # 等待期间可能出现另一个真实弹窗；返回前重新核验唯一作用域与所属组。
+                scope = await plan_scope(self.page)
+                await pro_card(scope, details=True)
+                return scope
+            if await self.page.get_by_role('dialog').filter(visible=True).count():
+                raise Stop('official_plan_tier_not_found')
         try:
             await expect(heading).to_have_count(1, timeout=self.timeout())
         except Exception as exc:
@@ -318,6 +353,17 @@ class Selection:
     async def open_menu(self, target_plan):
         self.step('open_menu')
         scope = await plan_scope(self.page)
+        pro = selection_spec(target_plan)['price_usd'] is not None
+        if pro and await pro_cards(scope).count():
+            card = await pro_card(scope)
+            try:
+                await pro_card(scope, details=True)
+            except Stop as exc:
+                if (exc.report['reason'] != 'official_plan_tier_not_found'
+                        or await pro_detail_groups(card).count()):
+                    raise
+            else:
+                return scope
         visible_options = (personal_control(scope).or_(buttons(scope, GO)).or_(buttons(scope, PLUS))
                            .or_(buttons(scope, PRO)).or_(pro_cards(scope)))
         if not await visible_options.count():
@@ -351,7 +397,18 @@ class Selection:
                 await expect(personal).to_have_attribute('aria-checked', 'true', timeout=self.timeout())
             elif role == 'tab':
                 await expect(personal).to_have_attribute('aria-selected', 'true', timeout=self.timeout())
-        return await plan_scope(self.page)
+        scope = await plan_scope(self.page)
+        if pro and await pro_cards(scope).count():
+            card = await pro_card(scope)
+            try:
+                await pro_card(scope, details=True)
+            except Stop as exc:
+                if (exc.report['reason'] != 'official_plan_tier_not_found'
+                        or await pro_detail_groups(card).count()):
+                    raise
+                # 首页概览没有档位，仅读取原生定价路由一次；不点击 Pro CTA 或循环。
+                return await self.open_pricing_card(target_plan)
+        return scope
 
     async def open_pro_details(self, scope):
         if (not await pro_cards(scope).count()
@@ -367,17 +424,8 @@ class Selection:
             await self.ready(cue.first, 'official_plan_tier_not_found')
             scope = await plan_scope(self.page)
         if await pro_cards(scope).count():
-            card = await pro_card(scope)
-            if not await pro_detail_groups(card).count():
-                self.step('choose_tier')
-                entry = card.get_by_role('button').filter(visible=True)
-                await self.ready(entry, 'official_plan_option_not_found')
-                await entry.click(timeout=self.timeout())
-                scope = await plan_scope(self.page)
-                self.diagnostics['role'] = 'region'
-                details_card = await pro_card(scope) if await pro_cards(scope).count() else pro_cards(scope)
-                await self.ready(pro_detail_groups(details_card), 'official_plan_tier_not_found')
-                scope = await plan_scope(self.page)
+            # 标题或唯一按钮不能证明会展开详情；缺少已就绪档位组时直接停止。
+            self.step('choose_tier', 'region')
             return await pro_card(scope, details=True)
         return scope
 
