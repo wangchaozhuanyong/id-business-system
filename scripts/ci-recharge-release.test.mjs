@@ -439,6 +439,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'recharge-pro-menu-b8-20261005'), false);
   assert.equal(selected('release', 'recharge-pro-menu-7f-20261005'), false);
   assert.equal(selected('release', 'recharge-pro-main80-20261006'), false);
+  assert.equal(selected('release', 'recharge-pro-01ce-20261007'), false);
   assert.equal(selected('release', 'registration-worker-b8-80-20261006'), false);
   assert.equal(selected('release', 'registration-worker-956-20261006'), false);
   assert.equal(selected('release', 'registration-worker-85-20261006'), false);
@@ -457,6 +458,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'recharge-pro-menu-b8-20261005',
         'recharge-pro-menu-7f-20261005',
         'recharge-pro-main80-20261006',
+        'recharge-pro-01ce-20261007',
         'registration-worker-b8-80-20261006',
         'registration-worker-956-20261006',
         'registration-worker-85-20261006',
@@ -1668,7 +1670,9 @@ function approvedRuntimeTransport(
         ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
         : identity === 'recharge-pro-main80-20261006'
           ? 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
-          : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+          : identity === 'recharge-pro-01ce-20261007'
+            ? '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af'
+            : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
@@ -3114,5 +3118,293 @@ test('fixed 91 profile observation workflow confines fresh Worker builds and exp
   assert.equal(
     skipped.if,
     `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
+  );
+});
+
+const recharge01ceIdentity = 'recharge-pro-01ce-20261007';
+const recharge01ceBaseline = '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af';
+
+test('fixed 01ce selection separates release baseline from independent candidate readback', () => {
+  fixture(({ root, env, log }) => {
+    const approved = approvedRuntimeTransport(root, env, false, recharge01ceIdentity);
+    const select = (overrides = {}) =>
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: { ...approved, ...overrides },
+        stdio: 'pipe'
+      });
+    select();
+    select({ RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: env.RELEASE_COMMIT });
+    for (const fields of [
+      { EXPECTED_CURRENT: 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' },
+      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
+      { RELEASE_OPERATION: 'verify_recharge_release' },
+      { RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: 'd'.repeat(40) },
+      { RELEASE_OPERATION: 'verify_recharge_release', RELEASE_COMMIT: recharge01ceBaseline },
+      {
+        RELEASE_OPERATION: 'verify_recharge_release',
+        EXPECTED_CURRENT: 'B'.repeat(40),
+        RELEASE_COMMIT: 'B'.repeat(40)
+      },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { RELEASE_ADMIN_ONLY: 'unexpected' },
+      { RELEASE_OPERATION: 'prepare_order_archive_release' },
+      { RELEASE_OPERATION: 'verify_access' },
+      { REUSE_IMAGE_RUN: '22' },
+      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
+      { REUSE_IMAGE_RUN_ID: '22' },
+      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+      { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+      { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
+      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
+      { HISTORICAL_EXCEPTION: 'recharge-pro-c4-20261007' },
+      { HISTORICAL_EXCEPTION: recharge01ceIdentity + ' --admin-only' }
+    ])
+      assert.throws(() => select(fields), JSON.stringify(fields));
+    assert.equal(readFileSync(log, 'utf8'), '');
+  });
+});
+
+test('fixed 01ce approved transport builds and pushes one fresh recharge image only', () => {
+  fixture(({ root, env, log }) => {
+    const transport = approvedRuntimeTransport(root, env, false, recharge01ceIdentity);
+    for (const entry of ['build-images', 'push-images'])
+      execFileSync('bash', [`scripts/production-release/${entry}.sh`], {
+        env: transport,
+        stdio: 'pipe'
+      });
+    const ops = readFileSync(log, 'utf8').trim().split('\n');
+    const builds = ops.filter((line) => line.startsWith('build '));
+    const pushes = ops.filter((line) => line.startsWith('push '));
+    assert.equal(builds.length, 1);
+    assert.ok(builds[0].includes('auto-recharge/worker/Dockerfile'));
+    assert.ok(builds[0].includes(`${env.RELEASE_COMMIT}-999999-1-auto-recharge`));
+    assert.equal(pushes.length, 1);
+    assert.ok(pushes[0].endsWith('-auto-recharge'));
+    assert.equal(
+      ops.some((line) => /-auto-registration|-api|-admin|-migrate/.test(line)),
+      false
+    );
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+    assert.equal(readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'), 'checked\nchecked\n');
+  });
+});
+
+test('fixed 01ce release entries reject stale scopes readback and approval failures before effects', () => {
+  for (const override of [
+    { EXPECTED_CURRENT: 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' },
+    { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { RELEASE_ADMIN_ONLY: 'unexpected' },
+    { RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: 'b'.repeat(40) },
+    { RELEASE_OPERATION: 'prepare_order_archive_release' },
+    { RELEASE_OPERATION: 'cleanup_unused_cache' },
+    { REUSE_IMAGE_RUN: '22' },
+    { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '22' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+    { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+    { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
+    { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
+    { HISTORICAL_EXCEPTION: 'recharge-pro-01ce-20261008' },
+    { HISTORICAL_EXCEPTION: recharge01ceIdentity + ' --admin-only' },
+    { TASK_EXPECTED_FIXED_PROFILE: 'recharge-pro-main80-20261006' },
+    { rejectedApproval: true }
+  ]) {
+    const { rejectedApproval, ...fields } = override;
+    for (const entry of ['build-images', 'push-images'])
+      fixture(({ root, env, log }) => {
+        const transport = approvedRuntimeTransport(
+          root,
+          env,
+          rejectedApproval,
+          recharge01ceIdentity
+        );
+        assert.throws(() =>
+          execFileSync('bash', [`scripts/production-release/${entry}.sh`], {
+            env: { ...transport, ...fields },
+            stdio: 'pipe'
+          })
+        );
+        assert.equal(readFileSync(log, 'utf8'), '', entry + JSON.stringify(fields));
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+    dispatchFixture(
+      recharge01ceIdentity,
+      recharge01ceBaseline,
+      ({ execute, parametersFile, awsLog, root, env }) => {
+        const transport = approvedRuntimeTransport(
+          root,
+          env,
+          rejectedApproval,
+          recharge01ceIdentity
+        );
+        assert.throws(() => execute({ ...transport, ...fields }), JSON.stringify(fields));
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      }
+    );
+  }
+});
+
+test('fixed 01ce dispatch binds its exclusive flag and fresh candidate image identity', () => {
+  dispatchFixture(
+    recharge01ceIdentity,
+    recharge01ceBaseline,
+    ({ execute, parametersFile, awsLog, root, env }) => {
+      execute(approvedRuntimeTransport(root, env, false, recharge01ceIdentity));
+      const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
+      assert.equal(args.filter((arg) => arg === '--recharge-pro-01ce').length, 1);
+      assert.equal(args[args.indexOf('--expected-current') + 1], recharge01ceBaseline);
+      assert.equal(args[args.indexOf('--image-commit') + 1], env.RELEASE_COMMIT);
+      assert.equal(args[args.indexOf('--image-run-id') + 1], '999999');
+      assert.equal(args[args.indexOf('--image-run-attempt') + 1], '1');
+      assert.equal(
+        args.some((arg) =>
+          /^(--historical-finance-|--recharge-pro-menu-|--recharge-pro-main80|--registration-worker-|--admin-only|--order-archive-|--post-cleanup-)/.test(
+            arg
+          )
+        ),
+        false
+      );
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1
+      );
+    }
+  );
+});
+
+test('fixed 01ce dispatch rejects malformed candidate bindings before AWS or parameters', () => {
+  for (const fields of [
+    { RELEASE_COMMIT: 'B'.repeat(40) },
+    { RELEASE_COMMIT: 'b'.repeat(40) + ' --admin-only' },
+    { SOURCE_TREE: 'c'.repeat(39) },
+    { QUALITY_RUN_ID: '0' },
+    { QUALITY_RUN_ID: '111 --historical-finance-order-archive' },
+    { RELEASE_REPOSITORY: 'unreviewed.example/id-business-v2-release' }
+  ])
+    dispatchFixture(
+      recharge01ceIdentity,
+      recharge01ceBaseline,
+      ({ execute, parametersFile, awsLog, root, env }) => {
+        assert.throws(() =>
+          execute({
+            ...approvedRuntimeTransport(root, env, false, recharge01ceIdentity),
+            ...fields
+          })
+        );
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      }
+    );
+});
+
+test('fixed 01ce disabled real parser fails closed before build push dispatch effects', () => {
+  for (const entry of ['build-images', 'push-images', 'dispatch'])
+    fixture(({ root, env, log }) => {
+      const scripts = join(root, 'scripts/production-release');
+      mkdirSync(scripts, { recursive: true });
+      for (const name of [
+        'build-images.sh',
+        'push-images.sh',
+        'dispatch.sh',
+        'validate-release-selection.sh',
+        'remote-deploy.py'
+      ])
+        writeFileSync(join(scripts, name), readFileSync(`scripts/production-release/${name}`));
+      mkdirSync(join(root, 'deploy/aws'), { recursive: true });
+      const disabled = JSON.parse(readFileSync(`deploy/aws/${recharge01ceIdentity}.json`, 'utf8'));
+      disabled.enabled = false;
+      disabled.approvalStatus = 'NOT_APPROVED';
+      writeFileSync(
+        join(root, `deploy/aws/${recharge01ceIdentity}.json`),
+        JSON.stringify(disabled)
+      );
+      assert.throws(
+        () =>
+          execFileSync('bash', [join(scripts, `${entry}.sh`)], {
+            cwd: root,
+            env: {
+              ...env,
+              HISTORICAL_EXCEPTION: recharge01ceIdentity,
+              EXPECTED_CURRENT: recharge01ceBaseline,
+              RELEASE_ADMIN_ONLY: 'false',
+              SOURCE_TREE: 'c'.repeat(40),
+              QUALITY_RUN_ID: '111'
+            },
+            stdio: 'pipe'
+          }),
+        (error) => error.status !== 0 && String(error.stderr).includes('raw output suppressed')
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+      assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+    });
+});
+
+test('fixed 01ce workflow chooses independent approval readback and cache skip preserving old approval', () => {
+  assert.ok(workflowInputs.historical_exception.options.includes(recharge01ceIdentity));
+  const enabled = (operation) =>
+    workflowSteps
+      .filter(
+        (step) =>
+          !step.if ||
+          new Function('inputs', `return (${step.if});`)({
+            operation,
+            historical_exception: recharge01ceIdentity,
+            reuse_image_run: ''
+          })
+      )
+      .map((step) => step.name);
+  for (const name of [
+    'Verify fixed 01ce recharge runtime approval',
+    'Validate release policy and reviewed seal selection',
+    'Build images on the GitHub runner',
+    'Verify fixed recharge deployment independently',
+    'Record skipped cache maintenance for fixed recharge release'
+  ])
+    assert.ok(enabled('release').includes(name), name);
+  for (const name of [
+    'Verify fixed recharge runtime approval',
+    'Verify reusable build and unchanged application source',
+    'Verify or maintain recoverable unused project image cache'
+  ])
+    assert.equal(enabled('release').includes(name), false, name);
+  assert.ok(
+    enabled('verify_recharge_release').includes('Verify fixed recharge deployment independently')
+  );
+  for (const name of [
+    'Verify fixed 01ce recharge runtime approval',
+    'Build images on the GitHub runner',
+    'Push images using short-lived AWS credentials',
+    'Dispatch guarded deployment',
+    'Record skipped cache maintenance for fixed recharge release'
+  ])
+    assert.equal(enabled('verify_recharge_release').includes(name), false, name);
+  const old = workflowSteps.find((step) => step.name === 'Verify fixed recharge runtime approval');
+  assert.equal(
+    old.if,
+    "inputs.historical_exception == 'recharge-pro-menu-b8-20261005' || inputs.historical_exception == 'recharge-pro-menu-7f-20261005' || inputs.historical_exception == 'recharge-pro-main80-20261006'"
+  );
+  assert.equal(old.run.includes(recharge01ceIdentity), false);
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge deployment independently'
+  );
+  for (const operation of ['release', 'verify_recharge_release'])
+    assert.equal(
+      new Function('inputs', `return (${readback.env.FIXED_RECHARGE_PROFILE.slice(3, -2)});`)({
+        operation,
+        historical_exception: recharge01ceIdentity
+      }),
+      recharge01ceIdentity
+    );
+  assert.ok(readback.run.includes("'recharge-pro-main80-20261006', 'recharge-pro-01ce-20261007'"));
+  const cmds = guardCommands([`deploy/aws/${recharge01ceIdentity}.json`]);
+  assert.equal(
+    cmds.filter((cmd) => cmd === 'python3 -B scripts/production-release/remote-deploy.test.py')
+      .length,
+    1
   );
 });

@@ -227,3 +227,22 @@ class RuntimeOwnershipTests(unittest.TestCase):
                         close.assert_awaited_once_with(JOB_ID)
                     else:
                         close.assert_not_awaited()
+
+
+class RuntimePrewarmOwnershipTests(unittest.TestCase):
+    def test_only_registration_role_prewarms_and_recharge_run_still_reuses_browser(self):
+        for registration_owner in (False, True):
+            with self.subTest(registration_owner=registration_owner):
+                factory = AsyncMock(side_effect=fixture_browser)
+                runtime = server.PersistentBrowserRuntime(browser_factory=factory,
+                                                          registration_owner=registration_owner)
+                runtime.start()
+                try:
+                    self.assertTrue(runtime.started)
+                    self.assertEqual(factory.await_count, int(registration_owner))
+                    first = runtime.run(lambda browser: asyncio.sleep(0, result=browser))
+                    second = runtime.run(lambda browser: asyncio.sleep(0, result=browser))
+                    self.assertIs(first, second)
+                    self.assertEqual(factory.await_count, 1)
+                finally:
+                    runtime.stop()

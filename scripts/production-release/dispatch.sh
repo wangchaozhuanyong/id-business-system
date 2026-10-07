@@ -73,6 +73,14 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; 
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope
 fi
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-01ce-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+fi
+
 if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-b8-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-menu-7f-20261005 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-main80-20261006 ]]; then
   case "$HISTORICAL_EXCEPTION" in
     recharge-pro-menu-b8-20261005) test "$EXPECTED_CURRENT" = b8d643450ffa9012ccc09ead15e4681e3dee98d0 ;;
@@ -111,6 +119,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'recharge-pro-menu-b8-20261005',
                          'recharge-pro-menu-7f-20261005',
                          'recharge-pro-main80-20261006',
+                         'recharge-pro-01ce-20261007',
                          'registration-worker-b8-80-20261006',
                          'registration-worker-956-20261006',
                          'registration-worker-85-20261006',
@@ -149,6 +158,12 @@ elif history_policy == 'recharge-pro-menu-7f-20261005':
 elif history_policy == 'recharge-pro-main80-20261006':
     assert previous == 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' and admin_only == 'false'
     scope_flag += ' --recharge-pro-main80'
+elif history_policy == 'recharge-pro-01ce-20261007':
+    assert previous == '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT',
+        'POST_CLEANUP_SEAL_SHA256', 'ORDER_ARCHIVE_SEAL_SHA256', 'ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'))
+    scope_flag += ' --recharge-pro-01ce'
 elif history_policy == 'registration-worker-b8-80-20261006':
     assert previous == '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (

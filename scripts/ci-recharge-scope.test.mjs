@@ -743,3 +743,54 @@ test('fixed 91 profile observation CI accepts only two Worker files and reviewed
     assert.equal(isCiOnly([profile, extra]), false, extra);
   }
 });
+
+test('fixed 01ce recharge profile and twelve controls stay exact without weakening worker checks', () => {
+  const profile = 'deploy/aws/recharge-pro-01ce-20261007.json';
+  const controls = [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh',
+    'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'docs/PRODUCTION_RELEASE_OIDC.md'
+  ];
+  assert.equal(checkMode([profile, ...controls], schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts([profile]), ['guards']);
+  // The existing shared CI command path retains all module evidence; ci-only mode selects control execution.
+  assert.deepEqual(selectedParts([profile, ...controls]), ['guards', 'admin', 'api', 'connector']);
+  const workers = [
+    'plan_selection.py',
+    'server.py',
+    'test_pro.py',
+    'test_server.py',
+    'test_worker_isolation.py'
+  ].map((name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`);
+  for (const path of workers) {
+    assert.equal(checkMode([profile, path], schema, schema), 'recharge', path);
+    assert.deepEqual(selectedParts([profile, path]), ['guards', 'connector'], path);
+  }
+  assert.equal(
+    checkMode([profile, ...controls, ...workers, 'docs/V2_TASKS.md'], schema, schema),
+    'recharge'
+  );
+  assert.deepEqual(selectedParts([profile, ...workers, 'docs/V2_TASKS.md']), [
+    'guards',
+    'connector'
+  ]);
+  for (const wrong of [
+    'deploy/aws/recharge-pro-01ce-20261008.json',
+    'deploy/aws/recharge-pro-c4-20261007.json',
+    profile + '.backup',
+    profile + '/future.json',
+    'deploy/aws/../aws/recharge-pro-01ce-20261007.json'
+  ]) {
+    assert.equal(isCiOnly([wrong]), false, wrong);
+    assert.equal(checkMode([profile, wrong], schema, schema), 'full', wrong);
+  }
+});
