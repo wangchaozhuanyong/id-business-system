@@ -438,15 +438,16 @@ class RegistrationBrowser:
         if (gate != 'none' or value['email_error'] not in {'none', 'not_measured'}) and 'email_form_first_failure' not in self.registration_state:
             self.registration_state['email_form_first_failure'] = dict(value)
 
-    async def email_submit_control(self, email, *, require_valid=True):
+    async def email_submit_control(self, email, *, require_valid=True, page=None):
         """Resolve one actual button associated with the exact email form."""
-        self.official(self.page)
+        page = self.page if page is None else page
+        self.official(page)
         handle = await email.element_handle()
         if not handle or not await handle.evaluate('(node) => node.isConnected && !!node.form'):
             return None, None, 'wrong_scope'
         if require_valid and not await handle.evaluate('(node) => node.validity.valid'):
             return handle, None, 'invalid'
-        candidates = self.page.get_by_role('button', name=re.compile(r'^(continue|继续)$', re.I))
+        candidates = page.get_by_role('button', name=re.compile(r'^(continue|继续)$', re.I))
         associated = []
         for index in range(await candidates.count()):
             candidate = candidates.nth(index)
@@ -459,17 +460,20 @@ class RegistrationBrowser:
             return handle, None, 'ambiguous' if len(associated) > 1 else 'wrong_scope'
         return handle, associated[0], None
 
-    async def email_submit_ready(self, email, button):
+    async def email_submit_ready(self, email, button, *, page=None):
         """Only an exact GET form's observable submit handler permits filling it."""
-        self.official(self.page)
+        self.official(self.page if page is None else page)
         value = await button.evaluate('''(node, email) => {
             const readiness = ''' + EMAIL_SUBMIT_READINESS + ''';
             return email.isConnected ? readiness(email.form, node) : 'unknown';
         }''', email)
         return value in {'native_handler', 'react_handler', 'not_required'}
 
-    async def email_submit_unchanged(self, email, button, form, page, url):
-        if self.page is not page or page.url != url:
+    async def email_submit_unchanged(self, email, button, form, page, url, *, verification_context=None, observe=None):
+        if ((verification_context is None) != (observe is None)
+                or (verification_context is None and self.page is not page)
+                or (verification_context is not None and (not callable(observe) or page not in verification_context.pages))
+                or page.url != url):
             return False
         self.official(page)
         current = await self.field(page, EMAIL_INPUT)
@@ -479,11 +483,19 @@ class RegistrationBrowser:
                 && node.value === args.expected && node.validity.valid''',
                 {'form': form, 'expected': self.data['email']}):
             return False
-        _, resolved_button, reason = await self.email_submit_control(current)
+        _, resolved_button, reason = (await self.email_submit_control(current) if verification_context is None
+                                     else await self.email_submit_control(current, page=page))
         if reason or not resolved_button or not await resolved_button.evaluate('(node, old) => node === old', button):
             return False
-        if not await button.is_visible() or not await button.is_enabled() or await self.challenge():
+        if not await button.is_visible() or not await button.is_enabled():
             return False
+        if verification_context is None:
+            if await self.challenge():
+                return False
+        else:
+            await observe()
+            if page not in verification_context.pages or page.url != url:
+                return False
         # Recheck after challenge reads; a fixed handle cannot resolve to a new code button.
         return bool(await button.evaluate('''(node, args) => {
             const readiness = ''' + EMAIL_SUBMIT_READINESS + ''';
@@ -1412,6 +1424,7 @@ class RegistrationBrowser:
                      'post_code_identity_unconfirmed', 'password_rejected', 'secret_cleanup', 'context_cleanup',
                      'identity_first', 'identity_retry', 'identity_guard_install', 'identity_code_guard',
                      'identity_get', 'identity_after_get', 'identity_guard_remove', 'owned_onboarding'}
+        subphases.update({'email_form_readiness', 'email_form_changed'})
 
         def note(name):
             nonlocal subphase
@@ -1695,30 +1708,86 @@ class RegistrationBrowser:
                     note('retry_guard_install')
                     await verification.route('**/*', readonly)
                     navigation_readonly = readonly
-            await self.settle(3)
-            await safe_page()
+            # The existing navigation budget also pays for settling, hydration
+            # and the mail callback fence. No fresh budget is started for email.
+            await budget.run(lambda: self.settle(3), 'verification_email_settle')
+            await budget.run(safe_page, 'verification_email_page')
             mark('field_read')
             note('email_field_read')
-            email = await self.field(page, EMAIL_INPUT)
+            email = await budget.run(lambda: self.field(page, EMAIL_INPUT), 'verification_email_field')
             if not email:
                 note('email_field_missing')
                 raise Stop('verification_required')
             if navigation_readonly:
                 mark('navigation_guard')
                 note('retry_guard_remove')
-                await verification.unroute('**/*', navigation_readonly)
+                await budget.run(lambda: verification.unroute('**/*', navigation_readonly), 'verification_email_guard')
                 navigation_readonly = None
-            mark('email_fill')
-            await email.fill(self.data['email'])
+            async def prepare_email():
+                nonlocal email
+                note('email_form_readiness')
+                while True:
+                    budget.remaining_ms()
+                    await safe_page()
+                    mark('field_read')
+                    note('email_form_readiness')
+                    email_handle, submit, reason = await self.email_submit_control(email, require_valid=False, page=page)
+                    if not submit or reason:
+                        raise Stop('form_unrecognized')
+                    if await self.email_submit_ready(email_handle, submit, page=page):
+                        break
+                    await self.settle(.1)
+                    email = await self.field(page, EMAIL_INPUT)
+                    if not email:
+                        note('email_form_changed')
+                        raise Stop('form_unrecognized')
+                form = (await email_handle.evaluate_handle('(node) => node.form')).as_element()
+                url = page.url
+                mark('email_fill')
+                await email_handle.fill(self.data['email'])
+                while True:
+                    budget.remaining_ms()
+                    note('email_form_changed')
+                    if not await email_handle.evaluate('''(node, args) => node.isConnected
+                            && node.form === args.form && node.value === args.expected && node.validity.valid''',
+                            {'form': form, 'expected': self.data['email']}):
+                        raise Stop('form_unrecognized')
+                    if await submit.is_enabled():
+                        break
+                    await safe_page()
+                    await self.settle(.1)
+                return email_handle, submit, form, url
+            email_handle, submit, form, prepared_url = await budget.run(prepare_email, 'verification_email_prepare')
             # Fence the current task's mail before either login submission can send it.
             mark('mail_prepare')
             mail_step = ('mfa' if self.job.step in {'password_verified', 'mfa'} else 'password') if _owned_context else ('mfa' if mfa else 'password')
-            self.job.prepare_mail(mail_step, new_request=True)
-            await safe_page()
-            self.official(page)
+            budget.remaining_ms()
+            missing_deadline = object()
+            previous_deadline = getattr(self.job, '_profile_prepare_deadline', missing_deadline)
+            mail_deadline = budget.started + budget.seconds
+            if type(previous_deadline) in {int, float} and -float('inf') < previous_deadline < float('inf'):
+                mail_deadline = min(mail_deadline, previous_deadline)
+            self.job._profile_prepare_deadline = mail_deadline
+            try:
+                self.job.prepare_mail(mail_step, new_request=True)
+            finally:
+                if previous_deadline is missing_deadline:
+                    del self.job._profile_prepare_deadline
+                else:
+                    self.job._profile_prepare_deadline = previous_deadline
+            await budget.run(safe_page, 'verification_email_page')
+            mark('field_read')
+            note('email_form_changed')
+            if not await budget.run(lambda: self.email_submit_unchanged(
+                    email_handle, submit, form, page, prepared_url,
+                    verification_context=verification, observe=safe_page), 'verification_email_reobserve'):
+                mark('field_read')
+                note('email_form_changed')
+                raise Stop('form_unrecognized')
+            budget.remaining_ms()
             mark('email_submit')
             if _owned_context:authentication['submitted'] = True
-            await email.press('Enter')
+            await budget.run(lambda: email_handle.press('Enter'), 'verification_email_submit')
             await self.settle(3)
             chose_password = False
             for _ in range(60):

@@ -68,6 +68,35 @@ print(value['apiCompiledSourceProjectionSha256'] if kind == 'api-compiled' else 
 PY_RECOVERY_PROJECTION
 }
 
+read_registration_login_projection() {
+  python3 - <<'PY_LOGIN_PROJECTION'
+import json, os, re
+from pathlib import Path
+
+def unique(items):
+    value = {}
+    for key, item in items:
+        if key in value: raise ValueError('Fixed login projection changed')
+        value[key] = item
+    return value
+raw = Path('.deploy/production-release/registration-build-projection.json').read_bytes()
+if len(raw) > 128 * 1024: raise SystemExit('Fixed login projection unavailable')
+v = json.loads(raw, object_pairs_hook=unique)
+p = json.loads(Path('deploy/aws/registration-worker-93-20261007.json').read_bytes(), object_pairs_hook=unique)
+keys = {'version', 'id', 'sourceCommit', 'sourceTree', 'registrationSourceCommit', 'workerBasisCommit',
+    'workerProjectionSha256', 'registrationSourceSha256', 'validationSourceSha256', 'contextPath'}
+if (set(v) != keys or type(v['version']) is not int or v['version'] != 1
+        or v['id'] != 'registration-worker-93-20261007' or p.get('enabled') is not True
+        or v['sourceCommit'] != os.environ['RELEASE_COMMIT'] or not re.fullmatch(r'[a-f0-9]{40}', v['sourceTree'])
+        or v['contextPath'] != '.deploy/production-release/registration-build-context'
+        or not isinstance(v['workerProjectionSha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', v['workerProjectionSha256'])
+        or any(v[k] != p[k] for k in ('registrationSourceCommit', 'workerBasisCommit', 'workerProjectionSha256',
+            'registrationSourceSha256', 'validationSourceSha256'))):
+    raise SystemExit('Fixed login projection unavailable')
+print(v['workerProjectionSha256'])
+PY_LOGIN_PROJECTION
+}
+
 # Selection only; the remote policy still verifies the reviewed source proof.
 validate_release_selection() {
   local policy="${HISTORICAL_EXCEPTION:-none}"
@@ -114,6 +143,11 @@ validate_release_selection() {
       return 0 ;;
     registration-worker-92-20261007)
       [[ "${EXPECTED_CURRENT:-}" == 974c62cc1681012ecff897aefc90d2cd9900004a ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      return 0 ;;
+    registration-worker-93-20261007)
+      [[ "${EXPECTED_CURRENT:-}" == 2f24cf81007429ea474da404a30bc74da9d43ce1 ]] || return 1
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;

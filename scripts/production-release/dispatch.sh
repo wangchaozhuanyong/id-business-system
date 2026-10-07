@@ -23,6 +23,13 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; the
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-90-20261007
 fi
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-93-20261007 ]]; then
+  test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-93-20261007
+fi
+
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-91-20261007 ]]; then
   test "$EXPECTED_CURRENT" = 01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af
   test "${RELEASE_ADMIN_ONLY:-false}" = false
@@ -145,7 +152,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'registration-worker-89-20261006',
                          'registration-worker-90-20261007',
                          'registration-worker-91-20261007',
-                         'registration-worker-92-20261007',
+                         'registration-worker-92-20261007', 'registration-worker-93-20261007',
                          'historical-finance-20261005-order-archive',
                          'historical-finance-20261005-post-cleanup')
 if history_policy == 'historical-finance-20261005':
@@ -222,6 +229,11 @@ elif history_policy == 'registration-worker-92-20261007':
     assert not any(os.environ.get(key) for key in (
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-92'
+elif history_policy == 'registration-worker-93-20261007':
+    assert previous == '2f24cf81007429ea474da404a30bc74da9d43ce1' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
+    scope_flag += ' --registration-worker-93'
 elif history_policy == 'registration-worker-91-20261007':
     assert previous == '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
@@ -254,7 +266,7 @@ elif history_policy == 'historical-finance-20261005-order-archive':
     scope_flag += (' --historical-finance-order-archive --order-archive-seal-sha256 '
                    + os.environ['ORDER_ARCHIVE_SEAL_SHA256']
                    + ' --order-archive-prepared-images-sha256 ' + os.environ['ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'])
-if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006', 'registration-worker-87-20261006', 'registration-worker-88-20261006', 'registration-worker-89-20261006', 'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007'):
+if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006', 'registration-worker-87-20261006', 'registration-worker-88-20261006', 'registration-worker-89-20261006', 'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007'):
     image_commit, image_run, image_attempt = sha, run_id, attempt
 else:
     image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)

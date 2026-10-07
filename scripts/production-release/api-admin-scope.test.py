@@ -218,6 +218,10 @@ class BaselineAndReadbackTests(unittest.TestCase):
             (current / 'release-manifest.json').write_text(json.dumps(manifest))
             self.assertEqual(scope.baseline(controller, OLD, check_jobs=False)[3]['apiSource']['kind'],
                              'VERIFIED_EXISTING_API_PROJECTION')
+            manifest['fixedRegistrationRelease'] = {'id': 'registration-worker-93-20261007'}
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            self.assertEqual(scope.baseline(controller, OLD, check_jobs=False)[3]['apiSource']['revision'],
+                             d.RECHARGE_2F_CURRENT)
             profile_path.write_bytes(profile_raw + b'\n')
             with self.assertRaisesRegex(RuntimeError, 'UNKNOWN_API_PROJECTION'):
                 scope.baseline(controller, OLD, check_jobs=False)
