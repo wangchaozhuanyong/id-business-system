@@ -1,6 +1,5 @@
 import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const dataAnalyticsFeature = defineV2Feature({
   key: 'analytics',
@@ -25,6 +24,9 @@ export const dataAnalyticsFeature = defineV2Feature({
     { key: 'journalType', label: '业务类型', kind: 'select' },
     { key: 'financeAccount', label: '资金账户', kind: 'select' }
   ],
-  tables: v2TablesByFeature['analytics'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['analytics']
+    ),
   loadView: () => import('./V2DataAnalyticsView.vue')
 });

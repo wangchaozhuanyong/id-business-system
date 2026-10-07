@@ -1,4 +1,3 @@
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 import { defineV2Feature } from '@/v2/features/feature';
 export const autoRechargeFeature = defineV2Feature({
   key: 'auto-recharge',
@@ -10,6 +9,9 @@ export const autoRechargeFeature = defineV2Feature({
   kind: 'form',
   freshnessPolicy: 'event-with-deadline',
   filters: [],
-  tables: v2TablesByFeature['auto-recharge'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['auto-recharge']
+    ),
   loadView: () => import('./V2AutoRechargeView.vue')
 });

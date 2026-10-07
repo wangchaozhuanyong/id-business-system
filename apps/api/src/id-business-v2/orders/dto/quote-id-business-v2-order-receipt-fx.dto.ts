@@ -1,5 +1,5 @@
-import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
+import type { V2OrderReceiptCurrency } from '@apple-business/shared';
 
 export interface QuoteIdBusinessV2OrderReceiptFxDto {
-  currency?: IdBusinessV2FinanceCurrency | string;
+  currency?: V2OrderReceiptCurrency | string;
 }

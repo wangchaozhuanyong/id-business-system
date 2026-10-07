@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import { V2_FINANCE_CURRENCIES, V2_ORDER_RECEIPT_CURRENCIES } from '@apple-business/shared';
 import { IdBusinessV2AccountLockScope, Prisma } from '@prisma/client';
 import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -298,6 +299,46 @@ describe('IdBusinessV2OrderEntryService', () => {
     });
     expect(financeFxService.quoteOrderRate).toHaveBeenCalledWith('MYR', operator);
   });
+
+  it.each(
+    V2_FINANCE_CURRENCIES.filter(
+      (currency) => !V2_ORDER_RECEIPT_CURRENCIES.some((item) => item === currency)
+    )
+  )(
+    'rejects expanded finance currency %s before FX resolution, transactions or writes',
+    async (currency) => {
+      await expect(
+        service.create(makeDto({ receivedCurrency: currency }), operator)
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(() => service.quoteReceiptFx({ currency }, operator)).toThrow(BadRequestException);
+      expect(financeFxService.resolve).not.toHaveBeenCalled();
+      expect(financeFxService.quoteOrderRate).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2Order.create).not.toHaveBeenCalled();
+      expect(tx.auditLog.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(V2_ORDER_RECEIPT_CURRENCIES)(
+    'keeps %s available for order creation and quoting',
+    async (currency) => {
+      financeAccountLock.mockResolvedValue({
+        id: financeAccountId,
+        status: 'active',
+        currency,
+        currentBalance: ReceiptAmount4.from('1000'),
+        currentBalanceCny: ReceiptAmount4.from('1000')
+      });
+      await service.create(makeDto({ receivedCurrency: currency }), operator);
+      expect(tx.idBusinessV2Order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ receivedCurrency: currency })
+        })
+      );
+      await service.quoteReceiptFx({ currency: ` ${currency.toLowerCase()} ` }, operator);
+      expect(financeFxService.quoteOrderRate).toHaveBeenCalledWith(currency, operator);
+    }
+  );
 
   it('creates a pending order and a real ID lock in one transaction with server-calculated fees', async () => {
     const result = await service.create(makeDto(), operator);

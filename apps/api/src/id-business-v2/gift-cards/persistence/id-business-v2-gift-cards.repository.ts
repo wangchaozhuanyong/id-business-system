@@ -142,6 +142,13 @@ export class IdBusinessV2GiftCardsRepository {
     return tx.auditLog.create({ data });
   }
 
+  appendSensitiveAccess(
+    tx: V2CommandTransaction,
+    data: Prisma.SensitiveAccessLogUncheckedCreateInput
+  ) {
+    return tx.sensitiveAccessLog.create({ data });
+  }
+
   async listGiftCards(criteria: GiftCardListCriteria) {
     const where: Prisma.IdBusinessV2GiftCardWhereInput = {
       accountId: criteria.accountId ?? undefined,

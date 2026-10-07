@@ -198,7 +198,8 @@ try {
       for (const fixture of selectedFixtures) {
         await page.goto(
           new URL(`${fixture.pathname}?theme=${theme}&${fixture.query || ''}`, baseUrl).href,
-          { waitUntil: 'networkidle' }
+          // Fixtures may keep a read-only polling channel open; readiness is the mounted UI.
+          { waitUntil: 'domcontentloaded' }
         );
         await page
           .locator(fixture.selector)

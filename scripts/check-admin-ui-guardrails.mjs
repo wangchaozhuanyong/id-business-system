@@ -56,6 +56,10 @@ for (const file of walk(sourceRoot).filter((item) => item.endsWith('.vue'))) {
     failures.push(`${projectPath}: 业务页面禁止自建整页加载反馈`);
   }
 
+  if (!projectPath.includes('/testing/') && /<el-button(?=\s|>)/.test(source)) {
+    failures.push(`${projectPath}: 业务操作必须使用 AppButton，禁止绕过共享按钮状态皮肤`);
+  }
+
   for (const match of source.matchAll(/:(?:confirm-disabled|disabled)\s*=\s*["']([^"']+)["']/g)) {
     if (hasFieldValidityCondition(match[1])) {
       failures.push(`${projectPath}: 可修正的字段有效性不得用于禁用提交操作`);

@@ -62,7 +62,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test:repository-scripts && npm run test --workspaces --if-present",
-    "test:repository-scripts": "node --test scripts/aws-mysql-backup.test.mjs scripts/ci-change-scope.test.mjs scripts/container-hardening.test.mjs scripts/development-data-cleanup.test.mjs scripts/npm-audit-high.test.mjs scripts/production-database-access.test.mjs scripts/production-performance-monitor.test.mjs scripts/trusted-proxy-config.test.mjs scripts/user-phone-encryption.test.mjs scripts/v2-data-integrity-audit.test.mjs scripts/v2-release-history-policy.test.mjs",
+    "test:repository-scripts": "node --test scripts/check-v2-module-architecture.test.mjs scripts/check-v2-prisma-runtime-boundary.test.mjs scripts/ci-recharge-check.test.mjs scripts/ci-recharge-scope.test.mjs scripts/aws-mysql-backup.test.mjs scripts/ci-change-scope.test.mjs scripts/container-hardening.test.mjs scripts/development-data-cleanup.test.mjs scripts/npm-audit-high.test.mjs scripts/production-database-access.test.mjs scripts/production-performance-monitor.test.mjs scripts/trusted-proxy-config.test.mjs scripts/user-phone-encryption.test.mjs scripts/v2-data-integrity-audit.test.mjs scripts/v2-release-history-policy.test.mjs",
     "audit:high": "node scripts/npm-audit-high.mjs",
     "audit:all": "npm audit --audit-level=high",
     "prisma:generate": "npm run prisma:generate --workspace @apple-business/api",
@@ -111,6 +111,8 @@
   },
   "overrides": {
     "deepmerge-ts": "8.0.1",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2",
     "@nestjs/platform-express": {
       "multer": "2.4.0"
     }

@@ -11651,11 +11651,21 @@ class Registration94ScopeTests(unittest.TestCase):
         argv = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
             '--repository', 'synthetic-fixture-only', '--expected-current', deployment.REGISTRATION_FOLLOWUP_CURRENT,
             '--run-id', '1', '--run-attempt', '1', '--ci-run-id', '1', '--registration-worker-94']
-        for flag in ('--registration-worker-93', '--recharge-pro-2f'):
+        for flag in ('--registration-worker-93', '--recharge-pro-2f', '--api-admin-only'):
             with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', argv + [flag]), \
                     patch.object(deployment, 'registration_followup_release') as release, patch.object(deployment, 'run') as command:
                 with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
                 release.assert_not_called(); command.assert_not_called()
+        with patch.object(deployment.sys, 'argv', argv + ['--api-admin-build-proof', 'synthetic-no-secrets']), \
+                patch.object(deployment, 'registration_followup_release') as release, patch.object(deployment, 'api_admin_scope') as scope:
+            with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_SCOPE_REQUIRED'): deployment.main()
+            release.assert_not_called(); scope.assert_not_called()
+        api_args = [x for x in argv if x != '--registration-worker-94'] + ['--api-admin-only', '--api-admin-build-proof', 'synthetic-no-secrets']
+        api_release = MagicMock(return_value='selected-api-admin'); controller = object()
+        with patch.object(deployment.sys, 'argv', api_args), patch.object(deployment, 'api_admin_scope', return_value=(SimpleNamespace(release=api_release), controller)), \
+                patch.object(deployment, 'registration_followup_release') as registration:
+            self.assertEqual(deployment.main(), 'selected-api-admin')
+            api_release.assert_called_once(); registration.assert_not_called()
         with patch.object(deployment.sys, 'argv', argv), patch.object(deployment, 'registration_followup_release', return_value='selected94') as selected:
             self.assertEqual(deployment.main(), 'selected94'); selected.assert_called_once()
 

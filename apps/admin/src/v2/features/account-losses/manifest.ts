@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const accountLossesFeature = defineV2Feature({
   key: 'account-losses',
@@ -18,6 +17,9 @@ export const accountLossesFeature = defineV2Feature({
     { key: 'status', label: '记录状态', kind: 'select', options: ['待恢复', '已恢复'] },
     { key: 'reportedAt', label: '报损时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['account-losses'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['account-losses']
+    ),
   loadView: () => import('./V2AccountLossesView.vue')
 });

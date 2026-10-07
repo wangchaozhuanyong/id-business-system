@@ -35,11 +35,12 @@
     </el-select>
   </el-form-item>
   <p v-if="error" class="recharge-error" role="alert">
-    {{ error }} <el-button link type="primary" @click="$emit('retry')">重试</el-button>
+    {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RechargePlan } from './contracts';
 import { rechargePlanOptions } from './recharge-plan-options';
 

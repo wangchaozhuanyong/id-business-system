@@ -21,6 +21,7 @@ export interface V2CommandContext {
   operator?: AuthenticatedUser;
   businessTime: Date;
   idempotencyKey?: string;
+  markChangedScopes(scopes: readonly V2DataScope[]): void;
 }
 
 interface V2CommandTransactionBaseOptions {
@@ -64,8 +65,8 @@ export class V2CommandTransactionManager {
     work: (tx: V2CommandTransaction, context: V2CommandContext) => Promise<TResult>,
     options: V2CommandTransactionOptions<TResult>
   ) {
-    const changedScopes = [...new Set(options.changedScopes)];
-    if (!changedScopes.length) {
+    const initialScopes = [...new Set(options.changedScopes)];
+    if (!initialScopes.length) {
       throw new Error('V2 command transaction requires at least one changed scope');
     }
     const retryable =
@@ -79,14 +80,31 @@ export class V2CommandTransactionManager {
       idempotencyKey: retryable ? options.idempotencyKey : undefined
     };
 
-    for (let attempt = 1; attempt <= maxWriteConflictRetries + 1; attempt += 1) {
-      const context: V2CommandContext = { ...baseContext, attempt };
+    const runTransaction = async (operation: typeof work, attempt: number): Promise<TResult> => {
+      const changedScopes = [...initialScopes];
+      let acceptingChanges = false;
+      const context: V2CommandContext = {
+        ...baseContext,
+        attempt,
+        markChangedScopes(scopes) {
+          if (!acceptingChanges) throw new Error('V2 command scope registration is closed');
+          for (const scope of scopes) {
+            if (!changedScopes.includes(scope)) changedScopes.push(scope);
+          }
+        }
+      };
       try {
         const result = await this.prisma.$transaction(
           async (tx) => {
-            const transactionResult = await work(tx, context);
-            await bumpV2ScopeVersions(tx, changedScopes, context.businessTime);
-            return transactionResult;
+            acceptingChanges = true;
+            try {
+              const transactionResult = await operation(tx, context);
+              acceptingChanges = false;
+              await bumpV2ScopeVersions(tx, changedScopes, context.businessTime);
+              return transactionResult;
+            } finally {
+              acceptingChanges = false;
+            }
           },
           {
             isolationLevel,
@@ -96,6 +114,14 @@ export class V2CommandTransactionManager {
         );
         this.changeEventPublisher?.publishCommittedChangeBestEffort(changedScopes);
         return result;
+      } finally {
+        acceptingChanges = false;
+      }
+    };
+
+    for (let attempt = 1; attempt <= maxWriteConflictRetries + 1; attempt += 1) {
+      try {
+        return await runTransaction(work, attempt);
       } catch (error) {
         if (isWriteConflictError(error) && retryable && attempt <= maxWriteConflictRetries) {
           continue;
@@ -103,21 +129,7 @@ export class V2CommandTransactionManager {
 
         if (isUniqueConstraintError(error)) {
           if (retryable) {
-            const replayContext: V2CommandContext = { ...baseContext, attempt: attempt + 1 };
-            const result = await this.prisma.$transaction(
-              async (tx) => {
-                const replayResult = await options.replay(tx, replayContext);
-                await bumpV2ScopeVersions(tx, changedScopes, replayContext.businessTime);
-                return replayResult;
-              },
-              {
-                isolationLevel,
-                maxWait: options.maxWaitMs,
-                timeout: options.timeoutMs
-              }
-            );
-            this.changeEventPublisher?.publishCommittedChangeBestEffort(changedScopes);
-            return result;
+            return runTransaction(options.replay, attempt + 1);
           }
           throw new ConflictException(
             options.uniqueConflictMessage ?? '数据已被其他操作创建，请刷新后核对'

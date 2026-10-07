@@ -1,6 +1,5 @@
 import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const financeExpensesFeature = defineV2Feature({
   key: 'finance-expenses',
@@ -27,6 +26,9 @@ export const financeExpensesFeature = defineV2Feature({
       options: V2_FINANCE_CURRENCY_OPTIONS.map((item) => item.label)
     }
   ],
-  tables: v2TablesByFeature['finance-expenses'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['finance-expenses']
+    ),
   loadView: () => import('./V2FinanceExpensesView.vue')
 });

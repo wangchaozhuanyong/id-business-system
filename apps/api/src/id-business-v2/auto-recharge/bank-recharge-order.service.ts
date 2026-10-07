@@ -16,6 +16,7 @@ import {
   V2TransactionalAuditService,
   assertV2ExpectedUpdatedAt,
   normalizeV2ExpectedUpdatedAt,
+  type V2CommandContext,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
@@ -161,21 +162,23 @@ export class BankRechargeOrderService {
       }
     );
   }
-
   async update(id: string, value: unknown, operator: AuthenticatedUser) {
-    return this.transactions.execute((tx) => this.updateInTransaction(tx, id, value, operator), {
-      changedScopes: ['auto-recharge', 'renewals', 'renewal-warning-summary', 'dashboard'],
-      requestId: randomUUID(),
-      operator,
-      retryMode: 'none'
-    });
+    return this.transactions.execute(
+      (tx, context) => this.updateInTransaction(tx, id, value, operator, context),
+      {
+        changedScopes: ['auto-recharge', 'renewals', 'renewal-warning-summary', 'dashboard'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
   }
-
   async updateInTransaction(
     tx: V2CommandTransaction,
     id: string,
     value: unknown,
-    operator: AuthenticatedUser
+    operator: AuthenticatedUser,
+    context: V2CommandContext
   ) {
     bankRechargeId(id, '银充订单');
     const input = bankRechargeObject(value);
@@ -288,7 +291,7 @@ export class BankRechargeOrderService {
       )
     )
       throw new BadRequestException('旧口径订单需明确确认转换后再填写新费用');
-    const feeData = newFees ? await this.fees.prepare(tx, previous, input, operator) : {};
+    const feeData = newFees ? await this.fees.prepare(tx, previous, input, operator, context) : {};
     const rate =
       input.customerFeeRate === undefined
         ? Amount4.from(previous.customerFeeRate)

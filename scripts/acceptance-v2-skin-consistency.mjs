@@ -16,6 +16,8 @@ assert.ok(!path.relative(root, output).startsWith('..'), '验收产物必须位�
 mkdirSync(output, { recursive: true });
 const checks = [];
 const runtimeErrors = [];
+const overlayFrames = new Map();
+const widths = [1440, 1024, 901, 900, 768, 390];
 let browser;
 let server;
 
@@ -48,52 +50,116 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   browser = await chromium.launch({ headless: true });
-  for (const theme of ['light', 'dark']) {
-    for (const width of [1440, 901, 900, 768, 390]) {
-      const page = await browser.newPage({ viewport: { width, height: 1000 } });
-      page.on('pageerror', (error) => runtimeErrors.push(error.message));
-      await page.route('**/*', async (route) => {
-        const url = new URL(route.request().url());
-        if (url.origin !== baseUrl.origin || url.pathname.startsWith('/api/')) {
-          runtimeErrors.push('皮肤验收出现非本机静态资源请求');
-          await route.abort();
-        } else await route.continue();
-      });
-      await page.goto(new URL(`/theme-components-fixture.html?theme=${theme}`, baseUrl).href, {
-        waitUntil: 'networkidle'
-      });
-      const sample = page.locator('[data-skin-page] [data-skin-sample]');
-      await sample.waitFor();
-      await disableTransitions(page);
-      const pageSkin = await verifySample(page, sample, theme, width, 'page');
-      for (const kind of ['dialog', 'drawer']) {
-        await page.locator(`[data-theme-${kind}-trigger]`).click();
-        const overlaySample = page.locator(`[data-skin-${kind}]`);
-        await overlaySample.waitFor();
-        // Measure the mounted Teleport DOM using the same controls as the page.
-        await page.locator(`[data-skin-${kind}] [data-skin-input] input`).focus();
-        await page.locator(`[data-skin-${kind}] [data-skin-input] input`).blur();
-        const skin = await verifySample(page, overlaySample, theme, width, kind);
-        assert.deepEqual(skin, pageSkin, `${theme}/${width}/${kind} 与页面皮肤不同`);
-        if ([1440, 390].includes(width)) {
-          await page.locator(kind === 'dialog' ? '.el-dialog' : '.el-drawer').screenshot({
-            path: path.join(output, `${theme}-${width}-${kind}.png`),
-            animations: 'disabled'
+  for (const mode of ['layout', 'standalone']) {
+    for (const theme of ['light', 'dark']) {
+      for (const width of widths) {
+        const page = await browser.newPage({ viewport: { width, height: 1000 } });
+        let shellStylesRequested = false;
+        page.on('pageerror', (error) => runtimeErrors.push(error.message));
+        await page.route('**/*', async (route) => {
+          const url = new URL(route.request().url());
+          if (url.pathname.endsWith('/styles/v2.css')) shellStylesRequested = true;
+          if (url.origin !== baseUrl.origin || url.pathname.startsWith('/api/')) {
+            runtimeErrors.push('皮肤验收出现非本机静态资源请求');
+            await route.abort();
+          } else await route.continue();
+        });
+        await page.goto(
+          new URL(
+            `/theme-components-fixture.html?theme=${theme}&${mode === 'standalone' ? 'standalone' : ''}`,
+            baseUrl
+          ).href,
+          {
+            waitUntil: 'networkidle'
+          }
+        );
+        const sample = page.locator('[data-skin-page] [data-skin-sample]');
+        await sample.waitFor();
+        assert.equal(shellStylesRequested, mode === 'layout', `${mode} 必须验证真实的样式隔离`);
+        await disableTransitions(page);
+        const pageSkin = await verifySample(page, sample, theme, width, 'page');
+        for (const kind of ['dialog', 'drawer']) {
+          await page.locator(`[data-theme-${kind}-trigger]`).click();
+          const overlaySample = page.locator(`[data-skin-${kind}]`);
+          await overlaySample.waitFor();
+          // Measure the mounted Teleport DOM using the same controls as the page.
+          await page.locator(`[data-skin-${kind}] [data-skin-input] input`).focus();
+          await page.locator(`[data-skin-${kind}] [data-skin-input] input`).blur();
+          const skin = await verifySample(page, overlaySample, theme, width, kind);
+          assert.deepEqual(skin, pageSkin, `${theme}/${width}/${kind} 与页面皮肤不同`);
+          const overlay = page.locator(kind === 'dialog' ? '.el-dialog' : '.el-drawer');
+          const close = overlay.locator(
+            kind === 'dialog' ? '.el-dialog__headerbtn' : '.el-drawer__close-btn'
+          );
+          const closeBox = await close.boundingBox();
+          assert.ok(
+            closeBox &&
+              closeBox.width >= (width <= 900 ? 44 : 36) &&
+              closeBox.height >= (width <= 900 ? 44 : 36),
+            '弹层关闭按钮触摸目标不足'
+          );
+          await page.keyboard.press('Tab');
+          await close.focus();
+          const focusOutline = await close.evaluate(
+            (element) => getComputedStyle(element).outlineWidth
+          );
+          assert.ok(parseFloat(focusOutline) >= 2, '弹层关闭按钮缺少键盘焦点边界');
+          const frame = await overlay.evaluate((element, overlayKind) => {
+            const selectors =
+              overlayKind === 'drawer'
+                ? ['.el-drawer__header', '.el-drawer__body', '.el-drawer__footer']
+                : ['.el-dialog__header', '.el-dialog__body', '.el-dialog__footer'];
+            return [element, ...selectors.map((selector) => element.querySelector(selector))].map(
+              (node) => {
+                const css = getComputedStyle(node);
+                return Object.fromEntries(
+                  [
+                    'padding',
+                    'minHeight',
+                    'position',
+                    'backgroundColor',
+                    'borderLeftWidth',
+                    'fontSize',
+                    'lineHeight'
+                  ].map((property) => [property, css[property]])
+                );
+              }
+            );
+          }, kind);
+          const key = `${theme}/${width}/${kind}`;
+          if (mode === 'layout') overlayFrames.set(key, frame);
+          else assert.deepEqual(frame, overlayFrames.get(key), `${key} 独立入口与后台弹层规则不同`);
+          checks.push({
+            theme,
+            width,
+            scope: `${mode}-${kind}-frame`,
+            frame,
+            closeBox,
+            focusOutline
           });
+          if ([1440, 390].includes(width)) {
+            await page.locator(kind === 'dialog' ? '.el-dialog' : '.el-drawer').screenshot({
+              path: path.join(
+                output,
+                `${mode === 'standalone' ? 'standalone-' : ''}${theme}-${width}-${kind}.png`
+              ),
+              animations: 'disabled'
+            });
+          }
+          await page.locator(`[data-theme-${kind}-close]`).click();
+          await overlaySample.waitFor({ state: 'hidden' });
         }
-        await page.locator(`[data-theme-${kind}-close]`).click();
-        await overlaySample.waitFor({ state: 'hidden' });
+        assert.equal(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+          ),
+          false,
+          `${theme}/${width} 页面横向溢出`
+        );
+        await verifyMailboxStates(page, theme, width);
+        await verifyOrderSemantics(page, theme, width);
+        await page.close();
       }
-      assert.equal(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth > document.documentElement.clientWidth
-        ),
-        false,
-        `${theme}/${width} 页面横向溢出`
-      );
-      await verifyMailboxStates(page, theme, width);
-      await verifyOrderSemantics(page, theme, width);
-      await page.close();
     }
   }
   assert.deepEqual(runtimeErrors, []);
@@ -103,7 +169,8 @@ try {
       {
         ok: true,
         themes: ['light', 'dark'],
-        widths: [1440, 901, 900, 768, 390],
+        widths,
+        entryModes: ['layout', 'standalone'],
         checks,
         runtimeErrors
       },
@@ -116,7 +183,8 @@ try {
       ok: true,
       scenarios: checks.length,
       themes: 2,
-      viewportWidths: 5,
+      viewportWidths: widths.length,
+      entryModes: 2,
       realOverlayTypes: ['dialog', 'drawer'],
       output
     })

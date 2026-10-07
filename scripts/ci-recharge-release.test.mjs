@@ -58,10 +58,13 @@ function fixture(run, outputDirectory = '.deploy') {
 }
 
 const workflowPredicate = (expression) => (inputs) =>
-  new Function('inputs', 'startsWith', `return (${expression});`)(inputs, (value, prefix) =>
-    String(value ?? '')
-      .toLowerCase()
-      .startsWith(String(prefix).toLowerCase())
+  new Function('inputs', 'startsWith', 'always', `return (${expression});`)(
+    inputs,
+    (value, prefix) =>
+      String(value ?? '')
+        .toLowerCase()
+        .startsWith(String(prefix).toLowerCase()),
+    () => true
   );
 
 function guardCommands(
@@ -156,6 +159,7 @@ test('actual source entry rejects failed evidence on Bash before emitting reusab
     assert.equal(checkMode([alias], '', ''), 'full', alias);
   assert.deepEqual(guardCommands([path], { part: 'release-controls' }), [
     'node --test scripts/ci-recharge-release.test.mjs',
+    'python3 -B scripts/production-release/api-admin-scope.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
   ]);
   for (const changed of [
@@ -281,6 +285,20 @@ const preparePostCleanupEnv = {
   REUSE_IMAGE_RUN: ''
 };
 
+test('always workflow evidence still respects the explicit API Admin operation scope', () => {
+  const evidence = workflowSteps.find(
+    (step) => step.name === 'Save API Admin build and independent runtime evidence'
+  );
+  assert.match(evidence.if, /always\(\)/);
+  for (const operation of workflowInputs.operation.options)
+    assert.equal(
+      workflowPredicate(evidence.if)({ operation }),
+      ['verify_api_admin', 'release_api_admin'].includes(operation),
+      operation
+    );
+  assert.equal(workflowPredicate('!always()')({}), false);
+});
+
 test('workflow wires a separate empty-by-default seal and rejects all non-release operations before AWS', () => {
   assert.equal(workflowInputs.historical_exception.default, 'none');
   assert.ok(workflowInputs.historical_exception.options.includes(postCleanupPolicy));
@@ -316,9 +334,12 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
           }),
         (error) =>
           error.status === 1 &&
-          String(error.stderr).includes('supports preparation or release only')
+          (['verify_api_admin', 'release_api_admin'].includes(operation)
+            ? String(error.stderr) === ''
+            : String(error.stderr).includes('supports preparation or release only'))
       );
       assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false, 'rejected selection emitted runner proof');
     });
   }
 });
@@ -649,6 +670,7 @@ test('actual full-mode release controls select each missing suite once without r
     'node --test scripts/ci-recharge-release.test.mjs',
     'node --test scripts/v2-registration-finance-audit.test.mjs',
     'python3 -B scripts/production-release/registration-only-transport.test.py',
+    'python3 -B scripts/production-release/api-admin-scope.test.py',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
     'python3 -B scripts/production-release/build-image-cache.test.py',
@@ -684,6 +706,9 @@ test('actual full-mode release controls preserve exact maintenance selection and
   ]) {
     assert.deepEqual(guardCommands([path], { part: 'release-controls' }), [
       'node --test scripts/ci-recharge-release.test.mjs',
+      ...(path === '.github/workflows/quality.yml'
+        ? []
+        : ['python3 -B scripts/production-release/api-admin-scope.test.py']),
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]);
   }
@@ -693,6 +718,7 @@ test('actual full-mode release controls preserve exact maintenance selection and
     }),
     [
       'node --test scripts/ci-recharge-release.test.mjs',
+      'python3 -B scripts/production-release/api-admin-scope.test.py',
       'python3 -B scripts/production-release/retire-orphan-retention.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]
@@ -701,6 +727,7 @@ test('actual full-mode release controls preserve exact maintenance selection and
     guardCommands(['scripts/production-release/reuse-images.py'], { part: 'release-controls' }),
     [
       'node --test scripts/ci-recharge-release.test.mjs',
+      'python3 -B scripts/production-release/api-admin-scope.test.py',
       'python3 -B scripts/production-release/prepared-images.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]

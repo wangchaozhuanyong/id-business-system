@@ -4,7 +4,6 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import {
   IdBusinessV2FinanceFxService,
-  normalizeFinanceCurrency,
   normalizeFinanceMoney,
   normalizeFinanceRate
 } from '../finance/public-api';
@@ -31,6 +30,7 @@ import {
   generateOrderNo,
   maskWebsiteAccount,
   normalizeCreateOrderInput,
+  normalizeOrderReceiptCurrency,
   toOrderEntryLockSummary,
   writeOrderEntryAuditLog,
   type OrderEntryLockSummary
@@ -152,13 +152,13 @@ export class IdBusinessV2OrderEntryService {
   }
 
   quoteReceiptFx(dto: QuoteIdBusinessV2OrderReceiptFxDto, operator?: AuthenticatedUser) {
-    const currency = normalizeFinanceCurrency(dto.currency, '收款币种');
+    const currency = normalizeOrderReceiptCurrency(dto.currency);
     return this.financeFxService.quoteOrderRate(currency, operator);
   }
 
   async create(dto: CreateIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
     const orderTimestamp = new Date();
-    const receivedCurrency = normalizeFinanceCurrency(dto.receivedCurrency ?? 'CNY', '收款币种');
+    const receivedCurrency = normalizeOrderReceiptCurrency(dto.receivedCurrency ?? 'CNY');
     if (dto.receivedOriginalAmount === undefined && dto.receivedAmount === undefined) {
       throw new BadRequestException('原币收款金额不能为空');
     }

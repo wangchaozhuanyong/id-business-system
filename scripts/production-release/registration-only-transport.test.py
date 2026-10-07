@@ -932,5 +932,15 @@ class Registration94TransportTests(TransportTests):
             self.assertEqual([x for x in self.calls(env,'docker') if x and x[0] in ('pull','build')],[])
 
 
+    def test_api_admin_operation_cannot_select_registration94(self):
+        for operation in ('release_api_admin', 'verify_api_admin'):
+            for name in ('build-images.sh', 'push-images.sh', 'dispatch.sh'):
+                with self.subTest(operation=operation, script=name), self.fixture() as (root, env):
+                    env['RELEASE_OPERATION'] = operation
+                    result = self.run_script(root, env, name)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(self.calls(env, 'aws'), [])
+                    self.assertEqual(self.calls(env, 'docker'), [])
+
 if __name__ == '__main__':
     unittest.main()

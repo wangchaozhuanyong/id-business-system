@@ -13,14 +13,14 @@ import list from './components/V2AccountsList.vue?raw';
 import overview from './components/V2AccountsOverview.vue?raw';
 import toolbar from './components/V2AccountsToolbar.vue?raw';
 import accountLossesManifest from '@/v2/features/account-losses/manifest.ts?raw';
-import runtimeRegistry from '@/v2/features/runtimeRegistry.ts?raw';
+import { getV2RuntimeModuleDefinition } from '@/v2/features/runtimeRegistry';
 import accountsFixture from '@/v2/testing/V2AccountsDesignFixture.vue?raw';
 
 describe('ID management page UI contract', () => {
   it('uses the ID management name in navigation and import materials', () => {
     expect(manifest).toContain("title: 'ID管理'");
     expect(manifest).toContain("sourceSheet: 'ID管理'");
-    expect(runtimeRegistry).toContain("title: 'ID管理'");
+    expect(getV2RuntimeModuleDefinition('accounts')?.title).toBe('ID管理');
     expect(accountImport).toContain('ID管理导入模板');
   });
 
@@ -51,10 +51,10 @@ describe('ID management page UI contract', () => {
     expect(view).not.toContain("router.push('/v2/records/account-losses')");
     expect(lifecycleTabs).toContain('props.showReported');
     expect(accountLossesManifest).toContain('navigation: false');
-    expect(runtimeRegistry).toContain("key: 'account-losses'");
-    expect(runtimeRegistry).toContain(
-      "route: '/v2/records/account-losses',\n    navigation: false"
-    );
+    expect(getV2RuntimeModuleDefinition('account-losses')).toMatchObject({
+      route: '/v2/records/account-losses',
+      navigation: false
+    });
     expect(rowActions).toContain('props.canReportLoss && !props.lossReported');
     expect(rowActions).not.toContain("props.saleState !== 'sold'");
     expect(rowActions).toContain('command="recover-sale"');

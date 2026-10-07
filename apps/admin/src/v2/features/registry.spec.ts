@@ -1,7 +1,57 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import type { V2TableSchema } from '@/v2/components/tableSystem';
+import type { V2FeatureManifest, V2ModuleKey } from './feature';
 import { v2FeatureRegistry, v2NavigationSections } from './registry';
+import {
+  getV2RuntimeModuleDefinition,
+  v2RuntimeFeatureRegistry,
+  v2NavigationSections as runtimeNavigationSections
+} from './runtimeRegistry';
+
+const loadedTables = new Map<V2ModuleKey, readonly V2TableSchema[]>();
+beforeAll(async () => {
+  await Promise.all(
+    v2FeatureRegistry.map(async (feature) => {
+      loadedTables.set(feature.key, await feature.loadTables());
+    })
+  );
+});
+
+function tablesFor(feature: V2FeatureManifest | undefined) {
+  return feature ? loadedTables.get(feature.key) : undefined;
+}
 
 describe('V2 feature registry', () => {
+  it('uses the same manifests and navigation objects for runtime routing and metadata', () => {
+    expect(v2RuntimeFeatureRegistry).toBe(v2FeatureRegistry);
+    expect(runtimeNavigationSections).toBe(v2NavigationSections);
+    for (const feature of v2FeatureRegistry) {
+      expect(getV2RuntimeModuleDefinition(feature.key)).toBe(feature);
+    }
+    expect(getV2RuntimeModuleDefinition('bank-recharge-orders')?.freshnessPolicy).toBe(
+      'event-with-deadline'
+    );
+  });
+
+  it('registers runtime routes without evaluating table schemas or business views', async () => {
+    vi.resetModules();
+    vi.doMock('@/v2/features/tableSchemas', () => {
+      throw new Error('Table schemas must stay out of runtime registration');
+    });
+    vi.doMock('@/v2/features/accounts/V2AccountsView.vue', () => {
+      throw new Error('Business views must stay lazy during runtime registration');
+    });
+    try {
+      const runtime = await import('./runtimeRegistry');
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(34);
+      expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
+    } finally {
+      vi.doUnmock('@/v2/features/tableSchemas');
+      vi.doUnmock('@/v2/features/accounts/V2AccountsView.vue');
+      vi.resetModules();
+    }
+  });
+
   it('registers every feature with a unique key and route', () => {
     const keys = v2FeatureRegistry.map((feature) => feature.key);
     const routes = v2FeatureRegistry.map((feature) => feature.route);
@@ -87,7 +137,7 @@ describe('V2 feature registry', () => {
       expect(feature.summary).toBeTruthy();
       expect(feature.plannedSections?.length).toBeGreaterThan(0);
       expect(feature.filters).toEqual([]);
-      expect(feature.tables).toEqual([]);
+      expect(tablesFor(feature)).toEqual([]);
     }
   });
 
@@ -101,7 +151,7 @@ describe('V2 feature registry', () => {
     });
     expect(dataGovernance?.status).not.toBe('planned');
     expect(dataGovernance?.filters.length).toBeGreaterThan(0);
-    expect(dataGovernance?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(dataGovernance)?.length).toBeGreaterThan(0);
   });
 
   it('registers employee accounts as an administrator-only real module', () => {
@@ -113,7 +163,7 @@ describe('V2 feature registry', () => {
     });
     expect(employees?.status).not.toBe('planned');
     expect(employees?.filters.length).toBeGreaterThan(0);
-    expect(employees?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(employees)?.length).toBeGreaterThan(0);
   });
 
   it('registers role permissions as an administrator-only real module', () => {
@@ -125,7 +175,7 @@ describe('V2 feature registry', () => {
     });
     expect(roles?.status).not.toBe('planned');
     expect(roles?.filters.length).toBeGreaterThan(0);
-    expect(roles?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(roles)?.length).toBeGreaterThan(0);
   });
 
   it('registers audit logs as a permission-protected real module', () => {
@@ -138,7 +188,7 @@ describe('V2 feature registry', () => {
     });
     expect(auditLogs?.status).not.toBe('planned');
     expect(auditLogs?.filters.length).toBeGreaterThan(0);
-    expect(auditLogs?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(auditLogs)?.length).toBeGreaterThan(0);
   });
 
   it('registers the security center as an administrator-only real module', () => {
@@ -151,7 +201,7 @@ describe('V2 feature registry', () => {
     });
     expect(security?.status).not.toBe('planned');
     expect(security?.filters.length).toBeGreaterThan(0);
-    expect(security?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(security)?.length).toBeGreaterThan(0);
   });
 
   it('registers the current-user profile as a real self-service module', () => {
@@ -163,7 +213,7 @@ describe('V2 feature registry', () => {
       freshnessPolicy: 'event-with-deadline'
     });
     expect(profile?.status).not.toBe('planned');
-    expect(profile?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(profile)?.length).toBeGreaterThan(0);
   });
 
   it('registers the dashboard as a real permission-aware module', () => {
@@ -174,7 +224,7 @@ describe('V2 feature registry', () => {
       freshnessPolicy: 'event-with-deadline'
     });
     expect(dashboard?.status).not.toBe('planned');
-    expect(dashboard?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(dashboard)?.length).toBeGreaterThan(0);
   });
 
   it('keeps account loss records routable but out of standalone navigation', () => {
@@ -199,7 +249,7 @@ describe('V2 feature registry', () => {
     });
     expect(businessMonitoring?.status).not.toBe('planned');
     expect(businessMonitoring?.filters.length).toBeGreaterThan(0);
-    expect(businessMonitoring?.tables.length).toBeGreaterThan(0);
+    expect(tablesFor(businessMonitoring)?.length).toBeGreaterThan(0);
   });
 
   it('registers system monitoring as an administrator-only real module', () => {
@@ -213,7 +263,7 @@ describe('V2 feature registry', () => {
       freshnessPolicy: 'event-with-deadline'
     });
     expect(systemMonitoring?.status).not.toBe('planned');
-    expect(systemMonitoring?.tables).toEqual([]);
+    expect(tablesFor(systemMonitoring)).toEqual([]);
   });
 
   it('registers branding settings as an administrator-only settings module', () => {
@@ -225,7 +275,7 @@ describe('V2 feature registry', () => {
       freshnessPolicy: 'event-driven'
     });
     expect(branding?.status).not.toBe('planned');
-    expect(branding?.tables).toEqual([]);
+    expect(tablesFor(branding)).toEqual([]);
   });
 
   it('derives navigation from the same registered feature objects', () => {

@@ -4,8 +4,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2FinanceCommandRepository } from '../finance/persistence/id-business-v2-finance-command.repository';
+import { IdBusinessV2FinanceQueryRepository } from '../finance/persistence/id-business-v2-finance-query.repository';
 import { IdBusinessV2FinanceReportRepository } from '../finance/persistence/id-business-v2-finance-report.repository';
-import { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import {
+  IdBusinessV2FinanceFxService,
+  IdBusinessV2FinancePostingService
+} from '../finance/public-api';
 import { IdBusinessV2FinanceReportsService } from '../finance/id-business-v2-finance-reports.service';
 import {
   Amount4,
@@ -97,6 +101,13 @@ suite('bank recharge real MySQL lifecycle', () => {
     const repository = new BankRechargeRepository(prisma);
     const transactions = new V2CommandTransactionManager(prisma);
     const audit = new V2TransactionalAuditService();
+    const fx = new IdBusinessV2FinanceFxService(
+      transactions,
+      new IdBusinessV2FinanceCommandRepository(),
+      new IdBusinessV2FinanceQueryRepository(prisma),
+      audit,
+      {} as never
+    );
     const encryption = new FieldEncryptionService({
       get: (key: string) =>
         key === 'FIELD_ENCRYPTION_KEY' ? 'isolated-bank-recharge-test-key' : 'isolated-bank-hash'
@@ -107,7 +118,7 @@ suite('bank recharge real MySQL lifecycle', () => {
       audit,
       accounts,
       repository,
-      new BankRechargeFeesService(repository, audit),
+      new BankRechargeFeesService(repository, fx),
       encryption
     );
     finance = new BankRechargeFinanceService(
@@ -115,7 +126,7 @@ suite('bank recharge real MySQL lifecycle', () => {
       transactions,
       audit,
       new IdBusinessV2FinancePostingService(new IdBusinessV2FinanceCommandRepository()),
-      new BankRechargeFeesService(repository, audit)
+      new BankRechargeFeesService(repository, fx)
     );
     queries = new BankRechargeQueryRepository(prisma);
   });

@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const dataGovernanceFeature = defineV2Feature({
   key: 'data-governance',
@@ -32,6 +31,9 @@ export const dataGovernanceFeature = defineV2Feature({
       options: ['待审批', '待执行', '执行中', '已完成', '部分完成', '失败', '已驳回']
     }
   ],
-  tables: v2TablesByFeature['data-governance'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['data-governance']
+    ),
   loadView: () => import('./V2DataGovernanceView.vue')
 });

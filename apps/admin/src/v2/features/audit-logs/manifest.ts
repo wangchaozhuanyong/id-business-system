@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const auditLogsFeature = defineV2Feature({
   key: 'audit-logs',
@@ -18,6 +17,9 @@ export const auditLogsFeature = defineV2Feature({
     { key: 'action', label: '操作类型或查看内容', kind: 'select' },
     { key: 'createdAt', label: '时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['audit-logs'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['audit-logs']
+    ),
   loadView: () => import('./V2AuditLogsView.vue')
 });

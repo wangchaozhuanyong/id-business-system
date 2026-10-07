@@ -2,10 +2,12 @@
   <div class="v2-order-entry-form-column">
     <el-form-item label="收款币种" prop="receivedCurrency">
       <el-select v-model="form.receivedCurrency" @change="emit('currencyChange')">
-        <el-option label="人民币 CNY" value="CNY" />
-        <el-option label="马币 MYR" value="MYR" />
-        <el-option label="美元 USD" value="USD" />
-        <el-option label="USDT" value="USDT" />
+        <el-option
+          v-for="currency in V2_ORDER_RECEIPT_CURRENCIES"
+          :key="currency"
+          :label="receiptCurrencyLabels[currency]"
+          :value="currency"
+        />
       </el-select>
     </el-form-item>
 
@@ -114,9 +116,17 @@
 
 <script setup lang="ts">
 import type { V2FinanceFxRateSnapshot, V2OrderReceiptFxQuote } from '@apple-business/shared';
+import { V2_ORDER_RECEIPT_CURRENCIES, type V2OrderReceiptCurrency } from '@apple-business/shared';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2OrderReceiptAccountField from './V2OrderReceiptAccountField.vue';
 import type { V2OrderEntryForm } from '../order-entry-form';
+
+const receiptCurrencyLabels: Record<V2OrderReceiptCurrency, string> = {
+  CNY: '人民币 CNY',
+  MYR: '马币 MYR',
+  USD: '美元 USD',
+  USDT: 'USDT'
+};
 
 defineProps<{
   form: V2OrderEntryForm;

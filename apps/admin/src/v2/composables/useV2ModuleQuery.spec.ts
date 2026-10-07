@@ -22,7 +22,50 @@ const renderer = createRenderer<TestNode, TestNode>({
   parentNode: (child) => child.parent,
   nextSibling: () => null
 });
-afterEach(clearV2QueryCache);
+afterEach(() => {
+  clearV2QueryCache();
+  vi.useRealTimers();
+});
+
+it('refreshes the bank order expiry list at its deadline without a scope event', async () => {
+  vi.useFakeTimers();
+  const start = Date.parse('2026-10-05T00:00:00Z');
+  const expiresAt = start + 1000;
+  vi.setSystemTime(start);
+  const read = vi.fn(async () => ({
+    items: Date.now() >= expiresAt ? ['expired-order'] : [],
+    revalidateAt: Date.now() >= expiresAt ? start + 60_000 : expiresAt
+  }));
+  type ExpiryList = Awaited<ReturnType<typeof read>>;
+  let result!: ReturnType<typeof useV2ModuleQuery<ExpiryList>>;
+  const app = renderer.createApp({
+    setup() {
+      result = useV2ModuleQuery({
+        moduleKey: 'bank-recharge-orders',
+        scope: 'auto-recharge',
+        key: 'expired-orders',
+        trackRouteData: false,
+        getRevalidateAt: (data) => data.revalidateAt,
+        query: read
+      });
+      return () => h('div');
+    }
+  });
+  app.mount(node());
+  try {
+    await result.ensureFresh();
+    expect(result.data.value?.items).toEqual([]);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(result.data.value?.items).toEqual(['expired-order']);
+  } finally {
+    app.unmount();
+  }
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(read).toHaveBeenCalledTimes(2);
+});
 
 it('reloads mounted module filters and pagination without clearing successful content', async () => {
   const key = ref('all:1');

@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const rolesFeature = defineV2Feature({
   key: 'roles',
@@ -18,6 +17,9 @@ export const rolesFeature = defineV2Feature({
       placeholder: '角色名称、编码或说明'
     }
   ],
-  tables: v2TablesByFeature['roles'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['roles']
+    ),
   loadView: () => import('./V2RolesView.vue')
 });

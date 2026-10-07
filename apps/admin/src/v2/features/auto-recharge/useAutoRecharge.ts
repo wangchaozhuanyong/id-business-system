@@ -29,7 +29,7 @@ import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
-import { parseDirectCredential } from './bitbrowser-direct-login';
+import { parseDirectCredential } from './bitbrowser-direct-credential';
 
 const activeStates = new Set([
   'running',

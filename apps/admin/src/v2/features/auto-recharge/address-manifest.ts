@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const autoRechargeAddressesFeature = defineV2Feature({
   key: 'auto-recharge-addresses',
@@ -19,6 +18,9 @@ export const autoRechargeAddressesFeature = defineV2Feature({
       options: ['未使用', '已使用', '已停用']
     }
   ],
-  tables: v2TablesByFeature['auto-recharge-addresses'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['auto-recharge-addresses']
+    ),
   loadView: () => import('./V2RechargeAddressesView.vue')
 });

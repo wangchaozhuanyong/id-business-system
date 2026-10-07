@@ -58,18 +58,16 @@ export class IdBusinessV2GiftCardSensitiveService {
         const accessReason = access.mode === 'approval' ? access.reason : reason || access.reason;
         const code = this.fieldEncryptionService.decrypt(giftCard.codeEncrypted);
         if (!code) throw new NotFoundException('礼品卡号不可用');
-        await tx.sensitiveAccessLog.create({
-          data: {
-            userId: operator.id,
-            module: 'id_business_v2_gift_card',
-            fieldName: 'code',
-            objectType: 'id_business_v2_gift_card',
-            objectId: giftCard.id,
-            accessReason,
-            approved: true,
-            ip: requestMeta?.ip,
-            userAgent: requestMeta?.userAgent
-          }
+        await this.repository.appendSensitiveAccess(tx, {
+          userId: operator.id,
+          module: 'id_business_v2_gift_card',
+          fieldName: 'code',
+          objectType: 'id_business_v2_gift_card',
+          objectId: giftCard.id,
+          accessReason,
+          approved: true,
+          ip: requestMeta?.ip,
+          userAgent: requestMeta?.userAgent
         });
         await this.repository.appendAudit(tx, {
           userId: operator.id,

@@ -1,5 +1,5 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
-import type { V2FinanceCurrency, V2OrderReceiptFxQuote } from '@apple-business/shared';
+import type { V2OrderReceiptCurrency, V2OrderReceiptFxQuote } from '@apple-business/shared';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
   ArchiveV2OrderInput,
@@ -75,7 +75,7 @@ export const idBusinessV2OrdersApi = {
       })
     );
   },
-  quoteReceiptFx(currency: V2FinanceCurrency, options: ApiRequestOptions = {}) {
+  quoteReceiptFx(currency: V2OrderReceiptCurrency, options: ApiRequestOptions = {}) {
     return request<V2OrderReceiptFxQuote>(
       http.post('/id-business-v2/orders/receipt-fx-quote', { currency }, { signal: options.signal })
     );

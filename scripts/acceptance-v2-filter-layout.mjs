@@ -14,18 +14,21 @@ const outputDir = path.resolve(root, process.argv[2] ?? '.runtime/filter-layout-
 mkdirSync(outputDir, { recursive: true });
 const widths = [1920, 1440, 1180, 1024, 901, 900, 768, 640, 390];
 const checks = [];
+const lifecycleOnly = process.argv.includes('--lifecycle-only');
+let fixtureGroups = 0;
 const errors = [];
 const alignmentErrors = [];
 const user = {
   id: '11111111-1111-4111-8111-111111111111',
   username: 'layout-fixture',
   displayName: '布局验收管理员',
-  roles: ['admin'],
+  roles: ['super_admin', 'admin'],
   permissions: [],
   mustResetPassword: false
 };
 const now = '2026-10-01T12:00:00.000Z';
 let customerCount = 2;
+let customerReadBehavior = 'normal';
 const customer = (index) => ({
   id: `22222222-2222-4222-8222-${String(index).padStart(12, '0')}`,
   name: `本地布局客户 ${index}`,
@@ -86,9 +89,35 @@ try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1920, height: 1000 } });
   page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    const pathname = new URL(message.location().url || baseUrl.href).pathname;
+    const expectedReadFailure =
+      customerReadBehavior === 'error' &&
+      /\/api\/id-business-v2\/customers(\/bootstrap)?$/.test(pathname) &&
+      message.text().includes('503 (Service Unavailable)');
+    if (!expectedReadFailure) errors.push(`console:${message.text()}`);
+  });
   await page.addInitScript((fixtureUser) => {
-    localStorage.setItem('apple_business_access_token', 'local-layout-fixture');
-    localStorage.setItem('apple_business_current_user', JSON.stringify(fixtureUser));
+    // Seed only this isolated local test tab using the current credential contract.
+    sessionStorage.setItem(
+      'apple_business_auth_v2',
+      JSON.stringify({
+        credentialId: 'layout-fixture-credential',
+        schemaVersion: 2,
+        token: 'local-layout-fixture',
+        tokenRevision: 1,
+        updatedAt: Date.now(),
+        userCache: fixtureUser
+      })
+    );
+    localStorage.setItem(
+      'apple_business_browser_session_marker',
+      JSON.stringify({
+        credentialId: 'layout-fixture-credential',
+        signedOut: false
+      })
+    );
   }, user);
   await page.route('**/api/**', async (route) => {
     const request = route.request();
@@ -98,8 +127,17 @@ try {
       return;
     }
     assert.equal(request.method(), 'GET', `布局验收禁止业务写入：${url.pathname}`);
+    if (/\/customers(\/bootstrap)?$/.test(url.pathname) && customerReadBehavior !== 'normal') {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      if (customerReadBehavior === 'error') {
+        await route.fulfill({ status: 503, json: { message: '本地模拟读取失败' } });
+        return;
+      }
+    }
     let data = { items: [], total: 0, page: 1, pageSize: 20 };
-    if (/\/auth\/(me|session)$/.test(url.pathname)) data = user;
+    if (url.pathname.endsWith('/auth/me')) data = user;
+    else if (url.pathname.endsWith('/auth/session'))
+      data = { accessToken: 'local-layout-fixture', user };
     else if (url.pathname.endsWith('/branding/public')) {
       data = {
         appName: 'ID 业务管理',
@@ -112,6 +150,51 @@ try {
     else if (url.pathname.endsWith('/renewals/warning-summary'))
       data = { total: 0, warningDays: 7 };
     else if (url.pathname.endsWith('/sensitive-access/approvals/summary')) data = { pending: 0 };
+    else if (url.pathname.endsWith('/accounts/purchase-sources'))
+      data = { financeAccounts: [], supplierWallets: [] };
+    else if (url.pathname.endsWith('/dashboard/overview'))
+      data = {
+        generatedAt: now,
+        businessDate: now.slice(0, 10),
+        timezone: 'Asia/Shanghai',
+        warningDays: 7,
+        access: {
+          orders: true,
+          activations: true,
+          renewals: true,
+          accounts: true,
+          balances: true,
+          exchangeRates: true,
+          finance: true,
+          audit: true
+        },
+        business: {
+          todayOrders: 0,
+          todayCompletedOrders: 0,
+          todayActivations: 0,
+          todayTopups: 0,
+          todayTopupCostCny: '0',
+          todayRevenueCny: '0',
+          todayProfitCny: '0'
+        },
+        risks: {
+          pendingOrders: 0,
+          failedOrders: 0,
+          overdueRenewals: 0,
+          dueSoonRenewals: 0,
+          lowBalanceAccounts: 0,
+          failedExchangeRuns: 0
+        },
+        assets: {
+          totalAccounts: 0,
+          availableAccounts: 0,
+          inventoryBookValueCny: '0',
+          financeHistoryStatus: 'completed'
+        },
+        recentOrders: [],
+        upcomingRenewals: [],
+        recentAudits: []
+      };
     else if (url.pathname.endsWith('/auto-recharge/addresses'))
       data = {
         items: [],
@@ -186,234 +269,331 @@ try {
     });
   });
 
-  // Actual mailbox components: all three tabs, successful empty states, and pagination.
-  for (const width of widths) {
-    await page.setViewportSize({ width, height: 1000 });
-    await page.goto(new URL('/vendure-mailbox-design-fixture.html', baseUrl).href);
-    for (const tab of ['主邮箱管理', '虚拟邮箱管理', '收件记录']) {
-      await page.getByRole('tab', { name: tab, exact: true }).click();
-      await page.locator('.vendure-mailbox-toolbar').waitFor();
-      await settle(page);
-      await checkToolbar(page, '.vendure-mailbox-toolbar', `邮箱-${tab}-${width}`, width >= 1440);
-    }
-    if ([1920, 390].includes(width)) {
-      await page.screenshot({ path: path.join(outputDir, `mailbox-${width}.png`), fullPage: true });
-    }
-  }
-  for (const state of ['', '?state=empty']) {
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto(new URL(`/vendure-mailbox-design-fixture.html${state}`, baseUrl).href);
-    await page.locator('.vendure-mailbox-toolbar').waitFor();
-    await settle(page);
-    await checkToolbar(page, '.vendure-mailbox-toolbar', `邮箱-${state || '第一页'}`, true);
-    if (!state) {
-      await page.getByRole('tab', { name: '收件记录', exact: true }).click();
-      await page.locator('.el-pagination .btn-next').click();
-      await settle(page);
-      await checkToolbar(page, '.vendure-mailbox-toolbar', '邮箱-最后一页', true);
-    }
-  }
-
-  // Real routes with intercepted local read responses; no API or database is started.
-  for (const route of ['proxies', 'chatgpt-accounts', 'bank-cards']) {
+  if (!lifecycleOnly) {
+    // Actual mailbox components: all three tabs, successful empty states, and pagination.
     for (const width of widths) {
       await page.setViewportSize({ width, height: 1000 });
-      await page.goto(new URL(`/v2/auto-recharge/${route}`, baseUrl).href);
-      await page
-        .locator('.v2-page-context__filters > .el-form--inline')
-        .waitFor({ timeout: 40_000 });
-      await settle(page);
-      await checkToolbar(
-        page,
-        '.v2-page-context__filters > .el-form--inline',
-        `${route}-${width}`,
-        width >= 1440
-      );
-      await checkLabels(page, `${route}-${width}`);
-      if (route === 'proxies' && [1920, 390].includes(width)) {
+      await page.goto(new URL('/vendure-mailbox-design-fixture.html', baseUrl).href);
+      for (const tab of ['主邮箱管理', '虚拟邮箱管理', '收件记录']) {
+        await page.getByRole('tab', { name: tab, exact: true }).click();
+        await page.locator('.vendure-mailbox-toolbar').waitFor();
+        await settle(page);
+        await checkToolbar(page, '.vendure-mailbox-toolbar', `邮箱-${tab}-${width}`, width >= 1440);
+      }
+      if ([1920, 390].includes(width)) {
         await page.screenshot({
-          path: path.join(outputDir, `proxies-${width}.png`),
+          path: path.join(outputDir, `mailbox-${width}.png`),
           fullPage: true
         });
       }
     }
-  }
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(new URL('/v2/auto-recharge/proxies', baseUrl).href);
-  await page.getByRole('main').getByText('布局验收', { exact: true }).waitFor();
-  await page.locator('.el-pagination .btn-next').click();
-  await page.getByText('最后一页', { exact: true }).waitFor();
-  await checkToolbar(page, '.recharge-proxy-filters', '代理-最后一页', true);
-  await page.getByPlaceholder('国家代码或备注').fill('empty');
-  await page.getByRole('button', { name: '搜索', exact: true }).click();
-  await page.getByText('暂无代理 IP', { exact: true }).waitFor();
-  await checkToolbar(page, '.recharge-proxy-filters', '代理-空状态', true);
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 1000 });
-    await page.getByRole('button', { name: '新增代理 IP', exact: true }).click();
-    await page.getByRole('heading', { name: '新增代理 IP', exact: true }).waitFor();
-    await settle(page);
-    await checkLabels(page, `代理-抽屉-${width}`);
-    const drawer = page.getByLabel('新增代理 IP', { exact: true });
-    await drawer.locator('.el-drawer__close-btn').click();
-    await drawer.waitFor({ state: 'hidden' });
-  }
-
-  // The address import group must share the same row as search and status filters.
-  for (const width of widths) {
-    await page.setViewportSize({ width, height: 1000 });
-    await page.goto(new URL('/v2/auto-recharge/addresses', baseUrl).href);
-    await page.locator('.recharge-address-toolbar').waitFor();
-    await settle(page);
-    await checkToolbar(page, '.recharge-address-toolbar', `addresses-${width}`, width >= 1440);
-    if (width === 1440) {
-      await page.getByLabel('搜索街道地址', { exact: true }).fill('layout-query-check');
-      const searchRead = page.waitForResponse((response) => {
-        const url = new URL(response.url());
-        return (
-          url.pathname.endsWith('/auto-recharge/addresses') &&
-          url.searchParams.get('keyword') === 'layout-query-check'
-        );
-      });
-      await page.getByRole('button', { name: '查询', exact: true }).click();
-      await searchRead;
-      checks.push({ label: 'addresses-filter-query', requestedKeyword: 'layout-query-check' });
-    }
-    await page.getByLabel('选择街道地址文件', { exact: true }).setInputFiles({
-      name: 'address-layout-long-filename-for-import.txt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from('100 Layout Test Street\n200 Layout Test Street')
-    });
-    await page.getByText('已读取 2 行', { exact: true }).waitFor();
-    await checkToolbar(
-      page,
-      '.recharge-address-toolbar',
-      `addresses-selected-${width}`,
-      width >= 1440
-    );
-  }
-
-  // A short first page must already reserve the empty state's body height.
-  for (const dark of [false, true]) {
-    for (const count of [1, 2]) {
-      customerCount = count;
-      for (const width of [1440, 390]) {
-        await page.setViewportSize({ width, height: 1000 });
-        await page.goto(new URL('/v2/customers', baseUrl).href);
-        await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
-        await page.evaluate((dark) => {
-          document.documentElement.dataset.v2Theme = dark ? 'dark' : 'light';
-          document.documentElement.classList.toggle('dark', dark);
-        }, dark);
+    for (const state of ['', '?state=empty']) {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto(new URL(`/vendure-mailbox-design-fixture.html${state}`, baseUrl).href);
+      await page.locator('.vendure-mailbox-toolbar').waitFor();
+      await settle(page);
+      await checkToolbar(page, '.vendure-mailbox-toolbar', `邮箱-${state || '第一页'}`, true);
+      if (!state) {
+        await page.getByRole('tab', { name: '收件记录', exact: true }).click();
+        await page.locator('.el-pagination .btn-next').click();
         await settle(page);
-        if (width === 390) {
-          const desktopHeight = await page
-            .locator('.v2-records-list > .v2-unified-table-shell')
-            .evaluate((element) => element.getBoundingClientRect().height);
-          assert.equal(desktopHeight, 0, '手机卡片模式不得保留隐藏桌面表格的占位');
-        }
-        const height = () =>
-          page
-            .locator('.v2-records-list')
-            .evaluate((element) => element.getBoundingClientRect().height);
-        const firstHeight = await height();
-        await page.getByRole('textbox', { name: '搜索客户', exact: true }).fill('empty');
-        await page.getByRole('button', { name: '查询客户', exact: true }).click();
-        await page.locator('.v2-records-empty:visible').waitFor();
-        await settle(page);
-        const emptyHeight = await height();
-        assert.equal(emptyHeight, firstHeight, `${count} 条客户 ${width}px：空状态改变列表高度`);
-        await page.getByRole('textbox', { name: '搜索客户', exact: true }).fill('');
-        await page.getByRole('button', { name: '查询客户', exact: true }).click();
-        await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
-        await settle(page);
-        const restoredHeight = await height();
-        assert.equal(restoredHeight, firstHeight, `${count} 条客户 ${width}px：恢复列表改变高度`);
-        checks.push({
-          label: `客户短列表-${dark ? 'dark' : 'light'}-${count}-${width}`,
-          firstHeight,
-          emptyHeight,
-          restoredHeight
-        });
+        await checkToolbar(page, '.vendure-mailbox-toolbar', '邮箱-最后一页', true);
       }
     }
-  }
 
-  // At the end of a long list, the fixed quick action must not intercept pagination.
-  customerCount = 21;
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 1000 });
-    await page.goto(new URL('/v2/customers', baseUrl).href);
-    await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
-    await settle(page);
-    await page.locator('#v2-main').evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
-    const overlap = await page.evaluate(() => {
-      const next = document.querySelector('.v2-records-pagination .btn-next');
-      const fab = document.querySelector('.v2-quick-actions-fab');
-      const button = next.getBoundingClientRect();
-      const tool = fab.getBoundingClientRect();
-      return (
-        button.left < tool.right &&
-        button.right > tool.left &&
-        button.top < tool.bottom &&
-        button.bottom > tool.top
-      );
-    });
-    assert.equal(overlap, false, `${width}px：浮动工具挡住分页按钮`);
-    await page.locator('.v2-records-pagination .btn-next').click();
-    await page.getByText('本地布局客户 21', { exact: true }).filter({ visible: true }).waitFor();
-    checks.push({ label: `页尾浮动工具-${width}`, overlap, pageChanged: true });
-  }
-  customerCount = 2;
-
-  // Shared styles are also exercised by existing fixtures across every business group.
-  const fixtures = [
-    'accounts',
-    'customers',
-    'orders',
-    'topup-records',
-    'topups',
-    'activations',
-    'renewals',
-    'exchange-rates',
-    'finance-ledger',
-    'finance-expenses',
-    'employees',
-    'roles',
-    'security',
-    'profile',
-    'branding',
-    'options',
-    'order-entry',
-    'workspace',
-    'theme-components'
-  ];
-  for (const fixture of fixtures) {
-    for (const width of [1440, 390]) {
-      await page.setViewportSize({ width, height: 1000 });
-      await page.goto(new URL(`/${fixture}-design-fixture.html`, baseUrl).href);
-      await page.locator('.v2-shell').waitFor();
-      await settle(page);
-      await checkLabels(page, `${fixture}-${width}`);
-      await checkPageWidth(page, `${fixture}-${width}`);
+    // Real routes with intercepted local read responses; no API or database is started.
+    for (const route of ['proxies', 'chatgpt-accounts', 'bank-cards']) {
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto(new URL(`/v2/auto-recharge/${route}`, baseUrl).href);
+        await page
+          .locator('.v2-page-context__filters > .el-form--inline')
+          .waitFor({ timeout: 40_000 })
+          .catch(async (error) => {
+            await page.screenshot({
+              path: path.join(outputDir, 'route-failure.png'),
+              fullPage: true
+            });
+            throw new Error(
+              `${route}/${width}: ${error.message}; url=${page.url()}; UI=${(await page.locator('body').innerText()).slice(0, 1600)}; runtime=${JSON.stringify(errors)}`
+            );
+          });
+        await settle(page);
+        await checkToolbar(
+          page,
+          '.v2-page-context__filters > .el-form--inline',
+          `${route}-${width}`,
+          width >= 1440
+        );
+        await checkLabels(page, `${route}-${width}`);
+        if (route === 'proxies' && [1920, 390].includes(width)) {
+          await page.screenshot({
+            path: path.join(outputDir, `proxies-${width}.png`),
+            fullPage: true
+          });
+        }
+      }
     }
-  }
-  for (const [route, title] of [
-    ['/v2/accounts', '新增 ID'],
-    ['/v2/customers', '新增客户'],
-    ['/v2/system/roles', '新建角色']
-  ]) {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(new URL('/v2/auto-recharge/proxies', baseUrl).href);
+    await page.getByRole('main').getByText('布局验收', { exact: true }).waitFor();
+    await page.locator('.el-pagination .btn-next').click();
+    await page.getByText('最后一页', { exact: true }).waitFor();
+    await checkToolbar(page, '.recharge-proxy-filters', '代理-最后一页', true);
+    await page.getByPlaceholder('国家代码或备注').fill('empty');
+    await page.getByRole('button', { name: '搜索', exact: true }).click();
+    await page.getByText('暂无代理 IP', { exact: true }).waitFor();
+    await checkToolbar(page, '.recharge-proxy-filters', '代理-空状态', true);
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
-      await page.goto(new URL(route, baseUrl).href);
-      await page.getByRole('button', { name: title, exact: true }).first().click();
-      const drawer = page.getByLabel(title, { exact: true });
-      await drawer.waitFor();
+      await page.getByRole('button', { name: '新增代理 IP', exact: true }).click();
+      await page.getByRole('heading', { name: '新增代理 IP', exact: true }).waitFor();
       await settle(page);
-      await checkLabels(page, `${route}-抽屉-${width}`);
+      await checkLabels(page, `代理-抽屉-${width}`);
+      const drawer = page.getByLabel('新增代理 IP', { exact: true });
       await drawer.locator('.el-drawer__close-btn').click();
+      await drawer.waitFor({ state: 'hidden' });
+    }
+
+    // The address import group must share the same row as search and status filters.
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(new URL('/v2/auto-recharge/addresses', baseUrl).href);
+      await page.locator('.recharge-address-toolbar').waitFor();
+      await settle(page);
+      await checkToolbar(page, '.recharge-address-toolbar', `addresses-${width}`, width >= 1440);
+      if (width === 1440) {
+        await page.getByLabel('搜索街道地址', { exact: true }).fill('layout-query-check');
+        const searchRead = page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return (
+            url.pathname.endsWith('/auto-recharge/addresses') &&
+            url.searchParams.get('keyword') === 'layout-query-check'
+          );
+        });
+        await page.getByRole('button', { name: '查询', exact: true }).click();
+        await searchRead;
+        checks.push({ label: 'addresses-filter-query', requestedKeyword: 'layout-query-check' });
+      }
+      await page.getByLabel('选择街道地址文件', { exact: true }).setInputFiles({
+        name: 'address-layout-long-filename-for-import.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('100 Layout Test Street\n200 Layout Test Street')
+      });
+      await page.getByText('已读取 2 行', { exact: true }).waitFor();
+      await checkToolbar(
+        page,
+        '.recharge-address-toolbar',
+        `addresses-selected-${width}`,
+        width >= 1440
+      );
+    }
+
+    // A short first page must already reserve the empty state's body height.
+    for (const dark of [false, true]) {
+      for (const count of [1, 2]) {
+        customerCount = count;
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await page.goto(new URL('/v2/customers', baseUrl).href);
+          await page
+            .getByText('本地布局客户 1', { exact: true })
+            .filter({ visible: true })
+            .waitFor();
+          await page.evaluate((dark) => {
+            document.documentElement.dataset.v2Theme = dark ? 'dark' : 'light';
+            document.documentElement.classList.toggle('dark', dark);
+          }, dark);
+          await settle(page);
+          if (width === 390) {
+            const desktopHeight = await page
+              .locator('.v2-records-list > .v2-unified-table-shell')
+              .evaluate((element) => element.getBoundingClientRect().height);
+            assert.equal(desktopHeight, 0, '手机卡片模式不得保留隐藏桌面表格的占位');
+          }
+          const height = () =>
+            page
+              .locator('.v2-records-list')
+              .evaluate((element) => element.getBoundingClientRect().height);
+          const firstHeight = await height();
+          await page.getByRole('textbox', { name: '搜索客户', exact: true }).fill('empty');
+          await page.getByRole('button', { name: '查询客户', exact: true }).click();
+          await page.locator('.v2-records-empty:visible').waitFor();
+          await settle(page);
+          const emptyHeight = await height();
+          assert.equal(emptyHeight, firstHeight, `${count} 条客户 ${width}px：空状态改变列表高度`);
+          await page.getByRole('textbox', { name: '搜索客户', exact: true }).fill('');
+          await page.getByRole('button', { name: '查询客户', exact: true }).click();
+          await page
+            .getByText('本地布局客户 1', { exact: true })
+            .filter({ visible: true })
+            .waitFor();
+          await settle(page);
+          const restoredHeight = await height();
+          assert.equal(restoredHeight, firstHeight, `${count} 条客户 ${width}px：恢复列表改变高度`);
+          checks.push({
+            label: `客户短列表-${dark ? 'dark' : 'light'}-${count}-${width}`,
+            firstHeight,
+            emptyHeight,
+            restoredHeight
+          });
+        }
+      }
+    }
+
+    // At the end of a long list, the fixed quick action must not intercept pagination.
+    customerCount = 21;
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(new URL('/v2/customers', baseUrl).href);
+      await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
+      await settle(page);
+      await page.locator('#v2-main').evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      const overlap = await page.evaluate(() => {
+        const next = document.querySelector('.v2-records-pagination .btn-next');
+        const fab = document.querySelector('.v2-quick-actions-fab');
+        const button = next.getBoundingClientRect();
+        const tool = fab.getBoundingClientRect();
+        return (
+          button.left < tool.right &&
+          button.right > tool.left &&
+          button.top < tool.bottom &&
+          button.bottom > tool.top
+        );
+      });
+      assert.equal(overlap, false, `${width}px：浮动工具挡住分页按钮`);
+      await page.locator('.v2-records-pagination .btn-next').click();
+      await page.getByText('本地布局客户 21', { exact: true }).filter({ visible: true }).waitFor();
+      checks.push({ label: `页尾浮动工具-${width}`, overlap, pageChanged: true });
+    }
+    customerCount = 2;
+
+    // Shared styles are also exercised by existing fixtures across every business group.
+    const fixtures = [
+      'accounts',
+      'customers',
+      'orders',
+      'topup-records',
+      'topups',
+      'activations',
+      'renewals',
+      'exchange-rates',
+      'finance-ledger',
+      'finance-expenses',
+      'employees',
+      'roles',
+      'security',
+      'profile',
+      'branding',
+      'options',
+      'order-entry',
+      'workspace',
+      'theme-components'
+    ];
+    fixtureGroups = fixtures.length;
+    for (const fixture of fixtures) {
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto(new URL(`/${fixture}-design-fixture.html`, baseUrl).href);
+        await page.locator('.v2-shell').waitFor();
+        await settle(page);
+        await checkLabels(page, `${fixture}-${width}`);
+        await checkPageWidth(page, `${fixture}-${width}`);
+      }
+    }
+    for (const [route, title] of [
+      ['/v2/accounts', '新增 ID'],
+      ['/v2/customers', '新增客户'],
+      ['/v2/system/roles', '新建角色']
+    ]) {
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto(new URL(route, baseUrl).href);
+        await page.getByRole('button', { name: title, exact: true }).first().click();
+        const drawer = page.getByLabel(title, { exact: true });
+        await drawer.waitFor();
+        await settle(page);
+        await checkLabels(page, `${route}-抽屉-${width}`);
+        await drawer.locator('.el-drawer__close-btn').click();
+      }
+    }
+    writeFileSync(path.join(outputDir, 'layout-geometry.json'), JSON.stringify(checks, null, 2));
+    assert.deepEqual(alignmentErrors, [], '实际文字节点对齐失败');
+  }
+
+  // Exercise shared loading and draft behavior through real routes and local GET mocks.
+  for (const theme of ['light', 'dark']) {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(new URL('/v2/customers', baseUrl).href);
+      await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
+      await page
+        .getByTitle(`切换为${theme === 'dark' ? '深' : '浅'}色主题`, { exact: true })
+        .click();
+      const search = page.getByRole('textbox', { name: '搜索客户', exact: true });
+      const draftText = `本地草稿-${theme}-${width}`;
+      await search.fill(draftText);
+      await page.getByRole('button', { name: '新增客户', exact: true }).first().click();
+      const drawer = page.getByLabel('新增客户', { exact: true });
+      const nameInput = drawer
+        .locator('.el-form-item')
+        .filter({ hasText: '客户名称' })
+        .getByRole('textbox');
+      await nameInput.fill(draftText);
+      await drawer.locator('.el-drawer__close-btn').click();
+      await drawer.waitFor({ state: 'hidden' });
+      await page.getByRole('button', { name: '新增客户', exact: true }).first().click();
+      assert.equal(await nameInput.inputValue(), draftText, '关闭并重开抽屉必须恢复输入');
+      await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+      await drawer.waitFor({ state: 'hidden' });
+      await navigateLocally(page, '/v2/accounts', width);
+      await page.getByRole('button', { name: '新增 ID', exact: true }).first().waitFor();
+      await navigateLocally(page, '/v2/customers', width);
+      await search.waitFor();
+      assert.equal(await search.inputValue(), draftText, '同标签页切页返回必须恢复搜索');
+      await page.getByRole('button', { name: '新增客户', exact: true }).first().click();
+      assert.equal(await nameInput.inputValue(), draftText, '切页返回必须恢复新增资料草稿');
+      await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+      await drawer.waitFor({ state: 'hidden' });
+      checks.push({ label: `输入保留-${theme}-${width}`, drawerReopen: true, routeReturn: true });
+
+      const list = page.locator('.v2-records-list');
+      await list.waitFor();
+      const before = await list.evaluate((element) => element.getBoundingClientRect().height);
+      customerReadBehavior = 'error';
+      await search.fill(`读取重试-${theme}-${width}`);
+      await page.getByRole('button', { name: '查询客户', exact: true }).click();
+      const progress = page.locator('.v2-async-region__progress:visible');
+      await progress.waitFor();
+      assert.equal(await progress.count(), 1, '读取只允许一个区域加载反馈');
+      assert.equal(await page.locator('.el-loading-mask:visible').count(), 0, '禁止全页加载遮罩');
+      assert.equal(
+        await list.evaluate((element) => element.getBoundingClientRect().height),
+        before
+      );
+      assert.ok(
+        await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).count()
+      );
+      const alert = page.locator('.v2-async-region__refresh-error');
+      await alert.waitFor();
+      assert.equal(
+        await list.evaluate((element) => element.getBoundingClientRect().height),
+        before
+      );
+      customerReadBehavior = 'normal';
+      await alert.getByRole('button', { name: '重试', exact: true }).click();
+      await alert.waitFor({ state: 'hidden' });
+      await progress.waitFor({ state: 'hidden' });
+      assert.equal(await search.inputValue(), `读取重试-${theme}-${width}`, '失败重试必须保留输入');
+      await checkPageWidth(page, `加载重试-${theme}-${width}`);
+      checks.push({
+        label: `加载重试-${theme}-${width}`,
+        singleFeedback: true,
+        contentRetained: true,
+        frameHeight: before
+      });
     }
   }
   assert.deepEqual(errors, [], '页面运行时异常');
@@ -424,8 +604,10 @@ try {
       ok: true,
       checks: checks.length,
       widths,
-      fixtureGroups: fixtures.length,
-      realRoutes: ['proxies', 'chatgpt-accounts', 'bank-cards', 'addresses', 'customers'],
+      fixtureGroups,
+      realRoutes: lifecycleOnly
+        ? ['accounts', 'customers']
+        : ['proxies', 'chatgpt-accounts', 'bank-cards', 'addresses', 'customers', 'accounts'],
       businessWrites: 0,
       outputDir
     })
@@ -556,4 +738,16 @@ async function checkLabels(page, label) {
     if (field.delta > 2) alignmentErrors.push({ scenario: label, ...field });
   }
   checks.push({ label, fields });
+}
+
+async function navigateLocally(page, route, width) {
+  if (width <= 900) await page.locator('.v2-menu-button').click();
+  const link = page.locator(`.v2-navigation a[href="${route}"]`);
+  const section = page
+    .locator('.v2-navigation__section')
+    .filter({ has: page.locator(`a[href="${route}"]`) });
+  const parent = section.locator('.v2-navigation__parent');
+  if ((await parent.getAttribute('aria-expanded')) !== 'true') await parent.click();
+  await link.click();
+  await page.waitForURL(new URL(route, baseUrl).href);
 }

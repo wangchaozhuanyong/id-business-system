@@ -55,7 +55,7 @@
     /></el-form-item>
   </template>
   <p v-if="source === 'library' && error" class="recharge-error" role="alert">
-    {{ error }} <el-button link type="primary" @click="$emit('retry')">重试</el-button>
+    {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
   <p v-else-if="source === 'library' && !addresses.length" class="recharge-note" role="status">
     暂无可用地址，请先到“地址管理”核对或启用地址。
@@ -81,6 +81,7 @@
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RechargeAddress, V2RechargeDetails } from './contracts';
 
 const details = defineModel<V2RechargeDetails>({ required: true });

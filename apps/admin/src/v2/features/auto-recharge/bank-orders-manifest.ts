@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const bankRechargeOrdersFeature = defineV2Feature({
   key: 'bank-recharge-orders',
@@ -14,6 +13,9 @@ export const bankRechargeOrdersFeature = defineV2Feature({
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '订单号、客户或账号' },
     { key: 'status', label: '状态', kind: 'select', options: ['待补全', '已完成', '已退款'] }
   ],
-  tables: v2TablesByFeature['bank-recharge-orders'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['bank-recharge-orders']
+    ),
   loadView: () => import('./V2BankRechargeOrdersView.vue')
 });

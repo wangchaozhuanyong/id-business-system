@@ -31,7 +31,7 @@ export class BankRechargeCorrectionService {
     const reason = bankRechargeText(reasonValue, '更正原因', 300);
     const expected = normalizeV2ExpectedUpdatedAt(input.expectedUpdatedAt, '银充订单');
     return this.transactions.execute(
-      async (tx) => {
+      async (tx, context) => {
         const previous = await this.repository.findOrder(tx, id);
         if (!previous) throw new NotFoundException('银充订单不存在');
         assertV2ExpectedUpdatedAt(previous.updatedAt, expected, '银充订单');
@@ -62,7 +62,8 @@ export class BankRechargeCorrectionService {
           tx,
           id,
           { ...input, expectedUpdatedAt: pending.updatedAt.toISOString() },
-          operator
+          operator,
+          context
         );
         const completed = await this.finance.completeInTransaction(
           tx,

@@ -203,7 +203,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
   }
 
   async function requestReceiptFxQuoteWithRetry(
-    currency: V2OrderReceiptFxQuote['currency'],
+    currency: V2OrderEntryForm['receivedCurrency'],
     signal: AbortSignal
   ) {
     let lastError: unknown;

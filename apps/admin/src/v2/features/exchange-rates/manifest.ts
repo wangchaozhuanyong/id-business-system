@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const exchangeRatesFeature = defineV2Feature({
   key: 'exchange-rates',
@@ -14,6 +13,9 @@ export const exchangeRatesFeature = defineV2Feature({
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '备注、操作人' },
     { key: 'recordedAt', label: '记录时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['exchange-rates'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['exchange-rates']
+    ),
   loadView: () => import('./V2ExchangeRatesView.vue')
 });

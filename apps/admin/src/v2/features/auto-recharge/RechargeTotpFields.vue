@@ -46,7 +46,7 @@
   </el-form-item>
   <p v-if="source === 'saved' && error" class="recharge-error" role="alert">
     {{ error }}
-    <el-button link type="primary" @click="emit('retry')">重试</el-button>
+    <AppButton link variant="primary" @click="emit('retry')">重试</AppButton>
   </p>
   <p class="recharge-note recharge-login-note">
     {{
@@ -58,6 +58,7 @@
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import { computed } from 'vue';
 import { V2_TOTP_INPUT_LIMITS } from '@/v2/components/workspace/totp';
 import type { SavedAccountOption, TotpSource } from './useRechargeTotp';

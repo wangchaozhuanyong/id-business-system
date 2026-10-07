@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import {
   adminCheckCommands,
   adminUiGuardChecks,
+  backendArchitectureGuardChecks,
   auditRetentionMigration,
   historicalReleaseControlPaths
 } from './ci-recharge-scope.mjs';
@@ -14,7 +15,8 @@ const run = (file, args) => execFileSync(file, args, { stdio: 'inherit' });
 const npm = (...args) => run('npm', args);
 const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
   .trim()
-  .split('\n');
+  .split('\n')
+  .filter(Boolean);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 const retirementControlPaths = [
   '.github/workflows/production-release.yml',
@@ -107,6 +109,9 @@ if (part === 'guards') {
   run('node', [
     '--test',
     'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/check-v2-prisma-runtime-boundary.test.mjs',
+    'scripts/check-v2-module-architecture.test.mjs',
     'scripts/ci-recharge-precision.test.mjs',
     'scripts/ci-change-scope.test.mjs',
     'scripts/ci-recharge-release.test.mjs',
@@ -117,6 +122,15 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);
     run('node', ['--test', 'scripts/v2-release-mailbox-audit.test.mjs']);
   }
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/') ||
+        path === '.github/workflows/production-release.yml' ||
+        path === 'scripts/ci-recharge-check.mjs'
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
   releaseMaintenanceControls();
   archiveReleaseControls();
   if (
@@ -130,6 +144,8 @@ if (part === 'guards') {
     )
   )
     run('node', ['--test', 'scripts/aws-mysql-backup.test.mjs']);
+  if (changed.some((path) => /^scripts\/admin-skin-rules(?:\.test)?\.mjs$/.test(path)))
+    run('node', ['--test', 'scripts/admin-skin-rules.test.mjs']);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
   if (
@@ -173,9 +189,9 @@ if (part === 'guards') {
   )
     run('python3', ['-B', 'scripts/production-release/audit-retention-mysql.test.py']);
   const uiChecks = adminUiGuardChecks(mode, changed);
-  if (uiChecks.length) {
-    for (const name of uiChecks) npm('run', name);
-  } else if (mode !== 'ci-only' && mode !== 'audit-retention') {
+  const architectureChecks = backendArchitectureGuardChecks(mode, changed);
+  for (const name of new Set([...uiChecks, ...architectureChecks])) npm('run', name);
+  if (!uiChecks.length && mode !== 'ci-only' && mode !== 'audit-retention') {
     npm(
       'run',
       'check:v2-decimal-standard',
@@ -208,6 +224,15 @@ if (part === 'guards') {
   }
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/') ||
+        path === '.github/workflows/production-release.yml' ||
+        path === 'scripts/ci-recharge-check.mjs'
+    )
+  )
+    run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
   releaseMaintenanceControls();
   archiveReleaseControls();
 } else if (part === 'admin') {

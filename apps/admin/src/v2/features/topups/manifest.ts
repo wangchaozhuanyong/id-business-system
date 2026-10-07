@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const topupWorkbenchFeature = defineV2Feature({
   key: 'topup-workbench',
@@ -20,6 +19,9 @@ export const topupWorkbenchFeature = defineV2Feature({
     },
     { key: 'balance', label: '自定义余额', kind: 'number-range' }
   ],
-  tables: v2TablesByFeature['topup-workbench'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['topup-workbench']
+    ),
   loadView: () => import('./V2TopupWorkbenchView.vue')
 });

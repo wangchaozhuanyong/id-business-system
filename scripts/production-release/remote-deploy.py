@@ -1278,7 +1278,10 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
           historical_order_archive=False, order_archive_seal_sha256=None,
           order_archive_prepared_sha256=None, image_run=None, image_attempt=None,
           candidate_commit=None, candidate_tree=None, stage=None, source=None,
-          before_receipt=None, origin=None):
+          before_receipt=None, origin=None, api_admin_only=False):
+    require(not api_admin_only or not any((historical_exception, historical_continuation,
+        historical_diagnostics, historical_maintenance, historical_mailbox, historical_post_cleanup,
+        historical_order_archive)), "API_ADMIN_AUDIT_SCOPE_CONFLICT")
     require(sum((historical_exception, historical_continuation, historical_diagnostics,
                  historical_maintenance, historical_mailbox, historical_post_cleanup,
                  historical_order_archive)) <= 1,
@@ -1302,7 +1305,7 @@ def audit(directory, receipt, *, historical_exception=False, historical_continua
                 HISTORY_CONTINUATION_BASELINE if historical_continuation else HISTORY_BASELINE)
     historical = historical_exception or historical_continuation or historical_diagnostics or historical_post_cleanup
     policy = continuation_policy(source, policy_id) if historical_continuation or historical_diagnostics else None
-    audit_service = 'api' if historical_post_cleanup else 'migrate'
+    audit_service = 'api' if historical_post_cleanup or api_admin_only else 'migrate'
     if historical_post_cleanup:
         require(source is not None, 'Post-cleanup candidate source missing')
         policy, release_seal = reviewed_post_cleanup_seal(source, post_cleanup_seal_sha256, candidate_commit, candidate_tree)
@@ -7594,7 +7597,7 @@ def registration_followup_release(args):
     contract = registration_contract(profile_id)
     updated_services = registration_updated_services(profile_id)
     require(getattr(args, 'registration_worker_94', False) is True and all((not getattr(args, name, False) for name in ('registration_worker_b8_80', 'registration_worker_956', 'registration_worker_85', 'registration_worker_86', 'registration_worker_87', 'registration_worker_88', 'registration_worker_89', 'registration_worker_90', 'registration_worker_91', 'registration_worker_92', 'registration_worker_93'))), 'Fixed registration selection changed')
-    require(args.expected_current == contract['current'] and (not args.admin_only) and (not getattr(args, 'recharge_pro_main80', False)) and (not getattr(args, 'recharge_pro_974', False)) and (not getattr(args, 'recharge_pro_2f', False)) and all((not getattr(args, name) for name in ('historical_finance_exception', 'historical_finance_continuation', 'historical_finance_recharge_diagnostics', 'historical_finance_maintenance_continuation', 'historical_finance_mailbox_batch', 'recharge_pro_menu_b8', 'recharge_pro_menu_7f', 'historical_finance_post_cleanup', 'historical_finance_order_archive', 'post_cleanup_seal_sha256', 'order_archive_seal_sha256', 'order_archive_prepared_images_sha256'))) and ((args.image_commit or args.commit) == args.commit) and ((args.image_run_id or args.run_id) == args.run_id) and ((args.image_run_attempt or args.run_attempt) == args.run_attempt), 'Fixed registration selection changed')
+    require(args.expected_current == contract['current'] and (not args.admin_only) and (not getattr(args, 'api_admin_only', False)) and (not getattr(args, 'api_admin_build_proof', None)) and (not getattr(args, 'recharge_pro_main80', False)) and (not getattr(args, 'recharge_pro_974', False)) and (not getattr(args, 'recharge_pro_2f', False)) and all((not getattr(args, name) for name in ('historical_finance_exception', 'historical_finance_continuation', 'historical_finance_recharge_diagnostics', 'historical_finance_maintenance_continuation', 'historical_finance_mailbox_batch', 'recharge_pro_menu_b8', 'recharge_pro_menu_7f', 'historical_finance_post_cleanup', 'historical_finance_order_archive', 'post_cleanup_seal_sha256', 'order_archive_seal_sha256', 'order_archive_prepared_images_sha256'))) and ((args.image_commit or args.commit) == args.commit) and ((args.image_run_id or args.run_id) == args.run_id) and ((args.image_run_attempt or args.run_attempt) == args.run_attempt), 'Fixed registration selection changed')
     require(all((re.fullmatch('[a-f0-9]{40}', value or '') for value in (args.commit, args.source_tree))) and all((re.fullmatch('[1-9][0-9]*', value or '') for value in (args.run_id, args.run_attempt, args.ci_run_id))) and re.fullmatch('[0-9]{12}\\.dkr\\.ecr\\.ap-northeast-1\\.amazonaws\\.com/id-business-v2-release', args.repository), 'Fixed registration selection changed')
     require(isinstance(REGISTRATION_LOGIN_SOURCE, str) and re.fullmatch(r'[a-f0-9]{40}', REGISTRATION_LOGIN_SOURCE)
         and isinstance(REGISTRATION_LOGIN_PROJECTION_SHA256, str) and re.fullmatch(r'[a-f0-9]{64}', REGISTRATION_LOGIN_PROJECTION_SHA256)
@@ -10035,6 +10038,12 @@ def recharge_974_release(args, *, profile_id=RECHARGE_974_ID):
             return 1
 
 
+def api_admin_scope():
+    # Only the explicitly selected scope loads its separate controller.
+    import types
+    namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')))
+    return types.SimpleNamespace(**namespace), types.SimpleNamespace(**globals())
+
 # A finite successor of the native92 release. No generic or all-service fallback.
 RECHARGE_2F_ID = 'recharge-pro-2f-20261007'
 RECHARGE_2F_FILE = 'deploy/aws/' + RECHARGE_2F_ID + '.json'
@@ -10368,6 +10377,7 @@ def recharge_2f_release(args):
     return recharge_974_release(args, profile_id=RECHARGE_2F_ID)
 
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
@@ -10381,6 +10391,8 @@ def main():
     parser.add_argument('--image-run-id')
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
+    parser.add_argument('--api-admin-only', action='store_true')
+    parser.add_argument('--api-admin-build-proof')
     parser.add_argument('--historical-finance-exception', action='store_true')
     parser.add_argument('--historical-finance-continuation', action='store_true')
     parser.add_argument('--historical-finance-recharge-diagnostics', action='store_true')
@@ -10409,14 +10421,21 @@ def main():
     parser.add_argument('--registration-worker-94', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
-    require(not (args.registration_worker_94 and (args.registration_worker_93 or args.recharge_pro_2f)), 'Fixed release selection is ambiguous')
+    require(not (args.registration_worker_94 and (args.registration_worker_93 or args.recharge_pro_2f or args.api_admin_only)), 'Fixed release selection is ambiguous')
+    if args.api_admin_only:
+        scope, controller = api_admin_scope()
+        return scope.release(controller, args)
+    require(not args.api_admin_build_proof, "API_ADMIN_SCOPE_REQUIRED")
     if args.registration_worker_94:
         return registration_followup_release(args)
+
     require(not (args.registration_worker_93 and args.recharge_pro_2f), 'Fixed release selection is ambiguous')
     if args.registration_worker_93:
         return registration_login_release(args)
+
     if args.recharge_pro_2f:
         return recharge_2f_release(args)
+
     if args.recharge_pro_974:
         return recharge_974_release(args)
     recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_main80
@@ -10968,7 +10987,28 @@ def main():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--summarize-command-result']:
+    if sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):
+        try:
+            scope, controller = api_admin_scope()
+            if sys.argv[1:] == ['--write-api-admin-build-proof']:
+                scope.build_proof(controller)
+            else:
+                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                        and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'API_ADMIN_INPUT_INVALID')
+                if sys.argv[1] == '--api-admin-readback':
+                    result = scope.readback(controller, sys.argv[3])
+                else:
+                    previous, manifest, states, evidence = scope.baseline(controller, sys.argv[3])
+                    result = {'status': 'API_ADMIN_BASELINE_VERIFIED', 'commit': sys.argv[3],
+                              'services': states, **evidence}
+                print(json.dumps(result))
+        except Exception as error:
+            message = str(error)
+            code = message if re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', message) else 'API_ADMIN_READ_UNAVAILABLE'
+            print(json.dumps({'status': 'API_ADMIN_VERIFICATION_FAILED', 'code': code,
+                              'errorType': type(error).__name__}))
+            raise SystemExit(1) from None
+    elif sys.argv[1:] == ['--summarize-command-result']:
         print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_failure_summary(json.load(sys.stdin))))
     elif sys.argv[1:2] in (['--check-fixed-registration-scope'], ['--prepare-fixed-registration-build']):
         try:

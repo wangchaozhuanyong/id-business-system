@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const renewalWorkbenchFeature = defineV2Feature({
   key: 'renewal-workbench',
@@ -25,6 +24,9 @@ export const renewalWorkbenchFeature = defineV2Feature({
     },
     { key: 'dueAt', label: '到期时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['renewal-workbench'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['renewal-workbench']
+    ),
   loadView: () => import('./V2RenewalsView.vue')
 });

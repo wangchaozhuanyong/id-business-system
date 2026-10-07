@@ -59,7 +59,7 @@
 import { CircleCheck } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 
-const variants = ['default', 'primary', 'soft', 'danger', 'success', 'ghost'] as const;
+const variants = ['default', 'primary', 'soft', 'danger', 'success', 'warning', 'ghost'] as const;
 </script>
 
 <style scoped>

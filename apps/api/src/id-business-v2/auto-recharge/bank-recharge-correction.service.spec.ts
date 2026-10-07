@@ -29,7 +29,10 @@ function fixture() {
     updateOrder: vi.fn().mockResolvedValue({ ...order, status: 'pending_details' })
   };
   const tx = {};
-  const transactions = { execute: vi.fn(async (work: (value: unknown) => unknown) => work(tx)) };
+  const context = { businessTime: date, markChangedScopes: vi.fn() };
+  const transactions = {
+    execute: vi.fn(async (work: (value: unknown, context: unknown) => unknown) => work(tx, context))
+  };
   const audit = { append: vi.fn() };
   const posting = { reverse: vi.fn() };
   const orders = {
@@ -46,7 +49,7 @@ function fixture() {
     orders as never,
     finance as never
   );
-  return { service, repository, posting, orders, finance, tx };
+  return { service, repository, posting, orders, finance, tx, context };
 }
 describe('银充更正事务', () => {
   it('reverses and reposts in the same transaction and preserves a revision-specific journal key', async () => {
@@ -58,6 +61,7 @@ describe('银充更正事务', () => {
     );
     expect(f.posting.reverse.mock.calls[0]?.[0]).toBe(f.tx);
     expect(f.orders.updateInTransaction.mock.calls[0]?.[0]).toBe(f.tx);
+    expect(f.orders.updateInTransaction.mock.calls[0]?.[4]).toBe(f.context);
     expect(f.finance.completeInTransaction).toHaveBeenCalledWith(
       f.tx,
       id,

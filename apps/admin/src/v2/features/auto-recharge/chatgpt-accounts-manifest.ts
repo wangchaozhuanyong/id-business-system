@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const chatgptAccountsFeature = defineV2Feature({
   key: 'chatgpt-accounts',
@@ -11,6 +10,9 @@ export const chatgptAccountsFeature = defineV2Feature({
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [],
-  tables: v2TablesByFeature['chatgpt-accounts'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['chatgpt-accounts']
+    ),
   loadView: () => import('./V2ChatgptAccountsView.vue')
 });

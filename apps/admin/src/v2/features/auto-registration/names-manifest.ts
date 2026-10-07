@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const registrationNamesFeature = defineV2Feature({
   key: 'registration-names',
   title: '名字数据表',
@@ -10,6 +9,9 @@ export const registrationNamesFeature = defineV2Feature({
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [{ key: 'keyword', label: '搜索', kind: 'search', placeholder: '名字' }],
-  tables: v2TablesByFeature['registration-names'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['registration-names']
+    ),
   loadView: () => import('./V2RegistrationNamesView.vue')
 });

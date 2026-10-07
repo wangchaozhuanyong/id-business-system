@@ -204,8 +204,11 @@ function validateSchemaRegistry(registry, schemas) {
 function validateFeatureManifests() {
   const manifestFiles = readdirSync(featuresRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(featuresRoot, entry.name, 'manifest.ts'))
-    .filter(existsSync);
+    .flatMap((entry) =>
+      readdirSync(path.join(featuresRoot, entry.name))
+        .filter((name) => name === 'manifest.ts' || name.endsWith('-manifest.ts'))
+        .map((name) => path.join(featuresRoot, entry.name, name))
+    );
 
   for (const file of manifestFiles) {
     const projectPath = path.relative(rootDir, file);
@@ -241,11 +244,46 @@ function validateFeatureManifests() {
     );
     const key = properties.get('key')?.initializer.getText(ast).replaceAll("'", '');
     if (properties.has('columns')) issues.push(`${projectPath}: manifest 禁止复制 columns`);
-    const tablesExpression = properties.get('tables')?.initializer.getText(ast);
-    if (!key || tablesExpression !== `v2TablesByFeature['${key}']`) {
-      issues.push(`${projectPath}: tables 必须引用 v2TablesByFeature 的同 feature schema`);
+    if (!key || !isFeatureTableLoader(properties.get('loadTables')?.initializer, key)) {
+      issues.push(`${projectPath}: loadTables 必须按需引用 v2TablesByFeature 的同 feature schema`);
+    }
+    if (properties.has('tables')) {
+      issues.push(`${projectPath}: 禁止静态 tables；使用 loadTables 保持运行注册轻量`);
     }
   }
+}
+
+function isFeatureTableLoader(loader, featureKey) {
+  if (!loader || !ts.isArrowFunction(loader) || loader.parameters.length) return false;
+  const chain = loader.body;
+  if (!ts.isCallExpression(chain) || !ts.isPropertyAccessExpression(chain.expression)) return false;
+  if (chain.expression.name.text !== 'then' || chain.arguments.length !== 1) return false;
+  const importer = chain.expression.expression;
+  if (
+    !ts.isCallExpression(importer) ||
+    importer.expression.kind !== ts.SyntaxKind.ImportKeyword ||
+    importer.arguments.length !== 1 ||
+    !ts.isStringLiteral(importer.arguments[0]) ||
+    importer.arguments[0].text !== '@/v2/features/tableSchemas'
+  ) {
+    return false;
+  }
+  const selector = chain.arguments[0];
+  if (!ts.isArrowFunction(selector) || selector.parameters.length !== 1) return false;
+  const binding = selector.parameters[0].name;
+  if (!ts.isObjectBindingPattern(binding) || binding.elements.length !== 1) return false;
+  const name = binding.elements[0];
+  if (name.propertyName || !ts.isIdentifier(name.name) || name.name.text !== 'v2TablesByFeature') {
+    return false;
+  }
+  const reference = selector.body;
+  return (
+    ts.isElementAccessExpression(reference) &&
+    ts.isIdentifier(reference.expression) &&
+    reference.expression.text === 'v2TablesByFeature' &&
+    ts.isStringLiteral(reference.argumentExpression) &&
+    reference.argumentExpression.text === featureKey
+  );
 }
 
 function validateTableNode(tableNode, projectPath, consumedSchemas) {
@@ -528,6 +566,25 @@ function validateBusinessSortRules() {
 }
 
 function runSelfTests() {
+  const tableLoader = (source) =>
+    ts.createSourceFile('table-loader.ts', source, ts.ScriptTarget.Latest, true).statements[0]
+      .declarationList.declarations[0].initializer;
+  assert.equal(
+    isFeatureTableLoader(
+      tableLoader(
+        "const load = () => import('@/v2/features/tableSchemas').then(({ v2TablesByFeature }) => v2TablesByFeature['accounts']);"
+      ),
+      'accounts'
+    ),
+    true
+  );
+  for (const source of [
+    "const load = v2TablesByFeature['accounts'];",
+    "const load = () => import('@/v2/features/tableSchemas').then(({ v2TablesByFeature }) => v2TablesByFeature['orders']);",
+    "const load = () => import('@/v2/features/tableSchemas').then(() => []);"
+  ]) {
+    assert.equal(isFeatureTableLoader(tableLoader(source), 'accounts'), false);
+  }
   const ast = parseTemplate(
     '<V2Table :schema="v2TableSchemas.demo.main"><V2TableColumn :definition="v2TableSchemas.demo.main.columns[0]" /></V2Table>'
   );

@@ -321,18 +321,24 @@
 
 .v2-order-entry-readonly {
   display: flex;
+  flex-wrap: wrap;
   width: 100%;
+  min-width: 0;
   min-height: var(--el-component-size);
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 0 11px;
+  gap: 4px 10px;
+  padding: 6px 11px;
+  line-height: var(--v3-line-height-body);
   border: 1px solid var(--v2-border-soft);
   border-radius: var(--v3-radius-sm);
   background: var(--v2-surface-muted);
 }
 
 .v2-order-entry-readonly strong {
+  max-width: 100%;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
   color: var(--v2-text);
   font-size: 13px;
   font-weight: var(--v3-font-weight-semibold);
@@ -401,6 +407,7 @@
 
 .v2-order-entry-recommendation {
   display: flex;
+  flex-wrap: wrap;
   width: 100%;
   min-width: 0;
   min-height: var(--el-component-size);
@@ -408,6 +415,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 5px 8px 5px 11px;
+  line-height: var(--v3-line-height-body);
   border: 1px solid var(--v2-border-soft);
   border-radius: var(--v3-radius-sm);
   background: var(--v2-surface-muted);
@@ -538,10 +546,8 @@
   gap: 12px;
 }
 
-.v2-submit-disabled-reason {
+.v2-order-entry-actions .v2-submit-disabled-reason {
   max-width: 240px;
-  color: var(--el-color-danger);
-  line-height: 1.4;
   text-align: right;
 }
 
@@ -551,8 +557,6 @@
 
 .v2-order-entry-actions .app-button {
   min-width: 168px;
-  min-height: var(--el-component-size);
-  font-weight: var(--v3-font-weight-semibold);
 }
 
 .v2-order-entry-summary .v2-order-entry-section-header {
@@ -1246,7 +1250,7 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
     display: none;
   }
 
-  .v2-submit-disabled-reason {
+  .v2-order-entry-actions .v2-submit-disabled-reason {
     max-width: none;
     text-align: left;
   }
