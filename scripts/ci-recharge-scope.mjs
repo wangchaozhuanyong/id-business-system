@@ -17,6 +17,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-90-20261007.json',
   'deploy/aws/registration-worker-91-20261007.json',
   'deploy/aws/registration-worker-92-20261007.json',
+  'deploy/aws/registration-worker-93-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -97,6 +98,44 @@ function isRegistrationProfileObservationOnly(paths) {
     )
   );
 }
+const registrationLoginProfile = 'deploy/aws/registration-worker-93-20261007.json';
+const registrationLoginSources = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
+]);
+const registrationLoginControls = new Set([
+  registrationLoginProfile,
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/remote-deploy.test.py',
+  'scripts/production-release/registration-only-transport.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/v2-registration-finance-audit.mjs',
+  'scripts/v2-registration-finance-audit.test.mjs',
+  'scripts/production-release/maintain-image-cache.py',
+  'scripts/production-release/maintain-image-cache.test.py',
+  'scripts/production-release/service-image-retention.py',
+  'scripts/production-release/service-image-retention.test.py',
+  'scripts/production-release/browser-cache-input.py',
+  'scripts/production-release/browser-cache-input.test.py',
+  'scripts/production-release/build-image-cache.test.py'
+]);
+const isRegistrationLoginControl = (path) =>
+  registrationLoginControls.has(path) ||
+  ['docs/V2_TASKS.md', 'docs/AUTO_REGISTRATION.md'].includes(path);
+function isRegistrationLoginOnly(paths) {
+  return (
+    paths.includes(registrationLoginProfile) &&
+    paths.every((path) => registrationLoginSources.has(path) || isRegistrationLoginControl(path))
+  );
+}
 const registrationRecoveryProfile = 'deploy/aws/registration-worker-92-20261007.json';
 const registrationRecoverySources = new Set([
   'apps/api/src/id-business-v2/auto-registration/registration-validation.ts',
@@ -131,6 +170,7 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (paths.includes(registrationLoginProfile)) return paths.every(isRegistrationLoginControl);
   if (paths.includes(registrationRecoveryProfile))
     return paths.every(isRegistrationRecoveryControl);
   if (paths.includes(registrationProfileObservationProfile))
@@ -322,6 +362,10 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationLoginProfile))
+    return (
+      isRegistrationLoginOnly(paths) && paths.some((path) => registrationLoginSources.has(path))
+    );
   if (paths.includes(registrationRecoveryProfile))
     return (
       isRegistrationRecoveryOnly(paths) &&
@@ -359,6 +403,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationLoginProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationRecoveryProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationProfileObservationProfile))
@@ -383,6 +428,10 @@ export function selectedParts(paths) {
         ? ['connector']
         : [])
     ];
+  if (isRegistrationLoginOnly(paths))
+    return paths.some((path) => registrationLoginSources.has(path))
+      ? ['guards', 'connector']
+      : ['guards'];
   if (isRegistrationProfileObservationOnly(paths))
     return paths.some((path) => registrationProfileObservationSources.has(path))
       ? ['guards', 'connector']

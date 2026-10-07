@@ -854,3 +854,30 @@ test('fixed92 accepts only four API files, three Worker files, owned tests and e
     assert.equal(isCiOnly([...controls, foreign]), false, foreign);
   }
 });
+
+test('fixed93 permits only two registration browser files and exact new release controls', () => {
+  const profile = 'deploy/aws/registration-worker-93-20261007.json';
+  const browser = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py';
+  const unit = 'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py';
+  const controls = [
+    profile,
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/maintain-image-cache.py'
+  ];
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(checkMode([...controls, browser, unit], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, browser, unit]), ['guards', 'connector']);
+  for (const foreign of [
+    'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/server.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile',
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'deploy/aws/registration-worker-92-20261007.json',
+    'docs/UNREVIEWED.md'
+  ]) {
+    assert.equal(checkMode([...controls, browser, foreign], schema, schema), 'full', foreign);
+    assert.equal(isCiOnly([...controls, foreign]), false, foreign);
+  }
+});

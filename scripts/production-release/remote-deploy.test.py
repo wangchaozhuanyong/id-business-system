@@ -11338,5 +11338,186 @@ class Registration92RecoveryScopeTests(unittest.TestCase):
         self.assertNotIn('skip', body.lower())
 
 
+
+class Registration93ScopeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[2]
+        cls.profile = json.loads((cls.root / deployment.REGISTRATION_LOGIN_FILE).read_bytes())
+
+    @contextmanager
+    def frozen(self):
+        profile = copy.deepcopy(self.profile)
+        candidate = {name: (('synthetic-reviewed93:' + name).encode(), '100644')
+            for name in deployment.REGISTRATION_LOGIN_CONTROLS | deployment.REGISTRATION_LOGIN_FILES}
+        sha = lambda name: deployment.hashlib.sha256(candidate[name][0]).hexdigest()
+        source = {deployment.REGISTRATION_WORKER_PREFIX + 'registration_browser.py': sha(deployment.REGISTRATION_WORKER_PREFIX + 'registration_browser.py')}
+        validation = {deployment.REGISTRATION_WORKER_PREFIX + 'test_registration_browser.py': sha(deployment.REGISTRATION_WORKER_PREFIX + 'test_registration_browser.py')}
+        projection = copy.deepcopy(deployment.REGISTRATION_LOGIN_WORKER_BASIS)
+        for name in deployment.REGISTRATION_LOGIN_FILES: projection[name] = {'mode': '100644', 'sha256': sha(name)}
+        handoff = {'receiptSha256': '5' * 64, 'taskId': '252ab243-d96b-4928-8116-b83dedc1d240', 'attempt': 7,
+            'registered': True, 'passwordLoginVerified': False, 'mfaLoginVerified': False,
+            'windowExists': False, 'leaseActive': False, 'busy': False}
+        profile.update(enabled=True, registrationSourceCommit='9' * 40, registrationSourceSha256=source,
+            validationSourceSha256=validation, workerProjection=projection,
+            workerProjectionSha256=deployment.historical_fingerprint(projection), registrationHandoff=handoff,
+            controlSourceSha256={name: sha(name) for name in deployment.REGISTRATION_LOGIN_CONTROLS})
+        with ExitStack() as stack:
+            for name, value in {'REGISTRATION_LOGIN_SOURCE': '9' * 40, 'REGISTRATION_LOGIN_SOURCE_SHA256': source,
+                'REGISTRATION_LOGIN_VALIDATION_SHA256': validation, 'REGISTRATION_LOGIN_PROJECTION_SHA256': profile['workerProjectionSha256'],
+                'REGISTRATION_LOGIN_HANDOFF': handoff}.items(): stack.enter_context(patch.object(deployment, name, value))
+            yield SimpleNamespace(profile=profile, candidate=candidate, handoff=handoff)
+
+    def test_draft_has_no_external_or_lock_side_effects(self):
+        draft=copy.deepcopy(self.profile);draft['enabled']=False
+        with patch.object(deployment, 'REGISTRATION_LOGIN_SOURCE',None),patch.object(deployment, 'run') as command, patch.object(deployment, 'registration_download') as download:
+            with self.assertRaises(RuntimeError): deployment.registration_login_profile(draft)
+            args = Registration92RecoveryScopeTests.arguments()
+            args.registration_worker_92 = False; args.registration_worker_93 = True
+            args.expected_current = deployment.REGISTRATION_LOGIN_CURRENT
+            with self.assertRaisesRegex(RuntimeError, 'source unavailable'): deployment.registration_login_release(args)
+        command.assert_not_called(); download.assert_not_called()
+
+    def test_only_two_reviewed_files_and_six_retained_services_are_allowed(self):
+        with self.frozen() as f:
+            self.assertIs(deployment.registration_login_profile(f.profile), f.profile)
+            self.assertEqual(deployment.registration_updated_services(deployment.REGISTRATION_LOGIN_ID), ('auto-registration',))
+            self.assertEqual(len(deployment.registration_selected_preserved_states(deployment.REGISTRATION_LOGIN_BASELINE['liveServices'], deployment.REGISTRATION_LOGIN_ID)), 6)
+            deployment.registration_login_source(f.profile, f.candidate)
+            for name in ('server.py', 'Dockerfile', 'registration_builtin.py', 'registration_job.py', 'plan_selection.py'):
+                broken = copy.deepcopy(f.profile); broken['workerProjection'][deployment.REGISTRATION_WORKER_PREFIX + name]['sha256'] = '0' * 64
+                with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.registration_login_profile(broken)
+            wrong = dict(f.candidate); wrong[deployment.REGISTRATION_WORKER_PREFIX + 'test_registration_browser.py'] = (b'changed', '100644')
+            with self.assertRaises(RuntimeError): deployment.registration_login_source(f.profile, wrong)
+
+    def test_source_handoff_compiled_api_and_closed_profile_drift_reject(self):
+        with self.frozen() as f:
+            mutations = [('enabled', False), ('enabled', 1), ('expectedCurrent', '0' * 40), ('workerBasisCommit', '0' * 40),
+                ('apiProjectionSha256', '0' * 64), ('apiCompiledSourceProjectionSha256', '0' * 64), ('unexpected', 'RAW_SECRET_SENTINEL')]
+            for key, value in mutations:
+                bad = copy.deepcopy(f.profile); bad[key] = value
+                with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.registration_login_profile(bad)
+            for key, value in [('attempt', 8), ('attempt', True), ('windowExists', True), ('leaseActive', True), ('busy', True), ('registered', False), ('receiptSha256', None)]:
+                bad = copy.deepcopy(f.profile); bad['registrationHandoff'][key] = value
+                with self.subTest(handoff=key), self.assertRaises(RuntimeError): deployment.registration_login_profile(bad)
+            bad = copy.deepcopy(f.profile); bad['scope']['cacheCleanupAllowed'] = 0
+            with self.assertRaises(RuntimeError): deployment.registration_login_profile(bad)
+            bad = copy.deepcopy(f.profile); bad['runtimeBaseline']['windowRestarted'] = 0
+            with self.assertRaises(RuntimeError): deployment.registration_login_profile(bad)
+            for key in ('REGISTRATION_LOGIN_SOURCE', 'REGISTRATION_LOGIN_PROJECTION_SHA256', 'REGISTRATION_LOGIN_HANDOFF'):
+                with patch.object(deployment, key, None), self.subTest(missing=key), self.assertRaises(RuntimeError): deployment.registration_login_profile(f.profile)
+
+    def test_readback_and_retained_api_revision_are_closed(self):
+        with self.frozen() as f:
+            receipt = deployment.registration_readback_receipt('a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_LOGIN_ID)
+            self.assertEqual(receipt['preservedServiceCount'], 6); self.assertEqual(receipt['servicesUpdated'], ['auto-registration'])
+            self.assertEqual(receipt['registrationHandoff'], f.handoff)
+            deployment.validate_fixed_registration_readback_projection(receipt, 'a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_LOGIN_ID)
+            for key, value in [('apiProjectionSha256', '0' * 64), ('servicesUpdated', ['api','auto-registration']), ('preservedServiceCount', 5), ('unknown', True)]:
+                wrong = {**receipt, key: value}
+                with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.validate_fixed_registration_readback_projection(wrong, 'a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_LOGIN_ID)
+            image = deployment.REGISTRATION_LOGIN_BASELINE['manifest']['images']['api']['digest']
+            metadata = {'Id': image, 'Architecture': 'amd64', 'Config': {'Labels': {'org.opencontainers.image.revision': deployment.REGISTRATION_LOGIN_CURRENT,
+                'id-business-v2.api-projection-sha256': deployment.REGISTRATION_RECOVERY_API_PROJECTION_SHA256,
+                'id-business-v2.api-compiled-source-sha256': deployment.REGISTRATION_RECOVERY_API_COMPILED_PROJECTION_SHA256}}}
+            with patch.object(deployment, 'registration_recovery_api_hashes') as compiled, patch.object(deployment, 'run', side_effect=lambda *args: json.dumps([metadata])):
+                deployment.registration_login_api_hashes(Path('/synthetic'), f.profile); compiled.assert_called_once()
+                metadata['Config']['Labels']['org.opencontainers.image.revision'] = 'a' * 40
+                with self.assertRaises(RuntimeError): deployment.registration_login_api_hashes(Path('/synthetic'), f.profile)
+
+    def test_projection_reconstructs_actual92_then_changes_only_reviewed_pair(self):
+        with self.frozen() as f:
+            old={name:(('synthetic-actual92:'+name).encode(),row['mode']) for name,row in deployment.REGISTRATION_LOGIN_WORKER_BASIS.items()}
+            measured=lambda files:{n:{'mode':m,'sha256':deployment.hashlib.sha256(b).hexdigest()} for n,(b,m) in files.items()}
+            old_hashes=measured(old);expected=dict(old);expected.update({n:f.candidate[n] for n in deployment.REGISTRATION_LOGIN_FILES})
+            f.profile['workerProjection']=measured(expected)
+            raw=b'synthetic-actual92-archive';profile_raw=b'{"id":"synthetic-original92"}'
+            baseline=copy.deepcopy(deployment.REGISTRATION_LOGIN_BASELINE)
+            baseline['manifest']['sourceArchiveSha256']=deployment.hashlib.sha256(raw).hexdigest()
+            baseline['profileSha256']=deployment.hashlib.sha256(profile_raw).hexdigest()
+            baseline['workerProjectionSha256']=deployment.historical_fingerprint(old_hashes)
+            previous={deployment.REGISTRATION_RECOVERY_FILE:(profile_raw,'100644')};old_profile={'workerProjection':old_hashes}
+            with patch.object(deployment,'REGISTRATION_LOGIN_BASELINE',baseline),patch.object(deployment,'REGISTRATION_LOGIN_WORKER_BASIS',old_hashes), \
+                    patch.object(deployment,'registration_download',return_value=raw),patch.object(deployment,'registration_archive',return_value=previous), \
+                    patch.object(deployment,'registration_profile',return_value=old_profile), \
+                    patch.object(deployment,'registration_recovery_worker_projection',return_value=old) as reconstruct:
+                result=deployment.registration_login_worker_projection(f.profile,{'reviewed-old-basis':True},f.candidate)
+                self.assertEqual(result,expected)
+                reconstruct.assert_called_once_with(old_profile,{'reviewed-old-basis':True},previous)
+                for name in old:
+                    if name not in deployment.REGISTRATION_LOGIN_FILES:self.assertEqual(result[name],old[name])
+                corrupt=dict(old);corrupt[deployment.REGISTRATION_WORKER_PREFIX+'server.py']=(b'new-main-pro','100644')
+                reconstruct.return_value=corrupt
+                with self.assertRaisesRegex(RuntimeError,'actual92 Worker'):deployment.registration_login_worker_projection(f.profile,{},f.candidate)
+
+    def test_all_seven_environment_drift_rejects_before_compiled_probe(self):
+        runtime = self.root / '.runtime/registration-login-submit-ready-20261007'; runtime.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as temporary:
+            base=Path(temporary);previous=base/'releases/previous';previous.mkdir(parents=True)
+            (base/'current').symlink_to(previous)
+            for service in deployment.ALL_SERVICES:
+                live=copy.deepcopy(deployment.REGISTRATION_LOGIN_BASELINE['liveServices']);live[service]['environmentSha256']='0'*64
+                with self.subTest(service=service),patch.object(deployment,'BASE',base), \
+                        patch.object(deployment,'registration_login_history',return_value=({},previous)), \
+                        patch.object(deployment,'registration_login_api_hashes') as compiled, \
+                        patch.object(deployment,'service_state',side_effect=lambda _p,n,**kw:copy.deepcopy(live[n])):
+                    with self.assertRaises(RuntimeError):deployment.registration_login_baseline(previous)
+                    compiled.assert_not_called()
+
+    def test_retained_window_blocks_before_source_or_pull(self):
+        runtime=self.root/'.runtime/registration-login-submit-ready-20261007'
+        with self.frozen() as f,tempfile.TemporaryDirectory(dir=runtime) as temporary:
+            base=Path(temporary);previous=base/'releases/previous';previous.mkdir(parents=True);(base/'current').symlink_to(previous)
+            args=Registration92RecoveryScopeTests.arguments();args.registration_worker_92=False;args.registration_worker_93=True
+            args.expected_current=deployment.REGISTRATION_LOGIN_CURRENT
+            with patch.object(deployment,'BASE',base),patch.object(deployment,'service_state',return_value={}), \
+                    patch.object(deployment,'registration_runtime_baseline',return_value=({},previous)), \
+                    patch.object(deployment,'assert_release_jobs_idle'),patch.object(deployment,'assert_no_active_registration',side_effect=RuntimeError('retained')), \
+                    patch.object(deployment,'registration_download') as download,patch.object(deployment,'run') as command:
+                with self.assertRaisesRegex(RuntimeError,'retained'):deployment.registration_login_release(args)
+                download.assert_not_called();command.assert_not_called()
+
+    def test_new_finance_lane_uses_original_api80_and_exact_49_zero_guard(self):
+        tree=ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_bytes())
+        node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='registration_login_finance_audit')
+        source=ast.unparse(node)
+        self.assertIn("REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['reference']",source)
+        self.assertIn("require(image['Id'] == seal['images']['api']",source)
+        self.assertIn('require_registration_zero_report',source)
+        self.assertNotIn('REGISTRATION_LOGIN_BASELINE',source)
+        self.assertNotIn('skip',source.lower())
+
+    def test_main_routes_each_new_lane_and_rejects_combined_flags_before_effects(self):
+        argv = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', 'synthetic-fixture-only', '--expected-current', deployment.REGISTRATION_LOGIN_CURRENT,
+            '--run-id', '1', '--run-attempt', '1', '--ci-run-id', '1']
+        with patch.object(deployment.sys, 'argv', argv + ['--registration-worker-93', '--recharge-pro-2f']), \
+                patch.object(deployment, 'registration_login_release') as registration, \
+                patch.object(deployment, 'recharge_2f_release') as recharge, \
+                patch.object(deployment, 'run') as command, patch.object(deployment, 'registration_download') as download:
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
+            registration.assert_not_called(); recharge.assert_not_called()
+            command.assert_not_called(); download.assert_not_called()
+        for flag, expected, excluded in [('--registration-worker-93', 'registration_login_release', 'recharge_2f_release'),
+                ('--recharge-pro-2f', 'recharge_2f_release', 'registration_login_release')]:
+            with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', argv + [flag]), \
+                    patch.object(deployment, expected, return_value='selected-only') as selected, \
+                    patch.object(deployment, excluded) as other:
+                self.assertEqual(deployment.main(), 'selected-only')
+                selected.assert_called_once(); other.assert_not_called()
+
+    def test_actual92_baseline_and_all_legacy_functions_profiles_keep_exact_pins(self):
+        baseline = ast.parse(subprocess.check_output(['git','show',deployment.REGISTRATION_LOGIN_CURRENT + ':scripts/production-release/remote-deploy.py'],cwd=self.root))
+        candidate = ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes())
+        functions = lambda tree: {n.name: ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,ast.FunctionDef)}
+        old,new = functions(baseline),functions(candidate)
+        for name in ('registration_release','registration_finance_audit','check_fixed_registration_deployment','require_registration_zero_report',
+            'registration_hydration_history','registration_hydration_baseline','registration_profile_observation_history','registration_profile_observation_baseline',
+            'registration_recovery_release','registration_recovery_history','registration_recovery_baseline','registration_recovery_finance_audit','check_registration_recovery_deployment'):
+            with self.subTest(function=name): self.assertEqual(old[name],new[name])
+        for file,digest in deployment.REGISTRATION_LOGIN_BASELINE['fileSha256'].items():
+            if file.startswith('deploy/aws/registration-worker-'):
+                with self.subTest(profile=file): self.assertEqual(deployment.hashlib.sha256((self.root/file).read_bytes()).hexdigest(),digest)
+
 if __name__ == '__main__':
     unittest.main()

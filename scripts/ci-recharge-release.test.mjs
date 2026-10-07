@@ -457,6 +457,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'registration-worker-89-20261006'), false);
   assert.equal(selected('release', 'registration-worker-90-20261007'), false);
   assert.equal(selected('release', 'registration-worker-91-20261007'), false);
+  assert.equal(selected('release', 'registration-worker-93-20261007'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -478,6 +479,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-90-20261007',
         'registration-worker-91-20261007',
         'registration-worker-92-20261007',
+        'registration-worker-93-20261007',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -3587,6 +3589,37 @@ test('fixed92 transport and workflow bind API80 plus actual91 projections withou
   assert.ok(maintenance.if.includes(`inputs.historical_exception != '${profile}'`));
 });
 
+test('fixed93 builds Worker once and keeps current92 API and the new retention implementation', () => {
+  const profile = 'registration-worker-93-20261007';
+  const raw = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.equal(raw.expectedCurrent, '2f24cf81007429ea474da404a30bc74da9d43ce1');
+  assert.deepEqual(raw.scope.servicesUpdated, ['auto-registration']);
+  assert.deepEqual(raw.scope.imageServices, ['auto-recharge']);
+  assert.equal(raw.scope.preservedServices.length, 6);
+  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
+    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == ' + profile + ' ]]; then')[1]
+    .split('\nfi')[0];
+  assert.equal((build.match(/build_image /g) || []).length, 1);
+  assert.ok(build.includes('registration-build-context'));
+  assert.equal(build.includes('build_image api'), false);
+  const workflow = readFileSync('.github/workflows/production-release.yml', 'utf8');
+  assert.ok(workflow.includes('Verify fixed 93 registration deployment independently'));
+  assert.ok(workflow.includes('fixed-registration-93-readback-filter.py'));
+  assert.ok(
+    workflow.includes('Maintain service rollback image cache independently after fixed release')
+  );
+  assert.ok(
+    readFileSync('scripts/production-release/build-images.sh', 'utf8').includes(
+      'validate_browser_cache_reference'
+    )
+  );
+  assert.ok(
+    readFileSync('scripts/production-release/maintain-image-cache.py', 'utf8').includes(
+      'current-service-rollback-explicit-dependencies-ecr-cache-v2'
+    )
+  );
+});
+
 const recharge2fIdentity = 'recharge-pro-2f-20261007';
 const recharge2fBaseline = '2f24cf81007429ea474da404a30bc74da9d43ce1';
 
@@ -3901,4 +3934,45 @@ test('fixed 2f actual readonly workflow requires the complete 21 field 49 zero p
     delete incomplete.storedGatesMatched;
     assert.throws(() => execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify(incomplete)}\n`));
   }, recharge2fIdentity);
+});
+
+test('fixed93 and fixed 2f workflow approvals remain exclusive after integration', () => {
+  const registrationApproval = 'Verify fixed 93 registration runtime approval';
+  const registrationReadback = 'Verify fixed 93 registration deployment independently';
+  const rechargeApproval = 'Verify fixed 2f recharge runtime approval';
+  const rechargeReadback = 'Verify fixed recharge deployment independently';
+  for (const [profile, required, excluded] of [
+    [
+      'registration-worker-93-20261007',
+      [registrationApproval, registrationReadback],
+      [rechargeApproval, rechargeReadback]
+    ],
+    [
+      'recharge-pro-2f-20261007',
+      [rechargeApproval, rechargeReadback],
+      [registrationApproval, registrationReadback]
+    ]
+  ]) {
+    const enabled = workflowSteps
+      .filter(
+        (step) =>
+          !step.if ||
+          workflowPredicate(step.if)({
+            operation: 'release',
+            historical_exception: profile,
+            reuse_image_run: ''
+          })
+      )
+      .map((step) => step.name);
+    for (const name of required) assert.ok(enabled.includes(name), `${profile}: ${name}`);
+    for (const name of [
+      ...excluded,
+      'Verify or maintain recoverable unused project image cache',
+      'Verify reusable build and unchanged application source'
+    ])
+      assert.equal(enabled.includes(name), false, `${profile}: ${name}`);
+    assert.ok(
+      enabled.includes('Maintain service rollback image cache independently after fixed release')
+    );
+  }
 });
