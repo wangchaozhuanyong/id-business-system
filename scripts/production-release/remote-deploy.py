@@ -2351,8 +2351,11 @@ def validate_main80_recharge_readback_projection(value, expected_current, source
 
 
 def fixed_recharge_binding(profile_id=RECHARGE_SCOPE_ID):
-    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID),
+    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID),
             'Fixed recharge runtime scope unavailable')
+    if profile_id == RECHARGE_2F_ID:
+        return {'id': RECHARGE_2F_ID, 'current': RECHARGE_2F_CURRENT, 'tree': RECHARGE_2F_TREE,
+            'file': RECHARGE_2F_FILE, 'previous': RECHARGE_974_CURRENT, 'carried': frozenset()}
     if profile_id == RECHARGE_974_ID:
         return {'id': RECHARGE_974_ID, 'current': RECHARGE_974_CURRENT, 'tree': RECHARGE_974_TREE,
             'file': RECHARGE_974_FILE, 'previous': RECHARGE_974_CHAIN[1][0], 'carried': frozenset(RECHARGE_974_CARRIED_SOURCE)}
@@ -2386,6 +2389,8 @@ def fixed_recharge_json(raw):
 
 def fixed_recharge_scope(value, *, require_approved=True):
     try:
+        if isinstance(value, dict) and value.get('id') == RECHARGE_2F_ID:
+            return recharge_2f_scope(value, require_approved=require_approved)
         if isinstance(value, dict) and value.get('id') == RECHARGE_974_ID:
             return recharge_974_scope(value, require_approved=require_approved)
         if isinstance(value, dict) and value.get('id') == RECHARGE_MAIN80_ID:
@@ -2564,6 +2569,8 @@ def verify_fixed_recharge_archive(release, source, profile, *, checkout=False, n
 
 
 def check_fixed_recharge_scope(*, require_approved=True, profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_2F_ID:
+        return check_recharge_2f_scope(require_approved=require_approved)
     binding = fixed_recharge_binding(profile_id)
     source = Path(__file__).resolve().parents[2]
     profile = parse_fixed_recharge_scope(fixed_recharge_bytes(source / binding['file'],
@@ -2867,6 +2874,8 @@ def fixed_recharge_preserved_states(states):
 
 def validate_fixed_recharge_readback_projection(value, expected_current, source_tree, profile_sha256,
         profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_2F_ID:
+        return validate_recharge_2f_readback_projection(value, expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_974_ID:
         return validate_recharge_974_readback_projection(value, expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_MAIN80_ID:
@@ -2893,6 +2902,8 @@ def validate_fixed_recharge_readback_projection(value, expected_current, source_
 
 
 def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha256, profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_2F_ID:
+        return check_recharge_2f_deployment(expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_974_ID:
         return check_recharge_974_deployment(expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_MAIN80_ID:
@@ -8570,14 +8581,16 @@ def recharge_974_scope(value, *, require_approved=True):
     return value
 
 
-def recharge_974_native_chain(previous):
+def recharge_974_native_chain(previous, *, chain=None):
     """Snapshot all eleven fixed immutable releases; no private content escapes."""
     message = 'Fixed 974 native chain changed'
     rows, directories, files = [], 0, 0
     identity = lambda x: (x.st_dev, x.st_ino, x.st_mode, x.st_uid, x.st_gid, x.st_nlink,
         x.st_size, x.st_mtime_ns, x.st_ctime_ns)
     directory = previous
-    for index, (commit, tree) in enumerate(RECHARGE_974_CHAIN):
+    chain = RECHARGE_974_CHAIN if chain is None else chain
+    require(chain in (RECHARGE_974_CHAIN, RECHARGE_2F_CHAIN), message)
+    for index, (commit, tree) in enumerate(chain):
         require(directory.is_absolute() and directory.resolve() == directory and not directory.is_symlink()
             and directory.parent == BASE / 'releases'
             and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + commit[:12], directory.name), message)
@@ -8599,8 +8612,8 @@ def recharge_974_native_chain(previous):
             require(identity(path.lstat()) == before[path], message)
         require(all(identity(path.lstat()) == original for path, original in before.items()), message)
         rows.append({'commit': commit, 'tree': tree, 'release': str(directory), 'files': entries, 'directories': folders})
-        if index + 1 < len(RECHARGE_974_CHAIN):
-            require(manifest.get('previousCommit') == RECHARGE_974_CHAIN[index + 1][0], message)
+        if index + 1 < len(chain):
+            require(manifest.get('previousCommit') == chain[index + 1][0], message)
             directory = Path(manifest['previousRelease'])
     external = {}
     for path in (ORDER_ARCHIVE_SEAL, POST_CLEANUP_RECEIPT):
@@ -8611,11 +8624,16 @@ def recharge_974_native_chain(previous):
         'fileCount': files, 'directoryCount': directories, 'origin': directory}
 
 
-def recharge_974_baseline_fields(previous):
+def recharge_974_baseline_fields(previous, *, profile_id=RECHARGE_974_ID):
+    require(profile_id in (RECHARGE_974_ID, RECHARGE_2F_ID), "Fixed recharge baseline selection changed")
+    successor = profile_id == RECHARGE_2F_ID
+    current = RECHARGE_2F_CURRENT if successor else RECHARGE_974_CURRENT
+    tree = RECHARGE_2F_TREE if successor else RECHARGE_974_TREE
+    predecessor = RECHARGE_974_CURRENT if successor else RECHARGE_974_CHAIN[1][0]
     manifest = fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json'))
-    require(manifest.get('commit') == RECHARGE_974_CURRENT and manifest.get('sourceTree') == RECHARGE_974_TREE
-        and manifest.get('previousCommit') == RECHARGE_974_CHAIN[1][0]
-        and manifest.get('servicesUpdated') == ['auto-registration'] and manifest.get('migrationApplied') is False
+    require(manifest.get('commit') == current and manifest.get('sourceTree') == tree
+        and manifest.get('previousCommit') == predecessor
+        and manifest.get('servicesUpdated') == (['api', 'auto-registration'] if successor else ['auto-registration']) and manifest.get('migrationApplied') is False
         and manifest.get('newMigrations') == [] and manifest.get('databaseGrants') == {
             'status': 'SKIPPED', 'reason': 'FIXED_REGISTRATION_NO_MIGRATIONS'}, 'Fixed 974 native baseline changed')
     result = {key: manifest[key] for key in ('commit', 'sourceTree', 'previousCommit', 'deploymentRun')}
@@ -8754,7 +8772,7 @@ def recharge_974_candidate_link(current, previous, manifest, expected_current, s
     require(current.is_absolute() and current.resolve() == current and current.parent == BASE / 'releases'
         and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + expected_current[:12], current.name)
         and (BASE / 'current').resolve() == current and manifest.get('commit') == expected_current
-        and manifest.get('sourceTree') == source_tree and manifest.get('previousCommit') == RECHARGE_974_CURRENT
+        and manifest.get('sourceTree') == source_tree and manifest.get('previousCommit') == profile['expectedCurrent']
         and manifest.get('previousRelease') == str(previous) and manifest.get('servicesUpdated') == ['auto-recharge']
         and manifest.get('migrationApplied') is False and manifest.get('newMigrations') == []
         and manifest.get('databaseGrants') == {'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}, message)
@@ -8884,17 +8902,26 @@ def recharge_974_pull_image(repository, commit, run_id, run_attempt):
         auth = None; connection.close()
 
 
-def recharge_974_release(args):
+def recharge_974_release(args, *, profile_id=RECHARGE_974_ID):
+    require(profile_id in (RECHARGE_974_ID, RECHARGE_2F_ID), 'Fixed recharge release selection changed')
+    successor = profile_id == RECHARGE_2F_ID
+    current = RECHARGE_2F_CURRENT if successor else RECHARGE_974_CURRENT
+    profile_file = RECHARGE_2F_FILE if successor else RECHARGE_974_FILE
+    baseline_check = recharge_2f_baseline if successor else recharge_974_baseline
+    audit = recharge_2f_audit if successor else recharge_974_audit
+    context = recharge_2f_context if successor else recharge_974_context
+    deployment_check = check_recharge_2f_deployment if successor else check_recharge_974_deployment
     message = 'Fixed 974 recharge release unavailable'
-    require(getattr(args, 'recharge_pro_974', False) is True and not args.admin_only
+    require(getattr(args, 'recharge_pro_2f' if successor else 'recharge_pro_974', False) is True
+        and not getattr(args, 'recharge_pro_974' if successor else 'recharge_pro_2f', False) and not args.admin_only
         and all(not getattr(args, key, False) for key in ('historical_finance_exception', 'historical_finance_continuation',
             'historical_finance_recharge_diagnostics', 'historical_finance_maintenance_continuation',
             'historical_finance_mailbox_batch', 'historical_finance_post_cleanup', 'historical_finance_order_archive',
             'recharge_pro_menu_b8', 'recharge_pro_menu_7f', 'recharge_pro_main80', 'registration_worker_b8_80',
             'registration_worker_956', 'registration_worker_85', 'registration_worker_86', 'registration_worker_87',
             'registration_worker_88', 'registration_worker_89', 'registration_worker_90', 'registration_worker_91', 'registration_worker_92', 'post_cleanup_seal_sha256', 'order_archive_seal_sha256',
-            'order_archive_prepared_images_sha256')) and args.expected_current == RECHARGE_974_CURRENT, message)
-    require(re.fullmatch(r'[a-f0-9]{40}', args.commit or '') and args.commit != RECHARGE_974_CURRENT
+            'order_archive_prepared_images_sha256')) and args.expected_current == current, message)
+    require(re.fullmatch(r'[a-f0-9]{40}', args.commit or '') and args.commit != current
         and re.fullmatch(r'[a-f0-9]{40}', args.source_tree or '')
         and re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository or '')
         and all(re.fullmatch(r'[1-9][0-9]*', item or '') for item in (args.run_id, args.run_attempt, args.ci_run_id)), message)
@@ -8906,28 +8933,34 @@ def recharge_974_release(args):
         previous = (BASE / 'current').resolve()
         old_manifest = fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json'))
         with urllib.request.urlopen('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'
-                + args.commit + '/' + RECHARGE_974_FILE, timeout=30) as response:
+                + args.commit + '/' + profile_file, timeout=30) as response:
             profile_raw = response.read(128 * 1024 + 1)
         profile = parse_fixed_recharge_scope(profile_raw)
-        require(profile['id'] == RECHARGE_974_ID, message)
-        origin, _finance_profile = recharge_974_baseline(previous, profile, old_manifest, verify_native=True)
+        require(profile['id'] == profile_id, message)
+        origin, _finance_profile = baseline_check(previous, profile, old_manifest, verify_native=True)
         states = {name: service_state(previous, name, include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES}
         require(historical_fingerprint(states) == profile['nativeBaseline']['runtimeStatesSha256'], message)
         assert_release_jobs_idle(previous, ('auto-recharge',))
-        baseline_archive = fixed_recharge_runtime_archive(profile)
+        baseline_archive = previous if successor else fixed_recharge_runtime_archive(profile)
         finance_source = prepare_registration_finance_source(args, registration_download(REGISTRATION_CURRENT))
         stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
         release = BASE / 'releases' / (stamp + '-' + args.commit[:12])
-        require(not release.exists(), message); release.mkdir(mode=0o700)
+        require(not release.exists(), message)
         changed = False; step = 'source'
         try:
             candidate_raw = registration_download(args.commit)
             candidate = registration_archive(candidate_raw, args.commit)
-            write_registration_files(release, candidate)
-            require(fixed_recharge_bytes(release / RECHARGE_974_FILE, modes=(0o644, 0o664), limit=128 * 1024) == profile_raw, message)
+            write_registration_files(release, recharge_2f_source_files(previous, profile, candidate) if successor else candidate)
+            require(fixed_recharge_bytes(release / profile_file, modes=(0o644, 0o664), limit=128 * 1024) == profile_raw, message)
             normalize_fixed_recharge_modes(release, profile)
-            with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as archive:
-                verify_fixed_recharge_archive(release, archive, profile)
+            if successor:
+                recharge_2f_carried_modes(release, previous, profile)
+            if successor:
+                verify_recharge_2f_candidate_source(release, previous, profile)
+                shutil.copy2(previous / 'compose.release.json', release / 'compose.release.json')
+            else:
+                with tarfile.open(fileobj=io.BytesIO(baseline_archive), mode='r:gz') as archive:
+                    verify_fixed_recharge_archive(release, archive, profile)
             for name in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws'):
                 require(fixed_recharge_bytes(release / name, modes=(0o644, 0o664))
                     == fixed_recharge_bytes(previous / name, modes=(0o644, 0o664)), message)
@@ -8937,10 +8970,12 @@ def recharge_974_release(args):
             require_diagnostics_migration_scope(migration_plan(previous, release), False)
             require(shutil.disk_usage(BASE).free > 6 * 1024**3, 'Insufficient free disk before pull')
             step = 'audit-before'
-            before_audit = recharge_974_audit(previous, release / 'before-audit.json', stage='before', source=origin,
+            before_audit = audit(release if successor else previous, release / 'before-audit.json', stage='before', source=origin,
                 auditor_source=finance_source, profile=profile, previous=previous)
             step = 'images'
             reference, image_id = recharge_974_pull_image(args.repository, args.commit, args.run_id, args.run_attempt)
+            if successor:
+                recharge_2f_image_hashes(image_id, profile)
             override = fixed_recharge_json(fixed_recharge_bytes(previous / 'compose.release.json', modes=(0o400, 0o600, 0o644)))
             override['services']['auto-recharge'] = {'image': reference, 'pull_policy': 'never'}
             (release / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
@@ -8951,13 +8986,13 @@ def recharge_974_release(args):
             (release / 'backup-verification.json').write_text(json.dumps(backup, indent=2) + '\n'); (release / 'backup-verification.json').chmod(0o600)
             require((BASE / 'current').resolve() == previous and {name: service_state(previous, name,
                 include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES} == states, message)
-            recharge_974_baseline(previous, profile, old_manifest)
+            baseline_check(previous, profile, old_manifest)
             assert_release_jobs_idle(previous, ('auto-recharge',)); assert_no_active_recharge(previous)
             step = 'switch'; changed = True
             compose(release, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'auto-recharge', timeout=300)
             wait_healthy(release, 'auto-recharge')
             step = 'audit-after'
-            after_audit = recharge_974_audit(release, release / 'after-audit.json', stage='after', source=origin,
+            after_audit = audit(release, release / 'after-audit.json', stage='after', source=origin,
                 auditor_source=finance_source, profile=profile, previous=previous, before_receipt=release / 'before-audit.json')
             after = {name: service_state(release, name, include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES}
             require(main80_recharge_preserved_states(after) == main80_recharge_preserved_states(states)
@@ -8965,20 +9000,21 @@ def recharge_974_release(args):
                 and all(row['status'] == 'running' for row in after.values())
                 and all(after[name]['health'] == 'healthy' for name in ALL_SERVICES if name != 'caddy'), message)
             require_diagnostics_environment_unchanged(previous, release, environment)
-            recharge_974_baseline(previous, profile, old_manifest)
+            baseline_check(previous, profile, old_manifest)
             public_url = environment_values(release / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
             for suffix in ('/api/health/ready', '/'):
                 with urllib.request.urlopen(public_url + suffix, timeout=20) as response:
                     require(response.status == 200, 'Public readiness failed')
-            public = verify_recharge_974_candidate_source(release, baseline_archive, profile)
-            recharge_974_baseline(previous, profile, old_manifest)
+            public = (verify_recharge_2f_candidate_source(release, previous, profile) if successor
+                else verify_recharge_974_candidate_source(release, baseline_archive, profile))
+            baseline_check(previous, profile, old_manifest)
             require((BASE / 'current').resolve() == previous and {name: service_state(release, name,
                 include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES} == after, message)
             require_main80_recharge_public_snapshot(public)
             manifest = dict(old_manifest)
             manifest.pop('mailboxPreservedStates', None)
             manifest.update(commit=args.commit, sourceBranch='main', sourceTree=args.source_tree,
-                previousCommit=RECHARGE_974_CURRENT, previousRelease=str(previous), deploymentRun='github-actions-' + args.run_id + '-' + args.run_attempt,
+                previousCommit=current, previousRelease=str(previous), deploymentRun='github-actions-' + args.run_id + '-' + args.run_attempt,
                 imageBuildRun='github-actions-' + args.run_id + '-' + args.run_attempt, ciWorkflow='Quality Gate', ciWorkflowRunId=int(args.ci_run_id),
                 releaseTag='v2-production-' + stamp, deployedAt=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                 sourceArchiveSha256=hashlib.sha256(candidate_raw).hexdigest(), servicesUpdated=['auto-recharge'], migrationApplied=False,
@@ -8986,12 +9022,12 @@ def recharge_974_release(args):
                 dataAuditBefore=before_audit, dataAuditAfter=after_audit, backupBeforeRelease=backup['name'],
                 rollback={'release': str(previous), 'images': {'auto-recharge': states['auto-recharge']['image']}, 'servicesAdded': []})
             manifest['images'] = {**old_manifest['images'], 'auto-recharge': {'reference': reference, 'digest': image_id, 'sourceCommit': args.commit}}
-            manifest['fixedRechargeRelease'] = recharge_974_context(args, profile, before_audit, after_audit)
+            manifest['fixedRechargeRelease'] = context(args, profile, before_audit, after_audit)
             manifest['fixedRechargePreservedStates'] = {'before': main80_recharge_preserved_states(states), 'after': main80_recharge_preserved_states(after)}
             manifest.pop('prCiRunId', None)
             (release / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n'); (release / 'release-manifest.json').chmod(0o600)
             point_current(release, stamp + '-publish')
-            check_recharge_974_deployment(args.commit, args.source_tree, historical_fingerprint(profile))
+            deployment_check(args.commit, args.source_tree, historical_fingerprint(profile))
             print(json.dumps({'status': 'DEPLOYED', 'commit': args.commit, 'releaseTag': manifest['releaseTag'],
                 'servicesUpdated': ['auto-recharge'], 'migrationApplied': False, 'backupVerified': True,
                 'auditViolations': 0, 'unchangedServiceContainersPreserved': True}), flush=True)
@@ -9005,9 +9041,342 @@ def recharge_974_release(args):
                 try: rollback_service(previous, release, 'auto-recharge', states)
                 except Exception: rollback_ok = False
             print(json.dumps({'status': 'FAILED_ROLLED_BACK' if rollback_ok else 'FAILED_ROLLBACK_INCOMPLETE',
-                'step': step, 'commit': args.commit, 'previousCommit': RECHARGE_974_CURRENT,
+                'step': step, 'commit': args.commit, 'previousCommit': current,
                 'error': 'Fixed 974 recharge release check failed; raw output suppressed'}), file=sys.stderr, flush=True)
             return 1
+
+
+# A finite successor of the native92 release. No generic or all-service fallback.
+RECHARGE_2F_ID = 'recharge-pro-2f-20261007'
+RECHARGE_2F_FILE = 'deploy/aws/' + RECHARGE_2F_ID + '.json'
+RECHARGE_2F_CURRENT = '2f24cf81007429ea474da404a30bc74da9d43ce1'
+RECHARGE_2F_TREE = 'a3e2b3ba49f947d606a5c34dd613f01263446979'
+RECHARGE_2F_PRODUCER = '40ab97ef56624bd4d1df081bde697fc93c7d4a4dfed344f8fdb90e28cf4fab8b'
+RECHARGE_2F_PROFILE_RAW = '4d9b43c71a300a0043cb9fd179342a82230fddf9e013836d7e14d0ef3d2bb951'
+RECHARGE_2F_CHAIN = ((RECHARGE_2F_CURRENT, RECHARGE_2F_TREE),) + RECHARGE_974_CHAIN
+RECHARGE_2F_SOURCE_BASIS = {'commit': 'f81252fc219cd794e1dc599c8d919b5ed3b827b9',
+    'tree': 'a1e538c4b51578ae27eb7e1975bdb65557eea0c1'}
+RECHARGE_2F_WORKER = frozenset(REGISTRATION_WORKER_PREFIX + name for name in
+    ('Dockerfile', 'plan_selection.py', 'server.py', 'test_pro.py', 'test_server.py', 'test_worker_isolation.py'))
+RECHARGE_2F_CANDIDATES = RECHARGE_2F_WORKER | {'docs/V2_TASKS.md'}
+RECHARGE_2F_CONTROLS = frozenset(('.github/workflows/production-release.yml',
+    'scripts/production-release/build-images.sh', 'scripts/production-release/push-images.sh',
+    'scripts/production-release/dispatch.sh', 'scripts/production-release/validate-release-selection.sh',
+    'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/remote-deploy.py', 'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/maintain-image-cache.py', 'scripts/production-release/maintain-image-cache.test.py'))
+RECHARGE_2F_GENERATED = ('.env.aws.production', 'compose.release.json', 'release-manifest.json',
+    'before-audit.json', 'after-audit.json', 'backup-verification.json', 'order-archive-seal.reader.json',
+    'order-archive-cleanup.reader.json', 'registration-recovery-audit.compose.json')
+
+
+def recharge_2f_retained_migrate(directory):
+    # This already retained predecessor exited with 1; preserve that exact state, never rerun it.
+    container = compose(directory, 'ps', '-a', '-q', 'migrate')
+    require(re.fullmatch(r'[a-f0-9]{64}', container or ''), 'Fixed 2f retained migration unavailable')
+    rows = json.loads(run('docker', 'inspect', container))
+    require(isinstance(rows, list) and len(rows) == 1, 'Fixed 2f retained migration unavailable')
+    data = rows[0]
+    require(data['Id'] == container and data['State']['Status'] == 'exited'
+        and type(data['State']['ExitCode']) is int and data['State']['ExitCode'] == 1
+        and isinstance(data['Config']['Env'], list) and all(isinstance(x, str) for x in data['Config']['Env']),
+        'Fixed 2f retained migration changed')
+    return historical_fingerprint({'containerId': data['Id'], 'image': data['Image'],
+        'reference': data['Config']['Image'], 'status': data['State']['Status'], 'exitCode': data['State']['ExitCode'],
+        'startedAtSha256': hashlib.sha256(data['State']['StartedAt'].encode()).hexdigest(),
+        'environmentSha256': historical_fingerprint(sorted(data['Config']['Env'])),
+        'hostConfigSha256': historical_fingerprint(data['HostConfig'])})
+
+
+def recharge_2f_worker_probe(profile):
+    expected = {name.removeprefix(REGISTRATION_WORKER_PREFIX): row['sha256']
+        for name, row in profile['workerProjection'].items()}
+    probe = ('import hashlib,json\nfrom pathlib import Path\nnames=' + repr(sorted(expected))
+        + '\nprint(json.dumps({n:hashlib.sha256((Path("/app")/n).read_bytes()).hexdigest() for n in names}))')
+    return expected, probe
+
+
+def recharge_2f_image_hashes(image, profile):
+    rows = json.loads(run('docker', 'image', 'inspect', image))
+    require(len(rows) == 1 and rows[0]['Id'] == image and rows[0]['Config']['Labels'].get(
+        'id-business-v2.worker-projection-sha256') == historical_fingerprint(profile['workerProjection']),
+        'Fixed 2f image projection label changed')
+    expected, probe = recharge_2f_worker_probe(profile)
+    actual = fixed_recharge_json(run('docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'python',
+        image, '-B', '-c', probe, timeout=30).encode())
+    require(actual == expected, 'Fixed 2f image source changed')
+
+
+def recharge_2f_running_hashes(directory, profile):
+    expected, probe = recharge_2f_worker_probe(profile)
+    actual = fixed_recharge_json(compose(directory, 'exec', '-T', 'auto-recharge', 'python', '-B', '-c', probe, timeout=20).encode())
+    require(actual == expected, 'Fixed 2f running source changed')
+    state = service_state(directory, 'auto-recharge')
+    rows = json.loads(run('docker', 'image', 'inspect', state['image']))
+    require(len(rows) == 1 and rows[0]['Id'] == state['image'] and rows[0]['Config']['Labels'].get(
+        'id-business-v2.worker-projection-sha256') == historical_fingerprint(profile['workerProjection']),
+        'Fixed 2f running projection label changed')
+
+
+def recharge_2f_carried_modes(directory, previous, profile):
+    approved = set(profile['candidateSourceSha256']) | set(profile['controlSourceSha256']) | {RECHARGE_2F_FILE}
+    for name, (digest, mode) in fixed_recharge_file_map(previous, omitted=RECHARGE_2F_GENERATED).items():
+        if name in approved: continue
+        path = directory / name
+        require(hashlib.sha256(fixed_recharge_bytes(path, modes=(0o644, 0o755))).hexdigest() == digest,
+            'Fixed 2f carried source changed')
+        path.chmod(mode)
+
+
+def recharge_2f_scope(value, *, require_approved=True):
+    message = 'Fixed 2f recharge scope unavailable'
+    keys = {'version', 'kind', 'id', 'enabled', 'approvalStatus', 'expectedCurrent', 'baselineRelease',
+        'nativeBaseline', 'candidateSourceSha256', 'carriedSourceOnlySha256', 'controlSourceSha256',
+        'sourceModes', 'scope', 'financeValidator', 'financeClearance', 'workerProjection', 'sourceBasis'}
+    require(isinstance(value, dict) and set(value) == keys and type(value['version']) is int
+        and value['version'] == 1 and value['kind'] == 'FIXED_RECHARGE_RUNTIME_SCOPE'
+        and value['id'] == RECHARGE_2F_ID and type(value['enabled']) is bool
+        and value['approvalStatus'] in ('NOT_APPROVED', 'APPROVED')
+        and value['enabled'] == (value['approvalStatus'] == 'APPROVED')
+        and value['expectedCurrent'] == RECHARGE_2F_CURRENT and value['sourceBasis'] == RECHARGE_2F_SOURCE_BASIS, message)
+    if require_approved: require(value['enabled'], 'Fixed recharge runtime scope is not approved')
+    digest = lambda x: isinstance(x, str) and re.fullmatch(r'[a-f0-9]{64}', x) is not None
+    evidence = lambda x: digest(x) or (not value['enabled'] and x is None)
+    baseline = value['baselineRelease']
+    require(isinstance(baseline, dict) and set(baseline) == {'commit', 'sourceTree', 'previousCommit',
+        'deploymentRun', 'manifestSha256', 'beforeAuditSha256', 'afterAuditSha256', 'composeSha256',
+        'overrideRawSha256', 'overrideCanonicalSha256'} and baseline['commit'] == RECHARGE_2F_CURRENT
+        and baseline['sourceTree'] == RECHARGE_2F_TREE and baseline['previousCommit'] == RECHARGE_974_CURRENT
+        and baseline['deploymentRun'] == 'github-actions-37606627812-1'
+        and all(evidence(baseline[k]) for k in set(baseline) - {'commit', 'sourceTree', 'previousCommit', 'deploymentRun'}), message)
+    native = value['nativeBaseline']
+    require(isinstance(native, dict) and set(native) == RECHARGE_974_NATIVE_KEYS | {'retainedMigrateSha256'}
+        and native['producerSha256'] == RECHARGE_2F_PRODUCER
+        and native['registrationProfileRawSha256'] == RECHARGE_2F_PROFILE_RAW
+        and all(evidence(native[k]) for k in set(native) - {'nativeFileCount', 'nativeDirectoryCount'})
+        and all((type(native[k]) is int and 0 < native[k] <= 100000) or (not value['enabled'] and native[k] is None)
+            for k in ('nativeFileCount', 'nativeDirectoryCount')), message)
+    names = RECHARGE_2F_CANDIDATES | RECHARGE_2F_CONTROLS
+    require(value['carriedSourceOnlySha256'] == {}
+        and historical_fingerprint(value['financeValidator']) == historical_fingerprint(REGISTRATION_FINANCE)
+        and historical_fingerprint(value['financeClearance']) == historical_fingerprint(REGISTRATION_CLEARANCE)
+        and historical_fingerprint(value['scope']) == historical_fingerprint(RECHARGE_SCOPE_EXPECTED)
+        and isinstance(value['sourceModes'], dict) and set(value['sourceModes']) == names
+        and all(type(mode) is int and mode == 0o644 for mode in value['sourceModes'].values()), message)
+    for key, allowed in (('candidateSourceSha256', RECHARGE_2F_CANDIDATES), ('controlSourceSha256', RECHARGE_2F_CONTROLS)):
+        require(isinstance(value[key], dict) and set(value[key]) == allowed
+            and all(digest(x) for x in value[key].values()), message)
+    projection = value['workerProjection']
+    require(isinstance(projection, dict) and set(projection) == set(REGISTRATION_RECOVERY_WORKER_BASIS)
+        and len(projection) == 60 and all(isinstance(row, dict) and set(row) == {'mode', 'sha256'}
+            and row['mode'] == REGISTRATION_RECOVERY_WORKER_BASIS[name]['mode'] and digest(row['sha256'])
+            for name, row in projection.items())
+        and all(projection[name]['sha256'] == value['candidateSourceSha256'][name] for name in RECHARGE_2F_WORKER), message)
+    return value
+
+
+def recharge_2f_native_producer(previous):
+    producer = fixed_recharge_bytes(previous / 'scripts/production-release/remote-deploy.py', modes=(0o644, 0o664))
+    require(hashlib.sha256(producer).hexdigest() == RECHARGE_2F_PRODUCER, 'Fixed 2f producer changed')
+    namespace = {'__name__': 'fixed_2f_native_producer', '__file__': str(previous / 'scripts/production-release/remote-deploy.py')}
+    exec(compile(producer, namespace['__file__'], 'exec'), namespace)
+    namespace['BASE'] = BASE
+    require(namespace['REGISTRATION_FINANCE'] == REGISTRATION_FINANCE
+        and namespace['REGISTRATION_CLEARANCE'] == REGISTRATION_CLEARANCE, 'Fixed 2f finance contract changed')
+    return namespace
+
+
+def recharge_2f_baseline_fields(previous):
+    return recharge_974_baseline_fields(previous, profile_id=RECHARGE_2F_ID)
+
+
+def recharge_2f_observe_native(previous=None):
+    previous = previous or (BASE / 'current').resolve()
+    require((BASE / 'current').resolve() == previous, 'Fixed 2f native current changed')
+    baseline = recharge_2f_baseline_fields(previous)
+    namespace = recharge_2f_native_producer(previous)
+    raw = fixed_recharge_bytes(previous / REGISTRATION_RECOVERY_FILE, modes=(0o644, 0o664), limit=128 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == RECHARGE_2F_PROFILE_RAW, 'Fixed 2f native profile changed')
+    readback = namespace['check_registration_recovery_deployment'](RECHARGE_2F_CURRENT, RECHARGE_2F_TREE,
+        RECHARGE_2F_PROFILE_RAW, profile_id=REGISTRATION_RECOVERY_ID)
+    states = {name: service_state(previous, name, include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES}
+    chain = recharge_974_native_chain(previous, chain=RECHARGE_2F_CHAIN)
+    native = {'producerSha256': RECHARGE_2F_PRODUCER, 'registrationProfileRawSha256': RECHARGE_2F_PROFILE_RAW,
+        'registrationReadbackSha256': historical_fingerprint(readback), 'nativeChainSha256': chain['sha256'],
+        'runtimeStatesSha256': historical_fingerprint(states),
+        'preservedStatesSha256': historical_fingerprint(main80_recharge_preserved_states(states)),
+        'nativeFileCount': chain['fileCount'], 'nativeDirectoryCount': chain['directoryCount'],
+        'retainedMigrateSha256': recharge_2f_retained_migrate(previous)}
+    require(recharge_2f_baseline_fields(previous) == baseline and recharge_974_native_chain(previous, chain=RECHARGE_2F_CHAIN) == chain
+        and (BASE / 'current').resolve() == previous and {name: service_state(previous, name,
+            include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES} == states, 'Fixed 2f native observation changed')
+    return {'baselineRelease': baseline, 'nativeBaseline': native}
+
+
+def recharge_2f_baseline(previous, profile, manifest, *, verify_native=False):
+    recharge_2f_scope(profile)
+    require(recharge_2f_baseline_fields(previous) == profile['baselineRelease']
+        and fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json')) == manifest, 'Fixed 2f baseline changed')
+    namespace = recharge_2f_native_producer(previous)
+    raw = fixed_recharge_bytes(previous / REGISTRATION_RECOVERY_FILE, modes=(0o644, 0o664), limit=128 * 1024)
+    native = profile['nativeBaseline']
+    require(hashlib.sha256(raw).hexdigest() == native['registrationProfileRawSha256'], 'Fixed 2f profile changed')
+    old_profile = namespace['registration_profile'](fixed_recharge_json(raw), profile_id=REGISTRATION_RECOVERY_ID)
+    expected_worker = dict(old_profile['workerProjection'])
+    expected_worker.update({name: {'mode': '100644', 'sha256': profile['candidateSourceSha256'][name]} for name in RECHARGE_2F_WORKER})
+    require(profile['workerProjection'] == expected_worker, 'Fixed 2f Worker projection changed')
+    readback = namespace['registration_readback_receipt'](RECHARGE_2F_CURRENT, RECHARGE_2F_TREE,
+        RECHARGE_2F_PROFILE_RAW, profile_id=REGISTRATION_RECOVERY_ID)
+    chain = recharge_974_native_chain(previous, chain=RECHARGE_2F_CHAIN)
+    require(historical_fingerprint(readback) == native['registrationReadbackSha256'] and chain['sha256'] == native['nativeChainSha256']
+        and chain['fileCount'] == native['nativeFileCount'] and chain['directoryCount'] == native['nativeDirectoryCount'], 'Fixed 2f native chain changed')
+    if verify_native: require(recharge_2f_observe_native(previous) == {'baselineRelease': profile['baselineRelease'], 'nativeBaseline': native}, 'Fixed 2f native proof changed')
+    require(recharge_2f_retained_migrate(previous) == native['retainedMigrateSha256'], 'Fixed 2f retained migration changed')
+    main80_recharge_reader_evidence(previous)
+    return chain['origin'], old_profile
+
+
+def check_recharge_2f_scope(*, require_approved=True):
+    root = Path(__file__).resolve().parents[2]
+    profile = recharge_2f_scope(fixed_recharge_json(fixed_recharge_bytes(root / RECHARGE_2F_FILE, modes=(0o644,), limit=128 * 1024)), require_approved=require_approved)
+    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    require(all(hashlib.sha256(fixed_recharge_bytes(root / name, modes=(0o644,))).hexdigest() == digest
+        for name, digest in approved.items()), 'Fixed 2f reviewed source changed')
+    require(run('git', '-C', str(root), 'rev-parse', RECHARGE_2F_SOURCE_BASIS['commit'] + '^{tree}')
+        == RECHARGE_2F_SOURCE_BASIS['tree'], 'Fixed 2f source basis changed')
+    delta = set(filter(None, run('git', '-C', str(root), 'diff', '--name-only', RECHARGE_2F_SOURCE_BASIS['commit'], '--').splitlines()))
+    require(delta <= RECHARGE_2F_CONTROLS | {'docs/V2_TASKS.md', RECHARGE_2F_FILE}
+        and not run('git', '-C', str(root), 'ls-files', '--others', '--exclude-standard'), 'Fixed 2f source scope changed')
+    return root, profile
+
+
+def prepare_recharge_2f_build():
+    root, profile = check_recharge_2f_scope()
+    source = registration_archive(registration_download(RECHARGE_2F_CURRENT), RECHARGE_2F_CURRENT)
+    raw = source[REGISTRATION_RECOVERY_FILE][0]
+    require(hashlib.sha256(raw).hexdigest() == RECHARGE_2F_PROFILE_RAW, 'Fixed 2f build basis changed')
+    old_profile = registration_profile(fixed_recharge_json(raw), profile_id=REGISTRATION_RECOVERY_ID)
+    basis = registration_archive(registration_download(RECHARGE_SCOPE_CURRENT), RECHARGE_SCOPE_CURRENT)
+    worker = registration_recovery_worker_projection(old_profile, basis, source)
+    worker.update({name: (fixed_recharge_bytes(root / name, modes=(0o644,)), '100644') for name in RECHARGE_2F_WORKER})
+    measured = {name: {'mode': mode, 'sha256': hashlib.sha256(data).hexdigest()} for name, (data, mode) in worker.items() if name.startswith(REGISTRATION_WORKER_PREFIX)}
+    require(measured == profile['workerProjection'], 'Fixed 2f complete Worker build changed')
+    output = root / '.deploy/production-release'
+    require(not output.is_symlink() and not (root / '.deploy').is_symlink(), 'Fixed recharge output changed')
+    output.mkdir(parents=True, exist_ok=True)
+    context = output / 'fixed-recharge-context'; target = output / 'fixed-recharge-build-projection.json'
+    require(not target.exists() and not target.is_symlink(), 'Fixed recharge output already exists')
+    write_registration_files(context, worker)
+    require(check_recharge_2f_scope()[1] == profile, 'Fixed recharge build input changed')
+    target.write_text(json.dumps({'version': 1, 'id': RECHARGE_2F_ID, 'contextPath': str(context),
+        'workerProjectionSha256': historical_fingerprint(measured)}, sort_keys=True) + '\n'); target.chmod(0o600)
+
+
+def recharge_2f_source_files(previous, profile, candidate):
+    recharge_2f_scope(profile)
+    files = fixed_recharge_file_map(previous, omitted=RECHARGE_2F_GENERATED)
+    result = {name: (fixed_recharge_bytes(previous / name, modes=(mode,)), '100755' if mode & 0o111 else '100644')
+        for name, (_digest, mode) in files.items()}
+    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    require(all(name in candidate and candidate[name][1] == '100644'
+        and hashlib.sha256(candidate[name][0]).hexdigest() == digest for name, digest in approved.items()), 'Fixed 2f candidate source changed')
+    result.update({name: candidate[name] for name in approved})
+    require(RECHARGE_2F_FILE in candidate, 'Fixed 2f candidate profile missing')
+    require(fixed_recharge_json(candidate[RECHARGE_2F_FILE][0]) == profile and candidate[RECHARGE_2F_FILE][1] == '100644', 'Fixed 2f candidate profile changed')
+    result[RECHARGE_2F_FILE] = candidate[RECHARGE_2F_FILE]
+    return result
+
+
+def verify_recharge_2f_candidate_source(directory, previous, profile):
+    expected = fixed_recharge_file_map(previous, omitted=RECHARGE_2F_GENERATED)
+    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    expected.update({name: (digest, 0o644) for name, digest in approved.items()})
+    expected[RECHARGE_2F_FILE] = (hashlib.sha256(fixed_recharge_bytes(directory / RECHARGE_2F_FILE, modes=(0o644,))).hexdigest(), 0o644)
+    files = fixed_recharge_file_map(directory, omitted=RECHARGE_2F_GENERATED)
+    require(files == expected and parse_fixed_recharge_scope(fixed_recharge_bytes(directory / RECHARGE_2F_FILE, modes=(0o644,), limit=128 * 1024)) == profile,
+        'Fixed 2f candidate projection changed')
+    return main80_recharge_public_snapshot(directory, files)
+
+
+def recharge_2f_audit(directory, receipt, *, stage, source, auditor_source, profile, previous, before_receipt=None):
+    recharge_2f_baseline(previous, profile, fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json')))
+    namespace = recharge_2f_native_producer(previous)
+    result = namespace['registration_recovery_finance_audit'](directory, receipt, stage=stage, source=auditor_source,
+        before_receipt=before_receipt, control_source=previous, profile_id=REGISTRATION_RECOVERY_ID)
+    recharge_2f_baseline(previous, profile, fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json')))
+    return result
+
+
+def recharge_2f_context(args, profile, before_gate, after_gate):
+    recharge_2f_scope(profile)
+    require(args.expected_current == RECHARGE_2F_CURRENT and re.fullmatch(r'[a-f0-9]{40}', args.commit or '')
+        and args.commit != RECHARGE_2F_CURRENT and re.fullmatch(r'[a-f0-9]{40}', args.source_tree or ''), 'Fixed 2f context changed')
+    for stage, gate in (('before', before_gate), ('after', after_gate)):
+        require(isinstance(gate, dict) and set(gate) == {'checkCount', 'violationCount', 'registrationFinanceGate'}
+            and type(gate['checkCount']) is int and gate['checkCount'] == 49 and type(gate['violationCount']) is int and gate['violationCount'] == 0
+            and gate['registrationFinanceGate'].get('stage') == stage
+            and gate['registrationFinanceGate'].get('status') == REGISTRATION_CLEARANCE['mode'], 'Fixed 2f zero audit unavailable')
+    return {'version': 1, 'id': RECHARGE_2F_ID, 'profileSha256': historical_fingerprint(profile),
+        'expectedCurrent': RECHARGE_2F_CURRENT, 'sourceCommit': args.commit, 'sourceTree': args.source_tree,
+        'servicesUpdated': ['auto-recharge'], 'financeValidator': REGISTRATION_CLEARANCE['mode'],
+        'clearanceSealSha256': historical_fingerprint(REGISTRATION_CLEARANCE),
+        'nativeChainSha256': profile['nativeBaseline']['nativeChainSha256'],
+        'workerProjectionSha256': historical_fingerprint(profile['workerProjection']),
+        'beforeGateSha256': historical_fingerprint(before_gate['registrationFinanceGate']),
+        'afterGateSha256': historical_fingerprint(after_gate['registrationFinanceGate']),
+        'unchangedServiceContainersPreserved': True, 'environmentUnchanged': True,
+        'migrationStatus': 'SKIPPED', 'databaseGrantSyncStatus': 'SKIPPED', 'cacheStatus': 'SKIPPED'}
+
+
+def recharge_2f_readback_receipt(expected_current, source_tree, profile_sha256):
+    require(expected_current != RECHARGE_2F_CURRENT, 'Fixed 2f candidate commit changed')
+    receipt = recharge_974_readback_receipt(expected_current, source_tree, profile_sha256)
+    receipt.update(id=RECHARGE_2F_ID, previousCommit=RECHARGE_2F_CURRENT)
+    return receipt
+
+
+def validate_recharge_2f_readback_projection(value, expected_current, source_tree, profile_sha256):
+    expected = recharge_2f_readback_receipt(expected_current, source_tree, profile_sha256)
+    require(isinstance(value, dict) and set(value) == set(expected) and historical_fingerprint(value) == historical_fingerprint(expected),
+        'Fixed recharge deployment verification unavailable')
+    return value
+
+
+def check_recharge_2f_deployment(expected_current, source_tree, profile_sha256):
+    projection = recharge_2f_readback_receipt(expected_current, source_tree, profile_sha256)
+    current = (BASE / 'current').resolve()
+    profile = recharge_2f_scope(fixed_recharge_json(fixed_recharge_bytes(current / RECHARGE_2F_FILE, modes=(0o644,), limit=128 * 1024)))
+    require(historical_fingerprint(profile) == profile_sha256, 'Fixed 2f deployed profile changed')
+    manifest = fixed_recharge_json(fixed_recharge_bytes(current / 'release-manifest.json'))
+    previous = Path(manifest['previousRelease'])
+    baseline = fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json'))
+    origin, _old_profile = recharge_2f_baseline(previous, profile, baseline)
+    live = recharge_974_candidate_link(current, previous, manifest, expected_current, source_tree, profile)
+    public = verify_recharge_2f_candidate_source(current, previous, profile)
+    frozen = fixed_recharge_json(fixed_recharge_bytes(origin / 'before-audit.json'))['gate']
+    gates, facts = {}, []
+    for stage in ('before', 'after'):
+        report = fixed_recharge_json(fixed_recharge_bytes(current / (stage + '-audit.json')))
+        old = fixed_recharge_json(fixed_recharge_bytes(previous / (stage + '-audit.json')))
+        gates[stage] = require_registration_zero_report(report, stage, frozen)
+        require_registration_zero_report(old, stage, frozen)
+        require(gates[stage] == manifest['dataAudit' + stage.title()] and report['checks'] == old['checks']
+            and report['identity'] == old['identity'], 'Fixed 2f complete audit facts changed')
+        facts.append((report['checks'], report['identity']))
+    require(facts[0] == facts[1] and manifest['fixedRechargeRelease'] == recharge_2f_context(
+        argparse.Namespace(commit=expected_current, source_tree=source_tree, expected_current=RECHARGE_2F_CURRENT),
+        profile, gates['before'], gates['after']), 'Fixed 2f stored audit changed')
+    main80_recharge_reader_evidence(current)
+    recharge_2f_running_hashes(current, profile)
+    recharge_2f_baseline(previous, profile, baseline)
+    require(recharge_974_candidate_link(current, previous, fixed_recharge_json(fixed_recharge_bytes(current / 'release-manifest.json')),
+        expected_current, source_tree, profile) == live, 'Fixed 2f readback tail changed')
+    require_main80_recharge_public_snapshot(public)
+    return validate_recharge_2f_readback_projection(projection, expected_current, source_tree, profile_sha256)
+
+
+def recharge_2f_release(args):
+    return recharge_974_release(args, profile_id=RECHARGE_2F_ID)
 
 
 def main():
@@ -9037,6 +9406,7 @@ def main():
     parser.add_argument('--recharge-pro-menu-7f', action='store_true')
     parser.add_argument('--recharge-pro-main80', action='store_true')
     parser.add_argument('--recharge-pro-974', action='store_true')
+    parser.add_argument('--recharge-pro-2f', action='store_true')
     parser.add_argument('--registration-worker-b8-80', action='store_true')
     parser.add_argument('--registration-worker-956', action='store_true')
     parser.add_argument('--registration-worker-85', action='store_true')
@@ -9049,8 +9419,11 @@ def main():
     parser.add_argument('--registration-worker-92', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
+    require(not (args.registration_worker_93 and args.recharge_pro_2f), 'Fixed release selection is ambiguous')
     if args.registration_worker_93:
         return registration_login_release(args)
+    if args.recharge_pro_2f:
+        return recharge_2f_release(args)
     if args.recharge_pro_974:
         return recharge_974_release(args)
     recharge_requested = args.recharge_pro_menu_b8 or args.recharge_pro_menu_7f or args.recharge_pro_main80
@@ -9639,12 +10012,18 @@ if __name__ == '__main__':
         except Exception:
             raise SystemExit('Fixed registration readback unavailable; raw output suppressed') from None
         print('FIXED_REGISTRATION_RELEASE_VERIFIED ' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+    elif sys.argv[1:] == ['--prepare-fixed-recharge-build', '--fixed-recharge-profile', RECHARGE_2F_ID]:
+        try:
+            prepare_recharge_2f_build()
+        except Exception:
+            raise SystemExit('Fixed recharge build unavailable; raw output suppressed') from None
+        print('FIXED_RECHARGE_BUILD_PREPARED')
     elif sys.argv[1:2] == ['--check-fixed-recharge-scope']:
         try:
             tokens = sys.argv[2:]
             if tokens:
                 require(len(tokens) == 2 and tokens[0] == '--fixed-recharge-profile'
-                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID),
+                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID),
                     'Fixed recharge runtime scope unavailable')
                 check_fixed_recharge_scope(profile_id=tokens[1])
             else:
@@ -9661,7 +10040,7 @@ if __name__ == '__main__':
                     'Fixed recharge deployment verification unavailable')
             values = dict(zip(tokens[::2], tokens[1::2]))
             if '--fixed-recharge-profile' in values:
-                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID),
+                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID),
                         'Fixed recharge deployment verification unavailable')
                 result = check_fixed_recharge_deployment(values['--expected-current'], values['--source-tree'],
                     values['--profile-sha256'], profile_id=values['--fixed-recharge-profile'])

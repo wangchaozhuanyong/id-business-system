@@ -447,6 +447,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'recharge-pro-menu-7f-20261005'), false);
   assert.equal(selected('release', 'recharge-pro-main80-20261006'), false);
   assert.equal(selected('release', 'recharge-pro-974-20261007'), false);
+  assert.equal(selected('release', 'recharge-pro-2f-20261007'), false);
   assert.equal(selected('release', 'registration-worker-b8-80-20261006'), false);
   assert.equal(selected('release', 'registration-worker-956-20261006'), false);
   assert.equal(selected('release', 'registration-worker-85-20261006'), false);
@@ -467,6 +468,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'recharge-pro-menu-7f-20261005',
         'recharge-pro-main80-20261006',
         'recharge-pro-974-20261007',
+        'recharge-pro-2f-20261007',
         'registration-worker-b8-80-20261006',
         'registration-worker-956-20261006',
         'registration-worker-85-20261006',
@@ -1728,7 +1730,9 @@ function approvedRuntimeTransport(
           ? 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
           : identity === 'recharge-pro-974-20261007'
             ? '974c62cc1681012ecff897aefc90d2cd9900004a'
-            : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+            : identity === 'recharge-pro-2f-20261007'
+              ? '2f24cf81007429ea474da404a30bc74da9d43ce1'
+              : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
@@ -1987,22 +1991,32 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
     ])
       if (
         identity !== 'recharge-pro-main80-20261006' &&
+        identity !== 'recharge-pro-2f-20261007' &&
         (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
       )
         profile.baselineRelease[key] = 'd'.repeat(64);
     for (const key of ['candidateSourceSha256', 'carriedSourceOnlySha256', 'controlSourceSha256'])
       for (const name of Object.keys(profile[key]))
         if (
-          identity !== 'recharge-pro-main80-20261006' ||
-          (key !== 'carriedSourceOnlySha256' &&
-            ![
-              'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
-              'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py',
-              'scripts/v2-registration-finance-audit.mjs',
-              'scripts/v2-registration-finance-audit.test.mjs'
-            ].includes(name))
+          identity !== 'recharge-pro-2f-20261007' &&
+          (identity !== 'recharge-pro-main80-20261006' ||
+            (key !== 'carriedSourceOnlySha256' &&
+              ![
+                'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+                'apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py',
+                'scripts/v2-registration-finance-audit.mjs',
+                'scripts/v2-registration-finance-audit.test.mjs'
+              ].includes(name)))
         )
           profile[key][name] = 'e'.repeat(64);
+    if (identity === 'recharge-pro-2f-20261007') {
+      // Exercise the actual parser with private native evidence represented only by hashes.
+      for (const key of ['overrideCanonicalSha256'])
+        if (profile.baselineRelease[key] === null) profile.baselineRelease[key] = 'd'.repeat(64);
+      for (const key of Object.keys(profile.nativeBaseline))
+        if (profile.nativeBaseline[key] === null)
+          profile.nativeBaseline[key] = key.endsWith('Count') ? 1 : 'e'.repeat(64);
+    }
     const profileFile = join(root, `deploy/aws/${identity}.json`);
     writeFileSync(profileFile, JSON.stringify(profile));
     const digest = execFileSync(
@@ -2024,10 +2038,20 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       profileSha256: digest,
       servicesUpdated: ['auto-recharge'],
       preservedServiceCount: 6,
-      checkCount: identity === 'recharge-pro-main80-20261006' ? 49 : 48,
-      executedCheckCount: identity === 'recharge-pro-main80-20261006' ? 49 : 48,
+      checkCount: ['recharge-pro-main80-20261006', 'recharge-pro-2f-20261007'].includes(identity)
+        ? 49
+        : 48,
+      executedCheckCount: ['recharge-pro-main80-20261006', 'recharge-pro-2f-20261007'].includes(
+        identity
+      )
+        ? 49
+        : 48,
       unavailableCheckCount: 0,
-      violationCount: identity === 'recharge-pro-main80-20261006' ? 0 : 6,
+      violationCount: ['recharge-pro-main80-20261006', 'recharge-pro-2f-20261007'].includes(
+        identity
+      )
+        ? 0
+        : 6,
       storedGatesMatched: true,
       unchangedServiceContainersPreserved: true,
       environmentUnchanged: true,
@@ -3594,4 +3618,361 @@ test('fixed93 builds Worker once and keeps current92 API and the new retention i
       'current-service-rollback-explicit-dependencies-ecr-cache-v2'
     )
   );
+});
+
+const recharge2fIdentity = 'recharge-pro-2f-20261007';
+const recharge2fBaseline = '2f24cf81007429ea474da404a30bc74da9d43ce1';
+
+function approved2fTransport(
+  root,
+  env,
+  { rejectApproval = false, rejectPreparation = false } = {}
+) {
+  const transport = approvedRuntimeTransport(root, env, rejectApproval, recharge2fIdentity);
+  writeFileSync(
+    join(root, 'bin/python3'),
+    `#!/bin/sh
+if [ "$2" = --check-fixed-recharge-scope ]; then
+  [ "$3" = --fixed-recharge-profile ] && [ "$4" = "$TASK_EXPECTED_FIXED_PROFILE" ] || exit 32
+  printf '%s\\n' checked >> "$TASK_PROFILE_CHECK_LOG"
+  exit ${rejectApproval ? 31 : 0}
+fi
+if [ "$2" = --prepare-fixed-recharge-build ]; then
+  [ "$3" = --fixed-recharge-profile ] && [ "$4" = "$TASK_EXPECTED_FIXED_PROFILE" ] || exit 32
+  printf '%s\\n' prepared >> "$TASK_PROFILE_CHECK_LOG"
+  ${rejectPreparation ? 'exit 33' : ''}
+  mkdir -p .deploy/production-release/fixed-recharge-context/apps/api/src/id-business-v2/auto-recharge/worker
+  printf '%s\\n' 'FROM synthetic-fixture-only' > .deploy/production-release/fixed-recharge-context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile
+  printf '{"version":1,"id":"%s","contextPath":".deploy/production-release/fixed-recharge-context","workerProjectionSha256":"%s"}\\n' "$TASK_EXPECTED_FIXED_PROFILE" "$TASK_RECHARGE_PROJECTION" > .deploy/production-release/fixed-recharge-build-projection.json
+  exit 0
+fi
+exec "$TASK_REAL_PYTHON" "$@"
+`,
+    { mode: 0o755 }
+  );
+  return {
+    ...transport,
+    TASK_RECHARGE_PROJECTION: 'a'.repeat(64),
+    RELEASE_BROWSER_CACHE_IMAGE: '',
+    RELEASE_BROWSER_CACHE_IMAGE_ID: ''
+  };
+}
+
+test('fixed 2f selection confines release and readonly verification to their exact baselines', () => {
+  fixture(({ root, env, log }) => {
+    const transport = approved2fTransport(root, env);
+    const select = (fields = {}) =>
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: { ...transport, ...fields },
+        stdio: 'pipe'
+      });
+    select();
+    select({ RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: env.RELEASE_COMMIT });
+    for (const fields of [
+      { EXPECTED_CURRENT: recharge974Baseline },
+      { EXPECTED_CURRENT: '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af' },
+      { RELEASE_OPERATION: 'verify_recharge_release' },
+      { RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: 'd'.repeat(40) },
+      { RELEASE_OPERATION: 'verify_recharge_release', RELEASE_COMMIT: recharge2fBaseline },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { RELEASE_ADMIN_ONLY: 'unexpected' },
+      { RELEASE_OPERATION: 'prepare_order_archive_release' },
+      { RELEASE_OPERATION: 'verify_access' },
+      { REUSE_IMAGE_RUN: '22' },
+      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
+      { REUSE_IMAGE_RUN_ID: '22' },
+      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+      { POST_CLEANUP_SEAL_SHA256: 'e'.repeat(64) },
+      { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
+      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
+      { HISTORICAL_EXCEPTION: recharge2fIdentity + ' --admin-only' }
+    ])
+      assert.throws(() => select(fields), JSON.stringify(fields));
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+  });
+});
+
+test('fixed 2f builds its frozen Worker context and pushes one recharge image after preparation', () => {
+  fixture(({ root, env, log }) => {
+    const transport = approved2fTransport(root, env);
+    for (const entry of ['build-images', 'push-images'])
+      execFileSync('bash', [join(process.cwd(), `scripts/production-release/${entry}.sh`)], {
+        cwd: root,
+        env: transport,
+        stdio: 'pipe'
+      });
+    const operations = readFileSync(log, 'utf8').trim().split('\n');
+    const builds = operations.filter((line) => line.startsWith('build '));
+    const pushes = operations.filter((line) => line.startsWith('push '));
+    assert.equal(builds.length, 1);
+    assert.ok(
+      builds[0].includes(
+        '-f .deploy/production-release/fixed-recharge-context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
+      )
+    );
+    assert.ok(builds[0].endsWith(' .deploy/production-release/fixed-recharge-context'));
+    assert.ok(
+      builds[0].includes(`--label id-business-v2.worker-projection-sha256=${'a'.repeat(64)}`)
+    );
+    assert.equal(pushes.length, 1);
+    assert.ok(pushes[0].endsWith(`${env.RELEASE_COMMIT}-999999-1-auto-recharge`));
+    assert.equal(
+      operations.some((line) => /-auto-registration|-api|-admin|-migrate/.test(line)),
+      false
+    );
+    assert.equal(
+      readFileSync(transport.TASK_PROFILE_CHECK_LOG, 'utf8'),
+      'checked\nprepared\nchecked\n'
+    );
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+  });
+});
+
+test('fixed 2f refuses stale bindings failed approval or preparation before Docker and environment writes', () => {
+  for (const fields of [
+    { EXPECTED_CURRENT: recharge974Baseline },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { RELEASE_OPERATION: 'verify_recharge_release', EXPECTED_CURRENT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN: '22' },
+    { REUSE_IMAGE_COMMIT: 'b'.repeat(40) },
+    { REUSE_IMAGE_RUN_ID: '22' },
+    { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+    { ORDER_ARCHIVE_SEAL_SHA256: 'e'.repeat(64) },
+    { TASK_EXPECTED_FIXED_PROFILE: recharge974Identity }
+  ])
+    for (const entry of ['build-images', 'push-images'])
+      fixture(({ root, env, log }) => {
+        const transport = approved2fTransport(root, env);
+        assert.throws(() =>
+          execFileSync('bash', [join(process.cwd(), `scripts/production-release/${entry}.sh`)], {
+            cwd: root,
+            env: { ...transport, ...fields },
+            stdio: 'pipe'
+          })
+        );
+        assert.equal(readFileSync(log, 'utf8'), '');
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+  for (const rejected of [{ rejectApproval: true }, { rejectPreparation: true }])
+    fixture(({ root, env, log }) => {
+      assert.throws(() =>
+        execFileSync('bash', [join(process.cwd(), 'scripts/production-release/build-images.sh')], {
+          cwd: root,
+          env: approved2fTransport(root, env, rejected),
+          stdio: 'pipe'
+        })
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+    });
+});
+
+test('fixed 2f refuses a malformed prepared Worker projection before image effects', () => {
+  fixture(({ root, env, log }) => {
+    const transport = approved2fTransport(root, env);
+    assert.throws(() =>
+      execFileSync('bash', [join(process.cwd(), 'scripts/production-release/build-images.sh')], {
+        cwd: root,
+        env: { ...transport, TASK_RECHARGE_PROJECTION: 'invalid' },
+        stdio: 'pipe'
+      })
+    );
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+  });
+});
+
+test('fixed 2f dispatch submits its single exclusive recharge flag with fresh candidate image bindings', () => {
+  dispatchFixture(
+    recharge2fIdentity,
+    recharge2fBaseline,
+    ({ execute, parametersFile, awsLog, root, env }) => {
+      execute(approved2fTransport(root, env));
+      const args = JSON.parse(readFileSync(parametersFile, 'utf8')).commands.at(-1).split(' ');
+      assert.equal(args.filter((arg) => arg === '--recharge-pro-2f').length, 1);
+      assert.equal(args[args.indexOf('--expected-current') + 1], recharge2fBaseline);
+      assert.equal(args[args.indexOf('--image-commit') + 1], env.RELEASE_COMMIT);
+      assert.equal(args[args.indexOf('--image-run-id') + 1], '999999');
+      assert.equal(args[args.indexOf('--image-run-attempt') + 1], '1');
+      assert.equal(
+        args.some((arg) =>
+          /^(--historical-finance-|--recharge-pro-974|--recharge-pro-menu-|--recharge-pro-main80|--registration-worker-|--admin-only)/.test(
+            arg
+          )
+        ),
+        false
+      );
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1
+      );
+    }
+  );
+});
+
+test('fixed 2f dispatch refuses stale selection malformed identity and failed approval before AWS', () => {
+  for (const fields of [
+    { EXPECTED_CURRENT: recharge974Baseline },
+    { RELEASE_OPERATION: 'verify_recharge_release' },
+    { RELEASE_ADMIN_ONLY: 'true' },
+    { REUSE_IMAGE_RUN_ID: '22' },
+    { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'e'.repeat(64) },
+    { RELEASE_COMMIT: 'B'.repeat(40) },
+    { SOURCE_TREE: 'c'.repeat(39) },
+    { QUALITY_RUN_ID: '0' },
+    { TASK_EXPECTED_FIXED_PROFILE: recharge974Identity },
+    { rejectApproval: true }
+  ])
+    dispatchFixture(
+      recharge2fIdentity,
+      recharge2fBaseline,
+      ({ execute, parametersFile, awsLog, root, env }) => {
+        const { rejectApproval, ...overrides } = fields;
+        assert.throws(() =>
+          execute({ ...approved2fTransport(root, env, { rejectApproval }), ...overrides })
+        );
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      }
+    );
+});
+
+test('fixed 2f workflow selects its guarded approval readonly projection and independent retention', () => {
+  assert.ok(workflowInputs.historical_exception.options.includes(recharge2fIdentity));
+  const enabled = (operation) =>
+    workflowSteps
+      .filter(
+        (step) =>
+          !step.if ||
+          workflowPredicate(step.if)({
+            operation,
+            historical_exception: recharge2fIdentity,
+            reuse_image_run: ''
+          })
+      )
+      .map((step) => step.name);
+  for (const name of [
+    'Verify fixed 2f recharge runtime approval',
+    'Build images on the GitHub runner',
+    'Verify fixed recharge deployment independently',
+    'Record skipped cache maintenance for fixed recharge release',
+    'Maintain service rollback image cache independently after fixed release'
+  ])
+    assert.ok(enabled('release').includes(name), name);
+  for (const name of [
+    'Verify fixed 974 recharge runtime approval',
+    'Verify fixed 92 registration runtime approval',
+    'Verify fixed recharge runtime approval',
+    'Verify or maintain recoverable unused project image cache',
+    'Verify reusable build and unchanged application source'
+  ])
+    assert.equal(enabled('release').includes(name), false, name);
+  for (const name of [
+    'Verify fixed 2f recharge runtime approval',
+    'Build images on the GitHub runner',
+    'Push images using short-lived AWS credentials',
+    'Deploy through the production instance',
+    'Record skipped cache maintenance for fixed recharge release'
+  ])
+    assert.equal(enabled('verify_recharge_release').includes(name), false, name);
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 2f recharge runtime approval'
+  );
+  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${recharge2fBaseline}`));
+  assert.ok(approval.run.includes(`--fixed-recharge-profile ${recharge2fIdentity}`));
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed recharge deployment independently'
+  );
+  for (const operation of ['release', 'verify_recharge_release'])
+    assert.equal(
+      new Function('inputs', `return (${readback.env.FIXED_RECHARGE_PROFILE.slice(3, -2)});`)({
+        operation,
+        historical_exception: recharge2fIdentity
+      }),
+      recharge2fIdentity
+    );
+  assert.ok(readback.run.includes(`'${recharge2fIdentity}'`));
+  const commands = guardCommands([`deploy/aws/${recharge2fIdentity}.json`]);
+  assert.ok(
+    commands.some(
+      (command) =>
+        command.startsWith('node --test ') &&
+        command.split(' ').includes('scripts/ci-recharge-release.test.mjs')
+    )
+  );
+});
+
+test('fixed 2f profile only CI runs its real native projection and rejection controls', () => {
+  execFileSync(
+    'python3',
+    ['-B', 'scripts/production-release/remote-deploy.test.py', 'FixedRecharge2fNativeTests'],
+    { stdio: 'pipe', timeout: 180000 }
+  );
+});
+
+test('fixed 2f actual readonly workflow requires the complete 21 field 49 zero proof', () => {
+  fixedRechargeReadbackFixture(({ execute, receipt }) => {
+    execute();
+    for (const fields of [
+      { previousCommit: recharge974Baseline },
+      { id: recharge974Identity },
+      { checkCount: 48, executedCheckCount: 48 },
+      { violationCount: 5 },
+      { unchangedServiceContainersPreserved: false },
+      { environmentUnchanged: false },
+      { rechargeImageMatched: false },
+      { cacheStatus: 'APPLIED' },
+      { rawOutput: 'unreviewed-extra' }
+    ])
+      assert.throws(() =>
+        execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...fields })}\n`)
+      );
+    const incomplete = { ...receipt };
+    delete incomplete.storedGatesMatched;
+    assert.throws(() => execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify(incomplete)}\n`));
+  }, recharge2fIdentity);
+});
+
+test('fixed93 and fixed 2f workflow approvals remain exclusive after integration', () => {
+  const registrationApproval = 'Verify fixed 93 registration runtime approval';
+  const registrationReadback = 'Verify fixed 93 registration deployment independently';
+  const rechargeApproval = 'Verify fixed 2f recharge runtime approval';
+  const rechargeReadback = 'Verify fixed recharge deployment independently';
+  for (const [profile, required, excluded] of [
+    [
+      'registration-worker-93-20261007',
+      [registrationApproval, registrationReadback],
+      [rechargeApproval, rechargeReadback]
+    ],
+    [
+      'recharge-pro-2f-20261007',
+      [rechargeApproval, rechargeReadback],
+      [registrationApproval, registrationReadback]
+    ]
+  ]) {
+    const enabled = workflowSteps
+      .filter(
+        (step) =>
+          !step.if ||
+          workflowPredicate(step.if)({
+            operation: 'release',
+            historical_exception: profile,
+            reuse_image_run: ''
+          })
+      )
+      .map((step) => step.name);
+    for (const name of required) assert.ok(enabled.includes(name), `${profile}: ${name}`);
+    for (const name of [
+      ...excluded,
+      'Verify or maintain recoverable unused project image cache',
+      'Verify reusable build and unchanged application source'
+    ])
+      assert.equal(enabled.includes(name), false, `${profile}: ${name}`);
+    assert.ok(
+      enabled.includes('Maintain service rollback image cache independently after fixed release')
+    );
+  }
 });

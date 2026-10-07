@@ -28,11 +28,44 @@ validate_browser_cache_reference() {
 
 validate_browser_cache_reference
 
+read_recharge_worker_projection() {
+  python3 - <<'PY_RECHARGE_PROJECTION'
+import json, re
+from pathlib import Path
+
+def unique(items):
+    value = {}
+    for key, item in items:
+        if key in value:
+            raise ValueError('Fixed recharge Worker projection changed')
+        value[key] = item
+    return value
+
+raw = Path('.deploy/production-release/fixed-recharge-build-projection.json').read_bytes()
+if not 0 < len(raw) <= 128 * 1024:
+    raise SystemExit('Fixed recharge Worker projection unavailable')
+value = json.loads(raw, object_pairs_hook=unique)
+digest = value.get('workerProjectionSha256') if isinstance(value, dict) else None
+if (not isinstance(value, dict) or set(value) != {'version', 'id', 'contextPath', 'workerProjectionSha256'}
+        or type(value['version']) is not int or value['version'] != 1
+        or value['id'] != 'recharge-pro-2f-20261007'
+        or not isinstance(value['contextPath'], str)
+        or Path(value['contextPath']).resolve() != Path('.deploy/production-release/fixed-recharge-context').resolve()
+        or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)):
+    raise SystemExit('Fixed recharge Worker projection unavailable')
+print(digest)
+PY_RECHARGE_PROJECTION
+}
+
 build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
+  if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 && "$service" == auto-recharge ]]; then
+    [[ "${recharge_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    options+=(--label "id-business-v2.worker-projection-sha256=$recharge_worker_projection")
+  fi
   if [[ "$service" == admin ]]; then
     options+=(--build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api)
     if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
@@ -236,6 +269,20 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; 
   registration_context=.deploy/production-release/registration-build-context
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  exit 0
+fi
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-recharge-build --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+  recharge_context=.deploy/production-release/fixed-recharge-context
+  recharge_worker_projection="$(read_recharge_worker_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$recharge_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$recharge_context"
   exit 0
 fi
 
