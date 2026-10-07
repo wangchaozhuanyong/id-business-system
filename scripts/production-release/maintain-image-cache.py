@@ -22,7 +22,7 @@ FIXED_REGISTRATION_IDS = frozenset({
     'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008',
 })
 FIXED_RECHARGE_IDS = frozenset({'recharge-pro-main80-20261006', 'recharge-pro-974-20261007',
-    'recharge-pro-2f-20261007'})
+    'recharge-pro-2f-20261007', 'recharge-pro-4c-20261008'})
 ORDER_ARCHIVE_SEAL_RELATIVE = 'backups/mysql/partial-two-order-authorized-20261005-v1/reviewed-order-archive-release-seal.json'
 TAG = re.compile(r'[0-9a-f]{40}-[1-9][0-9]*-[1-9][0-9]*-(?:admin|api|migrate|media-resolver|auto-recharge)')
 LEGACY_POLICY = 'reviewed-obsolete-project-cache-20261003'

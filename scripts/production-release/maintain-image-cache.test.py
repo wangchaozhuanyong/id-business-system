@@ -838,6 +838,55 @@ class DependencyRetentionTests(unittest.TestCase):
         self.assertTrue(all(command[:5] == ('docker', 'image', 'inspect', '--format', '{{.Id}}')
             for command in self.commands))
 
+    def test_d3fb_successor_retains_original_finance_bridge_and_service_rollback_images(self):
+        profile, _, _ = self.recharge('recharge-pro-4c-20261008')
+        result = self.collect()
+        expected = {self.ids[1], self.ids[3], self.pro_image, *self.ids[4:]}
+        self.assertEqual(set(result['imageIds']), expected)
+        self.assertIn(str(profile.relative_to(self.base)), result['evidenceSha256'])
+        self.assertEqual(result['serviceRollback']['auto-registration']['commit'], self.rows[1]['commit'])
+        self.assertEqual(result['serviceRollback']['auto-recharge']['commit'], self.rows[2]['commit'])
+        protected = cache.protected_images(self.rows[0], self.rows[1], set(), result)
+        inventory = [{'id': image, 'repoTags': [cache.REPOSITORY + ':' + 'e' * 40
+            + '-' + str(index + 1) + '-1-auto-recharge']}
+            for index, image in enumerate(sorted(expected))]
+        self.assertEqual(cache.make_plan(self.rows[0]['commit'], self.rows[1], protected,
+            inventory, result)['items'], [])
+        self.assertTrue(all(command[:5] == ('docker', 'image', 'inspect', '--format', '{{.Id}}')
+            for command in self.commands))
+
+    def test_d3fb_profile_seal_bridge_or_unknown_id_blocks_before_docker(self):
+        for location in ('profile', 'seal', 'bridge', 'id'):
+            with self.subTest(location=location):
+                profile, seal, _ = self.recharge('recharge-pro-4c-20261008')
+                if location == 'profile':
+                    value = json.loads(profile.read_text())
+                    value['financeValidator']['releaseSealSha256'] = 'f' * 64
+                    self.write(profile, value)
+                elif location == 'seal':
+                    self.write(seal, {'images': {}})
+                elif location == 'bridge':
+                    changed = json.loads(json.dumps(self.rows[3]))
+                    changed['images']['auto-recharge']['digest'] = 'sha256:' + '9' * 64
+                    self.write(self.paths[3] / 'release-manifest.json', changed)
+                else:
+                    self.rows[0]['fixedRechargeRelease']['id'] = 'recharge-pro-d3fb-unreviewed'
+                    self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+                with self.assertRaises(RuntimeError):
+                    self.collect()
+                self.assertEqual(self.commands, [])
+
+    def test_d3fb_skipped_cache_rejects_automatic_maintenance_despite_zero_finance_violations(self):
+        retention = RetentionTests(); retention.setUp()
+        retention.manifest['fixedRechargeRelease'] = {
+            'id': 'recharge-pro-4c-20261008', 'cacheStatus': 'SKIPPED'}
+        retention.manifest['dataAuditAfter'] = {'checkCount': 49, 'violationCount': 0}
+        with patch.object(cache, 'verify_deployment') as audit:
+            with self.assertRaisesRegex(RuntimeError, 'separately approved exact plan'):
+                retention.invoke(['--apply', '--approved-policy', cache.POLICY,
+                    '--deployment-run', 'github-actions-123-1'])
+            audit.assert_not_called()
+
     def test_2f_recharge_changed_profile_seal_or_unknown_id_blocks_before_docker(self):
         for location in ('profile', 'seal', 'id'):
             with self.subTest(location=location):

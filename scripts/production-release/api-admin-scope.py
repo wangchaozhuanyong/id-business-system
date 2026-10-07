@@ -163,7 +163,8 @@ def baseline(d, expected, *, check_jobs=True):
                           profileId=d.REGISTRATION_FOLLOWUP_ID, profileRawSha256=profile_sha256,
                           buildProofSha256=receipt['apiBuildProofSha256'],
                           apiContentSha256=receipt['apiContentSha256'], adminContentSha256=receipt['adminContentSha256'])
-        elif manifest.get('fixedRegistrationRelease', {}).get('id') == getattr(d, 'REGISTRATION_INTERSTITIAL_ID', 'registration-worker-95-20261008'):
+        elif manifest.get('fixedRegistrationRelease', {}).get('id') == 'registration-worker-95-20261008':
+            d.load_registration_interstitial95()
             # 95 keeps the 815 API/Admin image; its own manifest revision describes only the Worker.
             d.require('apiAdminPublication' not in manifest, 'API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS')
             profile_raw = (previous / d.REGISTRATION_INTERSTITIAL_FILE).read_bytes()

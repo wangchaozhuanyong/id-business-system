@@ -10963,6 +10963,679 @@ class FixedRecharge2fNativeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): deployment.prepare_recharge_2f_build()
 
 
+
+class FixedRechargeD3fbNativeTests(unittest.TestCase):
+    """Pure local successor fixtures. Never fetch metadata, audit a DB or operate a live service."""
+    @classmethod
+    def setUpClass(cls):
+        cls.project = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.project / '.runtime/recharge-pro-f812-integration-20261007/live-selector-local/native-control-tests'
+        cls.runtime.mkdir(parents=True, exist_ok=True); cls.runtime.chmod(0o700)
+        FixedRecharge2fNativeTests.setUpClass()
+        cls.worker92 = FixedRecharge2fNativeTests.worker92
+        cls.basis_raw = FixedRecharge2fNativeTests.basis_raw
+        cls.native_raw = subprocess.check_output(['git', 'archive', '--prefix=id-business-system-' + deployment.RECHARGE_D3FB_ORIGIN + '/',
+            deployment.RECHARGE_D3FB_ORIGIN], cwd=cls.project)
+        cls.native_source = deployment.registration_archive(cls.native_raw, deployment.RECHARGE_D3FB_ORIGIN)
+        cls.worker_d3 = dict(cls.worker92)
+        cls.worker_d3.update({name: cls.native_source[name] for name in deployment.RECHARGE_2F_WORKER})
+        assert Registration92RecoveryScopeTests.fingerprint(cls.worker_d3) == deployment.RECHARGE_D3FB_WORKER_BASIS
+        cls.old_profile = json.loads(cls.native_source[deployment.RECHARGE_2F_FILE][0])
+        assert deployment.historical_fingerprint(cls.old_profile) == deployment.RECHARGE_D3FB_PROFILE_CANONICAL
+
+    def setUp(self):
+        self.draft = json.loads((self.project / deployment.RECHARGE_D3FB_FILE).read_bytes())
+        self.draft.update(enabled=False, approvalStatus='NOT_APPROVED')
+        # Only this in-memory fixture is completed before root seals measured production fields.
+        binding = deployment.recharge_projected_binding(deployment.RECHARGE_D3FB_ID)
+        self.draft['baselineRelease'].update(commit=binding['current'], sourceTree=binding['tree'],
+            previousCommit=binding['previous'], deploymentRun=binding['run'])
+        self.draft['nativeBaseline'] = {key: self.draft['nativeBaseline'].get(key, 'e' * 64)
+            for key in deployment.RECHARGE_D3FB_NATIVE_KEYS}
+        self.draft['nativeBaseline'].update(producerSha256=deployment.RECHARGE_D3FB_PRODUCER,
+            registrationProfileRawSha256=deployment.RECHARGE_D3FB_REGISTRATION_RAW,
+            registrationProfileCanonicalSha256=deployment.RECHARGE_D3FB_REGISTRATION_CANONICAL)
+        self.contents = {name: (self.project / name).read_bytes()
+            for name in deployment.RECHARGE_D3FB_CANDIDATES | deployment.RECHARGE_2F_CONTROLS}
+        self.profile = copy.deepcopy(self.draft)
+        self.profile.update(enabled=True, approvalStatus='APPROVED')
+        for group in ('baselineRelease', 'nativeBaseline'):
+            for key, value in self.profile[group].items():
+                if value is None: self.profile[group][key] = 100 if key.endswith('Count') else 'e' * 64
+        for key, names in (('candidateSourceSha256', deployment.RECHARGE_D3FB_CANDIDATES),
+                ('controlSourceSha256', deployment.RECHARGE_2F_CONTROLS)):
+            self.profile[key] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in names}
+        self.profile['workerProjection'] = dict(deployment.RECHARGE_D3FB_WORKER_BASIS)
+        self.profile['workerProjection'].update({name: {'mode': '100644', 'sha256': self.profile['candidateSourceSha256'][name]}
+            for name in deployment.RECHARGE_D3FB_WORKER})
+
+    @contextmanager
+    def source_fixture(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            base = Path(name).resolve(); previous = base / 'previous'; release = base / 'candidate'
+            source = {**self.worker_d3, deployment.RECHARGE_2F_FILE: self.native_source[deployment.RECHARGE_2F_FILE],
+                'docker-compose.aws-mysql.yml': (b'services: {}\n', '100644'),
+                'apps/api/src/id-business-v2/retained.ts': (b'// retained API\n', '100644')}
+            deployment.write_registration_files(previous, source)
+            (previous / 'docker-compose.aws-mysql.yml').chmod(0o664)
+            for private, key in deployment.RECHARGE_D3FB_PRIVATE.items():
+                data = json.dumps({'localFixture': private}).encode()
+                (previous / private).write_bytes(data); (previous / private).chmod(0o600)
+                self.profile['nativeBaseline'][key] = deployment.hashlib.sha256(data).hexdigest()
+            raw = (json.dumps(self.profile, sort_keys=True) + '\n').encode()
+            candidate = {name: (data, '100644') for name, data in self.contents.items()}
+            candidate[deployment.RECHARGE_D3FB_FILE] = (raw, '100644')
+            for name in deployment.RECHARGE_D3FB_WORKER_BASIS:
+                if name not in deployment.RECHARGE_D3FB_WORKER:
+                    candidate[name] = (b'new-main93-content-excluded', '100644')
+            yield SimpleNamespace(base=base, previous=previous, release=release, source=source, candidate=candidate, raw=raw)
+
+    def test_complete_draft_is_reviewable_but_real_build_remains_blocked_until_approval(self):
+        self.assertFalse(self.draft['enabled']); self.assertEqual(self.draft['approvalStatus'], 'NOT_APPROVED')
+        self.assertEqual(deployment.recharge_d3fb_scope(self.draft, require_approved=False), self.draft)
+        with self.assertRaises(RuntimeError): deployment.recharge_d3fb_scope(self.draft)
+        flipped = copy.deepcopy(self.draft); flipped.update(enabled=True, approvalStatus='APPROVED')
+        self.assertEqual(deployment.recharge_d3fb_scope(flipped), flipped)
+        incomplete = copy.deepcopy(flipped); incomplete['nativeBaseline']['nativeChainSha256'] = None
+        with self.assertRaises(RuntimeError): deployment.recharge_d3fb_scope(incomplete)
+        with patch.object(deployment, 'registration_download') as external, \
+                patch.object(deployment, 'check_recharge_d3fb_scope', side_effect=lambda: (self.project, deployment.recharge_d3fb_scope(self.draft))):
+            with self.assertRaises(RuntimeError): deployment.prepare_recharge_d3fb_build()
+            external.assert_not_called()
+        self.assertEqual(len(self.profile['candidateSourceSha256']), 3)
+        self.assertEqual(len(self.profile['controlSourceSha256']), 12)
+        self.assertEqual(deployment.recharge_d3fb_scope(self.profile), self.profile)
+
+    def test_scope_pins_current4c_origin815_D3_and_all_58_carried_worker_rows(self):
+        self.assertEqual(len(deployment.RECHARGE_D3FB_CHAIN), 15)
+        self.assertEqual(deployment.RECHARGE_D3FB_CHAIN[3:], deployment.RECHARGE_2F_CHAIN)
+        for group, key, value in (('baselineRelease', 'commit', deployment.RECHARGE_2F_CURRENT),
+                ('baselineRelease', 'deploymentRun', 'github-actions-37623452492-1'),
+                ('nativeBaseline', 'producerSha256', 'a' * 64), ('nativeBaseline', 'rechargeProfileRawSha256', 'a' * 64),
+                ('nativeBaseline', 'nativeFileCount', True), ('nativeBaseline', 'nativeChainSha256', None),
+                ('sourceBasis', 'commit', deployment.RECHARGE_D3FB_ORIGIN), ('financeValidator', 'checkCount', 48),
+                ('financeClearance', 'violationCount', 1), ('scope', 'financialWritesAllowed', True)):
+            bad = copy.deepcopy(self.profile); bad[group][key] = value
+            with self.subTest(group=group, key=key), self.assertRaises(RuntimeError): deployment.recharge_d3fb_scope(bad)
+        for name in deployment.RECHARGE_D3FB_WORKER_BASIS.keys() - deployment.RECHARGE_D3FB_WORKER:
+            bad = copy.deepcopy(self.profile); bad['workerProjection'][name]['sha256'] = 'a' * 64
+            with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.recharge_d3fb_scope(bad)
+        for name in ('Dockerfile', 'server.py', 'registration_job.py'):
+            bad = copy.deepcopy(self.profile); path = deployment.REGISTRATION_WORKER_PREFIX + name
+            bad['candidateSourceSha256'][path] = 'a' * 64; bad['sourceModes'][path] = 0o644
+            with self.assertRaises(RuntimeError): deployment.recharge_d3fb_scope(bad)
+
+    def test_real_projected_writer_preserves_original58_and_source_bytes_modes(self):
+        with self.source_fixture() as f:
+            projected = deployment.recharge_d3fb_source_files(f.previous, self.profile, f.candidate)
+            deployment.write_registration_files(f.release, projected)
+            deployment.recharge_d3fb_carried_modes(f.release, f.previous, self.profile)
+            deployment.recharge_d3fb_private_copies(f.release, f.previous, self.profile, copy_files=True)
+            deployment.verify_recharge_2f_candidate_source(f.release, f.previous, self.profile)
+            self.assertEqual((f.release / 'docker-compose.aws-mysql.yml').stat().st_mode & 0o777, 0o664)
+            for name, (data, mode) in f.source.items():
+                expected = self.contents[name] if name in deployment.RECHARGE_D3FB_WORKER else data
+                self.assertEqual((f.release / name).read_bytes(), expected)
+            self.assertEqual((f.release / deployment.RECHARGE_D3FB_FILE).read_bytes(), f.raw)
+            preserved = f.release / 'apps/api/src/id-business-v2/retained.ts'; preserved.write_bytes(b'drift')
+            with self.assertRaises(RuntimeError): deployment.verify_recharge_2f_candidate_source(f.release, f.previous, self.profile)
+
+    def test_real_release_writes_only_reviewed_source_and_stops_before_any_service_action(self):
+        with self.source_fixture() as f, ExitStack() as stack:
+            (f.base / 'releases').mkdir()
+            previous = f.base / 'releases' / ('20261007T120000Z-' + deployment.RECHARGE_D3FB_CURRENT[:12])
+            f.previous.rename(previous); (f.base / 'current').symlink_to(previous)
+            caddy = previous / 'deploy/caddy/Caddyfile.aws'; caddy.parent.mkdir(parents=True, exist_ok=True)
+            caddy.write_bytes(b':80 { respond "local-fixture" }\n'); caddy.chmod(0o644)
+            environment = b'LOCAL_FIXTURE_ONLY=placeholder\n'
+            (previous / '.env.aws.production').write_bytes(environment); (previous / '.env.aws.production').chmod(0o600)
+            (previous / 'compose.release.json').write_text('{"services":{}}'); (previous / 'compose.release.json').chmod(0o600)
+            (previous / 'release-manifest.json').write_text(json.dumps({'commit':deployment.RECHARGE_D3FB_CURRENT,'sourceTree':deployment.RECHARGE_D3FB_TREE}))
+            (previous / 'release-manifest.json').chmod(0o600)
+            states = {service:{'status':'running','containerId':'local-'+service,'environmentSha256':'e'*64} for service in deployment.ALL_SERVICES}
+            profile = copy.deepcopy(self.profile); profile['nativeBaseline']['runtimeStatesSha256'] = deployment.historical_fingerprint(states)
+            raw = (json.dumps(profile,sort_keys=True)+'\n').encode(); candidate=dict(f.candidate)
+            candidate[deployment.RECHARGE_D3FB_FILE]=(raw,'100644')
+            args=SimpleNamespace(commit='a'*40,source_tree='b'*40,expected_current=deployment.RECHARGE_D3FB_CURRENT,
+                recharge_pro_d3fb=True,recharge_pro_2f=False,recharge_pro_974=False,admin_only=False,
+                repository='123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',run_id='123',run_attempt='1',ci_run_id='456',
+                image_commit=None,image_run_id=None,image_run_attempt=None)
+            archive=FixedRechargeRuntimeScopeTests.source_archive(args.commit,{name:(data,0o644) for name,(data,_mode) in candidate.items()})
+            original_umask=deployment.os.umask(0o077); deployment.os.umask(original_umask);stack.callback(deployment.os.umask,original_umask)
+            stack.enter_context(patch.object(deployment,'BASE',f.base))
+            stack.enter_context(patch.dict(deployment.os.environ,{},clear=True))
+            stack.enter_context(patch.object(deployment.time,'strftime',return_value='20261007T130000Z'))
+            stack.enter_context(patch.object(deployment.urllib.request,'urlopen',return_value=io.BytesIO(raw)))
+            stack.enter_context(patch.object(deployment,'registration_download',side_effect=lambda commit: archive if commit==args.commit else b'local-finance-source'))
+            stack.enter_context(patch.object(deployment,'prepare_registration_finance_source',return_value=f.base))
+            baseline=stack.enter_context(patch.object(deployment,'recharge_d3fb_baseline',return_value=(previous,self.old_profile)))
+            stack.enter_context(patch.object(deployment,'service_state',side_effect=lambda _path,service,**kw:copy.deepcopy(states[service])))
+            stack.enter_context(patch.object(deployment,'assert_release_jobs_idle'))
+            stack.enter_context(patch.object(deployment.shutil,'disk_usage',return_value=SimpleNamespace(free=20*1024**3)))
+            writers={name:stack.enter_context(patch.object(deployment,name,wraps=getattr(deployment,name)))
+                for name in ('recharge_d3fb_source_files','write_registration_files','recharge_d3fb_carried_modes','verify_recharge_2f_candidate_source')}
+            audit=stack.enter_context(patch.object(deployment,'recharge_d3fb_audit',side_effect=RuntimeError('local-audit-before-stop')))
+            forbidden={name:stack.enter_context(patch.object(deployment,name,side_effect=AssertionError('service action forbidden')))
+                for name in ('recharge_974_pull_image','fresh_backup','compose','point_current','rollback_service','wait_healthy','run')}
+            error=io.StringIO()
+            with redirect_stdout(io.StringIO()),patch.object(deployment.sys,'stderr',error):
+                self.assertEqual(deployment.recharge_d3fb_release(args),1)
+            self.assertEqual(json.loads(error.getvalue())['step'],'audit-before')
+            self.assertEqual((f.base/'current').resolve(),previous)
+            release=f.base/'releases'/('20261007T130000Z-'+args.commit[:12])
+            self.assertEqual((release/'.env.aws.production').read_bytes(),environment)
+            for name,(data,_mode) in self.worker_d3.items():
+                self.assertEqual((release/name).read_bytes(),self.contents[name] if name in deployment.RECHARGE_D3FB_WORKER else data)
+            self.assertEqual((release/'docker-compose.aws-mysql.yml').stat().st_mode&0o777,0o664)
+            for writer in writers.values():writer.assert_called_once()
+            for action in forbidden.values():action.assert_not_called()
+            self.assertTrue(baseline.call_args.kwargs['verify_native']);audit.assert_called_once()
+
+    def test_projected_source_refuses_unreviewed_bytes_modes_or_profile(self):
+        with self.source_fixture() as f:
+            for kind in ('bytes', 'mode', 'profile'):
+                bad = dict(f.candidate); name = next(iter(deployment.RECHARGE_D3FB_WORKER))
+                if kind == 'bytes': bad[name] = (b'unreviewed', '100644')
+                elif kind == 'mode': bad[name] = (bad[name][0], '100755')
+                else: bad[deployment.RECHARGE_D3FB_FILE] = (b'{}', '100644')
+                with self.subTest(kind=kind), self.assertRaises(RuntimeError): deployment.recharge_d3fb_source_files(f.previous, self.profile, bad)
+
+    def test_native15_chain_refuses_skipped_ancestor_and_detects_every_release_byte_change(self):
+        fixture = FixedRecharge974NativeTests(); fixture.runtime = self.runtime
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            f = fixture.chain_fixture(name)
+            with f.stack:
+                previous = f.paths[0]
+                for commit, tree in ((deployment.RECHARGE_2F_CURRENT, deployment.RECHARGE_2F_TREE),
+                        (deployment.RECHARGE_D3FB_ORIGIN, deployment.RECHARGE_D3FB_ORIGIN_TREE),
+                        (deployment.RECHARGE_D3FB_API_ORIGIN, deployment.RECHARGE_D3FB_API_TREE),
+                        (deployment.RECHARGE_D3FB_CURRENT, deployment.RECHARGE_D3FB_TREE)):
+                    current = f.base / 'releases' / ('20261007T102436Z-' + commit[:12]); current.mkdir(mode=0o700)
+                    (current / 'release-manifest.json').write_text(json.dumps({'commit': commit, 'sourceTree': tree,
+                        'previousCommit': json.loads((previous / 'release-manifest.json').read_text())['commit'], 'previousRelease': str(previous)}))
+                    (current / 'release-manifest.json').chmod(0o600); (current / 'public.py').write_bytes(b'local-fixture\n')
+                    previous = current
+                good = deployment.recharge_974_native_chain(previous, chain=deployment.RECHARGE_D3FB_CHAIN)
+                self.assertEqual(good['origin'], f.paths[-1])
+                for old in [previous, Path(json.loads((previous / 'release-manifest.json').read_text())['previousRelease']), *f.paths]:
+                    public = old / 'public.py'; raw = public.read_bytes(); public.write_bytes(b'drift')
+                    self.assertNotEqual(deployment.recharge_974_native_chain(previous, chain=deployment.RECHARGE_D3FB_CHAIN)['sha256'], good['sha256'])
+                    public.write_bytes(raw)
+                with self.assertRaises(RuntimeError): deployment.recharge_974_native_chain(previous, chain=deployment.RECHARGE_D3FB_CHAIN[:2])
+                manifest = json.loads((previous / 'release-manifest.json').read_bytes()); manifest['previousCommit'] = deployment.RECHARGE_974_CURRENT
+                (previous / 'release-manifest.json').write_text(json.dumps(manifest))
+                with self.assertRaises(RuntimeError): deployment.recharge_974_native_chain(previous, chain=deployment.RECHARGE_D3FB_CHAIN)
+
+    def test_wrong_producer_stops_before_exec_or_any_original_checker(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            root = Path(name); path = root / 'scripts/production-release/remote-deploy.py'; path.parent.mkdir(parents=True)
+            path.write_bytes(b'raise AssertionError("must-never-execute")\n'); path.chmod(0o644)
+            with self.assertRaises(RuntimeError): deployment.recharge_d3fb_native_producer(root)
+
+    def test_after_native_validation_uses_storedD3_and_closedAPI_without_original_global_current_replay(self):
+        with self.source_fixture() as f, ExitStack() as stack:
+            manifest = {'fixture': True}; (f.previous / 'release-manifest.json').write_text(json.dumps(manifest)); (f.previous / 'release-manifest.json').chmod(0o600)
+            stored = {'closedReceiptSha256': self.profile['nativeBaseline']['rechargeReadbackSha256'], 'localFixture': True}
+            self.profile['nativeBaseline']['originD3StoredProofSha256'] = deployment.historical_fingerprint(stored)
+            stack.enter_context(patch.object(deployment, 'recharge_d3fb_baseline_fields', return_value=self.profile['baselineRelease']))
+            stack.enter_context(patch.object(deployment, 'recharge_d3fb_stored_origin', return_value=(f.previous, self.old_profile, stored)))
+            registration_keys = ('registrationProfileRawSha256', 'registrationProfileCanonicalSha256', 'registrationReadbackSha256')
+            stack.enter_context(patch.object(deployment, 'recharge_d3fb_registration_receipt',
+                return_value={key:self.profile['nativeBaseline'][key] for key in registration_keys}))
+            api_stored = {'historical815Fixture': True}
+            self.profile['nativeBaseline']['origin815StoredProofSha256'] = deployment.historical_fingerprint(api_stored)
+            stack.enter_context(patch.object(deployment, 'recharge_d3fb_api_stored_origin', return_value=api_stored))
+            api = stack.enter_context(patch.object(deployment, 'recharge_d3fb_api_receipt'))
+            stack.enter_context(patch.object(deployment, 'recharge_974_native_chain', return_value={'sha256': self.profile['nativeBaseline']['nativeChainSha256'],
+                'fileCount': self.profile['nativeBaseline']['nativeFileCount'], 'directoryCount': self.profile['nativeBaseline']['nativeDirectoryCount'], 'origin': f.previous}))
+            stack.enter_context(patch.object(deployment, 'recharge_2f_retained_migrate', return_value=self.profile['nativeBaseline']['retainedMigrateSha256']))
+            observer = stack.enter_context(patch.object(deployment, 'recharge_d3fb_observe_native', side_effect=AssertionError('original current replay forbidden')))
+            self.assertEqual(deployment.recharge_d3fb_baseline(f.previous, self.profile, manifest), (f.previous, self.old_profile))
+            observer.assert_not_called(); api.assert_called_once_with(f.previous, profile=self.profile)
+
+    def test_observer_calls_original94_once_and_resnapshots15_chain_retained_identity(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
+            base = Path(name); previous = base / 'releases' / 'previous'; previous.mkdir(parents=True); (base / 'current').symlink_to(previous)
+            stack.enter_context(patch.object(deployment, 'BASE', base))
+            baseline = stack.enter_context(patch.object(deployment, 'recharge_d3fb_baseline_fields', return_value=self.profile['baselineRelease']))
+            api_keys = ('apiScopeProducerSha256','apiBuildProofRawSha256','apiBuildProofCanonicalSha256','apiStateRawSha256','apiReadbackSha256','configuredPreservedStatesSha256')
+            api = stack.enter_context(patch.object(deployment, 'recharge_d3fb_api_receipt', return_value={key:self.profile['nativeBaseline'][key] for key in api_keys}))
+            stored = {'closedReceiptSha256': self.profile['nativeBaseline']['rechargeReadbackSha256']}
+            stack.enter_context(patch.object(deployment, 'recharge_d3fb_stored_origin', return_value=(previous,self.old_profile,stored)))
+            registration = stack.enter_context(patch.object(deployment, 'recharge_d3fb_registration_receipt', return_value={key:self.profile['nativeBaseline'][key]
+                for key in ('registrationProfileRawSha256','registrationProfileCanonicalSha256','registrationReadbackSha256')}))
+            stack.enter_context(patch.object(deployment, 'recharge_d3fb_api_stored_origin', return_value={'historical815Fixture':True}))
+            running = stack.enter_context(patch.object(deployment,'recharge_2f_running_hashes'))
+            states = {service: {'image':'sha256:'+'a'*64,'reference':'fixture-'+service,'status':'running','health':'healthy',
+                'containerId':str(i)*64,'startedAtSha256':'b'*64,'environmentSha256':'c'*64} for i, service in enumerate(deployment.ALL_SERVICES)}
+            stack.enter_context(patch.object(deployment, 'service_state', side_effect=lambda _path, service, **kw: states[service]))
+            chain = stack.enter_context(patch.object(deployment, 'recharge_974_native_chain', return_value={'sha256':'d'*64,'fileCount':100,'directoryCount':50,'origin':previous}))
+            retained = stack.enter_context(patch.object(deployment, 'recharge_2f_retained_migrate', return_value='e'*64))
+            result = deployment.recharge_d3fb_observe_native(previous)
+            self.assertEqual(api.call_args_list,[unittest.mock.call(previous,verify_native=True),unittest.mock.call(previous)])
+            running.assert_called_once_with(previous,self.old_profile)
+            self.assertEqual(registration.call_args_list,[unittest.mock.call(previous,verify_native=True),unittest.mock.call(previous)])
+            self.assertEqual(set(result['nativeBaseline']), deployment.RECHARGE_D3FB_NATIVE_KEYS)
+            self.assertEqual(chain.call_count, 2); self.assertEqual(retained.call_count, 2); self.assertEqual(baseline.call_count, 2)
+            self.assertTrue(all(call.kwargs == {'chain': deployment.RECHARGE_D3FB_CHAIN} for call in chain.call_args_list))
+
+    def test_audit_routes_original_frozen92_control_and_preserves_49_rules(self):
+        with self.source_fixture() as f, patch.object(deployment, 'recharge_d3fb_baseline') as baseline, \
+                patch.object(deployment, 'recharge_d3fb_native_producer') as native, \
+                patch.object(deployment, 'recharge_d3fb_audit_control', return_value=f.base / 'original2f'):
+            manifest = {'fixture': True}; (f.previous / 'release-manifest.json').write_text(json.dumps(manifest)); (f.previous / 'release-manifest.json').chmod(0o600)
+            audit = unittest.mock.Mock(return_value={'checkCount':49,'violationCount':0})
+            native.return_value = {'registration_recovery_finance_audit': audit}
+            self.assertEqual(deployment.recharge_d3fb_audit(f.release, f.base / 'receipt', stage='after', source=f.base,
+                auditor_source=f.base / 'auditor', profile=self.profile, previous=f.previous, before_receipt=f.base / 'before'), audit.return_value)
+            self.assertEqual(baseline.call_count, 2)
+            audit.assert_called_once_with(f.release, f.base / 'receipt', stage='after', source=f.base / 'auditor',
+                before_receipt=f.base / 'before', control_source=f.base / 'original2f', profile_id=deployment.REGISTRATION_RECOVERY_ID)
+
+    def test_audit_control_requires_existing_original2f_override_and_never_creates_it(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, patch.object(deployment, 'BASE', Path(name).resolve()):
+            base=Path(name).resolve(); control=base/'releases'/('20261007T120000Z-'+deployment.RECHARGE_2F_CURRENT[:12])
+            previous=base/'releases'/('20261007T130000Z-'+deployment.RECHARGE_D3FB_CURRENT[:12]); previous.mkdir(parents=True)
+            origin=base/'releases'/('20261007T123000Z-'+deployment.RECHARGE_D3FB_ORIGIN[:12]);origin.mkdir()
+            origin_manifest={'commit':deployment.RECHARGE_D3FB_ORIGIN,'sourceTree':deployment.RECHARGE_D3FB_ORIGIN_TREE,
+                'previousCommit':deployment.RECHARGE_2F_CURRENT,'previousRelease':str(control)}
+            origin_raw=json.dumps(origin_manifest).encode();(origin/'release-manifest.json').write_bytes(origin_raw);(origin/'release-manifest.json').chmod(0o600)
+            api=base/'releases'/('20261007T124500Z-'+deployment.RECHARGE_D3FB_API_ORIGIN[:12]);api.mkdir()
+            api_manifest={'commit':deployment.RECHARGE_D3FB_API_ORIGIN,'sourceTree':deployment.RECHARGE_D3FB_API_TREE,
+                'previousCommit':deployment.RECHARGE_D3FB_ORIGIN,'previousRelease':str(origin),
+                'previousManifestSha256':deployment.hashlib.sha256(origin_raw).hexdigest()}
+            api_raw=json.dumps(api_manifest).encode();(api/'release-manifest.json').write_bytes(api_raw);(api/'release-manifest.json').chmod(0o600)
+            api_producer=api/'scripts/production-release/remote-deploy.py';api_producer.parent.mkdir(parents=True)
+            api_producer.write_bytes(subprocess.check_output(['git','show',deployment.RECHARGE_D3FB_API_ORIGIN+':scripts/production-release/remote-deploy.py'],cwd=self.project));api_producer.chmod(0o644)
+            manifest={'commit':deployment.RECHARGE_D3FB_CURRENT,'sourceTree':deployment.RECHARGE_D3FB_TREE,
+                'previousCommit':deployment.RECHARGE_D3FB_API_ORIGIN,'previousRelease':str(api),
+                'previousManifestSha256':deployment.hashlib.sha256(api_raw).hexdigest()}
+            original_manifest_sha=deployment.RECHARGE_D3FB_ORIGIN_MANIFEST
+            deployment.RECHARGE_D3FB_ORIGIN_MANIFEST=api_manifest['previousManifestSha256']
+            self.addCleanup(setattr,deployment,'RECHARGE_D3FB_ORIGIN_MANIFEST',original_manifest_sha)
+            original_api_sha=deployment.RECHARGE_D3FB_API_MANIFEST
+            deployment.RECHARGE_D3FB_API_MANIFEST=manifest['previousManifestSha256']
+            self.addCleanup(setattr,deployment,'RECHARGE_D3FB_API_MANIFEST',original_api_sha)
+            (previous/'release-manifest.json').write_text(json.dumps(manifest));(previous/'release-manifest.json').chmod(0o600)
+            source={deployment.REGISTRATION_RECOVERY_FILE:self.native_source[deployment.REGISTRATION_RECOVERY_FILE],
+                'scripts/production-release/remote-deploy.py':(subprocess.check_output(['git','show',deployment.RECHARGE_2F_CURRENT+':scripts/production-release/remote-deploy.py'],cwd=self.project),'100644')}
+            deployment.write_registration_files(control,source)
+            override=control/'registration-recovery-audit.compose.json'
+            with self.assertRaises((RuntimeError,FileNotFoundError)):deployment.recharge_d3fb_audit_control(previous)
+            self.assertFalse(override.exists())
+            raw=(json.dumps({'services':{'api':{'image':deployment.REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['digest'],
+                'pull_policy':'never'}}},sort_keys=True,separators=(',',':'))+'\n').encode()
+            override.write_bytes(raw);override.chmod(0o600)
+            self.assertEqual(deployment.recharge_d3fb_audit_control(previous),control)
+            self.assertEqual(override.read_bytes(),raw)
+            override.write_bytes(b'{}')
+            with self.assertRaises(RuntimeError):deployment.recharge_d3fb_audit_control(previous)
+
+    def test_context_requires_exact_49_zero_and_new21_readback_binding(self):
+        args = SimpleNamespace(commit='a'*40,source_tree='b'*40,expected_current=deployment.RECHARGE_D3FB_CURRENT)
+        gates={stage:{'checkCount':49,'violationCount':0,'registrationFinanceGate':{'stage':stage,'status':deployment.REGISTRATION_CLEARANCE['mode']}} for stage in ('before','after')}
+        context = deployment.recharge_d3fb_context(args,self.profile,gates['before'],gates['after'])
+        self.assertEqual(context['id'],deployment.RECHARGE_D3FB_ID); self.assertEqual(context['servicesUpdated'],['auto-recharge'])
+        for field, value in (('checkCount',48),('violationCount',1),('violationCount',False)):
+            bad=copy.deepcopy(gates['after']);bad[field]=value
+            with self.assertRaises(RuntimeError): deployment.recharge_d3fb_context(args,self.profile,gates['before'],bad)
+        receipt = deployment.recharge_d3fb_readback_receipt('a'*40,'b'*40,'c'*64)
+        self.assertEqual(len(receipt),21);self.assertEqual(receipt['previousCommit'],deployment.RECHARGE_D3FB_CURRENT)
+        self.assertEqual(receipt['checkCount'],49);self.assertEqual(receipt['violationCount'],0)
+        self.assertEqual(deployment.validate_fixed_recharge_readback_projection(receipt,'a'*40,'b'*40,'c'*64,profile_id=deployment.RECHARGE_D3FB_ID),receipt)
+        for key in receipt:
+            bad=copy.deepcopy(receipt);bad[key]=None
+            with self.assertRaises(RuntimeError): deployment.validate_recharge_d3fb_readback_projection(bad,'a'*40,'b'*40,'c'*64)
+
+    def test_all_mixed_flags_stop_before_native_network_lock_or_docker(self):
+        args=['remote-deploy.py','--commit','a'*40,'--source-tree','b'*40,'--repository',
+            '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release','--expected-current',deployment.RECHARGE_D3FB_CURRENT,
+            '--run-id','123','--run-attempt','1','--ci-run-id','456','--recharge-pro-d3fb']
+        for flag in ('--recharge-pro-974','--recharge-pro-2f','--recharge-pro-main80','--registration-worker-89','--registration-worker-92',
+                '--registration-worker-93','--registration-worker-94','--historical-finance-order-archive','--admin-only','--api-admin-only'):
+            with self.subTest(flag=flag), patch.object(deployment.sys,'argv',args+[flag]), patch.object(deployment,'run') as command, \
+                    patch.object(deployment.urllib.request,'urlopen') as external, patch.object(deployment,'recharge_d3fb_observe_native') as observer, \
+                    patch.object(deployment,'registration_followup_release') as registration94:
+                with self.assertRaises(RuntimeError): deployment.main()
+                external.assert_not_called();command.assert_not_called();observer.assert_not_called();registration94.assert_not_called()
+
+        with patch.object(deployment,'recharge_974_release') as release:
+            with self.assertRaises(RuntimeError):deployment.recharge_d3fb_release(SimpleNamespace(registration_worker_94=True))
+            release.assert_not_called()
+
+    def test_new_api_admin_lane_remains_independent_and_d3_build_proof_is_rejected(self):
+        base=['remote-deploy.py','--commit','a'*40,'--source-tree','b'*40,'--repository',
+            '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release','--expected-current',deployment.RECHARGE_D3FB_CURRENT,
+            '--run-id','123','--run-attempt','1','--ci-run-id','456']
+        release=unittest.mock.Mock(return_value='independent-api-admin-fixture')
+        scope=SimpleNamespace(release=release); controller=SimpleNamespace(local_fixture=True)
+        with patch.object(deployment.sys,'argv',base+['--api-admin-only']), \
+                patch.object(deployment,'api_admin_scope',return_value=(scope,controller)) as loader, \
+                patch.object(deployment,'recharge_d3fb_release') as recharge:
+            self.assertEqual(deployment.main(),'independent-api-admin-fixture')
+            loader.assert_called_once_with();release.assert_called_once();recharge.assert_not_called()
+            self.assertIs(release.call_args.args[0],controller)
+        for suffix in (['--api-admin-only'],['--api-admin-build-proof','local-placeholder']):
+            with patch.object(deployment.sys,'argv',base+['--recharge-pro-d3fb',*suffix]), \
+                    patch.object(deployment,'api_admin_scope') as loader, patch.object(deployment,'recharge_d3fb_release') as recharge:
+                with self.assertRaises(RuntimeError):deployment.main()
+                loader.assert_not_called();recharge.assert_not_called()
+
+    def test_dispatch_rejects_d3_api_admin_mix_in_selection_before_any_transport_client(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name:
+            import shlex
+            root=Path(name).resolve(); binary=root/'bin';binary.mkdir(); marker=root/'forbidden-client.log'
+            for client in ('python3','aws','curl','docker'):
+                path=binary/client
+                path.write_text('#!/bin/sh\nprintf %s '+shlex.quote(client)+' >> '+shlex.quote(str(marker))+'\nexit 91\n')
+                path.chmod(0o755)
+            environment={**deployment.os.environ,'PATH':str(binary)+':'+deployment.os.environ['PATH'],
+                'RELEASE_OPERATION':'release_api_admin','HISTORICAL_EXCEPTION':deployment.RECHARGE_D3FB_ID,
+                'RELEASE_COMMIT':'a'*40,'SOURCE_TREE':'b'*40,'EXPECTED_CURRENT':deployment.RECHARGE_D3FB_CURRENT,
+                'QUALITY_RUN_ID':'456','GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1',
+                'RELEASE_REPOSITORY':'123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+                'RELEASE_ADMIN_ONLY':'false'}
+            for filename in ('validate-release-selection.sh','dispatch.sh'):
+                result=subprocess.run(['bash',str(self.project/'scripts/production-release'/filename)],
+                    cwd=self.project,env=environment,capture_output=True,timeout=10)
+                with self.subTest(filename=filename):self.assertNotEqual(result.returncode,0)
+                self.assertFalse(marker.exists())
+
+    def test_d3_cache_ref_and_digest_each_failclosed_without_changing_old2f_contract(self):
+        for key in ('RELEASE_BROWSER_CACHE_IMAGE','RELEASE_BROWSER_CACHE_IMAGE_ID'):
+            with patch.dict(deployment.os.environ,{key:'forbidden'},clear=True), self.assertRaises(RuntimeError): deployment.require_recharge_d3fb_no_browser_cache()
+        with patch.dict(deployment.os.environ,{},clear=True): deployment.require_recharge_d3fb_no_browser_cache()
+        self.assertEqual(deployment.RECHARGE_2F_CURRENT,'2f24cf81007429ea474da404a30bc74da9d43ce1')
+        self.assertEqual(deployment.RECHARGE_2F_PROFILE_RAW,'4d9b43c71a300a0043cb9fd179342a82230fddf9e013836d7e14d0ef3d2bb951')
+        with self.assertRaises(RuntimeError): deployment.recharge_projected_binding('recharge-pro-arbitrary')
+
+    def test_real_build_emits60_projection_with_exact2_overlays_and_no_main93_worker(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
+            root=Path(name).resolve(); profile=copy.deepcopy(self.profile)
+            profile['baselineRelease']['sourceArchiveSha256']=deployment.hashlib.sha256(self.native_raw).hexdigest()
+            profile['baselineRelease']['buildInputSha256']=deployment.historical_fingerprint(json.loads(self.native_source[deployment.REGISTRATION_RECOVERY_FILE][0])['buildInputSha256'])
+            for relative,data in self.contents.items():
+                path=root/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data);path.chmod(0o644)
+            stack.enter_context(patch.object(deployment,'check_recharge_d3fb_scope',return_value=(root,profile)))
+            stack.enter_context(patch.dict(deployment.os.environ,{},clear=True))
+            stack.enter_context(patch.object(deployment,'RECHARGE_D3FB_ORIGIN_ARCHIVE',deployment.hashlib.sha256(self.native_raw).hexdigest()))
+            archives={deployment.RECHARGE_D3FB_ORIGIN:self.native_raw,deployment.RECHARGE_SCOPE_CURRENT:self.basis_raw}
+            download=stack.enter_context(patch.object(deployment,'registration_download',side_effect=lambda commit:archives[commit]))
+            # The original92 reconstruction is covered by unchanged old2f tests; all final60 hashes remain real here.
+            stack.enter_context(patch.object(deployment,'registration_recovery_worker_projection',return_value=dict(self.worker92)))
+            deployment.prepare_recharge_d3fb_build()
+            context=root/'.deploy/production-release/fixed-recharge-context'
+            measured=deployment.fixed_recharge_file_map(context,names=profile['workerProjection'])
+            self.assertEqual({name:digest for name,(digest,_mode) in measured.items()},{name:row['sha256'] for name,row in profile['workerProjection'].items()})
+            for path,(data,_mode) in self.worker_d3.items():
+                self.assertEqual((context/path).read_bytes(),self.contents[path] if path in deployment.RECHARGE_D3FB_WORKER else data)
+            receipt=json.loads((root/'.deploy/production-release/fixed-recharge-build-projection.json').read_text())
+            self.assertEqual(receipt['id'],deployment.RECHARGE_D3FB_ID)
+            self.assertEqual(set(call.args[0] for call in download.call_args_list),set(archives))
+    def test_private600_copies_are_explicit_and_refuse_missing_drift_modes_symlinks(self):
+        with self.source_fixture() as f:
+            deployment.write_registration_files(f.release,deployment.recharge_d3fb_source_files(f.previous,self.profile,f.candidate))
+            deployment.recharge_d3fb_carried_modes(f.release,f.previous,self.profile)
+            for name in deployment.RECHARGE_D3FB_PRIVATE:self.assertFalse((f.release/name).exists())
+            deployment.recharge_d3fb_private_copies(f.release,f.previous,self.profile,copy_files=True)
+            for name in deployment.RECHARGE_D3FB_PRIVATE:
+                path=f.release/name; raw=path.read_bytes();self.assertEqual(path.stat().st_mode&0o777,0o600)
+                path.write_bytes(b'{}')
+                with self.assertRaises(RuntimeError):deployment.verify_recharge_2f_candidate_source(f.release,f.previous,self.profile)
+                path.write_bytes(raw);path.chmod(0o644)
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_private_copies(f.release,f.previous,self.profile)
+                path.chmod(0o600);path.unlink();path.symlink_to(f.previous/name)
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_private_copies(f.release,f.previous,self.profile)
+                path.unlink()
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_private_copies(f.release,f.previous,self.profile)
+                path.write_bytes(raw);path.chmod(0o600)
+            deployment.verify_recharge_2f_candidate_source(f.release,f.previous,self.profile)
+            self.assertEqual(deployment.recharge_projected_generated(deployment.RECHARGE_2F_ID),deployment.RECHARGE_2F_GENERATED)
+
+    def test_fresh_fixed49_readback_is_independent_of815_no_gate_reports_and_binds_history(self):
+        fixture=FixedRegistrationRuntimeScopeTests();fixture.root=self.project
+        fixture.profile=json.loads((self.project/deployment.REGISTRATION_SCOPE_FILE).read_bytes())
+        reports,frozen,_policy,_seal=fixture.zero_fixture()
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name,ExitStack() as stack:
+            base=Path(name).resolve();current=base/'candidate';previous=base/'previous';origin=base/'origin'
+            for path in (current,previous,origin):path.mkdir()
+            (base/'current').symlink_to(current);stack.enter_context(patch.object(deployment,'BASE',base))
+            profile=copy.deepcopy(self.profile)
+            for private,key in deployment.RECHARGE_D3FB_PRIVATE.items():
+                raw=('localReadback-'+private).encode()
+                for directory in (current,previous):(directory/private).write_bytes(raw);(directory/private).chmod(0o600)
+                profile['nativeBaseline'][key]=deployment.hashlib.sha256(raw).hexdigest()
+            path=current/deployment.RECHARGE_D3FB_FILE;path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(profile));path.chmod(0o644)
+            (origin/'before-audit.json').write_text(json.dumps({'gate':frozen}));(origin/'before-audit.json').chmod(0o600)
+            (previous/'release-manifest.json').write_text('{}');(previous/'release-manifest.json').chmod(0o600)
+            for stage in ('before','after'):
+                (current/(stage+'-audit.json')).write_text(json.dumps(reports[stage]));(current/(stage+'-audit.json')).chmod(0o600)
+                (previous/(stage+'-audit.json')).write_text(json.dumps({'ok':True,'checkCount':49,'checks':[],'identity':'ordinary815'}))
+                (previous/(stage+'-audit.json')).chmod(0o600)
+            gates={stage:deployment.require_registration_zero_report(reports[stage],stage,frozen) for stage in ('before','after')}
+            args=SimpleNamespace(commit='a'*40,source_tree='b'*40,expected_current=deployment.RECHARGE_D3FB_CURRENT)
+            manifest={'previousRelease':str(previous),'dataAuditBefore':gates['before'],'dataAuditAfter':gates['after'],
+                'fixedRechargeRelease':deployment.recharge_d3fb_context(args,profile,gates['before'],gates['after'])}
+            manifest_file=current/'release-manifest.json'
+            def write_manifest():manifest_file.write_text(json.dumps(manifest));manifest_file.chmod(0o600)
+            write_manifest()
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_baseline',return_value=(origin,self.old_profile)))
+            stack.enter_context(patch.object(deployment,'recharge_974_candidate_link',return_value={'fixture':True}))
+            stack.enter_context(patch.object(deployment,'verify_recharge_2f_candidate_source',return_value=[]))
+            stack.enter_context(patch.object(deployment,'main80_recharge_reader_evidence'))
+            stack.enter_context(patch.object(deployment,'recharge_2f_running_hashes'))
+            stack.enter_context(patch.object(deployment,'require_main80_recharge_public_snapshot'))
+            api=stack.enter_context(patch.object(deployment,'recharge_d3fb_api_receipt'))
+            digest=deployment.historical_fingerprint(profile)
+            self.assertEqual(deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)['checkCount'],49)
+            self.assertEqual(api.call_args_list,[unittest.mock.call(previous,current,profile)]*2)
+            private=current/'api-admin-preservation.json';private_raw=private.read_bytes()
+            with patch.object(deployment,'require_main80_recharge_public_snapshot',side_effect=lambda _snapshot:private.write_bytes(b'late-private-corruption')):
+                with self.assertRaises(RuntimeError):deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)
+            private.write_bytes(private_raw)
+            original_history=copy.deepcopy(manifest['fixedRechargeRelease']['historicalApiAdmin'])
+            manifest['fixedRechargeRelease']['historicalApiAdmin'].pop('preservationRawSha256');write_manifest()
+            with self.assertRaises(RuntimeError):deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)
+            manifest['fixedRechargeRelease']['historicalApiAdmin']=original_history
+            manifest['fixedRechargeRelease']['historicalApiAdmin']['publication']['workersPublished']=True;write_manifest()
+            with self.assertRaises(RuntimeError):deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)
+            manifest['fixedRechargeRelease']=deployment.recharge_d3fb_context(args,profile,gates['before'],gates['after'])
+            manifest['apiAdminPublication']=manifest['fixedRechargeRelease']['historicalApiAdmin']['publication'];write_manifest()
+            with self.assertRaises(RuntimeError):deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)
+            manifest.pop('apiAdminPublication');write_manifest()
+            changed=copy.deepcopy(reports['after']);changed['identity']['currentUser']='id_business_audit@other-fixture'
+            (current/'after-audit.json').write_text(json.dumps(changed))
+            with self.assertRaises(RuntimeError):deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)
+
+    @contextmanager
+    def api4c_fixture(self):
+        """Real immutable815 API scope; only Docker and the separately covered immutable94 history boundary are mocked."""
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name, ExitStack() as stack:
+            base=Path(name).resolve();previous=base/'previous';directory=base/'candidate';api=base/'immutable815'
+            for path in (previous,directory,api):path.mkdir()
+            stack.enter_context(patch.object(deployment,'BASE',base))
+            scope_path=api/'scripts/production-release/api-admin-scope.py';scope_path.parent.mkdir(parents=True)
+            scope_path.write_bytes(subprocess.check_output(['git','show',deployment.RECHARGE_D3FB_API_ORIGIN+':scripts/production-release/api-admin-scope.py'],cwd=self.project));scope_path.chmod(0o644)
+            lines={'api':'a'*64+'  /app/apps/api/dist/main.js\n','admin':'b'*64+'  /usr/share/nginx/html/index.html\n'}
+            proof={'version':1,'commit':deployment.RECHARGE_D3FB_API_ORIGIN,'sourceTree':deployment.RECHARGE_D3FB_API_TREE,
+                'images':{service:{'imageId':'sha256:'+str(index)*64,
+                    'reference':'123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:'+deployment.RECHARGE_D3FB_API_ORIGIN+'-123-1-'+service,
+                    'fileCount':1,'sha256':deployment.hashlib.sha256(lines[service].encode()).hexdigest()}
+                    for index,service in enumerate(('api','admin'),1)}}
+            states={service:{'image':'sha256:'+'c'*64,'reference':'local-'+service,'status':'running','health':'healthy',
+                'containerId':str(index)*64,'startedAtSha256':'d'*64,'environmentSha256':'e'*64}
+                for index,service in enumerate(deployment.ALL_SERVICES)}
+            for service in ('api','admin'):states[service].update(image=proof['images'][service]['imageId'],reference=proof['images'][service]['reference'])
+            metadata={service:{'Id':row['containerId'],'Image':row['image'],'Config':{'local':service},'HostConfig':{},'Mounts':[]}
+                for service,row in states.items()}
+            snapshots={service:{**row,'configurationSha256':deployment.historical_fingerprint({key:metadata[service][key] for key in ('Config','HostConfig','Mounts')})}
+                for service,row in states.items()}
+            live=copy.deepcopy(states);live['auto-recharge'].update(image='sha256:'+'f'*64,containerId='f'*64)
+            images={proof['images'][service]['imageId']:{'Id':proof['images'][service]['imageId'],'Architecture':'amd64',
+                'Config':{'Labels':{'org.opencontainers.image.revision':deployment.RECHARGE_D3FB_API_ORIGIN,
+                    'id-business-v2.source-tree':deployment.RECHARGE_D3FB_API_TREE}}} for service in ('api','admin')}
+            def command(*args,**kwargs):
+                if args[:3]==('docker','image','inspect'):return json.dumps([images[args[3]]])
+                if args[:2]==('docker','inspect'):
+                    if args[2]=='f'*64:return json.dumps([{**metadata['auto-recharge'],'Id':'f'*64,'Image':'sha256:'+'f'*64}])
+                    return json.dumps([next(row for row in metadata.values() if row['Id']==args[2])])
+                raise AssertionError('unexpected command')
+            controller={'BASE':base,'ALL_SERVICES':deployment.ALL_SERVICES,'require':deployment.require,'run':command,
+                'production_services':lambda _directory:list(deployment.ALL_SERVICES),
+                'service_state':lambda path,service,**kwargs:copy.deepcopy(live[service] if path==directory else states[service]),
+                'compose':lambda _directory,_exec,_T,service,*args,**kwargs:lines[service]}
+            profile=copy.deepcopy(self.profile)
+            report={'ok':True,'checkCount':49,'violationCount':0,'checks':[{'code':'C'+str(index),'count':0} for index in range(49)]}
+            record={'fixture':'immutable815-preservation'}
+            for relative,data in [('api-admin-build-proof.json',proof),('api-admin-preservation.json',record),('before-audit.json',report),('after-audit.json',report)]:
+                (api/relative).write_text(json.dumps(data));(api/relative).chmod(0o600)
+            for relative,key in deployment.RECHARGE_D3FB_PRIVATE.items():
+                raw=(api/relative).read_bytes();(previous/relative).write_bytes(raw);(previous/relative).chmod(0o600)
+                profile['nativeBaseline'][key]=deployment.hashlib.sha256(raw).hexdigest()
+            receipt=copy.deepcopy(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['readback'])
+            controller['REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE']={'liveServices':snapshots,'readback':receipt}
+            scope,controller_object=deployment.recharge_d3fb_api_scope(api,controller)
+            forbidden=unittest.mock.Mock(side_effect=AssertionError('original API global-current replay forbidden'));scope['readback']=forbidden
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_native_producer',return_value=controller))
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_api_origin',return_value=api))
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_api_scope',return_value=(scope,controller_object)))
+            profile['nativeBaseline'].update(apiBuildProofCanonicalSha256=deployment.historical_fingerprint(proof),
+                apiReadbackSha256=deployment.historical_fingerprint(receipt),
+                configuredPreservedStatesSha256=deployment.historical_fingerprint({key:value for key,value in snapshots.items() if key!='auto-recharge'}))
+            manifest={'commit':deployment.RECHARGE_D3FB_API_ORIGIN,'sourceTree':deployment.RECHARGE_D3FB_API_TREE,
+                'apiAdminPublication':deployment.recharge_d3fb_historical_api(profile)['publication']}
+            (api/'release-manifest.json').write_text(json.dumps(manifest));(api/'release-manifest.json').chmod(0o600)
+            def stored_history(_api):
+                deployment.require(_api==api,'unexpected historical API path')
+                for stage in ('before','after'):scope['audit_receipt'](controller_object,api/(stage+'-audit.json'))
+                return fixed_copy(manifest),api
+            def fixed_copy(value):return copy.deepcopy(value)
+            controller['registration_followup_api_admin_history']=stored_history
+            deployment.recharge_d3fb_private_copies(directory,previous,profile,copy_files=True)
+            yield SimpleNamespace(base=base,previous=previous,directory=directory,api=api,scope=scope,controller=controller,
+                profile=profile,manifest=manifest,lines=lines,states=states,live=live,metadata=metadata,images=images,
+                proof=proof,record=record,report=report,forbidden=forbidden,snapshots=snapshots)
+
+    def test_originalAPI_after_closure_uses_real_scope_content_and_snapshot_without_readback_replay(self):
+        with self.api4c_fixture() as f:
+            fields=deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile)
+            self.assertEqual(fields['apiReadbackSha256'],f.profile['nativeBaseline']['apiReadbackSha256'])
+            self.assertEqual(fields['configuredPreservedStatesSha256'],f.profile['nativeBaseline']['configuredPreservedStatesSha256'])
+            self.assertNotEqual(f.live['auto-recharge'],f.states['auto-recharge']);f.forbidden.assert_not_called()
+            original=f.lines['api'];f.lines['api']='f'*64+'  /app/apps/api/dist/main.js\n'
+            with self.assertRaises(RuntimeError):deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile)
+            f.lines['api']=original
+            for relative in deployment.RECHARGE_D3FB_PRIVATE:
+                original=(f.api/relative).read_bytes();(f.api/relative).write_bytes(original+b' ')
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile)
+                (f.api/relative).write_bytes(original)
+                (f.directory/relative).chmod(0o644)
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile)
+                (f.directory/relative).chmod(0o600)
+            f.manifest['apiAdminPublication']['workersPublished']=True
+            (f.api/'release-manifest.json').write_text(json.dumps(f.manifest))
+            with self.assertRaises(RuntimeError):deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile)
+            f.forbidden.assert_not_called()
+
+    def test_actual_configured6_rejects_each_preserved_container_mount_and_environment_change(self):
+        with self.api4c_fixture() as f:
+            for service in set(deployment.ALL_SERVICES)-{'auto-recharge'}:
+                for kind in ('Config','HostConfig','Mounts','environment'):
+                    old_metadata=copy.deepcopy(f.metadata[service]);old_live=copy.deepcopy(f.live[service])
+                    if kind=='Mounts':f.metadata[service][kind]=[{'Source':'local-changed','Destination':'/fixture'}]
+                    elif kind=='environment':f.live[service]['environmentSha256']='a'*64
+                    else:f.metadata[service][kind]={'localChanged':True}
+                    with self.subTest(service=service,kind=kind),self.assertRaises(RuntimeError):
+                        deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile)
+                    f.metadata[service]=old_metadata;f.live[service]=old_live
+            # The rechargeable row is deliberately excluded, including its new configuration.
+            f.metadata['auto-recharge']['Mounts']=[{'Source':'new-charge','Destination':'/fixture'}]
+            deployment.recharge_d3fb_api_receipt(f.previous,f.directory,f.profile);f.forbidden.assert_not_called()
+
+    def test_readback_final_tail_detects_real_late_registration_mount_drift(self):
+        fixture=FixedRegistrationRuntimeScopeTests();fixture.root=self.project
+        fixture.profile=json.loads((self.project/deployment.REGISTRATION_SCOPE_FILE).read_bytes())
+        reports,frozen,_policy,_seal=fixture.zero_fixture()
+        with self.api4c_fixture() as f,ExitStack() as stack:
+            origin=f.base/'frozen';origin.mkdir();(origin/'before-audit.json').write_text(json.dumps({'gate':frozen}));(origin/'before-audit.json').chmod(0o600)
+            (f.base/'current').symlink_to(f.directory)
+            path=f.directory/deployment.RECHARGE_D3FB_FILE;path.parent.mkdir(parents=True);path.write_text(json.dumps(f.profile));path.chmod(0o644)
+            (f.previous/'release-manifest.json').write_text('{}');(f.previous/'release-manifest.json').chmod(0o600)
+            for stage in ('before','after'):
+                (f.directory/(stage+'-audit.json')).write_text(json.dumps(reports[stage]));(f.directory/(stage+'-audit.json')).chmod(0o600)
+            gates={stage:deployment.require_registration_zero_report(reports[stage],stage,frozen) for stage in ('before','after')}
+            args=SimpleNamespace(commit='a'*40,source_tree='b'*40,expected_current=deployment.RECHARGE_D3FB_CURRENT)
+            manifest={'previousRelease':str(f.previous),'dataAuditBefore':gates['before'],'dataAuditAfter':gates['after'],
+                'fixedRechargeRelease':deployment.recharge_d3fb_context(args,f.profile,gates['before'],gates['after'])}
+            (f.directory/'release-manifest.json').write_text(json.dumps(manifest));(f.directory/'release-manifest.json').chmod(0o600)
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_baseline',return_value=(origin,self.old_profile)))
+            stack.enter_context(patch.object(deployment,'recharge_974_candidate_link',return_value={'localStableIdentity':True}))
+            stack.enter_context(patch.object(deployment,'verify_recharge_2f_candidate_source',return_value=[]))
+            stack.enter_context(patch.object(deployment,'main80_recharge_reader_evidence'))
+            stack.enter_context(patch.object(deployment,'recharge_2f_running_hashes'))
+            digest=deployment.historical_fingerprint(f.profile)
+            with patch.object(deployment,'require_main80_recharge_public_snapshot'):
+                self.assertEqual(deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)['preservedServiceCount'],6)
+            def corrupt_late(_snapshot):
+                f.metadata['auto-registration']['Mounts']=[{'Source':'late-fixture-change','Destination':'/fixture'}]
+            with patch.object(deployment,'require_main80_recharge_public_snapshot',side_effect=corrupt_late):
+                with self.assertRaises(RuntimeError):deployment.check_recharge_d3fb_deployment('a'*40,'b'*40,digest)
+            f.forbidden.assert_not_called()
+
+    def test_historical815_stored_proof_uses_real_generic49_and_never_forges_fixed_gate(self):
+        with self.api4c_fixture() as f:
+            stored_d3={'immutableD3':'local-fixture'}
+            proof=deployment.recharge_d3fb_api_stored_origin(f.previous,stored_d3)
+            self.assertEqual(proof['commit'],deployment.RECHARGE_D3FB_API_ORIGIN)
+            self.assertEqual(proof['originD3StoredProofSha256'],deployment.historical_fingerprint(stored_d3))
+            self.assertEqual(proof['storedGeneric49']['before']['mode'],'STRICT_ZERO_49')
+            self.assertNotIn('gate',proof['storedGeneric49']['before'])
+            for bad in ({**f.report,'gate':{}},{**f.report,'checks':f.report['checks'][:-1]},
+                    {**f.report,'violationCount':1}):
+                (f.api/'after-audit.json').write_text(json.dumps(bad))
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_api_stored_origin(f.previous,stored_d3)
+            f.forbidden.assert_not_called()
+
+    def test_original94_receipt_before_only_checker_and_closed_profile_context_after(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as name,ExitStack() as stack:
+            base=Path(name).resolve();previous=base/'previous';previous.mkdir();(base/'current').symlink_to(previous)
+            stack.enter_context(patch.object(deployment,'BASE',base))
+            producer=previous/'scripts/production-release/remote-deploy.py';producer.parent.mkdir(parents=True)
+            producer.write_bytes(subprocess.check_output(['git','show',deployment.RECHARGE_D3FB_CURRENT+':scripts/production-release/remote-deploy.py'],cwd=self.project));producer.chmod(0o644)
+            raw=subprocess.check_output(['git','show',deployment.RECHARGE_D3FB_CURRENT+':'+deployment.REGISTRATION_FOLLOWUP_FILE],cwd=self.project)
+            profile_path=previous/deployment.REGISTRATION_FOLLOWUP_FILE;profile_path.parent.mkdir(parents=True);profile_path.write_bytes(raw);profile_path.chmod(0o644)
+            manifest={'fixedRegistrationRelease':{'id':deployment.REGISTRATION_FOLLOWUP_ID,'profileRawSha256':deployment.RECHARGE_D3FB_REGISTRATION_RAW}}
+            manifest_path=previous/'release-manifest.json';manifest_path.write_text(json.dumps(manifest));manifest_path.chmod(0o600)
+            namespace=deployment.recharge_d3fb_native_producer(previous)
+            receipt=namespace['registration_readback_receipt'](deployment.RECHARGE_D3FB_CURRENT,deployment.RECHARGE_D3FB_TREE,
+                deployment.RECHARGE_D3FB_REGISTRATION_RAW,profile_id=deployment.REGISTRATION_FOLLOWUP_ID)
+            checker=unittest.mock.Mock(return_value=receipt);namespace['check_registration_followup_deployment']=checker
+            stack.enter_context(patch.object(deployment,'recharge_d3fb_native_producer',return_value=namespace))
+            before=deployment.recharge_d3fb_registration_receipt(previous,verify_native=True);checker.assert_called_once()
+            self.assertEqual(before['registrationReadbackSha256'],deployment.historical_fingerprint(receipt))
+            self.assertGreater(len(receipt),21)
+            (base/'current').unlink();(base/'candidate').mkdir();(base/'current').symlink_to(base/'candidate')
+            checker.side_effect=AssertionError('original94 global-current replay forbidden')
+            self.assertEqual(deployment.recharge_d3fb_registration_receipt(previous),before);self.assertEqual(checker.call_count,1)
+            for bad in ({**manifest,'apiAdminPublication':{}},{'fixedRegistrationRelease':{'id':'old','profileRawSha256':deployment.RECHARGE_D3FB_REGISTRATION_RAW}},
+                    {'fixedRegistrationRelease':{'id':deployment.REGISTRATION_FOLLOWUP_ID,'profileRawSha256':'a'*64}}):
+                manifest_path.write_text(json.dumps(bad))
+                with self.assertRaises(RuntimeError):deployment.recharge_d3fb_registration_receipt(previous)
+            manifest_path.write_text(json.dumps(manifest));profile_path.write_bytes(raw+b' ')
+            with self.assertRaises(RuntimeError):deployment.recharge_d3fb_registration_receipt(previous)
+            profile_path.write_bytes(raw);profile_path.chmod(0o600)
+            with self.assertRaises(RuntimeError):deployment.recharge_d3fb_registration_receipt(previous)
+
+    def test_D3_archive_is_pinned_independently_of_current4c_archive_before_build(self):
+        with patch.object(deployment,'check_recharge_d3fb_scope',return_value=(self.project,self.profile)), \
+                patch.dict(deployment.os.environ,{},clear=True),patch.object(deployment,'registration_download',return_value=b'not-D3-original') as download, \
+                patch.object(deployment,'registration_archive') as unpack:
+            with self.assertRaises(RuntimeError):deployment.prepare_recharge_d3fb_build()
+            download.assert_called_once_with(deployment.RECHARGE_D3FB_ORIGIN);unpack.assert_not_called()
+
+
+
 class Registration92RecoveryScopeTests(unittest.TestCase):
     """Every archive/image/window operation is a local closed fixture for the two-service lane."""
     @classmethod
@@ -11887,6 +12560,7 @@ class Registration94ScopeTests(unittest.TestCase):
 class Registration95ScopeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        deployment.load_registration_interstitial95()
         cls.root = Path(__file__).resolve().parents[2]
         cls.profile = json.loads((cls.root / deployment.REGISTRATION_INTERSTITIAL_FILE).read_bytes())
         cls.runtime = cls.root / '.runtime/registration-login-interstitial-20261008/control95'
@@ -11913,6 +12587,58 @@ class Registration95ScopeTests(unittest.TestCase):
                 'REGISTRATION_INTERSTITIAL_HANDOFF':handoff}.items(): stack.enter_context(patch.object(deployment,name,value))
             yield SimpleNamespace(profile=profile,candidate=candidate,handoff=handoff)
 
+    def test_plaintext_loader_preserves_real_repo_current_and_stage_namespace(self):
+        source_path=self.root/'scripts/production-release/remote-deploy.py'
+        source_raw=source_path.read_bytes();module_raw=source_path.with_name('registration-interstitial-95.py').read_bytes()
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary)
+            for directory in (source_path.parent,base/'releases/actual95/scripts/production-release',base/'.staging'/('oidc-'+'a'*40)):
+                directory.mkdir(parents=True,exist_ok=True);source=directory/'remote-deploy.py';module=directory/'registration-interstitial-95.py'
+                if source!=source_path:source.write_bytes(source_raw);source.chmod(0o644);module.write_bytes(module_raw);module.chmod(0o644)
+                ns={'__name__':'real95_loader_fixture','__file__':str(source)};exec(compile(source_raw,str(source),'exec'),ns)
+                if source!=source_path:ns['BASE']=base
+                before={name:ns[name]for name in ('__name__','__file__','BASE')}
+                self.assertNotIn('REGISTRATION_INTERSTITIAL_ID',ns)
+                self.assertIs(ns['load_registration_interstitial95'](),ns)
+                self.assertEqual(before,{name:ns[name]for name in before})
+                self.assertEqual(ns['REGISTRATION_INTERSTITIAL_ID'],'registration-worker-95-20261008')
+                self.assertEqual(ns['registration_interstitial_record'](self.profile['runtimeBaseline']),self.profile['runtimeBaseline'])
+
+    def test_plaintext_module_missing_hash_mode_size_symlink_and_read_race_reject_before_exec(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base);module=source.with_name('registration-interstitial-95.py');raw=module.read_bytes()
+            module.unlink()
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            module.write_bytes(raw+b"\nraise AssertionError('UNVERIFIED95_EXEC_SENTINEL')\n");module.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError,'module carrier changed'):ns['load_registration_interstitial95']()
+            module.write_bytes(raw);module.chmod(0o600)
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            module.chmod(0o644);module.write_bytes(b'x'*(128*1024+1))
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            module.unlink();missing=base/'never-created-module';module.symlink_to(missing)
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            self.assertFalse(missing.exists());module.unlink();module.write_bytes(raw);module.chmod(0o644)
+            original=ns['os'].fstat;count={'n':0}
+            def racing(fd):
+                state=original(fd)
+                if state.st_ino==module.stat().st_ino:
+                    count['n']+=1
+                    if count['n']==2:module.write_bytes(raw+b' ')
+                return original(fd)
+            with patch.object(ns['os'],'fstat',side_effect=racing),self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+
+    def test_pro4c_staging_entry_never_requires_or_executes95_module(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,_profile=self.staging_fixture(base)
+            source.with_name('registration-interstitial-95.py').unlink()
+            fresh={'__name__':'pro4c_without95_carrier','__file__':str(source)};exec(compile(source.read_bytes(),str(source),'exec'),fresh)
+            self.assertNotIn('REGISTRATION_INTERSTITIAL_ID',fresh)
+            self.assertEqual(fresh['fixed_recharge_binding']('recharge-pro-4c-20261008')['id'],'recharge-pro-4c-20261008')
+            selected=[];fresh['recharge_d3fb_release']=lambda args:selected.append(args)or 'pro4c-selected'
+            tokens=['--commit','a'*40,'--source-tree','b'*40,'--repository','fixture','--expected-current','4c170e661c871dc14dccc98a8d6e5cf983141341','--run-id','123','--run-attempt','1','--ci-run-id','456','--recharge-pro-d3fb']
+            with patch.object(fresh['sys'],'argv',[str(source),*tokens]):self.assertEqual(fresh['main'](),'pro4c-selected')
+            self.assertEqual(len(selected),1);self.assertNotIn('REGISTRATION_INTERSTITIAL_ID',fresh)
+
     def test_disabled_draft_and_missing_pins_stop_before_lock_download_or_commands(self):
         draft=copy.deepcopy(self.profile);draft['enabled']=False
         with patch.object(deployment,'REGISTRATION_INTERSTITIAL_HANDOFF',None),patch.object(deployment,'run')as command,patch.object(deployment,'registration_download')as download,patch.object(Path,'open')as opened:
@@ -11936,7 +12662,8 @@ class Registration95ScopeTests(unittest.TestCase):
         source=stage/'remote-deploy.py';raw=(self.root/'scripts/production-release/remote-deploy.py').read_bytes();source.write_bytes(raw);source.chmod(0o644)
         profile=stage/Path(deployment.REGISTRATION_INTERSTITIAL_FILE).name
         profile.write_bytes((self.root/deployment.REGISTRATION_INTERSTITIAL_FILE).read_bytes());profile.chmod(0o644)
-        ns={'__name__':'actual95_staging_fixture','__file__':str(source)};exec(compile(raw,str(source),'exec'),ns);ns['BASE']=base
+        module=stage/'registration-interstitial-95.py';module.write_bytes((self.root/'scripts/production-release/registration-interstitial-95.py').read_bytes());module.chmod(0o644)
+        ns={'__name__':'actual95_staging_fixture','__file__':str(source)};exec(compile(raw,str(source),'exec'),ns);ns['BASE']=base;ns['load_registration_interstitial95']()
         return ns,source,profile
 
     def test_real_controller_staging_contract_carrier_and_readback_without_repository_profile(self):
@@ -12073,7 +12800,7 @@ class Registration95ScopeTests(unittest.TestCase):
                 patch.object(deployment,'registration_download')as download,patch.object(deployment,'run')as command:
             with self.assertRaises(RuntimeError):deployment.prepare_registration_interstitial_build()
             download.assert_not_called();command.assert_not_called()
-        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_bytes()).body if isinstance(n,ast.FunctionDef)}
+        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_text()+(self.root/'scripts/production-release/registration-interstitial-95.py').read_text()).body if isinstance(n,ast.FunctionDef)}
         node=functions['prepare_registration_interstitial_build'];calls={n.func.id for n in ast.walk(node)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)}
         self.assertIn('registration_login_worker_projection',calls)
         self.assertNotIn('registration_worker_projection',calls)
@@ -12158,7 +12885,7 @@ class Registration95ScopeTests(unittest.TestCase):
             with patch.object(deployment,'fixed_recharge_bytes',side_effect=racing),self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
 
     def test_history_reads_fixed94_not_current_and_has_no_mutation_or_recursion(self):
-        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_bytes()).body if isinstance(n,ast.FunctionDef)}
+        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_text()+(self.root/'scripts/production-release/registration-interstitial-95.py').read_text()).body if isinstance(n,ast.FunctionDef)}
         node=functions['registration_interstitial_history'];source=ast.unparse(node)
         self.assertIn("namespace['registration_followup_api_admin_history']",source)
         self.assertNotIn('check_registration_followup_deployment',source)
@@ -12170,7 +12897,7 @@ class Registration95ScopeTests(unittest.TestCase):
         self.assertIn('scope.CONFIG_FILES',scope);self.assertIn('configurationBefore',scope);self.assertIn('configurationAfter',scope)
 
     def test_finance_and_modes_keep_original80_seal_without_publishing_api(self):
-        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_bytes()).body if isinstance(n,ast.FunctionDef)}
+        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_text()+(self.root/'scripts/production-release/registration-interstitial-95.py').read_text()).body if isinstance(n,ast.FunctionDef)}
         finance=ast.unparse(functions['registration_interstitial_finance_audit'])
         self.assertIn("REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['reference']",finance)
         self.assertIn('prepare_post_cleanup_reader_copy',finance);self.assertIn('before',finance);self.assertIn('require_registration_zero_report',finance)

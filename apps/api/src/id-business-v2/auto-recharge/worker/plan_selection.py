@@ -127,9 +127,10 @@ async def pro_card(scope, *, details=False):
         groups = pro_detail_groups(region)
         count = await groups.count()
         if count != 1:
-            raise region_ambiguous(count) if count > 1 else Stop('official_plan_tier_not_found')
+            raise region_ambiguous(count) if count > 1 else Stop(
+                'official_plan_tier_not_found', diagnostics={'role': 'region', 'matched_count': count})
         if not (await groups.get_attribute('aria-label') or '').strip():
-            raise Stop('official_plan_tier_not_found')
+            raise Stop('official_plan_tier_not_found', diagnostics={'role': 'region', 'matched_count': count})
     return region
 
 
@@ -292,9 +293,15 @@ class Selection:
         try:
             await pro_detail_groups(card).first.wait_for(state='visible', timeout=self.timeout())
         except Exception as exc:
-            self.diagnostics['error_type'] = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
-            raise Stop('official_plan_tier_not_found') from None
-        return await pro_card(scope, details=True)
+            error_type = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
+            scope = await plan_scope(self.page)
+            count = await pro_detail_groups(await pro_card(scope)).count()
+            if count > 1:
+                raise region_ambiguous(count, error_type=error_type) from None
+            raise Stop('official_plan_tier_not_found', diagnostics={
+                'role': 'region', 'matched_count': count, 'error_type': error_type}) from None
+        # 异步挂载期间可能出现第二个弹窗，重新核验唯一作用域后才返回档位组。
+        return await pro_card(await plan_scope(self.page), details=True)
 
     async def open_pricing_card(self, target_plan):
         """通过官网定价卡进入套餐弹窗；该链接本身不得作为建单按钮返回。"""
@@ -424,9 +431,9 @@ class Selection:
             await self.ready(cue.first, 'official_plan_tier_not_found')
             scope = await plan_scope(self.page)
         if await pro_cards(scope).count():
-            # 标题或唯一按钮不能证明会展开详情；缺少已就绪档位组时直接停止。
+            # 标题可能先于档位组挂载；在原预算内只等原生详情，不点击 Pro CTA。
             self.step('choose_tier', 'region')
-            return await pro_card(scope, details=True)
+            return await self.wait_native_pro_details(scope)
         return scope
 
     async def run(self, target_plan, require_upgrade=False):

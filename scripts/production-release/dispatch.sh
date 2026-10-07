@@ -102,6 +102,14 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; 
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope
 fi
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}"
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+fi
 if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1
@@ -158,6 +166,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'recharge-pro-main80-20261006',
                          'recharge-pro-974-20261007',
                          'recharge-pro-2f-20261007',
+                         'recharge-pro-4c-20261008',
                          'registration-worker-b8-80-20261006',
                          'registration-worker-956-20261006',
                          'registration-worker-85-20261006',
@@ -197,6 +206,13 @@ elif history_policy == 'recharge-pro-menu-7f-20261005':
 elif history_policy == 'recharge-pro-main80-20261006':
     assert previous == 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' and admin_only == 'false'
     scope_flag += ' --recharge-pro-main80'
+elif history_policy == 'recharge-pro-4c-20261008':
+    assert previous == '4c170e661c871dc14dccc98a8d6e5cf983141341' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT',
+        'POST_CLEANUP_SEAL_SHA256', 'ORDER_ARCHIVE_SEAL_SHA256', 'ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'))
+    assert not os.environ.get('RELEASE_BROWSER_CACHE_IMAGE') and not os.environ.get('RELEASE_BROWSER_CACHE_IMAGE_ID')
+    scope_flag += ' --recharge-pro-d3fb'
 elif history_policy == 'recharge-pro-2f-20261007':
     assert previous == '2f24cf81007429ea474da404a30bc74da9d43ce1' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
@@ -325,19 +341,27 @@ if history_policy == 'registration-worker-95-20261008':
     from pathlib import Path
     source_raw=Path('scripts/production-release/remote-deploy.py').read_bytes()
     profile_name='registration-worker-95-20261008.json'
+    module_name='registration-interstitial-95.py'
     profile_raw=Path('deploy/aws',profile_name).read_bytes()
-    assert len(source_raw)<=1024*1024 and len(profile_raw)<=128*1024
+    module_raw=Path('scripts/production-release',module_name).read_bytes()
+    assert len(source_raw)<=1024*1024 and len(profile_raw)<=128*1024 and len(module_raw)<=128*1024
     profile_target=str(Path(script_path).parent/profile_name)
+    module_target=str(Path(script_path).parent/module_name)
     guard=('import pathlib,stat;paths=[pathlib.Path('+repr(str(Path(script_path).parent))+')];'
         +'\nfor p in [paths[0],paths[0].parent,paths[0].parent.parent]:\n if p.resolve()!=p or p.is_symlink():raise RuntimeError("Fixed95 staging location changed")\n'
-        +'for p in [pathlib.Path('+repr(script_path)+'),pathlib.Path('+repr(profile_target)+')]:\n if p.is_symlink() or (p.exists() and (not p.is_file() or p.stat().st_nlink!=1)):raise RuntimeError("Fixed95 staging carrier changed")')
-    verify=('import hashlib,pathlib; p=pathlib.Path('+repr(script_path)+');b=p.read_bytes();'
-        +'\nif len(b)>1024*1024 or hashlib.sha256(b).hexdigest()!='+repr(hashlib.sha256(source_raw).hexdigest())+':raise RuntimeError("Fixed95 controller changed")\n'
+        +'for p in [pathlib.Path('+repr(script_path)+'),pathlib.Path('+repr(profile_target)+'),pathlib.Path('+repr(module_target)+')]:\n if p.is_symlink() or (p.exists() and (not p.is_file() or p.stat().st_nlink!=1)):raise RuntimeError("Fixed95 staging carrier changed")')
+    verify=('import hashlib,pathlib;\n'+"import os,stat\n\ndef read95(path, cap, expected):\n    if path.resolve()!=path or path.is_symlink() or path.parent.resolve()!=path.parent:raise RuntimeError('Fixed95 carrier path changed')\n    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)\n    with os.fdopen(fd,'rb')as stream:\n        before=os.fstat(stream.fileno())\n        identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)\n        if not stat.S_ISREG(before.st_mode)or stat.S_IMODE(before.st_mode)!=0o644 or before.st_nlink!=1 or before.st_size>cap:raise RuntimeError('Fixed95 carrier stat changed')\n        raw=stream.read(cap+1)\n        if len(raw)>cap or identity(before)!=identity(os.fstat(stream.fileno())) or identity(before)!=identity(os.stat(path,follow_symlinks=False)):raise RuntimeError('Fixed95 carrier read changed')\n    if hashlib.sha256(raw).hexdigest()!=expected:raise RuntimeError('Fixed95 carrier hash changed')\n    return raw\n"
+        +'p=pathlib.Path('+repr(script_path)+');q=pathlib.Path('+repr(profile_target)+');m=pathlib.Path('+repr(module_target)+');'
+        +'b=read95(p,1024*1024,'+repr(hashlib.sha256(source_raw).hexdigest())+');'
+        +'read95(q,128*1024,'+repr(hashlib.sha256(profile_raw).hexdigest())+');'
+        +'read95(m,128*1024,'+repr(hashlib.sha256(module_raw).hexdigest())+');'
         +'n={"__name__":"fixed95_staging_verify","__file__":str(p)};exec(compile(b,str(p),"exec"),n);'
+        +'n["load_registration_interstitial95"]();'
         +'n["registration_interstitial_verify_carrier"]('+repr(hashlib.sha256(source_raw).hexdigest())+','+repr(hashlib.sha256(profile_raw).hexdigest())+')')
     commands[1:3]=['python3 -c '+shlex.quote(guard),commands[1],commands[2],
         f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/deploy/aws/{profile_name} -o {profile_target}',
-        f'chmod 0644 {script_path} {profile_target}','python3 -c '+shlex.quote(verify)]
+        f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{module_name} -o {module_target}',
+        f'chmod 0644 {script_path} {profile_target} {module_target}','python3 -c '+shlex.quote(verify)]
 if api_admin:
     import hashlib
     pinned = []

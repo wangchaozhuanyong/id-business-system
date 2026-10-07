@@ -959,8 +959,10 @@ class Registration95TransportTests(TransportTests):
             controller=root/'scripts/production-release/remote-deploy.py'
             controller.write_text(controller.read_text()+'\nvalidate_registration_interstitial_readback=validate_fixed_registration_readback_projection\n')
             controller.write_text(controller.read_text()+"\ndef registration_interstitial_verify_carrier(source_sha,profile_sha):\n import pathlib,hashlib,json\n p=pathlib.Path(__file__);q=pathlib.Path('deploy/aws/registration-worker-95-20261008.json')\n assert hashlib.sha256(p.read_bytes()).hexdigest()==source_sha and hashlib.sha256(q.read_bytes()).hexdigest()==profile_sha\n return json.loads(q.read_bytes())\n")
+            controller.write_text(controller.read_text()+"\ndef load_registration_interstitial95():return globals()\n")
+            (root/'scripts/production-release/registration-interstitial-95.py').write_text('# Closed plaintext95 module fixture\n')
             curl=root/'.fixture/curl'
-            curl.write_text('#!'+sys.executable+'\n'+"import os,pathlib,sys\nargs=sys.argv[1:];url=args[args.index('--max-time')+2];base='https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+os.environ['RELEASE_COMMIT']+'/'\nallowed={base+'scripts/production-release/remote-deploy.py':pathlib.Path('scripts/production-release/remote-deploy.py'),base+'deploy/aws/registration-worker-95-20261008.json':pathlib.Path('deploy/aws/registration-worker-95-20261008.json')}\nif url not in allowed:raise SystemExit('Closed local curl fixture rejected URL')\ndata=allowed[url].read_bytes();pathlib.Path(args[args.index('-o')+1]).write_bytes(data)\n")
+            curl.write_text('#!'+sys.executable+'\n'+"import os,pathlib,sys\nargs=sys.argv[1:];url=args[args.index('--max-time')+2];base='https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+os.environ['RELEASE_COMMIT']+'/'\nallowed={base+'scripts/production-release/remote-deploy.py':pathlib.Path('scripts/production-release/remote-deploy.py'),base+'deploy/aws/registration-worker-95-20261008.json':pathlib.Path('deploy/aws/registration-worker-95-20261008.json'),base+'scripts/production-release/registration-interstitial-95.py':pathlib.Path('scripts/production-release/registration-interstitial-95.py')}\nif url not in allowed:raise SystemExit('Closed local curl fixture rejected URL')\ndata=allowed[url].read_bytes();pathlib.Path(args[args.index('-o')+1]).write_bytes(data)\n")
             curl.chmod(0o755)
             profile = {'id': self.profile, 'enabled': True, 'registrationSourceCommit': '9'*40, 'workerBasisCommit': '2f24cf81007429ea474da404a30bc74da9d43ce1',
                 'workerProjectionSha256': 'b'*64, 'registrationSourceSha256': {}, 'validationSourceSha256': {}}
@@ -1008,19 +1010,25 @@ class Registration95TransportTests(TransportTests):
                 self.assertIn('\"--registration-profile\",\"' + self.profile + '\"', command[2])
             staging = '/opt/id-business-v2/.staging/oidc-' + COMMIT + '/remote-deploy.py'
             local_source = root / 'scripts/production-release/remote-deploy.py'
-            local_verifier = command[2].replace(repr(staging), repr(str(local_source))).replace(repr('/opt/id-business-v2/.staging/oidc-'+COMMIT+'/'+self.profile+'.json'),repr(str(root/self.profile_file)))
+            local_verifier = command[2].replace(repr(staging), repr(str(local_source))).replace(repr('/opt/id-business-v2/.staging/oidc-'+COMMIT+'/'+self.profile+'.json'),repr(str(root/self.profile_file))).replace(repr('/opt/id-business-v2/.staging/oidc-'+COMMIT+'/registration-interstitial-95.py'),repr(str(root/'scripts/production-release/registration-interstitial-95.py')))
             carrier=root/self.profile_file;carrier_raw=carrier.read_bytes();carrier.unlink();never=root/'never-written-readback-carrier';carrier.symlink_to(never)
             rejected=subprocess.run([sys.executable,'-c',local_verifier],cwd=root,env=env,capture_output=True,text=True)
             self.assertNotEqual(rejected.returncode,0);self.assertFalse(never.exists());carrier.unlink();carrier.write_bytes(carrier_raw)
             verified = subprocess.run([sys.executable, '-c', local_verifier], cwd=root, env=env,
                                       capture_output=True, text=True, timeout=10)
             self.assertEqual(verified.returncode, 0, verified.stderr)
+            module=root/'scripts/production-release/registration-interstitial-95.py';module_raw=module.read_bytes();module.write_bytes(module_raw+b'changed')
+            bad_module=subprocess.run([sys.executable,'-c',local_verifier],cwd=root,env=env,capture_output=True,text=True)
+            self.assertNotEqual(bad_module.returncode,0);self.assertIn('Fixed95 carrier hash changed',bad_module.stderr);module.write_bytes(module_raw)
+            module.unlink();never_module=root/'never-readback-module';module.symlink_to(never_module)
+            bad_module=subprocess.run([sys.executable,'-c',local_verifier],cwd=root,env=env,capture_output=True,text=True)
+            self.assertNotEqual(bad_module.returncode,0);self.assertFalse(never_module.exists());module.unlink();module.write_bytes(module_raw)
             with local_source.open('a') as target:
                 target.write("\nraise RuntimeError('RAW_SECRET_SENTINEL')\n")
             changed = subprocess.run([sys.executable, '-c', local_verifier], cwd=root, env=env,
                                     capture_output=True, text=True, timeout=10)
             self.assertNotEqual(changed.returncode, 0)
-            self.assertIn('Fixed registration verifier source unavailable', changed.stderr)
+            self.assertIn('Fixed95 carrier hash changed', changed.stderr)
             self.assertNotIn('RAW_SECRET_SENTINEL', changed.stdout + changed.stderr)
 
     def test_actual_dispatch_stages_pinned95_carrier_and_matches_real_controller_argv(self):
@@ -1029,10 +1037,13 @@ class Registration95TransportTests(TransportTests):
             parameters=json.loads((root/'.deploy/production-release/ssm-456.json').read_bytes())
             commands=parameters['commands'];source_sha=hashlib.sha256((root/'scripts/production-release/remote-deploy.py').read_bytes()).hexdigest()
             profile_sha=hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest()
+            module_sha=hashlib.sha256((root/'scripts/production-release/registration-interstitial-95.py').read_bytes()).hexdigest()
+            self.assertTrue(any('/scripts/production-release/registration-interstitial-95.py' in c for c in commands))
             self.assertTrue(any('/deploy/aws/'+self.profile+'.json' in c for c in commands))
             self.assertTrue(any('/.staging/oidc-'+COMMIT+'/'+self.profile+'.json' in c for c in commands))
             verified=[shlex.split(c)[2]for c in commands if c.startswith('python3 -c ')]
             for code in verified:compile(code,'<closed95-carrier>','exec')
+            self.assertTrue(any(module_sha in c and 'load_registration_interstitial95'in c for c in verified))
             self.assertTrue(any(source_sha in c and profile_sha in c and 'registration_interstitial_verify_carrier'in c for c in verified))
             self.assertTrue(any('resolve()'in c and 'is_symlink' in c for c in verified))
             prefix='/opt/id-business-v2'
@@ -1045,12 +1056,34 @@ class Registration95TransportTests(TransportTests):
             local_source=local_stage/'remote-deploy.py';local_source.symlink_to(target)
             rejected=subprocess.run([sys.executable,'-c',guard],env=env,capture_output=True,text=True)
             self.assertNotEqual(rejected.returncode,0);self.assertFalse(target.exists());local_source.unlink()
+            local_module=local_stage/'registration-interstitial-95.py';local_module.symlink_to(target)
+            rejected=subprocess.run([sys.executable,'-c',guard],env=env,capture_output=True,text=True)
+            self.assertNotEqual(rejected.returncode,0);self.assertFalse(target.exists());local_module.unlink()
             ns={'__name__':'actual95_dispatch_argv_fixture','__file__':str(PROJECT/'scripts/production-release/remote-deploy.py')}
             exec(compile((PROJECT/'scripts/production-release/remote-deploy.py').read_bytes(),ns['__file__'],'exec'),ns)
+            ns['load_registration_interstitial95']()
             received=[];ns['registration_interstitial_release']=lambda args:received.append(args)or 0
             tokens=shlex.split(commands[-1]);self.assertEqual(tokens[:2],['python3','/opt/id-business-v2/.staging/oidc-'+COMMIT+'/remote-deploy.py'])
             self.assertEqual(ns['registration_interstitial_main'](tokens[2:]),0);self.assertEqual(len(received),1)
             args=received[0];self.assertEqual((args.image_commit,args.image_run_id,args.image_run_attempt),(COMMIT,'456','1'))
+
+    def test_dispatch_all_three_hashes_are_checked_before_controller_or_module_exec(self):
+        with self.fixture()as(root,env):
+            controller=root/'scripts/production-release/remote-deploy.py'
+            controller.write_text(controller.read_text()+"\nraise AssertionError('UNVERIFIED95_CONTROLLER_EXEC_SENTINEL')\n")
+            result=self.run_script(root,env,'dispatch.sh');self.assertEqual(result.returncode,0,result.stderr)
+            commands=json.loads((root/'.deploy/production-release/ssm-456.json').read_bytes())['commands']
+            verify=[shlex.split(c)[2]for c in commands if c.startswith('python3 -c ')][1]
+            base=root/'actual-three-carrier-preexec';stage=base/'.staging'/('oidc-'+COMMIT);stage.mkdir(parents=True)
+            locations=[(controller,stage/'remote-deploy.py'),(root/self.profile_file,stage/(self.profile+'.json')),
+                (root/'scripts/production-release/registration-interstitial-95.py',stage/'registration-interstitial-95.py')]
+            for original,target in locations:target.write_bytes(original.read_bytes());target.chmod(0o644)
+            code=verify.replace('/opt/id-business-v2',str(base))
+            for _original,target in locations:
+                raw=target.read_bytes();target.write_bytes(raw+b'drift')
+                rejected=subprocess.run([sys.executable,'-c',code],cwd=root,env=env,capture_output=True,text=True)
+                self.assertNotEqual(rejected.returncode,0);self.assertIn('Fixed95 carrier hash changed',rejected.stderr)
+                self.assertNotIn('UNVERIFIED95_CONTROLLER_EXEC_SENTINEL',rejected.stderr);target.write_bytes(raw);target.chmod(0o644)
 
     def test_registration_build_uses_only_prepared_worker_context(self):
         with self.fixture() as (root,env):
