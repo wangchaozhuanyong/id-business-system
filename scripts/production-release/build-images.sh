@@ -18,9 +18,37 @@ build_image() {
       options+=(--build-arg "V2_BUILD_ID=$archive_build_id")
     fi
   fi
+  if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
+    if [[ "$service" == api ]]; then
+      options+=(--label "id-business-v2.api-projection-sha256=$registration_api_projection")
+      options+=(--label "id-business-v2.api-compiled-source-sha256=$registration_api_compiled_projection")
+    elif [[ "$service" == auto-recharge ]]; then
+      options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
+    else
+      exit 1
+    fi
+  fi
   docker build "${options[@]}" -f "$dockerfile" -t "$reference" "$context"
   echo "Built image: $service"
 }
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 974c62cc1681012ecff897aefc90d2cd9900004a
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-92-20261007
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-registration-build --registration-profile registration-worker-92-20261007
+  registration_context=.deploy/production-release/registration-build-context
+  registration_api_context=.deploy/production-release/registration-api-build-context
+  registration_api_projection="$(read_registration_recovery_projection api)"
+  registration_api_compiled_projection="$(read_registration_recovery_projection api-compiled)"
+  registration_worker_projection="$(read_registration_recovery_projection worker)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api "$registration_api_context/apps/api/Dockerfile.mysql" runtime "$registration_api_context"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  exit 0
+fi
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release

@@ -16,6 +16,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-89-20261006.json',
   'deploy/aws/registration-worker-90-20261007.json',
   'deploy/aws/registration-worker-91-20261007.json',
+  'deploy/aws/registration-worker-92-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -90,7 +91,42 @@ function isRegistrationProfileObservationOnly(paths) {
     )
   );
 }
+const registrationRecoveryProfile = 'deploy/aws/registration-worker-92-20261007.json';
+const registrationRecoverySources = new Set([
+  'apps/api/src/id-business-v2/auto-registration/registration-validation.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-jobs.service.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-events.service.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-jobs.service.spec.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-worker.spec.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-events.service.spec.ts',
+  'apps/api/src/id-business-v2/auto-registration/registration-mysql.integration.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_builtin.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
+]);
+const registrationRecoveryControls = new Set([
+  ...registrationProfileObservationControls,
+  registrationRecoveryProfile,
+  'docs/AUTO_REGISTRATION.md',
+  'docs/V2_TASKS.md'
+]);
+registrationRecoveryControls.delete(registrationProfileObservationProfile);
+const isRegistrationRecoveryControl = (path) => registrationRecoveryControls.has(path);
+function isRegistrationRecoveryOnly(paths) {
+  return (
+    paths.includes(registrationRecoveryProfile) &&
+    paths.every(
+      (path) => registrationRecoverySources.has(path) || isRegistrationRecoveryControl(path)
+    )
+  );
+}
 export function isCiOnly(paths) {
+  if (paths.includes(registrationRecoveryProfile))
+    return paths.every(isRegistrationRecoveryControl);
   if (paths.includes(registrationProfileObservationProfile))
     return paths.every(isRegistrationProfileObservationControl);
   return (
@@ -157,6 +193,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationRecoveryProfile)) {
+    if (!isRegistrationRecoveryOnly(paths)) return 'full';
+    return paths.some((path) => registrationRecoverySources.has(path)) ? 'recharge' : 'ci-only';
+  }
   if (paths.includes(registrationProfileObservationProfile)) {
     if (!isRegistrationProfileObservationOnly(paths)) return 'full';
     return paths.some((path) => registrationProfileObservationSources.has(path))
@@ -276,6 +316,11 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationRecoveryProfile))
+    return (
+      isRegistrationRecoveryOnly(paths) &&
+      paths.some((path) => registrationRecoverySources.has(path))
+    );
   if (paths.includes(registrationProfileObservationProfile))
     return (
       isRegistrationProfileObservationOnly(paths) &&
@@ -308,6 +353,8 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationRecoveryProfile))
+    return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationProfileObservationProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
   return (
@@ -320,6 +367,16 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (isRegistrationRecoveryOnly(paths))
+    return [
+      'guards',
+      ...(paths.some((path) => registrationRecoverySources.has(path) && path.endsWith('.ts'))
+        ? ['api']
+        : []),
+      ...(paths.some((path) => registrationRecoverySources.has(path) && path.endsWith('.py'))
+        ? ['connector']
+        : [])
+    ];
   if (isRegistrationProfileObservationOnly(paths))
     return paths.some((path) => registrationProfileObservationSources.has(path))
       ? ['guards', 'connector']

@@ -2,14 +2,17 @@ import type { IdBusinessV2RegistrationJob } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RegistrationJobsService } from './registration-jobs.service';
 
-const worker = vi.hoisted(() => ({ command: vi.fn(), ready: vi.fn() }));
+const worker = vi.hoisted(() => ({ command: vi.fn(), ready: vi.fn(), windowLost: vi.fn() }));
 vi.mock('./registration-worker', () => ({
   registrationWorkerCommand: worker.command,
-  requireRegistrationWorker: worker.ready
+  requireRegistrationWorker: worker.ready,
+  registrationWindowLost: worker.windowLost,
+  registeredProfileRecoveryPendingReason: 'registered_profile_recovery_pending'
 }));
 beforeEach(() => {
   worker.command.mockReset().mockResolvedValue({ delivery: 'accepted' });
   worker.ready.mockReset().mockResolvedValue(undefined);
+  worker.windowLost.mockReset().mockResolvedValue(false);
 });
 
 function fixture() {
@@ -206,6 +209,186 @@ describe('注册年龄任务快照', () => {
   });
 });
 
+describe('已注册任务的丢窗安全续接', () => {
+  function registeredFixture() {
+    const f = fixture();
+    Object.assign(f.job, {
+      registered: true,
+      step: 'password',
+      accountId: 'account-1',
+      browserProfileId: 'reg_' + 'a'.repeat(64),
+      registrationCountryCode: 'US',
+      passwordEncrypted: 'encrypted:synthetic-staged-password',
+      pendingTotpEncrypted: 'encrypted:synthetic-staged-totp'
+    });
+    f.repository.account.mockResolvedValue({
+      id: f.job.accountId,
+      emailHash: f.job.emailHash,
+      registered: true,
+      deletedAt: null
+    });
+    worker.windowLost.mockResolvedValue(true);
+    return f;
+  }
+  it('确认丢窗后原子撤销旧绑定并保留账号、安全资料和注册证据', async () => {
+    const f = registeredFixture();
+    const oldProfile = f.job.browserProfileId;
+    expect(await f.service.launch(f.job.id, f.operator)).toMatchObject({
+      attempt: 2,
+      delivery: 'accepted'
+    });
+    expect(worker.windowLost).toHaveBeenCalledWith(f.job.id, 1);
+    expect(f.job).toMatchObject({
+      accountId: 'account-1',
+      registered: true,
+      passwordVerified: false,
+      mfaVerified: false,
+      step: 'password',
+      registrationCountryCode: 'US',
+      browserProfileId: null,
+      passwordEncrypted: 'encrypted:synthetic-staged-password',
+      pendingTotpEncrypted: 'encrypted:synthetic-staged-totp',
+      reason: 'registered_profile_recovery_pending',
+      nonceHash: expect.any(String)
+    });
+    expect(worker.command).toHaveBeenCalledTimes(1);
+    expect(worker.command).toHaveBeenCalledWith(
+      f.job.id,
+      2,
+      'launch',
+      expect.objectContaining({
+        registered: true,
+        passwordVerified: false,
+        mfaVerified: false,
+        step: 'password',
+        browserProfileId: null
+      })
+    );
+    expect(f.audit.append).toHaveBeenCalledWith(
+      f.tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_registration.profile_lost_recovery',
+        objectId: f.job.id,
+        beforeData: { attempt: 1, browserProfileId: oldProfile },
+        afterData: expect.objectContaining({
+          attempt: 2,
+          accountId: 'account-1',
+          browserProfileId: null,
+          registered: true
+        })
+      })
+    );
+  });
+  it.each(['registered', 'password', 'password_verified', 'mfa'] as const)(
+    '安全步骤%s使用原进度恢复',
+    async (step) => {
+      const f = registeredFixture();
+      f.job.step = step;
+      f.job.passwordVerified = ['password_verified', 'mfa'].includes(step);
+      await f.service.launch(f.job.id, f.operator);
+      expect(worker.command).toHaveBeenCalledWith(
+        f.job.id,
+        2,
+        'launch',
+        expect.objectContaining({
+          step,
+          passwordVerified: f.job.passwordVerified,
+          browserProfileId: null
+        })
+      );
+    }
+  );
+  it('窗口仍保留或结果不明时继续携带原绑定，不生成冷窗口', async () => {
+    const f = registeredFixture();
+    worker.windowLost.mockResolvedValue(false);
+    const original = f.job.browserProfileId;
+    await f.service.launch(f.job.id, f.operator);
+    expect(f.job.browserProfileId).toBe(original);
+    expect(worker.command).toHaveBeenCalledWith(
+      f.job.id,
+      2,
+      'launch',
+      expect.objectContaining({ browserProfileId: original })
+    );
+    expect(
+      f.audit.append.mock.calls.some(([, entry]) => entry.action.endsWith('profile_lost_recovery'))
+    ).toBe(false);
+  });
+  it('已撤销的冷准备失败只在再次确认空窗口后重试', async () => {
+    const f = registeredFixture();
+    f.job.browserProfileId = null;
+    worker.windowLost.mockResolvedValue(false);
+    await expect(f.service.launch(f.job.id, f.operator)).rejects.toThrow('丢失尚未确认');
+    expect(worker.command).not.toHaveBeenCalled();
+    worker.windowLost.mockResolvedValue(true);
+    await f.service.launch(f.job.id, f.operator);
+    expect(f.job.browserProfileId).toBeNull();
+  });
+  it('原nonce仍有效及等待本人处理的任务禁止冷恢复', async () => {
+    const f = registeredFixture();
+    f.job.nonceHash = 'a'.repeat(64);
+    f.job.leaseUntil = new Date(Date.now() + 60_000);
+    await expect(f.service.launch(f.job.id, f.operator)).rejects.toThrow('原任务仍有效');
+    f.job.state = 'awaiting_user';
+    await expect(f.service.launch(f.job.id, f.operator)).rejects.toThrow('原任务仍有效');
+    expect(f.repository.update).not.toHaveBeenCalled();
+    expect(worker.command).not.toHaveBeenCalled();
+  });
+  it.each([
+    { id: 'other-account' },
+    { emailHash: 'hash:other@example.invalid' },
+    { registered: false },
+    { deletedAt: new Date('2026-10-01T00:00:00Z') }
+  ])('账号错绑或失效阻止清除窗口 %j', async (patch) => {
+    const f = registeredFixture();
+    f.repository.account.mockResolvedValue({
+      id: f.job.accountId,
+      emailHash: f.job.emailHash,
+      registered: true,
+      deletedAt: null,
+      ...patch
+    });
+    await expect(f.service.launch(f.job.id, f.operator)).rejects.toThrow();
+    expect(f.repository.update).not.toHaveBeenCalled();
+    expect(worker.command).not.toHaveBeenCalled();
+  });
+  it.each([
+    { attempt: 2 },
+    { browserProfileId: 'reg_' + 'b'.repeat(64) },
+    { updatedAt: new Date('2026-10-03T00:00:00.001Z') },
+    { nonceHash: 'b'.repeat(64), leaseUntil: new Date(Date.now() + 60_000) },
+    { state: 'awaiting_user' },
+    { step: 'registered' },
+    { step: 'mfa', passwordVerified: true },
+    { mfaVerified: true }
+  ] satisfies Partial<IdBusinessV2RegistrationJob>[])(
+    '窗口探测与事务之间的竞态拒绝续接 %j',
+    async (patch) => {
+      const f = registeredFixture();
+      f.repository.findInTransaction.mockResolvedValueOnce({ ...f.job, ...patch });
+      await expect(f.service.launch(f.job.id, f.operator)).rejects.toThrow();
+      expect(f.repository.update).not.toHaveBeenCalled();
+      expect(worker.command).not.toHaveBeenCalled();
+    }
+  );
+  it('未注册丢窗和安全验证已完成的任务保持原规则', async () => {
+    const f = fixture();
+    f.job.browserProfileId = 'reg_' + 'a'.repeat(64);
+    worker.windowLost.mockResolvedValue(true);
+    await f.service.launch(f.job.id, f.operator);
+    expect(worker.windowLost).not.toHaveBeenCalled();
+    expect(f.job.browserProfileId).toBe('reg_' + 'a'.repeat(64));
+    const complete = registeredFixture();
+    complete.job.passwordVerified = true;
+    complete.job.mfaVerified = true;
+    complete.job.step = 'mfa_verified';
+    worker.windowLost.mockClear();
+    await complete.service.launch(complete.job.id, complete.operator);
+    expect(worker.windowLost).not.toHaveBeenCalled();
+    expect(complete.job.browserProfileId).toBe('reg_' + 'a'.repeat(64));
+  });
+});
+
 describe('注册列表候选与原任务查询', () => {
   it('代理和名字搜索分页独立，返回各自总量并兼容旧搜索', async () => {
     const { service, repository, proxies, operator } = fixture();
@@ -374,6 +557,7 @@ describe('注册启动与恢复保护', () => {
     const { service, repository, operator, job } = fixture();
     job.accountId = 'account-1';
     job.registered = original;
+    job.browserProfileId = `reg_${'a'.repeat(64)}`;
     repository.account.mockResolvedValue({ id: 'account-1', registered: current });
     await expect(service.launch(job.id, operator)).rejects.toThrow('注册状态');
     expect(worker.command).not.toHaveBeenCalled();

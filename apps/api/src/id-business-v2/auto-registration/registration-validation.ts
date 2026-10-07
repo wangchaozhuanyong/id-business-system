@@ -1,3 +1,4 @@
+import type { IdBusinessV2RegistrationJob, IdBusinessV2ChatgptAccount } from '@prisma/client';
 import { BadRequestException } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import {
@@ -111,5 +112,88 @@ export function startInput(
     // Worker 兼容官网完整日期控件；这只是年龄推导日期，并非用户真实生日。
     birthDate: legacyBirthday ?? `${Number(today.slice(0, 4)) - age}-01-01`,
     confirmIdentity: true
+  };
+}
+
+export function registeredSecurityIncomplete(job: IdBusinessV2RegistrationJob) {
+  return (
+    job.registered === true &&
+    job.mfaVerified === false &&
+    (job.passwordVerified === true
+      ? ['password_verified', 'mfa'].includes(job.step)
+      : job.passwordVerified === false && ['registered', 'password'].includes(job.step))
+  );
+}
+
+export function registeredProfileRecoveryCheckpointMatches(
+  row: IdBusinessV2RegistrationJob,
+  original: IdBusinessV2RegistrationJob,
+  account: Pick<IdBusinessV2ChatgptAccount, 'id' | 'emailHash' | 'registered' | 'deletedAt'> | null
+) {
+  return !(
+    row.attempt !== original.attempt ||
+    row.browserProfileId !== original.browserProfileId ||
+    row.updatedAt.getTime() !== original.updatedAt.getTime() ||
+    row.state !== 'partial' ||
+    row.accountId !== original.accountId ||
+    row.emailHash !== original.emailHash ||
+    row.step !== original.step ||
+    row.passwordVerified !== original.passwordVerified ||
+    row.mfaVerified !== original.mfaVerified ||
+    !registeredSecurityIncomplete(row) ||
+    (row.nonceHash && row.leaseUntil && row.leaseUntil > new Date()) ||
+    !account ||
+    account.emailHash !== row.emailHash ||
+    account.registered !== true
+  );
+}
+
+export function registeredProfileRecoveryAudit(
+  row: IdBusinessV2RegistrationJob,
+  nextAttempt: number
+) {
+  return {
+    userId: row.ownerId,
+    module: 'id_business_v2',
+    action: 'id_business_v2.auto_registration.profile_lost_recovery',
+    objectType: 'registration_job',
+    objectId: row.id,
+    beforeData: { attempt: row.attempt, browserProfileId: row.browserProfileId },
+    afterData: {
+      attempt: nextAttempt,
+      browserProfileId: null,
+      accountId: row.accountId,
+      step: row.step,
+      registered: row.registered,
+      passwordVerified: row.passwordVerified,
+      mfaVerified: row.mfaVerified
+    }
+  };
+}
+
+export function registrationSummary(row: IdBusinessV2RegistrationJob) {
+  return {
+    id: row.id,
+    emailMasked: row.emailMasked,
+    displayName: row.displayName,
+    registrationAge: row.registrationAge ?? null,
+    state:
+      row.nonceHash &&
+      row.leaseUntil &&
+      row.leaseUntil <= new Date() &&
+      !['completed', 'cancelled'].includes(row.state)
+        ? ('partial' as const)
+        : row.state,
+    step: row.step,
+    registered: row.registered,
+    passwordVerified: row.passwordVerified,
+    mfaVerified: row.mfaVerified,
+    offerStatus: row.offerStatus,
+    reason: row.reason,
+    browserProfileId: row.browserProfileId,
+    accountId: row.accountId,
+    attempt: row.attempt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   };
 }

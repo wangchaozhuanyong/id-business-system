@@ -18,8 +18,22 @@ import {
 import { RechargeProxyService, RechargeSettingsService } from '../auto-recharge/public-api';
 import { IdBusinessV2VendureMailboxService } from '../workspace/public-api';
 import { RegistrationRepository } from './persistence/registration.repository';
-import { registrationWorkerCommand, requireRegistrationWorker } from './registration-worker';
-import { id, record, startInput, text } from './registration-validation';
+import {
+  registeredProfileRecoveryPendingReason,
+  registrationWindowLost,
+  registrationWorkerCommand,
+  requireRegistrationWorker
+} from './registration-worker';
+import {
+  id,
+  record,
+  startInput,
+  text,
+  registeredSecurityIncomplete,
+  registeredProfileRecoveryCheckpointMatches,
+  registeredProfileRecoveryAudit,
+  registrationSummary
+} from './registration-validation';
 
 const registrationProxyKindLabels: Readonly<Record<string, string>> = {
   dynamic_residential: '动态住宅',
@@ -27,32 +41,7 @@ const registrationProxyKindLabels: Readonly<Record<string, string>> = {
   mobile: '移动代理'
 };
 
-export function registrationSummary(row: IdBusinessV2RegistrationJob) {
-  return {
-    id: row.id,
-    emailMasked: row.emailMasked,
-    displayName: row.displayName,
-    registrationAge: row.registrationAge ?? null,
-    state:
-      row.nonceHash &&
-      row.leaseUntil &&
-      row.leaseUntil <= new Date() &&
-      !['completed', 'cancelled'].includes(row.state)
-        ? ('partial' as const)
-        : row.state,
-    step: row.step,
-    registered: row.registered,
-    passwordVerified: row.passwordVerified,
-    mfaVerified: row.mfaVerified,
-    offerStatus: row.offerStatus,
-    reason: row.reason,
-    browserProfileId: row.browserProfileId,
-    accountId: row.accountId,
-    attempt: row.attempt,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
-  };
-}
+export { registrationSummary } from './registration-validation';
 export const registrationTokenHash = (token: string) =>
   createHash('sha256').update(token).digest('hex');
 
@@ -262,6 +251,14 @@ export class RegistrationJobsService {
       throw new ConflictException('原窗口关闭尚未确认，请重试关闭后再启动任务');
     if (['completed', 'cancelled'].includes(original.state))
       throw new ConflictException('该任务已经结束');
+    if (
+      original.registered &&
+      original.state === 'partial' &&
+      original.nonceHash &&
+      original.leaseUntil &&
+      original.leaseUntil > new Date()
+    )
+      throw new ConflictException('原任务仍有效，请在原窗口继续或取消');
     const mailboxHash = await this.currentMailboxHash(original.mailboxAliasId, operator);
     const proxy = await this.proxies.forCharge(original.proxyId, operator);
     if (original.browserProfileId && !original.browserProfileId.startsWith('reg_'))
@@ -269,6 +266,13 @@ export class RegistrationJobsService {
         '旧任务使用比特窗口，不能转成新窗口重复注册；请核对账号并结束旧任务'
       );
     await requireRegistrationWorker();
+    const recoverProfile =
+      original.state === 'partial' &&
+      registeredSecurityIncomplete(original) &&
+      (!original.browserProfileId || /^reg_[a-f0-9]{64}$/.test(original.browserProfileId)) &&
+      (await registrationWindowLost(original.id, original.attempt));
+    if (original.registered && !original.browserProfileId && !recoverProfile)
+      throw new ConflictException('原窗口丢失尚未确认，请核对后继续原任务');
     const agentToken = randomBytes(32).toString('hex');
     const job = await this.transactions.execute(
       async (tx) => {
@@ -289,14 +293,19 @@ export class RegistrationJobsService {
         if (await this.repository.active(tx, row.id))
           throw new ConflictException('已有其他注册任务执行中');
         this.checkMailboxHash(row, mailboxHash);
-        await this.checkAccountRegistration(tx, row);
+        const account = await this.checkAccountRegistration(tx, row);
+        if (recoverProfile && !registeredProfileRecoveryCheckpointMatches(row, original, account))
+          throw new ConflictException('账号或原窗口检查点已变化，请重新核对');
         const next = await this.repository.update(tx, row.id, {
           state: 'running',
           attempt: { increment: 1 },
           nonceHash: registrationTokenHash(agentToken),
           leaseUntil: new Date(Date.now() + 45 * 60_000),
-          reason: null
+          reason: recoverProfile ? registeredProfileRecoveryPendingReason : null,
+          ...(recoverProfile ? { browserProfileId: null } : {})
         });
+        if (recoverProfile)
+          await this.audit.append(tx, registeredProfileRecoveryAudit(row, next.attempt));
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',

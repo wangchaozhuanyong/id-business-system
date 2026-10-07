@@ -468,6 +468,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-89-20261006',
         'registration-worker-90-20261007',
         'registration-worker-91-20261007',
+        'registration-worker-92-20261007',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -2945,7 +2946,7 @@ test('fixed 90 hydration workflow confines dual builds and explicit readback to 
     const source = readFileSync(`scripts/production-release/${name}`, 'utf8');
     const branch = source
       .split(
-        '\nif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then'
+        /\n(?:if|elif) \[\[ "\$\{HISTORICAL_EXCEPTION:-none\}" == registration-worker-90-20261007 \]\]; then/
       )[1]
       .split(/\n(?:fi|elif )/)[0];
     assert.ok(
@@ -3407,4 +3408,104 @@ test('fixed 974 workflow chooses independent approval readback and cache skip pr
       .length,
     1
   );
+});
+
+test('formatting excludes only the generated Worker browser cache and retains full CI fallback', async () => {
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const manifest = require.resolve('prettier/package.json');
+  const config = JSON.parse(readFileSync(manifest, 'utf8'));
+  const binary = typeof config.bin === 'string' ? config.bin : config.bin.prettier;
+  const prettier = join(manifest, '..', binary);
+  const output = join(process.cwd(), '.runtime/registration-fingerprint-prepare-repair-20261007');
+  mkdirSync(output, { recursive: true });
+  const root = mkdtempSync(join(output, 'formatter-browser-cache-'));
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  const cache = join(root, worker, '.browsers/chromium-123/browser');
+  const source = join(root, worker, 'inspected-source.js');
+  try {
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(root, '.prettierignore'), readFileSync('.prettierignore'));
+    writeFileSync(join(cache, 'third-party.js'), 'if (');
+    writeFileSync(join(cache, 'third-party.json'), 'not valid JSON');
+    writeFileSync(source, 'const checked = 1;\n');
+    const check = () => execFileSync(process.execPath, [prettier, '--check', '.'], { cwd: root });
+    assert.doesNotThrow(check);
+    writeFileSync(source, 'const checked=1\n');
+    assert.throws(
+      check,
+      (error) => error.status === 1 && error.stderr.toString().includes('inspected-source.js')
+    );
+    assert.equal(readFileSync(join(cache, 'third-party.js'), 'utf8'), 'if (');
+    assert.equal(readFileSync(join(cache, 'third-party.json'), 'utf8'), 'not valid JSON');
+    assert.equal(
+      checkMode(['deploy/aws/registration-worker-92-20261007.json', '.prettierignore']),
+      'full'
+    );
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
+test('fixed92 transport and workflow bind API80 plus actual91 projections without generic services or cache maintenance', () => {
+  const profile = 'registration-worker-92-20261007';
+  const baseline = '974c62cc1681012ecff897aefc90d2cd9900004a';
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 92 registration runtime approval'
+  );
+  assert.equal(approval.if, `inputs.historical_exception == '${profile}'`);
+  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+  assert.ok(approval.run.includes(`--registration-profile ${profile}`));
+  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
+    .split(`\nif [[ "${'${HISTORICAL_EXCEPTION:-none}'}" == ${profile} ]]; then`)[1]
+    .split('\nfi')[0];
+  assert.equal((build.match(/build_image /g) || []).length, 2);
+  assert.ok(
+    build.includes(
+      'build_image api "$registration_api_context/apps/api/Dockerfile.mysql" runtime "$registration_api_context"'
+    )
+  );
+  assert.ok(build.includes('build_image auto-recharge "$registration_context/'));
+  assert.equal(build.includes('build_image admin'), false);
+  assert.equal(build.includes('build_image migrate'), false);
+  const push = readFileSync('scripts/production-release/push-images.sh', 'utf8')
+    .split(`== ${profile} ]]; then`)[1]
+    .split('\nelif ')[0];
+  assert.ok(push.includes('services=(api auto-recharge)'));
+  assert.ok(push.includes('id-business-v2.api-projection-sha256'));
+  assert.ok(push.includes('id-business-v2.api-compiled-source-sha256'));
+  assert.ok(push.includes('id-business-v2.worker-projection-sha256'));
+  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8')
+    .split(`elif history_policy == '${profile}':`)[1]
+    .split('\nelif ')[0];
+  assert.ok(dispatch.includes("scope_flag += ' --registration-worker-92'"));
+  const artifact = workflowSteps.find(
+    (step) => step.name === 'Save fixed 92 registration API and Worker build projection'
+  );
+  assert.equal(
+    artifact.if,
+    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
+  );
+  assert.equal(
+    artifact.with.name,
+    'registration-worker-92-build-projection-${{ github.run_id }}-${{ github.run_attempt }}'
+  );
+  assert.equal(artifact.with.path, '.deploy/production-release/registration-build-projection.json');
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 92 registration deployment independently'
+  );
+  assert.ok(readback.run.includes(`profile_id='${profile}'`));
+  assert.ok(readback.run.includes('fixed-registration-92-readback.json'));
+  assert.ok(readback.run.includes('raw output suppressed'));
+  const skipped = workflowSteps.find(
+    (step) => step.name === 'Record skipped cache maintenance for fixed 92 registration release'
+  );
+  assert.equal(
+    skipped.if,
+    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
+  );
+  const maintenance = workflowSteps.find(
+    (step) => step.name === 'Verify or maintain recoverable unused project image cache'
+  );
+  assert.ok(maintenance.if.includes(`inputs.historical_exception != '${profile}'`));
 });

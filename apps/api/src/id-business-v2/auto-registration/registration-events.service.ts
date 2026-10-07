@@ -13,7 +13,15 @@ import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
 import { bankRechargeCountryCode } from '../auto-recharge/public-api';
 import { RegistrationRepository } from './persistence/registration.repository';
 import { registrationSummary, registrationTokenHash } from './registration-jobs.service';
-import { id, offer, record, step, text } from './registration-validation';
+import { registeredProfileRecoveryPendingReason } from './registration-worker';
+import {
+  registeredSecurityIncomplete,
+  id,
+  offer,
+  record,
+  step,
+  text
+} from './registration-validation';
 
 @Injectable()
 export class RegistrationEventsService {
@@ -91,6 +99,35 @@ export class RegistrationEventsService {
           ['completed', 'cancelled'].includes(row.state)
         )
           throw new ForbiddenException('任务授权已失效');
+        const recoveryPending = row.reason === registeredProfileRecoveryPendingReason;
+        if (recoveryPending) {
+          const account = await this.repository.account(tx, row.emailHash);
+          if (
+            !registeredSecurityIncomplete(row) ||
+            row.browserProfileId !== null ||
+            !account ||
+            account.deletedAt ||
+            account.id !== row.accountId ||
+            account.emailHash !== row.emailHash ||
+            account.registered !== true
+          )
+            throw new ConflictException('账号或原窗口检查点已变化，请重新核对');
+          if (
+            !['progress', 'partial'].includes(type) ||
+            (type === 'partial' && input.browserProfileId !== undefined) ||
+            (type === 'progress' &&
+              ((input.step !== undefined && input.step !== row.step) ||
+                typeof input.reason !== 'string' ||
+                !['proxy_resolving', 'proxy_verifying', 'proxy_retrying', 'proxy_ready'].includes(
+                  input.reason
+                ) ||
+                (input.browserProfileId !== undefined &&
+                  (input.reason !== 'proxy_ready' ||
+                    typeof input.browserProfileId !== 'string' ||
+                    !/^reg_[a-f0-9]{64}$/.test(input.browserProfileId)))))
+          )
+            throw new ConflictException('新浏览器窗口尚未绑定，不能继续安全配置');
+        }
         const eventSteps: Record<string, typeof row.step> = {
           registered: 'registered',
           password_verified: 'password_verified',
@@ -213,7 +250,10 @@ export class RegistrationEventsService {
         if (input.reason !== undefined) {
           const reason = text(input.reason, '任务原因', 80);
           if (!/^[a-z_]+$/.test(reason)) throw new BadRequestException('任务原因无效');
-          patch.reason = reason;
+          patch.reason =
+            recoveryPending && type === 'progress' && !profileId
+              ? registeredProfileRecoveryPendingReason
+              : reason;
         }
         if (type === 'complete') {
           if (!row.registered || !row.passwordVerified || !row.mfaVerified)
@@ -224,6 +264,19 @@ export class RegistrationEventsService {
           patch.leaseUntil = null;
         }
         row = await this.repository.update(tx, jobId, patch);
+        if (recoveryPending && profileId)
+          await this.audit.append(tx, {
+            userId: row.ownerId,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_registration.profile_rebound',
+            objectType: 'registration_job',
+            objectId: jobId,
+            afterData: {
+              attempt: row.attempt,
+              browserProfileId: profileId,
+              accountId: row.accountId
+            }
+          });
         if (row.registered) {
           const account = await this.repository.saveAccount(
             tx,

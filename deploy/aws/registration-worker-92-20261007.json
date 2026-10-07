@@ -1,0 +1,682 @@
+{
+  "version": 1,
+  "kind": "FIXED_REGISTRATION_RUNTIME_SCOPE",
+  "id": "registration-worker-92-20261007",
+  "enabled": true,
+  "expectedCurrent": "974c62cc1681012ecff897aefc90d2cd9900004a",
+  "baselineRelease": {
+    "commit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+    "sourceTree": "fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b",
+    "previousCommit": "3ca300486d0edfadda83c094a48474a63959fce7",
+    "deploymentRun": "github-actions-37364471153-2",
+    "manifestSha256": "622ce40b7d1144cb260fc9711773ddf37fb7000784dc3f1d4ec6fdbf6dd38e85",
+    "beforeAuditSha256": "9b70752e23052cb18845ff33c7bc19d49f8757f5d15e5b6446fc6468682becf7",
+    "afterAuditSha256": "d9393cdc5ef3b89acf71ab59686f5d689457125b4e8fff59a8732f67be80b07c",
+    "composeSha256": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
+    "overrideRawSha256": "fdaf610856bdfef3983ab57586d67d199cb60552ac5000c142f1c7083cda7560",
+    "overrideCanonicalSha256": "d6448664a8a204e42f5b41cb79df3121874d3d8308925ce17c4c1a89c06f8925",
+    "environmentRawSha256": "a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af",
+    "sourceArchiveSha256": "232c1a4c992fc31eb1e6c31011dd1a48e8a20889c57c5298841df509fdc9dd26",
+    "runtimeEnvironmentSha256": {
+      "admin": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+      "api": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c",
+      "auto-recharge": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+      "auto-registration": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",
+      "caddy": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+      "media-resolver": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+      "mysql": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299"
+    }
+  },
+  "registrationSourceCommit": "ac319c950d4abfc449c170545fabec253ed47dfb",
+  "workerBasisCommit": "974c62cc1681012ecff897aefc90d2cd9900004a",
+  "registrationSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "35b35b7a74a2fb22c5724ef1b8fadf24242a3d8f2d83ac4e558cfb9a1722266d",
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_builtin.py": "bd6f3bb856288c792ed9d194e829a7f7abbd888869aec66165a6e4a029a4e774",
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": "aaad2d3a5ab389c3e8f4bd1cce94a51923ff0265c0f6e97d4085d3723f30cc18",
+    "apps/api/src/id-business-v2/auto-registration/registration-events.service.ts": "8c17905b5385ccbe966c9f457f908fb2de1bacc84330b0eaa804e3f083c4c943",
+    "apps/api/src/id-business-v2/auto-registration/registration-jobs.service.ts": "8faec19efd7131e6f564247d73cb97c74b87805dfd8bf7aec9b486f612c385b4",
+    "apps/api/src/id-business-v2/auto-registration/registration-validation.ts": "6be5f356046dba0af7ac3300ba8ed6e34ae681ffa78bbe86978ef39b7f6b932d",
+    "apps/api/src/id-business-v2/auto-registration/registration-worker.ts": "6810a652b4dc2cb60da711e7a331fa87646ae0526d4bd8264dbb3545dd4512bb",
+    "docs/AUTO_REGISTRATION.md": "0a992edfeac109f9f448bff9b7afdd51ec0b059a779360dc90ef445e763ee7ef"
+  },
+  "validationSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": "38ff09d23abcdf7f633d254dbddddeef746f636c7e14e3531fd410027af72295",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "503505091e2a08062264b7e743b053fcac821ba820cf1de7c7a82427c60e0c7f",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py": "5a5f3f0dd6ada282430398ddee5eedec4347ec966d426f6323426d7c582f4c6c",
+    "apps/api/src/id-business-v2/auto-registration/registration-events.service.spec.ts": "3fe6c966a1c49b387c07a3b050a868b8382acccba14c386c12a015534b2660b5",
+    "apps/api/src/id-business-v2/auto-registration/registration-jobs.service.spec.ts": "c0a8ea2589823971cf691f0ebf3aeb26e9a7a2881d4d31e33a4c1a165afd9638",
+    "apps/api/src/id-business-v2/auto-registration/registration-mysql.integration.spec.ts": "fd8f09b6368d34e40b9e97e1d931aa152c3329d48413a7fd84f8c2fec2bf30cb",
+    "apps/api/src/id-business-v2/auto-registration/registration-worker.spec.ts": "5bfe2d7e0d41ec9bc6bc9303ab75b9694639bc0ba7bfb2cf538dee2919412c24",
+    "docs/V2_TASKS.md": "4cd5d2924af13bbab521cc5dedb8bc464d0b09e6c223ee3a0bcb3eb0bf0e7200"
+  },
+  "workerProjection": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile": {
+      "mode": "100644",
+      "sha256": "fb3426a44eef0ffc0521275e5e7c8d0c969c688b03a6e978cdbd4926a570815b"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/attempt_ledger.py": {
+      "mode": "100644",
+      "sha256": "f774f5bdc8f1ba63c9cb0453df1a1021166dccc72710e7b73590762151b9d0c2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_catalog.py": {
+      "mode": "100644",
+      "sha256": "25891362c051cc61224a46da6ca6cd8a13f58063f49715240650ad4b1aa165c2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py": {
+      "mode": "100644",
+      "sha256": "a711c24d610c1ca0f20d274f055d5f5ef7fc0d9f537575c482a60bf59d815bd1"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_options.py": {
+      "mode": "100644",
+      "sha256": "ecad088dbd059534baf9c3013fac79fbd7e46999242e834046a134f69ee6c915"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py": {
+      "mode": "100644",
+      "sha256": "02228a4023d46640280c28503b7fa3d7d2721ef75c9f92f6566735884248e754"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_checkout.py": {
+      "mode": "100644",
+      "sha256": "e644be9d68bbab358dc07ce1c3fb90a77fe0ff556017f19130726a2fa67cd6dc"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_password_login.py": {
+      "mode": "100644",
+      "sha256": "39a7d789098ed167c0b3e6e4b592553487bddf9e3d43bf64c1ff3a2667913ef6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_session.py": {
+      "mode": "100644",
+      "sha256": "d4f1117bf8ca579ea0cbaa92e16f7866af31a05bab10767dff8570033241182c"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/checkout_core.py": {
+      "mode": "100644",
+      "sha256": "1c6d38709f76a36aa2d3d230270786d182feeac7f2e1595bae3e9e69dd9d3a66"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/fingerprint_runtime.py": {
+      "mode": "100644",
+      "sha256": "9d190ac3a4edf3546391b4e7e40ace3193445aaf5d6f57ed0737d09db439af6d"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/install_fingerprint_browser.py": {
+      "mode": "100644",
+      "sha256": "f9ff9588b729ec3ebf8f1390bc363736c9e25716e3b89d5e80c98634b99382b3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": {
+      "mode": "100644",
+      "sha256": "132ac0782b4652c5d3aba6d7d27bcdd674d409052a08bdef816a2d6b74bcf6bb"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_3ds.py": {
+      "mode": "100644",
+      "sha256": "f89ccbd14abb1eef1c28314a44a54ffd1237b42ab3e9c079933c8487981df5b3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py": {
+      "mode": "100644",
+      "sha256": "3bfe34586f373d88ffa0128a227784ed89502bfbfcc758bef98a29c5807ceae6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_handoff.py": {
+      "mode": "100644",
+      "sha256": "a2a97522e1a1eadd17de7d27f1006d1cbe5229db677d5cb764c22ee596c3e373"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_network.py": {
+      "mode": "100644",
+      "sha256": "109579fffede89c7c5bc4e15b815df44f7f14eca9f7fad704ecc6236767bf887"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_recovery.py": {
+      "mode": "100644",
+      "sha256": "18815675c48b8240dd0f44b1cfe29690a085b71a404007d208147cc5020f3372"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_state.py": {
+      "mode": "100644",
+      "sha256": "52be6d21af6d39e8a0d96ae1133d4845a41882984c7c3af6589e937799ef00ac"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": {
+      "mode": "100644",
+      "sha256": "9c3c0d7b7d60ae26729486943fb7d4eec15154fb1331646fa755a6a014ebde6a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/plans.py": {
+      "mode": "100644",
+      "sha256": "17d6f205929cb86b329900f1afbf1fc72615be1a19f7aea2229470408def3a8c"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": {
+      "mode": "100644",
+      "sha256": "35b35b7a74a2fb22c5724ef1b8fadf24242a3d8f2d83ac4e558cfb9a1722266d"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_builtin.py": {
+      "mode": "100644",
+      "sha256": "bd6f3bb856288c792ed9d194e829a7f7abbd888869aec66165a6e4a029a4e774"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": {
+      "mode": "100644",
+      "sha256": "aaad2d3a5ab389c3e8f4bd1cce94a51923ff0265c0f6e97d4085d3723f30cc18"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_security.py": {
+      "mode": "100644",
+      "sha256": "dcc5ead05ea4fdd24f36d29dbdd79438f34bb75fb957552852487b7a6c62568b"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt": {
+      "mode": "100644",
+      "sha256": "5625010a0ce5fc9aced3847cfe6d231e047e93586a3403a5e54edd1e10c67493"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/server.py": {
+      "mode": "100644",
+      "sha256": "3546384cec0398dc522da0a7e2a87a092b8ca39541945de54b960be7e6b573db"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/server_proxy.py": {
+      "mode": "100644",
+      "sha256": "699262e2bac0f719f36c5a745f4fa913f94a049c9117f37a90c5eaa3e9be7ded"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscribe.py": {
+      "mode": "100644",
+      "sha256": "ca2cd9192d72e09355317bad643058b5da27366ebca7ba2068612833b193e3e2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscription_upgrade.py": {
+      "mode": "100644",
+      "sha256": "c8d4c0f5e8d3ef47c48b098a01b0ee912376609f6a3be918c31904f2479ff31e"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_catalog.py": {
+      "mode": "100644",
+      "sha256": "b01e2786e7904b2f49eba3d2096385afd5cee672b5c79a53e69724acb0ca1580"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py": {
+      "mode": "100644",
+      "sha256": "86ae3dc9ae745161699ac6ba466797a15c2218f88f6aba0f5fe3c29e523af769"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_options.py": {
+      "mode": "100644",
+      "sha256": "457a6e3bded2e5d9ce8ee1826e53c064c7e46117cea4f7ba86965ef5f9c7d6ea"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_upgrade.py": {
+      "mode": "100644",
+      "sha256": "67307c21a1912c805b559c278d3f9c6da025c2f7e1deeaccbfce19cfb620e8ae"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_browser.py": {
+      "mode": "100644",
+      "sha256": "f037b56fc532cc50783e6e8b666fb0eda947da78b23549d32e64c5cbd5a7d6b2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_connector_health.py": {
+      "mode": "100644",
+      "sha256": "a34c0d3f0fea79747f5bf6302b4b5eee965241feba9ba8f78c836d2a43b123c3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_fingerprint_runtime.py": {
+      "mode": "100644",
+      "sha256": "ba0bf129607345a165a08a43fc0b3ddaae5ed345f3174a5de2221eb0db3aee19"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_go.py": {
+      "mode": "100644",
+      "sha256": "5f772b1e32d9c801eb5e4099fcb287a6bda4aad5958282f4b1097a940df4e4d3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_password_login.py": {
+      "mode": "100644",
+      "sha256": "74a1ac5f66b781f3ac7f6d82d4d2d89ce35744467783b09f42490cc2d8d5fff6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py": {
+      "mode": "100644",
+      "sha256": "9533ff06288adebca4f00a0ee069a3bf5bcfefce62c8075be0214ce2b800866b"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_3ds.py": {
+      "mode": "100644",
+      "sha256": "a0702cc92ae22b9feb8e1aa41e4e28fb848f377555d84aa9d7c4346da010c5e6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_handoff.py": {
+      "mode": "100644",
+      "sha256": "3df55a3ed61bef2e469f080c60b92c07fefdd63b9fc1523aedb9d8350f99e8d7"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": {
+      "mode": "100644",
+      "sha256": "2ccb8e3b0e6b3ba9ff2cfc55e1fb96c5352ce6c0767ae7594aab2f5fa30d948f"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_recharge_email_code.py": {
+      "mode": "100644",
+      "sha256": "4466a9de202b9156a2851f24d91e9618d401ebed517bc41259d9865f0d71a7ca"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": {
+      "mode": "100644",
+      "sha256": "c409f1d4a36fc759aa3bf649d08e93938ff5497b9261b635f28cc02e324bcec0"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py": {
+      "mode": "100644",
+      "sha256": "b9115e2d6f91bc0b847380b763d4bdd88391268bbfa7bb5ad1c1e3e4c8c82ed6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": {
+      "mode": "100644",
+      "sha256": "f49b7939de402db79b81d17069728a87ada29aa30bc9a12e0753267362f80382"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py": {
+      "mode": "100644",
+      "sha256": "1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_mail_events.py": {
+      "mode": "100644",
+      "sha256": "161cbe50b6342e7c3498baf4cc09c5c1400fe54079fd73ad0361d52aa9b52f0c"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_server.py": {
+      "mode": "100644",
+      "sha256": "0b5771868e5ed6c8d2ffef36cf3019e313e986b9768c6f2465dbf4bcfa661757"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_server_proxy.py": {
+      "mode": "100644",
+      "sha256": "94a3365c502a0124f495097583d2a5bb942f242ea0195fc004312fc5f4a336f5"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_session_retry.py": {
+      "mode": "100644",
+      "sha256": "90886b6cc726455a0c103064bce57cfe3b6c4be13bba8f50553cce9cdaac3481"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscribe.py": {
+      "mode": "100644",
+      "sha256": "8ff45feb9f4d47b89580a6a3d84a0f520f442c56843588b82e4bbee977ee22d6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscription_upgrade.py": {
+      "mode": "100644",
+      "sha256": "7b2cc952e7709537858b6790bf803c891b7b26426dd774dbb62b1444916ccb0a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_upgrade_card_flow.py": {
+      "mode": "100644",
+      "sha256": "2cc5ad8d65ca9c3d40bcfb296f0e71758c75ad9f0a0a0f9a7c3e09e94a023b16"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_upgrade_card_selection.py": {
+      "mode": "100644",
+      "sha256": "3091d23596423d2d3578273766a993de558a744c70b06c85cc404a4e8af40f1a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_worker_isolation.py": {
+      "mode": "100644",
+      "sha256": "df4e85e5e4d6790c1c6fe1b7aeb3a40b84119fd18a589afe264af189fc5fcefc"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_authentication.py": {
+      "mode": "100644",
+      "sha256": "53c42dd9f5daf4053a81e7eb54286020292ec589a0311dfedaf1d41be47506f5"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_card_network.py": {
+      "mode": "100644",
+      "sha256": "b0ade78a203c7b0f83982a817c171271d961c3cb4c99fd27682f63019605ce6a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_card_selection.py": {
+      "mode": "100644",
+      "sha256": "ee65947bca3509b0ff68c0fd45effc648f436e8ba507ec7a59b2beb95f32178e"
+    }
+  },
+  "workerProjectionSha256": "7da05ef7e0d74d84f84d33c2bbcc9a3f7daa67270cb87ecc7ac468016f714907",
+  "apiBasisCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+  "apiBasisProjectionSha256": "5465bcdcdc21a0ecad452798145d555e8589db56c3ee2ef0091b440ebae718c0",
+  "apiProjectionSha256": "4100a9186d94b81aacc6f4f0d2f3d7c6277adac7cad3a2a6ffea50d56815f454",
+  "buildInputSha256": {
+    ".dockerignore": "9f69c1f476e723f1d8de9892058c34abc3817481b6d8259da4175c3f6293c05d",
+    "scripts/audit-python-dependencies.py": "99b90a53943699d44c3fca8642db0ef7917ce618d2f3e09a4e30f31c127ee41c"
+  },
+  "controlSourceSha256": {
+    ".github/workflows/production-release.yml": "a26d8dc08500862562bc4eb972a6b124bbde8498e57c6b54fe92312d9f5f195e",
+    "scripts/ci-recharge-check.mjs": "0f8b1072fc6ac59cd7edcd29b4312ea0837788d2e3458c97bed440a5f193d21d",
+    "scripts/ci-recharge-release.test.mjs": "7f6faf16c0ef25a4d2afac014b1babf1bebff931de9800c6d3abcc01f9b0e425",
+    "scripts/ci-recharge-scope.mjs": "74d01e9a44471b0957f261eb07dfcc4142ed3c54f5684227833bc9af4d5e60fa",
+    "scripts/ci-recharge-scope.test.mjs": "eaf92ff78b88483f2d0f4d3e438880a841ef7646d7a43b2c54d016d086153bca",
+    "scripts/production-release/build-images.sh": "01da53e0100b5fb4021dac975e4fe0a5b412d20ac08c91edfd026f840a3a155f",
+    "scripts/production-release/dispatch.sh": "78dea8b89de5bde2b3eef211aa85569c2c250ffec0a60b347afffcd53dd02335",
+    "scripts/production-release/push-images.sh": "2a2047563b67074fb3ce8b94fa1a05322a997d04c10b6c87052941325f42bdfc",
+    "scripts/production-release/registration-only-transport.test.py": "2d9efff2f5284e50d4a3665d6a856b1124f7c44f7c772944638aff1ae2be8684",
+    "scripts/production-release/remote-deploy.py": "40ab97ef56624bd4d1df081bde697fc93c7d4a4dfed344f8fdb90e28cf4fab8b",
+    "scripts/production-release/remote-deploy.test.py": "0bf95e857aedc930cc7563134cd59cbec50c51575789799a448b0de704614e0f",
+    "scripts/production-release/validate-release-selection.sh": "46894273125463a10c908b325831ca59329c6c08557857bfe251b1a7f7a7cba9",
+    "scripts/v2-registration-finance-audit.mjs": "4d0726ba795569bc70e256141847cfe8ee57354d2936f35341c6e8a599ed8e67",
+    "scripts/v2-registration-finance-audit.test.mjs": "b9b32f040ad062f978d447d7f08b7d5dccdc1fd65e10297519f2a6e9fc063470"
+  },
+  "scope": {
+    "servicesUpdated": ["api", "auto-registration"],
+    "imageServices": ["api", "auto-recharge"],
+    "preservedServices": ["media-resolver", "auto-recharge", "admin", "mysql", "caddy"],
+    "imageReuseAllowed": false,
+    "cacheCleanupAllowed": false,
+    "migrationDeploymentAllowed": false,
+    "financialWritesAllowed": false,
+    "googleDriveConfigAllowed": false,
+    "databaseGrantSyncAllowed": false
+  },
+  "financeValidator": {
+    "kind": "EXISTING_SEALED_ORDER_ARCHIVE_49",
+    "sourceCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+    "candidateTree": "fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b",
+    "policyId": "historical-finance-20261005-order-archive",
+    "checkCount": 49,
+    "executedCheckCount": 49,
+    "unavailableCheckCount": 0,
+    "violationCount": 5,
+    "policyRawSha256": "243101271c3087f8bc87521972c0d698a2e2e444044268ec5eebf05b93b6e778",
+    "policyCanonicalSha256": "91096c5c2cf5d6b1a3210794ec3cdf20aef54fe457d11b75df1735416d7c3511",
+    "rulesSha256": "fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a",
+    "exceptionsSha256": "410340139d3ea77de19103e20d0577946cd920ce9ec229978f0fd3d081644bc9",
+    "metadataSha256": "4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb",
+    "sources": {
+      "accounts": {
+        "rowCount": 2,
+        "sha256": "95e4a89173c5241290875f79cd96ac6c2e68e809b840dac3ff1987afb5bfab82"
+      },
+      "cashJournals": {
+        "rowCount": 10,
+        "sha256": "7af63905fa4958871ed5d724ce51fafae336e8317295e5b1bf68a6533070ba26"
+      },
+      "cashLines": {
+        "rowCount": 10,
+        "sha256": "0cb3f1804059f9610f81ce015f4e872b5152861a365ce772ee18f13f3151bef1"
+      },
+      "expenses": {
+        "rowCount": 5,
+        "sha256": "740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c"
+      },
+      "journals": {
+        "rowCount": 5,
+        "sha256": "df7e1a47198be81db1d59414d1204e50732cebcf77c8ad9a136bdfbea2e635b3"
+      },
+      "lines": {
+        "rowCount": 10,
+        "sha256": "f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c"
+      }
+    },
+    "checksSha256": "e1158ece628a1f952fe7cd9ab6c480208b0f3006575405af2cb9393971eefdd1",
+    "gateSha256": {
+      "before": "257f88bdc796c62582f9d8f4d8e7dc67b0fe5f46ae8d0370c53dcf16b535fa23",
+      "after": "a312a13b61f5e56a1901f81a2fd0094c7da588e1012fc09dc2b7a8cd55075ab3"
+    },
+    "releaseSealSha256": "a3e241c715ceb01c18427f56d98a4ea173598afb3874e8b4522ce43a07d3fc0c",
+    "preparedImagesSha256": "4ed683fae91fc60df43e2b068d4d18782e0d977676320fda5b194de72302f57d",
+    "preparationRunId": 37362644900,
+    "preparationRunAttempt": 1,
+    "sourceProjectionTree": "d9c2e534f0e71d5c88ffc4db492c4db2e79a9370",
+    "sourceAnchorSha256": "39dd801292f081560fdaf7db2feb6cdd6f3c1bc8b730ca9add4d33a472466920",
+    "cleanupReceiptSha256": "f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f"
+  },
+  "financeClearance": {
+    "version": 1,
+    "mode": "STRICT_ZERO_AFTER_APPROVED_REVERSALS_49",
+    "sourceCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "checkCount": 49,
+    "executedCheckCount": 49,
+    "unavailableCheckCount": 0,
+    "violationCount": 0,
+    "rulesSha256": "fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a",
+    "sources": {
+      "accounts": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 2,
+        "sha256": "7e3f38a53838c3edc387498e6bb0ea8585af89b3606a0979c6d10441680172fb"
+      },
+      "cashJournals": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 15,
+        "sha256": "eba994ee593ab87b49e2c9d772e6b81dd5f84a8a5376c0a946e8f9258d61aa96"
+      },
+      "cashLines": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 15,
+        "sha256": "6564164dd9d17c0617120e483ba79fbadeb0148c8c522066d137aa6a79059b79"
+      },
+      "expenses": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 5,
+        "sha256": "740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c"
+      },
+      "journals": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 5,
+        "sha256": "51b7f09183c5cfeb4c107cefde6ce1c652d1f0167dbd7c567c34b7e50964f4fb"
+      },
+      "lines": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 10,
+        "sha256": "f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c"
+      }
+    },
+    "metadataSha256": "4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb",
+    "checksSha256": "94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2",
+    "reversalCount": 5,
+    "reversalAuditSha256": "d90da27ad60e57116ef68f8e9e8a4f2af110cbd0e50b67d06937cf0946d8e3fc",
+    "reversalChainSha256": "22b06da04b6aca6af194b7ed1053eb8f5f9851926c0a68478bf0f614a613aea9",
+    "scope": {
+      "deletedOrderSha256": [
+        "a2ffdcf9fc09b3731b9b7fbdf41581ba5a810084ffc15172175b3ae67daed82d",
+        "c06d6d101d1525ffdc8e8fd7790a7a038a20a71f8a833020698ca3010fc9df79"
+      ],
+      "protectedOrderSha256": "4b95901aeeb2fdd34d0fe8784ebf0d4da58ccf2341bf27469f71bb3114e6332b"
+    },
+    "evidence": {
+      "cash-five-clearance-completion-source-index-20261006-v2.json": "f92fc07094fe7aacdf7762d331b96f5fe1b5cf1ebdb0267df59f7ac7c59cc8a2",
+      "cash-five-clearance-inventory-fresh-before-20261006-v4.report.json": "a458e31568c3810d229c0696a81cc185269bd50d426330837750a632d51cec0d",
+      "cash-five-clearance-inventory-after-20261006-v4.report.json": "2921c7d8f81bfdac3f7e8b17a8bba85fe2fc3c3d17fd52b07c482b57c3f7cc1d",
+      "cash-five-clearance-real49-after-20261006-v1.report.json": "b89ed31f7b2f948c441a8d25fc412c0d8278182adec19386ff541bda54669788",
+      "cash-five-clearance-five-real-ui-actions-20261006-v1.json": "28a07113cc4f399c885ba66e2afe4d55dbe5a70fe3841749e7fbda99a390dde8",
+      "cash-five-clearance-independent-actual-final-review-20261006-v1.json": "a74b8c4631a36d182eca28266e50f36e62db72518a4a3ea8d4f78f4783e094fe"
+    }
+  },
+  "runtimeBaseline": {
+    "status": "VERIFIED_91_RUNTIME_BASELINE",
+    "current": "/opt/id-business-v2/releases/20261007T054347Z-974c62cc1681",
+    "controllerSha256": "484cfa642a9b0071235edf4026759811b17acdceade0373713c0e56f16b47888",
+    "profileSha256": "c5b886a1d6b1a9f5bd34868d298274c1651b2576a22e3f414fab185526f5fa5d",
+    "manifest": {
+      "commit": "974c62cc1681012ecff897aefc90d2cd9900004a",
+      "sourceTree": "866706ef6da1d1ac7b33348ef35c133cdd8d173b",
+      "previousCommit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+      "previousRelease": "/opt/id-business-v2/releases/20261006T225956Z-01cec5190b9f",
+      "deploymentRun": "github-actions-37577436927-1",
+      "imageBuildRun": "github-actions-37577436927-1",
+      "sourceArchiveSha256": "49ebe3c3be71121c79476ae248bddacd84eddda375a5240afd428cf38b2d5cd0",
+      "servicesUpdated": ["auto-registration"],
+      "migrationApplied": false,
+      "newMigrations": [],
+      "images": {
+        "admin": {
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af-37543606799-1-admin",
+          "digest": "sha256:dfd6c15ad3add1349fa797fceb6d75808dc032dbe0d4a09a15658dc04345525c",
+          "sourceCommit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af"
+        },
+        "caddy": {
+          "digest": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510"
+        },
+        "api": {
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api",
+          "digest": "sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0",
+          "sourceCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b"
+        },
+        "migrate": {
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-migrate",
+          "digest": "sha256:6f2c0d6f71c23ee2ec0565c1dae9a0a79f42dcf5ccb589bf0583c2b9e78414f9",
+          "sourceCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b"
+        },
+        "auto-recharge": {
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:d2e22e623d0e19851c79ffe43396f5f97a99b8d3-37496968953-1-auto-recharge",
+          "digest": "sha256:bd7f4b9b5012cc06f265b2ebf9a1c49c646dfd141695bc51cc1f24a197a3de51",
+          "sourceCommit": "d2e22e623d0e19851c79ffe43396f5f97a99b8d3"
+        },
+        "media-resolver": {
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+          "digest": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+          "sourceCommit": "b8d643450ffa9012ccc09ead15e4681e3dee98d0"
+        },
+        "auto-registration": {
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:974c62cc1681012ecff897aefc90d2cd9900004a-37577436927-1-auto-recharge",
+          "digest": "sha256:1cd0faa2caf759004ff261f4b941d355f5e742e5983c26cbd73934ebe9b31334",
+          "sourceCommit": "974c62cc1681012ecff897aefc90d2cd9900004a"
+        }
+      },
+      "fixedRegistrationRelease": {
+        "id": "registration-worker-91-20261007",
+        "profileRawSha256": "c5b886a1d6b1a9f5bd34868d298274c1651b2576a22e3f414fab185526f5fa5d",
+        "registrationSourceCommit": "d6dbea1759d8d5ac9d3850067aadeb0d515eb545",
+        "workerBasisCommit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+        "workerProjectionSha256": "196e41d26653963cbd0a2e2d168af09999c8eb6a31044a98124b29c48edf3b88",
+        "financeSourceCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+        "financePolicyId": "historical-finance-20261005-order-archive",
+        "financeMode": "STRICT_ZERO_AFTER_APPROVED_REVERSALS_49",
+        "clearanceSealSha256": "46f1b091459ba540af2c26a2fad3136d1ca4b7f269d2a77bd6c97c48976ee520",
+        "environmentUnchanged": true,
+        "migrationStatus": "SKIPPED",
+        "databaseGrantSyncStatus": "SKIPPED",
+        "cacheStatus": "SKIPPED"
+      }
+    },
+    "fileSha256": {
+      "release-manifest.json": "f93fe80499696ff5f77c5dcdfac4ca3020f3de304675673aa68707e57955450d",
+      "before-audit.json": "22f3ed6997f79e531bd92f198d4ee95d8ae22496fb678322e6e65b93e2b04aba",
+      "after-audit.json": "aa5fcc6bc2c3064689e890392ac85be030d0404768c1bbef3b53dfc5a3747c17",
+      "docker-compose.aws-mysql.yml": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
+      "compose.release.json": "06f014580c4bb0727675c2cc703698851153670bbc07fa87f5a9d655aa4085c1",
+      ".env.aws.production": "a812aef2a536de5b18a31824cdac09e195672f158429a423643232134b1108af",
+      "deploy/aws/registration-worker-b8-80-20261006.json": "d5c023887b22f6a555abe0f8e4627113d5a45dec0668ae2abc1bb8fbf8cbdb28",
+      "deploy/aws/registration-worker-956-20261006.json": "60226df9c51cb222bf8c0cc09a7783b52a8f0082f728189ec3ada9554b6dbfc1",
+      "deploy/aws/registration-worker-85-20261006.json": "02fc3375314ee75b6e5b8ec47ce715f1e02f9b744ce77c5a4804d9110ba4daec",
+      "deploy/aws/registration-worker-86-20261006.json": "81946a081a13d6787a5a1e16782ef780065c6e81440b8500e55dbca155fef7f2",
+      "deploy/aws/registration-worker-87-20261006.json": "3742920452e28992595c7d31d8ea5c03915f3a3218435a7714cf6e2fe1c2aea7",
+      "deploy/aws/registration-worker-88-20261006.json": "cce9a098659ba3bc5bec6e7fd8eb294d3ef075dc4676c86f5b4c38de1ff67d67",
+      "deploy/aws/registration-worker-89-20261006.json": "4113a45f2f50c3952172942005ba2ee6e4d4d8b64c62513d232cbe844c01dec5",
+      "deploy/aws/registration-worker-90-20261007.json": "56adb736e6081eeaeb31f14bba1ccb22f1a218c3f22abefcd1a9dcdae6625eed",
+      "deploy/aws/registration-worker-91-20261007.json": "c5b886a1d6b1a9f5bd34868d298274c1651b2576a22e3f414fab185526f5fa5d"
+    },
+    "overrideCanonicalSha256": "18d36c40e77de79b3f40632bd375c28d903167381eb3977fd75556398c76b3d5",
+    "audits": {
+      "before": {
+        "checkCount": 49,
+        "violationCount": 0,
+        "checksSha256": "94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2",
+        "gateSha256": "ec68038c2606fabc6f5408a0e79784a6dc1b142acfc9cc6b78035581f907041f",
+        "identitySha256": "6458d529956db12370d7c9339a73e597b187aa0ef3a5fb475591b311ec9fdee1"
+      },
+      "after": {
+        "checkCount": 49,
+        "violationCount": 0,
+        "checksSha256": "94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2",
+        "gateSha256": "80be54958db3f671aca657fe52949f42b36fda1679d88e1fdb0c1655f54c79fb",
+        "identitySha256": "6458d529956db12370d7c9339a73e597b187aa0ef3a5fb475591b311ec9fdee1"
+      }
+    },
+    "liveServices": {
+      "media-resolver": {
+        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+        "status": "running",
+        "health": "healthy",
+        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+        "startedAtSha256": "8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f",
+        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163"
+      },
+      "auto-recharge": {
+        "image": "sha256:bd7f4b9b5012cc06f265b2ebf9a1c49c646dfd141695bc51cc1f24a197a3de51",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:d2e22e623d0e19851c79ffe43396f5f97a99b8d3-37496968953-1-auto-recharge",
+        "status": "running",
+        "health": "healthy",
+        "containerId": "b221d3c3d23a2aba49f2e0ffa02365aa368e17d7efd55171da6f5e7a40102f53",
+        "startedAtSha256": "5a50f0b801c6069121648ab0cf3965b779eb9a18861b20f1a9995724455d61a7",
+        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae"
+      },
+      "auto-registration": {
+        "image": "sha256:1cd0faa2caf759004ff261f4b941d355f5e742e5983c26cbd73934ebe9b31334",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:974c62cc1681012ecff897aefc90d2cd9900004a-37577436927-1-auto-recharge",
+        "status": "running",
+        "health": "healthy",
+        "containerId": "eea79d0fff585c8f9b672fff6d9619cc5b4bdcaeb422274da5a3054a2483120a",
+        "startedAtSha256": "5f42690fad2652ecc90243e15fb38e0859b3f0395b08ab166587439a0f146f5b",
+        "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17"
+      },
+      "api": {
+        "image": "sha256:3bb6b2d19432e327b258953900e7029d7bb56bfc7eb42ee26b611c1e1decf8f0",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b-37362644900-1-api",
+        "status": "running",
+        "health": "healthy",
+        "containerId": "8e9f22d9ec615945844d846abca8c34f827d156b13154cf0382c55148407d5ff",
+        "startedAtSha256": "2df79a73b30f3b54252ba0f8d8276815c704037cd19454a56c12074a0d57aa12",
+        "environmentSha256": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c"
+      },
+      "admin": {
+        "image": "sha256:dfd6c15ad3add1349fa797fceb6d75808dc032dbe0d4a09a15658dc04345525c",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af-37543606799-1-admin",
+        "status": "running",
+        "health": "healthy",
+        "containerId": "7737ca8d5cd4613298df71f78177a4bf8f94fd6ca7a96d8afcfd8a30fd6fabf6",
+        "startedAtSha256": "a23f08d872f054c445021de21df8adc34d397d4794eb8751a851c17f26ae66d7",
+        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4"
+      },
+      "mysql": {
+        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+        "status": "running",
+        "health": "healthy",
+        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+        "startedAtSha256": "de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7",
+        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299"
+      },
+      "caddy": {
+        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+        "status": "running",
+        "health": null,
+        "containerId": "60d68c4e7c96e46c905d77bc059b3e5e93535d86710dfe19f791587790056cab",
+        "startedAtSha256": "7c0ca0361f561b614aea52e22030becb250582f6b3e87e496c59ccc4d7f081cc",
+        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181"
+      }
+    },
+    "readback": {
+      "version": 1,
+      "id": "registration-worker-91-20261007",
+      "status": "VERIFIED",
+      "currentCommit": "974c62cc1681012ecff897aefc90d2cd9900004a",
+      "sourceTree": "866706ef6da1d1ac7b33348ef35c133cdd8d173b",
+      "profileSha256": "c5b886a1d6b1a9f5bd34868d298274c1651b2576a22e3f414fab185526f5fa5d",
+      "previousCommit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+      "registrationSourceCommit": "d6dbea1759d8d5ac9d3850067aadeb0d515eb545",
+      "workerBasisCommit": "01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af",
+      "workerProjectionSha256": "196e41d26653963cbd0a2e2d168af09999c8eb6a31044a98124b29c48edf3b88",
+      "servicesUpdated": ["auto-registration"],
+      "preservedServiceCount": 6,
+      "checkCount": 49,
+      "executedCheckCount": 49,
+      "unavailableCheckCount": 0,
+      "violationCount": 0,
+      "financeMode": "STRICT_ZERO_AFTER_APPROVED_REVERSALS_49",
+      "runningSourceMatched": true,
+      "unchangedServiceContainersPreserved": true,
+      "environmentUnchanged": true,
+      "migrationStatus": "SKIPPED",
+      "databaseGrantSyncStatus": "SKIPPED",
+      "cacheStatus": "SKIPPED",
+      "liveServicesHealthy": true
+    },
+    "actualWorkerSourceSha256": {
+      "browser_password_login.py": "39a7d789098ed167c0b3e6e4b592553487bddf9e3d43bf64c1ff3a2667913ef6",
+      "registration_browser.py": "0695a7ab960a07407ed16fbfce3368878b9e9c5c3ae4aef137ffbd7553495f9f",
+      "registration_builtin.py": "bf646db25d342c1ce1c8cbfebf74ec1b8f470f837f98a097d9c20cea1fbb5def",
+      "registration_job.py": "f1878abdf27e6760bd63c602136ae14ff06902d136bbd47cf2d036fd1fb393ae"
+    },
+    "original80SealMatched": true,
+    "databaseWrites": 0,
+    "windowRestarted": false
+  },
+  "registrationHandoff": {
+    "receiptSha256": "5b7d055c58984604d3ab9cb18b9c4d349462f227fd7f019b447c98c85e4294aa",
+    "taskId": "252ab243-d96b-4928-8116-b83dedc1d240",
+    "attempt": 5,
+    "registered": true,
+    "passwordLoginVerified": false,
+    "mfaLoginVerified": false,
+    "windowExists": false,
+    "leaseActive": false,
+    "busy": false
+  },
+  "apiCompiledSourceSha256": {
+    "apps/api/dist/id-business-v2/auto-registration/registration-jobs.service.js": "5917bc052e0263f70e249734b84a0cf5b973f26f4fef5f8e4dd36dab8827e637",
+    "apps/api/dist/id-business-v2/auto-registration/registration-events.service.js": "3488e4a8792fa0a22823c8ec71ecef8cfc058616bb02b5d39d4864f016a8ce79",
+    "apps/api/dist/id-business-v2/auto-registration/registration-worker.js": "5ea9b146219417e35276d9a0c653fc823e8b00814e898a24964cb193abc8a3ea",
+    "apps/api/dist/id-business-v2/auto-registration/registration-validation.js": "aded6d7105d5fa51e927c5598c8e28f95c69f0d01c54b14359f38ea7956a83e8"
+  },
+  "apiCompiledSourceProjectionSha256": "6a99c9c3d5f85f2e8af4c9cf195d84542d5c8fb1c9531a718e1b9f7c0d48ec22"
+}
