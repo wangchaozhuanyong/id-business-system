@@ -11753,6 +11753,106 @@ class Registration94ScopeTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_official(previous)
                 producer.assert_not_called()
 
+    @contextmanager
+    def api815_history_fixture(self):
+        # Real files and hash readers exercise the history guard, not its AST.
+        runtime = self.root / '.runtime/registration-login-runtime-followup-20261007'
+        with tempfile.TemporaryDirectory(dir=runtime) as temporary, ExitStack() as stack:
+            base = Path(temporary); origin = base / 'releases/d3'; previous = base / 'releases/815'
+            origin.mkdir(parents=True); previous.mkdir()
+            scope, controller = deployment.api_admin_scope()
+            fixed = copy.deepcopy(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE)
+            old = copy.deepcopy(deployment.REGISTRATION_FOLLOWUP_BASELINE)
+            manifest = fixed['manifest']; manifest['previousRelease'] = str(origin)
+            fixed['current'] = str(previous); fixed['historicalD3']['directory'] = str(origin)
+            old['current'] = str(origin)
+
+            def write(directory, name, value, private=False):
+                path = directory / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(value if isinstance(value, str) else json.dumps(value, indent=2) + '\n')
+                path.chmod(0o600 if private else 0o644)
+
+            for directory in (origin, previous):
+                for name in scope.CONFIG_FILES: write(directory, name, 'unchanged-static-config:' + name)
+                write(directory, '.env.aws.production', 'synthetic-no-secrets', True)
+            for directory, value in ((origin, old['manifest']), (previous, manifest)):
+                write(directory, 'compose.release.json', {'services': {name: {
+                    'image': value['images'][name]['reference'], 'pull_policy': 'never'}
+                    for name in (*deployment.SERVICES, 'migrate')}}, True)
+            before = copy.deepcopy(fixed['liveServices'])
+            for name in ('api', 'admin'):
+                before[name].update(old['liveServices'][name]); before[name]['configurationSha256'] = '7' * 64
+            record = {'before': before, 'after': copy.deepcopy(fixed['liveServices']),
+                'buildProofSha256': deployment.historical_fingerprint(fixed['buildProof']),
+                'environmentSha256': deployment.hashlib.sha256((previous / '.env.aws.production').read_bytes()).hexdigest(),
+                'configurationBefore': scope.configuration_hashes(origin), 'configurationAfter': scope.configuration_hashes(previous)}
+            self.assertNotEqual(record['configurationBefore']['compose.release.json'], record['configurationAfter']['compose.release.json'])
+            write(previous, 'api-admin-build-proof.json', fixed['buildProof'], True)
+            report = {'ok': True, 'checkCount': 49, 'violationCount': 0,
+                'checks': [{'code': str(index), 'count': 0} for index in range(49)]}
+            for stage in ('before', 'after'):
+                write(previous, stage + '-audit.json', report, True)
+                fixed['audits'][stage] = scope.audit_receipt(controller, previous / (stage + '-audit.json'))
+
+            def repin():
+                write(previous, 'api-admin-preservation.json', record, True)
+                write(previous, 'release-manifest.json', manifest, True)
+                paths = [path for path in previous.rglob('*') if path.is_file()]
+                fixed['fileSha256'] = {str(path.relative_to(previous)): deployment.hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+                fixed['privateFileModes'] = {name: 0o600 for name in fixed['fileSha256'] if name in deployment.REGISTRATION_FOLLOWUP_API_ADMIN_PRIVATE}
+                public = deployment.fixed_recharge_file_map(previous, omitted=deployment.REGISTRATION_FOLLOWUP_API_ADMIN_PRIVATE)
+                fixed['publicSourceMap'] = {'fileCount': len(public), 'sha256': deployment.historical_fingerprint(public)}
+
+            repin()
+            stack.enter_context(patch.object(deployment, 'BASE', base))
+            stack.enter_context(patch.object(deployment, 'REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE', fixed))
+            stack.enter_context(patch.object(deployment, 'REGISTRATION_FOLLOWUP_BASELINE', old))
+            # Archive/source provenance is separately covered; preservation logic stays real.
+            stack.enter_context(patch.object(deployment, 'registration_followup_api_admin_record', side_effect=lambda value: value))
+            stack.enter_context(patch.object(deployment, 'registration_followup_history', return_value=(old['manifest'], origin)))
+            stack.enter_context(patch.object(deployment, 'registration_followup_api_admin_module', return_value=(scope, controller)))
+            stack.enter_context(patch.object(deployment, 'registration_followup_api_admin_carried'))
+            command = stack.enter_context(patch.object(deployment, 'run', side_effect=AssertionError('external command forbidden')))
+            yield SimpleNamespace(previous=previous, origin=origin, fixed=fixed, old=old, manifest=manifest,
+                record=record, scope=scope, repin=repin, write=write)
+            command.assert_not_called()
+
+    def test815_history_accepts_only_api_admin_compose_image_changes(self):
+        with self.api815_history_fixture() as f:
+            self.assertEqual(deployment.registration_followup_api_admin_history(f.previous), (f.manifest, f.origin))
+
+    def test815_history_rejects_static_config_drift_even_with_matching_saved_hashes(self):
+        for name in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws', 'apps/api/prisma-mysql/schema.prisma'):
+            with self.subTest(name=name), self.api815_history_fixture() as f:
+                f.write(f.previous, name, 'changed-static-config')
+                f.record['configurationAfter'] = f.scope.configuration_hashes(f.previous); f.repin()
+                with self.assertRaisesRegex(RuntimeError, 'API Admin history changed'):
+                    deployment.registration_followup_api_admin_history(f.previous)
+
+    def test815_history_rejects_saved_hash_drift_or_incomplete_maps(self):
+        for side in ('configurationBefore', 'configurationAfter'):
+            for mutation in ('hash', 'missing', 'extra'):
+                with self.subTest(side=side, mutation=mutation), self.api815_history_fixture() as f:
+                    if mutation == 'hash': f.record[side]['compose.release.json'] = '0' * 64
+                    elif mutation == 'missing': f.record[side].pop('compose.release.json')
+                    else: f.record[side]['unapproved-config'] = '0' * 64
+                    f.repin()
+                    with self.assertRaisesRegex(RuntimeError, 'API Admin history changed'):
+                        deployment.registration_followup_api_admin_history(f.previous)
+
+    def test815_history_rejects_retained_service_or_compose_drift(self):
+        with self.api815_history_fixture() as f:
+            f.record['before']['caddy']['configurationSha256'] = '0' * 64; f.repin()
+            with self.assertRaisesRegex(RuntimeError, 'API Admin history changed'):
+                deployment.registration_followup_api_admin_history(f.previous)
+        with self.api815_history_fixture() as f:
+            value = json.loads((f.previous / 'compose.release.json').read_bytes())
+            value['services']['auto-recharge']['image'] = 'unapproved-image'
+            f.write(f.previous, 'compose.release.json', value, True)
+            f.record['configurationAfter'] = f.scope.configuration_hashes(f.previous); f.repin()
+            with self.assertRaisesRegex(RuntimeError, 'API Admin history changed'):
+                deployment.registration_followup_api_admin_history(f.previous)
+
     def test815_history_has_no_current_getter_mutation_or_legacy_api_image_requirement(self):
         tree = ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes())
         functions = {n.name:n for n in tree.body if isinstance(n, ast.FunctionDef)}
