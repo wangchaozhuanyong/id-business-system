@@ -10566,5 +10566,380 @@ class FixedRecharge974NativeTests(unittest.TestCase):
             self.assertEqual(deployment.check_fixed_recharge_deployment('a' * 40, 'b' * 40, 'c' * 64, deployment.RECHARGE_974_ID), {'synthetic': True})
             c3.assert_called_once_with('a' * 40, 'b' * 40, 'c' * 64)
 
+class Registration92RecoveryScopeTests(unittest.TestCase):
+    """Every archive/image/window operation is a local closed fixture for the two-service lane."""
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.root / '.runtime/registration-fingerprint-prepare-repair-20261007/registration92-control-tests'
+        cls.runtime.mkdir(parents=True, exist_ok=True)
+        cls.profile = json.loads((cls.root / deployment.REGISTRATION_RECOVERY_FILE).read_bytes())
+        cls.old_profile = json.loads((cls.root / deployment.REGISTRATION_PROFILE_OBSERVATION_FILE).read_bytes())
+        def local_archive(commit, *paths):
+            raw = subprocess.check_output(['git', 'archive', '--prefix=id-business-system-' + commit + '/',
+                commit, *paths], cwd=cls.root)
+            return raw, deployment.registration_archive(raw, commit)
+        cls.api_raw, cls.api = local_archive(deployment.REGISTRATION_CURRENT)
+        cls.previous_raw, cls.previous = local_archive(deployment.REGISTRATION_RECOVERY_CURRENT)
+        cls.basis_raw, cls.basis = local_archive(deployment.RECHARGE_SCOPE_CURRENT,
+            deployment.REGISTRATION_WORKER_PREFIX, '.dockerignore', 'scripts/audit-python-dependencies.py')
+        cls.old_worker = {name: row for name, row in cls.basis.items()
+            if name.startswith(deployment.REGISTRATION_WORKER_PREFIX)}
+        cls.old_worker.update({name: cls.previous[name] for name in deployment.REGISTRATION_EMAIL_FILES})
+        assert cls.fingerprint(cls.old_worker) == cls.old_profile['workerProjection']
+
+    @staticmethod
+    def fingerprint(files):
+        return {name: {'mode': mode, 'sha256': deployment.hashlib.sha256(raw).hexdigest()}
+            for name, (raw, mode) in files.items()}
+
+    @contextmanager
+    def frozen_fixture(self):
+        profile = copy.deepcopy(self.profile)
+        candidate = dict(self.previous)
+        names = (deployment.REGISTRATION_RECOVERY_API_FILES | deployment.REGISTRATION_RECOVERY_WORKER_FILES
+            | deployment.REGISTRATION_RECOVERY_VALIDATION_FILES | {'docs/AUTO_REGISTRATION.md'}
+            | deployment.REGISTRATION_CONTROLS)
+        candidate.update({name: (('synthetic-reviewed92:' + name).encode(), '100644') for name in names})
+        sha = lambda name: deployment.hashlib.sha256(candidate[name][0]).hexdigest()
+        sources = {name: sha(name) for name in deployment.REGISTRATION_RECOVERY_API_FILES
+            | deployment.REGISTRATION_RECOVERY_WORKER_FILES | {'docs/AUTO_REGISTRATION.md'}}
+        validation = {name: sha(name) for name in deployment.REGISTRATION_RECOVERY_VALIDATION_FILES}
+        projection = copy.deepcopy(self.old_profile['workerProjection'])
+        for name in deployment.REGISTRATION_RECOVERY_WORKER_FILES:
+            projection[name] = {'mode': '100644', 'sha256': sha(name)}
+        api = dict(self.api)
+        api.update({name: candidate[name] for name in deployment.REGISTRATION_RECOVERY_API_FILES})
+        baseline = copy.deepcopy(deployment.REGISTRATION_RECOVERY_BASELINE)
+        baseline['manifest']['sourceArchiveSha256'] = deployment.hashlib.sha256(self.previous_raw).hexdigest()
+        handoff = {'receiptSha256': '5' * 64, 'taskId': '12345678-1234-1234-1234-123456789abc',
+            'attempt': 5, 'registered': True, 'passwordLoginVerified': False, 'mfaLoginVerified': False,
+            'windowExists': False, 'leaseActive': False, 'busy': False}
+        profile.update(enabled=True, registrationSourceCommit='9' * 40,
+            registrationSourceSha256=sources, validationSourceSha256=validation,
+            workerProjection=projection, workerProjectionSha256=deployment.historical_fingerprint(projection),
+            apiProjectionSha256=deployment.historical_fingerprint(self.fingerprint(api)),
+            controlSourceSha256={name: sha(name) for name in deployment.REGISTRATION_CONTROLS},
+            runtimeBaseline=baseline, registrationHandoff=handoff)
+        with ExitStack() as stack:
+            for name, value in {'REGISTRATION_RECOVERY_SOURCE': profile['registrationSourceCommit'],
+                'REGISTRATION_RECOVERY_SOURCE_SHA256': sources,
+                'REGISTRATION_RECOVERY_VALIDATION_SHA256': validation,
+                'REGISTRATION_RECOVERY_PROJECTION_SHA256': profile['workerProjectionSha256'],
+                'REGISTRATION_RECOVERY_API_PROJECTION_SHA256': profile['apiProjectionSha256'],
+                'REGISTRATION_RECOVERY_BASELINE': baseline,
+                'REGISTRATION_RECOVERY_HANDOFF': handoff}.items():
+                stack.enter_context(patch.object(deployment, name, value))
+            download = stack.enter_context(patch.object(deployment, 'registration_download', return_value=self.previous_raw))
+            yield SimpleNamespace(profile=profile, candidate=candidate, baseline=baseline,
+                handoff=handoff, download=download, api=api)
+
+    @staticmethod
+    def arguments():
+        names = ('admin_only', 'recharge_pro_974', 'recharge_pro_main80', 'registration_worker_91',
+            'registration_worker_90', 'registration_worker_89', 'registration_worker_88',
+            'registration_worker_87', 'registration_worker_86', 'registration_worker_85',
+            'registration_worker_956', 'registration_worker_b8_80', 'historical_finance_exception',
+            'historical_finance_continuation', 'historical_finance_recharge_diagnostics',
+            'historical_finance_maintenance_continuation', 'historical_finance_mailbox_batch',
+            'recharge_pro_menu_b8', 'recharge_pro_menu_7f', 'historical_finance_post_cleanup',
+            'historical_finance_order_archive', 'post_cleanup_seal_sha256', 'order_archive_seal_sha256',
+            'order_archive_prepared_images_sha256')
+        return SimpleNamespace(**{name: False for name in names}, registration_worker_92=True,
+            commit='a' * 40, source_tree='b' * 40, expected_current=deployment.REGISTRATION_RECOVERY_CURRENT,
+            repository='123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            run_id='123', run_attempt='1', ci_run_id='456', image_commit=None,
+            image_run_id=None, image_run_attempt=None)
+
+    def test_disabled_or_missing_source_handoff_pins_fail_before_external_calls(self):
+        value = copy.deepcopy(self.profile); value['enabled'] = False
+        with patch.object(deployment, 'run') as command, patch.object(deployment, 'registration_download') as download:
+            with self.assertRaises(RuntimeError): deployment.registration_profile(value, profile_id=deployment.REGISTRATION_RECOVERY_ID)
+            with self.frozen_fixture() as f:
+                for name in ('REGISTRATION_RECOVERY_SOURCE', 'REGISTRATION_RECOVERY_SOURCE_SHA256',
+                    'REGISTRATION_RECOVERY_VALIDATION_SHA256', 'REGISTRATION_RECOVERY_PROJECTION_SHA256',
+                    'REGISTRATION_RECOVERY_API_PROJECTION_SHA256', 'REGISTRATION_RECOVERY_API_COMPILED_SHA256',
+                    'REGISTRATION_RECOVERY_API_COMPILED_PROJECTION_SHA256', 'REGISTRATION_RECOVERY_HANDOFF'):
+                    with self.subTest(pin=name), patch.object(deployment, name, None), self.assertRaises(RuntimeError):
+                        deployment.registration_profile(f.profile, profile_id=deployment.REGISTRATION_RECOVERY_ID)
+                with patch.object(deployment, 'REGISTRATION_RECOVERY_SOURCE', None), self.assertRaises(RuntimeError):
+                    deployment.registration_recovery_release(self.arguments())
+                f.download.assert_not_called()
+            download.assert_not_called(); command.assert_not_called()
+
+    def test_closed_profile_accepts_only_exact_seven_production_paths_and_frozen_validation(self):
+        with self.frozen_fixture() as f:
+            self.assertEqual(deployment.registration_profile(f.profile, profile_id=deployment.REGISTRATION_RECOVERY_ID), f.profile)
+            self.assertEqual(len(deployment.REGISTRATION_RECOVERY_API_FILES), 4)
+            self.assertEqual(len(deployment.REGISTRATION_RECOVERY_WORKER_FILES), 3)
+            for field in ('extra', 'source', 'validation', 'apiBasis', 'apiProjection', 'workerBasis', 'finance'):
+                value = copy.deepcopy(f.profile)
+                if field == 'extra': value['extra'] = True
+                elif field == 'source': value['registrationSourceSha256']['apps/api/src/auth/auth.service.ts'] = '0' * 64
+                elif field == 'validation': value['validationSourceSha256'][next(iter(value['validationSourceSha256']))] = '0' * 64
+                elif field == 'apiBasis': value['apiBasisCommit'] = deployment.RECHARGE_SCOPE_CURRENT
+                elif field == 'apiProjection': value['apiProjectionSha256'] = '0' * 64
+                elif field == 'workerBasis': value['workerBasisCommit'] = deployment.REGISTRATION_CURRENT
+                else: value['financeClearance']['violationCount'] = 1
+                with self.subTest(field=field), self.assertRaises(RuntimeError):
+                    deployment.registration_profile(value, profile_id=deployment.REGISTRATION_RECOVERY_ID)
+
+    def test_profile_rejects_extra_services_reuse_config_writes_and_nonzero_finance(self):
+        with self.frozen_fixture() as f:
+            for key in f.profile['scope']:
+                value = copy.deepcopy(f.profile)
+                if key in ('servicesUpdated', 'imageServices', 'preservedServices'): value['scope'][key].append('migrate')
+                else: value['scope'][key] = True
+                with self.subTest(key=key), self.assertRaises(RuntimeError):
+                    deployment.registration_profile(value, profile_id=deployment.REGISTRATION_RECOVERY_ID)
+
+    def test_handoff_requires_same_registered_checkpoint_with_physical_window_and_lease_closed(self):
+        with self.frozen_fixture() as f:
+            for key, bad in (('registered', False), ('windowExists', True), ('leaseActive', True),
+                ('busy', True), ('attempt', True), ('taskId', 'bad'), ('receiptSha256', None),
+                ('passwordLoginVerified', 'false'), ('mfaLoginVerified', 0), ('extra', False)):
+                handoff = dict(f.handoff); handoff[key] = bad
+                value = copy.deepcopy(f.profile); value['registrationHandoff'] = handoff
+                with self.subTest(key=key), patch.object(deployment, 'REGISTRATION_RECOVERY_HANDOFF', handoff), self.assertRaises(RuntimeError):
+                    deployment.registration_profile(value, profile_id=deployment.REGISTRATION_RECOVERY_ID)
+
+    def test_worker_uses_actual91_and_preserves_all_other57_bytes_and_modes(self):
+        with self.frozen_fixture() as f:
+            # Newer main's unrelated Worker contents are deliberately excluded from the runtime projection.
+            candidate = dict(f.candidate)
+            for name in ('server.py', 'plan_selection.py', 'test_pro.py', 'test_registration_browser.py'):
+                full = deployment.REGISTRATION_WORKER_PREFIX + name
+                if full not in deployment.REGISTRATION_RECOVERY_VALIDATION_FILES:
+                    candidate[full] = (b'new-main-unpublished', '100755')
+            result = deployment.registration_worker_projection(f.profile, self.basis, candidate)
+            f.download.assert_called_once_with(deployment.REGISTRATION_RECOVERY_CURRENT)
+            self.assertEqual({name for name in self.old_worker if self.old_worker[name] != result[name]},
+                deployment.REGISTRATION_RECOVERY_WORKER_FILES)
+            self.assertEqual({name: row for name, row in result.items() if name in self.old_worker
+                and name not in deployment.REGISTRATION_RECOVERY_WORKER_FILES},
+                {name: row for name, row in self.old_worker.items() if name not in deployment.REGISTRATION_RECOVERY_WORKER_FILES})
+
+    def test_profile_worker_projection_rejects_any_of57_preserved_file_drift(self):
+        with self.frozen_fixture() as f:
+            for file in ('server.py', 'plan_selection.py', 'test_pro.py', 'test_registration_browser.py'):
+                value = copy.deepcopy(f.profile); name = deployment.REGISTRATION_WORKER_PREFIX + file
+                value['workerProjection'][name]['sha256'] = '0' * 64
+                value['workerProjectionSha256'] = deployment.historical_fingerprint(value['workerProjection'])
+                with self.subTest(file=file), patch.object(deployment, 'REGISTRATION_RECOVERY_PROJECTION_SHA256', value['workerProjectionSha256']), self.assertRaises(RuntimeError):
+                    deployment.registration_profile(value, profile_id=deployment.REGISTRATION_RECOVERY_ID)
+
+    def test_production_modes_and_validation_digest_are_checked_before_archive_reads(self):
+        with self.frozen_fixture() as f:
+            for name in deployment.REGISTRATION_RECOVERY_API_FILES | deployment.REGISTRATION_RECOVERY_WORKER_FILES:
+                candidate = dict(f.candidate); candidate[name] = (candidate[name][0], '100755')
+                with self.subTest(name=name), self.assertRaises(RuntimeError):
+                    deployment.registration_worker_projection(f.profile, self.basis, candidate)
+            candidate = dict(f.candidate); name = next(iter(deployment.REGISTRATION_RECOVERY_VALIDATION_FILES)); candidate[name] = (b'changed', '100644')
+            with self.assertRaises(RuntimeError): deployment.registration_worker_projection(f.profile, self.basis, candidate)
+            f.download.assert_not_called()
+
+    def test_api_uses_complete80_context_and_only_four_registration_typescript_deltas(self):
+        with self.frozen_fixture() as f:
+            result = deployment.registration_recovery_api_projection(f.profile, self.api, f.candidate)
+            self.assertEqual(result, f.api)
+            self.assertEqual({name for name in self.api if self.api[name] != result[name]}, deployment.REGISTRATION_RECOVERY_API_FILES)
+            self.assertEqual(len(result), len(self.api))
+            for name in ('package-lock.json', 'apps/api/Dockerfile', 'apps/admin/package.json',
+                'packages/shared/package.json', 'apps/api/prisma-mysql/schema.prisma', '.dockerignore'):
+                self.assertEqual(result[name], self.api[name])
+            f.download.assert_not_called()
+
+    def test_api_basis_rejects_schema_dependency_docker_and_unrelated_source_drift(self):
+        with self.frozen_fixture() as f:
+            for name in ('package-lock.json', 'apps/api/Dockerfile', 'apps/api/prisma-mysql/schema.prisma',
+                'apps/api/src/id-business-v2/auto-recharge/worker/server.py'):
+                basis = dict(self.api); basis[name] = (b'changed', '100644')
+                with self.subTest(name=name), self.assertRaises(RuntimeError):
+                    deployment.registration_recovery_api_projection(f.profile, basis, f.candidate)
+            basis = dict(self.api); basis['unreviewed'] = (b'extra', '100644')
+            with self.assertRaises(RuntimeError): deployment.registration_recovery_api_projection(f.profile, basis, f.candidate)
+
+    def test_receipt_binds_both_projections_five_preserved_services_and_same_handoff(self):
+        with self.frozen_fixture() as f:
+            receipt = deployment.registration_readback_receipt('a' * 40, 'b' * 40, 'c' * 64,
+                profile_id=deployment.REGISTRATION_RECOVERY_ID)
+            self.assertEqual(receipt['servicesUpdated'], ['api', 'auto-registration'])
+            self.assertEqual(receipt['preservedServiceCount'], 5)
+            self.assertEqual(receipt['apiProjectionSha256'], f.profile['apiProjectionSha256'])
+            self.assertEqual(receipt['registrationHandoff'], f.handoff)
+            for key in ('apiProjectionSha256', 'apiCompiledSourceProjectionSha256', 'workerProjectionSha256', 'registrationHandoff', 'extra'):
+                value = dict(receipt); value[key] = 'changed'
+                with self.subTest(key=key), self.assertRaises(RuntimeError):
+                    deployment.validate_fixed_registration_readback_projection(value, 'a' * 40, 'b' * 40, 'c' * 64,
+                        profile_id=deployment.REGISTRATION_RECOVERY_ID)
+
+    def test_two_image_labels_are_required_and_cannot_be_swapped_or_omitted(self):
+        with self.frozen_fixture() as f:
+            for service, kind in (('api', 'api'), ('auto-registration', 'worker')):
+                labels = {'id-business-v2.' + kind + '-projection-sha256': f.profile[kind + 'ProjectionSha256']}
+                if service == 'api': labels['id-business-v2.api-compiled-source-sha256'] = f.profile['apiCompiledSourceProjectionSha256']
+                deployment.registration_recovery_image_labels(service, {'Config': {'Labels': labels}}, f.profile)
+                for bad in ({}, {next(iter(labels)): '0' * 64}, {'id-business-v2.unknown-projection-sha256': next(iter(labels.values()))}):
+                    with self.subTest(service=service, labels=bad), self.assertRaises(RuntimeError):
+                        deployment.registration_recovery_image_labels(service, {'Config': {'Labels': bad}}, f.profile)
+
+    def test_running_api_probe_checks_only_the_four_reviewed_dist_javascript_files(self):
+        with self.frozen_fixture() as f:
+            expected = f.profile['apiCompiledSourceSha256']
+            with patch.object(deployment, 'compose', return_value=json.dumps(expected)) as command:
+                deployment.registration_recovery_api_hashes(Path('/synthetic'), f.profile)
+                probe = command.call_args.args[6]
+                self.assertIn('registration-validation.js', probe)
+                self.assertNotIn('/src/', probe)
+                self.assertNotIn('.ts', probe)
+                self.assertIn('lstatSync', probe)
+                self.assertNotIn('password', probe)
+                self.assertEqual(command.call_args.kwargs['timeout'], 20)
+            with patch.object(deployment, 'compose', return_value='{}'), self.assertRaises(RuntimeError):
+                deployment.registration_recovery_api_hashes(Path('/synthetic'), f.profile)
+
+    def test_compiled_source_rejects_raw_typescript_only_missing_extra_or_drifted_output(self):
+        with self.frozen_fixture() as f:
+            for kind in ('missing', 'raw-ts', 'extra', 'digest'):
+                value = copy.deepcopy(f.profile)
+                if kind == 'missing': value.pop('apiCompiledSourceSha256')
+                elif kind == 'raw-ts': value['apiCompiledSourceSha256'] = {name: value['registrationSourceSha256'][name]
+                    for name in deployment.REGISTRATION_RECOVERY_API_FILES}
+                elif kind == 'extra': value['apiCompiledSourceSha256']['apps/api/dist/foreign.js'] = '0' * 64
+                else: value['apiCompiledSourceSha256'][next(iter(value['apiCompiledSourceSha256']))] = '0' * 64
+                with self.subTest(kind=kind), patch.object(deployment, 'compose') as command, self.assertRaises(RuntimeError):
+                    deployment.registration_recovery_api_hashes(Path('/synthetic'), value)
+                command.assert_not_called()
+            output = dict(f.profile['apiCompiledSourceSha256']); output[next(iter(output))] = '0' * 64
+            with patch.object(deployment, 'compose', return_value=json.dumps(output)), self.assertRaises(RuntimeError):
+                deployment.registration_recovery_api_hashes(Path('/synthetic'), f.profile)
+
+    def test_exact_updated_and_preserved_services_never_include_other_worker_or_migrations(self):
+        states = {name: {'containerId': name, 'environmentSha256': name} for name in deployment.ALL_SERVICES}
+        self.assertEqual(deployment.registration_updated_services(deployment.REGISTRATION_RECOVERY_ID), ('api', 'auto-registration'))
+        self.assertEqual(set(deployment.registration_selected_preserved_states(states, deployment.REGISTRATION_RECOVERY_ID)),
+            {'media-resolver', 'auto-recharge', 'admin', 'mysql', 'caddy'})
+        self.assertEqual(deployment.registration_worker_basis(deployment.REGISTRATION_RECOVERY_ID), deployment.REGISTRATION_RECOVERY_CURRENT)
+
+    def test_retained_window_blocks_before_archive_read_or_image_pull(self):
+        with self.frozen_fixture() as f, tempfile.TemporaryDirectory(dir=self.runtime) as directory:
+            base = Path(directory); previous = base / 'releases/previous'; previous.mkdir(parents=True)
+            (base / 'current').symlink_to(previous)
+            with patch.object(deployment, 'BASE', base), patch.object(deployment, 'service_state', return_value={}), \
+                    patch.object(deployment, 'registration_runtime_baseline', return_value=({}, previous)), \
+                    patch.object(deployment, 'assert_release_jobs_idle'), \
+                    patch.object(deployment, 'assert_no_active_registration', side_effect=RuntimeError('retained checkpoint')), \
+                    patch.object(deployment, 'run') as command:
+                with self.assertRaisesRegex(RuntimeError, 'retained checkpoint'):
+                    deployment.registration_recovery_release(self.arguments())
+                f.download.assert_not_called(); command.assert_not_called()
+
+    def test_dual_rollback_requires_no_active_window_and_restarts_only_worker_then_api(self):
+        with patch.object(deployment, 'assert_no_active_registration', side_effect=RuntimeError('active')), \
+                patch.object(deployment, 'rollback_service') as restart:
+            with self.assertRaises(RuntimeError): deployment.registration_recovery_rollback('old', 'new', {})
+            restart.assert_not_called()
+        with patch.object(deployment, 'assert_no_active_registration') as guard, patch.object(deployment, 'rollback_service') as restart:
+            deployment.registration_recovery_rollback('old', 'new', {'proof': True})
+            guard.assert_called_once_with('new')
+            self.assertEqual([row.args[2] for row in restart.call_args_list], ['auto-registration', 'api'])
+
+    def test_legacy_registration_and_finance_controller_asts_remain_exact(self):
+        old = ast.parse(subprocess.check_output(['git', 'show',
+            deployment.REGISTRATION_RECOVERY_CURRENT + ':scripts/production-release/remote-deploy.py'], cwd=self.root))
+        new = ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes())
+        functions = lambda module: {node.name: ast.dump(node, include_attributes=False)
+            for node in module.body if isinstance(node, ast.FunctionDef)}
+        before, after = functions(old), functions(new)
+        for name in ('registration_release', 'registration_finance_audit', 'check_fixed_registration_deployment',
+            'require_registration_zero_report', 'registration_hydration_history', 'registration_hydration_baseline',
+            'registration_profile_observation_history', 'registration_profile_observation_baseline'):
+            with self.subTest(name=name): self.assertEqual(before[name], after[name])
+
+    def test_both_finance_stages_execute_and_probe_sealed80_with_a_closed_image_override(self):
+        with self.frozen_fixture() as f, tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            directory = Path(temporary); control = directory / 'control'; control.mkdir()
+            path = control / deployment.REGISTRATION_RECOVERY_FILE; path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(f.profile)); path.chmod(0o644)
+            auditor = control / 'scripts/v2-registration-finance-audit.mjs'; auditor.parent.mkdir(parents=True)
+            auditor.write_bytes(f.candidate['scripts/v2-registration-finance-audit.mjs'][0]); auditor.chmod(0o644)
+            (directory / 'compose.release.json').write_text(json.dumps({'services': {'api': {'image': 'new-api-must-not-audit'}}}))
+            image = f.baseline['manifest']['images']['api']['digest']
+            report = {'checks': ['finite49'], 'identity': {'reader': 'same-node'}, 'gate': {}}
+            def output(_directory, *args, **_kwargs):
+                self.assertEqual(args[0], '-f')
+                override = json.loads(Path(args[1]).read_bytes())
+                self.assertEqual(override, {'services': {'api': {'image': image, 'pull_policy': 'never'}}})
+                self.assertIn('never', args)
+                return json.dumps({'uid': 1000, 'gid': 1000, 'user': 'node'} if '--entrypoint' in args else report)
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(deployment, 'require_registration_finance_source'))
+                stack.enter_context(patch.object(deployment, 'reviewed_order_archive_seal', return_value=(
+                    {'candidateBindings': {'sourceTree': 'b' * 40}}, {'images': {'api': image}, 'migration': {}})))
+                inspect = stack.enter_context(patch.object(deployment, 'run', return_value=json.dumps([{'Id': image}])))
+                stack.enter_context(patch.object(deployment, 'environment_values', return_value={}))
+                stack.enter_context(patch.object(deployment, 'maintenance_container_audit_url', return_value='closed-fixture'))
+                stack.enter_context(patch.object(deployment, 'prepare_post_cleanup_reader_copy', return_value=directory / 'fixture.reader.json'))
+                stack.enter_context(patch.object(deployment, 'prepare_registration_recovery_before_receipt'))
+                stack.enter_context(patch.object(deployment, 'historical_audit_reader', side_effect=AssertionError('new API identity is forbidden')))
+                stack.enter_context(patch.object(deployment, 'prepare_historical_before_receipt', side_effect=AssertionError('new API identity is forbidden')))
+                stack.enter_context(patch.object(deployment, 'require_registration_zero_report', return_value={'violationCount': 0}))
+                command = stack.enter_context(patch.object(deployment, 'compose', side_effect=output))
+                before = directory / 'before-audit.json'
+                deployment.registration_recovery_finance_audit(directory, before, stage='before', source=directory, control_source=control)
+                deployment.registration_recovery_finance_audit(directory, directory / 'after-audit.json', stage='after',
+                    source=directory, before_receipt=before, control_source=control)
+                self.assertEqual(command.call_count, 4)
+                self.assertEqual([row.args[3] for row in inspect.call_args_list],
+                    [f.baseline['manifest']['images']['api']['reference']] * 2)
+                self.assertEqual((control / 'registration-recovery-audit.compose.json').stat().st_mode & 0o777, 0o600)
+
+    def test_audit_override_reuses_only_exact_digest_and_rejects_symlinks_or_extra_configuration(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            directory = Path(temporary); image = 'sha256:' + 'a' * 64
+            path = deployment.registration_recovery_audit_override(directory, image)
+            self.assertEqual(deployment.registration_recovery_audit_override(directory, image), path)
+            path.write_text(json.dumps({'services': {'api': {'image': image}, 'migrate': {'image': image}}}))
+            with self.assertRaises(RuntimeError): deployment.registration_recovery_audit_override(directory, image)
+            path.unlink(); original = directory / 'fixture'; original.write_text('{}'); path.symlink_to(original)
+            with self.assertRaises(RuntimeError): deployment.registration_recovery_audit_override(directory, image)
+
+    def test_baseline_checks_all_seven_environment_hashes_even_for_updated_services(self):
+        with self.frozen_fixture() as f, tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            base = Path(temporary); previous = base / 'releases/previous'; previous.mkdir(parents=True)
+            (base / 'current').symlink_to(previous)
+            for service in deployment.ALL_SERVICES:
+                live = copy.deepcopy(f.baseline['liveServices']); live[service]['environmentSha256'] = '0' * 64
+                with self.subTest(service=service), patch.object(deployment, 'BASE', base), \
+                        patch.object(deployment, 'registration_recovery_history', return_value=({}, previous)), \
+                        patch.object(deployment, 'service_state', side_effect=lambda _path, name, **_options: copy.deepcopy(live[name])), \
+                        self.assertRaises(RuntimeError):
+                    deployment.registration_recovery_baseline(previous)
+
+    def test_carried_profile_checks_include91_and_cannot_only_validate_its_90_predecessor(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            directory = Path(temporary)
+            hashes = {name: digest for name, digest in deployment.REGISTRATION_RECOVERY_BASELINE['fileSha256'].items()
+                if name.startswith('deploy/aws/registration-worker-')}
+            with patch.object(deployment, 'registration_profile_observation_carried') as old, \
+                    patch.object(deployment, 'fixed_recharge_bytes', return_value=b'changed') as read, \
+                    self.assertRaises(RuntimeError):
+                deployment.registration_recovery_carried(directory)
+            old.assert_called_once_with(directory)
+            self.assertIn(deployment.REGISTRATION_PROFILE_OBSERVATION_FILE, hashes)
+            self.assertEqual(len(hashes), 9)
+            read.assert_called_once()
+
+    def test_recovery_finance_image_selector_uses_old80_exact_seal_and_keeps_zero_guard(self):
+        source = (self.root / 'scripts/production-release/remote-deploy.py').read_text()
+        node = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+            and node.name == 'registration_recovery_finance_audit')
+        body = ast.unparse(node)
+        self.assertIn("REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['reference']", body)
+        self.assertIn("require(image['Id'] == seal['images']['api']", body)
+        self.assertIn('require_registration_zero_report', body)
+        self.assertNotIn('skip', body.lower())
+
+
 if __name__ == '__main__':
     unittest.main()

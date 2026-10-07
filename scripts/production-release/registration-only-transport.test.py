@@ -593,6 +593,104 @@ class Registration91TransportTests(TransportTests):
             self.assertNotIn('RAW_SECRET_SENTINEL',result.stderr)
 
 
+class Registration92TransportTests(TransportTests):
+    profile = 'registration-worker-92-20261007'
+    output_directory = '.runtime/registration-fingerprint-prepare-repair-20261007/transport92'
+    baseline = '974c62cc1681012ecff897aefc90d2cd9900004a'
+    profile_file = 'deploy/aws/' + profile + '.json'
+    scope_args = ['--registration-profile', profile]
+    release_flag = '--registration-worker-92'
+    artifact_step = 'Save fixed 92 registration API and Worker build projection'
+    readback_step = 'Verify fixed 92 registration deployment independently'
+    readback_parameters = 'fixed-registration-92-readback.json'
+
+    @contextmanager
+    def fixture(self):
+        with super().fixture() as (root, env):
+            profile = {'id': self.profile, 'enabled': True, 'registrationSourceCommit': '9' * 40,
+                'workerBasisCommit': self.baseline, 'apiBasisCommit': BASELINE,
+                'apiBasisProjectionSha256': 'c' * 64, 'apiProjectionSha256': 'a' * 64,
+                'workerProjectionSha256': 'b' * 64, 'apiCompiledSourceSha256': {'synthetic-compiled.js': 'e' * 64},
+                'apiCompiledSourceProjectionSha256': 'd' * 64,
+                'registrationSourceSha256': {}, 'validationSourceSha256': {}}
+            (root / self.profile_file).write_text(json.dumps(profile))
+            projection = {'version': 1, 'id': self.profile, 'sourceCommit': COMMIT, 'sourceTree': TREE,
+                'contextPath': CONTEXT, 'apiContextPath': '.deploy/production-release/registration-api-build-context',
+                **{key: value for key, value in profile.items() if key not in ('id', 'enabled')}}
+            target = root / '.deploy/production-release/registration-build-projection.json'
+            target.parent.mkdir(parents=True, exist_ok=True); target.write_text(json.dumps(projection))
+            for executable in (root / '.fixture').iterdir():
+                if executable.name not in ('python3', 'aws', 'docker', 'node'): continue
+                source = executable.read_text()
+                marker = "['--prepare-fixed-registration-build','--registration-profile','registration-worker-91-20261007']):"
+                assert source.count(marker) == 1
+                source = source.replace(marker, marker[:-2] + ", ['--prepare-fixed-registration-build','--registration-profile','registration-worker-92-20261007']):")
+                marker = '            projection={}\n'
+                insertion = '''            if os.environ['LOCAL_TEST_PROFILE']=='registration-worker-92-20261007':
+                api=pathlib.Path('.deploy/production-release/registration-api-build-context')
+                (api/'apps/api').mkdir(parents=True);(api/'apps/api/Dockerfile.mysql').write_text('FROM synthetic-fixture\\n')
+                p=json.loads(pathlib.Path('deploy/aws/registration-worker-92-20261007.json').read_bytes())
+                projection={'version':1,'id':p['id'],'sourceCommit':os.environ['RELEASE_COMMIT'],'sourceTree':os.environ['SOURCE_TREE'],
+                    'contextPath':str(context),'apiContextPath':str(api),**{k:v for k,v in p.items() if k not in ('id','enabled')}}
+                mutation=os.environ.get('LOCAL_RECOVERY_PROJECTION_MUTATION','')
+                if mutation=='path':projection['apiContextPath']='foreign-context'
+                if mutation=='extra':projection['unexpected']='RAW_SECRET_SENTINEL'
+                if mutation=='compiled':projection['apiCompiledSourceProjectionSha256']='0'*64
+'''
+                assert source.count(marker) == 1; source = source.replace(marker, marker + insertion)
+                marker = "        if 'id-business-v2.admin-projection-sha256' in args[-1]:"
+                insertion = '''        if 'id-business-v2.api-compiled-source-sha256' in args[-1]:print(('0' if os.environ.get('LOCAL_RECOVERY_LABEL_DRIFT') else 'd')*64)
+        elif 'id-business-v2.api-projection-sha256' in args[-1]:print(('0' if os.environ.get('LOCAL_RECOVERY_LABEL_DRIFT') else 'a')*64)
+        elif 'id-business-v2.worker-projection-sha256' in args[-1]:print(('0' if os.environ.get('LOCAL_RECOVERY_LABEL_DRIFT') else 'b')*64)
+        elif 'id-business-v2.admin-projection-sha256' in args[-1]:'''
+                assert source.count(marker) == 1; source = source.replace(marker, insertion)
+                executable.write_text(source)
+            yield root, env
+
+    def test_registration_build_uses_only_prepared_worker_context(self):
+        with self.fixture() as (root, env):
+            result = self.run_script(root, env, 'build-images.sh')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            builds = self.calls(env, 'docker')
+            self.assertEqual(len(builds), 2)
+            self.assertEqual([entry[-1] for entry in builds],
+                ['.deploy/production-release/registration-api-build-context', CONTEXT])
+            self.assertEqual(builds[0][builds[0].index('-f') + 1],
+                '.deploy/production-release/registration-api-build-context/apps/api/Dockerfile.mysql')
+            self.assertEqual(builds[0][builds[0].index('--target') + 1], 'runtime')
+            self.assertIn('id-business-v2.api-projection-sha256=' + 'a' * 64, builds[0])
+            self.assertIn('id-business-v2.api-compiled-source-sha256=' + 'd' * 64, builds[0])
+            self.assertIn('id-business-v2.worker-projection-sha256=' + 'b' * 64, builds[1])
+            self.assertEqual([entry[entry.index('-t') + 1].rsplit('-', 1)[-1] for entry in builds], ['api', 'recharge'])
+            self.assertEqual(Path(env['GITHUB_ENV']).read_text(), 'RELEASE_ADMIN_ONLY=false\n')
+
+    def test_registration_push_verifies_and_pushes_only_worker_tag(self):
+        with self.fixture() as (root, env):
+            result = self.run_script(root, env, 'push-images.sh')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = [REPOSITORY + ':' + COMMIT + '-456-1-' + service for service in ('api', 'auto-recharge')]
+            self.assertEqual([entry[1] for entry in self.calls(env, 'docker') if entry[0] == 'push'], expected)
+            self.assertEqual(len([entry for entry in self.calls(env, 'aws') if entry[:2] == ['ecr', 'describe-images']]), 2)
+
+    def test_wrong_compiled_or_source_projection_label_stops_before_ecr_login_or_push(self):
+        with self.fixture() as (root, env):
+            env['LOCAL_RECOVERY_LABEL_DRIFT'] = 'true'
+            result = self.run_script(root, env, 'push-images.sh')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.calls(env, 'aws'), [])
+            self.assertEqual([entry for entry in self.calls(env, 'docker') if entry[0] in ('login', 'push')], [])
+
+    def test_projection_artifact_extra_path_or_compiled_drift_stops_before_docker_and_aws(self):
+        for mutation in ('path', 'extra', 'compiled'):
+            with self.subTest(mutation=mutation), self.fixture() as (root, env):
+                env['LOCAL_RECOVERY_PROJECTION_MUTATION'] = mutation
+                result = self.run_script(root, env, 'build-images.sh')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.calls(env, 'docker'), [])
+                self.assertEqual(self.calls(env, 'aws'), [])
+                self.assertNotIn('RAW_SECRET_SENTINEL', result.stdout + result.stderr)
+
+
 class Registration90TransportTests(Registration89TransportTests):
     profile = 'registration-worker-90-20261007'
     output_directory = '.runtime/registration-hydration-release-20261007/transport'

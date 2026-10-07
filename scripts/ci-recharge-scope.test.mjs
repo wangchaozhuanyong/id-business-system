@@ -794,3 +794,35 @@ test('fixed 974 recharge profile and twelve controls stay exact without weakenin
     assert.equal(checkMode([profile, wrong], schema, schema), 'full', wrong);
   }
 });
+
+test('fixed92 accepts only four API files, three Worker files, owned tests and exact controls', () => {
+  const profile = 'deploy/aws/registration-worker-92-20261007.json';
+  const api = 'apps/api/src/id-business-v2/auto-registration/registration-validation.ts';
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py';
+  const controls = [
+    profile,
+    'scripts/production-release/remote-deploy.py',
+    'docs/AUTO_REGISTRATION.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(checkMode([...controls, api, worker], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([...controls, api, worker]), ['guards', 'api', 'connector']);
+  assert.deepEqual(adminUiGuardChecks('recharge', [...controls, api, worker]), []);
+  assert.deepEqual(selectedParts([...controls, api]), ['guards', 'api']);
+  assert.deepEqual(selectedParts([...controls, worker]), ['guards', 'connector']);
+  for (const foreign of [
+    'apps/api/src/id-business-v2/auto-recharge/worker/server.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/features/orders/Orders.vue',
+    'deploy/aws/registration-worker-91-20261007.json',
+    'docs/UNREVIEWED.md'
+  ]) {
+    assert.equal(checkMode([...controls, api, worker, foreign], schema, schema), 'full', foreign);
+    assert.equal(isCiOnly([...controls, foreign]), false, foreign);
+  }
+});

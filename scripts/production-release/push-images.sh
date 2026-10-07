@@ -2,7 +2,27 @@
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
-if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 974c62cc1681012ecff897aefc90d2cd9900004a
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-92-20261007
+  services=(api auto-recharge)
+  registration_api_projection="$(read_registration_recovery_projection api)"
+  registration_api_compiled_projection="$(read_registration_recovery_projection api-compiled)"
+  registration_worker_projection="$(read_registration_recovery_projection worker)"
+  for registration_service in "${services[@]}"; do
+    registration_reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${registration_service}"
+    test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+    if [[ "$registration_service" == api ]]; then
+      test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.api-projection-sha256" }}')" = "$registration_api_projection"
+      test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.api-compiled-source-sha256" }}')" = "$registration_api_compiled_projection"
+    else
+      test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.worker-projection-sha256" }}')" = "$registration_worker_projection"
+    fi
+  done
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f
   test "${RELEASE_ADMIN_ONLY:-false}" = false

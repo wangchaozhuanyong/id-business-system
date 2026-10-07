@@ -26,6 +26,48 @@ print(value['adminProjectionSha256'])
 PY_ADMIN_PROJECTION
 }
 
+read_registration_recovery_projection() {
+  TASK_REGISTRATION_PROJECTION_KIND="$1" python3 - <<'PY_RECOVERY_PROJECTION'
+import json, os, re
+from pathlib import Path
+
+def unique(items):
+    value = {}
+    for key, item in items:
+        if key in value:
+            raise ValueError('Fixed registration recovery projection changed')
+        value[key] = item
+    return value
+
+raw = Path('.deploy/production-release/registration-build-projection.json').read_bytes()
+if len(raw) > 128 * 1024:
+    raise SystemExit('Fixed registration recovery projection unavailable')
+value = json.loads(raw, object_pairs_hook=unique)
+profile = json.loads(Path('deploy/aws/registration-worker-92-20261007.json').read_bytes(), object_pairs_hook=unique)
+kind = os.environ['TASK_REGISTRATION_PROJECTION_KIND']
+keys = {'version', 'id', 'sourceCommit', 'sourceTree', 'registrationSourceCommit', 'workerBasisCommit',
+    'workerProjectionSha256', 'apiBasisCommit', 'apiBasisProjectionSha256', 'apiProjectionSha256',
+    'registrationSourceSha256', 'validationSourceSha256', 'contextPath', 'apiContextPath', 'apiCompiledSourceSha256', 'apiCompiledSourceProjectionSha256'}
+if (kind not in ('api', 'worker', 'api-compiled') or set(value) != keys or type(value['version']) is not int
+        or value['version'] != 1 or value['id'] != 'registration-worker-92-20261007'
+        or profile.get('enabled') is not True or value['sourceCommit'] != os.environ['RELEASE_COMMIT']
+        or not re.fullmatch(r'[a-f0-9]{40}', value['sourceTree'])
+        or value['registrationSourceCommit'] != profile['registrationSourceCommit']
+        or value['workerBasisCommit'] != profile['workerBasisCommit']
+        or value['apiBasisCommit'] != profile['apiBasisCommit']
+        or value['apiBasisProjectionSha256'] != profile['apiBasisProjectionSha256']
+        or value['registrationSourceSha256'] != profile['registrationSourceSha256']
+        or value['validationSourceSha256'] != profile['validationSourceSha256']
+        or value['apiCompiledSourceSha256'] != profile['apiCompiledSourceSha256']
+        or value['contextPath'] != '.deploy/production-release/registration-build-context'
+        or value['apiContextPath'] != '.deploy/production-release/registration-api-build-context'
+        or any(not isinstance(value[key], str) or not re.fullmatch(r'[a-f0-9]{64}', value[key])
+            or value[key] != profile[key] for key in ('apiProjectionSha256', 'workerProjectionSha256', 'apiCompiledSourceProjectionSha256'))):
+    raise SystemExit('Fixed registration recovery projection unavailable')
+print(value['apiCompiledSourceProjectionSha256'] if kind == 'api-compiled' else value[kind + 'ProjectionSha256'])
+PY_RECOVERY_PROJECTION
+}
+
 # Selection only; the remote policy still verifies the reviewed source proof.
 validate_release_selection() {
   local policy="${HISTORICAL_EXCEPTION:-none}"
@@ -62,6 +104,11 @@ validate_release_selection() {
       return 0 ;;
     registration-worker-90-20261007)
       [[ "${EXPECTED_CURRENT:-}" == c3cad767b372738b2193e60584b0a53daa53b65f ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      return 0 ;;
+    registration-worker-92-20261007)
+      [[ "${EXPECTED_CURRENT:-}" == 974c62cc1681012ecff897aefc90d2cd9900004a ]] || return 1
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;

@@ -468,6 +468,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-89-20261006',
         'registration-worker-90-20261007',
         'registration-worker-91-20261007',
+        'registration-worker-92-20261007',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -3407,4 +3408,67 @@ test('fixed 974 workflow chooses independent approval readback and cache skip pr
       .length,
     1
   );
+});
+
+test('fixed92 transport and workflow bind API80 plus actual91 projections without generic services or cache maintenance', () => {
+  const profile = 'registration-worker-92-20261007';
+  const baseline = '974c62cc1681012ecff897aefc90d2cd9900004a';
+  const approval = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 92 registration runtime approval'
+  );
+  assert.equal(approval.if, `inputs.historical_exception == '${profile}'`);
+  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
+  assert.ok(approval.run.includes(`--registration-profile ${profile}`));
+  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
+    .split(`\nif [[ "${'${HISTORICAL_EXCEPTION:-none}'}" == ${profile} ]]; then`)[1]
+    .split('\nfi')[0];
+  assert.equal((build.match(/build_image /g) || []).length, 2);
+  assert.ok(
+    build.includes(
+      'build_image api "$registration_api_context/apps/api/Dockerfile.mysql" runtime "$registration_api_context"'
+    )
+  );
+  assert.ok(build.includes('build_image auto-recharge "$registration_context/'));
+  assert.equal(build.includes('build_image admin'), false);
+  assert.equal(build.includes('build_image migrate'), false);
+  const push = readFileSync('scripts/production-release/push-images.sh', 'utf8')
+    .split(`== ${profile} ]]; then`)[1]
+    .split('\nelif ')[0];
+  assert.ok(push.includes('services=(api auto-recharge)'));
+  assert.ok(push.includes('id-business-v2.api-projection-sha256'));
+  assert.ok(push.includes('id-business-v2.api-compiled-source-sha256'));
+  assert.ok(push.includes('id-business-v2.worker-projection-sha256'));
+  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8')
+    .split(`elif history_policy == '${profile}':`)[1]
+    .split('\nelif ')[0];
+  assert.ok(dispatch.includes("scope_flag += ' --registration-worker-92'"));
+  const artifact = workflowSteps.find(
+    (step) => step.name === 'Save fixed 92 registration API and Worker build projection'
+  );
+  assert.equal(
+    artifact.if,
+    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
+  );
+  assert.equal(
+    artifact.with.name,
+    'registration-worker-92-build-projection-${{ github.run_id }}-${{ github.run_attempt }}'
+  );
+  assert.equal(artifact.with.path, '.deploy/production-release/registration-build-projection.json');
+  const readback = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 92 registration deployment independently'
+  );
+  assert.ok(readback.run.includes(`profile_id='${profile}'`));
+  assert.ok(readback.run.includes('fixed-registration-92-readback.json'));
+  assert.ok(readback.run.includes('raw output suppressed'));
+  const skipped = workflowSteps.find(
+    (step) => step.name === 'Record skipped cache maintenance for fixed 92 registration release'
+  );
+  assert.equal(
+    skipped.if,
+    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
+  );
+  const maintenance = workflowSteps.find(
+    (step) => step.name === 'Verify or maintain recoverable unused project image cache'
+  );
+  assert.ok(maintenance.if.includes(`inputs.historical_exception != '${profile}'`));
 });
