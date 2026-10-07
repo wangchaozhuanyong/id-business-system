@@ -111,6 +111,8 @@
   },
   "overrides": {
     "deepmerge-ts": "8.0.1",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2",
     "@nestjs/platform-express": {
       "multer": "2.4.0"
     }
