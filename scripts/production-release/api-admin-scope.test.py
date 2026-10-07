@@ -144,6 +144,75 @@ class ProofTests(unittest.TestCase):
                         scope.strict_audit(controller, None, receipt)
 
 
+class SnapshotTests(unittest.TestCase):
+    def fixture(self):
+        before = states()
+        mounts = [
+            {'Type': 'volume', 'Name': 'data', 'Source': '/fixture/data', 'Destination': '/data',
+             'Driver': 'local', 'Mode': 'z', 'RW': True, 'Propagation': ''},
+            {'Type': 'bind', 'Source': '/fixture/Caddyfile', 'Destination': '/etc/caddy/Caddyfile',
+             'Mode': 'ro', 'RW': False, 'Propagation': 'rprivate'},
+            {'Type': 'volume', 'Name': 'config', 'Source': '/fixture/config', 'Destination': '/config',
+             'Driver': 'local', 'Mode': 'z', 'RW': True, 'Propagation': ''}]
+        metadata = {row['containerId']: {'Id': row['containerId'], 'Image': row['image'],
+            'Config': {'Image': row['reference'], 'Env': ['FIXTURE=one'], 'Cmd': ['run', 'argument']},
+            'HostConfig': {'ReadonlyRootfs': True, 'Binds': ['fixture:/data']},
+            'Mounts': copy.deepcopy(mounts) if name == 'caddy' else []} for name, row in before.items()}
+        controller = SimpleNamespace(require=d.require, ALL_SERVICES=d.ALL_SERVICES,
+            production_services=lambda directory: d.ALL_SERVICES,
+            service_state=lambda directory, name, **kw: copy.deepcopy(before[name]),
+            run=lambda *args: json.dumps([metadata[args[-1]]]))
+        return controller, before, metadata
+
+    def test_mount_order_only_is_stable_without_modifying_returned_records(self):
+        controller, _, metadata = self.fixture()
+        before = scope.snapshot(controller, None)
+        mounts = metadata['caddy']['Mounts']
+        for order in (list(reversed(mounts)), [mounts[1], mounts[2], mounts[0]]):
+            metadata['caddy']['Mounts'] = copy.deepcopy(order)
+            self.assertEqual(scope.snapshot(controller, None), before)
+            self.assertEqual(metadata['caddy']['Mounts'], order)
+
+    def test_every_mount_field_config_host_config_and_identity_stays_protected(self):
+        changes = {'Type': 'bind', 'Name': 'other', 'Source': '/fixture/other', 'Destination': '/other',
+                   'Driver': 'other', 'Mode': 'ro', 'RW': False, 'Propagation': 'shared', 'FutureField': 'new'}
+        for key, value in changes.items():
+            controller, _, metadata = self.fixture()
+            before = scope.snapshot(controller, None)
+            metadata['caddy']['Mounts'][0][key] = value
+            with self.subTest(mountField=key):
+                self.assertNotEqual(scope.snapshot(controller, None)['caddy']['configurationSha256'],
+                                    before['caddy']['configurationSha256'])
+        for section, field, value in [('Config', 'Env', ['FIXTURE=two']),
+                ('Config', 'Cmd', ['argument', 'run']), ('HostConfig', 'ReadonlyRootfs', False),
+                ('HostConfig', 'Binds', ['other:/data'])]:
+            controller, _, metadata = self.fixture()
+            before = scope.snapshot(controller, None)
+            metadata['caddy'][section][field] = value
+            with self.subTest(section=section, field=field):
+                self.assertNotEqual(scope.snapshot(controller, None)['caddy']['configurationSha256'],
+                                    before['caddy']['configurationSha256'])
+        for field, value in [('containerId', 'changed'), ('image', 'sha256:' + '8' * 64)]:
+            controller, rows, _ = self.fixture()
+            rows['caddy'][field] = value
+            with self.subTest(field=field), self.assertRaises((RuntimeError, KeyError)):
+                scope.snapshot(controller, None)
+        for field in ('reference', 'startedAtSha256', 'environmentSha256'):
+            controller, rows, _ = self.fixture()
+            before = scope.snapshot(controller, None)
+            rows['caddy'][field] = 'changed'
+            with self.subTest(field=field):
+                self.assertNotEqual(scope.snapshot(controller, None), before)
+
+    def test_invalid_or_duplicate_mount_destinations_fail_closed(self):
+        for mounts in (None, {}, [{}], [{'Destination': 'relative'}],
+                       [{'Destination': '/data'}, {'Destination': '/data'}]):
+            controller, _, metadata = self.fixture()
+            metadata['caddy']['Mounts'] = mounts
+            with self.subTest(mounts=mounts), self.assertRaisesRegex(RuntimeError, 'MOUNTS_INVALID'):
+                scope.snapshot(controller, None)
+
+
 class PreservationTests(unittest.TestCase):
     def test_preserved_container_restart_env_or_config_change_rejected(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
@@ -204,7 +273,7 @@ class BaselineAndReadbackTests(unittest.TestCase):
                 'apiCompiledSourceProjectionSha256': 'compiled'})
             controller.registration_recovery_api_hashes = MagicMock()
             controller.registration_recovery_image_labels = MagicMock()
-            stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            snapshot_mock = stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             result = scope.baseline(controller, OLD, check_jobs=False)
             self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_EXISTING_API_PROJECTION')
@@ -239,6 +308,31 @@ class BaselineAndReadbackTests(unittest.TestCase):
             controller.registration_recovery_api_hashes.side_effect = RuntimeError('raw private diagnostic')
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_PROJECTION_FAILED$'):
                 scope.baseline(controller, OLD, check_jobs=False)
+
+            controller.registration_recovery_api_hashes.side_effect = None
+            # Keep guards/projection unchanged while independently drifting each final gate.
+            current_link = base / 'current'
+            other = base / 'releases' / 'other'
+            other.mkdir()
+            def move_pointer(*args):
+                current_link.unlink()
+                current_link.symlink_to(other)
+            controller.registration_recovery_api_hashes.side_effect = move_pointer
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_POINTER_MOVED$'):
+                scope.baseline(controller, OLD, check_jobs=False)
+            current_link.unlink(); current_link.symlink_to(current)
+            original_manifest = (current / 'release-manifest.json').read_text()
+            controller.registration_recovery_api_hashes.side_effect = lambda *args: (current / 'release-manifest.json').write_text(original_manifest + ' ')
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_MANIFEST_CHANGED$'):
+                scope.baseline(controller, OLD, check_jobs=False)
+            (current / 'release-manifest.json').write_text(original_manifest)
+            controller.registration_recovery_api_hashes.side_effect = None
+            for field in ('containerId', 'image', 'reference', 'startedAtSha256', 'environmentSha256', 'configurationSha256'):
+                changed = copy.deepcopy(before)
+                changed['caddy'][field] = 'changed'
+                snapshot_mock.side_effect = [before, changed]
+                with self.subTest(driftField=field), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_SERVICES_CHANGED$'):
+                    scope.baseline(controller, OLD, check_jobs=False)
 
     def test_independent_readback_refuses_host_config_drift_without_container_restart(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
