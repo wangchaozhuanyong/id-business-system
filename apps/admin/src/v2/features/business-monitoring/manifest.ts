@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const businessMonitoringFeature = defineV2Feature({
   key: 'business-monitoring',
@@ -21,6 +20,9 @@ export const businessMonitoringFeature = defineV2Feature({
       options: ['订单', '余额', '续费与开通', '汇率采集', '财务基线']
     }
   ],
-  tables: v2TablesByFeature['business-monitoring'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['business-monitoring']
+    ),
   loadView: () => import('./V2BusinessMonitoringView.vue')
 });

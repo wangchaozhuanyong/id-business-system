@@ -82,7 +82,7 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       new IdBusinessV2FinanceReportRepository(prisma)
     );
     const bank = new BankRechargeRepository(prisma),
-      fees = new BankRechargeFeesService(bank, audit);
+      fees = new BankRechargeFeesService(bank, fx);
     bankAccounts = new BankRechargeAccountService(
       bank,
       tx,
@@ -385,6 +385,62 @@ suite('换汇与订阅成本隔离 MySQL', () => {
       operator
     );
   }
+  it('手续费汇率随外层订单一起提交和回滚，只在新增快照时递增汇率版本', async () => {
+    let row = await subscription();
+    await prisma.idBusinessV2ScopeVersion.upsert({
+      where: { scope: 'exchange-rates' },
+      update: {},
+      create: { scope: 'exchange-rates' }
+    });
+    const version = async () =>
+      (
+        await prisma.idBusinessV2ScopeVersion.findUniqueOrThrow({
+          where: { scope: 'exchange-rates' }
+        })
+      ).version;
+    const manualSnapshots = { where: { createdByUserId: operator.id, source: 'manual' as const } };
+    const fxAudit = {
+      where: { userId: operator.id, action: 'id_business_v2.finance.fx_rate.manual' }
+    };
+    const beforeVersion = await version();
+    const beforeCount = await prisma.idBusinessV2FinanceFxRateSnapshot.count(manualSnapshots);
+    const beforeAudit = await prisma.auditLog.count(fxAudit);
+    const input = {
+      expectedUpdatedAt: row.updatedAt.toISOString(),
+      usdtFeeAmount: '0.5',
+      usdtFeeFinanceAccountId: currencies.get('USDT'),
+      usdtFeeFxRateToCny: '6',
+      usdtFeeManualRateReason: '同事务汇率验证',
+      shoppingFeeAmount: '0'
+    };
+    // 汇率已创建后，订单本金汇率验证失败，全部证据必须回滚。
+    await expect(
+      orders.update(row.id, { ...input, chargeFxRateToCny: 'invalid' }, operator)
+    ).rejects.toThrow('代付汇率');
+    expect(await prisma.idBusinessV2FinanceFxRateSnapshot.count(manualSnapshots)).toBe(beforeCount);
+    expect(await prisma.auditLog.count(fxAudit)).toBe(beforeAudit);
+    expect(await version()).toBe(beforeVersion);
+    expect(
+      (await prisma.idBusinessV2BankRechargeOrder.findUniqueOrThrow({ where: { id: row.id } }))
+        .usdtFeeFxSnapshotId
+    ).toBeNull();
+    row = await orders.update(row.id, input, operator);
+    expect(row.usdtFeeFxSnapshotId).toBeTruthy();
+    expect(await prisma.idBusinessV2FinanceFxRateSnapshot.count(manualSnapshots)).toBe(
+      beforeCount + 1
+    );
+    expect(await prisma.auditLog.count(fxAudit)).toBe(beforeAudit + 1);
+    expect(await version()).toBe(beforeVersion + 1n);
+    await orders.update(
+      row.id,
+      { expectedUpdatedAt: row.updatedAt.toISOString(), remark: '沿用既有汇率' },
+      operator
+    );
+    expect(await prisma.idBusinessV2FinanceFxRateSnapshot.count(manualSnapshots)).toBe(
+      beforeCount + 1
+    );
+    expect(await version()).toBe(beforeVersion + 1n);
+  });
   it('未知费用阻止入账，多币种现金历史成本和FX贯穿完成、更正与分次回款', async () => {
     let row = await subscription();
     expect(row.accountingVersion).toBe('subscription_cost_v2');

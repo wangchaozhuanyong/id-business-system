@@ -24,22 +24,23 @@
     </ul>
     <RechargeResult v-if="historyJob" :job="historyJob" />
     <div v-if="canRecheck || canResolveNoBankRequest" class="recharge-actions">
-      <el-button v-if="canRecheck" type="primary" :loading="busy" @click="$emit('recheck')">
+      <AppButton v-if="canRecheck" variant="primary" :loading="busy" @click="$emit('recheck')">
         只读复查原订单
-      </el-button>
-      <el-button
+      </AppButton>
+      <AppButton
         v-if="canResolveNoBankRequest"
-        type="warning"
+        variant="warning"
         :loading="busy"
         @click="$emit('resolve-no-bank-request')"
       >
         确认银行卡未收到付款请求
-      </el-button>
+      </AppButton>
     </div>
   </el-drawer>
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import { computed, ref } from 'vue';
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';

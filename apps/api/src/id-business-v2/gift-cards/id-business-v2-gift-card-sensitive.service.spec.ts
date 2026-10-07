@@ -107,4 +107,20 @@ describe('IdBusinessV2GiftCardSensitiveService', () => {
     expect(encryption.decrypt).not.toHaveBeenCalled();
     expect(prisma.sensitiveAccessLog.create).not.toHaveBeenCalled();
   });
+
+  it('keeps both evidence writes in the outer transaction and returns no code on audit failure', async () => {
+    const transaction = {
+      idBusinessV2GiftCard: { findUnique: prisma.idBusinessV2GiftCard.findUnique },
+      sensitiveAccessLog: { create: vi.fn().mockResolvedValue({ id: 'access-tx' }) },
+      auditLog: { create: vi.fn().mockRejectedValue(new Error('audit unavailable')) }
+    };
+    prisma.$transaction.mockImplementationOnce(async (callback) => callback(transaction));
+    await expect(service.revealCode(giftCardId, { reason: '核对证据' }, operator)).rejects.toThrow(
+      'audit unavailable'
+    );
+    expect(transaction.sensitiveAccessLog.create).toHaveBeenCalledOnce();
+    expect(transaction.auditLog.create).toHaveBeenCalledOnce();
+    expect(prisma.sensitiveAccessLog.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
 });

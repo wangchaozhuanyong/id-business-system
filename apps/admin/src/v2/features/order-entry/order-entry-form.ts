@@ -1,4 +1,4 @@
-import type { V2FinanceCurrency, V2FinanceLatestRate } from '@apple-business/shared';
+import type { V2OrderReceiptCurrency, V2FinanceLatestRate } from '@apple-business/shared';
 import { addOneInclusiveMonthToV2DateTimeInput } from '@/v2/utils/dateTime';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import { getV2BusinessNowInput, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
@@ -35,7 +35,7 @@ export function createInitialOrderEntryForm() {
     websiteAccount: '',
     receivedAmount: '',
     receivedOriginalAmount: '',
-    receivedCurrency: 'CNY' as V2FinanceCurrency,
+    receivedCurrency: 'CNY' as V2OrderReceiptCurrency,
     receivedFinanceAccountId: '',
     receivedFxMode: 'automatic' as V2OrderReceiptFxMode,
     receivedFxRateToCny: '',

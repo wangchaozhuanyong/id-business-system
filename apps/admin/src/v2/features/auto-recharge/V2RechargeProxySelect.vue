@@ -35,11 +35,11 @@
   </el-form-item>
   <p v-if="countries.length" class="recharge-note">
     代理资料来自代理 IP 管理，本次任务使用这里选中的条目。
-    <el-button v-if="defaultProxyId" link type="primary" @click="$emit('useDefault')"
-      >使用默认代理</el-button
+    <AppButton v-if="defaultProxyId" link variant="primary" @click="$emit('useDefault')"
+      >使用默认代理</AppButton
     >
-    <el-button v-if="proxyId" link type="primary" @click="detailId = proxyId"
-      >查看完整链接</el-button
+    <AppButton v-if="proxyId" link variant="primary" @click="detailId = proxyId"
+      >查看完整链接</AppButton
     >
     <router-link to="/v2/auto-recharge/proxies">管理代理</router-link>
   </p>
@@ -47,7 +47,7 @@
     暂无启用代理，请先在<router-link to="/v2/auto-recharge/proxies">代理 IP 管理</router-link>新增。
   </p>
   <p v-if="error" class="recharge-error" role="alert">
-    {{ error }} <el-button link type="primary" @click="$emit('retry')">重试</el-button>
+    {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
   <V2RechargeProxyDetailDrawer v-if="detailId" :id="detailId" @close="detailId = null" />
   <p v-if="loginCountryRestriction" class="recharge-error" role="alert">
@@ -57,6 +57,7 @@
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import type { RechargeProxyItem } from './recharge-proxy-api';
 import { ref } from 'vue';
 import { proxyCountryLabel, proxyKindLabels, proxyProtocolLabel } from './recharge-proxy-options';

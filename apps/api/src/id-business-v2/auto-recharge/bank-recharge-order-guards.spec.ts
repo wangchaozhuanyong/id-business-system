@@ -4,6 +4,7 @@ import { BankRechargeOrderService } from './bank-recharge-order.service';
 const id = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
 const updatedAt = new Date('2026-10-04T00:00:00Z');
+const context = { businessTime: updatedAt, markChangedScopes: vi.fn() } as never;
 function setup(source = 'manual') {
   const order = {
     id,
@@ -57,9 +58,15 @@ describe('银充编辑边界', () => {
   it.each([{ chargeFxRateToCny: '2' }, {}])('人民币非1汇率不可新写入或沿用 %j', async (patch) => {
     const { service, repository, input } = setup();
     await expect(
-      service.updateInTransaction({} as never, id, { ...input, ...patch }, {
-        id: 'operator'
-      } as never)
+      service.updateInTransaction(
+        {} as never,
+        id,
+        { ...input, ...patch },
+        {
+          id: 'operator'
+        } as never,
+        context
+      )
     ).rejects.toThrow('人民币时必须为 1');
     expect(repository.updateOrder).not.toHaveBeenCalled();
   });
@@ -69,7 +76,8 @@ describe('银充编辑边界', () => {
       {} as never,
       id,
       { ...input, chargeFxRateToCny: '1' },
-      { id: 'operator' } as never
+      { id: 'operator' } as never,
+      context
     );
     expect(saved.chargeFxRateToCny).not.toBeNull();
     expect(saved.chargeFxRateToCny!.toString()).toBe('1');
@@ -88,7 +96,8 @@ describe('银充编辑边界', () => {
         {} as never,
         id,
         { ...input, accountId, chargeFxRateToCny: '1' },
-        { id: 'operator' } as never
+        { id: 'operator' } as never,
+        context
       )
     ).rejects.toThrow('原官网付款身份不一致');
     expect(repository.updateOrder).not.toHaveBeenCalled();
@@ -96,9 +105,15 @@ describe('银充编辑边界', () => {
   it('自动单普通编辑不能给未知开通时间填当前时间', async () => {
     const { service, repository, input } = setup('automatic');
     await expect(
-      service.updateInTransaction({} as never, id, { ...input, openedAt: '2026-10-04T10:00:00Z' }, {
-        id: 'operator'
-      } as never)
+      service.updateInTransaction(
+        {} as never,
+        id,
+        { ...input, openedAt: '2026-10-04T10:00:00Z' },
+        {
+          id: 'operator'
+        } as never,
+        context
+      )
     ).rejects.toThrow('核对订阅');
     expect(repository.updateOrder).not.toHaveBeenCalled();
   });

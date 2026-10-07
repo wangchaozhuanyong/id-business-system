@@ -318,11 +318,6 @@ const { listRef: whitelistListRef, listFrameStyle: whitelistListFrameStyle } = u
 .v2-security-policy__cards header,
 .v2-security-policy__cards header > div {
   display: flex;
-  align-items: center;
-}
-
-.v2-security-policy__cards header,
-.v2-security-policy__cards header > div {
   align-items: baseline;
   gap: 10px;
 }

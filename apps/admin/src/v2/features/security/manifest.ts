@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const securityFeature = defineV2Feature({
   key: 'security',
@@ -15,6 +14,9 @@ export const securityFeature = defineV2Feature({
     { key: 'status', label: '状态', kind: 'select' },
     { key: 'abnormal', label: '风险', kind: 'select' }
   ],
-  tables: v2TablesByFeature['security'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['security']
+    ),
   loadView: () => import('./V2SecurityView.vue')
 });

@@ -180,7 +180,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         historicalReleaseControlPaths.includes(p) ||
-        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/check-v2-(?:module-architecture|prisma-runtime-boundary|concurrency-standard)(?:\.test)?\.mjs|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance|api-admin-scope|api-admin-readonly)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
           p
         )
     )
@@ -216,6 +216,10 @@ export function isAdminOnly(paths) {
     paths.every(
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
+        p === 'apps/admin/src/components/ui/AppButton.vue' ||
+        /^scripts\/(?:admin-skin-rules(?:\.test)?|check-v2-color-contrast|acceptance-v2-(?:color-contrast|skin-consistency|business-skin))\.mjs$/.test(
+          p
+        ) ||
         adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-table-layout.mjs' ||
         p === 'scripts/acceptance-v2-order-archive-ui.mjs' ||
@@ -275,6 +279,31 @@ export function adminUiGuardChecks(mode, paths) {
     'check:v2-isolation',
     'check:v2-decimal-standard'
   ];
+}
+
+export function backendArchitectureGuardChecks(mode, paths) {
+  if (mode === 'ci-only') {
+    return ['module-architecture', 'prisma-runtime-boundary', 'concurrency-standard']
+      .filter((guard) =>
+        paths.some(
+          (path) =>
+            path === `scripts/check-v2-${guard}.mjs` ||
+            path === `scripts/check-v2-${guard}.test.mjs`
+        )
+      )
+      .map((guard) => `check:v2-${guard}`);
+  }
+  if (!['recharge', 'mailbox'].includes(mode)) return [];
+  const affectsBackend = paths.some((path) =>
+    /^(?:apps\/api\/src\/.*\.ts$|apps\/api\/prisma-mysql\/|packages\/shared\/src\/)/.test(path)
+  );
+  return affectsBackend
+    ? [
+        'check:v2-module-architecture',
+        'check:v2-prisma-runtime-boundary',
+        'check:v2-concurrency-standard'
+      ]
+    : [];
 }
 
 export function adminCheckCommands(mode, paths) {

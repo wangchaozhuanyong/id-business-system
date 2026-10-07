@@ -18,12 +18,13 @@
     <p v-if="detailLoading" class="recharge-note" role="status">正在读取银行卡资料，请稍候。</p>
     <p v-if="error" class="recharge-error" role="alert">
       {{ getApiErrorMessage(error) }}
-      <el-button link type="primary" @click="$emit('retry')">重试</el-button>
+      <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
     </p>
   </el-form-item>
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import type { BankRechargeCard } from './bank-recharge-api';
 

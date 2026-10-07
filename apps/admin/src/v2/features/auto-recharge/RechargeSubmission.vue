@@ -8,20 +8,26 @@
     </p>
   </div>
   <div class="recharge-form-footer">
-    <el-button
+    <AppButton
       v-if="operationMode === 'open_browser'"
-      type="primary"
+      variant="primary"
       :disabled="!canStartOpen"
       :loading="busy"
       @click="$emit('startOpen')"
     >
       打开比特浏览器并登录
-    </el-button>
-    <el-button v-else type="primary" :disabled="!canStart" :loading="busy" @click="$emit('start')">
+    </AppButton>
+    <AppButton
+      v-else
+      variant="primary"
+      :disabled="!canStart"
+      :loading="busy"
+      @click="$emit('start')"
+    >
       {{
         operationMode === 'server_payment' ? '在服务器执行本次充值' : '连接比特浏览器并执行本次充值'
       }}
-    </el-button>
+    </AppButton>
     <p class="recharge-note">
       {{
         operationMode === 'server_payment'
@@ -34,6 +40,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 const authorizeSinglePayment = defineModel<boolean>({ required: true });
 defineProps<{
   operationMode: 'server_payment' | 'payment' | 'open_browser';

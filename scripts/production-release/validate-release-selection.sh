@@ -100,6 +100,11 @@ PY_LOGIN_PROJECTION
 # Selection only; the remote policy still verifies the reviewed source proof.
 validate_release_selection() {
   local policy="${HISTORICAL_EXCEPTION:-none}"
+  if [[ "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == verify_api_admin ]]; then
+    [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || return 1
+    return 0
+  fi
   if [[ "$policy" != historical-finance-20261005-order-archive && -n "${ORDER_ARCHIVE_SEAL_SHA256:-}" ]]; then
     echo 'Order archive seal is valid only with its independent release policy' >&2
     return 1

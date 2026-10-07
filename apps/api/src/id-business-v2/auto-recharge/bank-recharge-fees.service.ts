@@ -1,25 +1,23 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { IdBusinessV2BankRechargeOrder } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { FinancePostingLineInput } from '../finance/public-api';
 import {
   Amount4,
   Rate8,
-  V2TransactionalAuditService,
-  toIdBusinessV2BusinessDate,
+  type V2CommandContext,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import {
   normalizeFinanceCurrency,
   normalizeFinanceMoney,
-  normalizeFinanceRate
+  IdBusinessV2FinanceFxService
 } from '../finance/public-api';
 import {
   BankRechargeRepository,
   type BankRechargeOrderFeeUpdate
 } from './persistence/bank-recharge.repository';
-import { bankRechargeOptionalId, bankRechargeText } from './bank-recharge-validation';
+import { bankRechargeOptionalId } from './bank-recharge-validation';
 
 export const BANK_RECHARGE_FEE_PREFIXES = ['usdtFee', 'shoppingFee'] as const;
 const labels = { usdtFee: 'USDT 手续费', shoppingFee: '购物网手续费' };
@@ -27,13 +25,14 @@ const labels = { usdtFee: 'USDT 手续费', shoppingFee: '购物网手续费' };
 export class BankRechargeFeesService {
   constructor(
     private readonly repository: BankRechargeRepository,
-    private readonly audit: V2TransactionalAuditService
+    private readonly financeFx: IdBusinessV2FinanceFxService
   ) {}
   async prepare(
     tx: V2CommandTransaction,
     previous: IdBusinessV2BankRechargeOrder,
     input: Record<string, unknown>,
-    operator: AuthenticatedUser
+    operator: AuthenticatedUser,
+    context: V2CommandContext
   ) {
     const data: BankRechargeOrderFeeUpdate = {};
     for (const prefix of BANK_RECHARGE_FEE_PREFIXES) {
@@ -82,54 +81,15 @@ export class BankRechargeFeesService {
         data[keyCny] = amount.toString();
         continue;
       }
-      const suppliedRate = input[keyRate];
-      const normalizedRate =
-        suppliedRate !== undefined && suppliedRate !== null && suppliedRate !== ''
-          ? normalizeFinanceRate(suppliedRate, currency)
-          : null;
-      const previousSnapshot = previous[keySnapshot]
-        ? await this.repository.financeFxSnapshot(tx, currency, previous[keySnapshot]!)
-        : null;
-      let snapshot =
-        previousSnapshot &&
-        previousSnapshot.currency === currency &&
-        (suppliedRate === undefined ||
-          suppliedRate === '' ||
-          normalizedRate?.equals(previousSnapshot.rateToCny))
-          ? previousSnapshot
-          : null;
-      if (!snapshot && suppliedRate !== undefined && suppliedRate !== null && suppliedRate !== '') {
-        const rate = normalizedRate!;
-        const reason = bankRechargeText(
-          input[`${prefix}ManualRateReason`],
-          `${label}人工汇率原因`,
-          500
-        );
-        snapshot = await this.repository.createFinanceFxSnapshot(tx, {
-          id: randomUUID(),
-          currency,
-          rateToCny: rate.toString(),
-          source: 'manual',
-          manualReason: reason,
-          businessDate: toIdBusinessV2BusinessDate(new Date()).date,
-          capturedAt: new Date(),
-          createdByUserId: operator.id
-        });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2_finance',
-          action: 'id_business_v2.finance.fx_rate.manual',
-          objectType: 'id_business_v2_finance_fx_rate_snapshot',
-          objectId: snapshot.id,
-          afterData: { currency, rateToCny: rate.toString(), reason },
-          remark: '订阅手续费人工汇率'
-        });
-      }
-      if (!snapshot) {
-        snapshot = await this.repository.financeFxSnapshot(tx, currency);
-        if (!snapshot || (snapshot.expiresAt && snapshot.expiresAt.getTime() <= Date.now()))
-          throw new BadRequestException(`${label}缺少有效汇率，请填写人工汇率及原因`);
-      }
+      const snapshot = await this.financeFx.resolveStoredRateInTransaction(tx, context, {
+        currency,
+        previousSnapshotId: previous[keySnapshot],
+        manualRate: input[keyRate],
+        manualReason: input[`${prefix}ManualRateReason`],
+        label,
+        operator,
+        auditRemark: '订阅手续费人工汇率'
+      });
       const rate = Rate8.from(snapshot.rateToCny);
       if (!rate.gt('0')) throw new BadRequestException(`${label}汇率不正确`);
       data[keyRate] = rate.toString();

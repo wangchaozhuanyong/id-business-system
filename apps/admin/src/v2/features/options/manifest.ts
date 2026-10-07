@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const optionsFeature = defineV2Feature({
   key: 'options',
@@ -29,6 +28,9 @@ export const optionsFeature = defineV2Feature({
       ]
     }
   ],
-  tables: v2TablesByFeature['options'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['options']
+    ),
   loadView: () => import('./V2OptionsView.vue')
 });

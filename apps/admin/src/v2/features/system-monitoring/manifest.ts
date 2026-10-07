@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const systemMonitoringFeature = defineV2Feature({
   key: 'system-monitoring',
@@ -13,6 +12,9 @@ export const systemMonitoringFeature = defineV2Feature({
   summary: '规划 API、数据库、实时同步、定时任务和应用错误的健康视图。',
   safetyNotice: '只展示可由当前运行时证明的聚合证据；未接入项明确标记未知。',
   filters: [],
-  tables: v2TablesByFeature['system-monitoring'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['system-monitoring']
+    ),
   loadView: () => import('./V2SystemMonitoringView.vue')
 });

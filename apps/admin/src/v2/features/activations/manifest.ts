@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const activationsFeature = defineV2Feature({
   key: 'activation-records',
@@ -20,6 +19,9 @@ export const activationsFeature = defineV2Feature({
     },
     { key: 'dueAt', label: '到期时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['activation-records'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['activation-records']
+    ),
   loadView: () => import('./V2ActivationsView.vue')
 });

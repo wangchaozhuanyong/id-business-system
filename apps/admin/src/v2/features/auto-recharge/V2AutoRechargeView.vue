@@ -108,7 +108,7 @@
                 </el-form-item>
                 <p v-if="bankAccountsQuery.error.value" class="recharge-error" role="alert">
                   {{ getApiErrorMessage(bankAccountsQuery.error.value) }}
-                  <el-button link type="primary" @click="bankAccountsQuery.refresh">重试</el-button>
+                  <AppButton variant="soft" @click="bankAccountsQuery.refresh">重试</AppButton>
                 </p>
                 <p class="recharge-note">
                   {{
@@ -305,11 +305,11 @@
             <p v-if="needsCode && !needsManualCode" class="recharge-note" role="status">
               {{ autoCodeMessage }}
             </p>
-            <el-button
+            <AppButton
               v-if="needsCode && autoCodeFailureJobId === selected?.id && totpReady"
               :loading="autoCodeBusy"
               @click="retryAutomaticCode"
-              >重试自动取码</el-button
+              >重试自动取码</AppButton
             >
             <el-form
               v-if="needsManualCode"
@@ -330,28 +330,28 @@
                   placeholder="输入当前 6 至 8 位验证码"
                 />
               </el-form-item>
-              <el-button type="primary" :loading="busy" @click="submitLoginCode"
-                >提交验证码</el-button
+              <AppButton variant="primary" :loading="busy" @click="submitLoginCode"
+                >提交验证码</AppButton
               >
             </el-form>
-            <el-button v-if="needsHuman" type="primary" :loading="busy" @click="resume">
+            <AppButton v-if="needsHuman" variant="primary" :loading="busy" @click="resume">
               {{ resumeActionLabel }}
-            </el-button>
-            <el-button v-if="canCancel" :disabled="busy" @click="cancel">停止本次任务</el-button>
-            <el-button v-if="canRecheck" type="primary" :loading="busy" @click="recheck">
+            </AppButton>
+            <AppButton v-if="canCancel" :disabled="busy" @click="cancel">停止本次任务</AppButton>
+            <AppButton v-if="canRecheck" variant="primary" :loading="busy" @click="recheck">
               只读复查原订单
-            </el-button>
-            <el-button
+            </AppButton>
+            <AppButton
               v-if="canResolveNoBankRequest"
-              type="warning"
+              variant="warning"
               :loading="busy"
               @click="resolveNoBankRequest"
             >
               确认银行卡未收到付款请求
-            </el-button>
-            <el-button :disabled="busy || query.phase.value === 'refreshing'" @click="refresh">
+            </AppButton>
+            <AppButton :disabled="busy || query.phase.value === 'refreshing'" @click="refresh">
               刷新原任务状态
-            </el-button>
+            </AppButton>
           </div>
         </section>
       </div>
@@ -379,6 +379,7 @@
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import { defineAsyncComponent, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';

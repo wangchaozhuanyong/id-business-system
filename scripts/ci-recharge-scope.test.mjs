@@ -13,7 +13,8 @@ import {
   selectedParts,
   checkMode,
   adminCheckCommands,
-  adminUiGuardChecks
+  adminUiGuardChecks,
+  backendArchitectureGuardChecks
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -284,6 +285,41 @@ test('documentation and backend-only recharge changes do not start frontend UI g
     'apps/api/src/id-business-v2/auto-recharge/example.service.ts'
   ]) {
     assert.deepEqual(adminUiGuardChecks(checkMode([path], schema, schema), [path]), []);
+  }
+});
+test('backend architecture gates run without frontend changes in recharge and mailbox scopes', () => {
+  for (const file of [
+    'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+    'apps/api/src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.ts',
+    'packages/shared/src/v2/auto-recharge.ts',
+    'packages/shared/src/v2/vendure-mailbox.ts'
+  ]) {
+    const paths = [file];
+    assert.deepEqual(backendArchitectureGuardChecks(checkMode(paths, schema, schema), paths), [
+      'check:v2-module-architecture',
+      'check:v2-prisma-runtime-boundary',
+      'check:v2-concurrency-standard'
+    ]);
+  }
+  assert.equal(
+    backendArchitectureGuardChecks('recharge', ['apps/api/prisma-mysql/schema.prisma']).length,
+    3
+  );
+  for (const file of [
+    'docs/V2_TASKS.md',
+    'scripts/ci-recharge-check.mjs',
+    'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py'
+  ]) {
+    assert.deepEqual(backendArchitectureGuardChecks(checkMode([file], schema, schema), [file]), []);
+  }
+});
+test('architecture guard repairs run only the affected control gate', () => {
+  for (const guard of ['module-architecture', 'prisma-runtime-boundary', 'concurrency-standard']) {
+    const paths = [`scripts/check-v2-${guard}.mjs`];
+    assert.equal(checkMode(paths, schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    assert.deepEqual(backendArchitectureGuardChecks('ci-only', paths), [`check:v2-${guard}`]);
   }
 });
 test('public static information pages stay in admin checks without widening auth or API scope', () => {
@@ -852,6 +888,56 @@ test('fixed92 accepts only four API files, three Worker files, owned tests and e
   ]) {
     assert.equal(checkMode([...controls, api, worker, foreign], schema, schema), 'full', foreign);
     assert.equal(isCiOnly([...controls, foreign]), false, foreign);
+  }
+});
+
+test('shared button skin and exact skin controls stay frontend only without omitting UI guards', () => {
+  const paths = [
+    'apps/admin/src/components/ui/AppButton.vue',
+    'apps/admin/src/v2/styles/base.css',
+    'scripts/admin-skin-rules.mjs',
+    'scripts/admin-skin-rules.test.mjs',
+    'scripts/check-v2-color-contrast.mjs',
+    'scripts/acceptance-v2-color-contrast.mjs',
+    'scripts/acceptance-v2-skin-consistency.mjs',
+    'scripts/acceptance-v2-business-skin.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'docs/UI_DESIGN.md'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.deepEqual(selectedParts(paths.filter((path) => !isCiOnly([path]))), ['guards', 'admin']);
+  const required = [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ];
+  for (const guard of required) assert.ok(adminUiGuardChecks('admin', paths).includes(guard));
+  for (const other of [
+    'apps/api/src/id-business-v2/finance/finance.ts',
+    'apps/admin/src/auth/login.ts',
+    'apps/admin/src/components/ui/PermissionGate.vue',
+    'scripts/admin-skin-rules-unknown.mjs',
+    'packages/shared/src/v2/finance.ts',
+    'package-lock.json',
+    'package.json',
+    'apps/api/prisma-mysql/migrations/new/migration.sql'
+  ])
+    assert.equal(checkMode([...paths, other], schema, schema), 'full', other);
+});
+
+test('explicit API Admin controls stay in control-only CI', () => {
+  for (const path of [
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-readonly.py',
+    'scripts/production-release/api-admin-scope.test.py'
+  ]) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts([path]), ['guards']);
   }
 });
 

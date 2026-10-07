@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const customersFeature = defineV2Feature({
   key: 'customers',
@@ -30,6 +29,9 @@ export const customersFeature = defineV2Feature({
       options: ['公司客户', '个人客户', '大客户', '小客户']
     }
   ],
-  tables: v2TablesByFeature['customers'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['customers']
+    ),
   loadView: () => import('./V2CustomersView.vue')
 });

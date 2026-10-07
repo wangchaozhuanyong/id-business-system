@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const employeesFeature = defineV2Feature({
   key: 'employees',
@@ -29,6 +28,9 @@ export const employeesFeature = defineV2Feature({
       kind: 'select'
     }
   ],
-  tables: v2TablesByFeature['employees'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['employees']
+    ),
   loadView: () => import('./V2EmployeesView.vue')
 });

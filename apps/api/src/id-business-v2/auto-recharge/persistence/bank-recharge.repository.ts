@@ -306,22 +306,6 @@ export class BankRechargeRepository {
   findFinanceAccount(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2FinanceAccount.findUnique({ where: { id } });
   }
-  financeFxSnapshot(
-    tx: V2CommandTransaction,
-    currency: Prisma.IdBusinessV2FinanceFxRateSnapshotWhereInput['currency'],
-    id?: string
-  ) {
-    return tx.idBusinessV2FinanceFxRateSnapshot.findFirst({
-      where: { currency, ...(id ? { id } : {}) },
-      orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
-    });
-  }
-  createFinanceFxSnapshot(
-    tx: V2CommandTransaction,
-    data: Prisma.IdBusinessV2FinanceFxRateSnapshotUncheckedCreateInput
-  ) {
-    return tx.idBusinessV2FinanceFxRateSnapshot.create({ data });
-  }
   findCompletionJournal(tx: V2CommandTransaction, orderId: string) {
     return tx.idBusinessV2FinanceJournal.findFirst({
       where: {

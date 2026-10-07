@@ -143,9 +143,7 @@
   gap: 12px;
 }
 
-.v2-options-fee-grid .el-input-number,
-.v2-form-drawer__body .el-select,
-.v2-form-drawer__body .el-input-number {
+.v2-options-fee-grid .el-input-number {
   width: 100%;
 }
 

@@ -43,6 +43,7 @@ describe('网页直连登录任务生命周期', () => {
     const input = launch();
     const credential = { login: { email: 'fixture@example.com', password: 'fixture-password' } };
     await controller.start(input, credential, '窗口');
+    await vi.waitFor(() => expect(mock.run).toHaveBeenCalledOnce());
     expect(() => controller.submitCode('other-job', '123456')).toThrow('没有等待验证码');
     controller.submitCode(input.id, '123456');
     expect(() => controller.submitCode(input.id, '123456')).toThrow();
@@ -72,6 +73,7 @@ describe('网页直连登录任务生命周期', () => {
       { login: { email: 'fixture@example.com', password: 'fixture-password' } },
       '窗口'
     );
+    await vi.waitFor(() => expect(mock.run).toHaveBeenCalledOnce());
     scope.stop();
     await vi.waitFor(() => expect(controller.owns('job-fixture')).toBe(false));
     expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
@@ -143,6 +145,7 @@ describe('仅登录窗口控制器收尾', () => {
     const flow = scope.run(() => useBitBrowserDirectOpen(vi.fn(), error))!;
     const current = launch();
     await flow.start(current, { sessionJson: 'fixture-json' }, '测试窗口');
+    await vi.waitFor(() => expect(mock.run).toHaveBeenCalledOnce());
     expect(flow.owns(current.id)).toBe(true);
     expect(flow.running.value).toBe(true);
     await flow.cancel(current.id, true);

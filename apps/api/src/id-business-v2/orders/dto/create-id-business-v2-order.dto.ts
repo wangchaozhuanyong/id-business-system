@@ -1,9 +1,9 @@
 import type {
   IdBusinessV2AccountLockScope,
-  IdBusinessV2FinanceCurrency,
   IdBusinessV2OrderAccountDisposition,
   IdBusinessV2OrderAccountSource
 } from '@prisma/client';
+import type { V2OrderReceiptCurrency } from '@apple-business/shared';
 
 export interface CreateIdBusinessV2OrderDto {
   customerId: string;
@@ -16,7 +16,7 @@ export interface CreateIdBusinessV2OrderDto {
   websiteAccount?: string | null;
   receivedAmount?: string | number;
   receivedOriginalAmount?: string | number;
-  receivedCurrency?: IdBusinessV2FinanceCurrency;
+  receivedCurrency?: V2OrderReceiptCurrency;
   receivedFinanceAccountId?: string | null;
   receivedFxRateToCny?: string | number;
   receivedFxSnapshotId?: string | null;

@@ -169,6 +169,9 @@ jobs:
       - name: Check Prisma runtime boundary
         run: npm run check:v2-prisma-runtime-boundary
 
+      - name: Check V2 concurrency standard
+        run: npm run check:v2-concurrency-standard
+
       - name: Check cloud independence
         run: npm run check:cloud-independence
 

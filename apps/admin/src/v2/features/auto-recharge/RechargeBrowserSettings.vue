@@ -109,13 +109,13 @@
         <fieldset v-if="!serverMode">
           <legend>窗口资料</legend>
           <div class="recharge-settings-connection recharge-settings-catalog-actions">
-            <el-button
+            <AppButton
               :disabled="
                 catalogQuery.phase.value === 'initial-loading' ||
                 catalogQuery.phase.value === 'refreshing'
               "
               @click="refreshCatalog"
-              >刷新分组与标签</el-button
+              >刷新分组与标签</AppButton
             >
             <span class="recharge-settings-note">读取当前电脑上比特浏览器里的现有选项</span>
           </div>
@@ -222,8 +222,8 @@
             />
           </el-form-item>
           <div class="recharge-settings-connection">
-            <el-button :loading="connectorStatus === 'checking'" @click="testConnector"
-              >检测完整连接</el-button
+            <AppButton :loading="connectorStatus === 'checking'" @click="testConnector"
+              >检测完整连接</AppButton
             >
             <span :role="connectorStatus === 'offline' ? 'alert' : 'status'">{{
               connectorMessage
@@ -241,6 +241,7 @@
 </template>
 
 <script setup lang="ts">
+import AppButton from '@/components/ui/AppButton.vue';
 import { computed, ref } from 'vue';
 import RechargeProxyOptions from './RechargeProxyOptions.vue';
 import RechargeWindowOptions from './RechargeWindowOptions.vue';

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" == release ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -283,12 +283,27 @@ if history_policy == 'historical-finance-20261005-mailbox-batch':
 image_flags = f' --image-commit {image_commit} --image-run-id {image_run} --image-run-attempt {image_attempt}'
 script_path = f'/opt/id-business-v2/.staging/oidc-{sha}/remote-deploy.py'
 url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/remote-deploy.py'
+api_admin = os.environ.get('RELEASE_OPERATION') == 'release_api_admin'
+if api_admin:
+    import base64
+    from pathlib import Path
+    scope_flag = ' --api-admin-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/api-admin-build-proof.json').read_bytes()).decode()
+    image_flags = ''
 commands = [
     'set -eu',
     f'mkdir -p /opt/id-business-v2/.staging/oidc-{sha}',
     f'curl -fsSL --retry 3 --max-time 30 {url} -o {script_path}',
     f'python3 {script_path} --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --run-attempt {attempt} --ci-run-id {quality_run}{scope_flag}{image_flags}',
 ]
+if api_admin:
+    import hashlib
+    pinned = []
+    for name in ('remote-deploy.py', 'api-admin-scope.py'):
+        digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
+        target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
+        pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',
+                       f'echo "{digest}  {target_path}" | sha256sum -c - >/dev/null'])
+    commands[2:3] = pinned
 with open(sys.argv[1], 'w', encoding='utf-8') as target:
     json.dump({'commands': commands, 'executionTimeout': ['3600']}, target)
 PY

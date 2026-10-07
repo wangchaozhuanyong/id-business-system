@@ -761,6 +761,329 @@ html[data-v2-theme] .el-pagination.is-background .el-pager li.is-active {
   }
 }
 
+/* 共享弹层、表单和表格基础皮肤：独立入口与后台复用，禁止业务页追加覆盖。 */
+
+html[data-v2-theme] .v2-form-drawer__body {
+  width: 100%;
+  min-width: 0;
+}
+
+html[data-v2-theme] .el-drawer__header {
+  margin-bottom: 0;
+  min-height: 68px;
+  align-items: center;
+  padding: 15px 20px 14px;
+  border-bottom: 1px solid var(--v2-border-soft);
+  flex: 0 0 auto;
+  background: var(--v2-surface);
+}
+
+html[data-v2-theme] .el-drawer__body {
+  padding: 18px 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+html[data-v2-theme] .el-drawer__footer {
+  z-index: 3;
+  bottom: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--v2-border);
+  position: relative;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--v2-surface) 94%, var(--v2-surface-muted));
+  box-shadow: var(--v3-shadow-sm);
+}
+
+html[data-v2-theme] .el-drawer {
+  display: flex;
+  max-width: 100vw;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--v3-shadow-md);
+  border-left: 1px solid var(--v2-border);
+  background: var(--v2-surface);
+}
+
+html[data-v2-theme] :is(.el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn) {
+  display: inline-flex;
+  width: var(--el-component-size);
+  height: var(--el-component-size);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--v3-radius-sm);
+  color: var(--v2-text-soft);
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+html[data-v2-theme]
+  :is(.el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn):hover {
+  background: var(--v2-surface-hover);
+  color: var(--v2-text);
+}
+
+html[data-v2-theme]
+  :is(.el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn):active {
+  transform: translateY(1px);
+}
+
+html[data-v2-theme]
+  :is(.el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn):focus-visible {
+  outline: 2px solid var(--v2-accent-solid);
+  outline-offset: 2px;
+}
+
+html[data-v2-theme] .el-drawer__close-btn {
+  flex: 0 0 auto;
+  margin: 0 0 0 16px;
+}
+
+html[data-v2-theme] :is(.el-dialog__header.show-close, .el-message-box__header.show-close) {
+  padding-right: var(--el-component-size);
+}
+
+html[data-v2-theme] .v2-form-drawer .el-drawer__header {
+  min-height: 76px;
+  align-items: center;
+  padding: 17px 24px 16px;
+}
+
+html[data-v2-theme] .v2-form-drawer__heading {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+html[data-v2-theme] .v2-form-drawer__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--v2-layout-control-gap);
+}
+
+html[data-v2-theme] .v2-form-drawer__heading h2,
+html[data-v2-theme] .v2-form-drawer__heading p {
+  margin: 0;
+}
+
+html[data-v2-theme] .v2-form-drawer__heading h2 {
+  color: var(--v2-text);
+  font-size: 18px;
+  font-weight: var(--v3-font-weight-bold);
+  line-height: 1.35;
+}
+
+html[data-v2-theme] .v2-form-drawer__heading p {
+  max-width: 56ch;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+html[data-v2-theme] .v2-form-drawer__eyebrow {
+  color: var(--v2-accent);
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+html[data-v2-theme] .v2-form-drawer .el-drawer__body {
+  padding: 22px 24px 30px;
+  background: var(--v2-surface);
+}
+
+html[data-v2-theme] .v2-form-drawer .el-drawer__footer {
+  min-height: 64px;
+  padding: 12px 24px;
+}
+
+html[data-v2-theme] .v2-form-drawer__footer {
+  min-width: 0;
+}
+
+@media (max-width: 560px) {
+  html[data-v2-theme] .el-drawer .el-drawer__header {
+    min-height: 64px;
+    padding: 13px 16px 12px;
+  }
+
+  html[data-v2-theme] .el-drawer .el-drawer__body {
+    padding: 16px;
+  }
+
+  html[data-v2-theme] .el-drawer .el-drawer__footer {
+    padding: 10px 16px;
+  }
+
+  html[data-v2-theme] .v2-form-drawer .el-drawer__header {
+    min-height: 68px;
+    padding: 14px 16px 13px;
+  }
+
+  html[data-v2-theme] .v2-form-drawer__heading h2 {
+    font-size: 17px;
+  }
+
+  html[data-v2-theme] .v2-form-drawer .el-drawer__body {
+    padding: 18px 16px 24px;
+  }
+
+  html[data-v2-theme] .v2-form-drawer .el-drawer__footer {
+    min-height: 60px;
+    padding: 10px 16px;
+  }
+
+  html[data-v2-theme] .v2-form-drawer__footer {
+    flex-wrap: wrap;
+  }
+
+  html[data-v2-theme] .v2-form-drawer__footer .v2-submit-disabled-reason {
+    width: 100%;
+    margin: 0 0 2px;
+  }
+}
+
+html[data-v2-theme] .el-dialog {
+  border: 1px solid var(--v2-border);
+}
+
+html[data-v2-theme] .v2-form-drawer__footer,
+html[data-v2-theme] .v2-confirm-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+html[data-v2-theme] .v2-submit-disabled-reason {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--v2-danger);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+}
+
+html[data-v2-theme] .v2-confirm-dialog__message {
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+html[data-v2-theme] .el-drawer__title {
+  color: var(--v2-text);
+  font-size: 17px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0;
+  line-height: var(--v3-line-height-tight);
+}
+
+html[data-v2-theme] .v2-horizontal-form .el-form-item__content {
+  min-width: 0;
+}
+
+html[data-v2-theme] .v2-horizontal-form .el-form-item.is-error {
+  margin-bottom: 24px;
+}
+
+html[data-v2-theme] .v2-horizontal-form .el-select,
+html[data-v2-theme] .v2-horizontal-form .el-date-editor,
+html[data-v2-theme] .v2-horizontal-form .el-input-number {
+  width: 100%;
+}
+
+html[data-v2-theme] .el-overlay .el-dialog__title,
+html[data-v2-theme] .el-message-box__title {
+  font-size: 16px;
+  font-weight: var(--v3-font-weight-semibold);
+  line-height: var(--v3-line-height-tight);
+}
+
+html[data-v2-theme] .el-overlay .el-dialog__body,
+html[data-v2-theme] .el-message-box__message,
+html[data-v2-theme] .el-message,
+html[data-v2-theme] .el-notification {
+  font-size: var(--v3-font-size-body);
+  font-weight: var(--v3-font-weight-regular);
+  line-height: var(--v3-line-height-body);
+}
+
+html[data-v2-theme]
+  .v2-shell
+  :where(
+    .v2-query-activity,
+    .v2-table-stack--money,
+    .v2-order-summary,
+    .v2-exchange-rate-value,
+    time
+  ),
+html[data-v2-theme] .el-overlay :where(.el-input-number, time) {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 560px) {
+  html[data-v2-theme] .el-dialog__footer > .v2-confirm-dialog__footer {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(82px, 0.8fr) minmax(0, 1.7fr);
+  }
+
+  html[data-v2-theme] .v2-confirm-dialog__footer .app-button.el-button {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+  }
+}
+
+html[data-v2-theme] .el-table .cell {
+  min-width: 0;
+  padding-inline: var(--v2-table-cell-inline-padding, 12px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.45;
+}
+
+html[data-v2-theme] .el-table .v2-table-cell {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-v2-theme]
+  .el-table
+  :where(
+    .v2-table-column--identifier,
+    .v2-table-column--index,
+    .v2-table-column--numeric,
+    .v2-table-column--date
+  )
+  .cell {
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-v2-theme] .el-table .v2-table-column--status .cell {
+  text-align: center;
+}
+
+html[data-v2-theme] .v2-form-drawer__body .el-select,
+html[data-v2-theme] .v2-form-drawer__body .el-input-number {
+  width: 100%;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -1433,6 +1756,18 @@ p {
   --el-button-active-border-color: var(--v3-success);
 }
 
+.app-button--warning.el-button {
+  --el-button-text-color: var(--v3-warning);
+  --el-button-bg-color: var(--v3-warning-soft);
+  --el-button-border-color: var(--v3-warning-border-soft);
+  --el-button-hover-text-color: var(--v3-warning);
+  --el-button-hover-bg-color: var(--v3-warning-soft);
+  --el-button-hover-border-color: var(--v3-warning);
+  --el-button-active-text-color: var(--v3-warning);
+  --el-button-active-bg-color: var(--v3-warning-border-soft);
+  --el-button-active-border-color: var(--v3-warning);
+}
+
 .app-button--ghost.el-button {
   --el-button-text-color: var(--v3-text);
   --el-button-bg-color: transparent;
@@ -1532,35 +1867,5 @@ p {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
-  }
-}
-
-/* Shared sizing keeps labels and controls on the same visual row. */
-html[data-v2-theme]
-  :is(
-    .el-form--large,
-    .el-form-item--large,
-    .el-input--large,
-    .el-select--large,
-    .el-input-number--large,
-    .el-button--large
-  ) {
-  --el-component-size: var(--el-component-size-large);
-}
-html[data-v2-theme]
-  :is(
-    .el-input__wrapper,
-    .el-select__wrapper,
-    .el-date-editor.el-input__wrapper,
-    .el-textarea__inner,
-    .el-form-item__content
-  ) {
-  min-height: var(--el-component-size);
-}
-@media (max-width: 900px) {
-  html[data-v2-theme] {
-    --el-component-size: 44px;
-    --el-component-size-small: 44px;
-    --el-component-size-large: 44px;
   }
 }

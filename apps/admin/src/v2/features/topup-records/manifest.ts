@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const topupRecordsFeature = defineV2Feature({
   key: 'topup-records',
@@ -25,6 +24,9 @@ export const topupRecordsFeature = defineV2Feature({
     },
     { key: 'changedAt', label: '变动时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['topup-records'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['topup-records']
+    ),
   loadView: () => import('./V2TopupRecordsView.vue')
 });

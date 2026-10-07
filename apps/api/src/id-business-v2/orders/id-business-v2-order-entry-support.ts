@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import { isV2OrderReceiptCurrency } from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
@@ -56,6 +57,16 @@ export interface OrderEntryLockSummary {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
 const MAX_AMOUNT = Amount4.from('99999999999999.9999');
+
+export function normalizeOrderReceiptCurrency(value: unknown) {
+  const currency = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (!isV2OrderReceiptCurrency(currency)) {
+    throw new BadRequestException('普通订单收款币种不受支持');
+  }
+  return currency;
+}
 
 export function normalizeCreateOrderInput(
   dto: CreateIdBusinessV2OrderDto,

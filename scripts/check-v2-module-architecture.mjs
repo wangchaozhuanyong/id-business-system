@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 
 const rootDir = process.cwd();
 const frontendRoot = 'apps/admin/src/v2/features';
@@ -63,6 +64,7 @@ const expectedBackendDomains = [
 ];
 
 checkFrontendFeatures();
+checkFrontendMetadataBoundary();
 const frontendGraph = checkFrontendBoundaries();
 checkDependencyCycles(frontendGraph, '前端 feature');
 const backendGraph = checkBackendBoundaries();
@@ -161,7 +163,7 @@ function checkFrontendFeatures() {
       'kind',
       'freshnessPolicy',
       'filters',
-      'tables'
+      'loadTables'
     ]) {
       if (!new RegExp(`\\b${field}:`).test(manifestSource)) {
         issues.push(`${manifestPath}: 缺少 ${field}`);
@@ -185,6 +187,62 @@ function checkFrontendFeatures() {
   for (const feature of actualFeatureDirs) {
     if (!expectedFeatures.includes(feature)) {
       issues.push(`${frontendRoot}/${feature}: 新 feature 必须加入架构门禁清单`);
+    }
+  }
+}
+
+function checkFrontendMetadataBoundary() {
+  const runtimePath = `${frontendRoot}/runtimeRegistry.ts`;
+  const runtime = ts.createSourceFile(runtimePath, read(runtimePath), ts.ScriptTarget.Latest, true);
+  const expectedExports = new Map([
+    ['getV2RuntimeModuleDefinition', 'getV2ModuleDefinition'],
+    ['v2RuntimeFeatureRegistry', 'v2FeatureRegistry'],
+    ['v2ModuleDefinitions', 'v2ModuleDefinitions'],
+    ['v2NavigationSections', 'v2NavigationSections'],
+    ['v2WorkbenchModules', 'v2WorkbenchModules']
+  ]);
+  for (const statement of runtime.statements) {
+    if (
+      !ts.isExportDeclaration(statement) ||
+      !statement.moduleSpecifier ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== './registry' ||
+      !statement.exportClause ||
+      !ts.isNamedExports(statement.exportClause)
+    ) {
+      issues.push(`${runtimePath}: 运行时注册只能重导出 registry 的同一元数据，禁止维护第二份定义`);
+      continue;
+    }
+    for (const element of statement.exportClause.elements) {
+      const original = element.propertyName?.text ?? element.name.text;
+      if (expectedExports.get(element.name.text) === original)
+        expectedExports.delete(element.name.text);
+      else issues.push(`${runtimePath}: 非预期的运行时注册导出 ${element.name.text}`);
+    }
+  }
+  for (const name of expectedExports.keys())
+    issues.push(`${runtimePath}: 缺少共享注册导出 ${name}`);
+
+  const metadataFiles = recursiveFiles(frontendRoot).filter(
+    (file) => /(?:\/|-)manifest\.ts$/.test(file) || file === `${frontendRoot}/registry.ts`
+  );
+  for (const file of metadataFiles) {
+    const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true);
+    for (const statement of source.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+        continue;
+      const clause = statement.importClause;
+      const typeOnly =
+        clause?.isTypeOnly ||
+        (!clause?.name &&
+          clause?.namedBindings &&
+          ts.isNamedImports(clause.namedBindings) &&
+          clause.namedBindings.elements.every((item) => item.isTypeOnly));
+      if (!typeOnly && /(?:tableSchemas|\.vue(?:\?|$))/.test(statement.moduleSpecifier.text)) {
+        issues.push(
+          `${file}: 注册元数据禁止静态加载页面或 tableSchemas，必须经 loadView/loadTables 按需加载`
+        );
+      }
     }
   }
 }

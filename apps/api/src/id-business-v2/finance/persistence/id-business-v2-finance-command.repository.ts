@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import type { V2FinanceCurrency } from '@apple-business/shared';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import { mapAmount4, mapRate8 } from '../../runtime/public-api';
 
@@ -200,6 +201,15 @@ export class IdBusinessV2FinanceCommandRepository {
     data: Prisma.IdBusinessV2FinanceFxRateSnapshotUncheckedCreateInput
   ) {
     return tx.idBusinessV2FinanceFxRateSnapshot.create({ data }).then(mapFxSnapshot);
+  }
+
+  findFxSnapshotInTransaction(tx: Transaction, currency: V2FinanceCurrency, id?: string | null) {
+    return tx.idBusinessV2FinanceFxRateSnapshot
+      .findFirst({
+        where: { currency, ...(id ? { id } : {}) },
+        orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
+      })
+      .then((row) => (row ? mapFxSnapshot(row) : null));
   }
 
   findPeriod(tx: Transaction, month: string) {

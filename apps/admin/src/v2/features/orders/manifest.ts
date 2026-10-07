@@ -1,5 +1,4 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const ordersFeature = defineV2Feature({
   key: 'orders',
@@ -37,6 +36,9 @@ export const ordersFeature = defineV2Feature({
     },
     { key: 'openedAt', label: '开通时间', kind: 'date-range' }
   ],
-  tables: v2TablesByFeature['orders'],
+  loadTables: () =>
+    import('@/v2/features/tableSchemas').then(
+      ({ v2TablesByFeature }) => v2TablesByFeature['orders']
+    ),
   loadView: () => import('./V2OrdersView.vue')
 });
