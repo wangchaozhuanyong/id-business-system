@@ -2742,10 +2742,21 @@ jobs:
           profile = Path('deploy/aws/registration-worker-95-20261008.json').read_bytes()
           profile_sha = hashlib.sha256(profile).hexdigest()
           staging = '/opt/id-business-v2/.staging/oidc-' + commit + '/remote-deploy.py'
+          carrier = staging.rsplit('/',1)[0] + '/registration-worker-95-20261008.json'
+          if len(source)>1024*1024 or len(profile)>128*1024:
+              raise SystemExit('Fixed95 carrier size changed')
           verifier = (
-              'import hashlib,pathlib,sys;'
-              + 'p=pathlib.Path(' + repr(staging) + ');b=p.read_bytes();'
+              'import hashlib,pathlib,sys,subprocess;'
+              + 'p=pathlib.Path(' + repr(staging) + ');q=pathlib.Path(' + repr(carrier) + ');'
+              + '\nfor x in [p.parent,p.parent.parent,p.parent.parent.parent]:\n if x.resolve()!=x or x.is_symlink():raise RuntimeError("Fixed95 staging location changed")\n'
+              + 'for x in [p,q]:\n if x.is_symlink() or (x.exists() and (not x.is_file() or x.stat().st_nlink!=1)):raise RuntimeError("Fixed95 staging carrier changed")\n'
+              + 'p.parent.mkdir(parents=True,exist_ok=True);'
+              + 'subprocess.run(["curl","-fsSL","--retry","3","--max-time","30",' + repr('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+commit+'/scripts/production-release/remote-deploy.py') + ',"-o",str(p)],check=True);'
+              + 'subprocess.run(["curl","-fsSL","--retry","3","--max-time","30",' + repr('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+commit+'/deploy/aws/registration-worker-95-20261008.json') + ',"-o",str(q)],check=True);'
+              + 'p.chmod(0o644);q.chmod(0o644);b=p.read_bytes();'
               + '\nif len(b)>1024*1024 or hashlib.sha256(b).hexdigest()!=' + repr(hashlib.sha256(source).hexdigest()) + ':\n    raise RuntimeError("Fixed registration verifier source unavailable")\n'
+              + 'n={"__name__":"fixed95_readback_carrier","__file__":str(p)};exec(compile(b,str(p),"exec"),n);'
+              + 'n["registration_interstitial_verify_carrier"](' + repr(hashlib.sha256(source).hexdigest()) + ',' + repr(profile_sha) + ');'
               + 'sys.argv=[str(p),"--check-fixed-registration-deployment","--expected-current",' + repr(commit)
               + ',"--source-tree",' + repr(tree) + ',"--registration-profile-sha256",' + repr(profile_sha)
               + ',"--registration-profile","registration-worker-95-20261008"];'

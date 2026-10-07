@@ -11931,6 +11931,84 @@ class Registration95ScopeTests(unittest.TestCase):
             self.assertEqual(root,self.root);self.assertEqual(profile,self.profile)
             command.assert_not_called();download.assert_not_called()
 
+    def staging_fixture(self,base):
+        stage=base/'.staging'/('oidc-'+('a'*40));stage.mkdir(parents=True)
+        source=stage/'remote-deploy.py';raw=(self.root/'scripts/production-release/remote-deploy.py').read_bytes();source.write_bytes(raw);source.chmod(0o644)
+        profile=stage/Path(deployment.REGISTRATION_INTERSTITIAL_FILE).name
+        profile.write_bytes((self.root/deployment.REGISTRATION_INTERSTITIAL_FILE).read_bytes());profile.chmod(0o644)
+        ns={'__name__':'actual95_staging_fixture','__file__':str(source)};exec(compile(raw,str(source),'exec'),ns);ns['BASE']=base
+        return ns,source,profile
+
+    def test_real_controller_staging_contract_carrier_and_readback_without_repository_profile(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base)
+            self.assertFalse((base/deployment.REGISTRATION_INTERSTITIAL_FILE).exists())
+            sha=lambda p:deployment.hashlib.sha256(p.read_bytes()).hexdigest()
+            self.assertEqual(ns['registration_interstitial_profile_path'](),profile)
+            self.assertEqual(ns['registration_interstitial_verify_carrier'](sha(source),sha(profile)),self.profile)
+            self.assertEqual(ns['registration_interstitial_contract']()['runtimeBaseline'],self.profile['runtimeBaseline'])
+            value=ns['registration_interstitial_readback_receipt']('a'*40,'b'*40,sha(profile))
+            self.assertEqual(value['registrationHandoff']['attempt'],8)
+            ns['validate_registration_interstitial_readback'](value,'a'*40,'b'*40,sha(profile))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier']('0'*64,sha(profile))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),'0'*64)
+            source_raw=source.read_bytes();source.chmod(0o600)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+            source.chmod(0o644);source.write_bytes(source_raw+b'x'*(1024*1024+1-len(source_raw)))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+            source.write_bytes(source_raw);source.chmod(0o644)
+            profile_raw=profile.read_bytes();profile.unlink()
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.write_bytes(profile_raw);profile.chmod(0o600)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.chmod(0o644);profile.write_bytes(b'x'*(128*1024+1))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.write_bytes(profile_raw);profile.chmod(0o644)
+            original=ns['os'].fstat;seen={'profile':0}
+            def racing(fd):
+                state=original(fd)
+                if state.st_ino==profile.stat().st_ino:
+                    seen['profile']+=1
+                    if seen['profile']==2:profile.write_bytes(profile_raw+b' ')
+                return original(fd)
+            with patch.object(ns['os'],'fstat',side_effect=racing),self.assertRaises(RuntimeError):
+                ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+
+    def test_staging_carrier_rejects_helper_root_parent_symlinks_and_name_drift(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base);original_file=ns['__file__']
+            for bad in (source.with_name('foreign.py'),source.parent.with_name('oidc-invalid')/'remote-deploy.py'):
+                ns['__file__']=str(bad)
+                with self.subTest(path=bad.name),self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+            ns['__file__']=original_file;old=profile.with_name('saved-profile');profile.rename(old);profile.symlink_to(old)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.unlink();old.rename(profile)
+            old=source.with_name('saved-controller');source.rename(old);source.symlink_to(old)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+            source.unlink();old.rename(source)
+            for path in (source.parent,source.parent.parent):
+                saved=path.with_name(path.name+'-saved');path.rename(saved);path.symlink_to(saved,target_is_directory=True)
+                with self.subTest(directory=path.name),self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+                path.unlink();saved.rename(path)
+            alias=base.parent/(base.name+'-root-alias');alias.symlink_to(base,target_is_directory=True)
+            ns['BASE']=alias;ns['__file__']=str(alias/'.staging'/source.parent.name/'remote-deploy.py')
+            try:
+                with self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+            finally:alias.unlink()
+
+    def test_existing_fresh_image_argv_is_accepted_but_foreign_values_fail_before_lock(self):
+        tokens=['--commit','a'*40,'--source-tree','b'*40,'--repository','123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current',deployment.REGISTRATION_INTERSTITIAL_CURRENT,'--run-id','123','--run-attempt','1','--ci-run-id','456','--registration-worker-95',
+            '--image-commit','a'*40,'--image-run-id','123','--image-run-attempt','1']
+        with patch.object(deployment,'registration_interstitial_release',return_value='selected')as selected:
+            self.assertEqual(deployment.registration_interstitial_main(tokens),'selected');args=selected.call_args.args[0]
+        self.assertEqual((args.image_commit,args.image_run_id,args.image_run_attempt),(args.commit,args.run_id,args.run_attempt))
+        for name,value in [('image_commit','0'*40),('image_run_id','999'),('image_run_attempt','2')]:
+            bad=copy.copy(args);setattr(bad,name,value)
+            with self.subTest(name=name),patch.object(Path,'open')as opened,patch.object(deployment,'run')as command,self.assertRaisesRegex(RuntimeError,'selection changed'):
+                deployment.registration_interstitial_release(bad)
+            opened.assert_not_called();command.assert_not_called()
+
     def test_actual94_baseline_exact_values_types_and_nested_content_are_pinned(self):
         fixed=self.profile['runtimeBaseline'];self.assertIs(deployment.registration_interstitial_record(fixed),fixed)
         for field,value in [('databaseWrites',False),('runtimeStable',False),('readOnly',1),('unexpected',True)]:

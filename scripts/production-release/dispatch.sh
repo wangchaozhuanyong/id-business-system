@@ -320,6 +320,24 @@ commands = [
     f'curl -fsSL --retry 3 --max-time 30 {url} -o {script_path}',
     f'python3 {script_path} --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --run-attempt {attempt} --ci-run-id {quality_run}{scope_flag}{image_flags}',
 ]
+if history_policy == 'registration-worker-95-20261008':
+    import hashlib, shlex
+    from pathlib import Path
+    source_raw=Path('scripts/production-release/remote-deploy.py').read_bytes()
+    profile_name='registration-worker-95-20261008.json'
+    profile_raw=Path('deploy/aws',profile_name).read_bytes()
+    assert len(source_raw)<=1024*1024 and len(profile_raw)<=128*1024
+    profile_target=str(Path(script_path).parent/profile_name)
+    guard=('import pathlib,stat;paths=[pathlib.Path('+repr(str(Path(script_path).parent))+')];'
+        +'\nfor p in [paths[0],paths[0].parent,paths[0].parent.parent]:\n if p.resolve()!=p or p.is_symlink():raise RuntimeError("Fixed95 staging location changed")\n'
+        +'for p in [pathlib.Path('+repr(script_path)+'),pathlib.Path('+repr(profile_target)+')]:\n if p.is_symlink() or (p.exists() and (not p.is_file() or p.stat().st_nlink!=1)):raise RuntimeError("Fixed95 staging carrier changed")')
+    verify=('import hashlib,pathlib; p=pathlib.Path('+repr(script_path)+');b=p.read_bytes();'
+        +'\nif len(b)>1024*1024 or hashlib.sha256(b).hexdigest()!='+repr(hashlib.sha256(source_raw).hexdigest())+':raise RuntimeError("Fixed95 controller changed")\n'
+        +'n={"__name__":"fixed95_staging_verify","__file__":str(p)};exec(compile(b,str(p),"exec"),n);'
+        +'n["registration_interstitial_verify_carrier"]('+repr(hashlib.sha256(source_raw).hexdigest())+','+repr(hashlib.sha256(profile_raw).hexdigest())+')')
+    commands[1:3]=['python3 -c '+shlex.quote(guard),commands[1],commands[2],
+        f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/deploy/aws/{profile_name} -o {profile_target}',
+        f'chmod 0644 {script_path} {profile_target}','python3 -c '+shlex.quote(verify)]
 if api_admin:
     import hashlib
     pinned = []

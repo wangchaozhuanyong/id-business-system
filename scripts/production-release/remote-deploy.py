@@ -11659,9 +11659,38 @@ def registration_interstitial_record(value):
     return value
 
 
+def registration_interstitial_profile_path():
+    path=Path(__file__).absolute();message='Fixed registration interstitial carrier location changed'
+    require(path.name=='remote-deploy.py' and path.resolve()==path and not path.is_symlink(),message)
+    if path.parent.parent==BASE/'.staging':
+        require(BASE.is_absolute() and BASE.resolve()==BASE and re.fullmatch(r'oidc-[a-f0-9]{40}',path.parent.name),message)
+        target=path.parent/Path(REGISTRATION_INTERSTITIAL_FILE).name
+    else:
+        require(path.parent.name=='production-release' and path.parent.parent.name=='scripts',message)
+        target=path.parents[2]/REGISTRATION_INTERSTITIAL_FILE
+    require(target.resolve()==target and not target.is_symlink(),message)
+    return target
+
+
+def registration_interstitial_profile_bytes():
+    path=registration_interstitial_profile_path()
+    modes=(0o644,) if path.parent.parent==BASE/'.staging' else (0o644,0o664)
+    return fixed_recharge_bytes(path,modes=modes,limit=128*1024)
+
+
+def registration_interstitial_verify_carrier(source_sha,profile_sha):
+    source=fixed_recharge_bytes(Path(__file__).absolute(),modes=(0o644,),limit=1024*1024)
+    raw=registration_interstitial_profile_bytes()
+    require(hashlib.sha256(source).hexdigest()==source_sha and hashlib.sha256(raw).hexdigest()==profile_sha,
+        'Fixed registration interstitial carrier hash changed')
+    value=registration_interstitial_profile(fixed_recharge_json(raw))
+    require(value['controlSourceSha256']['scripts/production-release/remote-deploy.py']==source_sha,
+        'Fixed registration interstitial carrier source changed')
+    return value
+
+
 def registration_interstitial_fixed():
-    root=Path(__file__).resolve().parents[2]
-    value=fixed_recharge_json(fixed_recharge_bytes(root/REGISTRATION_INTERSTITIAL_FILE,modes=(0o644,0o664),limit=128*1024))
+    value=fixed_recharge_json(registration_interstitial_profile_bytes())
     return registration_interstitial_record(value['runtimeBaseline'])
 
 
@@ -11950,7 +11979,7 @@ def registration_interstitial_release(args):
     require(isinstance(REGISTRATION_INTERSTITIAL_SOURCE, str) and re.fullmatch(r'[a-f0-9]{40}', REGISTRATION_INTERSTITIAL_SOURCE)
         and isinstance(REGISTRATION_INTERSTITIAL_PROJECTION_SHA256, str) and re.fullmatch(r'[a-f0-9]{64}', REGISTRATION_INTERSTITIAL_PROJECTION_SHA256)
         and isinstance(REGISTRATION_INTERSTITIAL_HANDOFF, dict), 'Fixed registration login source unavailable')
-    registration_interstitial_profile(fixed_recharge_json(fixed_recharge_bytes(Path(__file__).resolve().parents[2]/REGISTRATION_INTERSTITIAL_FILE,modes=(0o644,0o664),limit=128*1024)))
+    registration_interstitial_profile(fixed_recharge_json(registration_interstitial_profile_bytes()))
     os.umask(63)
     with (BASE / '.deploy.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -12174,12 +12203,13 @@ def registration_interstitial_main(tokens):
     for name in ('commit','source-tree','repository','expected-current','run-id','run-attempt','ci-run-id'):
         parser.add_argument('--'+name,required=True)
     parser.add_argument('--registration-worker-95',action='store_true',required=True)
+    for name in ('image-commit','image-run-id','image-run-attempt'):parser.add_argument('--'+name)
     args=parser.parse_args(tokens)
     for name in ('admin_only','api_admin_only','api_admin_build_proof','recharge_pro_main80','recharge_pro_974','recharge_pro_2f',
         'historical_finance_exception','historical_finance_continuation','historical_finance_recharge_diagnostics',
         'historical_finance_maintenance_continuation','historical_finance_mailbox_batch','recharge_pro_menu_b8','recharge_pro_menu_7f',
         'historical_finance_post_cleanup','historical_finance_order_archive','post_cleanup_seal_sha256','order_archive_seal_sha256',
-        'order_archive_prepared_images_sha256','image_commit','image_run_id','image_run_attempt'):
+        'order_archive_prepared_images_sha256'):
         setattr(args,name,None)
     return registration_interstitial_release(args)
 

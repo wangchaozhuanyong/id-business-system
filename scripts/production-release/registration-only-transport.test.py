@@ -958,6 +958,10 @@ class Registration95TransportTests(TransportTests):
         with super().fixture() as (root,env):
             controller=root/'scripts/production-release/remote-deploy.py'
             controller.write_text(controller.read_text()+'\nvalidate_registration_interstitial_readback=validate_fixed_registration_readback_projection\n')
+            controller.write_text(controller.read_text()+"\ndef registration_interstitial_verify_carrier(source_sha,profile_sha):\n import pathlib,hashlib,json\n p=pathlib.Path(__file__);q=pathlib.Path('deploy/aws/registration-worker-95-20261008.json')\n assert hashlib.sha256(p.read_bytes()).hexdigest()==source_sha and hashlib.sha256(q.read_bytes()).hexdigest()==profile_sha\n return json.loads(q.read_bytes())\n")
+            curl=root/'.fixture/curl'
+            curl.write_text('#!'+sys.executable+'\n'+"import os,pathlib,sys\nargs=sys.argv[1:];url=args[args.index('--max-time')+2];base='https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+os.environ['RELEASE_COMMIT']+'/'\nallowed={base+'scripts/production-release/remote-deploy.py':pathlib.Path('scripts/production-release/remote-deploy.py'),base+'deploy/aws/registration-worker-95-20261008.json':pathlib.Path('deploy/aws/registration-worker-95-20261008.json')}\nif url not in allowed:raise SystemExit('Closed local curl fixture rejected URL')\ndata=allowed[url].read_bytes();pathlib.Path(args[args.index('-o')+1]).write_bytes(data)\n")
+            curl.chmod(0o755)
             profile = {'id': self.profile, 'enabled': True, 'registrationSourceCommit': '9'*40, 'workerBasisCommit': '2f24cf81007429ea474da404a30bc74da9d43ce1',
                 'workerProjectionSha256': 'b'*64, 'registrationSourceSha256': {}, 'validationSourceSha256': {}}
             (root/self.profile_file).write_text(json.dumps(profile))
@@ -981,6 +985,72 @@ class Registration95TransportTests(TransportTests):
             target.write_text(json.dumps({'version':1,'id':profile['id'],'sourceCommit':COMMIT,'sourceTree':TREE,'contextPath':CONTEXT,
                 **{k:v for k,v in profile.items() if k not in ('id','enabled')}}))
             yield root,env
+
+    def test_readback_uses_bound_verifier_and_closed_receipt_filter(self):
+        _block, script = self.workflow_step(self.readback_step)
+        with self.fixture() as (root, env):
+            profile_sha = hashlib.sha256((root / self.profile_file).read_bytes()).hexdigest()
+            receipt = {'status': 'VERIFIED', 'currentCommit': COMMIT, 'sourceTree': TREE, 'profileSha256': profile_sha}
+            env['LOCAL_READBACK_OUTPUT'] = 'FIXED_REGISTRATION_RELEASE_VERIFIED ' + json.dumps(receipt)
+            result = subprocess.run(['bash', '-c', script], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), receipt)
+            parameters = json.loads((root / '.deploy/production-release' / self.readback_parameters).read_text())
+            command = shlex.split(parameters['commands'][0])
+            self.assertEqual(command[:2], ['python3', '-c'])
+            compile(command[2], '<bound-registration-readback>', 'exec')
+            self.assertIn(hashlib.sha256((root / 'scripts/production-release/remote-deploy.py').read_bytes()).hexdigest(), command[2])
+            self.assertIn('--check-fixed-registration-deployment', command[2])
+            self.assertIn('--registration-profile-sha256', command[2])
+            self.assertIn(profile_sha, command[2])
+            if self.scope_args:
+                self.assertIn('\"--registration-profile\",\"' + self.profile + '\"', command[2])
+            staging = '/opt/id-business-v2/.staging/oidc-' + COMMIT + '/remote-deploy.py'
+            local_source = root / 'scripts/production-release/remote-deploy.py'
+            local_verifier = command[2].replace(repr(staging), repr(str(local_source))).replace(repr('/opt/id-business-v2/.staging/oidc-'+COMMIT+'/'+self.profile+'.json'),repr(str(root/self.profile_file)))
+            carrier=root/self.profile_file;carrier_raw=carrier.read_bytes();carrier.unlink();never=root/'never-written-readback-carrier';carrier.symlink_to(never)
+            rejected=subprocess.run([sys.executable,'-c',local_verifier],cwd=root,env=env,capture_output=True,text=True)
+            self.assertNotEqual(rejected.returncode,0);self.assertFalse(never.exists());carrier.unlink();carrier.write_bytes(carrier_raw)
+            verified = subprocess.run([sys.executable, '-c', local_verifier], cwd=root, env=env,
+                                      capture_output=True, text=True, timeout=10)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            with local_source.open('a') as target:
+                target.write("\nraise RuntimeError('RAW_SECRET_SENTINEL')\n")
+            changed = subprocess.run([sys.executable, '-c', local_verifier], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(changed.returncode, 0)
+            self.assertIn('Fixed registration verifier source unavailable', changed.stderr)
+            self.assertNotIn('RAW_SECRET_SENTINEL', changed.stdout + changed.stderr)
+
+    def test_actual_dispatch_stages_pinned95_carrier_and_matches_real_controller_argv(self):
+        with self.fixture()as(root,env):
+            result=self.run_script(root,env,'dispatch.sh');self.assertEqual(result.returncode,0,result.stderr)
+            parameters=json.loads((root/'.deploy/production-release/ssm-456.json').read_bytes())
+            commands=parameters['commands'];source_sha=hashlib.sha256((root/'scripts/production-release/remote-deploy.py').read_bytes()).hexdigest()
+            profile_sha=hashlib.sha256((root/self.profile_file).read_bytes()).hexdigest()
+            self.assertTrue(any('/deploy/aws/'+self.profile+'.json' in c for c in commands))
+            self.assertTrue(any('/.staging/oidc-'+COMMIT+'/'+self.profile+'.json' in c for c in commands))
+            verified=[shlex.split(c)[2]for c in commands if c.startswith('python3 -c ')]
+            for code in verified:compile(code,'<closed95-carrier>','exec')
+            self.assertTrue(any(source_sha in c and profile_sha in c and 'registration_interstitial_verify_carrier'in c for c in verified))
+            self.assertTrue(any('resolve()'in c and 'is_symlink' in c for c in verified))
+            prefix='/opt/id-business-v2'
+            local_base=root/'staging-before-download';local_stage=local_base/'.staging'/('oidc-'+COMMIT);local_stage.mkdir(parents=True)
+            guard=verified[0].replace(prefix,str(local_base))
+            broken=local_stage/(self.profile+'.json');target=root/'never-written-carrier'
+            broken.symlink_to(target)
+            rejected=subprocess.run([sys.executable,'-c',guard],env=env,capture_output=True,text=True)
+            self.assertNotEqual(rejected.returncode,0);self.assertFalse(target.exists());broken.unlink()
+            local_source=local_stage/'remote-deploy.py';local_source.symlink_to(target)
+            rejected=subprocess.run([sys.executable,'-c',guard],env=env,capture_output=True,text=True)
+            self.assertNotEqual(rejected.returncode,0);self.assertFalse(target.exists());local_source.unlink()
+            ns={'__name__':'actual95_dispatch_argv_fixture','__file__':str(PROJECT/'scripts/production-release/remote-deploy.py')}
+            exec(compile((PROJECT/'scripts/production-release/remote-deploy.py').read_bytes(),ns['__file__'],'exec'),ns)
+            received=[];ns['registration_interstitial_release']=lambda args:received.append(args)or 0
+            tokens=shlex.split(commands[-1]);self.assertEqual(tokens[:2],['python3','/opt/id-business-v2/.staging/oidc-'+COMMIT+'/remote-deploy.py'])
+            self.assertEqual(ns['registration_interstitial_main'](tokens[2:]),0);self.assertEqual(len(received),1)
+            args=received[0];self.assertEqual((args.image_commit,args.image_run_id,args.image_run_attempt),(COMMIT,'456','1'))
 
     def test_registration_build_uses_only_prepared_worker_context(self):
         with self.fixture() as (root,env):
