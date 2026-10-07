@@ -12836,17 +12836,28 @@ class Registration95ScopeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):deployment.registration_interstitial_baseline(previous)
             self.assertTrue(all(call.args[0]in(previous,current)for call in states.call_args_list));running.assert_called()
 
-    def test_real_history_rejects_private_modes_public_drift_and_changes_during_read(self):
+    def test_real_history_validates_three_field_manifest_and_five_field_audits_with_drift_and_read_guards(self):
         import builtins
         with tempfile.TemporaryDirectory(dir=self.runtime)as temporary,ExitStack()as stack:
             base=Path(temporary);previous=base/'releases/old94';previous.mkdir(parents=True);origin=base/'releases/origin80';origin.mkdir()
-            before={'gate':{},'checks':['same49facts'],'identity':{'original80':True}};after=copy.deepcopy(before)
+            reports,frozen,_policy,_seal=FixedRegistrationRuntimeScopeTests.zero_fixture(SimpleNamespace(
+                root=self.root,profile=json.loads((self.root/deployment.REGISTRATION_SCOPE_FILE).read_bytes())))
+            before=reports['before'];after=reports['after']
+            summaries={stage:deployment.require_registration_zero_report(report,stage,frozen)for stage,report in reports.items()}
+            audits={stage:{'checkCount':report['checkCount'],'violationCount':report['violationCount'],
+                'checksSha256':deployment.historical_fingerprint(report['checks']),
+                'gateSha256':deployment.historical_fingerprint(report['gate']),
+                'identitySha256':deployment.historical_fingerprint(report['identity'])}for stage,report in reports.items()}
+            self.assertTrue(all(set(value)=={'checkCount','violationCount','registrationFinanceGate'}for value in summaries.values()))
+            self.assertTrue(all(len(value)==5 for value in audits.values()))
+            self.assertNotEqual(summaries,audits)
             (origin/'before-audit.json').write_text(json.dumps(before));(origin/'before-audit.json').chmod(0o600)
             nested=SimpleNamespace(manifest={'commit':deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT},origin=origin)
             producer=b"import builtins\nfrom pathlib import Path\nBASE=Path(builtins._registration95fixture.base)\nREGISTRATION_FOLLOWUP_API_ADMIN_BASELINE={'manifest':builtins._registration95fixture.manifest}\ndef registration_profile(value,**kw):return value\ndef registration_followup_api_admin_history(previous):return builtins._registration95fixture.manifest,builtins._registration95fixture.origin\ndef registration_login_source(*a):pass\ndef registration_login_worker_projection(*a):return {}\ndef registration_followup_api_admin_runtime(*a):return builtins._registration95fixture.runtime\ndef registration_contract(*a):return {}\ndef registration_followup_api_admin_carried(*a):pass\ndef check_registration_followup_deployment(*a):raise AssertionError('current getter forbidden in historical read')\n"
             oldprofile=b'{}';archive=b'synthetic94archive'
             manifest={'commit':deployment.REGISTRATION_INTERSTITIAL_CURRENT,'previousCommit':deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT,
-                'previousRelease':str(base/'releases/old815'),'previousManifestSha256':'7'*64,'sourceArchiveSha256':deployment.hashlib.sha256(archive).hexdigest()}
+                'previousRelease':str(base/'releases/old815'),'previousManifestSha256':'7'*64,'sourceArchiveSha256':deployment.hashlib.sha256(archive).hexdigest(),
+                'dataAuditBefore':summaries['before'],'dataAuditAfter':summaries['after']}
             files={'scripts/production-release/remote-deploy.py':(producer,0o644),deployment.REGISTRATION_FOLLOWUP_FILE:(oldprofile,0o644),
                 'docker-compose.aws-mysql.yml':(b'controlled-compose',0o664),'.env.aws.production':(b'RAM-only-fixture',0o600),
                 'release-manifest.json':(json.dumps(manifest).encode(),0o600),'before-audit.json':(json.dumps(before).encode(),0o400),
@@ -12858,7 +12869,7 @@ class Registration95ScopeTests(unittest.TestCase):
             fixed={'current':str(previous),'manifest':manifest,'fileSha256':{name:deployment.hashlib.sha256(raw).hexdigest()for name,(raw,_mode)in files.items()},
                 'privateFileModes':{name:mode for name,(_raw,mode)in files.items()if name in deployment.REGISTRATION_INTERSTITIAL_PRIVATE},
                 'publicSourceMap':{'fileCount':len(public),'sha256':deployment.historical_fingerprint(public)},
-                'historical815':{'fileSha256':{'release-manifest.json':'7'*64}},'audits':{'before':{'stage':'before'},'after':{'stage':'after'}}}
+                'historical815':{'fileSha256':{'release-manifest.json':'7'*64}},'audits':audits}
             for name,value in {'BASE':base,'REGISTRATION_INTERSTITIAL_PRODUCER':deployment.hashlib.sha256(producer).hexdigest(),
                 'REGISTRATION_INTERSTITIAL_PREVIOUS_PROFILE':deployment.hashlib.sha256(oldprofile).hexdigest()}.items():stack.enter_context(patch.object(deployment,name,value))
             stack.enter_context(patch.object(builtins,'_registration95fixture',nested,create=True))
@@ -12867,7 +12878,28 @@ class Registration95ScopeTests(unittest.TestCase):
             stack.enter_context(patch.object(deployment,'require_main80_recharge_public_snapshot'))
             stack.enter_context(patch.object(deployment,'registration_download',return_value=archive))
             stack.enter_context(patch.object(deployment,'registration_archive',return_value={deployment.REGISTRATION_FOLLOWUP_FILE:(oldprofile,'100644')}))
-            stack.enter_context(patch.object(deployment,'require_registration_zero_report',side_effect=lambda _r,stage,_g:{'stage':stage}))
+            self.assertEqual(deployment.registration_interstitial_history(previous),(manifest,origin))
+            def repin(name,value):
+                path=previous/name;path.chmod(0o600);raw=json.dumps(value).encode();path.write_bytes(raw);path.chmod(files[name][1])
+                fixed['fileSha256'][name]=deployment.hashlib.sha256(raw).hexdigest()
+            for stage in ('before','after'):
+                name=stage+'-audit.json'
+                for field in ('checks','gate','identity'):
+                    changed=copy.deepcopy(reports[stage])
+                    if field=='checks':changed['checks'][0]['count']=1
+                    elif field=='gate':changed['gate']['reversalCount']+=1
+                    else:changed['identity']['currentUser']='id_business_audit@other-synthetic'
+                    if field=='identity':deployment.require_registration_zero_report(changed,stage,frozen)
+                    repin(name,changed)
+                    with self.subTest(stage=stage,changed=field),self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
+                    repin(name,reports[stage])
+                key='dataAudit'+stage.title();manifest[key]=dict(summaries[stage],violationCount=1);repin('release-manifest.json',manifest)
+                with self.subTest(stage=stage,changed='manifest-summary'),self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
+                manifest[key]=summaries[stage];repin('release-manifest.json',manifest)
+            changed=copy.deepcopy(after);changed['identity']['currentUser']='id_business_audit@other-synthetic';repin('after-audit.json',changed)
+            original_identity=audits['after']['identitySha256'];audits['after']['identitySha256']=deployment.historical_fingerprint(changed['identity'])
+            with self.subTest(changed='before-after-identity'),self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
+            audits['after']['identitySha256']=original_identity;repin('after-audit.json',after)
             self.assertEqual(deployment.registration_interstitial_history(previous),(manifest,origin))
             private=previous/'before-audit.json';private.chmod(0o644)
             with self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
