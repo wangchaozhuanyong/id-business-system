@@ -89,7 +89,16 @@ def snapshot(d, directory):
         metadata = json.loads(d.run('docker', 'inspect', row['containerId']))[0]
         d.require(metadata['Id'] == row['containerId'] and metadata['Image'] == row['image'],
                   'API_ADMIN_CONTAINER_CHANGED')
-        row['configurationSha256'] = fingerprint({key: metadata.get(key) for key in ('Config', 'HostConfig', 'Mounts')})
+        mounts = metadata.get('Mounts')
+        d.require(isinstance(mounts, list) and all(isinstance(mount, dict)
+                  and isinstance(mount.get('Destination'), str) and mount['Destination'].startswith('/')
+                  for mount in mounts) and len({mount['Destination'] for mount in mounts}) == len(mounts),
+                  'API_ADMIN_CONTAINER_MOUNTS_INVALID')
+        # Docker can emit this destination-keyed collection in map iteration order.
+        # Preserve every mount field; only collection order is non-semantic.
+        configuration = {key: metadata.get(key) for key in ('Config', 'HostConfig')}
+        configuration['Mounts'] = sorted(mounts, key=lambda mount: mount['Destination'])
+        row['configurationSha256'] = fingerprint(configuration)
         states[service] = row
     d.require(all(row['status'] == 'running' for row in states.values())
               and all(row['health'] == 'healthy' for name, row in states.items() if name != 'caddy'),
@@ -161,9 +170,9 @@ def baseline(d, expected, *, check_jobs=True):
         stage = 'JOBS'
         guards = jobs_idle(d, previous) if check_jobs else None
         stage = 'SNAPSHOT'
-        d.require((d.BASE / 'current').resolve() == previous
-                  and (previous / 'release-manifest.json').read_bytes() == raw
-                  and snapshot(d, previous) == states, 'API_ADMIN_BASELINE_MOVED')
+        d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_POINTER_MOVED')
+        d.require((previous / 'release-manifest.json').read_bytes() == raw, 'API_ADMIN_BASELINE_MANIFEST_CHANGED')
+        d.require(snapshot(d, previous) == states, 'API_ADMIN_BASELINE_SERVICES_CHANGED')
         return previous, manifest, states, {'manifestSha256': hashlib.sha256(raw).hexdigest(),
             'environmentSha256': hashlib.sha256((previous / '.env.aws.production').read_bytes()).hexdigest(),
             'apiSource': source, 'guards': guards, 'freeBytes': free_bytes}
