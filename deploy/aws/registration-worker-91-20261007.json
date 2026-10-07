@@ -288,7 +288,7 @@
   "controlSourceSha256": {
     ".github/workflows/production-release.yml": "25eac621a7021d01a7a9be08b561d4e0018d603ac59d5d9de1f3dcf345bdf2c8",
     "scripts/ci-recharge-check.mjs": "f23e7c31441ca387b33a3d76b194784877e19d00b07394fa9aaf0a2345994b7b",
-    "scripts/ci-recharge-release.test.mjs": "3914dec500480565e8cfe1389f34af9bee2c1420abef8e3d1367f8f064ca3088",
+    "scripts/ci-recharge-release.test.mjs": "bca3f097b78c11fde2b59eee78db526656d7c264ed61efd17feb39d08abaecbc",
     "scripts/ci-recharge-scope.mjs": "388185bb8700db821164af2c25ab398a73fe0600eb0be9ea945acecd3efafb9a",
     "scripts/ci-recharge-scope.test.mjs": "ea7527aeeeab551e3708d7e876b17d2e6245af61059448798b68517ab9963ce9",
     "scripts/production-release/build-images.sh": "70083b2ffcf959a485874d1119107255219570ac2e21c0c741a1ef5e5289cb62",

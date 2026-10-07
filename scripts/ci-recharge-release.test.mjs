@@ -447,6 +447,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'registration-worker-88-20261006'), false);
   assert.equal(selected('release', 'registration-worker-89-20261006'), false);
   assert.equal(selected('release', 'registration-worker-90-20261007'), false);
+  assert.equal(selected('release', 'registration-worker-91-20261007'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -464,6 +465,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-88-20261006',
         'registration-worker-89-20261006',
         'registration-worker-90-20261007',
+        'registration-worker-91-20261007',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
