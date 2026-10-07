@@ -43,6 +43,7 @@ const registrationControlPaths = [
   'deploy/aws/registration-worker-90-20261007.json',
   'deploy/aws/registration-worker-91-20261007.json',
   'deploy/aws/registration-worker-92-20261007.json',
+  'deploy/aws/registration-worker-93-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',

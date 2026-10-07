@@ -744,6 +744,12 @@ class DependencyRetentionTests(unittest.TestCase):
         with patch.object(cache, 'read', side_effect=self.command):
             return cache.collect_dependencies(self.rows[0], self.rows[1])
 
+    def test_fixed93_retains_original_sealed_finance_images_and_pro_rollback(self):
+        self.fixed('registration-worker-93-20261007')
+        result = self.collect()
+        self.assertTrue(set(self.ids[4:7]) <= set(result['imageIds']))
+        self.assertIn('registration-worker-93-20261007', cache.FIXED_REGISTRATION_IDS)
+
     def fixed(self, profile_id='registration-worker-91-20261007'):
         import hashlib
         seal = {'images': {'admin': self.ids[4], 'api': self.ids[5], 'migrate': self.ids[6]}}
