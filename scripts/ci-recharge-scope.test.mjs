@@ -881,3 +881,29 @@ test('fixed93 permits only two registration browser files and exact new release 
     assert.equal(isCiOnly([...controls, foreign]), false, foreign);
   }
 });
+
+test('fixed94 control-only runtime followup never widens unchanged Worker or API checks', () => {
+  const profile = 'deploy/aws/registration-worker-94-20261007.json';
+  const controls = [
+    profile,
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/ci-recharge-release.test.mjs'
+  ];
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.equal(isCiOnly(controls), true);
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const foreign of [
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py',
+    'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+    'deploy/aws/registration-worker-93-20261007.json',
+    'deploy/aws/recharge-pro-2f-20261007.json',
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'docs/UNREVIEWED.md'
+  ]) {
+    assert.equal(checkMode([...controls, foreign], schema, schema), 'full', foreign);
+    assert.equal(isCiOnly([...controls, foreign]), false, foreign);
+  }
+});

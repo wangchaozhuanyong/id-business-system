@@ -18,6 +18,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-91-20261007.json',
   'deploy/aws/registration-worker-92-20261007.json',
   'deploy/aws/registration-worker-93-20261007.json',
+  'deploy/aws/registration-worker-94-20261007.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -130,6 +131,10 @@ const registrationLoginControls = new Set([
 const isRegistrationLoginControl = (path) =>
   registrationLoginControls.has(path) ||
   ['docs/V2_TASKS.md', 'docs/AUTO_REGISTRATION.md'].includes(path);
+const registrationFollowupProfile = 'deploy/aws/registration-worker-94-20261007.json';
+const isRegistrationFollowupControl = (path) =>
+  path === registrationFollowupProfile ||
+  (path !== registrationLoginProfile && isRegistrationLoginControl(path));
 function isRegistrationLoginOnly(paths) {
   return (
     paths.includes(registrationLoginProfile) &&
@@ -170,6 +175,8 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (paths.includes(registrationFollowupProfile))
+    return paths.every(isRegistrationFollowupControl);
   if (paths.includes(registrationLoginProfile)) return paths.every(isRegistrationLoginControl);
   if (paths.includes(registrationRecoveryProfile))
     return paths.every(isRegistrationRecoveryControl);
@@ -239,6 +246,9 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationFollowupProfile)) {
+    return paths.every(isRegistrationFollowupControl) ? 'ci-only' : 'full';
+  }
   if (paths.includes(registrationRecoveryProfile)) {
     if (!isRegistrationRecoveryOnly(paths)) return 'full';
     return paths.some((path) => registrationRecoverySources.has(path)) ? 'recharge' : 'ci-only';
@@ -418,6 +428,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (paths.includes(registrationFollowupProfile) && paths.every(isRegistrationFollowupControl))
+    return ['guards'];
   if (isRegistrationRecoveryOnly(paths))
     return [
       'guards',

@@ -37,6 +37,17 @@ elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; t
       test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.admin-projection-sha256" }}')" = "$registration_admin_projection"
     fi
   done
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-94-20261007 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = d3fb510a40d6ee1f0a84c66b95d31f92b730cf7d
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-94-20261007
+  services=(auto-recharge)
+  registration_worker_projection="$(read_registration_followup_projection)"
+  registration_reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-auto-recharge"
+  test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_COMMIT"
+  test "$(docker image inspect "$registration_reference" --format '{{ index .Config.Labels "id-business-v2.worker-projection-sha256" }}')" = "$registration_worker_projection"
 elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-93-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 2f24cf81007429ea474da404a30bc74da9d43ce1
