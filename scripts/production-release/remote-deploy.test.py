@@ -11519,5 +11519,269 @@ class Registration93ScopeTests(unittest.TestCase):
             if file.startswith('deploy/aws/registration-worker-'):
                 with self.subTest(profile=file): self.assertEqual(deployment.hashlib.sha256((self.root/file).read_bytes()).hexdigest(),digest)
 
+class Registration94ScopeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[2]
+        cls.profile93 = json.loads((cls.root / deployment.REGISTRATION_LOGIN_FILE).read_bytes())
+        cls.draft94 = json.loads((cls.root / deployment.REGISTRATION_FOLLOWUP_FILE).read_bytes())
+        (cls.root / '.runtime/registration-login-runtime-followup-20261007').mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def frozen(self):
+        helper = Registration93ScopeTests(); helper.profile = self.profile93
+        with helper.frozen() as f:
+            baseline = copy.deepcopy(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE)
+            self.assertIsInstance(baseline, dict, '815 baseline has not been frozen')
+            baseline['handoff']['rawSha256'] = f.handoff['receiptSha256']
+            f.profile.update(id=deployment.REGISTRATION_FOLLOWUP_ID,
+                expectedCurrent=deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT, runtimeBaseline=baseline)
+            for name in deployment.REGISTRATION_FOLLOWUP_CONTROLS - deployment.REGISTRATION_LOGIN_CONTROLS:
+                raw = (self.root / name).read_bytes(); f.candidate[name] = (raw, '100644')
+                f.profile['controlSourceSha256'][name] = deployment.hashlib.sha256(raw).hexdigest()
+            f.baseline = baseline
+            with patch.object(deployment, 'REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE', baseline): yield f
+
+    def test_disabled_draft_stops_before_commands_downloads_or_lock(self):
+        with patch.object(deployment, 'REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE', None), \
+                patch.object(deployment, 'run') as command, patch.object(deployment, 'registration_download') as download, \
+                patch.object(Path, 'open') as opened:
+            with self.assertRaisesRegex(RuntimeError, 'baseline unavailable'):
+                deployment.registration_followup_profile(self.draft94)
+            args = Registration92RecoveryScopeTests.arguments()
+            args.registration_worker_92 = False; args.registration_worker_93 = False; args.registration_worker_94 = True
+            args.expected_current = deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT
+            with self.assertRaisesRegex(RuntimeError, 'baseline unavailable'): deployment.registration_followup_release(args)
+            command.assert_not_called(); download.assert_not_called(); opened.assert_not_called()
+
+    def test_closed815_profile_keeps_registration92_basis_and_two_file_scope(self):
+        with self.frozen() as f:
+            self.assertIs(deployment.registration_followup_profile(f.profile), f.profile)
+            self.assertEqual(f.profile['workerBasisCommit'], deployment.REGISTRATION_LOGIN_CURRENT)
+            self.assertEqual(deployment.registration_worker_basis(deployment.REGISTRATION_FOLLOWUP_ID), deployment.REGISTRATION_LOGIN_CURRENT)
+            self.assertEqual(deployment.registration_updated_services(deployment.REGISTRATION_FOLLOWUP_ID), ('auto-registration',))
+            for field, value in [('workerBasisCommit', deployment.REGISTRATION_FOLLOWUP_CURRENT),
+                    ('apiProjectionSha256', '0' * 64), ('apiCompiledSourceProjectionSha256', '0' * 64), ('enabled', 1)]:
+                bad = copy.deepcopy(f.profile); bad[field] = value
+                with self.subTest(field=field), self.assertRaises(RuntimeError): deployment.registration_followup_profile(bad)
+            bad = copy.deepcopy(f.profile)
+            bad['workerProjection'][deployment.REGISTRATION_WORKER_PREFIX + 'server.py']['sha256'] = '0' * 64
+            with self.assertRaises(RuntimeError): deployment.registration_followup_profile(bad)
+            for field, value in [('runtimeStable', False), ('registrationIdle', False), ('readOnly', 1), ('databaseWrites', False), ('extra', True)]:
+                bad = copy.deepcopy(f.baseline); bad[field] = value
+                with self.subTest(baseline=field), patch.object(deployment, 'REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE', bad), self.assertRaises(RuntimeError):
+                    deployment.registration_followup_profile({**f.profile, 'runtimeBaseline': bad})
+
+    def test_projection_route_reuses_original92_reconstruction_not_d3_host_source(self):
+        with self.frozen() as f, patch.object(deployment, 'registration_login_worker_projection', return_value={'owned92': True}) as project, \
+                patch.object(deployment, 'registration_followup_history') as history:
+            basis = {'original-reviewed-basis': True}; candidate = {'reviewed94': True}
+            self.assertEqual(deployment.registration_worker_projection(f.profile, basis, candidate), {'owned92': True})
+            project.assert_called_once_with(f.profile, basis, candidate); history.assert_not_called()
+        source = ast.get_source_segment((self.root / 'scripts/production-release/remote-deploy.py').read_text(),
+            next(n for n in ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes()).body
+                if isinstance(n, ast.FunctionDef) and n.name == 'registration_login_worker_projection'))
+        self.assertIn('registration_download(REGISTRATION_LOGIN_CURRENT)', source)
+        self.assertNotIn('REGISTRATION_FOLLOWUP_CURRENT', source)
+
+    def test_public_readback_separates815_api_runtime_from_registration92_origin_and_basis(self):
+        with self.frozen() as f:
+            receipt = deployment.registration_readback_receipt('a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_FOLLOWUP_ID)
+            self.assertEqual(receipt['previousCommit'], deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT)
+            self.assertEqual(receipt['workerBasisCommit'], deployment.REGISTRATION_LOGIN_CURRENT)
+            self.assertEqual(receipt['preservedServiceCount'], 6)
+            self.assertEqual(receipt['apiRuntimeRevision'], deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT)
+            self.assertEqual(receipt['apiBuildProofSha256'], deployment.historical_fingerprint(f.baseline['buildProof']))
+            self.assertEqual(receipt['apiContentSha256'], f.baseline['apiContentProjection']['sha256'])
+            self.assertEqual(receipt['adminContentSha256'], f.baseline['buildProof']['images']['admin']['sha256'])
+            deployment.validate_fixed_registration_readback_projection(receipt, 'a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_FOLLOWUP_ID)
+            for fields in ({'previousCommit': deployment.REGISTRATION_LOGIN_CURRENT}, {'workerBasisCommit': deployment.REGISTRATION_FOLLOWUP_CURRENT},
+                    {'servicesUpdated': ['auto-recharge', 'auto-registration']}, {'apiProjectionSha256': '0' * 64}, {'unknown': True}):
+                with self.subTest(fields=fields), self.assertRaises(RuntimeError):
+                    deployment.validate_fixed_registration_readback_projection({**receipt, **fields}, 'a' * 40, 'b' * 40, 'c' * 64, profile_id=deployment.REGISTRATION_FOLLOWUP_ID)
+
+    def test_after94_baseline_rechecks815_history_and_all8_fields_without_current_only_getter(self):
+        runtime = self.root / '.runtime/registration-login-runtime-followup-20261007'
+        with tempfile.TemporaryDirectory(dir=runtime) as temporary:
+            base = Path(temporary); previous = base / 'releases/815'; previous.mkdir(parents=True)
+            current = base / 'releases/94'; current.mkdir(); (base / 'current').symlink_to(current)
+            frozen_live = copy.deepcopy(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['liveServices'])
+            live = copy.deepcopy(frozen_live); live['auto-registration']['containerId'] = 'e' * 64
+            live['auto-registration']['configurationSha256'] = 'f' * 64
+            old_manifest = {'apiAdminPublication': {'exact815': True}}
+            provenance = {'id': deployment.REGISTRATION_FOLLOWUP_ID,
+                'apiRuntimeRevision': deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT,
+                'apiBuildProofSha256': deployment.historical_fingerprint(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['buildProof']),
+                'apiContentSha256': deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['buildProof']['images']['api']['sha256'],
+                'adminContentSha256': deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['buildProof']['images']['admin']['sha256']}
+            value = {'previousRelease': str(previous), 'previousCommit': deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT,
+                'previousManifestSha256': deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['fileSha256']['release-manifest.json'],
+                'servicesUpdated': ['auto-registration'], 'fixedRegistrationRelease': provenance}
+            manifest = current / 'release-manifest.json'; manifest.write_text(json.dumps(value)); manifest.chmod(0o600)
+            fixed = {'liveServices': frozen_live, 'buildProof': deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['buildProof'],
+                'fileSha256': deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE['fileSha256']}
+            read = deployment.fixed_recharge_bytes
+            def bytes_read(path, **kw):
+                return b'{}' if path.as_posix().endswith(deployment.RECHARGE_2F_FILE) else read(path, **kw)
+            with patch.object(deployment, 'BASE', base), patch.object(deployment, 'REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE', fixed), \
+                    patch.object(deployment, 'registration_followup_api_admin_record', side_effect=lambda v: v), \
+                    patch.object(deployment, 'registration_followup_api_admin_states', side_effect=lambda _p: copy.deepcopy(live)), \
+                    patch.object(deployment, 'registration_followup_api_admin_history', return_value=(old_manifest, previous)) as history, \
+                    patch.object(deployment, 'registration_followup_api_admin_official') as official, \
+                    patch.object(deployment, 'registration_followup_api_admin_running') as compiled, \
+                    patch.object(deployment, 'fixed_recharge_bytes', side_effect=bytes_read), \
+                    patch.object(deployment, 'recharge_2f_scope', return_value={}), patch.object(deployment, 'recharge_2f_running_hashes'):
+                self.assertEqual(deployment.registration_followup_baseline(previous), (old_manifest, previous))
+                self.assertEqual(history.call_count, 2); official.assert_not_called(); compiled.assert_called_once()
+                for name in deployment.ALL_SERVICES:
+                    if name == 'auto-registration': continue
+                    for field in ('containerId', 'image', 'environmentSha256', 'configurationSha256'):
+                        old = live[name][field]; live[name][field] = '0' * 64
+                        with self.subTest(service=name, field=field), self.assertRaises(RuntimeError): deployment.registration_followup_baseline(previous)
+                        live[name][field] = old
+                live['auto-registration']['environmentSha256'] = '0' * 64
+                with self.assertRaises(RuntimeError): deployment.registration_followup_baseline(previous)
+                official.assert_not_called()
+
+    def test_official_d3_getter_rejects_noncurrent_before_producer_read(self):
+        runtime = self.root / '.runtime/registration-login-runtime-followup-20261007'
+        with tempfile.TemporaryDirectory(dir=runtime) as temporary:
+            base = Path(temporary); d3 = base / 'releases/d3'; d3.mkdir(parents=True)
+            newer = base / 'releases/94'; newer.mkdir(); (base / 'current').symlink_to(newer)
+            with patch.object(deployment, 'BASE', base), patch.object(deployment, 'REGISTRATION_FOLLOWUP_BASELINE', {'current': str(d3)}), \
+                    patch.object(deployment, 'fixed_recharge_bytes') as read, patch.object(deployment, 'run') as command:
+                with self.assertRaises(RuntimeError): deployment.registration_followup_official_readback(d3)
+                read.assert_not_called(); command.assert_not_called()
+
+    def test_historical_d3_read_is_independent_and_audit_override_belongs_to_previous92(self):
+        tree = ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes())
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'registration_followup_history')
+        calls = {n.func.id for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertTrue({'registration_login_history', 'recharge_2f_baseline', 'verify_recharge_2f_candidate_source',
+            'require_registration_zero_report', 'require_main80_recharge_public_snapshot'} <= calls)
+        self.assertTrue({'registration_followup_official_readback', 'point_current', 'service_state', 'compose'} .isdisjoint(calls))
+        self.assertFalse(any(isinstance(n, ast.Attribute) and n.attr in ('chmod', 'write_text', 'write_bytes', 'symlink_to') for n in ast.walk(node)))
+        self.assertNotIn('registration-recovery-audit.compose.json', deployment.REGISTRATION_FOLLOWUP_HISTORY_FILES)
+        self.assertEqual(len(deployment.REGISTRATION_FOLLOWUP_HISTORY_FILES), 40)
+        self.assertEqual(len(deployment.REGISTRATION_FOLLOWUP_BASELINE_KEYS), 25)
+        source = ast.unparse(node)
+        self.assertIn("native_previous / 'registration-recovery-audit.compose.json'", source)
+        self.assertIn("REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['digest']", source)
+        self.assertIn("modes=(384,)", source)
+
+    def test_main_mixed94_and93_orpro_selection_stops_before_effects(self):
+        argv = ['remote-deploy.py', '--commit', 'a' * 40, '--source-tree', 'b' * 40,
+            '--repository', 'synthetic-fixture-only', '--expected-current', deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT,
+            '--run-id', '1', '--run-attempt', '1', '--ci-run-id', '1', '--registration-worker-94']
+        for flag in ('--registration-worker-93', '--recharge-pro-2f', '--api-admin-only'):
+            with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', argv + [flag]), \
+                    patch.object(deployment, 'registration_followup_release') as release, patch.object(deployment, 'run') as command:
+                with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
+                release.assert_not_called(); command.assert_not_called()
+        with patch.object(deployment.sys, 'argv', argv + ['--api-admin-build-proof', 'synthetic-no-secrets']), \
+                patch.object(deployment, 'registration_followup_release') as release, patch.object(deployment, 'api_admin_scope') as scope:
+            with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_SCOPE_REQUIRED'): deployment.main()
+            release.assert_not_called(); scope.assert_not_called()
+        api_args = [x for x in argv if x != '--registration-worker-94'] + ['--api-admin-only', '--api-admin-build-proof', 'synthetic-no-secrets']
+        api_release = MagicMock(return_value='selected-api-admin'); controller = object()
+        with patch.object(deployment.sys, 'argv', api_args), patch.object(deployment, 'api_admin_scope', return_value=(SimpleNamespace(release=api_release), controller)), \
+                patch.object(deployment, 'registration_followup_release') as registration:
+            self.assertEqual(deployment.main(), 'selected-api-admin')
+            api_release.assert_called_once(); registration.assert_not_called()
+        with patch.object(deployment.sys, 'argv', argv), patch.object(deployment, 'registration_followup_release', return_value='selected94') as selected:
+            self.assertEqual(deployment.main(), 'selected94'); selected.assert_called_once()
+
+    def test_actual_d3_baseline_is_closed_and_source_maps_match_preserved92_plus_pro(self):
+        fixed = deployment.REGISTRATION_FOLLOWUP_BASELINE
+        self.assertEqual(set(fixed), deployment.REGISTRATION_FOLLOWUP_BASELINE_KEYS)
+        self.assertEqual(set(fixed['fileSha256']), deployment.REGISTRATION_FOLLOWUP_HISTORY_FILES)
+        self.assertEqual(set(fixed['manifest']), deployment.REGISTRATION_FOLLOWUP_MANIFEST_KEYS)
+        self.assertEqual(fixed['manifest']['commit'], deployment.REGISTRATION_FOLLOWUP_CURRENT)
+        self.assertEqual(fixed['manifest']['previousCommit'], deployment.REGISTRATION_LOGIN_CURRENT)
+        pro = json.loads((self.root / deployment.RECHARGE_2F_FILE).read_bytes())
+        self.assertEqual(fixed['actualRegistrationWorkerSourceSha256'], {
+            n.removeprefix(deployment.REGISTRATION_WORKER_PREFIX): r['sha256']
+            for n, r in deployment.REGISTRATION_LOGIN_WORKER_BASIS.items()})
+        self.assertEqual(fixed['actualRechargeWorkerSourceSha256'], {
+            n.removeprefix(deployment.REGISTRATION_WORKER_PREFIX): r['sha256']
+            for n, r in pro['workerProjection'].items()})
+        self.assertEqual(fixed['actualApiCompiledSourceSha256'], deployment.REGISTRATION_RECOVERY_API_COMPILED_SHA256)
+        self.assertEqual(fixed['auditControl'], {'directory': deployment.REGISTRATION_LOGIN_BASELINE['current'],
+            'overrideSha256': deployment.REGISTRATION_LOGIN_BASELINE['fileSha256']['registration-recovery-audit.compose.json'], 'mode': 384})
+        for stage in ('before', 'after'):
+            self.assertEqual(fixed['audits'][stage]['checkCount'], 49)
+            self.assertEqual(fixed['audits'][stage]['violationCount'], 0)
+        for key in ('checksSha256', 'identitySha256'):
+            self.assertEqual(fixed['audits']['before'][key], fixed['audits']['after'][key])
+        self.assertEqual(fixed['liveServices']['api'], deployment.REGISTRATION_LOGIN_BASELINE['liveServices']['api'])
+
+    def test_actual815_baseline_closed_types_api_content_and_historical_d3_are_separate(self):
+        fixed = deployment.REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE
+        self.assertIs(deployment.registration_followup_api_admin_record(fixed), fixed)
+        self.assertEqual(len(fixed), 27); self.assertEqual(len(fixed['manifest']), 23)
+        self.assertEqual(len(fixed['fileSha256']), 13); self.assertEqual(len(fixed['privateFileModes']), 8)
+        self.assertTrue(all(len(row) == 8 for row in fixed['liveServices'].values()))
+        self.assertEqual(fixed['publicSourceMap'], deployment.REGISTRATION_FOLLOWUP_API_ADMIN_PUBLIC)
+        self.assertEqual(fixed['apiContentProjection'], fixed['buildProof']['images']['api'])
+        self.assertEqual(fixed['historicalD3']['directory'], deployment.REGISTRATION_FOLLOWUP_BASELINE['current'])
+        for name, value in [('runtimeStable', False), ('registrationIdle', False), ('readOnly', 1), ('databaseWrites', False),
+                ('windowRestarted', 0), ('extra', True)]:
+            bad = copy.deepcopy(fixed); bad[name] = value
+            with self.subTest(field=name), self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_record(bad)
+        for name in ('api', 'admin', 'auto-recharge', 'auto-registration'):
+            bad = copy.deepcopy(fixed); bad['liveServices'][name].pop('configurationSha256')
+            with self.subTest(missing_config=name), self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_record(bad)
+        for key in ('commit', 'sourceTree'):
+            bad = copy.deepcopy(fixed); bad['buildProof'][key] = '0' * 40
+            with self.subTest(proof=key), self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_record(bad)
+        bad = copy.deepcopy(fixed); bad['publicSourceMap']['sha256'] = '43967adf2c0b0bd14937f34fd7f1e08779f00ef713926a2b2dedf6d3fc1688b7'
+        with self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_record(bad)
+        bad = copy.deepcopy(fixed); bad['actualApiCompiledSourceSha256'] = {}
+        with self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_record(bad)
+        bad = copy.deepcopy(fixed); bad['historicalD3']['directory'] = fixed['current']
+        with self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_record(bad)
+
+    def test_official815_getter_rejects_noncurrent_before_reading_producer(self):
+        runtime = self.root / '.runtime/registration-login-runtime-followup-20261007'
+        with tempfile.TemporaryDirectory(dir=runtime) as temporary:
+            base = Path(temporary); previous = base / 'releases/815'; previous.mkdir(parents=True)
+            current = base / 'releases/94'; current.mkdir(); (base / 'current').symlink_to(current)
+            fixed = {'current': str(previous)}
+            with patch.object(deployment, 'BASE', base), patch.object(deployment, 'REGISTRATION_FOLLOWUP_API_ADMIN_BASELINE', fixed), \
+                    patch.object(deployment, 'registration_followup_api_admin_record', side_effect=lambda v: v), \
+                    patch.object(deployment, 'registration_followup_api_admin_module') as producer:
+                with self.assertRaises(RuntimeError): deployment.registration_followup_api_admin_official(previous)
+                producer.assert_not_called()
+
+    def test815_history_has_no_current_getter_mutation_or_legacy_api_image_requirement(self):
+        tree = ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes())
+        functions = {n.name:n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        node = functions['registration_followup_api_admin_history']
+        calls = {n.func.id for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertTrue({'registration_followup_history', 'fixed_recharge_file_map', 'require_main80_recharge_public_snapshot'} <= calls)
+        self.assertTrue({'registration_followup_official_readback', 'registration_followup_api_admin_official', 'point_current', 'service_state', 'compose'} .isdisjoint(calls))
+        self.assertFalse(any(isinstance(n, ast.Attribute) and n.attr in ('chmod', 'write_text', 'write_bytes', 'symlink_to') for n in ast.walk(node)))
+        self.assertNotIn('registration_login_api_hashes', ast.unparse(functions['registration_followup_release']))
+        self.assertNotIn('registration_login_api_hashes', ast.unparse(functions['check_registration_followup_deployment']))
+        finance = functions['registration_followup_finance_audit']
+        copies = [n for n in ast.walk(finance) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id=='prepare_post_cleanup_reader_copy']
+        self.assertEqual(len(copies), 2)
+        self.assertTrue(all(isinstance(n.args[0], ast.Name) and n.args[0].id=='control_source' for n in copies))
+        self.assertIn("REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['digest']", ast.unparse(finance))
+        self.assertEqual(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_PUBLIC['fileCount'], 2194)
+        self.assertEqual(deployment.REGISTRATION_FOLLOWUP_API_ADMIN_PUBLIC['sha256'], 'd9ab8fdd3eae1bce58942fca5397ac6b84fec86cad4f6c331736ea00c4ee3d18')
+
+    def test_existing93_and_pro_controller_functions_and_profiles_are_immutable(self):
+        current = ast.parse((self.root / 'scripts/production-release/remote-deploy.py').read_bytes())
+        old = ast.parse(subprocess.check_output(['git', 'show', '6b0be71658f5533cc8e4a0d42711d4bc57b1f5c6:scripts/production-release/remote-deploy.py'], cwd=self.root))
+        functions = lambda tree: {n.name: ast.dump(n, include_attributes=False) for n in tree.body if isinstance(n, ast.FunctionDef)}
+        a, b = functions(old), functions(current)
+        names = [n for n in a if n.startswith('registration_login_') or n.startswith('recharge_2f_') or n == 'check_registration_login_deployment']
+        for name in names:
+            with self.subTest(function=name): self.assertEqual(a[name], b[name])
+        for name in (deployment.REGISTRATION_LOGIN_FILE, deployment.RECHARGE_2F_FILE):
+            with self.subTest(profile=name): self.assertEqual((self.root / name).read_bytes(), subprocess.check_output(['git', 'show', '6b0be71658f5533cc8e4a0d42711d4bc57b1f5c6:' + name], cwd=self.root))
+
+
 if __name__ == '__main__':
     unittest.main()
