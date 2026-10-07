@@ -91,7 +91,7 @@ build_image() {
       exit 1
     fi
   fi
-  if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-93-20261007 || "${HISTORICAL_EXCEPTION:-none}" == registration-worker-94-20261007 ]]; then
+  if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-93-20261007 || "${HISTORICAL_EXCEPTION:-none}" == registration-worker-94-20261007 || "${HISTORICAL_EXCEPTION:-none}" == registration-worker-95-20261008 ]]; then
     [[ "$service" == auto-recharge && -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || exit 1
     [[ "${registration_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
     options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
@@ -164,6 +164,21 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; the
   build_image admin "$registration_admin_context/apps/admin/Dockerfile" runtime "$registration_admin_context"
   exit 0
 fi
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-95-20261008 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-95-20261008
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-registration-build --registration-profile registration-worker-95-20261008
+  registration_context=.deploy/production-release/registration-build-context
+  registration_worker_projection="$(read_registration_interstitial_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  exit 0
+fi
+
 
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-94-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release

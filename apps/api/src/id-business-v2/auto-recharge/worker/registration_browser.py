@@ -1403,6 +1403,8 @@ class RegistrationBrowser:
         identity_recovery_used = False
         identity_handler = None
         navigation_readonly = None
+        challenge_loading = False
+        email_submit_returned = False
         phases = {'context_create', 'context_route', 'page_create', 'navigation', 'navigation_guard',
                   'body_read', 'field_read', 'email_code_wait', 'email_code_fill', 'email_code_submit',
                   'identity_read', 'email_fill', 'mail_prepare', 'email_submit', 'password_choice',
@@ -1424,7 +1426,8 @@ class RegistrationBrowser:
                      'post_code_identity_unconfirmed', 'password_rejected', 'secret_cleanup', 'context_cleanup',
                      'identity_first', 'identity_retry', 'identity_guard_install', 'identity_code_guard',
                      'identity_get', 'identity_after_get', 'identity_guard_remove', 'owned_onboarding'}
-        subphases.update({'email_form_readiness', 'email_form_changed'})
+        subphases.update({'email_form_readiness', 'email_form_changed',
+                         'challenge_loading', 'challenge_loading_exhausted'})
 
         def note(name):
             nonlocal subphase
@@ -1462,16 +1465,16 @@ class RegistrationBrowser:
             attempt = getattr(self.job, 'attempt', None)
             code = report.get('browser_error_code')
             logging.getLogger('registration').warning(
-                'Registration verification failed job=%s attempt=%s phase=%s error_type=%s browser_code=%s cleanup=%s reason=%s subphase=%s form_state=%s',
+                'Registration verification failed job=%s attempt=%s phase=%s error_type=%s browser_code=%s cleanup=%s reason=%s subphase=%s form_state=%s email_submit_returned=%s owned_context=%s',
                 job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
                 attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
                 details['phase'], details['error_type'],
                 code if type(code) is str and code in RETRYABLE_NETWORK_CODES else 'none', cleanup,
-                details['reason'], details['subphase'], details['form_state'])
+                details['reason'], details['subphase'], details['form_state'], email_submit_returned, _owned_context)
         submitted_email = False
         submitted_totp = False
 
-        async def safe_page():
+        async def scan_page():
             mark('body_read')
             note('official_guard')
             self.official(page)
@@ -1482,8 +1485,8 @@ class RegistrationBrowser:
             note('text_read')
             text = (await page.locator('body').inner_text())[:12000]
             note('title_read')
-            if re.search(r'just a moment|verify.{0,40}human|human verification|人机验证',
-                         await page.title() + '\n' + text, re.I):
+            title = await page.title()
+            if re.search(r'verify.{0,40}human|human verification|人机验证', title + '\n' + text, re.I):
                 note('challenge_text')
                 raise Stop('verification_required')
             challenges = page.locator('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .cf-turnstile')
@@ -1497,7 +1500,34 @@ class RegistrationBrowser:
                     and re.search(r'verif.{0,30}(?:phone|mobile)|(?:phone|mobile).{0,30}verif|phone number|enter.{0,30}(?:phone|mobile)|手机号|手机验证|电话验证', text, re.I)):
                 note('phone_verification')
                 raise Stop('verification_required')
-            note('none')
+            return bool(re.search(r'just a moment', title + '\n' + text, re.I))
+
+        async def safe_page():
+            nonlocal challenge_loading
+            challenge_loading = False
+            while True:
+                if challenge_loading:
+                    # A known loading page's DOM re-read also spends the same
+                    # deadline, including direct callers after mail/OTP waits.
+                    loading = await budget.run(scan_page, 'verification_challenge_reobserve')
+                else:
+                    loading = await scan_page()
+                challenge_loading = loading
+                if not loading:
+                    note('none')
+                    return
+                # Only a passive loading page can spend the original navigation
+                # budget. Normal OTP pages may arrive after its deadline.
+                challenge_loading = True
+                note('challenge_loading')
+                try:
+                    remaining = budget.remaining_ms()
+                except Stop as exc:
+                    if exc.report.get('reason') != 'session_load_timeout':
+                        raise
+                    note('challenge_loading_exhausted')
+                    raise Stop('verification_required') from None
+                await asyncio.sleep(min(.1, remaining / 1000))
 
         async def email_code():
             nonlocal submitted_email
@@ -1788,6 +1818,7 @@ class RegistrationBrowser:
             mark('email_submit')
             if _owned_context:authentication['submitted'] = True
             await budget.run(lambda: email_handle.press('Enter'), 'verification_email_submit')
+            email_submit_returned = True
             await self.settle(3)
             chose_password = False
             for _ in range(60):
@@ -1897,6 +1928,11 @@ class RegistrationBrowser:
             note('post_code_identity_unconfirmed' if submitted_email or submitted_totp else 'password_identity_unconfirmed')
             raise Stop('verification_required')
         except BaseException as exc:
+            # The outer budget may expire while cancelling the passive sleep.
+            # Record its observed kind while preserving the original exception.
+            if (challenge_loading and isinstance(exc, Stop)
+                    and exc.report.get('reason') == 'session_load_timeout'):
+                note('challenge_loading_exhausted')
             primary_error = exc
             mark(phase)
             failure(exc)

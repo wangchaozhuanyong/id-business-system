@@ -481,6 +481,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'registration-worker-91-20261007'), false);
   assert.equal(selected('release', 'registration-worker-93-20261007'), false);
   assert.equal(selected('release', 'registration-worker-94-20261007'), false);
+  assert.equal(selected('release', 'registration-worker-95-20261008'), false);
   assert.equal(selected('release', 'historical-finance-20261005-mailbox-batch'), false);
   for (const policy of workflowInputs.historical_exception.options.filter(
     (value) =>
@@ -505,6 +506,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'registration-worker-92-20261007',
         'registration-worker-93-20261007',
         'registration-worker-94-20261007',
+        'registration-worker-95-20261008',
         'historical-finance-20261005-mailbox-batch'
       ].includes(value)
   ))
@@ -4075,6 +4077,68 @@ test('fixed94 preserves815 API Admin and D3 Pro while rebuilding the reviewed re
   execFileSync(
     'python3',
     ['scripts/production-release/remote-deploy.test.py', 'Registration94ScopeTests'],
+    { encoding: 'utf8' }
+  );
+});
+
+test('fixed95 preserves94 and815 API Admin and D3 Pro while rebuilding the reviewed registration92 basis only', () => {
+  const profile = 'registration-worker-95-20261008';
+  const raw = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.equal(raw.expectedCurrent, '4c170e661c871dc14dccc98a8d6e5cf983141341');
+  assert.equal(raw.runtimeBaseline.status, 'VERIFIED_94_API815_RUNTIME_BASELINE');
+  assert.equal(raw.runtimeBaseline.manifest.commit, raw.expectedCurrent);
+  assert.equal(Object.keys(raw.controlSourceSha256).length, 24);
+  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.py']);
+  assert.ok(raw.controlSourceSha256['scripts/production-release/registration-interstitial-95.py']);
+  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.test.py']);
+  assert.equal(raw.workerBasisCommit, '2f24cf81007429ea474da404a30bc74da9d43ce1');
+  assert.deepEqual(raw.scope.servicesUpdated, ['auto-registration']);
+  assert.deepEqual(raw.scope.imageServices, ['auto-recharge']);
+  assert.equal(raw.scope.preservedServices.length, 6);
+  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
+    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == ' + profile + ' ]]; then')[1]
+    .split('\nfi')[0];
+  assert.equal((build.match(/build_image /g) || []).length, 1);
+  assert.ok(build.includes('registration-build-context'));
+  assert.equal(build.includes('build_image api'), false);
+  const required = [
+    'Verify fixed 95 registration runtime approval',
+    'Verify fixed 95 registration deployment independently',
+    'Save fixed 95 registration Worker build projection',
+    'Record skipped cache maintenance for fixed 95 registration release'
+  ];
+  const exclusive = [
+    'Verify fixed 94 registration runtime approval',
+    'Verify fixed 94 registration deployment independently',
+    'Verify fixed 93 registration runtime approval',
+    'Verify fixed 93 registration deployment independently',
+    'Verify fixed 2f recharge runtime approval',
+    'Verify fixed recharge deployment independently'
+  ];
+  const enabled = workflowSteps
+    .filter(
+      (step) =>
+        !step.if ||
+        workflowPredicate(step.if)({
+          operation: 'release',
+          historical_exception: profile,
+          reuse_image_run: ''
+        })
+    )
+    .map((step) => step.name);
+  for (const name of required) assert.ok(enabled.includes(name), name);
+  for (const name of [
+    ...exclusive,
+    'Verify or maintain recoverable unused project image cache',
+    'Verify reusable build and unchanged application source'
+  ])
+    assert.equal(enabled.includes(name), false, name);
+  assert.ok(
+    enabled.includes('Maintain service rollback image cache independently after fixed release')
+  );
+  execFileSync(
+    'python3',
+    ['scripts/production-release/remote-deploy.test.py', 'Registration95ScopeTests'],
     { encoding: 'utf8' }
   );
 });

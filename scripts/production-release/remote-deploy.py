@@ -12254,7 +12254,37 @@ def main():
     return 0
 
 
+
+
+# A closed successor of actual94; pending values never authorize a publication.
+REGISTRATION_INTERSTITIAL_MODULE_SHA256 = '0786173c80d24f5db35b17e34dfd2d91509709015f6f4c8b4e35ea19210cfda0'
+
+
+def load_registration_interstitial95():
+    """Load only the immutable plaintext95 definitions at the actual controller location."""
+    source = Path(__file__).absolute()
+    message = 'Fixed95 module carrier changed'
+    require(source.name == 'remote-deploy.py' and source.resolve() == source
+        and not source.is_symlink() and source.parent.resolve() == source.parent, message)
+    staged = source.parent.parent == BASE / '.staging'
+    if staged:
+        require(BASE.is_absolute() and BASE.resolve() == BASE
+            and re.fullmatch(r'oidc-[a-f0-9]{40}', source.parent.name), message)
+    else:
+        require(source.parent.name == 'production-release' and source.parent.parent.name == 'scripts', message)
+    path = source.with_name('registration-interstitial-95.py')
+    raw = fixed_recharge_bytes(path, modes=(0o644,) if staged else (0o644, 0o664), limit=128 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == REGISTRATION_INTERSTITIAL_MODULE_SHA256, message)
+    exec(compile(raw, str(path), 'exec'), globals())
+    return globals()
+
+
 if __name__ == '__main__':
+    if 'registration-worker-95-20261008' in sys.argv or '--registration-worker-95' in sys.argv:
+        try:
+            load_registration_interstitial95()
+            raise SystemExit(registration_interstitial_cli(sys.argv[1:]))
+        except Exception:raise SystemExit('Fixed registration interstitial unavailable; raw output suppressed') from None
     if sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):
         try:
             scope, controller = api_admin_scope()

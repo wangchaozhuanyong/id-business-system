@@ -1088,3 +1088,75 @@ test('fixed94 control-only runtime followup never widens unchanged Worker or API
     assert.equal(isCiOnly([...controls, foreign]), false, foreign);
   }
 });
+
+test('fixed95 control-only interstitial never widens unchanged Worker or API checks', () => {
+  const profile = 'deploy/aws/registration-worker-95-20261008.json';
+  const controls = [
+    profile,
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/api-admin-scope.py',
+    'scripts/production-release/api-admin-scope.test.py',
+    'scripts/production-release/maintain-image-cache.py',
+    'scripts/ci-recharge-release.test.mjs'
+  ];
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.equal(isCiOnly(controls), true);
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const foreign of [
+    'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+    'deploy/aws/registration-worker-93-20261007.json',
+    'deploy/aws/registration-worker-94-20261007.json',
+    'deploy/aws/recharge-pro-2f-20261007.json',
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'docs/UNREVIEWED.md',
+    'scripts/production-release/api-admin-readonly.py'
+  ]) {
+    assert.equal(checkMode([...controls, foreign], schema, schema), 'full', foreign);
+    assert.equal(isCiOnly([...controls, foreign]), false, foreign);
+  }
+});
+
+test('fixed95 exact browser pair selects only guards connector and rejects other runtime sources', () => {
+  const controls = [
+    'deploy/aws/registration-worker-95-20261008.json',
+    'scripts/production-release/remote-deploy.py'
+  ];
+  for (const file of ['registration_browser.py', 'test_registration_browser.py']) {
+    const paths = [...controls, 'apps/api/src/id-business-v2/auto-recharge/worker/' + file];
+    assert.equal(checkMode(paths, schema, schema), 'recharge');
+    assert.equal(isCiOnly(paths), false);
+    assert.equal(isRechargeOnly(paths, schema, schema), true);
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+  }
+  for (const file of ['server.py', 'registration_builtin.py', 'plan_selection.py', 'Dockerfile']) {
+    const paths = [...controls, 'apps/api/src/id-business-v2/auto-recharge/worker/' + file];
+    assert.equal(checkMode(paths, schema, schema), 'full');
+    assert.equal(isRechargeOnly(paths, schema, schema), false);
+  }
+});
+
+test('fixed95 plaintext module remains a finite control and rejects mixed Pro approval', () => {
+  const module = 'scripts/production-release/registration-interstitial-95.py';
+  const profile = 'deploy/aws/registration-worker-95-20261008.json';
+  const pro = 'deploy/aws/recharge-pro-4c-20261008.json';
+  const control = [profile, module, 'scripts/production-release/remote-deploy.py'];
+  assert.equal(checkMode(control, schema, schema), 'ci-only');
+  assert.equal(isCiOnly(control), true);
+  assert.deepEqual(selectedParts(control), ['guards']);
+  const business = [
+    ...control,
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py'
+  ];
+  assert.equal(checkMode(business, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(business), ['guards', 'connector']);
+  for (const drift of [
+    [...control, pro],
+    [...business, pro],
+    [...control, 'scripts/production-release/registration-interstitial-96.py']
+  ]) {
+    assert.equal(checkMode(drift, schema, schema), 'full');
+    assert.equal(isCiOnly(drift), false);
+    assert.equal(isTargetedOnly(drift, schema, schema), false);
+  }
+});

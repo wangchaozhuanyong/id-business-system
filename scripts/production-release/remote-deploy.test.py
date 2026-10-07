@@ -12556,5 +12556,357 @@ class Registration94ScopeTests(unittest.TestCase):
             with self.subTest(profile=name): self.assertEqual((self.root / name).read_bytes(), subprocess.check_output(['git', 'show', '6b0be71658f5533cc8e4a0d42711d4bc57b1f5c6:' + name], cwd=self.root))
 
 
+
+class Registration95ScopeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        deployment.load_registration_interstitial95()
+        cls.root = Path(__file__).resolve().parents[2]
+        cls.profile = json.loads((cls.root / deployment.REGISTRATION_INTERSTITIAL_FILE).read_bytes())
+        cls.runtime = cls.root / '.runtime/registration-login-interstitial-20261008/control95'
+        cls.runtime.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def frozen(self):
+        profile = copy.deepcopy(self.profile)
+        candidate = {name: (('local-synthetic95:' + name).encode(), '100644')
+            for name in deployment.REGISTRATION_INTERSTITIAL_CONTROLS | deployment.REGISTRATION_LOGIN_FILES}
+        sha = lambda name: deployment.hashlib.sha256(candidate[name][0]).hexdigest()
+        source = {deployment.REGISTRATION_WORKER_PREFIX + 'registration_browser.py': sha(deployment.REGISTRATION_WORKER_PREFIX + 'registration_browser.py')}
+        validation = {deployment.REGISTRATION_WORKER_PREFIX + 'test_registration_browser.py': sha(deployment.REGISTRATION_WORKER_PREFIX + 'test_registration_browser.py')}
+        projection = copy.deepcopy(deployment.REGISTRATION_LOGIN_WORKER_BASIS)
+        for name in deployment.REGISTRATION_LOGIN_FILES: projection[name] = {'mode':'100644','sha256':sha(name)}
+        handoff = {'receiptSha256':'5'*64,'taskId':'252ab243-d96b-4928-8116-b83dedc1d240','attempt':8,
+            'registered':True,'passwordLoginVerified':False,'mfaLoginVerified':False,'windowExists':False,'leaseActive':False,'busy':False}
+        profile.update(enabled=True,registrationSourceCommit='9'*40,registrationSourceSha256=source,
+            validationSourceSha256=validation,workerProjection=projection,workerProjectionSha256=deployment.historical_fingerprint(projection),
+            registrationHandoff=handoff,controlSourceSha256={name:sha(name)for name in deployment.REGISTRATION_INTERSTITIAL_CONTROLS})
+        with ExitStack() as stack:
+            for name,value in {'REGISTRATION_INTERSTITIAL_SOURCE':'9'*40,'REGISTRATION_INTERSTITIAL_SOURCE_SHA256':source,
+                'REGISTRATION_INTERSTITIAL_VALIDATION_SHA256':validation,'REGISTRATION_INTERSTITIAL_PROJECTION_SHA256':profile['workerProjectionSha256'],
+                'REGISTRATION_INTERSTITIAL_HANDOFF':handoff}.items(): stack.enter_context(patch.object(deployment,name,value))
+            yield SimpleNamespace(profile=profile,candidate=candidate,handoff=handoff)
+
+    def test_plaintext_loader_preserves_real_repo_current_and_stage_namespace(self):
+        source_path=self.root/'scripts/production-release/remote-deploy.py'
+        source_raw=source_path.read_bytes();module_raw=source_path.with_name('registration-interstitial-95.py').read_bytes()
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary)
+            for directory in (source_path.parent,base/'releases/actual95/scripts/production-release',base/'.staging'/('oidc-'+'a'*40)):
+                directory.mkdir(parents=True,exist_ok=True);source=directory/'remote-deploy.py';module=directory/'registration-interstitial-95.py'
+                if source!=source_path:source.write_bytes(source_raw);source.chmod(0o644);module.write_bytes(module_raw);module.chmod(0o644)
+                ns={'__name__':'real95_loader_fixture','__file__':str(source)};exec(compile(source_raw,str(source),'exec'),ns)
+                if source!=source_path:ns['BASE']=base
+                before={name:ns[name]for name in ('__name__','__file__','BASE')}
+                self.assertNotIn('REGISTRATION_INTERSTITIAL_ID',ns)
+                self.assertIs(ns['load_registration_interstitial95'](),ns)
+                self.assertEqual(before,{name:ns[name]for name in before})
+                self.assertEqual(ns['REGISTRATION_INTERSTITIAL_ID'],'registration-worker-95-20261008')
+                self.assertEqual(ns['registration_interstitial_record'](self.profile['runtimeBaseline']),self.profile['runtimeBaseline'])
+
+    def test_plaintext_module_missing_hash_mode_size_symlink_and_read_race_reject_before_exec(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base);module=source.with_name('registration-interstitial-95.py');raw=module.read_bytes()
+            module.unlink()
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            module.write_bytes(raw+b"\nraise AssertionError('UNVERIFIED95_EXEC_SENTINEL')\n");module.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError,'module carrier changed'):ns['load_registration_interstitial95']()
+            module.write_bytes(raw);module.chmod(0o600)
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            module.chmod(0o644);module.write_bytes(b'x'*(128*1024+1))
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            module.unlink();missing=base/'never-created-module';module.symlink_to(missing)
+            with self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+            self.assertFalse(missing.exists());module.unlink();module.write_bytes(raw);module.chmod(0o644)
+            original=ns['os'].fstat;count={'n':0}
+            def racing(fd):
+                state=original(fd)
+                if state.st_ino==module.stat().st_ino:
+                    count['n']+=1
+                    if count['n']==2:module.write_bytes(raw+b' ')
+                return original(fd)
+            with patch.object(ns['os'],'fstat',side_effect=racing),self.assertRaises(RuntimeError):ns['load_registration_interstitial95']()
+
+    def test_pro4c_staging_entry_never_requires_or_executes95_module(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,_profile=self.staging_fixture(base)
+            source.with_name('registration-interstitial-95.py').unlink()
+            fresh={'__name__':'pro4c_without95_carrier','__file__':str(source)};exec(compile(source.read_bytes(),str(source),'exec'),fresh)
+            self.assertNotIn('REGISTRATION_INTERSTITIAL_ID',fresh)
+            self.assertEqual(fresh['fixed_recharge_binding']('recharge-pro-4c-20261008')['id'],'recharge-pro-4c-20261008')
+            selected=[];fresh['recharge_d3fb_release']=lambda args:selected.append(args)or 'pro4c-selected'
+            tokens=['--commit','a'*40,'--source-tree','b'*40,'--repository','fixture','--expected-current','4c170e661c871dc14dccc98a8d6e5cf983141341','--run-id','123','--run-attempt','1','--ci-run-id','456','--recharge-pro-d3fb']
+            with patch.object(fresh['sys'],'argv',[str(source),*tokens]):self.assertEqual(fresh['main'](),'pro4c-selected')
+            self.assertEqual(len(selected),1);self.assertNotIn('REGISTRATION_INTERSTITIAL_ID',fresh)
+
+    def test_disabled_draft_and_missing_pins_stop_before_lock_download_or_commands(self):
+        draft=copy.deepcopy(self.profile);draft['enabled']=False
+        with patch.object(deployment,'REGISTRATION_INTERSTITIAL_HANDOFF',None),patch.object(deployment,'run')as command,patch.object(deployment,'registration_download')as download,patch.object(Path,'open')as opened:
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_profile(draft)
+            args=Registration92RecoveryScopeTests.arguments();args.registration_worker_92=False;args.registration_worker_95=True
+            args.expected_current=deployment.REGISTRATION_INTERSTITIAL_CURRENT
+            with self.assertRaisesRegex(RuntimeError,'source unavailable'):deployment.registration_interstitial_release(args)
+            command.assert_not_called();download.assert_not_called();opened.assert_not_called()
+
+    def test_actual_enabled_profile_and_local_scope_match_frozen_source_and_handoff8(self):
+        self.assertIs(deployment.registration_interstitial_profile(self.profile),self.profile)
+        self.assertEqual(self.profile['registrationHandoff']['attempt'],8)
+        self.assertEqual(self.profile['registrationHandoff'],deployment.REGISTRATION_INTERSTITIAL_HANDOFF)
+        with patch.object(deployment,'run')as command,patch.object(deployment,'registration_download')as download:
+            root,profile=deployment.check_registration_interstitial_scope()
+            self.assertEqual(root,self.root);self.assertEqual(profile,self.profile)
+            command.assert_not_called();download.assert_not_called()
+
+    def staging_fixture(self,base):
+        stage=base/'.staging'/('oidc-'+('a'*40));stage.mkdir(parents=True)
+        source=stage/'remote-deploy.py';raw=(self.root/'scripts/production-release/remote-deploy.py').read_bytes();source.write_bytes(raw);source.chmod(0o644)
+        profile=stage/Path(deployment.REGISTRATION_INTERSTITIAL_FILE).name
+        profile.write_bytes((self.root/deployment.REGISTRATION_INTERSTITIAL_FILE).read_bytes());profile.chmod(0o644)
+        module=stage/'registration-interstitial-95.py';module.write_bytes((self.root/'scripts/production-release/registration-interstitial-95.py').read_bytes());module.chmod(0o644)
+        ns={'__name__':'actual95_staging_fixture','__file__':str(source)};exec(compile(raw,str(source),'exec'),ns);ns['BASE']=base;ns['load_registration_interstitial95']()
+        return ns,source,profile
+
+    def test_real_controller_staging_contract_carrier_and_readback_without_repository_profile(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base)
+            self.assertFalse((base/deployment.REGISTRATION_INTERSTITIAL_FILE).exists())
+            sha=lambda p:deployment.hashlib.sha256(p.read_bytes()).hexdigest()
+            self.assertEqual(ns['registration_interstitial_profile_path'](),profile)
+            self.assertEqual(ns['registration_interstitial_verify_carrier'](sha(source),sha(profile)),self.profile)
+            self.assertEqual(ns['registration_interstitial_contract']()['runtimeBaseline'],self.profile['runtimeBaseline'])
+            value=ns['registration_interstitial_readback_receipt']('a'*40,'b'*40,sha(profile))
+            self.assertEqual(value['registrationHandoff']['attempt'],8)
+            ns['validate_registration_interstitial_readback'](value,'a'*40,'b'*40,sha(profile))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier']('0'*64,sha(profile))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),'0'*64)
+            source_raw=source.read_bytes();source.chmod(0o600)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+            source.chmod(0o644);source.write_bytes(source_raw+b'x'*(1024*1024+1-len(source_raw)))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+            source.write_bytes(source_raw);source.chmod(0o644)
+            profile_raw=profile.read_bytes();profile.unlink()
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.write_bytes(profile_raw);profile.chmod(0o600)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.chmod(0o644);profile.write_bytes(b'x'*(128*1024+1))
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.write_bytes(profile_raw);profile.chmod(0o644)
+            original=ns['os'].fstat;seen={'profile':0}
+            def racing(fd):
+                state=original(fd)
+                if state.st_ino==profile.stat().st_ino:
+                    seen['profile']+=1
+                    if seen['profile']==2:profile.write_bytes(profile_raw+b' ')
+                return original(fd)
+            with patch.object(ns['os'],'fstat',side_effect=racing),self.assertRaises(RuntimeError):
+                ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
+
+    def test_staging_carrier_rejects_helper_root_parent_symlinks_and_name_drift(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary:
+            base=Path(temporary);ns,source,profile=self.staging_fixture(base);original_file=ns['__file__']
+            for bad in (source.with_name('foreign.py'),source.parent.with_name('oidc-invalid')/'remote-deploy.py'):
+                ns['__file__']=str(bad)
+                with self.subTest(path=bad.name),self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+            ns['__file__']=original_file;old=profile.with_name('saved-profile');profile.rename(old);profile.symlink_to(old)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_fixed']()
+            profile.unlink();old.rename(profile)
+            old=source.with_name('saved-controller');source.rename(old);source.symlink_to(old)
+            with self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+            source.unlink();old.rename(source)
+            for path in (source.parent,source.parent.parent):
+                saved=path.with_name(path.name+'-saved');path.rename(saved);path.symlink_to(saved,target_is_directory=True)
+                with self.subTest(directory=path.name),self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+                path.unlink();saved.rename(path)
+            alias=base.parent/(base.name+'-root-alias');alias.symlink_to(base,target_is_directory=True)
+            ns['BASE']=alias;ns['__file__']=str(alias/'.staging'/source.parent.name/'remote-deploy.py')
+            try:
+                with self.assertRaises(RuntimeError):ns['registration_interstitial_profile_path']()
+            finally:alias.unlink()
+
+    def test_existing_fresh_image_argv_is_accepted_but_foreign_values_fail_before_lock(self):
+        tokens=['--commit','a'*40,'--source-tree','b'*40,'--repository','123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current',deployment.REGISTRATION_INTERSTITIAL_CURRENT,'--run-id','123','--run-attempt','1','--ci-run-id','456','--registration-worker-95',
+            '--image-commit','a'*40,'--image-run-id','123','--image-run-attempt','1']
+        with patch.object(deployment,'registration_interstitial_release',return_value='selected')as selected:
+            self.assertEqual(deployment.registration_interstitial_main(tokens),'selected');args=selected.call_args.args[0]
+        self.assertEqual((args.image_commit,args.image_run_id,args.image_run_attempt),(args.commit,args.run_id,args.run_attempt))
+        for name,value in [('image_commit','0'*40),('image_run_id','999'),('image_run_attempt','2')]:
+            bad=copy.copy(args);setattr(bad,name,value)
+            with self.subTest(name=name),patch.object(Path,'open')as opened,patch.object(deployment,'run')as command,self.assertRaisesRegex(RuntimeError,'selection changed'):
+                deployment.registration_interstitial_release(bad)
+            opened.assert_not_called();command.assert_not_called()
+
+    def test_actual94_baseline_exact_values_types_and_nested_content_are_pinned(self):
+        fixed=self.profile['runtimeBaseline'];self.assertIs(deployment.registration_interstitial_record(fixed),fixed)
+        for field,value in [('databaseWrites',False),('runtimeStable',False),('readOnly',1),('unexpected',True)]:
+            bad=copy.deepcopy(fixed);bad[field]=value
+            with self.subTest(field=field),self.assertRaises(RuntimeError):deployment.registration_interstitial_record(bad)
+        for name in ('liveServices','fileSha256','actualRegistrationWorkerSourceSha256','apiAdminBuildProof','historical815'):
+            bad=copy.deepcopy(fixed);bad[name]={}
+            with self.subTest(nested=name),self.assertRaises(RuntimeError):deployment.registration_interstitial_record(bad)
+
+    def test_closed_profile_requires_same92_basis_two_files_and_attempt8_handoff(self):
+        with self.frozen()as f:
+            self.assertIs(deployment.registration_interstitial_profile(f.profile),f.profile)
+            deployment.registration_login_source(f.profile,f.candidate)
+            for field,value in [('enabled',1),('workerBasisCommit',deployment.REGISTRATION_INTERSTITIAL_CURRENT),('apiProjectionSha256','0'*64),('unexpected',True)]:
+                bad=copy.deepcopy(f.profile);bad[field]=value
+                with self.subTest(field=field),self.assertRaises(RuntimeError):deployment.registration_interstitial_profile(bad)
+            for field,value in [('attempt',7),('attempt',True),('windowExists',True),('leaseActive',True),('busy',True),('registered',False)]:
+                bad=copy.deepcopy(f.profile);bad['registrationHandoff'][field]=value
+                with self.subTest(handoff=field),self.assertRaises(RuntimeError):deployment.registration_interstitial_profile(bad)
+            bad=copy.deepcopy(f.profile);bad['workerProjection'][deployment.REGISTRATION_WORKER_PREFIX+'server.py']['sha256']='0'*64
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_profile(bad)
+            bad=copy.deepcopy(f.profile);bad['controlSourceSha256']['foreign.py']='0'*64
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_profile(bad)
+
+    def test_no_unfrozen_source_projection_or_handoff_can_authorize_profile(self):
+        with self.frozen()as f:
+            for name in ('REGISTRATION_INTERSTITIAL_SOURCE','REGISTRATION_INTERSTITIAL_SOURCE_SHA256','REGISTRATION_INTERSTITIAL_VALIDATION_SHA256',
+                'REGISTRATION_INTERSTITIAL_PROJECTION_SHA256','REGISTRATION_INTERSTITIAL_HANDOFF'):
+                with self.subTest(pin=name),patch.object(deployment,name,None),self.assertRaises(RuntimeError):deployment.registration_interstitial_profile(f.profile)
+
+    def test_readback_separates95_worker_from815_api_and_closes_all33_values(self):
+        with self.frozen()as f:
+            receipt=deployment.registration_interstitial_readback_receipt('a'*40,'b'*40,'c'*64)
+            self.assertEqual(len(receipt),33);self.assertEqual(receipt['previousCommit'],deployment.REGISTRATION_INTERSTITIAL_CURRENT)
+            self.assertEqual(receipt['apiRuntimeRevision'],deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT)
+            self.assertEqual(receipt['workerBasisCommit'],deployment.REGISTRATION_LOGIN_CURRENT)
+            self.assertEqual(receipt['registrationHandoff']['attempt'],8)
+            deployment.validate_registration_interstitial_readback(receipt,'a'*40,'b'*40,'c'*64)
+            for field in receipt:
+                bad={**receipt,field:None}
+                with self.subTest(field=field),self.assertRaises(RuntimeError):deployment.validate_registration_interstitial_readback(bad,'a'*40,'b'*40,'c'*64)
+            with self.assertRaises(RuntimeError):deployment.validate_registration_interstitial_readback({**receipt,'unknown':True},'a'*40,'b'*40,'c'*64)
+            with self.assertRaises(RuntimeError):deployment.validate_registration_interstitial_readback({**receipt,'preservedServiceCount':6.0},'a'*40,'b'*40,'c'*64)
+
+    def test_cli_foreign_and_mixed_arguments_stop_before_selected_release(self):
+        tokens=['--commit','a'*40,'--source-tree','b'*40,'--repository','123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current',deployment.REGISTRATION_INTERSTITIAL_CURRENT,'--run-id','123','--run-attempt','1','--ci-run-id','456','--registration-worker-95']
+        with patch.object(deployment,'registration_interstitial_release',return_value='selected95')as selected:
+            self.assertEqual(deployment.registration_interstitial_main(tokens),'selected95')
+            selected.assert_called_once();args=selected.call_args.args[0];self.assertIs(args.api_admin_only,None)
+            for flag in ('--registration-worker-94','--api-admin-only','--admin-only','--image-commit'):
+                selected.reset_mock()
+                with self.subTest(flag=flag),self.assertRaises(SystemExit),redirect_stdout(io.StringIO()):deployment.registration_interstitial_main(tokens+[flag])
+                selected.assert_not_called()
+        with patch.object(deployment,'check_registration_interstitial_scope')as scope:
+            for tail in ([],['--registration-profile',deployment.REGISTRATION_FOLLOWUP_ID],['--registration-profile',deployment.REGISTRATION_INTERSTITIAL_ID,'extra']):
+                with self.assertRaises(RuntimeError):deployment.registration_interstitial_cli(['--check-fixed-registration-scope',*tail])
+            scope.assert_not_called()
+
+    def test_build_reconstructs_sealed92_worker_not_new_host_and_scope_fails_before_output(self):
+        with patch.object(deployment,'check_registration_interstitial_scope',side_effect=RuntimeError('disabled')), \
+                patch.object(deployment,'registration_download')as download,patch.object(deployment,'run')as command:
+            with self.assertRaises(RuntimeError):deployment.prepare_registration_interstitial_build()
+            download.assert_not_called();command.assert_not_called()
+        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_text()+(self.root/'scripts/production-release/registration-interstitial-95.py').read_text()).body if isinstance(n,ast.FunctionDef)}
+        node=functions['prepare_registration_interstitial_build'];calls={n.func.id for n in ast.walk(node)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)}
+        self.assertIn('registration_login_worker_projection',calls)
+        self.assertNotIn('registration_worker_projection',calls)
+        self.assertIn('registration_download(REGISTRATION_LOGIN_CURRENT)',ast.unparse(functions['registration_login_worker_projection']))
+
+    def test_current95_preserves_six_full8states_allenv_and_never_old_current_getter(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary,ExitStack()as stack:
+            base=Path(temporary);previous=base/'releases/old94';previous.mkdir(parents=True);current=base/'releases/new95';current.mkdir()
+            (base/'current').symlink_to(current);fixed=copy.deepcopy(self.profile['runtimeBaseline']);fixed['current']=str(previous)
+            live=copy.deepcopy(fixed['liveServices']);live['auto-registration']['containerId']='f'*64
+            manifest={'previousRelease':str(previous),'previousCommit':deployment.REGISTRATION_INTERSTITIAL_CURRENT,
+                'previousManifestSha256':fixed['fileSha256']['release-manifest.json'],'servicesUpdated':['auto-registration'],
+                'fixedRegistrationRelease':{'id':deployment.REGISTRATION_INTERSTITIAL_ID}}
+            path=current/'release-manifest.json';path.write_text(json.dumps(manifest));path.chmod(0o600)
+            stack.enter_context(patch.object(deployment,'BASE',base));stack.enter_context(patch.object(deployment,'registration_interstitial_fixed',return_value=fixed))
+            states=stack.enter_context(patch.object(deployment,'registration_followup_api_admin_states',side_effect=lambda _p:copy.deepcopy(live)))
+            history=stack.enter_context(patch.object(deployment,'registration_interstitial_history',return_value=(fixed['manifest'],previous)))
+            running=stack.enter_context(patch.object(deployment,'registration_followup_api_admin_running'))
+            stack.enter_context(patch.object(deployment,'recharge_2f_running_hashes'))
+            stack.enter_context(patch.object(deployment,'recharge_2f_scope',return_value={}))
+            original=deployment.fixed_recharge_bytes
+            stack.enter_context(patch.object(deployment,'fixed_recharge_bytes',side_effect=lambda p,**kw:original(p,**kw)if p==path else b'{}'))
+            self.assertEqual(deployment.registration_interstitial_baseline(previous),(fixed['manifest'],previous));self.assertEqual(history.call_count,2)
+            for name in live:
+                for field in live[name]:
+                    if name=='auto-registration'and field!='environmentSha256':continue
+                    value=live[name][field];live[name][field]='changed'
+                    with self.subTest(service=name,field=field),self.assertRaises(RuntimeError):deployment.registration_interstitial_baseline(previous)
+                    live[name][field]=value
+            manifest['apiAdminPublication']={};path.write_text(json.dumps(manifest))
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_baseline(previous)
+            manifest.pop('apiAdminPublication');manifest['previousManifestSha256']='0'*64;path.write_text(json.dumps(manifest))
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_baseline(previous)
+            self.assertTrue(all(call.args[0]in(previous,current)for call in states.call_args_list));running.assert_called()
+
+    def test_real_history_rejects_private_modes_public_drift_and_changes_during_read(self):
+        import builtins
+        with tempfile.TemporaryDirectory(dir=self.runtime)as temporary,ExitStack()as stack:
+            base=Path(temporary);previous=base/'releases/old94';previous.mkdir(parents=True);origin=base/'releases/origin80';origin.mkdir()
+            before={'gate':{},'checks':['same49facts'],'identity':{'original80':True}};after=copy.deepcopy(before)
+            (origin/'before-audit.json').write_text(json.dumps(before));(origin/'before-audit.json').chmod(0o600)
+            nested=SimpleNamespace(manifest={'commit':deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT},origin=origin)
+            producer=b"import builtins\nfrom pathlib import Path\nBASE=Path(builtins._registration95fixture.base)\nREGISTRATION_FOLLOWUP_API_ADMIN_BASELINE={'manifest':builtins._registration95fixture.manifest}\ndef registration_profile(value,**kw):return value\ndef registration_followup_api_admin_history(previous):return builtins._registration95fixture.manifest,builtins._registration95fixture.origin\ndef registration_login_source(*a):pass\ndef registration_login_worker_projection(*a):return {}\ndef registration_followup_api_admin_runtime(*a):return builtins._registration95fixture.runtime\ndef registration_contract(*a):return {}\ndef registration_followup_api_admin_carried(*a):pass\ndef check_registration_followup_deployment(*a):raise AssertionError('current getter forbidden in historical read')\n"
+            oldprofile=b'{}';archive=b'synthetic94archive'
+            manifest={'commit':deployment.REGISTRATION_INTERSTITIAL_CURRENT,'previousCommit':deployment.REGISTRATION_FOLLOWUP_RELEASE_CURRENT,
+                'previousRelease':str(base/'releases/old815'),'previousManifestSha256':'7'*64,'sourceArchiveSha256':deployment.hashlib.sha256(archive).hexdigest()}
+            files={'scripts/production-release/remote-deploy.py':(producer,0o644),deployment.REGISTRATION_FOLLOWUP_FILE:(oldprofile,0o644),
+                'docker-compose.aws-mysql.yml':(b'controlled-compose',0o664),'.env.aws.production':(b'RAM-only-fixture',0o600),
+                'release-manifest.json':(json.dumps(manifest).encode(),0o600),'before-audit.json':(json.dumps(before).encode(),0o400),
+                'after-audit.json':(json.dumps(after).encode(),0o600)}
+            for name,(raw,mode)in files.items():
+                path=previous/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(mode)
+            public=deployment.fixed_recharge_file_map(previous,omitted=deployment.REGISTRATION_INTERSTITIAL_PRIVATE)
+            nested.base=str(base);nested.runtime={name:(files[name][0],'100644')for name in public}
+            fixed={'current':str(previous),'manifest':manifest,'fileSha256':{name:deployment.hashlib.sha256(raw).hexdigest()for name,(raw,_mode)in files.items()},
+                'privateFileModes':{name:mode for name,(_raw,mode)in files.items()if name in deployment.REGISTRATION_INTERSTITIAL_PRIVATE},
+                'publicSourceMap':{'fileCount':len(public),'sha256':deployment.historical_fingerprint(public)},
+                'historical815':{'fileSha256':{'release-manifest.json':'7'*64}},'audits':{'before':{'stage':'before'},'after':{'stage':'after'}}}
+            for name,value in {'BASE':base,'REGISTRATION_INTERSTITIAL_PRODUCER':deployment.hashlib.sha256(producer).hexdigest(),
+                'REGISTRATION_INTERSTITIAL_PREVIOUS_PROFILE':deployment.hashlib.sha256(oldprofile).hexdigest()}.items():stack.enter_context(patch.object(deployment,name,value))
+            stack.enter_context(patch.object(builtins,'_registration95fixture',nested,create=True))
+            stack.enter_context(patch.object(deployment,'registration_interstitial_fixed',return_value=fixed))
+            stack.enter_context(patch.object(deployment,'main80_recharge_public_snapshot',return_value='controlled-parent-proof'))
+            stack.enter_context(patch.object(deployment,'require_main80_recharge_public_snapshot'))
+            stack.enter_context(patch.object(deployment,'registration_download',return_value=archive))
+            stack.enter_context(patch.object(deployment,'registration_archive',return_value={deployment.REGISTRATION_FOLLOWUP_FILE:(oldprofile,'100644')}))
+            stack.enter_context(patch.object(deployment,'require_registration_zero_report',side_effect=lambda _r,stage,_g:{'stage':stage}))
+            self.assertEqual(deployment.registration_interstitial_history(previous),(manifest,origin))
+            private=previous/'before-audit.json';private.chmod(0o644)
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
+            private.chmod(0o400)
+            publicpath=previous/'docker-compose.aws-mysql.yml';publicpath.write_bytes(b'changed')
+            with self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
+            publicpath.write_bytes(files['docker-compose.aws-mysql.yml'][0]);publicpath.chmod(0o664)
+            original=deployment.fixed_recharge_bytes;count={'read':0}
+            def racing(path,**options):
+                raw=original(path,**options)
+                if path==publicpath:
+                    count['read']+=1
+                    if count['read']==2:publicpath.write_bytes(raw+b'drift')
+                return raw
+            with patch.object(deployment,'fixed_recharge_bytes',side_effect=racing),self.assertRaises(RuntimeError):deployment.registration_interstitial_history(previous)
+
+    def test_history_reads_fixed94_not_current_and_has_no_mutation_or_recursion(self):
+        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_text()+(self.root/'scripts/production-release/registration-interstitial-95.py').read_text()).body if isinstance(n,ast.FunctionDef)}
+        node=functions['registration_interstitial_history'];source=ast.unparse(node)
+        self.assertIn("namespace['registration_followup_api_admin_history']",source)
+        self.assertNotIn('check_registration_followup_deployment',source)
+        calls={n.func.id for n in ast.walk(node)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)}
+        self.assertTrue({'point_current','service_state','compose','check_registration_followup_deployment'}.isdisjoint(calls))
+        for name in ('registration_interstitial_baseline','check_registration_interstitial_deployment'):
+            self.assertFalse(any(isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and n.func.attr=='baseline'for n in ast.walk(functions[name])))
+        scope=ast.unparse(functions['registration_followup_api_admin_history'])
+        self.assertIn('scope.CONFIG_FILES',scope);self.assertIn('configurationBefore',scope);self.assertIn('configurationAfter',scope)
+
+    def test_finance_and_modes_keep_original80_seal_without_publishing_api(self):
+        functions={n.name:n for n in ast.parse((self.root/'scripts/production-release/remote-deploy.py').read_text()+(self.root/'scripts/production-release/registration-interstitial-95.py').read_text()).body if isinstance(n,ast.FunctionDef)}
+        finance=ast.unparse(functions['registration_interstitial_finance_audit'])
+        self.assertIn("REGISTRATION_RECOVERY_BASELINE['manifest']['images']['api']['reference']",finance)
+        self.assertIn('prepare_post_cleanup_reader_copy',finance);self.assertIn('before',finance);self.assertIn('require_registration_zero_report',finance)
+        release=ast.unparse(functions['registration_interstitial_release'])
+        self.assertIn("manifest.pop('apiAdminPublication', None)",release)
+        self.assertIn("contract['runtimeBaseline']['fileSha256']['release-manifest.json']",release)
+        self.assertIn('assert_no_active_registration',release)
+        self.assertEqual(deployment.registration_updated_services(deployment.REGISTRATION_INTERSTITIAL_ID),('auto-registration',))
+        self.assertEqual(len(deployment.REGISTRATION_INTERSTITIAL_PRIVATE),11)
+
 if __name__ == '__main__':
     unittest.main()

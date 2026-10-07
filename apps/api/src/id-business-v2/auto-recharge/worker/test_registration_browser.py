@@ -5444,3 +5444,323 @@ class VerificationEmailHydrationBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(self.job.payload['passwordVerified']);self.assertFalse(self.job.payload['mfaVerified'])
                 if owned:await context.close()
                 else:self.assertIs(self.flow.page,original)
+
+
+class VerificationInterstitialTests(unittest.IsolatedAsyncioTestCase):
+    def fixture(self, owned=False, mode='loading'):
+        from browser_session import SessionBudget
+        flow, context, page, email, password = VerificationEmailReadinessTests.flow(self, owned)
+        clock = [0.0]; state = {'mode': mode}; pauses = []
+        flow.recovery_budget = lambda: SessionBudget(15, clock=lambda: clock[0], cancelled=flow.job.cancelled.is_set)
+        def check():
+            if flow.job.cancelled.is_set():raise Stop('operation_cancelled')
+        flow.job.check = check
+        async def body_text():
+            return {'loading':'Just a moment...', 'human':'Verify you are human',
+                    'phone':'Enter your phone number', 'clear':'Continue', 'widget':'Loading'}[state['mode']]
+        body = SimpleNamespace(inner_text=AsyncMock(side_effect=body_text))
+        async def title():return 'Login' if state['mode']=='clear' else 'Just a moment...'
+        page.title = AsyncMock(side_effect=title)
+        visible = SimpleNamespace(is_visible=AsyncMock(return_value=True))
+        def locator(selector):
+            if selector=='body':return body
+            matched = state['mode']=='widget' and selector.startswith('iframe') or state['mode']=='phone' and selector.startswith('input[type="tel"]')
+            return SimpleNamespace(all=AsyncMock(return_value=[visible] if matched else []), count=AsyncMock(return_value=0))
+        page.locator = locator
+        real_sleep = asyncio.sleep
+        async def passive_sleep(seconds):
+            if seconds==0:
+                await real_sleep(0)
+                return
+            pauses.append(seconds); clock[0] += seconds
+            await real_sleep(0)
+        return flow, context, page, email, password, clock, state, pauses, passive_sleep
+
+    async def test_loading_clears_in_same_page_before_one_email_password_submit(self):
+        for owned in [False, True]:
+            with self.subTest(owned=owned):
+                flow, context, page, email, password, clock, state, pauses, sleep = self.fixture(owned)
+                async def clear(seconds):
+                    await sleep(seconds)
+                    if seconds==0:return
+                    email.fill.assert_not_awaited(); flow.job.prepare_mail.assert_not_called()
+                    if len(pauses)==2:state['mode']='clear'
+                with patch('registration_browser.asyncio.sleep', clear):
+                    self.assertIs(await flow.verify_login(_owned_context=owned),not owned)
+                self.assertEqual(len(pauses),2); self.assertLess(clock[0],15)
+                for field in [email,password]:field.fill.assert_awaited_once(); field.press.assert_awaited_once_with('Enter')
+                flow.job.prepare_mail.assert_called_once(); flow.job.wait_code.assert_not_awaited()
+                page.goto.assert_awaited_once(); self.assertEqual(context.close.await_count,0 if owned else 1)
+
+    async def test_loading_after_mail_fence_never_repeats_fill_prepare_or_submit(self):
+        for owned in [False, True]:
+            with self.subTest(owned=owned):
+                flow, context, page, email, password, _clock, state, pauses, sleep = self.fixture(owned,'clear')
+                flow.job.prepare_mail.side_effect=lambda *_args,**_kwargs:state.update(mode='loading')
+                async def clear(seconds):
+                    await sleep(seconds)
+                    if seconds==0:return
+                    email.fill.assert_awaited_once(); email.press.assert_not_awaited()
+                    flow.job.prepare_mail.assert_called_once()
+                    if len(pauses)==2:state['mode']='clear'
+                with patch('registration_browser.asyncio.sleep',clear):
+                    self.assertIs(await flow.verify_login(_owned_context=owned),not owned)
+                for field in [email,password]:field.press.assert_awaited_once_with('Enter')
+                flow.job.prepare_mail.assert_called_once(); page.goto.assert_awaited_once()
+                self.assertEqual(context.close.await_count,0 if owned else 1)
+
+    async def test_persistent_loading_real_outer_budget_keeps_original_timeout(self):
+        from browser_session import SessionBudget
+        flow, context, page, email, password, *_rest = self.fixture()
+        flow.recovery_budget=lambda:SessionBudget(.04,cancelled=flow.job.cancelled.is_set)
+        with self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(Stop) as stopped:await flow.verify_login()
+        self.assertEqual(stopped.exception.report['reason'],'session_load_timeout')
+        self.assertEqual(flow.job.registration_verification_last_error['subphase'],'challenge_loading_exhausted')
+        self.assertIn('email_submit_returned=False',logs.output[-1])
+        for field in [email,password]:field.fill.assert_not_awaited(); field.press.assert_not_awaited()
+        flow.job.prepare_mail.assert_not_called(); flow.job.wait_code.assert_not_awaited()
+        page.goto.assert_awaited_once(); context.close.assert_awaited_once()
+
+    async def test_human_widget_and_phone_stop_without_loading_wait_in_both_contexts(self):
+        for kind,subphase in [('human','challenge_text'),('widget','challenge_visible'),('phone','phone_verification')]:
+            for owned in [False,True]:
+                with self.subTest(kind=kind,owned=owned):
+                    flow,context,page,email,password,_clock,_state,pauses,sleep=self.fixture(owned,kind)
+                    with patch('registration_browser.asyncio.sleep',sleep),self.assertLogs('registration',level='WARNING'):
+                        with self.assertRaises(Stop) as stopped:await flow.verify_login(_owned_context=owned)
+                    self.assertEqual(stopped.exception.report['reason'],'verification_required')
+                    self.assertEqual(flow.job.registration_verification_last_error['subphase'],subphase)
+                    self.assertEqual(pauses,[]); email.fill.assert_not_awaited(); password.fill.assert_not_awaited()
+                    flow.job.prepare_mail.assert_not_called(); flow.job.wait_code.assert_not_awaited()
+                    page.goto.assert_awaited_once(); self.assertEqual(context.close.await_count,0 if owned else 1)
+
+    async def test_loading_becomes_human_before_any_login_write(self):
+        flow,context,page,email,_password,_clock,state,pauses,sleep=self.fixture()
+        async def change(seconds):await sleep(seconds);state['mode']='human'
+        with patch('registration_browser.asyncio.sleep',change),self.assertLogs('registration',level='WARNING'):
+            with self.assertRaises(Stop) as stopped:await flow.verify_login()
+        self.assertEqual(stopped.exception.report['reason'],'verification_required')
+        self.assertEqual(flow.job.registration_verification_last_error['subphase'],'challenge_text')
+        self.assertEqual(len(pauses),1); email.fill.assert_not_awaited(); flow.job.prepare_mail.assert_not_called()
+        page.goto.assert_awaited_once(); context.close.assert_awaited_once()
+
+    async def test_normal_otp_after_expired_navigation_budget_still_submits_once(self):
+        for owned in [False,True]:
+            with self.subTest(owned=owned):
+                flow,context,page,email,password,clock,_state,_pauses,_sleep=self.fixture(owned,'clear')
+                _email,_password,code=VerificationFailureDiagnosticsTests.login_fields(self,flow,password=True)
+                flow.identity=AsyncMock(side_effect=[None,None,('same','identity')])
+                async def late_code():clock[0]=120;return '123456'
+                flow.job.wait_code.side_effect=late_code
+                with patch('registration_browser.login_code_type',AsyncMock(return_value='email')):
+                    self.assertIs(await flow.verify_login(_owned_context=owned),not owned)
+                for field in [_email,_password,code]:field.press.assert_awaited_once_with('Enter')
+                flow.job.prepare_mail.assert_called_once(); flow.job.wait_code.assert_awaited_once()
+                page.goto.assert_awaited_once(); self.assertEqual(context.close.await_count,0 if owned else 1)
+
+    async def test_late_otp_loading_has_no_new_budget_or_code_submission(self):
+        flow,context,page,_email,_password,clock,state,pauses,_sleep=self.fixture(mode='clear')
+        email,password,code=VerificationFailureDiagnosticsTests.login_fields(self,flow,password=True)
+        flow.identity=AsyncMock(side_effect=[None,None])
+        async def late_code():clock[0]=120;state['mode']='loading';return '123456'
+        flow.job.wait_code.side_effect=late_code
+        with patch('registration_browser.login_code_type',AsyncMock(return_value='email')),self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(Stop) as stopped:await flow.verify_login()
+        self.assertEqual(stopped.exception.report['reason'],'verification_required')
+        self.assertEqual(flow.job.registration_verification_last_error['subphase'],'challenge_loading_exhausted')
+        self.assertIn('email_submit_returned=True',logs.output[-1])
+        self.assertNotIn('Just a moment','\n'.join(logs.output)); self.assertNotIn(flow.data['email'],'\n'.join(logs.output))
+        self.assertEqual(pauses,[]); code.fill.assert_not_awaited();code.press.assert_not_awaited()
+        for field in [email,password]:field.press.assert_awaited_once_with('Enter')
+        flow.job.prepare_mail.assert_called_once();flow.job.wait_code.assert_awaited_once();context.close.assert_awaited_once()
+
+    async def test_cancel_during_loading_keeps_cancellation_and_closes_clean_context(self):
+        for next_page in ['human','clear']:
+            with self.subTest(next_page=next_page):
+                flow,context,page,email,_password,_clock,state,_pauses,sleep=self.fixture()
+                async def cancel(seconds):await sleep(seconds);state['mode']=next_page;flow.job.cancelled.set()
+                with patch('registration_browser.asyncio.sleep',cancel),self.assertLogs('registration',level='WARNING'):
+                    with self.assertRaises(Stop) as stopped:await flow.verify_login()
+                self.assertEqual(stopped.exception.report['reason'],'operation_cancelled')
+                email.fill.assert_not_awaited();flow.job.prepare_mail.assert_not_called();page.goto.assert_awaited_once();context.close.assert_awaited_once()
+
+    async def test_direct_late_code_loading_bounds_and_cancels_slow_dom_reobserve(self):
+        from browser_session import SessionBudget
+        flow,context,page,_email,_password,_clock,state,_pauses,_sleep=self.fixture(mode='clear')
+        email,password,code=VerificationFailureDiagnosticsTests.login_fields(self,flow,password=True)
+        flow.identity=AsyncMock(side_effect=[None,None]);flow.recovery_budget=lambda:SessionBudget(.3,cancelled=flow.job.cancelled.is_set)
+        observed=[0];cancelled=[]
+        async def slow_body():
+            if state['mode']!='loading':return 'Continue'
+            observed[0]+=1
+            if observed[0]==1:return 'Just a moment...'
+            try:await asyncio.Event().wait()
+            finally:cancelled.append(True)
+        page.locator('body').inner_text.side_effect=slow_body
+        async def mail():state['mode']='loading';return '123456'
+        flow.job.wait_code.side_effect=mail
+        with patch('registration_browser.login_code_type',AsyncMock(return_value='email')),self.assertLogs('registration',level='WARNING'):
+            with self.assertRaises(Stop) as stopped:await flow.verify_login()
+        self.assertEqual(stopped.exception.report['reason'],'session_load_timeout')
+        self.assertEqual(observed[0],2);self.assertEqual(cancelled,[True])
+        self.assertEqual(flow.job.registration_verification_last_error['subphase'],'challenge_loading_exhausted')
+        for field in [email,password]:field.press.assert_awaited_once_with('Enter')
+        code.fill.assert_not_awaited();code.press.assert_not_awaited();flow.job.wait_code.assert_awaited_once();context.close.assert_awaited_once()
+
+    async def test_read_timeout_after_loading_is_not_reclassified_as_loading_exhaustion(self):
+        flow,context,page,email,_password,_clock,_state,_pauses,sleep=self.fixture()
+        original=TimeoutError('synthetic-private-read')
+        async def fail_read(seconds):
+            await sleep(seconds);page.locator('body').inner_text.side_effect=original
+        with patch('registration_browser.asyncio.sleep',fail_read),self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(TimeoutError) as stopped:await flow.verify_login()
+        self.assertIs(stopped.exception,original)
+        self.assertEqual(flow.job.registration_verification_last_error['subphase'],'text_read')
+        self.assertNotIn('synthetic-private-read','\n'.join(logs.output))
+        email.fill.assert_not_awaited();flow.job.prepare_mail.assert_not_called();context.close.assert_awaited_once()
+
+    async def test_loading_timeout_and_cleanup_error_keep_separate_first_reasons(self):
+        from browser_session import SessionBudget
+        flow,context,_page,_email,_password,*_rest=self.fixture()
+        flow.recovery_budget=lambda:SessionBudget(.04,cancelled=flow.job.cancelled.is_set)
+        context.close.side_effect=RuntimeError('synthetic-private-cleanup')
+        with self.assertLogs('registration',level='WARNING') as logs:
+            with self.assertRaises(Stop) as stopped:await flow.verify_login()
+        self.assertEqual(stopped.exception.report['reason'],'session_load_timeout')
+        self.assertEqual(flow.job.registration_verification_error['subphase'],'challenge_loading_exhausted')
+        self.assertEqual(flow.job.registration_verification_cleanup_error['subphase'],'context_cleanup')
+        self.assertNotIn('synthetic-private-cleanup','\n'.join(logs.output));context.close.assert_awaited_once()
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST')=='1','explicit local fixture')
+class VerificationInterstitialBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Real native DOM/session fixtures. Every network request is fulfilled in RAM."""
+    async def asyncSetUp(self):await VerificationIdentityBrowserTests.asyncSetUp(self)
+    async def asyncTearDown(self):await ProfileBrowserTests.asyncTearDown(self)
+
+    async def fixture(self,owned,mode='clear',late_mail=False):
+        from registration_browser import REGISTERED_AUTH_RECOVERY
+        from browser_session import SessionBudget
+        self.requests=[];self.loading_inputs=0;self.loading_title_reads=0;self.authenticated=False;self.verify_page=None
+        self.contexts=[];self.errors=[];self.session_reads=0;self.account_reads=0
+        self.flow.context=self.context;self.flow.page=self.page;self.flow.registration_state.clear()
+        self.job.deadline=None;self.job.step='password'
+        html=r'''<!doctype html><html><title>Just a moment...</title><body><p id="loading">Just a moment...</p>
+        <main><form><input type="email" name="email" required><button>Continue</button></form></main><script>
+        const mode=__MODE__;
+        function input(){fetch('/fixture/input',{method:'POST',body:JSON.stringify({loading:document.title==='Just a moment...'})});}
+        function code(){document.querySelector('main').innerHTML='<form><p>Check your email. Email verification code</p><input name="code" autocomplete="one-time-code"><button>Continue</button></form>';
+          document.querySelector('form').onsubmit=async e=>{e.preventDefault();await fetch('/fixture/code',{method:'POST'});document.querySelector('main').innerHTML='<main>Welcome</main>';};}
+        function password(){document.querySelector('main').innerHTML='<form><input type="password" autocomplete="current-password"><button>Continue</button></form>';
+          document.querySelector('form').onsubmit=async e=>{e.preventDefault();await fetch('/fixture/password',{method:'POST'});code();};}
+        document.querySelector('input').oninput=input;
+        document.querySelector('form').onsubmit=async e=>{e.preventDefault();await fetch('/fixture/email',{method:'POST'});password();};
+        function clear(){document.title='Login';document.getElementById('loading').remove();}
+        if(mode==='clear')document.addEventListener('fixture-observed',()=>setTimeout(clear,200),{once:true});
+        if(mode==='normal')clear();
+        if(mode==='human')document.getElementById('loading').textContent='Verify you are human';
+        if(mode==='widget')document.body.insertAdjacentHTML('beforeend','<div class="cf-turnstile">Challenge</div>');
+        if(mode==='phone')document.body.insertAdjacentHTML('beforeend','<p>Enter your phone number</p><input type="tel" name="phone_number">');
+        </script></body></html>'''.replace('__MODE__',json.dumps(mode))
+        def session():
+            def part(value):return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+            email=self.job.payload['email']
+            token='.'.join((part({'alg':'RS256'}),part({'exp':int(time.time())+3600,'https://api.openai.com/auth':{'chatgpt_account_id':'interstitial-fixture-account'},'https://api.openai.com/profile':{'email':email}}),'c3ludGhldGlj'))
+            return {'accessToken':token,'user':{'id':'interstitial-fixture-user','email':email},'account':{'id':'interstitial-fixture-account'}}
+        async def local(route):
+            request=route.request;parsed=urlsplit(request.url);path=parsed.path
+            self.assertEqual(parsed.hostname,'chatgpt.com');self.requests.append((request.method,path))
+            if path=='/auth/login':
+                self.assertEqual(request.method,'GET');self.assertFalse(parsed.query)
+                await route.fulfill(content_type='text/html',body=html)
+            elif path in {'/fixture/email','/fixture/password','/fixture/code','/fixture/input'}:
+                self.assertEqual(request.method,'POST')
+                if path=='/fixture/code':self.authenticated=True
+                if path=='/fixture/input' and json.loads(request.post_data)['loading']:self.loading_inputs+=1
+                await route.fulfill(content_type='application/json',body='{}')
+            elif path=='/api/auth/session':
+                self.session_reads+=1
+                await route.fulfill(content_type='application/json',body=json.dumps(session()if self.authenticated else{}))
+            elif path=='/backend-api/accounts/check/v4-2023-04-27':
+                self.account_reads+=1
+                await route.fulfill(content_type='application/json',body=json.dumps({'accounts':{'interstitial-fixture-account':{'account':{'plan_type':'free'}}}}))
+            else:raise AssertionError('Unexpected local interstitial request')
+        context=await self.browser.new_context(service_workers='block',accept_downloads=False);self.contexts.append(context)
+        create_page=context.new_page
+        async def new_page():
+            page=await create_page();self.verify_page=page
+            page.on('pageerror',lambda _error:self.errors.append('page_error'))
+            actual_title=page.title;armed=False
+            async def observed_title():
+                nonlocal armed
+                value=await actual_title()
+                if value=='Just a moment...':
+                    self.loading_title_reads+=1
+                    if mode=='clear'and not armed:
+                        armed=True
+                        await page.evaluate("document.dispatchEvent(new Event('fixture-observed'))")
+                return value
+            page.title=observed_title
+            await page.route('**/*',local);return page
+        context.new_page=new_page
+        self.job.new_verification_context=AsyncMock(return_value=context)
+        self.job.prepare_mail=MagicMock()
+        async def mail():
+            if late_mail:await asyncio.sleep(2.2)
+            return '123456'
+        self.job.wait_code=AsyncMock(side_effect=mail)
+        if late_mail:self.flow.recovery_budget=lambda:SessionBudget(2,cancelled=self.job.cancelled.is_set)
+        if owned:
+            self.flow.context=context;self.flow.page=await context.new_page()
+            self.flow.registration_state[REGISTERED_AUTH_RECOVERY]={'context':context,'page':self.flow.page,'submitted':False,'guard':None}
+        return context
+
+    async def test_loading_clears_before_native_single_login_in_clean_and_owned_pages(self):
+        for owned in [False,True]:
+            with self.subTest(owned=owned):
+                context=await self.fixture(owned)
+                self.assertIs(await self.flow.verify_login(_owned_context=owned),not owned)
+                self.assertGreater(self.loading_title_reads,0)
+                self.assertEqual(self.loading_inputs,0)
+                self.assertEqual([p for method,p in self.requests if method=='POST'and p!='/fixture/input'],['/fixture/email','/fixture/password','/fixture/code'])
+                self.assertEqual(self.requests.count(('GET','/auth/login')),1)
+                self.assertGreater(self.session_reads,0);self.assertGreater(self.account_reads,0)
+                self.job.prepare_mail.assert_called_once_with('password',new_request=True);self.job.wait_code.assert_awaited_once()
+                self.assertEqual(self.errors,[])
+                if owned:self.assertEqual(context.pages,[self.flow.page]);await context.close()
+                else:self.assertEqual(context.pages,[])
+
+    async def test_persistent_loading_native_budget_exhausts_without_input_or_mail(self):
+        from browser_session import SessionBudget
+        for owned in [False,True]:
+            with self.subTest(owned=owned):
+                context=await self.fixture(owned,'stable')
+                self.flow.recovery_budget=lambda:SessionBudget(1,cancelled=self.job.cancelled.is_set)
+                with self.assertRaises(Stop) as stopped:await self.flow.verify_login(_owned_context=owned)
+                self.assertIn(stopped.exception.report['reason'],{'verification_required','session_load_timeout'})
+                self.assertEqual(self.job.registration_verification_last_error['subphase'],'challenge_loading_exhausted')
+                self.assertFalse(any(method=='POST'for method,_path in self.requests));self.assertEqual(self.loading_inputs,0)
+                self.job.prepare_mail.assert_not_called();self.job.wait_code.assert_not_awaited();self.assertEqual(self.errors,[])
+                if owned:await context.close()
+                else:self.assertEqual(context.pages,[])
+
+    async def test_native_human_widget_and_phone_immediately_pause_without_input(self):
+        for mode,subphase in [('human','challenge_text'),('widget','challenge_visible'),('phone','phone_verification')]:
+            with self.subTest(mode=mode):
+                context=await self.fixture(False,mode)
+                with self.assertRaises(Stop) as stopped:await self.flow.verify_login()
+                self.assertEqual(stopped.exception.report['reason'],'verification_required')
+                self.assertEqual(self.job.registration_verification_last_error['subphase'],subphase)
+                self.assertFalse(any(method=='POST'for method,_path in self.requests))
+                self.job.prepare_mail.assert_not_called();self.job.wait_code.assert_not_awaited()
+                self.assertEqual(context.pages,[]);self.assertEqual(self.errors,[])
+
+    async def test_native_normal_otp_after_navigation_budget_expires_keeps_single_complete_login(self):
+        context=await self.fixture(False,'normal',late_mail=True)
+        self.assertIs(await self.flow.verify_login(),True)
+        self.assertEqual([p for method,p in self.requests if method=='POST'and p!='/fixture/input'],['/fixture/email','/fixture/password','/fixture/code'])
+        self.job.prepare_mail.assert_called_once_with('password',new_request=True);self.job.wait_code.assert_awaited_once()
+        self.assertEqual(self.requests.count(('GET','/auth/login')),1)
+        self.assertGreater(self.session_reads,0);self.assertGreater(self.account_reads,0)
+        self.assertEqual(context.pages,[]);self.assertEqual(self.errors,[])

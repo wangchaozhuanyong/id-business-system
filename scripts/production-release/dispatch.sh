@@ -23,6 +23,14 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; the
   python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-90-20261007
 fi
 
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-95-20261008 ]]; then
+  test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" --check-fixed-registration-scope --registration-profile registration-worker-95-20261008
+fi
+
+
 if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-94-20261007 ]]; then
   test "$EXPECTED_CURRENT" = 815fae391b172d6c368ea2ad25225f52a1272808
   test "${RELEASE_ADMIN_ONLY:-false}" = false
@@ -168,7 +176,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'registration-worker-89-20261006',
                          'registration-worker-90-20261007',
                          'registration-worker-91-20261007',
-                         'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007',
+                         'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008',
                          'historical-finance-20261005-order-archive',
                          'historical-finance-20261005-post-cleanup')
 if history_policy == 'historical-finance-20261005':
@@ -252,6 +260,11 @@ elif history_policy == 'registration-worker-92-20261007':
     assert not any(os.environ.get(key) for key in (
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-92'
+elif history_policy == 'registration-worker-95-20261008':
+    assert previous == '4c170e661c871dc14dccc98a8d6e5cf983141341' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
+    scope_flag += ' --registration-worker-95'
 elif history_policy == 'registration-worker-94-20261007':
     assert previous == '815fae391b172d6c368ea2ad25225f52a1272808' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
@@ -294,7 +307,7 @@ elif history_policy == 'historical-finance-20261005-order-archive':
     scope_flag += (' --historical-finance-order-archive --order-archive-seal-sha256 '
                    + os.environ['ORDER_ARCHIVE_SEAL_SHA256']
                    + ' --order-archive-prepared-images-sha256 ' + os.environ['ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'])
-if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006', 'registration-worker-87-20261006', 'registration-worker-88-20261006', 'registration-worker-89-20261006', 'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007'):
+if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006', 'registration-worker-87-20261006', 'registration-worker-88-20261006', 'registration-worker-89-20261006', 'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008'):
     image_commit, image_run, image_attempt = sha, run_id, attempt
 else:
     image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)
@@ -323,6 +336,32 @@ commands = [
     f'curl -fsSL --retry 3 --max-time 30 {url} -o {script_path}',
     f'python3 {script_path} --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --run-attempt {attempt} --ci-run-id {quality_run}{scope_flag}{image_flags}',
 ]
+if history_policy == 'registration-worker-95-20261008':
+    import hashlib, shlex
+    from pathlib import Path
+    source_raw=Path('scripts/production-release/remote-deploy.py').read_bytes()
+    profile_name='registration-worker-95-20261008.json'
+    module_name='registration-interstitial-95.py'
+    profile_raw=Path('deploy/aws',profile_name).read_bytes()
+    module_raw=Path('scripts/production-release',module_name).read_bytes()
+    assert len(source_raw)<=1024*1024 and len(profile_raw)<=128*1024 and len(module_raw)<=128*1024
+    profile_target=str(Path(script_path).parent/profile_name)
+    module_target=str(Path(script_path).parent/module_name)
+    guard=('import pathlib,stat;paths=[pathlib.Path('+repr(str(Path(script_path).parent))+')];'
+        +'\nfor p in [paths[0],paths[0].parent,paths[0].parent.parent]:\n if p.resolve()!=p or p.is_symlink():raise RuntimeError("Fixed95 staging location changed")\n'
+        +'for p in [pathlib.Path('+repr(script_path)+'),pathlib.Path('+repr(profile_target)+'),pathlib.Path('+repr(module_target)+')]:\n if p.is_symlink() or (p.exists() and (not p.is_file() or p.stat().st_nlink!=1)):raise RuntimeError("Fixed95 staging carrier changed")')
+    verify=('import hashlib,pathlib;\n'+"import os,stat\n\ndef read95(path, cap, expected):\n    if path.resolve()!=path or path.is_symlink() or path.parent.resolve()!=path.parent:raise RuntimeError('Fixed95 carrier path changed')\n    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)\n    with os.fdopen(fd,'rb')as stream:\n        before=os.fstat(stream.fileno())\n        identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)\n        if not stat.S_ISREG(before.st_mode)or stat.S_IMODE(before.st_mode)!=0o644 or before.st_nlink!=1 or before.st_size>cap:raise RuntimeError('Fixed95 carrier stat changed')\n        raw=stream.read(cap+1)\n        if len(raw)>cap or identity(before)!=identity(os.fstat(stream.fileno())) or identity(before)!=identity(os.stat(path,follow_symlinks=False)):raise RuntimeError('Fixed95 carrier read changed')\n    if hashlib.sha256(raw).hexdigest()!=expected:raise RuntimeError('Fixed95 carrier hash changed')\n    return raw\n"
+        +'p=pathlib.Path('+repr(script_path)+');q=pathlib.Path('+repr(profile_target)+');m=pathlib.Path('+repr(module_target)+');'
+        +'b=read95(p,1024*1024,'+repr(hashlib.sha256(source_raw).hexdigest())+');'
+        +'read95(q,128*1024,'+repr(hashlib.sha256(profile_raw).hexdigest())+');'
+        +'read95(m,128*1024,'+repr(hashlib.sha256(module_raw).hexdigest())+');'
+        +'n={"__name__":"fixed95_staging_verify","__file__":str(p)};exec(compile(b,str(p),"exec"),n);'
+        +'n["load_registration_interstitial95"]();'
+        +'n["registration_interstitial_verify_carrier"]('+repr(hashlib.sha256(source_raw).hexdigest())+','+repr(hashlib.sha256(profile_raw).hexdigest())+')')
+    commands[1:3]=['python3 -c '+shlex.quote(guard),commands[1],commands[2],
+        f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/deploy/aws/{profile_name} -o {profile_target}',
+        f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{module_name} -o {module_target}',
+        f'chmod 0644 {script_path} {profile_target} {module_target}','python3 -c '+shlex.quote(verify)]
 if api_admin:
     import hashlib
     pinned = []

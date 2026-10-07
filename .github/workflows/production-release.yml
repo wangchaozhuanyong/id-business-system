@@ -89,6 +89,7 @@ on:
           - registration-worker-92-20261007
           - registration-worker-93-20261007
           - registration-worker-94-20261007
+          - registration-worker-95-20261008
 
           - historical-finance-20261005-post-cleanup
           - historical-finance-20261005-order-archive
@@ -303,6 +304,17 @@ jobs:
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-92-20261007
 
+      - name: Verify fixed 95 registration runtime approval
+        if: inputs.historical_exception == 'registration-worker-95-20261008'
+        env:
+          REQUESTED_REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
+        run: |
+          set -Eeuo pipefail
+          test "$RELEASE_OPERATION" = release
+          test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341
+          test -z "$REQUESTED_REUSE_IMAGE_RUN"
+          python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-95-20261008
+
       - name: Verify fixed 94 registration runtime approval
         if: inputs.historical_exception == 'registration-worker-94-20261007'
         env:
@@ -494,6 +506,16 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: registration-worker-92-build-projection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/registration-build-projection.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save fixed 95 registration Worker build projection
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-95-20261008'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: registration-worker-95-build-projection-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/registration-build-projection.json
           if-no-files-found: error
           include-hidden-files: true
@@ -1993,7 +2015,7 @@ jobs:
           retention-days: 14
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'registration-worker-93-20261007' && inputs.historical_exception != 'registration-worker-94-20261007' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'registration-worker-93-20261007' && inputs.historical_exception != 'registration-worker-94-20261007' && inputs.historical_exception != 'registration-worker-95-20261008' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -2712,6 +2734,106 @@ jobs:
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
             | python3 .deploy/production-release/fixed-registration-92-readback-filter.py
 
+      - name: Verify fixed 95 registration deployment independently
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-95-20261008'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY_BUILD_REGISTRATION_READBACK'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shlex
+          commit = os.environ['RELEASE_COMMIT']
+          tree = os.environ['SOURCE_TREE']
+          if not re.fullmatch(r'[a-f0-9]{40}', commit) or not re.fullmatch(r'[a-f0-9]{40}', tree):
+              raise SystemExit('Fixed registration readback source unavailable')
+          source = Path('scripts/production-release/remote-deploy.py').read_bytes()
+          profile = Path('deploy/aws/registration-worker-95-20261008.json').read_bytes()
+          profile_sha = hashlib.sha256(profile).hexdigest()
+          module = Path('scripts/production-release/registration-interstitial-95.py').read_bytes()
+          staging = '/opt/id-business-v2/.staging/oidc-' + commit + '/remote-deploy.py'
+          carrier = staging.rsplit('/',1)[0] + '/registration-worker-95-20261008.json'
+          module_carrier = staging.rsplit('/',1)[0] + '/registration-interstitial-95.py'
+          if len(source)>1024*1024 or len(profile)>128*1024 or len(module)>128*1024:
+              raise SystemExit('Fixed95 carrier size changed')
+          precheck = "import os,stat\n\ndef read95(path, cap, expected):\n    if path.resolve()!=path or path.is_symlink() or path.parent.resolve()!=path.parent:raise RuntimeError('Fixed95 carrier path changed')\n    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)\n    with os.fdopen(fd,'rb')as stream:\n        before=os.fstat(stream.fileno())\n        identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)\n        if not stat.S_ISREG(before.st_mode)or stat.S_IMODE(before.st_mode)!=0o644 or before.st_nlink!=1 or before.st_size>cap:raise RuntimeError('Fixed95 carrier stat changed')\n        raw=stream.read(cap+1)\n        if len(raw)>cap or identity(before)!=identity(os.fstat(stream.fileno())) or identity(before)!=identity(os.stat(path,follow_symlinks=False)):raise RuntimeError('Fixed95 carrier read changed')\n    if hashlib.sha256(raw).hexdigest()!=expected:raise RuntimeError('Fixed95 carrier hash changed')\n    return raw\n"
+          verifier = (
+              'import hashlib,pathlib,sys,subprocess;'
+              + 'p=pathlib.Path(' + repr(staging) + ');q=pathlib.Path(' + repr(carrier) + ');m=pathlib.Path('+repr(module_carrier)+');'
+              + '\nfor x in [p.parent,p.parent.parent,p.parent.parent.parent]:\n if x.resolve()!=x or x.is_symlink():raise RuntimeError("Fixed95 staging location changed")\n'
+              + 'for x in [p,q,m]:\n if x.is_symlink() or (x.exists() and (not x.is_file() or x.stat().st_nlink!=1)):raise RuntimeError("Fixed95 staging carrier changed")\n'
+              + 'p.parent.mkdir(parents=True,exist_ok=True);'
+              + 'subprocess.run(["curl","-fsSL","--retry","3","--max-time","30",' + repr('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+commit+'/scripts/production-release/remote-deploy.py') + ',"-o",str(p)],check=True);'
+              + 'subprocess.run(["curl","-fsSL","--retry","3","--max-time","30",' + repr('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+commit+'/deploy/aws/registration-worker-95-20261008.json') + ',"-o",str(q)],check=True);'
+              + 'subprocess.run(["curl","-fsSL","--retry","3","--max-time","30",' + repr('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'+commit+'/scripts/production-release/registration-interstitial-95.py') + ',"-o",str(m)],check=True);'
+              + 'p.chmod(0o644);q.chmod(0o644);m.chmod(0o644);\n'+precheck
+              + 'b=read95(p,1024*1024,'+repr(hashlib.sha256(source).hexdigest())+');'
+              + 'read95(q,128*1024,'+repr(profile_sha)+');'
+              + 'read95(m,128*1024,'+repr(hashlib.sha256(module).hexdigest())+');'
+              + '\nif len(b)>1024*1024 or hashlib.sha256(b).hexdigest()!=' + repr(hashlib.sha256(source).hexdigest()) + ':\n    raise RuntimeError("Fixed registration verifier source unavailable")\n'
+              + 'n={"__name__":"fixed95_readback_carrier","__file__":str(p)};exec(compile(b,str(p),"exec"),n);'
+              + 'n["load_registration_interstitial95"]();'
+              + 'n["registration_interstitial_verify_carrier"](' + repr(hashlib.sha256(source).hexdigest()) + ',' + repr(profile_sha) + ');'
+              + 'sys.argv=[str(p),"--check-fixed-registration-deployment","--expected-current",' + repr(commit)
+              + ',"--source-tree",' + repr(tree) + ',"--registration-profile-sha256",' + repr(profile_sha)
+              + ',"--registration-profile","registration-worker-95-20261008"];'
+              + 'exec(compile(b,str(p),"exec"),{"__name__":"__main__","__file__":str(p)})')
+          parameters = {'commands': ['python3 -c ' + shlex.quote(verifier)], 'executionTimeout': ['120']}
+          if len(json.dumps(parameters).encode()) > 20 * 1024:
+              raise SystemExit('Fixed registration readback exceeds the SSM command limit')
+          Path('.deploy/production-release/fixed-registration-95-readback.json').write_text(json.dumps(parameters))
+          PY_BUILD_REGISTRATION_READBACK
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/fixed-registration-95-readback.json \
+            --query 'Command.CommandId' --output text)"
+          wait_status=0
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?
+          if (( wait_status != 0 )); then
+            echo 'Fixed registration deployment readback failed; raw output suppressed' >&2
+            exit "$wait_status"
+          fi
+          cat > .deploy/production-release/fixed-registration-95-readback-filter.py <<'PY_FILTER_REGISTRATION_READBACK'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          try:
+              output = sys.stdin.read(8193)
+              prefix = 'FIXED_REGISTRATION_RELEASE_VERIFIED '
+              if len(output.encode()) > 8192 or not output.startswith(prefix) or len(output.strip().splitlines()) != 1:
+                  raise ValueError()
+              def unique(items):
+                  value = {}
+                  for key, item in items:
+                      if key in value:
+                          raise ValueError()
+                      value[key] = item
+                  return value
+              def invalid(_value):
+                  raise ValueError()
+              receipt = json.loads(output[len(prefix):], object_pairs_hook=unique, parse_constant=invalid)
+              source_path = Path('scripts/production-release/remote-deploy.py')
+              namespace = {'__name__': 'fixed_registration_readback_filter', '__file__': str(source_path)}
+              source = source_path.read_bytes()
+              exec(compile(source, str(source_path), 'exec'), namespace)
+              namespace['load_registration_interstitial95']()
+              profile = Path('deploy/aws/registration-worker-95-20261008.json').read_bytes()
+              namespace['validate_registration_interstitial_readback'](
+                  receipt, os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE'], hashlib.sha256(profile).hexdigest(),
+                  profile_id='registration-worker-95-20261008')
+          except BaseException:
+              raise SystemExit('Fixed registration deployment readback unavailable; raw output suppressed') from None
+          print(json.dumps(receipt, separators=(',', ':')))
+          PY_FILTER_REGISTRATION_READBACK
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
+            | python3 .deploy/production-release/fixed-registration-95-readback-filter.py
+
       - name: Verify fixed 94 registration deployment independently
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-94-20261007'
         run: |
@@ -3137,6 +3259,10 @@ jobs:
 
       - name: Record skipped cache maintenance for fixed 92 registration release
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-92-20261007'
+        run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
+
+      - name: Record skipped cache maintenance for fixed 95 registration release
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-95-20261008'
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
 
       - name: Record skipped cache maintenance for fixed 94 registration release

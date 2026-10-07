@@ -292,6 +292,50 @@ class BaselineAndReadbackTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS$'):
                 scope.baseline(controller, COMMIT, check_jobs=False)
 
+    def test_worker95_retains815_build_proof_through_closed_registration_getter(self):
+        d.load_registration_interstitial95()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); current = base / 'releases/current'; current.mkdir(parents=True)
+            (base / 'current').symlink_to(current)
+            before = states(); origin = d.REGISTRATION_FOLLOWUP_RELEASE_CURRENT
+            proof = {'apiRuntimeRevision': origin, 'apiBuildProofSha256': 'd' * 64,
+                'apiContentSha256': 'e' * 64, 'adminContentSha256': 'f' * 64}
+            provenance = {'id': d.REGISTRATION_INTERSTITIAL_ID, **proof}
+            manifest = {'commit': COMMIT, 'sourceTree': TREE, 'servicesUpdated': ['auto-registration'],
+                'images': {name: {'reference': before[name]['reference'], 'digest': before[name]['image'],
+                    'sourceCommit': origin if name in ('api','admin') else OLD} for name in d.SERVICES},
+                'fixedRegistrationRelease': provenance}
+            path = current / 'release-manifest.json'; path.write_text(json.dumps(manifest))
+            (current / '.env.aws.production').write_text('preserved')
+            profile = current / d.REGISTRATION_INTERSTITIAL_FILE; profile.parent.mkdir(parents=True)
+            raw = b'{"controlled95Fixture":true}'; profile.write_bytes(raw)
+            controller = SimpleNamespace(**vars(d)); controller.BASE = base
+            controller.run = MagicMock(return_value=json.dumps([{'Id': before['api']['image'], 'Config': {'Labels': {
+                'org.opencontainers.image.revision': origin}}}]))
+            controller.load_registration_interstitial95 = MagicMock()
+            controller.check_registration_interstitial_deployment = MagicMock(return_value=proof)
+            stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
+            result = scope.baseline(controller, COMMIT, check_jobs=False)
+            self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_RETAINED_API_ADMIN_PUBLICATION')
+            self.assertEqual(result[3]['apiSource']['revision'], origin)
+            self.assertEqual(result[3]['apiSource']['buildProofSha256'], proof['apiBuildProofSha256'])
+            controller.load_registration_interstitial95.assert_called_once_with()
+            controller.check_registration_interstitial_deployment.assert_called_once_with(COMMIT, TREE, scope.hashlib.sha256(raw).hexdigest())
+            for key in proof:
+                broken = dict(proof); broken[key] = '0' * (40 if key=='apiRuntimeRevision' else 64)
+                controller.check_registration_interstitial_deployment.return_value = broken
+                with self.subTest(field=key), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_RETAINED_PUBLICATION_CHANGED$'):
+                    scope.baseline(controller, COMMIT, check_jobs=False)
+            controller.check_registration_interstitial_deployment.return_value = proof
+            controller.check_registration_interstitial_deployment.side_effect = RuntimeError('RAW_PRIVATE_DIAGNOSTIC_SENTINEL')
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_PROJECTION_FAILED$'):
+                scope.baseline(controller, COMMIT, check_jobs=False)
+            controller.check_registration_interstitial_deployment.side_effect = None
+            manifest['apiAdminPublication'] = {}; path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS$'):
+                scope.baseline(controller, COMMIT, check_jobs=False)
+
     def test_registration94_getter_uses_pinned815_scope_without_new_baseline_recursion(self):
         import ast
         tree = ast.parse((ROOT / 'scripts/production-release/remote-deploy.py').read_bytes())

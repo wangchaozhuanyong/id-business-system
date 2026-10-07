@@ -19,6 +19,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-92-20261007.json',
   'deploy/aws/registration-worker-93-20261007.json',
   'deploy/aws/registration-worker-94-20261007.json',
+  'deploy/aws/registration-worker-95-20261008.json',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -160,13 +161,27 @@ const isRegistrationLoginControl = (path) =>
   registrationLoginControls.has(path) ||
   ['docs/V2_TASKS.md', 'docs/AUTO_REGISTRATION.md'].includes(path);
 const registrationFollowupProfile = 'deploy/aws/registration-worker-94-20261007.json';
+const registrationInterstitialProfile = 'deploy/aws/registration-worker-95-20261008.json';
+const registrationInterstitialModule = 'scripts/production-release/registration-interstitial-95.py';
+const isRegistrationInterstitialControl = (path) =>
+  path === registrationInterstitialModule || isRegistrationFollowupControl(path);
 const isRegistrationFollowupControl = (path) =>
   path === registrationFollowupProfile ||
+  path === registrationInterstitialProfile ||
   [
     'scripts/production-release/api-admin-scope.py',
     'scripts/production-release/api-admin-scope.test.py'
   ].includes(path) ||
   (path !== registrationLoginProfile && isRegistrationLoginControl(path));
+function isRegistrationInterstitialOnly(paths) {
+  return (
+    paths.includes(registrationInterstitialProfile) &&
+    !paths.includes(registrationFollowupProfile) &&
+    paths.every(
+      (path) => registrationLoginSources.has(path) || isRegistrationInterstitialControl(path)
+    )
+  );
+}
 function isRegistrationLoginOnly(paths) {
   return (
     paths.includes(registrationLoginProfile) &&
@@ -207,9 +222,13 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (paths.includes(registrationInterstitialProfile))
+    return isRegistrationInterstitialOnly(paths) && paths.every(isRegistrationInterstitialControl);
   if (paths.includes(recharge4cProfile)) return paths.every((path) => recharge4cControls.has(path));
   if (paths.includes(registrationFollowupProfile))
-    return paths.every(isRegistrationFollowupControl);
+    return (
+      !paths.includes(registrationInterstitialProfile) && paths.every(isRegistrationFollowupControl)
+    );
   if (paths.includes(registrationLoginProfile)) return paths.every(isRegistrationLoginControl);
   if (paths.includes(registrationRecoveryProfile))
     return paths.every(isRegistrationRecoveryControl);
@@ -283,12 +302,19 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationInterstitialProfile)) {
+    if (!isRegistrationInterstitialOnly(paths)) return 'full';
+    return paths.some((path) => registrationLoginSources.has(path)) ? 'recharge' : 'ci-only';
+  }
   if (paths.includes(recharge4cProfile)) {
     if (!isRecharge4cOnly(paths)) return 'full';
     return paths.some((path) => recharge4cSources.has(path)) ? 'recharge' : 'ci-only';
   }
   if (paths.includes(registrationFollowupProfile)) {
-    return paths.every(isRegistrationFollowupControl) ? 'ci-only' : 'full';
+    return !paths.includes(registrationInterstitialProfile) &&
+      paths.every(isRegistrationFollowupControl)
+      ? 'ci-only'
+      : 'full';
   }
   if (paths.includes(registrationRecoveryProfile)) {
     if (!isRegistrationRecoveryOnly(paths)) return 'full';
@@ -438,6 +464,11 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationInterstitialProfile))
+    return (
+      isRegistrationInterstitialOnly(paths) &&
+      paths.some((path) => registrationLoginSources.has(path))
+    );
   if (paths.includes(recharge4cProfile))
     return isRecharge4cOnly(paths) && paths.some((path) => recharge4cSources.has(path));
   if (paths.includes(registrationLoginProfile))
@@ -481,6 +512,8 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(registrationInterstitialProfile))
+    return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(recharge4cProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationLoginProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationRecoveryProfile))
@@ -499,7 +532,16 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 export function selectedParts(paths) {
   if (isRecharge4cOnly(paths))
     return paths.some((path) => recharge4cSources.has(path)) ? ['guards', 'connector'] : ['guards'];
-  if (paths.includes(registrationFollowupProfile) && paths.every(isRegistrationFollowupControl))
+  if (isRegistrationInterstitialOnly(paths))
+    return [
+      'guards',
+      ...(paths.some((path) => registrationLoginSources.has(path)) ? ['connector'] : [])
+    ];
+  if (
+    paths.includes(registrationFollowupProfile) &&
+    !paths.includes(registrationInterstitialProfile) &&
+    paths.every(isRegistrationFollowupControl)
+  )
     return ['guards'];
   if (isRegistrationRecoveryOnly(paths))
     return [
