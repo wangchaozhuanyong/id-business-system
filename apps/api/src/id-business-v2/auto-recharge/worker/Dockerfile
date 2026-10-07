@@ -3,7 +3,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright HOME=/tmp
 COPY apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt ./
 COPY apps/api/src/id-business-v2/auto-recharge/worker/install_fingerprint_browser.py ./
-COPY scripts/audit-python-dependencies.py /opt/security/audit-python-dependencies.py
+# Only locked dependency inputs precede the shared browser installation layer.
 RUN pip install --no-cache-dir pip==26.2.1 \
   && pip install --no-cache-dir -r requirements.lock.txt \
   && pip check \
@@ -15,8 +15,12 @@ RUN pip install --no-cache-dir pip==26.2.1 \
   && useradd --uid 10001 --gid recharge --no-create-home --shell /usr/sbin/nologin recharge \
   && chmod -R a+rX /ms-playwright /opt/camoufox \
   && rm -rf /var/lib/apt/lists/* /root/.cache
+COPY scripts/audit-python-dependencies.py /opt/security/audit-python-dependencies.py
 COPY --chown=recharge:recharge apps/api/src/id-business-v2/auto-recharge/worker/ ./
-RUN python /opt/security/audit-python-dependencies.py --python /usr/local/bin/python \
+# Refresh the live audit on every CI build without invalidating browser dependencies.
+ARG PYTHON_AUDIT_BUILD_ID=local
+RUN test -n "$PYTHON_AUDIT_BUILD_ID" \
+  && python /opt/security/audit-python-dependencies.py --python /usr/local/bin/python \
   --output /opt/security/python-dependencies.json
 USER recharge
 EXPOSE 8051

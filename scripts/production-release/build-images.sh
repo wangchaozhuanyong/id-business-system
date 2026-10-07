@@ -2,6 +2,32 @@
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
+validate_browser_cache_reference() {
+  local reference="${RELEASE_BROWSER_CACHE_IMAGE:-}" image_id="${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" tag
+  if [[ -z "$reference" ]]; then
+    [[ -z "$image_id" ]] || {
+      echo 'Browser cache reference and reviewed image identity must be supplied together' >&2
+      return 1
+    }
+    return 0
+  fi
+  [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+    echo 'Browser cache requires its reviewed image identity' >&2
+    return 1
+  }
+  [[ "$reference" == "$RELEASE_REPOSITORY:"* ]] || {
+    echo 'Browser cache must use the reviewed release repository' >&2
+    return 1
+  }
+  tag="${reference#"$RELEASE_REPOSITORY:"}"
+  [[ "$tag" =~ ^[a-f0-9]{40}-[1-9][0-9]*-[1-9][0-9]*-auto-recharge$ ]] || {
+    echo 'Browser cache requires an immutable worker release tag' >&2
+    return 1
+  }
+}
+
+validate_browser_cache_reference
+
 build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
@@ -28,7 +54,30 @@ build_image() {
       exit 1
     fi
   fi
-  docker build "${options[@]}" -f "$dockerfile" -t "$reference" "$context"
+  if [[ "$service" == auto-recharge ]]; then
+    local cache_reference="${RELEASE_BROWSER_CACHE_IMAGE:-}" cache_tag cache_revision cache_metadata
+    # Carry the cache inside this run's existing immutable image; no mutable cache tag.
+    options+=(--build-arg BUILDKIT_INLINE_CACHE=1)
+    options+=(--build-arg "PYTHON_AUDIT_BUILD_ID=$RELEASE_COMMIT-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
+    if [[ -n "$cache_reference" ]]; then
+      grep -Fxq 'ARG PYTHON_AUDIT_BUILD_ID=local' "$dockerfile" || {
+        echo 'Reviewed browser cache requires the fresh audit Dockerfile' >&2
+        return 1
+      }
+      cache_tag="${cache_reference#"$RELEASE_REPOSITORY:"}"
+      cache_revision="${cache_tag%%-*}"
+      docker pull --platform linux/amd64 "$cache_reference"
+      cache_metadata="$(docker image inspect --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' "$cache_reference")"
+      [[ "$cache_metadata" == "$RELEASE_BROWSER_CACHE_IMAGE_ID amd64 $cache_revision" ]] || {
+        echo 'Reviewed browser cache identity, architecture or revision changed' >&2
+        return 1
+      }
+      options+=(--cache-from "$cache_reference")
+    fi
+    DOCKER_BUILDKIT=1 docker build "${options[@]}" -f "$dockerfile" -t "$reference" "$context"
+  else
+    docker build "${options[@]}" -f "$dockerfile" -t "$reference" "$context"
+  fi
   echo "Built image: $service"
 }
 
