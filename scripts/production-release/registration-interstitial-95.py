@@ -123,7 +123,11 @@ def registration_interstitial_history(previous):
     audit_facts=[]
     for stage in ('before','after'):
         report=fixed_recharge_json(read(previous/(stage+'-audit.json'),modes=(fixed['privateFileModes'][stage+'-audit.json'],)))
-        require(require_registration_zero_report(report,stage,original)==fixed['audits'][stage],message)
+        summary=require_registration_zero_report(report,stage,original)
+        audit={'checkCount':summary['checkCount'],'violationCount':summary['violationCount'],
+            'checksSha256':historical_fingerprint(report['checks']),'gateSha256':historical_fingerprint(report['gate']),
+            'identitySha256':historical_fingerprint(report['identity'])}
+        require(audit==fixed['audits'][stage]and manifest['dataAudit'+stage.title()]==summary,message)
         audit_facts.append((report['checks'],report['identity']))
     require(audit_facts[0]==audit_facts[1],message)
     namespace['registration_followup_api_admin_carried'](previous)

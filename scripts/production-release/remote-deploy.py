@@ -12257,7 +12257,7 @@ def main():
 
 
 # A closed successor of actual94; pending values never authorize a publication.
-REGISTRATION_INTERSTITIAL_MODULE_SHA256 = '0786173c80d24f5db35b17e34dfd2d91509709015f6f4c8b4e35ea19210cfda0'
+REGISTRATION_INTERSTITIAL_MODULE_SHA256 = 'ffd44a83658908edb42c8508a2f329a6bd40bacba5430d5f974e5cbacd32f95d'
 
 
 def load_registration_interstitial95():

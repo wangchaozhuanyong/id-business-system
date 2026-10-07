@@ -302,14 +302,14 @@
     "scripts/production-release/maintain-image-cache.test.py": "fd7d7f8c7a4a90ff57b7a0318c2f286f2ea044e25b6b19cbcb83625227311253",
     "scripts/production-release/push-images.sh": "da617d7d316e92f721d086774b62ee9de9b1e6a6ce4ce8fae72d05960209c601",
     "scripts/production-release/registration-only-transport.test.py": "8271aa0b6b6f64d06e1026a8d631737e34fc965368c659a2f4a82d7a78db34af",
-    "scripts/production-release/remote-deploy.py": "e7f3b2f4500197317539c931e31312d9e9925919e6a7bc08d02421e0073a6f67",
-    "scripts/production-release/remote-deploy.test.py": "657a17340868c70f34c86ab7f8ed73c2d8fd33d0c0dedf8b6bf354b6c5e0ff62",
+    "scripts/production-release/remote-deploy.py": "db016f17318c7156935a983c4520d4964ecc929aa14a1e56d77cbac6b0e24acd",
+    "scripts/production-release/remote-deploy.test.py": "b31d503d232959ef1435dc8a0f17f29f278be8641a50ec3b43631438577c78ef",
     "scripts/production-release/service-image-retention.py": "0e4b8e4fd6ce0cc3928e8e938a50847ccb1953fd6f0fddc9a176171b8d557e1d",
     "scripts/production-release/service-image-retention.test.py": "c34f27e6c822828b0a75445c100aa12d23a1fa85f47b722ffa327504fff954f6",
     "scripts/production-release/validate-release-selection.sh": "23770fca8f71c1f85a254e221144c9019ea6751e9a24298dbab39e72ac653b2e",
     "scripts/v2-registration-finance-audit.mjs": "4d0726ba795569bc70e256141847cfe8ee57354d2936f35341c6e8a599ed8e67",
     "scripts/v2-registration-finance-audit.test.mjs": "b9b32f040ad062f978d447d7f08b7d5dccdc1fd65e10297519f2a6e9fc063470",
-    "scripts/production-release/registration-interstitial-95.py": "0786173c80d24f5db35b17e34dfd2d91509709015f6f4c8b4e35ea19210cfda0"
+    "scripts/production-release/registration-interstitial-95.py": "ffd44a83658908edb42c8508a2f329a6bd40bacba5430d5f974e5cbacd32f95d"
   },
   "scope": {
     "servicesUpdated": ["auto-registration"],
