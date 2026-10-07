@@ -89,6 +89,15 @@ try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1920, height: 1000 } });
   page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    const pathname = new URL(message.location().url || baseUrl.href).pathname;
+    const expectedReadFailure =
+      customerReadBehavior === 'error' &&
+      /\/api\/id-business-v2\/customers(\/bootstrap)?$/.test(pathname) &&
+      message.text().includes('503 (Service Unavailable)');
+    if (!expectedReadFailure) errors.push(`console:${message.text()}`);
+  });
   await page.addInitScript((fixtureUser) => {
     // Seed only this isolated local test tab using the current credential contract.
     sessionStorage.setItem(
@@ -141,6 +150,51 @@ try {
     else if (url.pathname.endsWith('/renewals/warning-summary'))
       data = { total: 0, warningDays: 7 };
     else if (url.pathname.endsWith('/sensitive-access/approvals/summary')) data = { pending: 0 };
+    else if (url.pathname.endsWith('/accounts/purchase-sources'))
+      data = { financeAccounts: [], supplierWallets: [] };
+    else if (url.pathname.endsWith('/dashboard/overview'))
+      data = {
+        generatedAt: now,
+        businessDate: now.slice(0, 10),
+        timezone: 'Asia/Shanghai',
+        warningDays: 7,
+        access: {
+          orders: true,
+          activations: true,
+          renewals: true,
+          accounts: true,
+          balances: true,
+          exchangeRates: true,
+          finance: true,
+          audit: true
+        },
+        business: {
+          todayOrders: 0,
+          todayCompletedOrders: 0,
+          todayActivations: 0,
+          todayTopups: 0,
+          todayTopupCostCny: '0',
+          todayRevenueCny: '0',
+          todayProfitCny: '0'
+        },
+        risks: {
+          pendingOrders: 0,
+          failedOrders: 0,
+          overdueRenewals: 0,
+          dueSoonRenewals: 0,
+          lowBalanceAccounts: 0,
+          failedExchangeRuns: 0
+        },
+        assets: {
+          totalAccounts: 0,
+          availableAccounts: 0,
+          inventoryBookValueCny: '0',
+          financeHistoryStatus: 'completed'
+        },
+        recentOrders: [],
+        upcomingRenewals: [],
+        recentAudits: []
+      };
     else if (url.pathname.endsWith('/auto-recharge/addresses'))
       data = {
         items: [],
