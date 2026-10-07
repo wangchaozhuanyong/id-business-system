@@ -883,6 +883,10 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
         locator.get_attribute = AsyncMock(side_effect=lambda key: (attributes or {}).get(key))
         locator.evaluate = AsyncMock(return_value=owned)
         locator.click = AsyncMock()
+        async def wait_for(**_kwargs):
+            if count == 0:
+                raise PlaywrightTimeoutError('synthetic control missing')
+        locator.wait_for = AsyncMock(side_effect=wait_for)
         return locator
 
     @classmethod
@@ -959,7 +963,9 @@ class ProSemanticParentMockTests(unittest.IsolatedAsyncioTestCase):
 
     async def assert_entry_blocked(self, scene, reason):
         scope, card, parent = scene
-        with self.assertRaises(Stop) as stopped:
+        with patch('plan_selection.STEP_SECONDS', .05), \
+                patch('plan_selection.plan_scope', new=AsyncMock(return_value=scope)), \
+                self.assertRaises(Stop) as stopped:
             await self.selection.open_pro_details(scope)
         self.assertEqual(stopped.exception.report['reason'], reason)
         card.get_by_role('button').click.assert_not_awaited()
@@ -1253,6 +1259,118 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         await self.assert_unsubmitted()
 
 
+    async def delayed_view_all_group(self, *, reveal_group=True, second_dialog=False):
+        """合成本地挂载顺序；不是官网现场 DOM 证据。"""
+        await self.page.evaluate('''options => {
+            document.querySelector('#pro-details').hidden=true;
+            document.querySelector('#usage-group').hidden=true;
+            const navigation=document.createElement('button');navigation.textContent='查看所有套餐';
+            navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
+              document.querySelector('#pro-details').hidden=false;navigation.remove();
+              if(options.revealGroup){setTimeout(()=>document.querySelector('#usage-group').hidden=false,120);}
+              if(options.secondDialog){setTimeout(()=>{
+                const other=document.createElement('section');other.setAttribute('role','dialog');
+                other.setAttribute('aria-label','Synthetic other task');
+                const action=document.createElement('button');action.textContent='Synthetic action';
+                other.append(action);document.body.append(other);},40);}
+            };
+            document.querySelector('section').append(navigation);
+        }''', {'revealGroup': reveal_group, 'secondDialog': second_dialog})
+
+    async def test_view_all_marker_before_group_waits_without_checkout(self):
+        await self.delayed_view_all_group()
+        try:
+            button=await self.select()
+            self.assertEqual(await button.get_attribute('id'),'final')
+            self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+            await verify_selected_plan(self.page,'pro-500')
+        finally:
+            self.assertEqual(await self.page.evaluate('window.navigationClicks'),1)
+            self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+            await self.assert_unsubmitted()
+
+    async def test_personal_switch_marker_after_menu_waits_for_group_without_checkout(self):
+        # 控制真实本地 DOM 在 open_menu 返回边界挂载，确定性模拟个人切换后的 race。
+        await self.page.evaluate('''() => {
+            document.querySelector('#pro-details').hidden=true;
+            const personal=document.querySelector('section > [role=radio]');
+            personal.setAttribute('aria-checked','false');
+            personal.onclick=()=>{window.personalClicks=(window.personalClicks||0)+1;
+              personal.setAttribute('aria-checked','true');};
+        }''')
+        original_open_menu=Selection.open_menu
+        async def mount_after_menu(selection,target_plan):
+            scope=await original_open_menu(selection,target_plan)
+            await self.page.evaluate('''() => {
+                document.querySelector('#usage-group').hidden=true;
+                document.querySelector('#pro-details').hidden=false;
+                setTimeout(()=>document.querySelector('#usage-group').hidden=false,120);
+            }''')
+            return scope
+        try:
+            with patch.object(Selection,'open_menu',new=mount_after_menu):
+                button=await self.select()
+            self.assertEqual(await button.get_attribute('id'),'final')
+            self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+            await verify_selected_plan(self.page,'pro-500')
+        finally:
+            self.assertEqual(await self.page.evaluate('window.personalClicks'),1)
+            self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+            await self.assert_unsubmitted()
+
+    async def test_missing_delayed_group_reports_zero_without_checkout(self):
+        await self.delayed_view_all_group(reveal_group=False)
+        try:
+            report=await self.assert_blocked('official_plan_tier_not_found')
+            self.assertEqual(report['diagnostics']['step'],'choose_tier')
+            self.assertEqual(report['diagnostics']['role'],'region')
+            self.assertEqual(report['diagnostics']['matched_count'],0)
+            self.assertNotIn('enabled',report['diagnostics'])
+            self.assertNotIn('selected',report['diagnostics'])
+            self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'false')
+        finally:
+            self.assertEqual(await self.page.evaluate('window.navigationClicks'),1)
+            self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+            await self.assert_unsubmitted()
+
+    async def test_post_menu_unnamed_group_reports_one_without_checkout(self):
+        await self.page.locator('#pro-details').evaluate('node=>node.hidden=true')
+        original_open_menu=Selection.open_menu
+        async def mount_unnamed_after_menu(selection,target_plan):
+            scope=await original_open_menu(selection,target_plan)
+            await self.page.evaluate('''() => {
+                document.querySelector('#usage-group').removeAttribute('aria-label');
+                document.querySelector('#pro-details').hidden=false;
+            }''')
+            return scope
+        try:
+            with patch.object(Selection,'open_menu',new=mount_unnamed_after_menu):
+                report=await self.assert_blocked('official_plan_tier_not_found')
+            self.assertEqual(report['diagnostics']['step'],'choose_tier')
+            self.assertEqual(report['diagnostics']['role'],'region')
+            self.assertEqual(report['diagnostics']['matched_count'],1)
+            self.assertNotIn('enabled',report['diagnostics'])
+            self.assertNotIn('selected',report['diagnostics'])
+            self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'false')
+        finally:
+            self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+            await self.assert_unsubmitted()
+
+    async def test_delayed_group_with_second_dialog_blocks_before_selection(self):
+        await self.delayed_view_all_group(second_dialog=True)
+        try:
+            report=await self.assert_blocked('official_plan_region_ambiguous')
+            self.assertEqual(report['diagnostics']['role'],'region')
+            self.assertEqual(report['diagnostics']['matched_count'],2)
+            self.assertNotIn('enabled',report['diagnostics'])
+            self.assertNotIn('selected',report['diagnostics'])
+            self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'false')
+        finally:
+            self.assertEqual(await self.page.evaluate('window.navigationClicks'),1)
+            self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+            await self.assert_unsubmitted()
+
+
     async def test_view_all_named_pro_cta_cannot_supply_missing_tiers(self):
         async def navigation(entry_name, duplicate=False):
             await self.page.evaluate('''options => {
@@ -1300,7 +1418,7 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
                             {method:'POST',body:JSON.stringify({plan_name:'chatgptpro'})});};
                     }""", {'placement': placement, 'label': label})
                     selection=Selection(self.page,lambda *_args,**_kwargs:None)
-                    with self.assertRaises(Stop) as stopped:
+                    with patch('plan_selection.STEP_SECONDS', .3), self.assertRaises(Stop) as stopped:
                         await selection.open_pro_details(self.page.get_by_role('dialog'))
                     self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
                     await self.assert_unsubmitted()
@@ -1518,7 +1636,7 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         }""")
         await self.page.locator('#entry').evaluate('node=>node.after(node.cloneNode(true))')
         selection=Selection(self.page,lambda *_args,**_kwargs:None)
-        with self.assertRaises(Stop) as stopped:
+        with patch('plan_selection.STEP_SECONDS', .3), self.assertRaises(Stop) as stopped:
             await selection.open_pro_details(self.page.get_by_role('dialog'))
         self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
         await self.assert_unsubmitted()
@@ -1526,7 +1644,7 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator('#pro-card #entry').last.evaluate('node=>node.remove()')
         await self.page.locator('#entry').evaluate('node=>node.disabled=true')
         selection=Selection(self.page,lambda *_args,**_kwargs:None)
-        with self.assertRaises(Stop) as stopped:
+        with patch('plan_selection.STEP_SECONDS', .3), self.assertRaises(Stop) as stopped:
             await selection.open_pro_details(self.page.get_by_role('dialog'))
         self.assertEqual(stopped.exception.report['reason'],'official_plan_tier_not_found')
         await self.assert_unsubmitted()
