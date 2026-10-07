@@ -33,6 +33,51 @@ def payload():
                                 browserOptions=deepcopy(bitbrowser_options.DEFAULTS)))
 
 
+class RegisteredColdPreparationTests(unittest.TestCase):
+    def job(self, step='password', verified=False, *, builtin=True):
+        value=payload(); value.update(registered=True,passwordVerified=verified,step=step)
+        if builtin:value['proxy']=value.pop('bitBrowser')
+        return RegistrationJob(value,'https://manager.example.test',object,builtin=builtin)
+
+    def body(self, job, **extra):
+        return {'type':'progress','attempt':job.attempt,'step':job.step,'reason':'proxy_ready',**extra}
+
+    def test_only_builtin_registered_incomplete_security_pairs_allow_prepare(self):
+        for step,verified in [('registered',False),('password',False),('password_verified',True),('mfa',True)]:
+            job=self.job(step,verified)
+            self.assertTrue(job._callback_prepare_retry(self.body(job)))
+            self.assertTrue(job._callback_prepare_retry(self.body(job,browserProfileId='reg_'+'b'*64)))
+        for step,verified in [('queued',False),('email_code',False),('password',True),('mfa',False),('completed',True)]:
+            job=self.job(step,verified)
+            self.assertFalse(job._callback_prepare_retry(self.body(job)))
+        job=self.job(builtin=False); self.assertFalse(job._callback_prepare_retry(self.body(job)))
+
+    def test_cold_prepare_still_rejects_profile_mail_state_proof_and_wrong_attempt(self):
+        variants=[('payload','browserProfileId','reg_'+'a'*64),('payload','registered',False),
+            ('payload','mfaVerified',True),('job','registration_state',{}),('job','registration_operation','email_submit'),
+            ('job','awaiting_code',True),('job','pending_code',('123456',None)),('job','last_delivered_mail_id','mail'),
+            ('body','attempt',2),('body','reason','email_submit'),('body','step','mfa'),('body','registered',True)]
+        for where,key,value in variants:
+            with self.subTest(where=where,key=key):
+                job=self.job(); body=self.body(job)
+                if where=='payload':job.payload[key]=value
+                elif where=='job':setattr(job,key,value)
+                else:body[key]=value
+                self.assertFalse(job._callback_prepare_retry(body))
+
+    def test_current_closed_fingerprint_conflict_allows_cold_prepare_replacement_only(self):
+        helper=RegistrationCallbackConflictTests(); job=self.job('mfa',True)
+        conflict=helper.conflict('浏览器指纹与已有任务重复，请重新生成')
+        opener=MagicMock();opener.open.side_effect=conflict
+        with patch('registration_job.build_opener',return_value=opener),self.assertLogs('registration',level='WARNING'):
+            with self.assertRaises(PreparationFingerprintDuplicate) as stopped:
+                job.event('progress',reason='proxy_ready',browserProfileId='reg_'+'b'*64)
+        self.assertEqual((stopped.exception.job_id,stopped.exception.attempt,stopped.exception.profile_id),
+                         (job.id,job.attempt,'reg_'+'b'*64))
+        self.assertEqual(job.step,'mfa');self.assertTrue(job.payload['passwordVerified'])
+        opener.open.assert_called_once()
+
+
 class RegistrationTests(unittest.TestCase):
     def test_uses_full_browser_settings_and_same_task_identity(self):
         job = RegistrationJob(payload(), 'https://manager.example.test', object)

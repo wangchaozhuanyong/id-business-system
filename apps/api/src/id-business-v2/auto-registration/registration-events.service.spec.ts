@@ -171,3 +171,187 @@ describe('原窗口验证码时间边界', () => {
     expect(f.repository.update).not.toHaveBeenCalled();
   });
 });
+
+describe('已注册冷续接的首次真实窗口绑定', () => {
+  const profile = 'reg_' + 'b'.repeat(64);
+  function fixture() {
+    const token = 'a'.repeat(64);
+    const job = {
+      id: '11111111-1111-4111-8111-111111111111',
+      ownerId: 'owner',
+      accountId: 'account',
+      emailHash: 'hash:synthetic@example.invalid',
+      attempt: 2,
+      state: 'running',
+      step: 'password',
+      registered: true,
+      passwordVerified: false,
+      mfaVerified: false,
+      browserProfileId: null,
+      reason: 'registered_profile_recovery_pending',
+      registrationCountryCode: 'US',
+      nonceHash: registrationTokenHash(token),
+      codeRequestedAt: new Date(Date.now() - 120_000),
+      leaseUntil: new Date(Date.now() + 60_000)
+    };
+    const account = {
+      id: job.accountId,
+      emailHash: job.emailHash,
+      registered: true,
+      deletedAt: null
+    };
+    const repository = {
+      lock: vi.fn(),
+      findInTransaction: vi.fn(async () => ({ ...job })),
+      account: vi.fn().mockResolvedValue(account),
+      fingerprintExists: vi.fn().mockResolvedValue(false),
+      update: vi.fn(async (_tx, _id, data) => {
+        Object.assign(job, data);
+        return { ...job };
+      }),
+      saveAccount: vi.fn().mockResolvedValue(account)
+    };
+    const audit = { append: vi.fn() };
+    const service = new RegistrationEventsService(
+      repository as never,
+      { execute: (work: (tx: object) => unknown) => work({}) } as never,
+      audit as never,
+      {} as never
+    );
+    const bind = (extra: object = {}) =>
+      service.event(job.id, token, {
+        type: 'progress',
+        attempt: 2,
+        step: 'password',
+        reason: 'proxy_ready',
+        browserProfileId: profile,
+        ...extra
+      });
+    return { service, repository, audit, job, account, token, bind };
+  }
+  it('准备阶段保留许可，真指纹绑定后消费许可且审计不改变证据', async () => {
+    const f = fixture();
+    const requested = f.job.codeRequestedAt.getTime();
+    await f.service.event(f.job.id, f.token, {
+      type: 'progress',
+      attempt: 2,
+      step: 'password',
+      reason: 'proxy_verifying'
+    });
+    expect(f.job.reason).toBe('registered_profile_recovery_pending');
+    expect(f.job.browserProfileId).toBeNull();
+    await f.bind();
+    expect(f.job).toMatchObject({
+      browserProfileId: profile,
+      reason: 'proxy_ready',
+      registered: true,
+      passwordVerified: false,
+      mfaVerified: false,
+      accountId: 'account',
+      registrationCountryCode: 'US'
+    });
+    expect(f.job.codeRequestedAt.getTime()).toBe(requested);
+    expect(f.repository.fingerprintExists).toHaveBeenCalledWith({}, profile, f.job.id);
+    expect(f.audit.append).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        action: 'id_business_v2.auto_registration.profile_rebound',
+        objectId: f.job.id,
+        afterData: { attempt: 2, browserProfileId: profile, accountId: 'account' }
+      })
+    );
+    await f.service.event(f.job.id, f.token, {
+      type: 'waiting_email',
+      attempt: 2,
+      step: 'password',
+      newMailRequest: true
+    });
+    expect(f.job.codeRequestedAt.getTime()).toBeGreaterThan(requested);
+  });
+  it('重复指纹不能消费许可，后续唯一指纹仍可绑定一次', async () => {
+    const f = fixture();
+    f.repository.fingerprintExists.mockResolvedValueOnce(true);
+    await expect(f.bind()).rejects.toThrow('指纹与已有任务重复');
+    expect(f.repository.update).not.toHaveBeenCalled();
+    expect(f.job.reason).toBe('registered_profile_recovery_pending');
+    await f.bind({ browserProfileId: 'reg_' + 'c'.repeat(64) });
+    await expect(f.bind()).rejects.toThrow('原浏览器窗口');
+  });
+  it.each([
+    'waiting_email',
+    'waiting_user',
+    'registered',
+    'password_verified',
+    'totp_pending',
+    'mfa_verified',
+    'complete'
+  ])('绑定前不得越过安全边界 %s', async (type) => {
+    const f = fixture();
+    await expect(f.service.event(f.job.id, f.token, { type, attempt: 2 })).rejects.toThrow(
+      '尚未绑定'
+    );
+    expect(f.repository.update).not.toHaveBeenCalled();
+  });
+  it.each([
+    { step: 'mfa' },
+    { reason: 'other' },
+    { reason: null },
+    { browserProfileId: 'reg_fixture' },
+    { browserProfileId: null },
+    { browserProfileId: profile, reason: 'proxy_verifying' }
+  ])('错误步骤或非真实绑定回执拒绝 %j', async (patch) => {
+    const f = fixture();
+    await expect(f.bind(patch)).rejects.toThrow('尚未绑定');
+    expect(f.repository.update).not.toHaveBeenCalled();
+  });
+  it.each([
+    { id: 'other' },
+    { emailHash: 'hash:other@example.invalid' },
+    { registered: false },
+    { deletedAt: new Date('2026-10-01T00:00:00Z') }
+  ])('首次绑定再次检查账号一致性 %j', async (patch) => {
+    const f = fixture();
+    f.repository.account.mockResolvedValue({ ...f.account, ...patch });
+    await expect(f.bind()).rejects.toThrow('检查点已变化');
+    expect(f.repository.update).not.toHaveBeenCalled();
+  });
+  it('旧尝试、旧nonce和过期租约不能绑定新窗口', async () => {
+    const f = fixture();
+    await expect(f.bind({ attempt: 1 })).rejects.toThrow('授权已失效');
+    await expect(
+      f.service.event(f.job.id, 'b'.repeat(64), { type: 'progress', attempt: 2 })
+    ).rejects.toThrow('授权已失效');
+    f.job.leaseUntil = new Date(Date.now() - 1000);
+    await expect(f.bind()).rejects.toThrow('授权已失效');
+    expect(f.repository.update).not.toHaveBeenCalled();
+  });
+  it('准备失败仅撤销授权并保留账号和未完成证据', async () => {
+    const f = fixture();
+    await f.service.event(f.job.id, f.token, {
+      type: 'partial',
+      attempt: 2,
+      reason: 'session_load_timeout'
+    });
+    expect(f.job).toMatchObject({
+      state: 'partial',
+      nonceHash: null,
+      leaseUntil: null,
+      registered: true,
+      passwordVerified: false,
+      mfaVerified: false,
+      browserProfileId: null
+    });
+  });
+  it('partial不得携带窗口编号绕过首次绑定', async () => {
+    const f = fixture();
+    await expect(
+      f.service.event(f.job.id, f.token, {
+        type: 'partial',
+        attempt: 2,
+        browserProfileId: profile,
+        reason: 'session_load_timeout'
+      })
+    ).rejects.toThrow('尚未绑定');
+    expect(f.repository.update).not.toHaveBeenCalled();
+  });
+});

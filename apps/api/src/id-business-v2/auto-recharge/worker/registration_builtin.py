@@ -234,10 +234,13 @@ class RegistrationServerJob(RegistrationJob):
             self.runtime.run_registration(lambda: PROFILES.close(self.id))
 
     async def execute_builtin(self):
-        from registration_browser import RegistrationBrowser
+        from registration_browser import RegistrationBrowser, REGISTERED_AUTH_RECOVERY
         self.profile = await PROFILES.open(self.runtime, self)
         # Only a submission fact survives attempts in the exact retained window.
         self.registration_state = self.profile.setdefault('registration_state', {})
+        if self._registered_cold_resume and REGISTERED_AUTH_RECOVERY not in self.registration_state:
+            self.registration_state[REGISTERED_AUTH_RECOVERY] = {
+                'context': self.profile['context'], 'page': None, 'submitted': False, 'guard': None}
         flow = RegistrationBrowser(self, self.profile['context'])
         await flow.run()
         await PROFILES.close(self.id)

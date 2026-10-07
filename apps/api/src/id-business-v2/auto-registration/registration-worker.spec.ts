@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   registrationWorkerCommand,
   registrationWorkerReady,
-  requireRegistrationWorker
+  requireRegistrationWorker,
+  registrationWindowLost
 } from './registration-worker';
 const fetchMock = vi.fn();
 const reply = (value: object, status = 200) => new Response(JSON.stringify(value), { status });
@@ -160,5 +161,70 @@ describe('注册私网执行器接收边界', () => {
     expect(await registrationWorkerCommand('job', 2, 'launch', {})).toEqual({
       delivery: 'not_received'
     });
+  });
+});
+
+describe('已注册任务的只读丢窗确认', () => {
+  const jobId = '11111111-1111-4111-8111-111111111111';
+  const emptyHealth = {
+    ready: true,
+    workerRole: 'registration',
+    engine: 'camoufox',
+    mailDeliveryVersion: 1,
+    registrationBusy: false,
+    registrationWindowRetained: false
+  };
+  it.each([
+    [{ ok: false }, 404],
+    [{ accepted: true, attempt: 2, done: true, cancelled: true }, 200]
+  ])('只有明确原收据和空窗口健康共同确认丢失 %j', async (receipt, status) => {
+    fetchMock.mockResolvedValueOnce(reply(receipt as object, status as number));
+    fetchMock.mockResolvedValueOnce(reply(emptyHealth));
+    expect(await registrationWindowLost(jobId, 2)).toBe(true);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `http://registration.example.test:8051/registration/jobs/${jobId}/status`,
+      'http://registration.example.test:8051/registration/health'
+    ]);
+    expect(fetchMock.mock.calls.every(([, options]) => options.method === undefined)).toBe(true);
+  });
+  it.each([
+    { registrationBusy: true },
+    { registrationWindowRetained: true },
+    { registrationBusy: undefined },
+    { registrationWindowRetained: undefined },
+    { registrationBusy: 'false' },
+    { registrationWindowRetained: 0 },
+    { ready: false },
+    { workerRole: 'recharge' },
+    { engine: 'chromium' },
+    { mailDeliveryVersion: 2 }
+  ])('保留、占用或非精确健康状态不能确认丢失 %j', async (patch) => {
+    fetchMock.mockResolvedValueOnce(reply({ ok: false }, 404));
+    fetchMock.mockResolvedValueOnce(reply({ ...emptyHealth, ...patch }));
+    expect(await registrationWindowLost(jobId, 2)).toBe(false);
+  });
+  it.each([
+    [{}, 404],
+    [{ ok: false, reason: 'unknown' }, 404],
+    [{ ok: false }, 403],
+    [{ accepted: true, attempt: 1, done: true, cancelled: true }, 200],
+    [{ accepted: true, attempt: 2, done: false, cancelled: true }, 200],
+    [{ accepted: true, attempt: 2, done: true, cancelled: false }, 200],
+    [{ attempt: 2, done: true, cancelled: true }, 200]
+  ])('不明或不同尝试的收据拒绝恢复 %j', async (receipt, status) => {
+    fetchMock.mockResolvedValueOnce(reply(receipt as object, status as number));
+    expect(await registrationWindowLost(jobId, 2)).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('请求失联、健康失联及非法任务参数均保持未知且不写请求', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('synthetic-offline'));
+    expect(await registrationWindowLost(jobId, 2)).toBe(false);
+    fetchMock.mockResolvedValueOnce(reply({ ok: false }, 404));
+    fetchMock.mockRejectedValueOnce(new Error('synthetic-offline'));
+    expect(await registrationWindowLost(jobId, 2)).toBe(false);
+    const count = fetchMock.mock.calls.length;
+    expect(await registrationWindowLost('../other', 2)).toBe(false);
+    expect(await registrationWindowLost(jobId, 0)).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(count);
   });
 });

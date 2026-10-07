@@ -91,6 +91,11 @@ class RegistrationJob:
             options = bitbrowser_options.validate_browser_settings(payload['bitBrowser'])
             self.settings = {**payload['bitBrowser'], 'browserOptions': options}
         self.payload = dict(payload)
+        self._builtin = builtin
+        self._registered_cold_resume = (builtin and payload['browserProfileId'] is None
+            and payload['registered'] is True and payload['mfaVerified'] is False
+            and ((payload['step'] in {'registered', 'password'} and payload['passwordVerified'] is False)
+                 or (payload['step'] in {'password_verified', 'mfa'} and payload['passwordVerified'] is True)))
         self.id, self.attempt = payload['id'], payload['attempt']
         self.step = payload['step']
         self.client_type = client_type
@@ -253,13 +258,19 @@ class RegistrationJob:
     def _callback_prepare_retry(self, body):
         profile = body.get('browserProfileId')
         reason = body.get('reason')
-        return (body['type'] == 'progress' and body['step'] == self.step == self.payload['step'] == 'queued'
+        initial = (self.step == 'queued' and all(self.payload[key] is False
+                   for key in ('registered', 'passwordVerified', 'mfaVerified')))
+        cold = (self._builtin and self._registered_cold_resume
+                and self.payload['registered'] is True and self.payload['mfaVerified'] is False
+                and ((self.step in {'registered', 'password'} and self.payload['passwordVerified'] is False)
+                     or (self.step in {'password_verified', 'mfa'} and self.payload['passwordVerified'] is True)))
+        return (body['type'] == 'progress' and body['step'] == self.step == self.payload['step']
+                and (initial or cold)
                 and type(body.get('attempt')) is int and body['attempt'] == self.attempt
                 and set(body) <= {'type', 'attempt', 'step', 'reason', 'browserProfileId'}
                 and type(reason) is str and reason in CALLBACK_PREPARE_REASONS
                 and (profile is None or type(profile) is str and re.fullmatch(r'reg_[a-f0-9]{64}', profile))
                 and self.payload['browserProfileId'] is None
-                and all(self.payload[key] is False for key in ('registered', 'passwordVerified', 'mfaVerified'))
                 and not hasattr(self, 'registration_state') and not hasattr(self, 'registration_operation')
                 and not self.awaiting_code and self.pending_code is None and not self.waiting_for_user
                 and not getattr(self, 'last_delivered_mail_id', None))

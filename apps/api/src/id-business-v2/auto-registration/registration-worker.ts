@@ -14,8 +14,9 @@ export type RegistrationDispatch = {
   delivery: RegistrationDelivery;
   reason?: (typeof rejectionReasons)[number];
 };
+export const registeredProfileRecoveryPendingReason = 'registered_profile_recovery_pending';
 
-async function registrationWorkerHealth() {
+async function registrationWorkerHealth(strictWindowState = false) {
   if ((process.env.AUTO_RECHARGE_WORKER_TOKEN?.length ?? 0) < 32) return null;
   try {
     const response = await fetch(`${base()}/registration/health`, {
@@ -27,7 +28,10 @@ async function registrationWorkerHealth() {
     return value?.ready === true &&
       value?.workerRole === 'registration' &&
       value?.engine === 'camoufox' &&
-      value?.mailDeliveryVersion === 1
+      value?.mailDeliveryVersion === 1 &&
+      (!strictWindowState ||
+        (typeof value.registrationBusy === 'boolean' &&
+          typeof value.registrationWindowRetained === 'boolean'))
       ? {
           registrationBusy: value.registrationBusy === true,
           windowRetained: value.registrationWindowRetained === true
@@ -35,6 +39,38 @@ async function registrationWorkerHealth() {
       : null;
   } catch {
     return null;
+  }
+}
+
+export async function registrationWindowLost(jobId: string, attempt: number): Promise<boolean> {
+  if (
+    (process.env.AUTO_RECHARGE_WORKER_TOKEN?.length ?? 0) < 32 ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(jobId) ||
+    !Number.isSafeInteger(attempt) ||
+    attempt < 1
+  )
+    return false;
+  try {
+    const response = await fetch(`${base()}/registration/jobs/${jobId}/status`, {
+      redirect: 'error',
+      headers: headers(),
+      signal: AbortSignal.timeout(3000)
+    });
+    const receipt = await response.json();
+    if (response.status === 404) {
+      if (receipt?.ok !== false || Object.keys(receipt).length !== 1) return false;
+    } else if (
+      !response.ok ||
+      receipt?.accepted !== true ||
+      receipt.attempt !== attempt ||
+      receipt.done !== true ||
+      receipt.cancelled !== true
+    )
+      return false;
+    const health = await registrationWorkerHealth(true);
+    return health?.registrationBusy === false && health.windowRetained === false;
+  } catch {
+    return false;
   }
 }
 

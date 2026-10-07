@@ -22,6 +22,7 @@ REGISTRATION_OBSERVE_SECONDS = 15
 REGISTRATION_VIEWS = {'verification', 'code', 'profile', 'unknown', 'registered', 'existing', 'email', 'signup'}
 REGISTRATION_WRITES = {'email_submit', 'code_submit', 'profile_submit', 'signup_click'}
 IDENTITY_RECOVERY = 'identity_recovery_readonly'
+REGISTERED_AUTH_RECOVERY = 'registered_authentication_recovery'
 EMAIL_REQUEST_LIMIT = 16
 EMAIL_REQUEST_PHASES = {'before_click', 'click', 'after_click', 'safe_get', 'unknown'}
 EMAIL_REQUEST_METHODS = {'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'other', 'none'}
@@ -79,6 +80,7 @@ class RegistrationBrowser:
         self.job, self.context = job, context
         self.data = job.payload
         self.page = None
+        self._run_guard = None
         self.registration_state = getattr(job, 'registration_state', {})
         self.registration_refreshed = False
         self.recovery_readonly = None
@@ -89,6 +91,15 @@ class RegistrationBrowser:
         self.email_request_handlers = []
         self.email_requests = {}
         self.email_request_phase = 'before_click'
+        authentication = self.registration_state.get(REGISTERED_AUTH_RECOVERY)
+        if authentication is not None:
+            if (type(authentication) is not dict or set(authentication) != {'context', 'page', 'submitted', 'guard'}
+                    or authentication['context'] is not self.context
+                    or type(authentication['submitted']) is not bool
+                    or (authentication['guard'] is not None and not callable(authentication['guard']))
+                    or (authentication['page'] is not None and authentication['page'] not in self.context.pages)
+                    or self.data.get('registered') is not True):
+                raise Stop('builtin_profile_missing')
         retained = self.registration_state.get(IDENTITY_RECOVERY)
         if retained is not None:
             if (type(retained) is not dict or set(retained) != {'context', 'page', 'handler'}
@@ -491,6 +502,10 @@ class RegistrationBrowser:
             return
         request = route.request
         url = urlsplit(request.url)
+        if (REGISTERED_AUTH_RECOVERY in self.registration_state and request.method not in {'GET', 'HEAD', 'OPTIONS'}
+                and re.search(r'/(?:signup|sign-up|register|registration|profile|onboarding)(?:/|$)', url.path, re.I)):
+            await route.abort('blockedbyclient')
+            return
         payment_path = request.method not in {'GET', 'HEAD', 'OPTIONS'} and (
             url.hostname == 'pay.openai.com' or (url.hostname == 'chatgpt.com' and
             re.search(r'/(payments?|billing|checkout|subscriptions?|subscribe|purchase)(?:/|$)', url.path)))
@@ -553,6 +568,9 @@ class RegistrationBrowser:
             try:
                 identity = await self.identity()
                 if identity:
+                    if (REGISTERED_AUTH_RECOVERY in self.registration_state
+                            and await budget.run(lambda: unique_visible(self.page, CODE_INPUT), 'registered_auth_code_guard')):
+                        raise Stop('verification_required')
                     await self.end_recovery()
                 elif self.recovery_readonly is not None:
                     raise Stop('official_login_not_verified')
@@ -578,12 +596,18 @@ class RegistrationBrowser:
             # the original overall deadline, including time spent reading identity.
             await budget.run(lambda: self.settle(.25), 'registered_reobserve')
             self.observation_budget = budget
+            if (REGISTERED_AUTH_RECOVERY in self.registration_state
+                    and await budget.run(lambda: unique_visible(self.page, CODE_INPUT), 'registered_auth_code_guard')):
+                raise first_error
             if not await self.refresh_registration():
                 raise first_error
             await self.guard_registered_onboarding()
             identity = await self.identity()
             if not identity:
                 raise Stop('official_login_not_verified')
+            if (REGISTERED_AUTH_RECOVERY in self.registration_state
+                    and await budget.run(lambda: unique_visible(self.page, CODE_INPUT), 'registered_auth_code_guard')):
+                raise Stop('verification_required')
             await self.end_recovery()
             return identity
         finally:
@@ -800,6 +824,11 @@ class RegistrationBrowser:
         # Older checkpoints may have saved a session before onboarding was complete.
         async def pending():
             try:
+                if (REGISTERED_AUTH_RECOVERY in self.registration_state
+                        and re.search(r'/(?:signup|sign-up|register|registration)(?:/|$)', urlsplit(self.page.url).path, re.I)):
+                    return True
+                if REGISTERED_AUTH_RECOVERY in self.registration_state and await unique_visible(self.page, CODE_INPUT):
+                    return True
                 return bool(await self.profile_fields()) or self.registration_loading
             except Stop as exc:
                 if exc.report.get('reason') not in {'form_unrecognized', 'login_form_ambiguous'}:
@@ -821,6 +850,13 @@ class RegistrationBrowser:
                     and retained.get('handler') is handler):
                 self.registration_state.pop(IDENTITY_RECOVERY)
             self.recovery_readonly = None
+        authentication = self.registration_state.get(REGISTERED_AUTH_RECOVERY)
+        if authentication is not None and authentication['guard'] is not None:
+            # Only this retained authentication guard belongs to an older run.
+            # The current run guard remains installed for security operations.
+            if authentication['guard'] is not self._run_guard:
+                await asyncio.wait_for(self.context.unroute('**/*', authentication['guard']), timeout=5)
+            authentication['guard'] = None
 
     async def manual_registration(self, reason):
         # An explicit administrator handoff may perform writes in the same window.
@@ -1337,8 +1373,15 @@ class RegistrationBrowser:
             await self.job.manual('form_unrecognized')
         raise Stop('form_unrecognized')
 
-    async def verify_login(self, mfa=False, *, allow_email_identity=False):
+    async def verify_login(self, mfa=False, *, allow_email_identity=False, _owned_context=False):
         # A clean context proves the staged password works; an existing session cannot.
+        authentication = self.registration_state.get(REGISTERED_AUTH_RECOVERY) if _owned_context else None
+        if (type(_owned_context) is not bool or (_owned_context and (
+                type(authentication) is not dict or set(authentication) != {'context', 'page', 'submitted', 'guard'}
+                or self.data.get('registered') is not True
+                or authentication.get('context') is not self.context or authentication.get('page') is not self.page
+                or authentication.get('submitted') is not False or self.page not in self.context.pages))):
+            raise Stop('builtin_profile_missing')
         verification = None
         page = None
         primary_error = None
@@ -1346,6 +1389,8 @@ class RegistrationBrowser:
         subphase = 'none'
         password_form_state = 'not_observed'
         identity_recovery_used = False
+        identity_handler = None
+        navigation_readonly = None
         phases = {'context_create', 'context_route', 'page_create', 'navigation', 'navigation_guard',
                   'body_read', 'field_read', 'email_code_wait', 'email_code_fill', 'email_code_submit',
                   'identity_read', 'email_fill', 'mail_prepare', 'email_submit', 'password_choice',
@@ -1366,7 +1411,7 @@ class RegistrationBrowser:
                      'unknown_code_type', 'unsupported_code_type', 'password_form_wait_exhausted', 'password_identity_unconfirmed',
                      'post_code_identity_unconfirmed', 'password_rejected', 'secret_cleanup', 'context_cleanup',
                      'identity_first', 'identity_retry', 'identity_guard_install', 'identity_code_guard',
-                     'identity_get', 'identity_after_get', 'identity_guard_remove'}
+                     'identity_get', 'identity_after_get', 'identity_guard_remove', 'owned_onboarding'}
 
         def note(name):
             nonlocal subphase
@@ -1417,6 +1462,10 @@ class RegistrationBrowser:
             mark('body_read')
             note('official_guard')
             self.official(page)
+            if _owned_context and (re.search(r'/(?:signup|sign-up|register|registration)(?:/|$)', urlsplit(page.url).path, re.I)
+                    or await unique_visible(page, BIRTH_INPUT + ', ' + AGE_INPUT)):
+                note('owned_onboarding')
+                raise Stop('form_unrecognized')
             note('text_read')
             text = (await page.locator('body').inner_text())[:12000]
             note('title_read')
@@ -1480,13 +1529,14 @@ class RegistrationBrowser:
                     raise Stop('verification_required')
                 self.official(page)
                 mark('email_code_submit')
+                if _owned_context:authentication['submitted'] = True
                 await field.press('Enter')
             finally:
                 value = ''
             await self.settle(3)
 
         async def verification_identity():
-            nonlocal identity_recovery_used
+            nonlocal identity_recovery_used, identity_handler
             # This episode includes its first read. Recovery is spent once for
             # the entire clean verification context, never once per form poll.
             budget = self.recovery_budget()
@@ -1519,6 +1569,7 @@ class RegistrationBrowser:
                     note('identity_guard_install')
                     try:
                         await budget.run(lambda: verification.route('**/*', readonly), 'verification_identity_guard')
+                        identity_handler = readonly
                         await budget.run(safe_page, 'verification_identity_page')
                         mark('identity_read')
                         note('identity_retry')
@@ -1565,6 +1616,7 @@ class RegistrationBrowser:
                             raise Stop('verification_required')
                         note('identity_guard_remove')
                         await budget.run(lambda: verification.unroute('**/*', readonly), 'verification_identity_guard')
+                        identity_handler = None
                         return identity
                     except Exception as recovery_error:
                         # Keep the initiating transport failure when the shared
@@ -1591,22 +1643,25 @@ class RegistrationBrowser:
             if await unique_visible(page, CODE_INPUT):
                 raise Stop('verification_required')
             if before_password:
-                if allow_email_identity and submitted_email and not mfa:
+                if _owned_context or (allow_email_identity and submitted_email and not mfa):
                     return False
                 raise Stop('verification_required')
-            if mfa and not submitted_totp:
+            if mfa and not submitted_totp and not _owned_context:
                 raise Stop('mfa_unverified')
-            return True
+            return False if _owned_context else True
 
         try:
             mark('context_create')
-            verification = (await self.job.new_verification_context()
-                            if hasattr(self.job, 'new_verification_context')
-                            else await self.context.browser.new_context())
+            if _owned_context:
+                verification = self.context
+            else:
+                verification = (await self.job.new_verification_context()
+                                if hasattr(self.job, 'new_verification_context')
+                                else await self.context.browser.new_context())
             mark('context_route')
-            await verification.route('**/*', self.guard)
+            if not _owned_context:await verification.route('**/*', self.guard)
             mark('page_create')
-            page = await verification.new_page()
+            page = self.page if _owned_context else await verification.new_page()
             budget = self.recovery_budget()
             navigation_readonly = None
             # No email, password or OTP has been entered: only the fixed GET can
@@ -1652,14 +1707,17 @@ class RegistrationBrowser:
                 mark('navigation_guard')
                 note('retry_guard_remove')
                 await verification.unroute('**/*', navigation_readonly)
+                navigation_readonly = None
             mark('email_fill')
             await email.fill(self.data['email'])
             # Fence the current task's mail before either login submission can send it.
             mark('mail_prepare')
-            self.job.prepare_mail('mfa' if mfa else 'password', new_request=True)
+            mail_step = ('mfa' if self.job.step in {'password_verified', 'mfa'} else 'password') if _owned_context else ('mfa' if mfa else 'password')
+            self.job.prepare_mail(mail_step, new_request=True)
             await safe_page()
             self.official(page)
             mark('email_submit')
+            if _owned_context:authentication['submitted'] = True
             await email.press('Enter')
             await self.settle(3)
             chose_password = False
@@ -1671,7 +1729,7 @@ class RegistrationBrowser:
                     password_form_state = 'identity'
                     # Inspect identity before any settings password control can
                     # be mistaken for an unauthenticated login form.
-                    if allow_email_identity and submitted_email and not mfa:
+                    if _owned_context or (allow_email_identity and submitted_email and not mfa):
                         return False
                     raise Stop('verification_required')
                 mark('field_read')
@@ -1718,16 +1776,17 @@ class RegistrationBrowser:
             await safe_page()
             self.official(page)
             mark('password_submit')
+            if _owned_context:authentication['submitted'] = True
             await password.press('Enter')
             for _ in range(60):
                 await safe_page()
                 mark('identity_read')
                 if await verification_identity():
-                    if mfa and not submitted_totp:
+                    if mfa and not submitted_totp and not _owned_context:
                         # Password and identity are proved; settings must still show
                         # an unconfigured authenticator before enrollment can resume.
                         raise Stop('mfa_unverified')
-                    return True
+                    return False if _owned_context else True
                 code = await self.field(page, CODE_INPUT)
                 if code:
                     await safe_page()
@@ -1749,6 +1808,7 @@ class RegistrationBrowser:
                                 raise Stop('verification_required')
                             self.official(page)
                             mark('totp_submit')
+                            if _owned_context:authentication['submitted'] = True
                             await code.press('Enter')
                         finally:
                             value = ''
@@ -1776,9 +1836,34 @@ class RegistrationBrowser:
             cleanup_error = None
             failed_phase = phase
             failed_subphase = subphase
+            if _owned_context and navigation_readonly is not None:
+                try:
+                    await asyncio.wait_for(verification.unroute('**/*', navigation_readonly), timeout=5)
+                except Exception as exc:
+                    phase = 'context_cleanup'; note('context_cleanup')
+                    cleanup_error = exc
+                    failure(exc, cleanup=True)
+            if _owned_context and authentication['submitted']:
+                try:
+                    install_handler = identity_handler is None
+                    if install_handler:
+                        async def readonly(route):
+                            if route.request.method != 'GET':await route.abort('blockedbyclient')
+                            else:await route.fallback()
+                        identity_handler = readonly
+                    self.recovery_readonly = identity_handler
+                    self.registration_state[IDENTITY_RECOVERY] = {
+                        'context': self.context, 'page': self.page, 'handler': identity_handler}
+                    authentication['guard'] = self._run_guard
+                    if install_handler:
+                        await asyncio.wait_for(verification.route('**/*', identity_handler), timeout=5)
+                except Exception as exc:
+                    phase = 'context_cleanup'; note('context_cleanup')
+                    cleanup_error = exc
+                    failure(exc, cleanup=True)
             for name, cleanup in (
                     ('secret_cleanup', lambda: clear_visible_secrets(page) if page else asyncio.sleep(0)),
-                    ('context_cleanup', lambda: verification.close() if verification else asyncio.sleep(0))):
+                    ('context_cleanup', lambda: verification.close() if verification and not _owned_context else asyncio.sleep(0))):
                 try:
                     phase = name
                     note(name)
@@ -1961,7 +2046,8 @@ class RegistrationBrowser:
         self.operation('browser_attach')
         primary_error = None
         try:
-            await self.context.route('**/*', self.guard)
+            self._run_guard = self.guard
+            await self.context.route('**/*', self._run_guard)
             retained = self.registration_state.get(IDENTITY_RECOVERY)
             if retained is not None:
                 self.page = retained['page']
@@ -1976,11 +2062,23 @@ class RegistrationBrowser:
             if not self.data['registered']:
                 await self.register()
             else:
+                authentication = self.registration_state.get(REGISTERED_AUTH_RECOVERY)
+                if authentication is not None:
+                    if authentication['page'] is None:
+                        authentication['page'] = self.page
+                    elif authentication['page'] is not self.page:
+                        raise Stop('builtin_profile_missing')
+                    if not authentication['submitted']:
+                        # This only authenticates the owned page. Its boolean is
+                        # never a password or MFA proof; verify the account anew.
+                        await self.verify_login(mfa=bool(self.data.get('totpSecret')),
+                            allow_email_identity=True, _owned_context=True)
                 await self.guard_registered_onboarding()
                 if not await self.registered_identity():
                     await self.job.manual('official_login_not_verified')
                     if not await self.registered_identity():
                         raise Stop('official_login_not_verified')
+                self.registration_state.pop(REGISTERED_AUTH_RECOVERY, None)
             if not self.data['passwordVerified']:
                 await self.password()
             if not self.data['mfaVerified']:
@@ -2000,9 +2098,13 @@ class RegistrationBrowser:
                 # Builtin cancellation closes this exact browser immediately after
                 # run returns. Drop RAM ownership, but keep writes blocked until close.
                 self.registration_state.pop(IDENTITY_RECOVERY)
+            authentication = self.registration_state.get(REGISTERED_AUTH_RECOVERY)
+            keep_auth_guard = (primary_error is not None and authentication is not None
+                               and authentication['guard'] is self._run_guard)
             cleanups = ([] if keep_readonly else [self.end_recovery]) + [
-                lambda: clear_visible_secrets(self.page) if self.page else asyncio.sleep(0),
-                lambda: self.context.unroute('**/*', self.guard)]
+                lambda: clear_visible_secrets(self.page) if self.page else asyncio.sleep(0)]
+            if not keep_auth_guard:
+                cleanups.append(lambda: self.context.unroute('**/*', self._run_guard))
             for cleanup in cleanups:
                 try:
                     await cleanup()

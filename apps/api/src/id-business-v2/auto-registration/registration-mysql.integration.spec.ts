@@ -12,10 +12,13 @@ import { RegistrationMailboxesService } from './registration-mailboxes.service';
 const worker = vi.hoisted(() => ({
   payload: {} as Record<string, unknown>,
   command: vi.fn(),
+  windowLost: vi.fn().mockResolvedValue(false),
   delivery: 'accepted' as 'accepted' | 'not_received' | 'unknown'
 }));
 vi.mock('./registration-worker', () => ({
   requireRegistrationWorker: async () => {},
+  registrationWindowLost: worker.windowLost,
+  registeredProfileRecoveryPendingReason: 'registered_profile_recovery_pending',
   registrationWorkerCommand: (...args: unknown[]) => {
     if (args[2] === 'launch') worker.payload = args[3] as Record<string, unknown>;
     worker.command(...args);
@@ -55,7 +58,7 @@ suite('自动注册 MySQL 事务和恢复', () => {
           ? correctionEmail
           : id === 'dispatch-check'
             ? 'dispatch@example.test'
-            : id.startsWith('age-cycle-')
+            : id.startsWith('age-cycle-') || id.startsWith('security-recovery-')
               ? `${id}@example.test`
               : email
     }),
@@ -134,6 +137,169 @@ suite('自动注册 MySQL 事务和恢复', () => {
   });
   afterAll(async () => {
     await prisma?.$disconnect();
+  });
+  it('已注册丢窗续接原账号，事务绑定新指纹并拒绝旧授权', async () => {
+    const aliasId = `security-recovery-${randomUUID()}`;
+    const address = `${aliasId}@example.test`;
+    const emailHash = encryption.hash(address)!;
+    const oldProfile = `reg_${'a'.repeat(64)}`;
+    const conflictingProfile = `reg_${'b'.repeat(64)}`;
+    const newProfile = `reg_${'c'.repeat(64)}`;
+    const oldToken = randomBytes(32).toString('hex');
+    const name = await prisma.idBusinessV2RegistrationName.create({
+      data: { displayName: `隔离续接${randomUUID()}` }
+    });
+    const account = await prisma.idBusinessV2ChatgptAccount.create({
+      data: {
+        emailEncrypted: encryption.encrypt(address)!,
+        emailHash,
+        emailMasked: 'se***@example.test',
+        registered: true,
+        registrationCountryCode: 'US',
+        createdByUserId: operator.id,
+        updatedByUserId: operator.id
+      }
+    });
+    const original = await prisma.idBusinessV2RegistrationJob.create({
+      data: {
+        ownerId: operator.id,
+        mailboxAliasId: aliasId,
+        proxyId,
+        nameId: name.id,
+        displayName: name.displayName,
+        emailEncrypted: encryption.encrypt(address)!,
+        emailHash,
+        emailMasked: 'se***@example.test',
+        birthDateEncrypted: encryption.encrypt('1996-01-01')!,
+        passwordEncrypted: encryption.encrypt('G!local-fixture-only-a9')!,
+        registrationAge: 30,
+        state: 'partial',
+        step: 'password',
+        attempt: 2,
+        registered: true,
+        registrationCountryCode: 'US',
+        accountId: account.id,
+        browserProfileId: oldProfile
+      }
+    });
+    worker.delivery = 'accepted';
+    worker.windowLost.mockResolvedValue(true);
+    const launchReceipt = await jobs.launch(original.id, operator);
+    const launch = worker.payload as {
+      agentToken: string;
+      attempt: number;
+      browserProfileId: null;
+    };
+    expect(launchReceipt.attempt).toBe(3);
+    expect(launch).toMatchObject({
+      registered: true,
+      passwordVerified: false,
+      mfaVerified: false,
+      browserProfileId: null,
+      step: 'password'
+    });
+    const emit = (type: string, extra: object = {}) =>
+      events.event(original.id, launch.agentToken, { type, attempt: launch.attempt, ...extra });
+    const pending = await prisma.idBusinessV2RegistrationJob.findUniqueOrThrow({
+      where: { id: original.id }
+    });
+    expect(pending).toMatchObject({
+      accountId: account.id,
+      registered: true,
+      browserProfileId: null,
+      reason: 'registered_profile_recovery_pending',
+      registrationCountryCode: 'US',
+      passwordVerified: false,
+      mfaVerified: false
+    });
+    expect(pending.passwordEncrypted).toBe(original.passwordEncrypted);
+    await emit('progress', { step: 'password', reason: 'proxy_verifying' });
+    await expect(
+      emit('waiting_email', { step: 'password', reason: 'password_setup_email' })
+    ).rejects.toThrow('尚未绑定');
+    const conflict = await prisma.idBusinessV2RegistrationJob.create({
+      data: {
+        ownerId: operator.id,
+        mailboxAliasId: `security-recovery-${randomUUID()}`,
+        proxyId,
+        nameId: name.id,
+        displayName: name.displayName,
+        emailEncrypted: encryption.encrypt('conflict@example.test')!,
+        emailHash: encryption.hash('conflict@example.test')!,
+        emailMasked: 'co***@example.test',
+        birthDateEncrypted: original.birthDateEncrypted,
+        passwordEncrypted: original.passwordEncrypted,
+        state: 'cancelled',
+        browserProfileId: conflictingProfile
+      }
+    });
+    expect(conflict.state).toBe('cancelled');
+    await expect(
+      emit('progress', {
+        step: 'password',
+        reason: 'proxy_ready',
+        browserProfileId: conflictingProfile
+      })
+    ).rejects.toThrow('指纹');
+    expect(
+      (await prisma.idBusinessV2RegistrationJob.findUniqueOrThrow({ where: { id: original.id } }))
+        .browserProfileId
+    ).toBeNull();
+    await emit('progress', {
+      step: 'password',
+      reason: 'proxy_ready',
+      browserProfileId: newProfile
+    });
+    await expect(
+      events.event(original.id, oldToken, {
+        type: 'progress',
+        attempt: original.attempt,
+        reason: 'proxy_ready',
+        browserProfileId: oldProfile
+      })
+    ).rejects.toThrow('授权');
+    await expect(
+      emit('progress', { step: 'password', reason: 'proxy_ready', browserProfileId: oldProfile })
+    ).rejects.toThrow('原浏览器');
+    const bound = await prisma.idBusinessV2RegistrationJob.findUniqueOrThrow({
+      where: { id: original.id }
+    });
+    expect(bound).toMatchObject({
+      accountId: account.id,
+      registered: true,
+      browserProfileId: newProfile,
+      passwordVerified: false,
+      mfaVerified: false,
+      registrationCountryCode: 'US'
+    });
+    const preserved = await prisma.idBusinessV2ChatgptAccount.findUniqueOrThrow({
+      where: { id: account.id }
+    });
+    expect(preserved).toEqual(account);
+    const audit = await prisma.auditLog.findMany({
+      where: {
+        objectId: original.id,
+        action: {
+          in: [
+            'id_business_v2.auto_registration.profile_lost_recovery',
+            'id_business_v2.auto_registration.profile_rebound'
+          ]
+        }
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+    expect(audit).toHaveLength(2);
+    expect(audit[0].beforeData).toEqual({ attempt: 2, browserProfileId: oldProfile });
+    expect(audit[1].afterData).toEqual({
+      attempt: 3,
+      browserProfileId: newProfile,
+      accountId: account.id
+    });
+    const auditJson = JSON.stringify(audit);
+    expect(auditJson).not.toContain(launch.agentToken);
+    expect(auditJson).not.toContain(original.passwordEncrypted);
+    expect(auditJson).not.toContain('G!local-fixture-only-a9');
+    worker.windowLost.mockResolvedValue(false);
   });
   it('重复名字导入与过期编辑保护，不改变旧账号默认优惠', async () => {
     const result = await names.import({ names: ['陈明', '陈明', '李华'] }, operator);

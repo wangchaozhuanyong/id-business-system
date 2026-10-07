@@ -626,6 +626,69 @@ class BuiltinTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(job.cancelled.is_set())
 
 
+class RegisteredColdBuiltinTests(unittest.IsolatedAsyncioTestCase):
+    def job(self,step='password',verified=False):
+        value=server_payload();value.update(registered=True,passwordVerified=verified,step=step)
+        runtime=MagicMock(_discard=AsyncMock(),playwright=object())
+        job=builtin.RegistrationServerJob(value['id'],value,'http://api:3000/api/id-business-v2/auto-registration/local',runtime)
+        return job,runtime
+
+    async def test_fresh_registered_profile_binds_actual_signature_before_auth_marker(self):
+        from registration_browser import REGISTERED_AUTH_RECOVERY
+        for step,verified in [('registered',False),('password',False),('password_verified',True),('mfa',True)]:
+            with self.subTest(step=step):
+                job,runtime=self.job(step,verified); profiles=builtin.BuiltinProfiles()
+                prepared=BuiltinTests.prepared_environments(self,1)[0]
+                order=[]
+                def event(_name,**data):
+                    self.assertEqual(data,{'browserProfileId':'reg_'+'b'*64,'reason':'proxy_ready'})
+                    self.assertFalse(hasattr(job,'registration_state'));order.append('bound')
+                job.event=MagicMock(side_effect=event)
+                def create(actual,context):
+                    self.assertIs(actual,job);self.assertIs(context,prepared['context'])
+                    marker=job.registration_state[REGISTERED_AUTH_RECOVERY]
+                    self.assertEqual(marker,{'context':context,'page':None,'submitted':False,'guard':None})
+                    self.assertEqual(job.payload['browserProfileId'],'reg_'+'b'*64)
+                    order.append('auth-ready');return MagicMock(run=AsyncMock())
+                with patch.object(builtin,'PROFILES',profiles),patch.object(builtin.server_proxy,'prepare_browser',AsyncMock(return_value=prepared)),patch.object(fingerprint_runtime,'fingerprint_signature',AsyncMock(return_value='b'*64)),patch.object(fingerprint_runtime,'close_fingerprint_resource',AsyncMock(return_value=True)),patch('registration_browser.RegistrationBrowser',side_effect=create):
+                    await job.execute_builtin()
+                self.assertEqual(order,['bound','auth-ready'])
+                self.assertEqual((job.payload['registered'],job.payload['passwordVerified'],job.payload['mfaVerified']),(True,verified,False))
+
+    async def test_registered_duplicate_closes_before_one_new_signature_and_keeps_step_flags(self):
+        job,runtime=self.job('mfa',True);profiles=builtin.BuiltinProfiles()
+        values=BuiltinTests.prepared_environments(self,2); order=[]
+        async def prepare(*_args,**_kwargs):order.append('prepare');return values[order.count('prepare')-1]
+        def event(_name,**data):
+            order.append('bind')
+            if data['browserProfileId']=='reg_'+'a'*64:raise builtin.PreparationFingerprintDuplicate(job.id,job.attempt,data['browserProfileId'])
+        async def close(_browser):order.append('close');return True
+        job.event=MagicMock(side_effect=event)
+        with patch.object(builtin.server_proxy,'prepare_browser',prepare),patch.object(fingerprint_runtime,'fingerprint_signature',AsyncMock(side_effect=['a'*64,'b'*64])),patch.object(fingerprint_runtime,'close_fingerprint_resource',close):
+            await profiles.open(runtime,job)
+        self.assertEqual(order,['prepare','bind','close','prepare','bind'])
+        self.assertEqual(job.payload['browserProfileId'],'reg_'+'b'*64)
+        self.assertEqual((job.step,job.payload['registered'],job.payload['passwordVerified'],job.payload['mfaVerified']),('mfa',True,True,False))
+
+    async def test_unregistered_lost_or_forged_profile_never_prepares_registration_again(self):
+        for forged in [False,True]:
+            job,runtime=self.job()
+            if forged:job.payload['browserProfileId']='reg_'+'a'*64
+            else:job.payload['registered']=False
+            with patch.object(builtin.server_proxy,'prepare_browser',AsyncMock()) as prepare:
+                with self.assertRaises(Stop):await builtin.BuiltinProfiles().open(runtime,job)
+            prepare.assert_not_awaited();runtime._discard.assert_not_awaited()
+
+    async def test_cold_duplicate_close_failure_retains_owner_without_second_environment(self):
+        job,runtime=self.job();profiles=builtin.BuiltinProfiles(); prepared=BuiltinTests.prepared_environments(self,1)[0]
+        job.event=MagicMock(side_effect=builtin.PreparationFingerprintDuplicate(job.id,job.attempt,'reg_'+'a'*64))
+        with patch.object(builtin.server_proxy,'prepare_browser',AsyncMock(return_value=prepared)) as prepare,patch.object(fingerprint_runtime,'fingerprint_signature',AsyncMock(return_value='a'*64)),patch.object(fingerprint_runtime,'close_fingerprint_resource',AsyncMock(return_value=False)):
+            with self.assertRaises(Stop) as stopped:await profiles.open(runtime,job)
+        self.assertEqual(stopped.exception.report['reason'],'fingerprint_cleanup_failed')
+        prepare.assert_awaited_once();self.assertIs(profiles.profile['context'],prepared['context'])
+        self.assertIsNone(job.payload['browserProfileId']);self.assertTrue(job.payload['registered'])
+
+
 class FinishedTaskTests(unittest.TestCase):
     def test_failure_diagnostics_exclude_exception_text_and_uncontrolled_codes(self):
         value = server_payload()
