@@ -12,7 +12,9 @@ DEFAULTS = {
     "sessionWaitMinutes": 2, "sessionRetryLimit": 2,
     "proxyMode": "dynamic", "staticHost": "", "staticPort": 8080,
     "dynamicProvider": "common", "refreshIp": True, "ipCheckService": "ip-api",
-    "os": "MacIntel", "languageFromIp": False, "language": "zh-CN",
+    "os": "Win32", "osVersion": "11", "coreVersion": "152",
+    "openWidth": 1600, "openHeight": 1000,
+    "languageFromIp": False, "language": "zh-CN",
     "displayLanguageFromIp": False, "displayLanguage": "zh-CN",
     "timezoneFromIp": True, "timezone": "Asia/Kuala_Lumpur",
     "positionFromIp": True, "latitude": 0, "longitude": 0, "accuracy": 100,
@@ -24,6 +26,7 @@ ENUMS = {
     "ipCheckService": {"ip-api", "ip123in", "luminati"},
     "os": {"MacIntel", "Win32", "Linux x86_64"},
 }
+PROFILE_KEYS = ("osVersion", "coreVersion", "openWidth", "openHeight")
 
 
 def invalid():
@@ -34,7 +37,8 @@ def validate_options(value):
     if value is not None and not isinstance(value, dict):
         invalid()
     options = dict(DEFAULTS) if value is None else {
-        "sessionWaitMinutes": 2, "sessionRetryLimit": 2, **value}
+        "sessionWaitMinutes": 2, "sessionRetryLimit": 2,
+        **{key: DEFAULTS[key] for key in PROFILE_KEYS}, **value}
     if not isinstance(options, dict) or set(options) != set(DEFAULTS):
         invalid()
     for key, low, high in (("sessionWaitMinutes", 1, 10), ("sessionRetryLimit", 0, 2)):
@@ -42,6 +46,20 @@ def validate_options(value):
             invalid()
     for key, choices in ENUMS.items():
         if not isinstance(options[key], str) or options[key] not in choices:
+            invalid()
+    if value is not None and all(key not in value for key in PROFILE_KEYS):
+        options.update(os="Win32", osVersion="11")
+    elif value is not None and options["os"] != "Win32" and "osVersion" not in value:
+        options["osVersion"] = ""
+    core = options["coreVersion"]
+    if not isinstance(core, str) or not re.fullmatch(r"[1-9]\d{1,2}", core) or int(core) < 96:
+        invalid()
+    if not isinstance(options["osVersion"], str) or (
+            options["os"] == "Win32" and options["osVersion"] not in {"11", "10"}) or (
+            options["os"] != "Win32" and options["osVersion"] != ""):
+        invalid()
+    for key, low, high in (("openWidth", 800, 7680), ("openHeight", 600, 4320)):
+        if type(options[key]) is not int or not low <= options[key] <= high:
             invalid()
     for key, default in DEFAULTS.items():
         if isinstance(default, bool) and not isinstance(options[key], bool):
@@ -107,7 +125,10 @@ def validate_browser_settings(settings):
 def profile_options(settings):
     options = validate_browser_settings(settings)
     fingerprint = {
-        "ostype": "PC", "os": options["os"],
+        "coreProduct": "chrome", "coreVersion": options["coreVersion"],
+        "ostype": "PC", "os": options["os"], "osVersion": options["osVersion"],
+        "version": options["coreVersion"], "userAgent": "",
+        "openWidth": options["openWidth"], "openHeight": options["openHeight"],
         "isIpCreateTimeZone": options["timezoneFromIp"],
         "isIpCreatePosition": options["positionFromIp"],
         "isIpCreateLanguage": options["languageFromIp"], "languages": options["language"],
@@ -137,3 +158,35 @@ def profile_options(settings):
                       proxyUserName=credentials.get("username", ""),
                       proxyPassword=credentials.get("password", ""))
     return result
+
+
+def verify_profile_configuration(detail, expected, opened=None):
+    observed = detail.get("browserFingerPrint") if isinstance(detail, dict) else None
+    if observed is not None and not isinstance(observed, dict):
+        raise Stop("bitbrowser_profile_configuration_mismatch")
+    # Older clients may omit these readback fields. Only an explicit contradiction blocks opening.
+    for key in ("coreProduct", "coreVersion", "os", "osVersion", "version", "openWidth", "openHeight"):
+        value = (observed or {}).get(key)
+        if expected[key] == "" or value is None or value == "":
+            continue
+        matches = (bool(re.fullmatch(r"\d+(?:\.\d+)*", str(value))) and
+                   str(value).split(".")[0] == expected[key]) if key in {"coreVersion", "version"} \
+            else str(value) == str(expected[key])
+        if not matches:
+            raise Stop("bitbrowser_profile_configuration_mismatch")
+    user_agent = (observed or {}).get("userAgent")
+    major = re.search(r"(?:Chrome|Chromium)/(\d+)", user_agent) if isinstance(user_agent, str) else None
+    if major and major.group(1) != expected["coreVersion"]:
+        raise Stop("bitbrowser_profile_configuration_mismatch")
+    actual_core = opened.get("coreVersion") if isinstance(opened, dict) else None
+    if actual_core is not None and actual_core != "" and (
+            not re.fullmatch(r"\d+(?:\.\d+)*", str(actual_core)) or
+            str(actual_core).split(".")[0] != expected["coreVersion"]):
+        raise Stop("bitbrowser_profile_configuration_mismatch")
+
+
+def verify_runtime_version(version, expected):
+    if not isinstance(version, str) or not re.fullmatch(r"\d+(?:\.\d+)*", version):
+        raise Stop("bitbrowser_profile_configuration_unverified")
+    if version.split(".")[0] != expected:
+        raise Stop("bitbrowser_profile_configuration_mismatch")

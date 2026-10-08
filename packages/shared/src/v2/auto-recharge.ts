@@ -240,6 +240,10 @@ export interface V2RechargeBrowserOptions {
   refreshIp: boolean;
   ipCheckService: 'ip-api' | 'ip123in' | 'luminati';
   os: 'MacIntel' | 'Win32' | 'Linux x86_64';
+  osVersion: '' | '11' | '10';
+  coreVersion: string;
+  openWidth: number;
+  openHeight: number;
   languageFromIp: boolean;
   language: string;
   displayLanguageFromIp: boolean;
@@ -264,7 +268,11 @@ export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = 
   dynamicProvider: 'common',
   refreshIp: true,
   ipCheckService: 'ip-api',
-  os: 'MacIntel',
+  os: 'Win32',
+  osVersion: '11',
+  coreVersion: '152',
+  openWidth: 1600,
+  openHeight: 1000,
   languageFromIp: false,
   language: 'zh-CN',
   displayLanguageFromIp: false,
@@ -279,6 +287,28 @@ export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = 
   syncCookies: false,
   syncLocalStorage: false
 };
+
+export const V2_RECHARGE_BROWSER_PROFILE_KEYS = [
+  'osVersion',
+  'coreVersion',
+  'openWidth',
+  'openHeight'
+] as const;
+
+export function normalizeV2RechargeBrowserOptions(
+  value?: Partial<V2RechargeBrowserOptions> | null
+): V2RechargeBrowserOptions {
+  const legacy =
+    value && V2_RECHARGE_BROWSER_PROFILE_KEYS.every((key) => !Object.hasOwn(value, key));
+  const options = { ...V2_RECHARGE_BROWSER_DEFAULTS, ...value };
+  if (legacy) {
+    options.os = 'Win32';
+    options.osVersion = '11';
+  } else if (options.os !== 'Win32') {
+    options.osVersion = '';
+  }
+  return options;
+}
 
 export interface V2RechargeStaticProxyCredentials {
   username: string;

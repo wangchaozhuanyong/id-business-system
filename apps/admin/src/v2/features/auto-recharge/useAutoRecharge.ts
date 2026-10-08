@@ -1183,6 +1183,11 @@ export function useAutoRecharge() {
   }
 
   function selectJob(id: string) {
+    if (directOpen.running.value) {
+      error.value =
+        '当前网页仍在执行登录任务，请先完成或停止原任务，再切换执行记录；历史记录仍可在抽屉中查看。';
+      return;
+    }
     currentId.value = id;
     localAccess.value = null;
     const job = jobs.value.find((item) => item.id === id);
@@ -1416,13 +1421,20 @@ export function useAutoRecharge() {
   async function submitAutomaticCode(jobId: string) {
     autoCodeBusy.value = true;
     error.value = '';
+    const releaseSkippedAttempt = () => {
+      if (autoCodeSubmittedJobId.value !== jobId) autoCodeAttempted.delete(jobId);
+    };
     try {
       const code =
         loginMethod.value === 'saved'
           ? (await bankRechargeApi.totpCode(selectedBankAccountId.value)).token
           : await totp.freshCode();
       if (!/^[0-9]{6,8}$/.test(code)) throw new Error('2FA 验证码格式无效');
-      if (disposed || !needsCode.value || selected.value?.id !== jobId) return;
+      if (disposed || !needsCode.value || selected.value?.id !== jobId) {
+        releaseSkippedAttempt();
+        return;
+      }
+      if (autoCodeSubmittedJobId.value === jobId) return;
       if (directOpen.owns(jobId)) {
         directOpen.submitCode(jobId, code);
         autoCodeSubmittedJobId.value = jobId;
@@ -1430,7 +1442,16 @@ export function useAutoRecharge() {
         return;
       }
       const current = await access();
-      if (current.job.id !== jobId || disposed || !needsCode.value) return;
+      if (
+        current.job.id !== jobId ||
+        disposed ||
+        !needsCode.value ||
+        selected.value?.id !== jobId
+      ) {
+        releaseSkippedAttempt();
+        return;
+      }
+      if (autoCodeSubmittedJobId.value === jobId) return;
       await rechargeConnectorApi.submitCode(
         current.connectorUrl,
         current.connectorToken,
@@ -1448,7 +1469,7 @@ export function useAutoRecharge() {
       ) {
         autoCodeFailureJobId.value = jobId;
         error.value = getApiErrorMessage(cause);
-      }
+      } else releaseSkippedAttempt();
     } finally {
       autoCodeBusy.value = false;
     }

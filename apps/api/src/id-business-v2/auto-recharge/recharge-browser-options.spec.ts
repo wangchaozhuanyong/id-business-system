@@ -95,6 +95,37 @@ describe('窗口配置校验', () => {
       validateBrowserOptions({ ...legacy, sessionWaitMinutes: 10, sessionRetryLimit: 0 })
     ).toMatchObject({ sessionWaitMinutes: 10, sessionRetryLimit: 0 });
   });
+  it('旧 Mac JSON 归一为 Windows 11，保留代理、地区且不修改原记录', () => {
+    const legacy = { ...staticOptions, os: 'MacIntel', language: 'en-US' } as Record<
+      string,
+      unknown
+    >;
+    for (const key of ['coreVersion', 'osVersion', 'openWidth', 'openHeight']) delete legacy[key];
+    const original = { ...legacy };
+    expect(storedBrowserOptions(legacy)).toMatchObject({
+      os: 'Win32',
+      osVersion: '11',
+      coreVersion: '152',
+      openWidth: 1600,
+      openHeight: 1000,
+      staticHost: 'proxy.example',
+      language: 'en-US'
+    });
+    expect(legacy).toEqual(original);
+  });
+  it('新版显式平台、内核与窗口尺寸保留，读取不偷偷写入数据库', () => {
+    for (const os of ['MacIntel', 'Linux x86_64']) {
+      const options = {
+        ...staticOptions,
+        os,
+        osVersion: '',
+        coreVersion: '150',
+        openWidth: 1800,
+        openHeight: 1100
+      };
+      expect(storedBrowserOptions(options)).toEqual(options);
+    }
+  });
   it.each([
     { sessionWaitMinutes: 0 },
     { sessionWaitMinutes: 11 },
@@ -102,6 +133,18 @@ describe('窗口配置校验', () => {
     { sessionRetryLimit: -1 },
     { sessionRetryLimit: 3 },
     { sessionRetryLimit: true },
+    { coreVersion: 'latest' },
+    { coreVersion: 152 },
+    { coreVersion: '95' },
+    { coreVersion: '152.0.0' },
+    { osVersion: '11,10' },
+    { osVersion: '' },
+    { openWidth: 799 },
+    { openWidth: 7681 },
+    { openWidth: 1600.5 },
+    { openWidth: true },
+    { openHeight: 599 },
+    { openHeight: 4321 },
     { proxyMode: 'direct' },
     { os: 'Android' },
     { dynamicProvider: 'other' },

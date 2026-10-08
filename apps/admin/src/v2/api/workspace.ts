@@ -51,7 +51,8 @@ import type {
   V2WorkspaceShortcutList,
   V2QuickActionInput,
   V2QuickActionItem,
-  V2QuickActionList
+  V2QuickActionList,
+  V2QuickActionOrderInput
 } from '@apple-business/shared';
 import { isAxiosError } from 'axios';
 import { http, request, type ApiRequestOptions } from '@/api/client';
@@ -61,6 +62,9 @@ export const idBusinessV2WorkspaceApi = {
     return request<V2QuickActionList>(
       http.get('/id-business-v2/quick-actions', { signal: options.signal })
     );
+  },
+  reorderQuickActions(input: V2QuickActionOrderInput) {
+    return request<V2QuickActionList>(http.put('/id-business-v2/quick-actions/order', input));
   },
   createQuickAction(input: V2QuickActionInput) {
     return request<V2QuickActionItem>(http.post('/id-business-v2/quick-actions', input));

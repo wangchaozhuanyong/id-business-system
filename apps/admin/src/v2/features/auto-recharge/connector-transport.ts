@@ -101,6 +101,7 @@ export function requireConnectorHealth(result: Record<string, unknown>) {
     ![
       'browser-catalog',
       'browser-options',
+      'browser-profile-v2',
       'session-load-retry',
       'same-window-page-refresh',
       'payment-unknown-resolution',

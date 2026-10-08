@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
-import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
+import { normalizeV2RechargeBrowserOptions } from '@apple-business/shared';
 import type {
   UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeBitBrowserSettings
@@ -33,7 +33,7 @@ const formFromSettings = (settings?: V2RechargeBitBrowserSettings): BitBrowserSe
   tagName: settings?.tagName ?? '申请gpt',
   proxyType: settings?.proxyType ?? 'http',
   dynamicProxyUrl: '',
-  browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, ...settings?.browserOptions },
+  browserOptions: normalizeV2RechargeBrowserOptions(settings?.browserOptions),
   staticProxyUsername: '',
   staticProxyPassword: '',
   clearStaticProxyCredentials: false
@@ -58,6 +58,11 @@ export function useRechargeBrowserSettings(
       };
     }
   );
+  const wasDirty = JSON.stringify(settingsForm.value) !== savedSnapshot.value;
+  settingsForm.value.browserOptions = normalizeV2RechargeBrowserOptions(
+    settingsForm.value.browserOptions
+  );
+  if (!wasDirty) savedSnapshot.value = JSON.stringify(settingsForm.value);
   const settingsDirty = computed(() => JSON.stringify(settingsForm.value) !== savedSnapshot.value);
   const settingsQuery = useV2ModuleQuery<V2RechargeBitBrowserSettings>({
     moduleKey: 'auto-recharge',

@@ -154,6 +154,7 @@ async def _execute_profiles(job, client, target, playwright, owned):
         endpoint = await asyncio.to_thread(client.open_profile, profile_id)
         job.progress("bitbrowser_profile_opened")
         browser = await playwright.chromium.connect_over_cdp(endpoint)
+        bitbrowser_options.verify_runtime_version(getattr(browser, "version", None), options["coreVersion"])
         if not browser.contexts:
             raise Stop("bitbrowser_context_missing")
         job.context = browser.contexts[0]

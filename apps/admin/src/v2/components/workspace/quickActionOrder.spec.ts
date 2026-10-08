@@ -2,26 +2,29 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { V2QuickActionItem } from '@apple-business/shared';
 import {
   quickActionOrderKey,
+  clearLegacyQuickActionOrder,
   readQuickActionOrder,
-  sortQuickActions,
-  writeQuickActionOrder
+  sortQuickActions
 } from './quickActionOrder';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('personal quick action order', () => {
-  it('keeps each user order separate and stores only record identifiers', () => {
-    const values = new Map<string, string>();
+  it('reads previous per-user order and removes only the migrated user key', () => {
+    const values = new Map<string, string>([
+      [quickActionOrderKey('user-a'), '["second","first"]'],
+      [quickActionOrderKey('user-b'), '["first","second"]']
+    ]);
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => values.set(key, value)
+      removeItem: (key: string) => values.delete(key)
     });
-    writeQuickActionOrder('user-a', ['second', 'first']);
-    writeQuickActionOrder('user-b', ['first', 'second']);
     expect(readQuickActionOrder('user-a')).toEqual(['second', 'first']);
     expect(readQuickActionOrder('user-b')).toEqual(['first', 'second']);
-    expect(values.get(quickActionOrderKey('user-a'))).toBe('["second","first"]');
     expect(readQuickActionOrder('')).toEqual([]);
+    clearLegacyQuickActionOrder('user-a');
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(false);
+    expect(values.get(quickActionOrderKey('user-b'))).toBe('["first","second"]');
   });
 
   it('ignores deleted identifiers, keeps new items at the end and does not mutate fetched data', () => {
@@ -50,13 +53,13 @@ describe('personal quick action order', () => {
     expect(readQuickActionOrder('user-a')).toEqual([]);
   });
 
-  it('reports failed writes instead of claiming that an unsaved order succeeded', () => {
+  it('does not fail a confirmed database save when old browser data cannot be removed', () => {
     vi.stubGlobal('localStorage', {
-      setItem: () => {
+      removeItem: () => {
         throw new Error('quota');
       }
     });
-    expect(() => writeQuickActionOrder('user-a', ['first'])).toThrow('浏览器无法保存顺序');
-    expect(() => writeQuickActionOrder('', ['first'])).toThrow('无法识别当前用户');
+    expect(() => clearLegacyQuickActionOrder('user-a')).not.toThrow();
+    expect(() => clearLegacyQuickActionOrder('')).not.toThrow();
   });
 });

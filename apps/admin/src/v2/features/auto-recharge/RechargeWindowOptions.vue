@@ -1,12 +1,52 @@
 <template>
   <fieldset>
     <legend>系统、语言与地区</legend>
+    <el-form-item label="浏览器内核版本" prop="browserOptions.coreVersion" required>
+      <el-input
+        v-model="options.coreVersion"
+        inputmode="numeric"
+        maxlength="3"
+        aria-label="浏览器内核版本"
+      />
+      <p class="recharge-settings-hint">
+        默认 152；请使用当前比特浏览器中已安装的版本，更新客户端后可修改。浏览器标识随内核生成。
+      </p>
+    </el-form-item>
     <el-form-item label="操作系统">
       <el-select v-model="options.os" aria-label="选择操作系统">
         <el-option label="苹果电脑（macOS）" value="MacIntel" />
         <el-option label="Windows 电脑" value="Win32" />
         <el-option label="Linux 电脑" value="Linux x86_64" />
       </el-select>
+    </el-form-item>
+    <el-form-item
+      v-if="options.os === 'Win32'"
+      label="Windows 版本"
+      prop="browserOptions.osVersion"
+      required
+    >
+      <el-select v-model="options.osVersion" aria-label="Windows 版本">
+        <el-option label="Windows 11" value="11" />
+        <el-option label="Windows 10" value="10" />
+      </el-select>
+    </el-form-item>
+    <el-form-item label="窗口宽度（像素）" prop="browserOptions.openWidth" required>
+      <el-input-number
+        v-model="options.openWidth"
+        :min="800"
+        :max="7680"
+        :precision="0"
+        aria-label="窗口宽度"
+      />
+    </el-form-item>
+    <el-form-item label="窗口高度（像素）" prop="browserOptions.openHeight" required>
+      <el-input-number
+        v-model="options.openHeight"
+        :min="600"
+        :max="4320"
+        :precision="0"
+        aria-label="窗口高度"
+      />
     </el-form-item>
     <el-form-item label="浏览器语言来源">
       <el-switch
@@ -176,9 +216,16 @@
   </fieldset>
 </template>
 <script setup lang="ts">
+import { watch } from 'vue';
 import type { V2RechargeBrowserOptions } from './contracts';
 import { rechargeLanguages as languages } from './recharge-browser-presentation';
 const options = defineModel<V2RechargeBrowserOptions>({ required: true });
+watch(
+  () => options.value.os,
+  (os) => {
+    options.value.osVersion = os === 'Win32' ? '11' : '';
+  }
+);
 defineProps<{ registration?: boolean }>();
 const timezones = [
   { label: '中国 · 上海', value: 'Asia/Shanghai' },

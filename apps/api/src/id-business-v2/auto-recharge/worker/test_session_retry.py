@@ -307,7 +307,7 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.client.open_profile.return_value = 'http://127.0.0.1:12345'
         self.client.post.return_value = {}
         self.playwright = SimpleNamespace(chromium=SimpleNamespace(
-            connect_over_cdp=AsyncMock(return_value=SimpleNamespace(contexts=[MagicMock()]))))
+            connect_over_cdp=AsyncMock(return_value=SimpleNamespace(contexts=[MagicMock()], version="152.0.0"))))
 
     async def execute(self, results):
         with patch.object(bitbrowser_retry.pay, 'run_flow', new=AsyncMock(side_effect=results)) as flow:

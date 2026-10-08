@@ -15,8 +15,9 @@
       :items="items"
       :phase="query.phase.value"
       :error="queryError"
+      :order-migration-error="migrationError"
       :writes-allowed="auth.writesAllowed"
-      :refresh="query.refresh"
+      :refresh="refresh"
       :save="save"
       :remove="remove"
       :reorder="reorder"
@@ -25,58 +26,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { DocumentCopy } from '@element-plus/icons-vue';
-import type { V2QuickActionInput, V2QuickActionList } from '@apple-business/shared';
+import type { V2QuickActionInput } from '@apple-business/shared';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
-import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2QuickActionsDrawer from './V2QuickActionsDrawer.vue';
-import {
-  quickActionOrderKey,
-  readQuickActionOrder,
-  sortQuickActions,
-  writeQuickActionOrder
-} from './quickActionOrder';
+import { useV2QuickActions } from './useV2QuickActions';
 
 const auth = useAuthStore();
 const drawerOpen = ref(false);
-const orderedIds = ref<string[]>([]);
 watch(
   () => auth.user?.id ?? '',
-  (userId) => {
+  () => {
     drawerOpen.value = false;
-    orderedIds.value = readQuickActionOrder(userId);
   },
   { immediate: true }
 );
 
-function syncOrder(event: StorageEvent) {
-  const userId = auth.user?.id;
-  if (userId && (event.key === null || event.key === quickActionOrderKey(userId))) {
-    orderedIds.value = readQuickActionOrder(userId);
-  }
-}
-onMounted(() => window.addEventListener('storage', syncOrder));
-onBeforeUnmount(() => window.removeEventListener('storage', syncOrder));
-const query = useV2ModuleQuery<V2QuickActionList>({
-  moduleKey: 'profile',
-  scope: 'workspace',
-  key: () => `quick-actions:${auth.user?.id ?? 'anonymous'}`,
-  enabled: () => drawerOpen.value && Boolean(auth.user?.id),
-  trackRouteData: false,
-  query: ({ signal }) => idBusinessV2WorkspaceApi.listQuickActions({ signal })
+const { query, items, migrationError, reorder, refresh } = useV2QuickActions({
+  userId: () => auth.user?.id ?? '',
+  writesAllowed: () => auth.writesAllowed,
+  open: drawerOpen
 });
-const items = computed(() => sortQuickActions(query.data.value?.items ?? [], orderedIds.value));
 const queryError = computed(() => (query.error.value ? getApiErrorMessage(query.error.value) : ''));
-
-async function reorder(ids: string[]) {
-  if (!auth.writesAllowed) throw new Error('当前连接处于只读状态，恢复后请重试');
-  writeQuickActionOrder(auth.user?.id ?? '', ids);
-  orderedIds.value = ids;
-}
 
 async function save(input: V2QuickActionInput, id?: string) {
   try {

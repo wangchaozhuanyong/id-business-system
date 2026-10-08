@@ -1,7 +1,10 @@
 import { Body, Controller, Delete, Get, Header, Param, Post, Put, Req } from '@nestjs/common';
 import { CurrentUser } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import type { IdBusinessV2QuickActionDto } from './dto/id-business-v2-quick-action.dto';
+import type {
+  IdBusinessV2QuickActionDto,
+  ReorderIdBusinessV2QuickActionsDto
+} from './dto/id-business-v2-quick-action.dto';
 import { IdBusinessV2QuickActionService } from './id-business-v2-quick-action.service';
 
 @Controller('id-business-v2/quick-actions')
@@ -22,6 +25,16 @@ export class IdBusinessV2QuickActionController {
     @Req() request?: { requestId?: string }
   ) {
     return this.service.create(dto, operator, request?.requestId);
+  }
+
+  @Put('order')
+  @Header('Cache-Control', 'private, no-store')
+  reorder(
+    @Body() dto: ReorderIdBusinessV2QuickActionsDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.service.reorder(dto, operator, request?.requestId);
   }
 
   @Put(':id')

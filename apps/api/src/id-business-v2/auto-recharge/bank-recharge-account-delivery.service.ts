@@ -11,8 +11,7 @@ import { IdBusinessV2VendureMailboxService } from '../workspace/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
 import { bankRechargeObject } from './bank-recharge-validation';
-import { accountCopySuffix } from './account-copy-settings';
-import { storedBrowserOptions } from './recharge-browser-options';
+import { ACCOUNT_COPY_SETTINGS_OWNER_ID } from './account-copy-settings';
 
 @Injectable()
 export class BankRechargeAccountDeliveryService {
@@ -32,7 +31,7 @@ export class BankRechargeAccountDeliveryService {
 
   async copySettings(operator: AuthenticatedUser) {
     this.requireAdmin(operator);
-    return { suffix: accountCopySuffix((await this.settings.find(operator.id))?.browserOptions) };
+    return { suffix: await this.settings.findAccountCopySuffix() };
   }
 
   async updateCopySettings(value: unknown, operator: AuthenticatedUser) {
@@ -51,26 +50,17 @@ export class BankRechargeAccountDeliveryService {
     const suffix = input.suffix;
     await this.transactions.execute(
       async (tx) => {
-        const before = await this.settings.findInTransaction(tx, operator.id);
-        const options = {
-          ...storedBrowserOptions(before?.browserOptions),
-          ...(before?.browserOptions &&
-          typeof before.browserOptions === 'object' &&
-          !Array.isArray(before.browserOptions)
-            ? before.browserOptions
-            : {})
-        };
-        await this.settings.upsert(tx, operator.id, {
-          browserOptions: toV2JsonDocument({ ...options, accountCopySuffix: suffix })
+        await this.settings.upsert(tx, ACCOUNT_COPY_SETTINGS_OWNER_ID, {
+          browserOptions: toV2JsonDocument({ accountCopySuffix: suffix })
         });
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.auto_recharge.account_copy.settings',
           objectType: 'recharge_browser_settings',
-          objectId: operator.id,
+          objectId: ACCOUNT_COPY_SETTINGS_OWNER_ID,
           afterData: { suffixLength: suffix.length },
-          remark: '设置账号资料复制后缀'
+          remark: '设置所有管理员共用的账号资料复制后缀'
         });
       },
       { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
@@ -87,7 +77,7 @@ export class BankRechargeAccountDeliveryService {
         const account = await this.accounts.requireActive(tx, id);
         if (this.encryption.decrypt(account.emailEncrypted) !== identity.email)
           throw new BadRequestException('账号邮箱已变更，请重新复制');
-        const row = await this.settings.findInTransaction(tx, operator.id);
+        const suffix = await this.settings.findAccountCopySuffix(tx);
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -101,7 +91,6 @@ export class BankRechargeAccountDeliveryService {
           },
           remark: '复制账号资料及买家查询码'
         });
-        const suffix = accountCopySuffix(row?.browserOptions);
         return {
           text: `${identity.email}----${this.encryption.decrypt(account.passwordEncrypted) ?? ''}----${this.encryption.decrypt(account.totpSecretEncrypted) ?? ''}----${alias.buyerQueryCode}${suffix ? `\n${suffix}` : ''}`
         };

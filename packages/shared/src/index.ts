@@ -124,6 +124,7 @@ export {
   type V2QuickActionInput,
   type V2QuickActionItem,
   type V2QuickActionList,
+  type V2QuickActionOrderInput,
   type ResolveV2MediaInput,
   type RotateV2ManagedMailboxQueryCodeResult,
   type CreateV2RelayJobInput,

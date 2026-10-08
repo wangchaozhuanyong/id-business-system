@@ -116,6 +116,7 @@ class BitBrowserClient:
         if not isinstance(token, str) or len(token) < 16 or "\n" in token or "\r" in token:
             raise Stop("bitbrowser_api_token_invalid")
         self.token = token
+        self.profile_fingerprints = {}
 
     def post(self, path, body):
         request = Request(
@@ -163,6 +164,7 @@ class BitBrowserClient:
             raise Stop("bitbrowser_profile_unverified")
         if len(profile_id) != 32:
             raise Stop("bitbrowser_profile_unverified")
+        self.profile_fingerprints[profile_id] = options["browserFingerPrint"]
         try:
             self.post("/browserTag/updateRelation", {
                 "browserId": profile_id, "addTagIds": [tag_id], "removeTagIds": []
@@ -197,7 +199,12 @@ class BitBrowserClient:
                     "syncTabs", "syncCookies", "syncLocalStorage",
                     "syncIndexedDb", "syncAuthorization"))):
             raise Stop("bitbrowser_profile_sync_unverified")
+        expected = self.profile_fingerprints.get(profile_id)
+        if expected is not None:
+            bitbrowser_options.verify_profile_configuration(detail, expected)
         data = self.post("/browser/open", {"id": profile_id, "queue": True})
+        if expected is not None:
+            bitbrowser_options.verify_profile_configuration(detail, expected, data)
         endpoint = (data.get("ws") or data.get("http")) if isinstance(data, dict) else None
         if not isinstance(endpoint, str) or not endpoint.startswith(("ws://", "http://")):
             raise Stop("bitbrowser_debug_endpoint_missing")
@@ -754,7 +761,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self.reply(200, {"ok": True, "version": 3,
                                     "service": "id-business-v2-auto-recharge-connector",
-                                    "capabilities": ["browser-catalog", "browser-options", "session-load-retry",
+                                    "capabilities": ["browser-catalog", "browser-options", "browser-profile-v2", "session-load-retry",
                                                      "same-window-page-refresh", "payment-unknown-resolution",
                                                      "prepayment-page-recovery", "stale-owned-profile-cleanup",
                                                      "password-login", "login-code", "account-registration"],

@@ -171,6 +171,13 @@ export interface V2QuickActionItem {
 
 export interface V2QuickActionList {
   items: V2QuickActionItem[];
+  hasCustomOrder?: boolean;
+}
+
+export interface V2QuickActionOrderInput {
+  quickActionIds: string[];
+  expectedQuickActionIds: string[];
+  initializeOnly?: boolean;
 }
 
 export interface V2QuickActionInput {

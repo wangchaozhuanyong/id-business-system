@@ -1,4 +1,4 @@
-import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
+import { normalizeV2RechargeBrowserOptions } from '@apple-business/shared';
 import type { V2RechargeBitBrowserOpenLaunch, V2RechargeBrowserCatalog } from './contracts';
 
 export type DirectBrowserSettings = V2RechargeBitBrowserOpenLaunch['bitBrowser'];
@@ -14,6 +14,10 @@ const messages = {
   bitbrowser_direct_command_failed: '窗口控制失败，请检查原窗口；本次不会自动重建或重复登录。',
   bitbrowser_direct_cancelled: '本次网页直连操作已停止，已打开的窗口保留供手动检查。',
   bitbrowser_profile_sync_unverified: '无法确认窗口已关闭登录资料同步，本次已停止登录。',
+  bitbrowser_profile_configuration_mismatch:
+    '比特窗口的内核、系统或尺寸与所选配置不一致，本次已停止登录。请检查客户端可用内核和窗口设置。',
+  bitbrowser_profile_configuration_unverified:
+    '无法确认比特窗口实际使用的内核版本，本次已停止登录。请更新客户端后重试。',
   official_login_email_mismatch: '官网已登录账号与本次选择不一致，本次已停止。',
   official_login_not_verified: '未能确认官网账号登录成功，请检查原窗口后重试。',
   invalid_session_json: '授权 JSON 缺少有效的会话、用户或账号资料，请重新授权。'
@@ -129,10 +133,17 @@ export async function directBrowserCatalog(
   };
 }
 export function directProfileOptions(settings: DirectBrowserSettings) {
-  const o = { ...V2_RECHARGE_BROWSER_DEFAULTS, ...settings.browserOptions };
+  const o = normalizeV2RechargeBrowserOptions(settings.browserOptions);
   const fingerprint: Record<string, unknown> = {
+    coreProduct: 'chrome',
+    coreVersion: o.coreVersion,
     ostype: 'PC',
     os: o.os,
+    osVersion: o.osVersion,
+    version: o.coreVersion,
+    userAgent: '',
+    openWidth: o.openWidth,
+    openHeight: o.openHeight,
     isIpCreateTimeZone: o.timezoneFromIp,
     isIpCreatePosition: o.positionFromIp,
     isIpCreateLanguage: o.languageFromIp,
@@ -186,4 +197,50 @@ export function directProfileOptions(settings: DirectBrowserSettings) {
           proxyPassword: settings.staticProxyCredentials?.password ?? ''
         })
   };
+}
+
+export function verifyDirectProfileConfiguration(
+  detail: Record<string, unknown>,
+  settings: DirectBrowserSettings,
+  opened?: Record<string, unknown>
+) {
+  const expected = directProfileOptions(settings).browserFingerPrint;
+  const fingerprint = detail.browserFingerPrint;
+  if (fingerprint != null && (typeof fingerprint !== 'object' || Array.isArray(fingerprint))) {
+    throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+  }
+  const observed = (fingerprint ?? {}) as Record<string, unknown>;
+  for (const key of [
+    'coreProduct',
+    'coreVersion',
+    'os',
+    'osVersion',
+    'version',
+    'openWidth',
+    'openHeight'
+  ]) {
+    const value = observed[key];
+    if (expected[key] === '' || value == null || value === '') continue;
+    const matches =
+      key === 'coreVersion' || key === 'version'
+        ? /^\d+(?:\.\d+)*$/.test(String(value)) && String(value).split('.')[0] === expected[key]
+        : String(value) === String(expected[key]);
+    if (!matches) {
+      throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+    }
+  }
+  const userAgent = typeof observed.userAgent === 'string' ? observed.userAgent : '';
+  const major = /(?:Chrome|Chromium)\/(\d+)/.exec(userAgent);
+  if (major && major[1] !== expected.coreVersion) {
+    throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+  }
+  const actualCore = opened?.coreVersion;
+  if (
+    actualCore != null &&
+    actualCore !== '' &&
+    (!/^\d+(?:\.\d+)*$/.test(String(actualCore)) ||
+      String(actualCore).split('.')[0] !== expected.coreVersion)
+  ) {
+    throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+  }
 }

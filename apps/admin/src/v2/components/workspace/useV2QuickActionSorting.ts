@@ -1,6 +1,7 @@
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
 import type { V2QuickActionItem } from '@apple-business/shared';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { sortQuickActions } from './quickActionOrder';
 
 export function useV2QuickActionSorting(options: {
@@ -19,12 +20,23 @@ export function useV2QuickActionSorting(options: {
   let pointerX = 0;
   let pointerY = 0;
   let frame = 0;
+  let saveRevision = 0;
+  let disposed = false;
 
   const customItems = computed(() => sortQuickActions(options.items(), orderedIds.value));
   watch(options.items, () => {
     cancelDrag();
     if (!ordering.value) orderedIds.value = [];
   });
+  watch(
+    () => sessionCoordinator.identityEpoch.value,
+    () => {
+      saveRevision += 1;
+      cancelDrag();
+      orderedIds.value = [];
+      ordering.value = false;
+    }
+  );
 
   function rowClass({ row }: { row: V2QuickActionItem }) {
     if (drag.value?.id === row.id) return 'is-sorting';
@@ -104,24 +116,35 @@ export function useV2QuickActionSorting(options: {
     if (ids.every((id, index) => id === customItems.value[index]?.id)) return;
     orderedIds.value = ids;
     ordering.value = true;
+    const revision = ++saveRevision;
+    const epoch = sessionCoordinator.identityEpoch.value;
+    const isCurrent = () =>
+      !disposed && revision === saveRevision && epoch === sessionCoordinator.identityEpoch.value;
     try {
       await options.reorder(ids);
+      if (!isCurrent()) return;
       orderedIds.value = [];
-      ElMessage.success('顺序已保存');
+      ElMessage.success('顺序已保存到当前账号');
     } catch (error) {
+      if (!isCurrent()) return;
       orderedIds.value = previous;
       ElMessage.error(error instanceof Error ? error.message : '顺序保存失败，请重新拖动重试');
     } finally {
-      ordering.value = false;
-      await nextTick();
-      const handles = [tableScroll.value, cardsScroll.value].flatMap((root) => [
-        ...(root?.querySelectorAll<HTMLElement>('[data-sort-id]') ?? [])
-      ]);
-      handles
-        .find(
-          (candidate) => candidate.dataset.sortId === focusId && candidate.getClientRects().length
-        )
-        ?.focus({ preventScroll: true });
+      if (isCurrent()) {
+        ordering.value = false;
+        await nextTick();
+        if (isCurrent()) {
+          const handles = [tableScroll.value, cardsScroll.value].flatMap((root) => [
+            ...(root?.querySelectorAll<HTMLElement>('[data-sort-id]') ?? [])
+          ]);
+          handles
+            .find(
+              (candidate) =>
+                candidate.dataset.sortId === focusId && candidate.getClientRects().length
+            )
+            ?.focus({ preventScroll: true });
+        }
+      }
     }
   }
 
@@ -162,7 +185,11 @@ export function useV2QuickActionSorting(options: {
     await saveOrder(ids, id);
   }
 
-  onBeforeUnmount(cancelDrag);
+  onScopeDispose(() => {
+    disposed = true;
+    saveRevision += 1;
+    cancelDrag();
+  });
   return {
     ordering,
     customItems,

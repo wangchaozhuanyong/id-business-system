@@ -1,19 +1,19 @@
 /** Runs only inside the newly created official window. Returns no cookies, tokens or passwords. */
 export async function inspectLoginPage(
-  action: 'inspect' | 'email' | 'password' | 'code' | 'clear',
-  value = ''
+  action: 'inspect' | 'login' | 'email' | 'password' | 'code' | 'submit' | 'clear',
+  value = '',
+  context?: { stage?: 'email' | 'password' | 'code'; email?: string }
 ) {
   const official =
     location.protocol === 'https:' &&
     ['chatgpt.com', 'auth.openai.com', 'auth0.openai.com'].includes(location.hostname);
   if (!official)
     return { kind: location.href === 'about:blank' ? ('loading' as const) : ('manual' as const) };
-  if (action === 'inspect' && document.readyState !== 'complete')
-    return { kind: 'loading' as const };
+  if (action !== 'clear' && document.readyState !== 'complete') return { kind: 'loading' as const };
   const selectors = {
     email: 'input[type="email"], input[name="username"], input[autocomplete="username"]',
     password: 'input[type="password"], input[autocomplete="current-password"]',
-    code: 'input[autocomplete="one-time-code"], input[name="code"], input[name*="otp"]'
+    code: 'input[autocomplete="one-time-code"], input[name="code"], input[name*="otp"], input[name="verificationCode"]'
   };
   const visible = (selector: string) =>
     Array.from(document.querySelectorAll<HTMLInputElement>(selector)).filter(
@@ -33,15 +33,85 @@ export async function inspectLoginPage(
       for (const input of visible(selectors[key])) write(input, '');
     return { kind: 'cleared' as const };
   }
+  if (/Just a moment|Verify.*human|安全验证|请稍候/i.test(document.title))
+    return { kind: 'manual' as const };
+  const loginControls = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('button, a')).filter((control) => {
+      if (
+        !control.getClientRects().length ||
+        getComputedStyle(control).visibility === 'hidden' ||
+        control.matches(':disabled, [aria-disabled="true"]') ||
+        !/^(log\s*in|login|登录|登入)$/i.test((control.textContent ?? '').trim())
+      )
+        return false;
+      if (control instanceof HTMLAnchorElement) {
+        const destination = new URL(control.href);
+        return (
+          destination.protocol === 'https:' &&
+          ['chatgpt.com', 'auth.openai.com', 'auth0.openai.com'].includes(destination.hostname)
+        );
+      }
+      return location.hostname === 'chatgpt.com';
+    });
+  if (action === 'login') {
+    if (Object.values(selectors).some((selector) => visible(selector).length))
+      return { kind: 'loading' as const };
+    const controls = loginControls();
+    if (controls.length !== 1) return { kind: 'manual' as const };
+    controls[0]!.click();
+    return { kind: 'submitted' as const };
+  }
   if (action !== 'inspect') {
-    const matches = visible(selectors[action]);
-    if (matches.length !== 1 || !matches[0]!.closest('form')) return { kind: 'manual' as const };
+    const stage = action === 'submit' ? context?.stage : action;
+    if (!stage) return { kind: 'manual' as const };
+    const matches = visible(selectors[stage]);
+    const input = matches[0];
+    const form = input?.form;
+    if (matches.length !== 1 || !input || !form) return { kind: 'manual' as const };
+    const formEmails = Array.from(form.querySelectorAll<HTMLInputElement>(selectors.email)).filter(
+      (email) => email.getClientRects().length && getComputedStyle(email).visibility !== 'hidden'
+    );
+    if (stage === 'password') {
+      if (formEmails.length > 1 || (formEmails.length && !context?.email))
+        return { kind: 'manual' as const };
+      const email = formEmails[0];
+      if (
+        email &&
+        (action === 'submit' || email.disabled || email.readOnly) &&
+        email.value.trim().toLowerCase() !== context!.email!.trim().toLowerCase()
+      )
+        return { kind: 'manual' as const };
+    }
+    if (action === 'submit') {
+      const controls = Array.from(
+        form.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+          'button[type="submit"], button:not([type]), input[type="submit"]'
+        )
+      ).filter(
+        (control) =>
+          control.form === form &&
+          control.getClientRects().length &&
+          getComputedStyle(control).visibility !== 'hidden'
+      );
+      if (controls.length !== 1) return { kind: 'manual' as const };
+      if (
+        input.value !== value ||
+        !form.checkValidity() ||
+        controls[0]!.disabled ||
+        controls[0]!.getAttribute('aria-disabled') === 'true'
+      )
+        return { kind: 'loading' as const };
+      controls[0]!.click();
+      return { kind: 'submitted' as const };
+    }
+    if (action === 'password') {
+      const email = formEmails[0];
+      if (email && !email.disabled && !email.readOnly) write(email, context!.email!);
+    }
     write(matches[0]!, value);
     matches[0]!.focus();
     return { kind: 'filled' as const };
   }
-  if (/Just a moment|Verify.*human|安全验证|请稍候/i.test(document.title))
-    return { kind: 'manual' as const };
   let unauthenticated = false;
   if (location.hostname === 'chatgpt.com') {
     try {
@@ -105,10 +175,15 @@ export async function inspectLoginPage(
     if (inputs.length > 1) return { kind: 'manual' as const };
     if (inputs.length === 1) return { kind };
   }
+  if (unauthenticated && loginControls().length === 1) return { kind: 'login' as const };
   return { kind: unauthenticated ? ('unauthenticated' as const) : ('loading' as const) };
 }
 
-export function loginPageExpression(action: Parameters<typeof inspectLoginPage>[0], value = '') {
-  return `(${inspectLoginPage.toString()})(${JSON.stringify(action)},${JSON.stringify(value)})`;
+export function loginPageExpression(
+  action: Parameters<typeof inspectLoginPage>[0],
+  value = '',
+  context?: Parameters<typeof inspectLoginPage>[2]
+) {
+  return `(${inspectLoginPage.toString()})(${JSON.stringify(action)},${JSON.stringify(value)},${JSON.stringify(context)})`;
 }
 export type LoginPageState = Awaited<ReturnType<typeof inspectLoginPage>>;

@@ -57,8 +57,19 @@
             ? '正在保存顺序…'
             : keyword.trim()
               ? '清空搜索后可拖拽排序。'
-              : '拖动左侧手柄调整顺序，自动保存在当前浏览器；也可选中手柄，用上下方向键调整。'
+              : '拖动左侧手柄调整顺序，保存到当前账号并跨电脑同步；也可选中手柄，用上下方向键调整。'
         }}
+      </p>
+
+      <p v-if="orderMigrationError" class="v2-quick-actions-drawer__notice" role="alert">
+        {{ orderMigrationError }}
+        <AppButton
+          variant="ghost"
+          size="small"
+          :disabled="!writesAllowed || mutationPending || phase !== 'ready'"
+          @click="refresh"
+          >重试同步</AppButton
+        >
       </p>
 
       <p v-if="!writesAllowed" class="v2-quick-actions-drawer__notice" role="status">
@@ -346,6 +357,7 @@ const props = defineProps<{
   items: V2QuickActionItem[];
   phase: V2QueryPhase;
   error: string;
+  orderMigrationError?: string;
   writesAllowed: boolean;
   refresh: () => Promise<unknown>;
   save: (input: V2QuickActionInput, id?: string) => Promise<void>;
@@ -384,6 +396,7 @@ const mutationPending = computed(() => saving.value || ordering.value || Boolean
 const canReorder = computed(
   () =>
     props.writesAllowed &&
+    props.phase === 'ready' &&
     !mutationPending.value &&
     sort.value === 'custom' &&
     !keyword.value.trim()

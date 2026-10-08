@@ -21,7 +21,7 @@ class ConnectorHealthTests(unittest.TestCase):
             handler.reply.assert_called_once_with(200, {
                 'ok': True, 'version': 3, 'service': 'id-business-v2-auto-recharge-connector',
                 'capabilities': [
-                    'browser-catalog', 'browser-options', 'session-load-retry',
+                    'browser-catalog', 'browser-options', 'browser-profile-v2', 'session-load-retry',
                     'same-window-page-refresh', 'payment-unknown-resolution',
                     'prepayment-page-recovery', 'stale-owned-profile-cleanup',
                     'password-login', 'login-code', 'account-registration'
