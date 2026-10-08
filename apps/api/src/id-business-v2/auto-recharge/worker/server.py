@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import base64
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import signal
 import tempfile
 import threading
 import time
@@ -50,9 +53,10 @@ PUBLIC_KEYS.update("handoff_session_id handoff_generation".split())
 
 class PersistentBrowserRuntime:
     """Playwright 固定在同一事件循环；所属任务独占本执行器的浏览器进程。"""
-    def __init__(self, browser_factory=None, *, registration_owner=False):
+    def __init__(self, browser_factory=None, *, registration_owner=False, executable_path=None):
         self.browser_factory = browser_factory
         self.registration_owner = registration_owner
+        self.executable_path = executable_path
         self.loop = None
         self.thread = None
         self.playwright = None
@@ -76,7 +80,10 @@ class PersistentBrowserRuntime:
         if self.playwright is None:
             from playwright.async_api import async_playwright
             self.playwright = await async_playwright().start()
-        return await fingerprint_runtime.launch_fingerprint_browser(self.playwright, proxy=proxy)
+        options = {"proxy": proxy}
+        if self.executable_path is not None:
+            options["executable_path"] = self.executable_path
+        return await fingerprint_runtime.launch_fingerprint_browser(self.playwright, **options)
 
     async def _ensure_browser(self):
         if self.browser is None or not self.browser.is_connected():
@@ -1112,13 +1119,74 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"ok": False})
 
 
-if __name__ == "__main__":
+def listener_host(value):
+    try:
+        return str(ipaddress.IPv4Address(value))
+    except ipaddress.AddressValueError:
+        raise argparse.ArgumentTypeError("监听地址必须是 IPv4 地址") from None
+
+
+def listener_port(value):
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("监听端口必须是 1 至 65535 的整数") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("监听端口必须是 1 至 65535 的整数")
+    return port
+
+
+def startup_options(argv=None):
+    parser = argparse.ArgumentParser(description="独立注册或充值执行器")
+    parser.add_argument("--host", type=listener_host, default="0.0.0.0")
+    parser.add_argument("--port", type=listener_port, default=8051)
+    parser.add_argument("--engine-path", type=Path)
+    options = parser.parse_args(argv)
+    if options.engine_path is not None:
+        options.engine_path = options.engine_path.expanduser().resolve()
+    return options
+
+
+def main(argv=None):
+    options = startup_options(argv)
     if WORKER_ROLE not in {"recharge", "registration"}:
         raise SystemExit("执行器类型无效")
     if len(TOKEN) < 32:
         raise SystemExit("执行器凭据未配置")
+    if not fingerprint_runtime.fingerprint_ready(options.engine_path):
+        raise SystemExit("指纹浏览器内核不存在")
+    # 先取得监听端口所有权；绑定失败时不能启动第二套注册窗口或浏览器。
+    listener = ThreadingHTTPServer((options.host, options.port), Handler)
     try:
+        BROWSER_RUNTIME.executable_path = options.engine_path
         BROWSER_RUNTIME.start()
-        ThreadingHTTPServer(("0.0.0.0", 8051), Handler).serve_forever()
+        listener.serve_forever()
     finally:
-        BROWSER_RUNTIME.stop()
+        try:
+            BROWSER_RUNTIME.stop()
+        finally:
+            listener.server_close()
+    return 0
+
+
+def cli(argv=None):
+    def interrupt(_signum, _frame):
+        # 终端信号及父进程转发可能重复到达，不能中断已开始的有界清理。
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise KeyboardInterrupt
+
+    # 仅 CLI 接管终止信号，确保 main 的 finally 能回收浏览器与监听端口。
+    previous_int = signal.signal(signal.SIGINT, interrupt)
+    previous_term = signal.signal(signal.SIGTERM, interrupt)
+    try:
+        return main(argv)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        signal.signal(signal.SIGINT, previous_int)
+        signal.signal(signal.SIGTERM, previous_term)
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())
