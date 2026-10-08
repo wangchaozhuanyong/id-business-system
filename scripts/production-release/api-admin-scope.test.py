@@ -988,7 +988,7 @@ class ReleaseFailureTests(unittest.TestCase):
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
                 if scope.MIGRATION_MODE:
-                    for name in [scope.MIGRATION_SCHEMA, *(scope.MIGRATION_ROOT + '/' + name for name in scope.migration_files(d, ROOT))]:
+                    for name in [scope.MIGRATION_SCHEMA, scope.MIGRATION_SEED, *(scope.MIGRATION_ROOT + '/' + name for name in scope.migration_files(d, ROOT))]:
                         raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
                         info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
                 if scope.REGISTRATION:
@@ -1643,6 +1643,14 @@ def migration_fixture(directory, *, old=False):
     raw = (subprocess.check_output(['git', 'show', migration.REGISTRATION_CURRENT + ':' + migration.MIGRATION_SCHEMA], cwd=ROOT)
            if old else (ROOT / migration.MIGRATION_SCHEMA).read_bytes())
     schema.write_bytes(raw)
+    (directory / migration.MIGRATION_SEED).write_bytes((ROOT / migration.MIGRATION_SEED).read_bytes())
+
+
+def docker_prisma_content(directory):
+    # Model the actual whole-directory Docker COPY, independently of the attestation allowlist.
+    root = directory / 'apps/api/prisma-mysql'
+    return '\n'.join(sorted(hashlib.sha256(path.read_bytes()).hexdigest() + '  /app/'
+        + path.relative_to(directory).as_posix() for path in root.rglob('*') if path.is_file()))
 
 
 def migration_database_fixture(*, applied=False):
@@ -1872,11 +1880,59 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
         with self.assertRaises(RuntimeError): migration.validate_proof(d, proof(), COMMIT, TREE)
 
     def test_migrate_content_is_prisma_only_not_an_admin_or_worker_root(self):
-        self.assertEqual(migration.migration_content(d, ROOT)['fileCount'], 48)
+        measured = migration.content_summary(d, 'migrate', docker_prisma_content(ROOT))
+        self.assertEqual(measured['fileCount'], 49)
+        self.assertEqual(measured['sha256'], '829ffff40a412bf2dd8dd46b22dcc02278f8323158fd8fdf104b1a5c307b974e')
+        self.assertEqual(migration.migration_content(d, ROOT), measured)
         self.assertIn('/app/apps/api/prisma-mysql', migration.content_command('migrate'))
         for path in ('/app/apps/api/dist/main.js', '/app/server.py', '/usr/share/nginx/html/index.html'):
             with self.assertRaisesRegex(RuntimeError, 'CONTENT_INVALID'):
                 migration.content_summary(d, 'migrate', '1' * 64 + '  ' + path)
+
+    def test_migration_seed_missing_changed_or_symlink_is_rejected(self):
+        for change in ('missing', 'changed', 'symlink'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+                directory = Path(temporary); migration_fixture(directory)
+                seed = directory / migration.MIGRATION_SEED
+                seed.unlink()
+                if change == 'changed': seed.write_text('changed seed')
+                elif change == 'symlink': seed.symlink_to(ROOT / migration.MIGRATION_SEED)
+                with self.assertRaisesRegex(RuntimeError, 'MIGRATION_(SOURCE_INVALID|SCOPE_CHANGED)'):
+                    migration.migration_content(d, directory)
+
+    def test_build_proof_uses_complete_docker_copy_and_rejects_image_drift(self):
+        content = docker_prisma_content(ROOT)
+        variants = {'complete': content,
+            'missing-seed': '\n'.join(line for line in content.splitlines() if not line.endswith('/seed.ts')),
+            'changed-seed': '\n'.join('0' * 64 + line[64:] if line.endswith('/seed.ts') else line for line in content.splitlines()),
+            'extra': content + '\n' + '0' * 64 + '  /app/apps/api/prisma-mysql/unexpected.ts'}
+        for change, measured in variants.items():
+            with self.subTest(change=change), tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, RELEASE_COMMIT=COMMIT, SOURCE_TREE=TREE,
+                    RELEASE_REPOSITORY=REPOSITORY, GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1'))
+                stack.enter_context(patch.object(Path, 'cwd', return_value=ROOT))
+                original = os.getcwd(); os.chdir(temporary)
+                try:
+                    def run(*args):
+                        if args == ('git', 'rev-parse', 'HEAD'): return COMMIT
+                        if args == ('git', 'rev-parse', 'HEAD^{tree}'): return TREE
+                        service = next(name for name in migration.IMAGE_SERVICES if args[3 if args[1] == 'image' else 8].endswith('-' + name))
+                        if args[1] == 'image':
+                            return json.dumps([{'Id': 'sha256:' + '1' * 64, 'Architecture': 'amd64', 'Config': {'Labels': {
+                                'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE}}}])
+                        return measured if service == 'migrate' else '1' * 64 + '  ' + (
+                            '/app/apps/api/dist/main.js' if service == 'api' else '/usr/share/nginx/html/index.html')
+                    controller = SimpleNamespace(require=d.require, run=run)
+                    if change == 'complete':
+                        with redirect_stdout(io.StringIO()): migration.build_proof(controller)
+                        value = json.loads((Path(temporary) / '.deploy/production-release' / migration.PROOF_FILE).read_text())
+                        self.assertEqual(value['images']['migrate']['fileCount'], 49)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'MIGRATION_IMAGE_CONTENT_CHANGED'):
+                            migration.build_proof(controller)
+                        self.assertFalse((Path(temporary) / '.deploy/production-release' / migration.PROOF_FILE).exists())
+                finally:
+                    os.chdir(original)
 
     def database_controller(self, value):
         return SimpleNamespace(require=d.require, current_job_database=MagicMock(return_value='fixture_db'),
@@ -2243,9 +2299,7 @@ class MigrationReadbackTests(unittest.TestCase):
             controller.compose = MagicMock(return_value=json.dumps(migration_database_fixture(applied=True)))
             image = {'Id': candidate['images']['migrate']['imageId'], 'Architecture': 'amd64', 'Config': {'Labels': {
                 'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE}}}
-            rows = {'/app/' + migration.MIGRATION_ROOT + '/' + name: digest for name, digest in migration.migration_files(d, current).items()}
-            rows['/app/' + migration.MIGRATION_SCHEMA] = hashlib.sha256((current / migration.MIGRATION_SCHEMA).read_bytes()).hexdigest()
-            content = '\n'.join(sorted(digest + '  ' + name for name, digest in rows.items()))
+            content = docker_prisma_content(current)
             controller.run = MagicMock(side_effect=lambda *args, **kw: json.dumps([image]) if args[:3] == ('docker', 'image', 'inspect') else content)
             state = migration.migration_database_state(controller, current)
             report = {'ok': True, 'checkCount': 49, 'violationCount': 0,

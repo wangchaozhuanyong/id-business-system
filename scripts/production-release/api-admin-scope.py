@@ -75,6 +75,8 @@ MIGRATION_NAME = '20261008180000_quick_action_user_order'
 MIGRATION_FILE = MIGRATION_NAME + '/migration.sql'
 MIGRATION_ROOT = 'apps/api/prisma-mysql/migrations'
 MIGRATION_SCHEMA = 'apps/api/prisma-mysql/schema.prisma'
+MIGRATION_SEED = 'apps/api/prisma-mysql/seed.ts'
+MIGRATION_SEED_SHA = 'ac9940a7977def1ed6eaad38ed154d81963ce6e877f02ffc07234fa61591096b'
 MIGRATION_IDENTITY = {
     'name': MIGRATION_NAME,
     'sha256': '2617684e1c9c4f7ecf5cc40009239c2972d9569c3c1cea1324ecfe5d58871678',
@@ -292,6 +294,13 @@ def apply_migration(d, directory):
 def migration_content(d, directory):
     rows = {('/app/' + MIGRATION_ROOT + '/' + name): digest for name, digest in migration_files(d, directory).items()}
     rows['/app/' + MIGRATION_SCHEMA] = hashlib.sha256((directory / MIGRATION_SCHEMA).read_bytes()).hexdigest()
+    # Docker copies the complete Prisma directory; attest the existing seed without executing it.
+    seed = directory / MIGRATION_SEED
+    d.require(seed.is_file() and not seed.is_symlink() and seed.stat().st_size < 8 * 1024**2,
+              'API_ADMIN_MIGRATION_SOURCE_INVALID')
+    digest = hashlib.sha256(seed.read_bytes()).hexdigest()
+    d.require(digest == MIGRATION_SEED_SHA, 'API_ADMIN_MIGRATION_SCOPE_CHANGED')
+    rows['/app/' + MIGRATION_SEED] = digest
     return content_summary(d, 'migrate', '\n'.join(sorted(digest + '  ' + name for name, digest in rows.items())))
 
 
