@@ -73,26 +73,17 @@
     "sourceCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
     "sources": {
       "accounts": {
-        "ids": [
-          "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
-          "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
-        ],
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
         "rowCount": 2,
         "sha256": "7e3f38a53838c3edc387498e6bb0ea8585af89b3606a0979c6d10441680172fb"
       },
       "cashJournals": {
-        "ids": [
-          "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
-          "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
-        ],
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
         "rowCount": 15,
         "sha256": "eba994ee593ab87b49e2c9d772e6b81dd5f84a8a5376c0a946e8f9258d61aa96"
       },
       "cashLines": {
-        "ids": [
-          "02d8080d-68d8-4095-8b60-a30d5cd6c4e0",
-          "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"
-        ],
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
         "rowCount": 15,
         "sha256": "6564164dd9d17c0617120e483ba79fbadeb0148c8c522066d137aa6a79059b79"
       },
@@ -225,22 +216,11 @@
     "financialWritesAllowed": false,
     "googleDriveConfigAllowed": false,
     "imageReuseAllowed": false,
-    "imageServices": [
-      "auto-recharge"
-    ],
+    "imageServices": ["auto-recharge"],
     "migrationDeploymentAllowed": false,
-    "preservedServices": [
-      "auto-registration",
-      "api",
-      "admin",
-      "media-resolver",
-      "mysql",
-      "caddy"
-    ],
+    "preservedServices": ["auto-registration", "api", "admin", "media-resolver", "mysql", "caddy"],
     "registrationRestartAllowed": false,
-    "servicesUpdated": [
-      "auto-recharge"
-    ]
+    "servicesUpdated": ["auto-recharge"]
   },
   "sourceBasis": {
     "commit": "e7c9862d58599995954883f1c1f6038283afffab",
