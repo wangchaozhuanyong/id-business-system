@@ -1,4 +1,4 @@
-/* global document, innerWidth, getComputedStyle */
+/* global document, innerWidth, getComputedStyle, requestAnimationFrame */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -7,6 +7,7 @@ import net from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const built = process.argv.includes('--built');
@@ -70,7 +71,7 @@ const bitSettings = {
   tagName: settings.tagName,
   proxyType: 'http',
   dynamicProxyUrl: 'https://example.invalid/proxy',
-  browserOptions: { sessionWaitMinutes: 1 }
+  browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, sessionWaitMinutes: 1 }
 };
 const results = [];
 const errors = [];
@@ -84,6 +85,7 @@ let apiStarts = 0;
 let codeRequests = 0;
 let settingsSaves = 0;
 let endpoint;
+let createdFingerprint;
 let jobs = [];
 const vite = spawn(
   process.execPath,
@@ -126,8 +128,12 @@ try {
     headless: true,
     args: [`--remote-debugging-port=${debugPort}`, `--remote-allow-origins=${origin}`]
   });
-  endpoint = (await (await fetch(`http://127.0.0.1:${debugPort}/json/version`)).json())
-    .webSocketDebuggerUrl;
+  const controlledVersion = await (
+    await fetch(`http://127.0.0.1:${debugPort}/json/version`)
+  ).json();
+  endpoint = controlledVersion.webSocketDebuggerUrl;
+  // The local test engine is independent of the BitBrowser client; verify its actual major.
+  bitSettings.browserOptions.coreVersion = /Chrome\/(\d+)\./.exec(controlledVersion.Browser)[1];
   controlledContext = await controlled.newContext();
   // Every official URL is fulfilled locally. No login, proxy or payment network is contacted.
   await controlledContext.route('**/*', async (route) => {
@@ -196,6 +202,13 @@ try {
     if (request.url === '/browser/update') {
       assert.equal(body.password, '');
       assert.equal(body.cookie, '');
+      createdFingerprint = body.browserFingerPrint;
+      assert.equal(createdFingerprint.os, 'Win32');
+      assert.equal(createdFingerprint.osVersion, '11');
+      assert.equal(createdFingerprint.coreVersion, bitSettings.browserOptions.coreVersion);
+      assert.equal(createdFingerprint.version, bitSettings.browserOptions.coreVersion);
+      assert.equal(createdFingerprint.openWidth, 1600);
+      assert.equal(createdFingerprint.openHeight, 1000);
       for (const key of [
         'syncTabs',
         'syncCookies',
@@ -210,6 +223,7 @@ try {
     if (request.url === '/browser/detail')
       return json(response, {
         id: 'c'.repeat(32),
+        browserFingerPrint: createdFingerprint,
         syncTabs: false,
         syncCookies: profileSync,
         syncLocalStorage: false,
@@ -219,7 +233,7 @@ try {
     if (request.url === '/browser/open') {
       assert.deepEqual(body.args, [`--remote-allow-origins=${origin}`]);
       await controlledContext.newPage();
-      return json(response, { ws: endpoint });
+      return json(response, { ws: endpoint, coreVersion: bitSettings.browserOptions.coreVersion });
     }
     throw new Error('未预期的模拟比特接口');
   });
@@ -255,6 +269,11 @@ try {
             assert.equal(request.postDataJSON().proxyId, proxyId);
             assert.equal(request.postDataJSON().dynamicProxyUrl, undefined);
             assert.equal(request.postDataJSON().staticProxyCredentials, undefined);
+            assert.equal(request.postDataJSON().browserOptions.coreVersion, '152');
+            assert.equal(request.postDataJSON().browserOptions.os, 'Win32');
+            assert.equal(request.postDataJSON().browserOptions.osVersion, '11');
+            assert.equal(request.postDataJSON().browserOptions.openWidth, 1600);
+            assert.equal(request.postDataJSON().browserOptions.openHeight, 1000);
             settingsSaves++;
           }
           return success(route, settings);
@@ -454,6 +473,92 @@ try {
   await page.getByText('网页直连', { exact: true }).waitFor();
   assert.equal(await page.getByText('本机连接密钥', { exact: true }).count(), 0);
   assert.equal(await page.getByText('本机连接器地址', { exact: true }).count(), 0);
+  const settingsDialog = page.getByRole('dialog', { name: '比特浏览器直连设置' });
+  await settingsDialog.evaluate(async (element) => {
+    const animations = [];
+    for (let current = element; current; current = current.parentElement)
+      animations.push(...current.getAnimations());
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
+  });
+  assert.equal(
+    await settingsDialog.getByRole('textbox', { name: '浏览器内核版本', exact: true }).inputValue(),
+    '152'
+  );
+  for (const width of [1440, 1024, 901, 900, 768, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((theme) => (document.documentElement.dataset.v2Theme = theme), theme);
+      await page.evaluate(
+        () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+      );
+      await settingsDialog.evaluate(async (element) => {
+        const animations = element.getAnimations();
+        await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
+        const body = element.querySelector('.el-drawer__body');
+        const section = element
+          .querySelector('input[aria-label="浏览器内核版本"]')
+          ?.closest('fieldset');
+        if (body && section)
+          body.scrollTop +=
+            section.getBoundingClientRect().top - body.getBoundingClientRect().top - 20;
+      });
+      const geometry = await settingsDialog.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const fields = [...element.querySelectorAll('.el-form-item')]
+          .filter((item) =>
+            /^(浏览器内核版本|操作系统|Windows 版本|窗口宽度|窗口高度)/.test(
+              item.querySelector('.el-form-item__label')?.textContent.trim() ?? ''
+            )
+          )
+          .map((item) => {
+            const label = item.querySelector('.el-form-item__label');
+            const control = item.querySelector('.el-input, .el-input-number, .el-select');
+            const range = document.createRange();
+            range.selectNodeContents(label);
+            const text = range.getClientRects()[0];
+            const rect = control.getBoundingClientRect();
+            return {
+              label: label.textContent.trim(),
+              text: { left: text.left, top: text.top, bottom: text.bottom },
+              control: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+            };
+          });
+        return {
+          left: box.left,
+          right: box.right,
+          fields,
+          overflow: document.documentElement.scrollWidth > innerWidth + 1
+        };
+      });
+      assert.equal(geometry.fields.length, 5);
+      assert.equal(geometry.overflow, false);
+      assert.ok(
+        geometry.left >= -1 && geometry.right <= width + 1,
+        JSON.stringify({ width, theme, geometry })
+      );
+      assert.ok(
+        geometry.fields.every(
+          ({ text, control }) =>
+            text.left < control.left &&
+            text.top < control.bottom &&
+            text.bottom > control.top &&
+            control.right <= geometry.right + 1
+        )
+      );
+      await settingsDialog.screenshot({
+        path: resolve(output, `${width}-${theme}-windows-settings.png`),
+        animations: 'disabled'
+      });
+      results.push({
+        scenario: 'Windows版本与大窗口配置，实际标签文字保持左侧且无溢出',
+        width,
+        theme,
+        geometry,
+        ok: true
+      });
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: '检测完整连接', exact: true }).click();
   await page
     .getByRole('dialog', { name: '比特浏览器直连设置' })

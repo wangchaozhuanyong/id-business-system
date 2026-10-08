@@ -1,4 +1,4 @@
-import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
+import { normalizeV2RechargeBrowserOptions } from '@apple-business/shared';
 import type { V2RechargeBitBrowserSettings } from './contracts';
 export const rechargeLanguages = [
   { label: '简体中文', value: 'zh-CN' },
@@ -13,7 +13,7 @@ export const rechargeLanguages = [
   { label: '西班牙语', value: 'es-ES' }
 ];
 export function browserSettingsSummary(settings?: V2RechargeBitBrowserSettings) {
-  const options = settings?.browserOptions ?? V2_RECHARGE_BROWSER_DEFAULTS;
+  const options = normalizeV2RechargeBrowserOptions(settings?.browserOptions);
   const language = (fromIp: boolean, value: string) =>
     fromIp
       ? '跟随 IP'
@@ -22,6 +22,7 @@ export function browserSettingsSummary(settings?: V2RechargeBitBrowserSettings) 
     proxy: settings?.proxyId
       ? '使用代理 IP 管理中的共用默认代理，连接资料以目录为准。'
       : `${options.proxyMode === 'static' ? '固定代理' : '动态提取'} · ${settings?.proxyType.toUpperCase() ?? 'HTTP'} · ${options.proxyMode === 'static' ? `${options.staticHost}:${options.staticPort}` : settings?.dynamicProxyUrlMask || '尚未选择代理'}`,
-    languages: `浏览器：${language(options.languageFromIp, options.language)} · 界面：${language(options.displayLanguageFromIp, options.displayLanguage)}`
+    languages: `浏览器：${language(options.languageFromIp, options.language)} · 界面：${language(options.displayLanguageFromIp, options.displayLanguage)}`,
+    profile: `${options.os === 'Win32' ? `Windows ${options.osVersion}` : options.os === 'MacIntel' ? 'macOS' : 'Linux'} · 内核 ${options.coreVersion} · 窗口 ${options.openWidth} × ${options.openHeight}`
   };
 }

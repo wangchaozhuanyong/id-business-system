@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RechargeSettingsService } from './recharge-settings.service';
-import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
+import {
+  V2_RECHARGE_BROWSER_DEFAULTS,
+  V2_RECHARGE_BROWSER_PROFILE_KEYS
+} from '@apple-business/shared';
 const operator = {
   id: 'admin-test',
   username: 'admin',
@@ -104,6 +107,93 @@ describe('网页直连设置与运行凭据', () => {
     browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS },
     updatedAt: new Date()
   };
+  it('新窗口配置保存在当前管理员的数据库设置，并由新服务实例读取和执行', async () => {
+    let saved = { ...row };
+    const repository = {
+      find: vi.fn().mockImplementation(() => Promise.resolve(saved)),
+      findInTransaction: vi.fn().mockImplementation(() => Promise.resolve(saved)),
+      upsert: vi
+        .fn()
+        .mockImplementation((_: unknown, ownerId: string, input: Partial<typeof row>) => {
+          expect(ownerId).toBe(operator.id);
+          saved = { ...saved, ...input };
+          return Promise.resolve(saved);
+        })
+    };
+    const encryption = { decrypt: vi.fn((value) => (value ? `fixture-${value}` : '')) };
+    const transactions = { execute: vi.fn((work) => work({})) };
+    const audit = { append: vi.fn() };
+    const service = new RechargeSettingsService(
+      repository as never,
+      encryption as never,
+      transactions as never,
+      audit as never,
+      {} as never
+    );
+    const browserOptions = {
+      ...V2_RECHARGE_BROWSER_DEFAULTS,
+      coreVersion: '150',
+      osVersion: '10' as const,
+      openWidth: 1800,
+      openHeight: 1100
+    };
+    const input = {
+      directMode: true,
+      connectorUrl: row.connectorUrl,
+      localApiUrl: row.localApiUrl,
+      groupName: row.groupName,
+      tagName: row.tagName,
+      proxyType: row.proxyType,
+      browserOptions
+    };
+    expect((await service.update(input, operator)).browserOptions).toEqual(browserOptions);
+    const anotherInstance = new RechargeSettingsService(
+      repository as never,
+      encryption as never,
+      transactions as never,
+      audit as never,
+      {} as never
+    );
+    expect((await anotherInstance.get(operator)).browserOptions).toEqual(browserOptions);
+    expect((await anotherInstance.runtime(operator.id, false, true)).browserOptions).toEqual(
+      browserOptions
+    );
+    expect(repository.find).toHaveBeenCalledWith(operator.id);
+    expect(repository.upsert).toHaveBeenCalledOnce();
+    expect(audit.append).toHaveBeenCalledOnce();
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('ciphertext');
+  });
+  it('读取旧 Mac 设置归一为 Windows 11，但不会悄悄重写旧记录或改代理地区', async () => {
+    const legacy = {
+      ...V2_RECHARGE_BROWSER_DEFAULTS,
+      os: 'MacIntel' as const,
+      language: 'en-US'
+    };
+    for (const key of V2_RECHARGE_BROWSER_PROFILE_KEYS)
+      delete (legacy as Partial<typeof legacy>)[key];
+    const before = { ...legacy };
+    const repository = {
+      find: vi.fn().mockResolvedValue({ ...row, browserOptions: legacy }),
+      upsert: vi.fn()
+    };
+    const service = new RechargeSettingsService(
+      repository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+    expect((await service.get(operator)).browserOptions).toMatchObject({
+      os: 'Win32',
+      osVersion: '11',
+      coreVersion: '152',
+      openWidth: 1600,
+      openHeight: 1000,
+      language: 'en-US'
+    });
+    expect(legacy).toEqual(before);
+    expect(repository.upsert).not.toHaveBeenCalled();
+  });
   it('直连允许首次保存接口密钥而没有连接器密钥，保存仍加密并写审计', async () => {
     const repository = {
       findInTransaction: vi.fn().mockResolvedValue(null),

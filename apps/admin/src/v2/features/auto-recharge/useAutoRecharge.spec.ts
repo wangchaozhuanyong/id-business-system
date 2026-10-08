@@ -1,4 +1,4 @@
-import { effectScope, nextTick, ref } from 'vue';
+import { effectScope, nextTick, ref, type Ref } from 'vue';
 import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -58,6 +58,7 @@ const mock = vi.hoisted(() => ({
   connectorCatalog: vi.fn(),
   directCatalog: vi.fn(),
   directStart: vi.fn(),
+  directRunning: undefined as Ref<boolean> | undefined,
   directOwns: vi.fn(),
   directSubmitCode: vi.fn(),
   directCancel: vi.fn(),
@@ -73,7 +74,7 @@ vi.mock('./useBitBrowserDirectOpen', () => ({
   useBitBrowserDirectOpen: () => ({
     start: mock.directStart,
     owns: mock.directOwns,
-    running: ref(false),
+    running: mock.directRunning ?? ref(false),
     submitCode: mock.directSubmitCode,
     cancel: mock.directCancel
   })
@@ -384,6 +385,7 @@ beforeEach(() => {
     tags: [{ id: 'tag-direct', name: settings.tagName }]
   });
   mock.directStart.mockResolvedValue(undefined);
+  mock.directRunning = ref(false);
   mock.directOwns.mockReturnValue(false);
   mock.directCancel.mockReset().mockResolvedValue(undefined);
 
@@ -400,6 +402,195 @@ beforeEach(() => {
 });
 
 afterEach(() => scope.stop());
+
+describe('登录验证码任务隔离', () => {
+  const historyId = '99999999-9999-4999-8999-999999999999';
+  const waitingJob = (id: string, direct = false): V2RechargeJob => ({
+    id,
+    plan: 'plus',
+    action: 'bitbrowser',
+    state: 'awaiting_human_verification',
+    result: {
+      mode: 'open_browser',
+      stage: 'login_code_required',
+      ...(direct ? { transport: 'web_direct' } : {})
+    },
+    createdAt: '',
+    updatedAt: ''
+  });
+  const historicalJob = (): V2RechargeJob => ({
+    ...waitingJob(historyId),
+    action: 'server',
+    state: 'finished',
+    chatgptAccountId: 'history-account',
+    result: { status: 'subscription_activated' }
+  });
+  function enableAutomaticCode() {
+    flow.loginMethod.value = 'password';
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+  }
+
+  it('仅登录窗口保留独立账号密码，官网等待时仅向原直连任务提交一次 2FA', async () => {
+    flow.operationMode.value = 'open_browser';
+    enableAutomaticCode();
+    flow.loginEmail.value = 'fixture@example.invalid';
+    flow.loginPassword.value = 'fixture-password';
+    await nextTick();
+    flow.windowName.value = '登录测试窗口';
+    const freshCode = vi.spyOn(flow.totp, 'freshCode').mockResolvedValue('123456');
+    expect(flow.canStartOpen.value).toBe(true);
+    await flow.startOpen();
+
+    const id = mock.startBitBrowserOpen.mock.calls[0]![0].id;
+    expect(mock.directStart.mock.calls[0]![1]).toEqual({
+      login: { email: 'fixture@example.invalid', password: 'fixture-password' }
+    });
+    expect(flow.loginPassword.value).toBe('');
+    expect(mock.startBitBrowserOpen.mock.calls[0]![0]).not.toHaveProperty('login');
+    mock.directOwns.mockImplementation((jobId) => jobId === id);
+    mock.directRunning!.value = true;
+    jobs.value.items = [waitingJob(id, true)];
+    await vi.waitFor(() => expect(mock.directSubmitCode).toHaveBeenCalledOnce());
+    expect(mock.directSubmitCode).toHaveBeenCalledWith(id, '123456');
+    expect(freshCode).toHaveBeenCalledOnce();
+    flow.retryAutomaticCode();
+    await nextTick();
+    expect(mock.directSubmitCode).toHaveBeenCalledOnce();
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+  });
+
+  it('原网页仍拥有直连执行时，历史选择不改变任务、操作模式和登录验证码来源，释放后可切换', async () => {
+    flow.operationMode.value = 'open_browser';
+    flow.loginMethod.value = 'saved';
+    flow.selectedBankAccountId.value = 'running-account';
+    flow.totp.source.value = 'saved';
+    flow.totp.savedAccountId.value = savedTotp.value.items[0]!.id;
+    jobs.value.items = [waitingJob(launch.id, true), historicalJob()];
+    flow.selectJob(launch.id);
+    mock.directOwns.mockImplementation((id) => id === launch.id);
+    mock.directRunning!.value = true;
+
+    flow.selectJob(historyId);
+    expect(flow.selected.value?.id).toBe(launch.id);
+    expect(flow.operationMode.value).toBe('open_browser');
+    expect(flow.loginMethod.value).toBe('saved');
+    expect(flow.selectedBankAccountId.value).toBe('running-account');
+    expect(flow.totp.source.value).toBe('saved');
+    expect(flow.totp.savedAccountId.value).toBe(savedTotp.value.items[0]!.id);
+    expect(flow.error.value).toContain('请先完成或停止原任务');
+
+    mock.directOwns.mockReturnValue(false);
+    mock.directRunning!.value = false;
+    flow.selectJob(historyId);
+    expect(flow.selected.value?.id).toBe(historyId);
+    expect(flow.operationMode.value).toBe('server_payment');
+    expect(flow.selectedBankAccountId.value).toBe('history-account');
+    await nextTick();
+  });
+
+  it.each(['成功', '失败'] as const)(
+    '历史选择期间取码%s迟到时丢弃，回到原连接器任务可重新取码',
+    async (result) => {
+      enableAutomaticCode();
+      let finish!: (value: string) => void;
+      let fail!: (cause: Error) => void;
+      const freshCode = vi
+        .spyOn(flow.totp, 'freshCode')
+        .mockImplementationOnce(
+          () =>
+            new Promise<string>((resolve, reject) => {
+              finish = resolve;
+              fail = reject;
+            })
+        )
+        .mockResolvedValue('654321');
+      jobs.value.items = [waitingJob(launch.id), historicalJob()];
+      flow.selectJob(launch.id);
+      await vi.waitFor(() => expect(freshCode).toHaveBeenCalledOnce());
+      flow.selectJob(historyId);
+      if (result === '成功') finish('123456');
+      else fail(new Error('fixture-code-unavailable'));
+      await vi.waitFor(() => expect(flow.autoCodeBusy.value).toBe(false));
+      expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+      expect(mock.directSubmitCode).not.toHaveBeenCalled();
+      expect(flow.error.value).not.toContain('fixture-code-unavailable');
+
+      flow.selectJob(launch.id);
+      await vi.waitFor(() => expect(mock.connectorSubmitCode).toHaveBeenCalledOnce());
+      expect(freshCode).toHaveBeenCalledTimes(2);
+      expect(mock.connectorSubmitCode).toHaveBeenCalledWith(
+        settings.connectorUrl,
+        launch.connectorToken,
+        launch.id,
+        '654321'
+      );
+    }
+  );
+
+  it('连接器访问资料迟到时再次核对所选任务，回到原任务才重新提交验证码', async () => {
+    enableAutomaticCode();
+    const freshCode = vi
+      .spyOn(flow.totp, 'freshCode')
+      .mockResolvedValueOnce('123456')
+      .mockResolvedValue('654321');
+    let finish!: (value: { connectorUrl: string; connectorToken: string }) => void;
+    mock.bitBrowserAccess.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    jobs.value.items = [waitingJob(launch.id), waitingJob(historyId)];
+    flow.selectJob(launch.id);
+    await vi.waitFor(() => expect(mock.bitBrowserAccess).toHaveBeenCalledOnce());
+    flow.totp.source.value = 'manual';
+    flow.selectJob(historyId);
+    expect(flow.needsCode.value).toBe(true);
+    finish({ connectorUrl: settings.connectorUrl, connectorToken: launch.connectorToken });
+    await vi.waitFor(() => expect(flow.autoCodeBusy.value).toBe(false));
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+
+    flow.totp.source.value = 'secret';
+    flow.selectJob(launch.id);
+    await vi.waitFor(() => expect(mock.connectorSubmitCode).toHaveBeenCalledOnce());
+    expect(freshCode).toHaveBeenCalledTimes(2);
+    expect(mock.connectorSubmitCode).toHaveBeenCalledWith(
+      settings.connectorUrl,
+      launch.connectorToken,
+      launch.id,
+      '654321'
+    );
+  });
+
+  it('直连任务已释放后，原验证码迟到不提交到新拥有的任务', async () => {
+    enableAutomaticCode();
+    let finish!: (code: string) => void;
+    const freshCode = vi.spyOn(flow.totp, 'freshCode').mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        })
+    );
+    jobs.value.items = [waitingJob(launch.id, true), waitingJob(historyId, true)];
+    flow.selectJob(launch.id);
+    mock.directOwns.mockImplementation((id) => id === launch.id);
+    mock.directRunning!.value = true;
+    await vi.waitFor(() => expect(freshCode).toHaveBeenCalledOnce());
+    jobs.value.items[0]!.state = 'finished';
+    mock.directOwns.mockImplementation((id) => id === historyId);
+    mock.directRunning!.value = false;
+    flow.totp.source.value = 'manual';
+    flow.selectJob(historyId);
+    mock.directRunning!.value = true;
+    finish('123456');
+    await vi.waitFor(() => expect(flow.autoCodeBusy.value).toBe(false));
+    expect(flow.selected.value?.id).toBe(historyId);
+    expect(mock.directSubmitCode).not.toHaveBeenCalled();
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+  });
+});
 
 describe('充值地址自动选择', () => {
   const secondAddress: V2RechargeAddress = {

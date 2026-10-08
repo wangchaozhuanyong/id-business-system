@@ -440,6 +440,7 @@ try {
             capabilities: [
               'browser-catalog',
               'browser-options',
+              'browser-profile-v2',
               'session-load-retry',
               'same-window-page-refresh',
               'payment-unknown-resolution',

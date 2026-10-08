@@ -86,7 +86,7 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         page = MagicMock(url="about:blank", set_default_timeout=MagicMock())
         context = MagicMock(pages=[page], route=AsyncMock(), unroute=AsyncMock())
         playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(
-            return_value=SimpleNamespace(contexts=[context]))))
+            return_value=SimpleNamespace(contexts=[context], version="152.0.0"))))
         target = BrowserCredential("", "account_fixture", "user_fixture")
         with (patch.object(login, "login_with_password", new=AsyncMock(return_value=(
                 target, {"current_plan": "free"}))) as sign_in,
@@ -103,6 +103,31 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("login", job.payload)
         context.route.assert_awaited_once()
         context.unroute.assert_awaited_once()
+
+    async def test_missing_or_different_running_kernel_stops_before_login_and_payment(self):
+        for version, reason in ((None, "bitbrowser_profile_configuration_unverified"),
+                                ("130.0.0", "bitbrowser_profile_configuration_mismatch")):
+            data = payload()
+            data.pop("sessionJson")
+            data["login"] = {"email": "test@example.invalid", "password": "local-password"}
+            job = connector.LocalJob(data)
+            job.callback = MagicMock()
+            job.restore_account = MagicMock()
+            client = MagicMock(create_profile=MagicMock(return_value="a" * 32),
+                               open_profile=MagicMock(return_value="http://127.0.0.1:12345"))
+            context = MagicMock()
+            playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(
+                return_value=SimpleNamespace(contexts=[context], version=version))))
+            with (self.subTest(version=version),
+                  patch.object(login, "login_with_password", new=AsyncMock()) as sign_in,
+                  patch.object(bitbrowser_retry, "cancellable_flow", new=AsyncMock()) as payment):
+                with self.assertRaises(Stop) as stopped:
+                    await bitbrowser_retry._execute_profiles(job, client, None, playwright, set())
+            self.assertEqual(stopped.exception.report["reason"], reason)
+            sign_in.assert_not_awaited()
+            payment.assert_not_awaited()
+            job.restore_account.assert_not_called()
+            context.route.assert_not_called()
 
 
 if __name__ == "__main__":

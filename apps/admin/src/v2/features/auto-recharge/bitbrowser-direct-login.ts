@@ -3,6 +3,7 @@ import {
   directBrowserApi,
   directBrowserCatalog,
   directProfileOptions,
+  verifyDirectProfileConfiguration,
   DirectBrowserError,
   type DirectBrowserSettings
 } from './bitbrowser-direct-api';
@@ -37,6 +38,7 @@ export async function runDirectLogin(
   let sessionId = '';
   let guardError: unknown;
   let removeGuard: (() => void) | undefined;
+  let pendingSubmission: { kind: 'email' | 'password' | 'code'; value: string } | undefined;
   try {
     const catalog = await directBrowserCatalog(
       settings.localApiUrl,
@@ -86,16 +88,23 @@ export async function runDirectLogin(
     ) {
       throw new DirectBrowserError('bitbrowser_profile_sync_unverified');
     }
+    verifyDirectProfileConfiguration(detail, settings);
     const opened = await api.post('/browser/open', {
       id: profileId,
       queue: true,
       args: [`--remote-allow-origins=${window.location.origin}`]
     });
+    verifyDirectProfileConfiguration(detail, settings, opened.data as Record<string, unknown>);
     await hooks.progress('bitbrowser_profile_opened');
     const endpoint = (opened.data as Record<string, unknown>)?.ws;
     if (typeof endpoint !== 'string')
       throw new DirectBrowserError('bitbrowser_direct_debug_unavailable');
     cdp = await BrowserCdp.connect(endpoint, signal);
+    const version = await cdp.command('Browser.getVersion');
+    const actualVersion = /(?:HeadlessChrome|Chrome)\/(\d+)\./.exec(String(version.product ?? ''));
+    if (!actualVersion) throw new DirectBrowserError('bitbrowser_profile_configuration_unverified');
+    if (actualVersion[1] !== directProfileOptions(settings).browserFingerPrint.coreVersion)
+      throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
     const targets = (await cdp.command('Target.getTargets')).targetInfos as {
       type: string;
       targetId: string;
@@ -152,9 +161,10 @@ export async function runDirectLogin(
     );
     const submitted = new Set<string>();
     let manualReported = false;
+    let manualState = '';
     let lastState = '';
     const deadline = Date.now() + 30 * 60_000;
-    const automaticDeadline =
+    let automaticDeadline =
       Date.now() + (settings.browserOptions?.sessionWaitMinutes ?? 2) * 60_000;
     while (Date.now() < deadline) {
       signal.throwIfAborted();
@@ -174,6 +184,8 @@ export async function runDirectLogin(
           throw error;
         state = { kind: 'loading' };
       }
+      const observedKind = state.kind;
+      if (manualReported && state.kind === 'manual') manualState = 'manual';
       if (state?.kind === 'identity') {
         if (
           state.email.toLowerCase() !== expected.email ||
@@ -194,10 +206,39 @@ export async function runDirectLogin(
       }
       if (
         !credential.login &&
-        (['unauthenticated', 'email', 'password', 'code'].includes(state?.kind) ||
+        (['unauthenticated', 'login', 'email', 'password', 'code'].includes(state?.kind) ||
           (state?.kind === 'loading' && Date.now() >= automaticDeadline && !manualReported))
       )
         throw new DirectBrowserError('official_login_not_verified');
+      if (
+        manualReported &&
+        credential.login &&
+        state.kind !== manualState &&
+        ['login', 'email', 'password', 'code'].includes(state?.kind) &&
+        !submitted.has(state.kind)
+      ) {
+        // After the user completes an official challenge, resume only stages never submitted.
+        manualReported = false;
+        automaticDeadline = Math.min(
+          deadline,
+          Date.now() + (settings.browserOptions?.sessionWaitMinutes ?? 2) * 60_000
+        );
+      }
+      if (
+        !manualReported &&
+        Date.now() < automaticDeadline &&
+        credential.login &&
+        state.kind === 'login' &&
+        !submitted.has('login')
+      ) {
+        await hooks.progress('session_restore');
+        const openedLogin = await cdp.evaluate<LoginPageState>(
+          sessionId,
+          loginPageExpression('login')
+        );
+        if (openedLogin.kind === 'submitted') submitted.add('login');
+        else state = openedLogin;
+      }
       if (
         !manualReported &&
         Date.now() < automaticDeadline &&
@@ -206,47 +247,47 @@ export async function runDirectLogin(
         !submitted.has(state.kind)
       ) {
         const kind = state.kind as 'email' | 'password' | 'code';
-        const requestedCode = kind === 'code' ? hooks.code() : undefined;
-        void requestedCode?.catch(() => undefined);
-        await hooks.progress(kind === 'code' ? 'login_code_required' : `login_${kind}`, {
-          user_action_required: kind === 'code'
-        });
-        let value =
-          kind === 'email'
-            ? credential.login.email
-            : kind === 'password'
-              ? credential.login.password
-              : await requestedCode!;
+        if (!pendingSubmission || pendingSubmission.kind !== kind) {
+          if (pendingSubmission) pendingSubmission.value = '';
+          const requestedCode = kind === 'code' ? hooks.code() : undefined;
+          void requestedCode?.catch(() => undefined);
+          await hooks.progress(kind === 'code' ? 'login_code_required' : `login_${kind}`, {
+            user_action_required: kind === 'code'
+          });
+          pendingSubmission = {
+            kind,
+            value:
+              kind === 'email'
+                ? credential.login.email
+                : kind === 'password'
+                  ? credential.login.password
+                  : await requestedCode!
+          };
+        }
         const filled = await cdp.evaluate<LoginPageState>(
           sessionId,
-          loginPageExpression(kind, value)
+          loginPageExpression(kind, pendingSubmission.value, { email: expected.email })
         );
-        value = '';
         if (filled.kind === 'filled') {
-          submitted.add(kind);
-          await cdp.command(
-            'Input.dispatchKeyEvent',
-            {
-              type: 'keyDown',
-              key: 'Enter',
-              code: 'Enter',
-              windowsVirtualKeyCode: 13,
-              text: '\r',
-              unmodifiedText: '\r'
-            },
-            sessionId
+          const confirmed = await cdp.evaluate<LoginPageState>(
+            sessionId,
+            loginPageExpression('submit', pendingSubmission.value, {
+              stage: kind,
+              email: expected.email
+            })
           );
-          await cdp.command(
-            'Input.dispatchKeyEvent',
-            { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
-            sessionId
-          );
-          if (kind === 'password') credential.login.password = '';
-          if (kind === 'code') await hooks.progress('login_code_submitted');
-        } else state = { kind: 'manual' };
+          if (confirmed.kind === 'submitted') {
+            submitted.add(kind);
+            pendingSubmission.value = '';
+            pendingSubmission = undefined;
+            if (kind === 'password') credential.login.password = '';
+            if (kind === 'code') await hooks.progress('login_code_submitted');
+          } else state = confirmed;
+        } else state = filled;
       }
       if (!manualReported && (state?.kind === 'manual' || Date.now() >= automaticDeadline)) {
         manualReported = true;
+        manualState = observedKind;
         await hooks.progress('verification_required', { user_action_required: true });
       } else if (
         state?.kind !== lastState &&
@@ -270,6 +311,7 @@ export async function runDirectLogin(
     }
     throw new DirectBrowserError('official_login_not_verified');
   } finally {
+    if (pendingSubmission) pendingSubmission.value = '';
     expected.token = '';
     if (credential.login) credential.login.password = '';
     if ('sessionJson' in credential) credential.sessionJson = '';

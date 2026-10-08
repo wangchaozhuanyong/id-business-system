@@ -273,7 +273,7 @@ validate_release_selection() {
     return 0
   fi
   local policy="${HISTORICAL_EXCEPTION:-none}"
-  if [[ "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == verify_api_admin || "${RELEASE_OPERATION:-release}" == release_api_registration || "${RELEASE_OPERATION:-release}" == verify_api_registration || "${RELEASE_OPERATION:-release}" == handoff_api_registration || "${RELEASE_OPERATION:-release}" == verify_registration_business || "${RELEASE_OPERATION:-release}" == verify_registration_handoff || "${RELEASE_OPERATION:-release}" == recover_registration_handoff ]]; then
+  if [[ "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == verify_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == verify_api_admin || "${RELEASE_OPERATION:-release}" == release_api_registration || "${RELEASE_OPERATION:-release}" == verify_api_registration || "${RELEASE_OPERATION:-release}" == handoff_api_registration || "${RELEASE_OPERATION:-release}" == verify_registration_business || "${RELEASE_OPERATION:-release}" == verify_registration_handoff || "${RELEASE_OPERATION:-release}" == recover_registration_handoff ]]; then
     [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
     [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || return 1
     return 0

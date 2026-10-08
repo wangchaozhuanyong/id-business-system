@@ -178,7 +178,7 @@ class BitBrowserUpgradeRecheckTests(unittest.IsolatedAsyncioTestCase):
         job.root = Path("/synthetic/readonly/state")
         target = BrowserCredential("", "synthetic-account", "synthetic-user")
         context = SimpleNamespace()
-        browser = SimpleNamespace(contexts=[context])
+        browser = SimpleNamespace(contexts=[context], version="152.0.0")
         playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=AsyncMock(return_value=browser)))
         client = SimpleNamespace(create_profile=MagicMock(return_value="a" * 32),
                                  open_profile=MagicMock(return_value="http://127.0.0.1:12345"))

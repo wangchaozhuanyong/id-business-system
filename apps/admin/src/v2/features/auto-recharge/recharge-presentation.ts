@@ -220,6 +220,10 @@ const labels: Record<string, string> = {
   bitbrowser_catalog_limit: '比特浏览器分组或标签数量超过读取上限，请整理后重试',
   bitbrowser_profile_unverified: '比特浏览器窗口创建结果未确认',
   bitbrowser_profile_sync_unverified: '无法确认窗口已关闭登录资料同步，请检查比特浏览器设置后重试',
+  bitbrowser_profile_configuration_mismatch:
+    '比特窗口的内核、系统或尺寸与所选配置不一致，请检查客户端可用内核和窗口设置',
+  bitbrowser_profile_configuration_unverified:
+    '无法确认比特窗口实际使用的内核版本，请更新客户端后重试',
   bitbrowser_debug_endpoint_missing: '比特浏览器未返回可连接的窗口',
   bitbrowser_context_missing: '比特浏览器窗口上下文不可用',
   local_connector_not_received: '本机连接器未接收，本次已安全结束',

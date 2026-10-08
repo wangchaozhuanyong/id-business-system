@@ -53,7 +53,24 @@ let quickActions =
         createdAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString(),
         updatedAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString()
       }));
-idBusinessV2WorkspaceApi.listQuickActions = async () => ({ items: [...quickActions] });
+let hasCustomQuickActionOrder = false;
+idBusinessV2WorkspaceApi.listQuickActions = async () => ({
+  items: [...quickActions],
+  hasCustomOrder: hasCustomQuickActionOrder
+});
+idBusinessV2WorkspaceApi.reorderQuickActions = async (input) => {
+  if (!(input.initializeOnly && hasCustomQuickActionOrder)) {
+    if (quickActions.some((item, index) => item.id !== input.expectedQuickActionIds[index]))
+      throw new Error('回复顺序已变化，请刷新后重试');
+    quickActions = input.quickActionIds.map((id) => {
+      const item = quickActions.find((candidate) => candidate.id === id);
+      if (!item) throw new Error('回复记录已变化，请刷新后重试');
+      return item;
+    });
+    hasCustomQuickActionOrder = true;
+  }
+  return { items: [...quickActions], hasCustomOrder: hasCustomQuickActionOrder };
+};
 idBusinessV2WorkspaceApi.createQuickAction = async (input) => {
   const item = {
     id: `quick-action-fixture-${quickActions.length + 1}`,
@@ -61,7 +78,7 @@ idBusinessV2WorkspaceApi.createQuickAction = async (input) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  quickActions = [item, ...quickActions];
+  quickActions = hasCustomQuickActionOrder ? [...quickActions, item] : [item, ...quickActions];
   return item;
 };
 idBusinessV2WorkspaceApi.updateQuickAction = async (id, input) => {

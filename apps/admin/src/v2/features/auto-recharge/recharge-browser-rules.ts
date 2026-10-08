@@ -17,6 +17,49 @@ export function browserOptionRules(form: BitBrowserSettingsForm): FormRules {
       )
   };
   return {
+    'browserOptions.coreVersion': [
+      {
+        required: true,
+        trigger: 'blur',
+        validator: (_rule, value, callback) =>
+          callback(
+            typeof value === 'string' && /^[1-9]\d{1,2}$/.test(value) && Number(value) >= 96
+              ? undefined
+              : new Error('请填写客户端已安装的内核版本号，至少为 96')
+          )
+      }
+    ],
+    'browserOptions.osVersion': [
+      {
+        trigger: 'change',
+        validator: (_rule, value, callback) =>
+          callback(
+            (options.os === 'Win32' ? ['11', '10'].includes(value) : value === '')
+              ? undefined
+              : new Error('请选择有效的系统版本')
+          )
+      }
+    ],
+    'browserOptions.openWidth': [
+      {
+        required: true,
+        type: 'integer',
+        min: 800,
+        max: 7680,
+        message: '窗口宽度应为 800 至 7680 像素的整数',
+        trigger: 'change'
+      }
+    ],
+    'browserOptions.openHeight': [
+      {
+        required: true,
+        type: 'integer',
+        min: 600,
+        max: 4320,
+        message: '窗口高度应为 600 至 4320 像素的整数',
+        trigger: 'change'
+      }
+    ],
     'browserOptions.sessionWaitMinutes': [
       {
         required: true,

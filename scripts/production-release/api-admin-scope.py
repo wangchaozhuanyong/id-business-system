@@ -1,4 +1,4 @@
-"""Explicit two-service publication; schema and historical policies stay unchanged."""
+"""Explicit two-service publication with a separately approved, finite migration mode."""
 
 import base64
 import hashlib
@@ -15,10 +15,12 @@ import time
 import urllib.request
 
 SCOPE = globals().get('SCOPE', 'API_ADMIN')
-if SCOPE not in ('API_ADMIN', 'API_REGISTRATION'):
+if SCOPE not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION'):
     raise ValueError('API_ADMIN_SCOPE_CONFLICT')
 REGISTRATION = SCOPE == 'API_REGISTRATION'
+MIGRATION_MODE = SCOPE == 'API_ADMIN_MIGRATION'
 UPDATED = ('api', 'auto-registration') if REGISTRATION else ('api', 'admin')
+IMAGE_SERVICES = (*UPDATED, 'migrate') if MIGRATION_MODE else UPDATED
 SWITCH_ORDER = ('api', 'auto-registration') if REGISTRATION else ('admin', 'api')
 PREFIX = SCOPE.lower().replace('_', '-')
 CONFIG_FILES = ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
@@ -53,12 +55,32 @@ REGISTRATION_PRIVATE = frozenset(('.env.aws.production', 'compose.release.json',
     'order-archive-cleanup.reader.json', 'registration-recovery-audit.compose.json',
     'api-admin-build-proof.json', 'api-admin-preservation.json'))
 TASK_ID = '252ab243-d96b-4928-8116-b83dedc1d240'
-TASK_ATTEMPT = 10
+TASK_ATTEMPT = 12 if MIGRATION_MODE else 10
 TASK_BINDING = {'accountSha256': '4764c0440ec5bde3d20c74064096b3720a3d7d6ac637361452b9f544b9287ba5',
     'profileSha256': '052ad861dc0da2f8611d422bd384e328e1d856a126bc86434846861f90728f00',
     'ownerSha256': 'ed198d0daf9ef5910f54dc16b3a7a6f4db0cf55c1935309f838071365ab7196d'}
+# Captured by the read-only 18e task inspection; these are keyed digests, not credentials.
+MIGRATION_TASK = {'taskId': TASK_ID, 'attempt': 12, 'state': 'partial', 'step': 'password',
+    'reason': 'session_load_timeout', 'updatedAt': '2026-10-08T14:18:32.726Z',
+    'registered': True, 'passwordVerified': False, 'mfaVerified': False, 'leaseActive': False,
+    'noncePresent': False, 'passwordCandidatePresent': True, 'binding': TASK_BINDING,
+    'emailHashHmac': '99e7d0edf61acf0d0228c67fa52bdf3065e86dda2356d06b8dc6f44125a3429b',
+    'jobHmac': '78bc1a85e9857512b534e8b23d6beae677f15cd45bbc76253812bc65396003f9',
+    'accountHmac': '763310b009d8c2c099ac94d2265570d9ca9d2886dcd6eb31d3133556571f3e9a',
+    'auditHmac': '500789997c0d6f006b7c70a07f21be06b1785b355eba2c36e10f3eb37d75edac',
+    'auditCount': 5}
 HANDOFF_FAILURE = {'confirmed': False, 'privatePostAttempted': True, 'failurePhase': 'close',
     'privatePostHttpStatus': 409, 'controlledReason': 'fingerprint_cleanup_failed', 'rawOutputSuppressed': True}
+MIGRATION_NAME = '20261008180000_quick_action_user_order'
+MIGRATION_FILE = MIGRATION_NAME + '/migration.sql'
+MIGRATION_ROOT = 'apps/api/prisma-mysql/migrations'
+MIGRATION_SCHEMA = 'apps/api/prisma-mysql/schema.prisma'
+MIGRATION_IDENTITY = {
+    'name': MIGRATION_NAME,
+    'sha256': '2617684e1c9c4f7ecf5cc40009239c2972d9569c3c1cea1324ecfe5d58871678',
+    'schemaBeforeSha256': 'c70cbcb110bb48c395b7e7284dedc0486a9afc125d940c455c0bafc1cffc701d',
+    'schemaAfterSha256': '8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197',
+    'baselineFilesSha256': 'c2179090dd600b3b33a56fe8384e8a7020a4e0cb6eb9a97f509352ee22f4df0a'}
 
 
 def image_service(service):
@@ -148,8 +170,153 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def migration_files(d, directory):
+    root = directory / MIGRATION_ROOT
+    paths = list(root.rglob('*'))
+    d.require(root.is_dir() and not root.is_symlink() and len(paths) < 200,
+              'API_ADMIN_MIGRATION_SOURCE_INVALID')
+    rows = {}
+    for path in paths:
+        d.require(not path.is_symlink(), 'API_ADMIN_MIGRATION_SOURCE_INVALID')
+        if path.is_dir():
+            continue
+        name = path.relative_to(root).as_posix()
+        d.require(path.is_file() and path.stat().st_size < 8 * 1024**2
+                  and (name == 'migration_lock.toml' or re.fullmatch(r'[0-9]{14}_[a-z0-9_]+/migration.sql', name)),
+                  'API_ADMIN_MIGRATION_SOURCE_INVALID')
+        rows[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return rows
+
+
+def migration_source_check(d, directory=None, *, candidate=True):
+    d.require(MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
+    directory = Path.cwd() if directory is None else directory
+    rows = migration_files(d, directory)
+    schema = directory / MIGRATION_SCHEMA
+    d.require(schema.is_file() and not schema.is_symlink(), 'API_ADMIN_MIGRATION_SOURCE_INVALID')
+    digest = hashlib.sha256(schema.read_bytes()).hexdigest()
+    added = rows.pop(MIGRATION_FILE, None)
+    d.require(len(rows) == 46 and fingerprint(rows) == MIGRATION_IDENTITY['baselineFilesSha256']
+              and ((added == MIGRATION_IDENTITY['sha256'] and digest == MIGRATION_IDENTITY['schemaAfterSha256'])
+                   or (not candidate and added is None and digest == MIGRATION_IDENTITY['schemaBeforeSha256'])),
+              'API_ADMIN_MIGRATION_SCOPE_CHANGED')
+    return dict(MIGRATION_IDENTITY)
+
+
+def migration_database_state(d, directory):
+    migration_source_check(d, directory, candidate=False)
+    expected = {n.split('/')[0]: digest for n, digest in migration_files(d, directory).items() if n.endswith('/migration.sql')}
+    expected[MIGRATION_NAME] = MIGRATION_IDENTITY['sha256']
+    query = """SELECT JSON_OBJECT('rows', (SELECT JSON_ARRAYAGG(JSON_OBJECT(
+        'name', migration_name, 'checksum', checksum, 'finished', finished_at IS NOT NULL,
+        'rolledBack', rolled_back_at IS NOT NULL)) FROM _prisma_migrations),
+        'columns', (SELECT JSON_ARRAYAGG(JSON_OBJECT('type', DATA_TYPE, 'columnType', COLUMN_TYPE,
+        'nullable', IS_NULLABLE, 'default', COLUMN_DEFAULT, 'extra', EXTRA))
+        FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='id_business_v2_quick_actions' AND COLUMN_NAME='sort_order'),
+        'indexes', (SELECT JSON_ARRAYAGG(JSON_OBJECT('column', COLUMN_NAME, 'sequence', SEQ_IN_INDEX,
+        'nonUnique', NON_UNIQUE, 'type', INDEX_TYPE, 'prefix', SUB_PART))
+        FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='id_business_v2_quick_actions'
+        AND INDEX_NAME='id_business_v2_quick_actions_user_id_deleted_at_sort_order_idx'))"""
+    database = d.current_job_database(directory)
+    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+        'mysql --batch --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+        '"$MYSQL_DATABASE" -e "' + ' '.join(query.split()) + '"', timeout=60)
+    d.require(len(raw) < 65536, 'API_ADMIN_MIGRATION_DATABASE_INVALID')
+    value = json.loads(raw)
+    d.require(isinstance(value, dict) and set(value) == {'rows', 'columns', 'indexes'}
+              and isinstance(value['rows'], list) and len(value['rows']) < 200,
+              'API_ADMIN_MIGRATION_DATABASE_INVALID')
+    completed = {}
+    for row in value['rows']:
+        d.require(isinstance(row, dict) and set(row) == {'name', 'checksum', 'finished', 'rolledBack'}
+                  and row['name'] in expected and row['checksum'] == expected[row['name']]
+                  and all(type(row[n]) in (bool, int) and row[n] in (0, 1) for n in ('finished', 'rolledBack'))
+                  and row['finished'] + row['rolledBack'] == 1,
+                  'API_ADMIN_MIGRATION_HISTORY_CHANGED')
+        if row['finished']:
+            d.require(row['name'] not in completed, 'API_ADMIN_MIGRATION_HISTORY_CHANGED')
+            completed[row['name']] = row['checksum']
+    applied = MIGRATION_NAME in completed
+    d.require(set(completed) == set(expected) if applied else set(completed) == set(expected) - {MIGRATION_NAME},
+              'API_ADMIN_MIGRATION_HISTORY_CHANGED')
+    columns, indexes = value['columns'] or [], value['indexes'] or []
+    if applied:
+        d.require(columns == [{'type': 'int', 'columnType': 'int', 'nullable': 'YES', 'default': None, 'extra': ''}]
+                  and isinstance(indexes, list) and len(indexes) == 3
+                  and sorted(indexes, key=lambda row: row.get('sequence', 0)) == [
+                      {'column': name, 'sequence': index, 'nonUnique': 1, 'type': 'BTREE', 'prefix': None}
+                      for index, name in enumerate(('user_id', 'deleted_at', 'sort_order'), 1)],
+                  'API_ADMIN_MIGRATION_SCHEMA_CHANGED')
+    else:
+        d.require(columns == [] and indexes == [], 'API_ADMIN_MIGRATION_SCHEMA_CHANGED')
+    return {'name': MIGRATION_NAME, 'sha256': MIGRATION_IDENTITY['sha256'],
+            'status': 'APPLIED' if applied else 'PENDING', 'schemaVerified': True,
+            'appliedMigrationsSha256': fingerprint(completed)}
+
+
+def migration_task_guard(d, directory, task, guards):
+    d.require(guards.get('registrationWindowRetained') is True
+              and jobs_idle(d, directory) == guards and registration_task(d, directory) == task,
+              'API_ADMIN_REGISTRATION_TASK_CHANGED')
+    registration_private(d, directory, retained=guards['registrationWindowRetained'])
+
+
+def migration_preflight(d, expected):
+    d.require(MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
+    directory, manifest, states, evidence = baseline(d, expected)
+    task = registration_task(d, directory)
+    migration_task_guard(d, directory, task, evidence['guards'])
+    audit = strict_audit(d, directory, Path(__file__).parent / (PREFIX + '-preflight-audit.json'))
+    d.require(snapshot(d, directory) == states, 'API_ADMIN_REGISTRATION_PREFLIGHT_CHANGED')
+    migration_task_guard(d, directory, task, evidence['guards'])
+    return {'status': SCOPE + '_BASELINE_VERIFIED', 'commit': expected, 'services': states,
+            **evidence, 'task': task, 'audit': audit, 'migration': dict(MIGRATION_IDENTITY),
+            'windowPreserved': True, 'requiresWindowHandoff': False}
+
+
+def apply_migration(d, directory):
+    before = migration_database_state(d, directory)
+    if before['status'] == 'APPLIED':
+        return {**before, 'performed': False}
+    try:
+        d.compose(directory, 'run', '--rm', '--no-deps', '--pull', 'never', 'migrate', timeout=600)
+    except Exception:
+        raise RuntimeError('API_ADMIN_MIGRATION_EXECUTION_FAILED') from None
+    after = migration_database_state(d, directory)
+    d.require(after['status'] == 'APPLIED', 'API_ADMIN_MIGRATION_NOT_APPLIED')
+    return {**after, 'performed': True}
+
+
+def migration_content(d, directory):
+    rows = {('/app/' + MIGRATION_ROOT + '/' + name): digest for name, digest in migration_files(d, directory).items()}
+    rows['/app/' + MIGRATION_SCHEMA] = hashlib.sha256((directory / MIGRATION_SCHEMA).read_bytes()).hexdigest()
+    return content_summary(d, 'migrate', '\n'.join(sorted(digest + '  ' + name for name, digest in rows.items())))
+
+
+def verify_migration_image(d, directory, proof, *, inspect_content=False):
+    row = proof['images']['migrate']
+    override = json.loads((directory / 'compose.release.json').read_text())
+    d.require(override['services']['migrate'] == {'image': row['reference'], 'pull_policy': 'never'},
+              'API_ADMIN_MIGRATION_IMAGE_CHANGED')
+    image = json.loads(d.run('docker', 'image', 'inspect', row['reference']))[0]
+    labels = image['Config'].get('Labels', {})
+    d.require(image['Id'] == row['imageId'] and image['Architecture'] == 'amd64'
+              and labels.get('org.opencontainers.image.revision') == proof['commit']
+              and labels.get('id-business-v2.source-tree') == proof['sourceTree'],
+              'API_ADMIN_MIGRATION_IMAGE_CHANGED')
+    expected = migration_content(d, directory)
+    d.require({k: row[k] for k in ('fileCount', 'sha256')} == expected,
+              'API_ADMIN_MIGRATION_IMAGE_CONTENT_CHANGED')
+    if inspect_content:
+        measured = content_summary(d, 'migrate', d.run('docker', 'run', '--rm', '--network', 'none',
+            '--read-only', '--entrypoint', '/bin/sh', row['reference'], '-c', content_command('migrate')))
+        d.require(measured == expected, 'API_ADMIN_MIGRATION_IMAGE_CONTENT_CHANGED')
+
+
 def content_command(service):
-    roots = '/app/apps/api/dist /app/packages/shared/dist' if service == 'api' else '/app' if service == 'auto-registration' else '/usr/share/nginx/html'
+    roots = '/app/apps/api/dist /app/packages/shared/dist' if service == 'api' else '/app/apps/api/prisma-mysql' if service == 'migrate' else '/app' if service == 'auto-registration' else '/usr/share/nginx/html'
     return ('set -eu; export LC_ALL=C; for p in ' + roots + '; do test -d "$p"; done; '
             'files="$(find ' + roots + ' -type f -exec sha256sum {} +)"; '
             "printf '%s\\n' \"$files\" | sort")
@@ -157,7 +324,7 @@ def content_command(service):
 
 def content_summary(d, service, output):
     lines = output.splitlines()
-    prefixes = ('/app/apps/api/dist/', '/app/packages/shared/dist/') if service == 'api' else ('/app/',) if service == 'auto-registration' else ('/usr/share/nginx/html/',)
+    prefixes = ('/app/apps/api/dist/', '/app/packages/shared/dist/') if service == 'api' else ('/app/apps/api/prisma-mysql/',) if service == 'migrate' else ('/app/',) if service == 'auto-registration' else ('/usr/share/nginx/html/',)
     d.require(0 < len(lines) < 30000 and len(output) < 8 * 1024 * 1024
               and all(re.fullmatch(r'[a-f0-9]{64}  /[^\r\n]+', line)
                       and line[66:].startswith(prefixes) for line in lines), 'API_ADMIN_CONTENT_INVALID')
@@ -169,6 +336,8 @@ def build_proof(d):
     d.require(d.run('git', 'rev-parse', 'HEAD') == commit
               and d.run('git', 'rev-parse', 'HEAD^{tree}') == tree, 'API_ADMIN_BUILD_SOURCE_CHANGED')
     result = {'version': 1, 'commit': commit, 'sourceTree': tree, 'images': {}}
+    if MIGRATION_MODE:
+        result.update(scope=SCOPE, migration=migration_source_check(d))
     if REGISTRATION:
         projection = json.loads(Path('.deploy/production-release/api-registration-build-projection.json').read_text())
         validate_worker_projection(d, projection['workerProjection'])
@@ -178,7 +347,7 @@ def build_proof(d):
                       == projection['workerProjection'][n]['sha256'] for n in WORKER_PAIR),
                   'API_ADMIN_REGISTRATION_PAIR_CHANGED')
         result.update(scope=SCOPE, **projection)
-    for service in UPDATED:
+    for service in IMAGE_SERVICES:
         reference = (os.environ['RELEASE_REPOSITORY'] + ':' + commit + '-'
                      + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'] + '-' + image_service(service))
         metadata = json.loads(d.run('docker', 'image', 'inspect', reference))[0]
@@ -188,6 +357,8 @@ def build_proof(d):
                   and labels.get('id-business-v2.source-tree') == tree, 'API_ADMIN_BUILD_LABEL_CHANGED')
         content = content_summary(d, service, d.run('docker', 'run', '--rm', '--network', 'none',
             '--read-only', '--entrypoint', '/bin/sh', reference, '-c', content_command(service)))
+        if service == 'migrate':
+            d.require(content == migration_content(d, Path.cwd()), 'API_ADMIN_MIGRATION_IMAGE_CONTENT_CHANGED')
         if service == 'auto-registration':
             d.require(labels.get('id-business-v2.worker-projection-sha256') == result['workerProjectionSha256'],
                       'API_ADMIN_REGISTRATION_PROJECTION_CHANGED')
@@ -201,10 +372,13 @@ def build_proof(d):
 
 
 def validate_proof(d, value, commit, tree, repository=None, run_id=None, attempt=None):
-    fields = {'version', 'commit', 'sourceTree', 'images'} | ({'scope', 'workerProjection', 'workerProjectionSha256'} if REGISTRATION else set())
+    fields = {'version', 'commit', 'sourceTree', 'images'} | ({'scope', 'workerProjection', 'workerProjectionSha256'} if REGISTRATION else {'scope', 'migration'} if MIGRATION_MODE else set())
     d.require(isinstance(value, dict) and set(value) == fields
               and value['version'] == 1 and value['commit'] == commit and value['sourceTree'] == tree
-              and set(value['images']) == set(UPDATED), 'API_ADMIN_BUILD_PROOF_INVALID')
+              and set(value['images']) == set(IMAGE_SERVICES), 'API_ADMIN_BUILD_PROOF_INVALID')
+    if MIGRATION_MODE:
+        d.require(value['scope'] == SCOPE and value['migration'] == MIGRATION_IDENTITY,
+                  'API_ADMIN_MIGRATION_BUILD_PROOF_CHANGED')
     for service, row in value['images'].items():
         d.require(set(row) == {'reference', 'imageId', 'fileCount', 'sha256'}
                   and re.fullmatch(r'sha256:[a-f0-9]{64}', row['imageId'])
@@ -292,6 +466,7 @@ def jobs_idle(d, directory, *, allow_retained=False):
 
 TASK_SOURCE = r'''const {PrismaClient}=require('@prisma/client'),c=require('node:crypto');
 const p=new PrismaClient({log:[]}),id=__TASK__,attempt=__ATTEMPT__,binding=__BINDING__;
+const migration=__MIGRATION__,observed=__OBSERVED__;
 const need=x=>{if(!x)throw Error();},bit=x=>x===true||x===1||x===1n;
 const sha=x=>c.createHash('sha256').update(x||'').digest('hex');
 const canon=x=>typeof x==='bigint'?x.toString():x instanceof Date?x.toISOString():Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
@@ -300,9 +475,9 @@ const mac=x=>c.createHmac('sha256',key).update('api-registration-handoff:').upda
 async function read(tx){
  const rows=await tx.$queryRaw`SELECT * FROM id_business_v2_registration_jobs WHERE id=${id}`;
  need(rows.length===1);const j=rows[0];
- need(j.id===id&&j.attempt===attempt&&j.state==='partial'&&j.step==='password'&&j.reason==='session_network_error'
+ need(j.id===id&&j.attempt===attempt&&j.state==='partial'&&j.step==='password'&&j.reason===(migration?observed.reason:'session_network_error')
   &&bit(j.registered)&&!bit(j.password_verified)&&!bit(j.mfa_verified)&&j.nonce_hash===null&&j.lease_until===null
-  &&j.updated_at.toISOString()==='2026-10-08T02:15:59.029Z'&&typeof j.password_encrypted==='string'&&j.password_encrypted.length>0
+  &&j.updated_at.toISOString()===(migration?observed.updatedAt:'2026-10-08T02:15:59.029Z')&&typeof j.password_encrypted==='string'&&j.password_encrypted.length>0
   &&sha(j.account_id)===binding.accountSha256&&sha(j.browser_profile_id)===binding.profileSha256&&sha(j.owner_id)===binding.ownerSha256);
  const accounts=await tx.$queryRaw`SELECT * FROM id_business_v2_chatgpt_accounts WHERE email_hash=${j.email_hash} ORDER BY id`;
  need(accounts.length===1&&accounts[0].id===j.account_id&&bit(accounts[0].registered)&&accounts[0].deleted_at===null
@@ -311,12 +486,16 @@ async function read(tx){
   action:{in:['id_business_v2.auto_registration.launch','id_business_v2.auto_registration.profile_rebound','id_business_v2.auto_registration.cancel']},
   createdAt:{gte:new Date('2026-10-08T02:14:14.768Z')}},orderBy:[{createdAt:'asc'},{id:'asc'}],take:1001});
  need(audits.length<1001);
+ if(migration)need(audits.length===observed.auditCount);
+ else{
  const launch=audits.filter(x=>x.action.endsWith('.launch')),rebound=audits.filter(x=>x.action.endsWith('.profile_rebound'));
  need(launch.length===1&&launch[0].afterData?.attempt===attempt&&launch[0].createdAt.toISOString()==='2026-10-08T02:14:16.979Z'
   &&rebound.length===1&&rebound[0].afterData?.attempt===attempt&&sha(rebound[0].afterData.browserProfileId)===binding.profileSha256
   &&sha(rebound[0].afterData.accountId)===binding.accountSha256&&rebound[0].createdAt.toISOString()==='2026-10-08T02:14:39.680Z');
- return {taskId:id,attempt,registered:true,passwordVerified:false,mfaVerified:false,leaseActive:false,noncePresent:false,
+ }
+ const value={taskId:id,attempt,registered:true,passwordVerified:false,mfaVerified:false,leaseActive:false,noncePresent:false,
   passwordCandidatePresent:true,binding,emailHashHmac:mac('email:'+j.email_hash),jobHmac:mac(rows),accountHmac:mac(accounts),auditHmac:mac(audits)};
+ return migration?{...value,state:j.state,step:j.step,reason:j.reason,updatedAt:j.updated_at.toISOString(),auditCount:audits.length}:value;
 }
 (async()=>{need(typeof key==='string'&&key.length>=32);const value=await p.$transaction(async tx=>{
  const a=await read(tx),b=await read(tx);need(JSON.stringify(a)===JSON.stringify(b));return b;
@@ -382,19 +561,26 @@ except BaseException:
 
 def registration_task(d, directory):
     code = TASK_SOURCE.replace('__TASK__', json.dumps(TASK_ID)).replace('__ATTEMPT__', str(TASK_ATTEMPT)).replace('__BINDING__', json.dumps(TASK_BINDING))
+    code = code.replace('__MIGRATION__', json.dumps(MIGRATION_MODE)).replace('__OBSERVED__', json.dumps(MIGRATION_TASK if MIGRATION_MODE else None))
     value = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', code, timeout=40))
     fields = {'taskId', 'attempt', 'registered', 'passwordVerified', 'mfaVerified', 'leaseActive',
               'noncePresent', 'passwordCandidatePresent', 'binding', 'emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'}
+    if MIGRATION_MODE:
+        fields = set(MIGRATION_TASK)
     d.require(isinstance(value, dict) and set(value) == fields and value['taskId'] == TASK_ID
               and type(value['attempt']) is int and value['attempt'] == TASK_ATTEMPT and value['binding'] == TASK_BINDING
               and all(value[n] is True for n in ('registered', 'passwordCandidatePresent'))
               and all(value[n] is False for n in ('passwordVerified', 'mfaVerified', 'leaseActive', 'noncePresent'))
               and all(re.fullmatch(r'[a-f0-9]{64}', value[n]) for n in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac')),
               'API_ADMIN_REGISTRATION_TASK_UNAVAILABLE')
+    if MIGRATION_MODE:
+        d.require(value == MIGRATION_TASK and type(value['auditCount']) is int,
+                  'API_ADMIN_REGISTRATION_TASK_CHANGED')
     return value
 
 
 def registration_private(d, directory, *, close=False, retained=True):
+    d.require(not MIGRATION_MODE or (close is False and retained is True), 'API_ADMIN_SCOPE_CONFLICT')
     code = PRIVATE_SOURCE.replace('__TASK__', TASK_ID).replace('__ATTEMPT__', str(TASK_ATTEMPT))
     code = code.replace('__CANCELLED__', repr(not retained)).replace('__RETAINED__', repr(retained)).replace('__CLOSE__', repr(close))
     value = json.loads(d.compose(directory, 'exec', '-T', 'auto-registration', 'python', '-B', '-c', code, timeout=45))
@@ -1073,16 +1259,34 @@ def baseline(d, expected, *, check_jobs=True):
                   == manifest['images']['api']['sourceCommit'], 'API_ADMIN_BASELINE_API_REVISION_CHANGED')
         source = {'imageId': metadata['Id'], 'revision': labels['org.opencontainers.image.revision']}
         stage = 'PROJECTION'
-        if manifest.get('apiRegistrationPublication'):
-            d.require(REGISTRATION and manifest['apiRegistrationPublication']['scope'] == SCOPE,
-                      'API_ADMIN_SCOPE_CONFLICT')
+        if manifest.get('apiAdminMigrationPublication'):
+            d.require(MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
             proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
-            d.require(manifest['apiRegistrationPublication'] == {'version': 1, 'scope': SCOPE,
+            d.require(manifest['apiAdminMigrationPublication'] == {'version': 1, 'scope': SCOPE,
+                'buildProofSha256': fingerprint(proof), 'workersPublished': False,
+                'cacheStatus': 'SKIPPED', 'configurationChanged': False, 'schemaChanged': True,
+                'migration': MIGRATION_IDENTITY} and manifest.get('migrationApplied') is True
+                and manifest.get('newMigrations') == [MIGRATION_FILE],
+                'API_ADMIN_MIGRATION_PROVENANCE_CHANGED')
+            migration_source_check(d, previous)
+            verify_running(d, previous, proof)
+            verify_migration_image(d, previous, proof)
+            source['kind'] = 'API_ADMIN_MIGRATION_BUILD_PROVEN'
+        elif manifest.get('apiRegistrationPublication'):
+            d.require(REGISTRATION or MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
+            origin, _ = d.api_admin_scope('API_REGISTRATION')
+            proof = origin.validate_proof(d, json.loads((previous / origin.PROOF_FILE).read_text()),
+                                          expected, manifest['sourceTree'])
+            d.require(manifest['apiRegistrationPublication'] == {'version': 1, 'scope': 'API_REGISTRATION',
                 'buildProofSha256': fingerprint(proof), 'workersPublished': True,
                 'cacheStatus': 'SKIPPED', 'configurationChanged': False}, 'API_ADMIN_REGISTRATION_PROVENANCE_CHANGED')
-            verify_running(d, previous, proof)
+            if MIGRATION_MODE:
+                d.require(manifest.get('servicesUpdated') == ['api', 'auto-registration']
+                          and manifest.get('migrationApplied') is False and manifest.get('newMigrations') == [],
+                          'API_ADMIN_REGISTRATION_PROVENANCE_CHANGED')
+            origin.verify_running(d, previous, proof)
             source['kind'] = 'API_REGISTRATION_BUILD_PROVEN'
-        elif REGISTRATION:
+        elif REGISTRATION or MIGRATION_MODE:
             source.update(registration_native_baseline(d, previous, manifest, states, raw))
         elif manifest.get('apiAdminPublication'):
             proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
@@ -1145,13 +1349,17 @@ def baseline(d, expected, *, check_jobs=True):
         guards = jobs_idle(d, previous) if check_jobs else None
         if REGISTRATION and check_jobs:
             require_registration_handoff(d, previous, manifest)
+        migration_state = migration_database_state(d, previous) if MIGRATION_MODE else None
         stage = 'SNAPSHOT'
         d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_POINTER_MOVED')
         d.require((previous / 'release-manifest.json').read_bytes() == raw, 'API_ADMIN_BASELINE_MANIFEST_CHANGED')
         d.require(snapshot(d, previous) == states, 'API_ADMIN_BASELINE_SERVICES_CHANGED')
-        return previous, manifest, states, {'manifestSha256': hashlib.sha256(raw).hexdigest(),
+        evidence = {'manifestSha256': hashlib.sha256(raw).hexdigest(),
             'environmentSha256': hashlib.sha256((previous / '.env.aws.production').read_bytes()).hexdigest(),
             'apiSource': source, 'guards': guards, 'freeBytes': free_bytes}
+        if MIGRATION_MODE:
+            evidence['migrationState'] = migration_state
+        return previous, manifest, states, evidence
     except Exception as error:
         code = str(error)
         if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
@@ -1190,15 +1398,22 @@ def require_preserved(d, previous, release, before, environment, *, all_services
               and (release / '.env.aws.production').read_bytes() == environment,
               'API_ADMIN_ENVIRONMENT_CHANGED')
     for name in CONFIG_FILES:
+        if MIGRATION_MODE and name == MIGRATION_SCHEMA:
+            continue
         d.require((previous / name).read_bytes() == (release / name).read_bytes(), 'API_ADMIN_CONFIG_OR_SCHEMA_CHANGED')
-    d.require(d.migration_plan(previous, release) == [], 'API_ADMIN_MIGRATIONS_FORBIDDEN')
+    if MIGRATION_MODE:
+        migration_source_check(d, previous, candidate=False)
+        migration_source_check(d, release)
+        d.require(d.migration_plan(previous, release) in ([], [MIGRATION_FILE]), 'API_ADMIN_MIGRATION_SCOPE_CHANGED')
+    else:
+        d.require(d.migration_plan(previous, release) == [], 'API_ADMIN_MIGRATIONS_FORBIDDEN')
     states = snapshot(d, previous)
     d.require(all(states[name] == before[name] for name in before if all_services or name not in UPDATED),
               'API_ADMIN_PRESERVED_CONTAINER_CHANGED')
     old = json.loads((previous / 'compose.release.json').read_text())
     new = json.loads((release / 'compose.release.json').read_text())
     d.require(set(old) == set(new) == {'services'} and set(old['services']) == set(new['services'])
-              and all(old['services'][name] == new['services'][name] for name in old['services'] if name not in UPDATED),
+              and all(old['services'][name] == new['services'][name] for name in old['services'] if name not in IMAGE_SERVICES),
               'API_ADMIN_PRESERVED_IMAGE_REFERENCE_CHANGED')
     return states
 
@@ -1240,11 +1455,14 @@ def source_tree(d, directory):
 
 
 def readback(d, expected, *, check_task=True):
+    d.require(not MIGRATION_MODE or check_task, 'API_ADMIN_SCOPE_CONFLICT')
     previous, manifest, states, evidence = baseline(d, expected, check_jobs=False)
     record = json.loads((previous / STATE_FILE).read_text())
     proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
-    d.require(manifest.get('servicesUpdated') == list(UPDATED) and manifest.get('migrationApplied') is False
-              and manifest.get('newMigrations') == [] and record['buildProofSha256'] == fingerprint(proof)
+    d.require(manifest.get('servicesUpdated') == list(UPDATED)
+              and manifest.get('migrationApplied') is (True if MIGRATION_MODE else False)
+              and manifest.get('newMigrations') == ([MIGRATION_FILE] if MIGRATION_MODE else [])
+              and record['buildProofSha256'] == fingerprint(proof)
               and evidence['environmentSha256'] == record['environmentSha256']
               and all(states[name] == record['before'][name] for name in states if name not in UPDATED),
               'API_ADMIN_READBACK_PRESERVATION_FAILED')
@@ -1263,10 +1481,28 @@ def readback(d, expected, *, check_task=True):
     if REGISTRATION and check_task:
         jobs_idle(d, previous)
         d.require(registration_task(d, previous) == record['registrationTask'], 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
+    migration = {}
+    if MIGRATION_MODE:
+        state = migration_database_state(d, previous)
+        d.require(state['status'] == 'APPLIED' and all(record['migration'][n] == state[n] for n in state)
+                  and type(manifest.get('migrationPerformed')) is bool
+                  and record['migration']['performed'] is manifest['migrationPerformed'],
+                  'API_ADMIN_MIGRATION_READBACK_CHANGED')
+        backup = json.loads((previous / 'backup-verification.json').read_text())
+        d.require(backup.get('name') == manifest.get('backupBeforeRelease') and backup.get('s3Verified') is True
+                  and type(backup.get('size')) is int and backup['size'] > 0
+                  and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')),
+                  'API_ADMIN_MIGRATION_BACKUP_CHANGED')
+        migration_task_guard(d, previous, record['registrationTask'], record['registrationGuards'])
+        verify_migration_image(d, previous, proof)
+        migration = {'migration': dict(MIGRATION_IDENTITY), 'migrationState': state,
+                     'migrationApplied': True, 'migrationPerformed': manifest['migrationPerformed'],
+                     'taskHmacMatched': True, 'windowPreserved': True,
+                     'registrationWindowRetained': record['registrationGuards']['registrationWindowRetained']}
     return {'status': SCOPE + '_VERIFIED', 'commit': expected, 'sourceTree': proof['sourceTree'],
             'servicesUpdated': list(UPDATED), 'preservedServiceCount': 5,
             'runningImagesAndContentMatched': True, 'buildProofSha256': fingerprint(proof),
-            'environmentUnchanged': True, 'services': states}
+            'environmentUnchanged': True, 'services': states, **migration}
 
 
 def release(d, args):
@@ -1291,7 +1527,9 @@ def _release_locked(d, args):
                      args.post_cleanup_seal_sha256, args.order_archive_seal_sha256,
                      args.order_archive_prepared_images_sha256))
         and not (REGISTRATION and getattr(args, 'api_admin_only', False))
-        and not (not REGISTRATION and getattr(args, 'api_registration_only', False)), 'API_ADMIN_SCOPE_CONFLICT')
+        and not (not REGISTRATION and getattr(args, 'api_registration_only', False))
+        and not (MIGRATION_MODE and getattr(args, 'api_admin_only', False))
+        and (getattr(args, 'api_admin_migration_only', False) is MIGRATION_MODE), 'API_ADMIN_SCOPE_CONFLICT')
     d.require(all(re.fullmatch(r'[a-f0-9]{40}', value or '') for value in
                   (args.commit, args.source_tree, args.expected_current))
               and re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository)
@@ -1303,7 +1541,11 @@ def _release_locked(d, args):
                           args.repository, args.run_id, args.run_attempt)
     os.umask(0o077)
     previous, old, before, evidence = baseline(d, args.expected_current)
-    original_task = registration_task(d, previous) if REGISTRATION else None
+    original_task = registration_task(d, previous) if REGISTRATION or MIGRATION_MODE else None
+    if MIGRATION_MODE:
+        migration_task_guard(d, previous, original_task, evidence['guards'])
+    migration_result = {**evidence['migrationState'], 'performed': False} if MIGRATION_MODE else None
+    migration_attempted = False
     environment = (previous / '.env.aws.production').read_bytes()
     original_configuration = configuration_hashes(previous)
     stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
@@ -1326,6 +1568,8 @@ def _release_locked(d, args):
             item.rename(target / item.name)
         extracted.rmdir()
         d.require(source_tree(d, target) == args.source_tree, 'API_ADMIN_SOURCE_TREE_CHANGED')
+        if MIGRATION_MODE:
+            migration_source_check(d, target)
         if REGISTRATION:
             d.require(all(hashlib.sha256((target / n).read_bytes()).hexdigest() == proof['workerProjection'][n]['sha256']
                           and stat.S_IMODE((target / n).stat().st_mode) in (0o644, 0o664) for n in WORKER_PAIR),
@@ -1335,7 +1579,7 @@ def _release_locked(d, args):
                   'API_ADMIN_EXECUTOR_SOURCE_CHANGED')
         shutil.copy2(previous / '.env.aws.production', target / '.env.aws.production')
         override = json.loads((previous / 'compose.release.json').read_text())
-        for name in UPDATED:
+        for name in IMAGE_SERVICES:
             override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
         require_preserved(d, previous, target, before, environment, all_services=True)
@@ -1346,7 +1590,7 @@ def _release_locked(d, args):
         login = subprocess.run(['docker', 'login', '--username', 'AWS', '--password-stdin', registry], input=password, capture_output=True, text=True)
         d.require(login.returncode == 0, 'API_ADMIN_ECR_LOGIN_FAILED')
         try:
-            for name in UPDATED:
+            for name in IMAGE_SERVICES:
                 row = proof['images'][name]
                 d.run('docker', 'pull', row['reference'], timeout=900)
                 image = json.loads(d.run('docker', 'image', 'inspect', row['reference']))[0]
@@ -1357,6 +1601,8 @@ def _release_locked(d, args):
         finally:
             subprocess.run(['docker', 'logout', registry], capture_output=True, text=True)
         d.require(shutil.disk_usage(d.BASE).free > 2 * 1024**3, 'API_ADMIN_DISK_LOW')
+        if MIGRATION_MODE:
+            verify_migration_image(d, target, proof, inspect_content=True)
         step = 'audit-before'
         first = strict_audit(d, target, target / 'before-audit.json')
         step = 'backup'
@@ -1367,9 +1613,18 @@ def _release_locked(d, args):
                   'API_ADMIN_BASELINE_MOVED')
         require_preserved(d, previous, target, before, environment, all_services=True)
         jobs_idle(d, previous)
+        if MIGRATION_MODE:
+            step = 'migration'
+            migration_task_guard(d, previous, original_task, evidence['guards'])
+            migration_attempted = migration_result['status'] == 'PENDING'
+            migration_result = apply_migration(d, target)
+            require_preserved(d, previous, target, before, environment, all_services=True)
+            migration_task_guard(d, previous, original_task, evidence['guards'])
         step = 'switch'
         for name in SWITCH_ORDER:
             require_preserved(d, previous, target, before, environment)
+            if MIGRATION_MODE:
+                migration_task_guard(d, previous, original_task, evidence['guards'])
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
                 if REGISTRATION:
@@ -1391,9 +1646,12 @@ def _release_locked(d, args):
         record = {'before': before, 'after': after, 'environmentSha256': evidence['environmentSha256'],
                   'baselineEvidence': evidence, 'buildProofSha256': fingerprint(proof),
                   'configurationBefore': configuration_hashes(previous), 'configurationAfter': configuration_hashes(target)}
-        if REGISTRATION:
+        if REGISTRATION or MIGRATION_MODE:
             d.require(registration_task(d, target) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
             record['registrationTask'] = original_task
+        if MIGRATION_MODE:
+            migration_task_guard(d, target, original_task, evidence['guards'])
+            record.update(registrationGuards=evidence['guards'], migration=migration_result)
         (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
         (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
         manifest = {'images': old['images'],
@@ -1406,14 +1664,18 @@ def _release_locked(d, args):
             imageBuildRun=f'github-actions-{args.run_id}-{args.run_attempt}',
             servicesUpdated=list(UPDATED), sourceArchiveSha256=hashlib.sha256(data).hexdigest(),
             images={**old['images'], **{name: {'reference': proof['images'][name]['reference'],
-                'digest': proof['images'][name]['imageId'], 'sourceCommit': args.commit} for name in UPDATED}},
-            backupBeforeRelease=backup['name'], migrationApplied=False, newMigrations=[],
+                'digest': proof['images'][name]['imageId'], 'sourceCommit': args.commit} for name in IMAGE_SERVICES}},
+            backupBeforeRelease=backup['name'], migrationApplied=MIGRATION_MODE,
+            newMigrations=[MIGRATION_FILE] if MIGRATION_MODE else [],
             dataAuditBefore=first, dataAuditAfter=second,
-            databaseGrants={'status': 'SKIPPED', 'reason': 'API_ADMIN_UNCHANGED_SCHEMA'},
+            databaseGrants={'status': 'SKIPPED', 'reason': 'API_ADMIN_EXISTING_TABLE_COLUMN_INDEX' if MIGRATION_MODE else 'API_ADMIN_UNCHANGED_SCHEMA'},
             rollback={'release': str(previous), 'images': {name: before[name]['image'] for name in UPDATED}, 'servicesAdded': []},
-            **{'apiRegistrationPublication' if REGISTRATION else 'apiAdminPublication':
+            **{'apiAdminMigrationPublication' if MIGRATION_MODE else 'apiRegistrationPublication' if REGISTRATION else 'apiAdminPublication':
                 {'version': 1, 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
-                 'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': False}})
+                 'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': False,
+                 **({'schemaChanged': True, 'migration': dict(MIGRATION_IDENTITY)} if MIGRATION_MODE else {})}})
+        if MIGRATION_MODE:
+            manifest['migrationPerformed'] = migration_result['performed']
         (target / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_MOVED')
         d.point_current(target, f'{stamp}-publish')
@@ -1422,14 +1684,23 @@ def _release_locked(d, args):
         print(json.dumps(result))
         return 0
     except Exception as error:
+        if MIGRATION_MODE and migration_attempted:
+            try:
+                observed = migration_database_state(d, target)
+                migration_result = {**observed, 'performed': observed['status'] == 'APPLIED'}
+            except Exception:
+                migration_result = {'status': 'UNVERIFIED', 'performed': None}
         # A new task may start after the last idle read. Do not interrupt it to
         # force rollback. Keep an explicit partial-state receipt for recovery.
         rollback_ok = True
         rollback = {}
         for name in reversed(changed):
             try:
-                if name == 'api' or REGISTRATION:
+                if name == 'api' or REGISTRATION or MIGRATION_MODE:
                     jobs_idle(d, target)
+                if MIGRATION_MODE:
+                    d.require(jobs_idle(d, target) == evidence['guards'], 'API_ADMIN_REGISTRATION_TASK_CHANGED')
+                    registration_private(d, target, retained=evidence['guards']['registrationWindowRetained'])
                 d.rollback_service(previous, target, name, before)
                 rollback[name] = 'RESTORED'
             except Exception:
@@ -1444,6 +1715,8 @@ def _release_locked(d, args):
                           and all(restored[name]['image'] == before[name]['image']
                                   and restored[name]['reference'] == before[name]['reference'] for name in UPDATED),
                           'API_ADMIN_ROLLBACK_NOT_RESTORED')
+                if MIGRATION_MODE:
+                    migration_task_guard(d, previous, original_task, evidence['guards'])
             except Exception:
                 rollback_ok = False
         if rollback_ok and (d.BASE / 'current').resolve() == target:
@@ -1451,6 +1724,8 @@ def _release_locked(d, args):
                 d.point_current(previous, f'{stamp}-recover')
             except Exception:
                 rollback_ok = False
+        if MIGRATION_MODE and migration_result['status'] == 'UNVERIFIED':
+            rollback_ok = False
         actual = {}
         for name in d.ALL_SERVICES:
             try:
@@ -1468,6 +1743,11 @@ def _release_locked(d, args):
                   'candidateCommit': args.commit, 'previousCommit': args.expected_current,
                   'currentPointsToCandidate': (d.BASE / 'current').resolve() == target}
         result['receiptPersisted'] = True
+        if MIGRATION_MODE:
+            result.update(migration=migration_result,
+                migrationApplied=None if migration_result['status'] == 'UNVERIFIED' else migration_result['status'] == 'APPLIED',
+                migrationPerformed=migration_result['performed'], migrationAttempted=migration_attempted,
+                inverseMigrationPerformed=False)
         try:
             (target / FAILURE_FILE).write_text(json.dumps(result, indent=2) + '\n')
         except Exception:

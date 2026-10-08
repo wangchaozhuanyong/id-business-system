@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { isIP } from 'node:net';
 import {
   V2_RECHARGE_BROWSER_DEFAULTS,
+  V2_RECHARGE_BROWSER_PROFILE_KEYS,
   type V2RechargeBrowserOptions,
   type V2RechargeStaticProxyCredentials
 } from '@apple-business/shared';
@@ -35,8 +36,10 @@ export function validateBrowserOptions(
   const input: Record<string, unknown> = {
     sessionWaitMinutes: defaults.sessionWaitMinutes,
     sessionRetryLimit: defaults.sessionRetryLimit,
+    ...Object.fromEntries(V2_RECHARGE_BROWSER_PROFILE_KEYS.map((key) => [key, defaults[key]])),
     ...supplied
   };
+  if (supplied.os !== 'Win32' && !Object.hasOwn(supplied, 'osVersion')) input.osVersion = '';
   if (
     Object.keys(input).some((key) => !Object.hasOwn(defaults, key)) ||
     Object.keys(defaults).some((key) => !Object.hasOwn(input, key))
@@ -51,6 +54,29 @@ export function validateBrowserOptions(
   }
   for (const [key, choices] of Object.entries(enums)) {
     if (!choices.includes(input[key] as string)) fail('窗口配置选项');
+  }
+  if (V2_RECHARGE_BROWSER_PROFILE_KEYS.every((key) => !Object.hasOwn(supplied, key))) {
+    input.os = 'Win32';
+    input.osVersion = '11';
+  }
+  if (
+    typeof input.coreVersion !== 'string' ||
+    !/^[1-9]\d{1,2}$/.test(input.coreVersion) ||
+    Number(input.coreVersion) < 96
+  )
+    fail('浏览器内核版本');
+  if (
+    input.os === 'Win32'
+      ? !['11', '10'].includes(input.osVersion as string)
+      : input.osVersion !== ''
+  )
+    fail('操作系统版本');
+  for (const [key, min, max] of [
+    ['openWidth', 800, 7680],
+    ['openHeight', 600, 4320]
+  ] as const) {
+    if (!Number.isInteger(input[key]) || Number(input[key]) < min || Number(input[key]) > max)
+      fail('窗口尺寸');
   }
   if (booleans.some((key) => typeof input[key] !== 'boolean')) fail('窗口开关');
   for (const [key, min, max] of [

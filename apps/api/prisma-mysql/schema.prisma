@@ -1995,6 +1995,7 @@ model IdBusinessV2QuickAction {
   userId    String    @map("user_id") @db.Char(36)
   title     String    @db.VarChar(80)
   content   String    @db.Text
+  sortOrder Int?      @map("sort_order")
   createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.DateTime(6)
   deletedAt DateTime? @map("deleted_at") @db.DateTime(6)
@@ -2002,6 +2003,7 @@ model IdBusinessV2QuickAction {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, deletedAt, updatedAt])
+  @@index([userId, deletedAt, sortOrder])
   @@map("id_business_v2_quick_actions")
 }
 

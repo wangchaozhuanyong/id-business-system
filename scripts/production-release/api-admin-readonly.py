@@ -16,9 +16,18 @@ def command(*args):
     return result.stdout.strip()
 
 
+def selected_scope(operation):
+    if operation in ('verify_api_admin_migration', 'release_api_admin_migration'):
+        return 'API_ADMIN_MIGRATION'
+    if operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration',
+                     'verify_registration_business', 'verify_registration_handoff', 'recover_registration_handoff'):
+        return 'API_REGISTRATION'
+    return 'API_ADMIN'
+
+
 def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True):
     if (not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (commit, expected))
-            or scope not in ('API_ADMIN', 'API_REGISTRATION') or mode not in ('preflight', 'readback', 'handoff', 'business', 'handoff-observe', 'handoff-recover')
+            or scope not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION') or mode not in ('preflight', 'readback', 'handoff', 'business', 'handoff-observe', 'handoff-recover')
             or mode in ('handoff', 'business', 'handoff-observe', 'handoff-recover') and scope != 'API_REGISTRATION' or type(require_closed) is not bool):
         raise ValueError('API_ADMIN_INPUT_INVALID')
     prefix = scope.lower().replace('_', '-')
@@ -68,6 +77,30 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                       else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
     if not isinstance(receipt, dict) or receipt.get('status') != wanted or receipt.get('commit') != expected:
         raise RuntimeError('API_ADMIN_RECEIPT_CHANGED')
+    if scope == 'API_ADMIN_MIGRATION' and mode == 'preflight':
+        import runpy
+        namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
+        guards, task, state, audit = (receipt.get(n, {}) for n in ('guards', 'task', 'migrationState', 'audit'))
+        if not all(isinstance(value, dict) for value in (guards, task, state, audit)):
+            raise RuntimeError('API_ADMIN_MIGRATION_PREFLIGHT_CHANGED')
+        if (receipt.get('migration') != namespace['MIGRATION_IDENTITY']
+                or receipt.get('windowPreserved') is not True or receipt.get('requiresWindowHandoff') is not False
+                or type(receipt.get('freeBytes')) is not int or receipt['freeBytes'] <= 6 * 1024**3
+                or guards.get('rechargeIdle') is not True or guards.get('registrationBusy') is not False
+                or guards.get('registrationLeaseActive') is not False or type(guards.get('registrationWindowRetained')) is not bool
+                or guards.get('registrationWindowRetained') is not True
+                or task.get('taskId') != namespace['TASK_ID'] or type(task.get('attempt')) is not int or task.get('attempt') != namespace['TASK_ATTEMPT']
+                or task.get('binding') != namespace['TASK_BINDING']
+                or task != namespace['MIGRATION_TASK'] or type(task.get('auditCount')) is not int
+                or any(task.get(n) is not True for n in ('registered', 'passwordCandidatePresent'))
+                or any(task.get(n) is not False for n in ('passwordVerified', 'mfaVerified', 'leaseActive', 'noncePresent'))
+                or any(not re.fullmatch(r'[a-f0-9]{64}', task.get(n, '')) for n in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'))
+                or state.get('status') not in ('PENDING', 'APPLIED') or state.get('schemaVerified') is not True
+                or state.get('name') != namespace['MIGRATION_NAME'] or state.get('sha256') != namespace['MIGRATION_IDENTITY']['sha256']
+                or not re.fullmatch(r'[a-f0-9]{64}', state.get('appliedMigrationsSha256', ''))
+                or audit.get('mode') != 'STRICT_ZERO_49' or audit.get('checkCount') != 49 or audit.get('violationCount') != 0
+                or not re.fullmatch(r'[a-f0-9]{64}', audit.get('checksSha256', ''))):
+            raise RuntimeError('API_ADMIN_MIGRATION_PREFLIGHT_CHANGED')
     if mode == 'readback':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
@@ -80,8 +113,19 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                 or receipt.get('environmentUnchanged') is not True
                 or any(receipt.get('services', {}).get(name, {}).get('image') != row['imageId']
                        or receipt.get('services', {}).get(name, {}).get('reference') != row['reference']
-                       for name, row in proof['images'].items())):
+                       for name, row in proof['images'].items() if name in namespace['UPDATED'])):
             raise RuntimeError('API_ADMIN_READBACK_BUILD_CHANGED')
+        if scope == 'API_ADMIN_MIGRATION' and (
+                receipt.get('migration') != namespace['MIGRATION_IDENTITY']
+                or receipt.get('migrationApplied') is not True or type(receipt.get('migrationPerformed')) is not bool
+                or receipt.get('taskHmacMatched') is not True or receipt.get('windowPreserved') is not True
+                or type(receipt.get('registrationWindowRetained')) is not bool
+                or receipt.get('migrationState', {}).get('status') != 'APPLIED'
+                or receipt.get('migrationState', {}).get('sha256') != namespace['MIGRATION_IDENTITY']['sha256']
+                or receipt.get('migrationState', {}).get('name') != namespace['MIGRATION_NAME']
+                or receipt.get('migrationState', {}).get('schemaVerified') is not True
+                or not re.fullmatch(r'[a-f0-9]{64}', receipt.get('migrationState', {}).get('appliedMigrationsSha256', ''))):
+            raise RuntimeError('API_ADMIN_MIGRATION_READBACK_CHANGED')
     return receipt
 
 
@@ -89,7 +133,7 @@ def main():
     os.umask(0o077)
     mode = sys.argv[1] if len(sys.argv) == 2 else ''
     operation = os.environ.get('RELEASE_OPERATION', '')
-    scope = 'API_REGISTRATION' if operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration', 'verify_registration_business', 'verify_registration_handoff', 'recover_registration_handoff') else 'API_ADMIN'
+    scope = selected_scope(operation)
     if mode == 'handoff' and operation != 'handoff_api_registration':
         raise ValueError('API_ADMIN_SCOPE_CONFLICT')
     if mode == 'business' and operation != 'verify_registration_business':
@@ -144,5 +188,5 @@ if __name__ == '__main__':
         code = str(error)
         if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
             code = 'API_ADMIN_TRANSPORT_UNAVAILABLE'
-        print(json.dumps({'status': 'API_ADMIN_VERIFICATION_FAILED', 'code': code}))
+        print(json.dumps({'status': selected_scope(os.environ.get('RELEASE_OPERATION', '')) + '_VERIFICATION_FAILED', 'code': code}))
         raise SystemExit(1) from None

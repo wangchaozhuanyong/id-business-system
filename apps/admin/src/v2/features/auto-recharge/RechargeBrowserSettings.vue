@@ -45,6 +45,7 @@
         <strong>{{ serverMode ? '当前服务器代理设置' : '当前代理 IP 与窗口配置' }}</strong>
         <p>{{ summary.proxy }}</p>
         <p v-if="!serverMode">分组：{{ stored.groupName }} · {{ summary.languages }}</p>
+        <p v-if="!serverMode">{{ summary.profile }}</p>
       </div>
       <p v-if="settingsError" class="recharge-settings-error" role="alert">{{ settingsError }}</p>
       <div v-if="directMode" class="recharge-settings-connection">

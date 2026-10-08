@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { BankRechargeAccountDeliveryService } from './bank-recharge-account-delivery.service';
+import { ACCOUNT_COPY_SETTINGS_OWNER_ID } from './account-copy-settings';
+import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
 import { storedBrowserOptions } from './recharge-browser-options';
 
 const operator = {
@@ -27,41 +29,78 @@ function fixture() {
   const mailboxes = {
     accountBuyerCode: vi.fn().mockResolvedValue({ aliasId: 'alias-1', buyerQueryCode: code })
   };
-  let row: { browserOptions: Record<string, unknown> } | null = {
-    browserOptions: {
-      ...V2_RECHARGE_BROWSER_DEFAULTS,
-      serverDefaultProxyId: 'proxy-1',
-      accountCopySuffix: '查询入口\n说明'
-    }
+  type SettingsRow = {
+    ownerId: string;
+    browserOptions: Record<string, unknown>;
+    updatedAt: Date;
   };
-  const settings = {
-    find: vi.fn(async () => row),
-    findInTransaction: vi.fn(async () => row),
-    upsert: vi.fn(async (_tx, _id, data) => {
-      row = data;
+  const rows = new Map<string, SettingsRow>([
+    [
+      operator.id,
+      {
+        ownerId: operator.id,
+        browserOptions: {
+          ...V2_RECHARGE_BROWSER_DEFAULTS,
+          serverDefaultProxyId: 'proxy-1',
+          accountCopySuffix: '查询入口\n说明'
+        },
+        updatedAt: new Date('2026-10-01T00:00:00Z')
+      }
+    ]
+  ]);
+  const persisted = {
+    findUnique: vi.fn(
+      async ({ where }: { where: { ownerId: string } }) => rows.get(where.ownerId) ?? null
+    ),
+    findMany: vi.fn(async () =>
+      [...rows.values()].sort(
+        (left, right) =>
+          right.updatedAt.getTime() - left.updatedAt.getTime() ||
+          left.ownerId.localeCompare(right.ownerId)
+      )
+    ),
+    upsert: vi.fn(async ({ where, create, update }) => {
+      const before = rows.get(where.ownerId);
+      const row: SettingsRow = {
+        ...(before ? { ...before, ...update } : create),
+        updatedAt: new Date('2026-10-08T00:00:00Z')
+      };
+      rows.set(where.ownerId, row);
+      return row;
     })
+  };
+  const prisma = { idBusinessV2RechargeBrowserSetting: persisted };
+  const repository = new RechargeSettingsRepository(prisma as never);
+  const settings = {
+    findAccountCopySuffix: vi.spyOn(repository, 'findAccountCopySuffix'),
+    upsert: vi.spyOn(repository, 'upsert')
   };
   const encryption = { decrypt: vi.fn((value: string | null) => value?.slice(7) ?? null) };
   const audit = { append: vi.fn().mockResolvedValue(undefined) };
-  const transactions = { execute: vi.fn(async (work) => work({})) };
-  const service = new BankRechargeAccountDeliveryService(
-    accounts as never,
-    mailboxes as never,
-    settings as never,
-    encryption as never,
-    transactions as never,
-    audit as never
-  );
+  const transactions = { execute: vi.fn(async (work) => work(prisma)) };
+  const createService = (repository = new RechargeSettingsRepository(prisma as never)) =>
+    new BankRechargeAccountDeliveryService(
+      accounts as never,
+      mailboxes as never,
+      repository,
+      encryption as never,
+      transactions as never,
+      audit as never
+    );
+  const service = createService(repository);
   return {
     service,
     accounts,
     account,
     mailboxes,
     settings,
+    rows,
+    persisted,
+    createService,
     audit,
     encryption,
     clearSettings: () => {
-      row = null;
+      rows.clear();
     }
   };
 }
@@ -119,36 +158,112 @@ describe('ChatGPT 账号资料交付复制', () => {
     await expect(service.updateCopySettings({ suffix: 'x' }, staff)).rejects.toThrow('仅管理员');
     expect(accounts.accountIdentity).not.toHaveBeenCalled();
     expect(mailboxes.accountBuyerCode).not.toHaveBeenCalled();
-    expect(settings.find).not.toHaveBeenCalled();
+    expect(settings.findAccountCopySuffix).not.toHaveBeenCalled();
     expect(settings.upsert).not.toHaveBeenCalled();
   });
 
-  it('后缀按当前管理员保存，保留窗口及代理配置，不进入执行器参数', async () => {
-    const { service, settings, audit } = fixture();
+  it('后缀单独保存为共享配置，不修改个人窗口或代理配置，不进入执行器参数', async () => {
+    const { service, settings, rows, audit } = fixture();
+    const personalBefore = structuredClone(rows.get(operator.id));
     await expect(service.copySettings(operator)).resolves.toEqual({ suffix: '查询入口\n说明' });
     await service.updateCopySettings({ suffix: '自定义\n两行' }, operator);
-    expect(settings.upsert).toHaveBeenCalledWith(expect.anything(), operator.id, {
-      browserOptions: {
-        ...V2_RECHARGE_BROWSER_DEFAULTS,
-        serverDefaultProxyId: 'proxy-1',
-        accountCopySuffix: '自定义\n两行'
+    expect(settings.upsert).toHaveBeenCalledWith(
+      expect.anything(),
+      ACCOUNT_COPY_SETTINGS_OWNER_ID,
+      {
+        browserOptions: { accountCopySuffix: '自定义\n两行' }
       }
+    );
+    expect(rows.get(operator.id)).toEqual(personalBefore);
+    expect(rows.get(ACCOUNT_COPY_SETTINGS_OWNER_ID)?.browserOptions).toEqual({
+      accountCopySuffix: '自定义\n两行'
     });
-    const saved = settings.upsert.mock.calls[0]![2].browserOptions;
-    expect(storedBrowserOptions(saved)).toEqual(V2_RECHARGE_BROWSER_DEFAULTS);
+    expect(storedBrowserOptions(rows.get(operator.id)?.browserOptions)).toEqual(
+      V2_RECHARGE_BROWSER_DEFAULTS
+    );
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain('自定义');
+    expect(audit.append).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: operator.id, objectId: ACCOUNT_COPY_SETTINGS_OWNER_ID })
+    );
   });
 
-  it('无既有配置时同时补齐原窗口默认值，后缀可清空', async () => {
+  it('无既有配置时保存共享后缀，后缀可清空', async () => {
     const { service, clearSettings, settings } = fixture();
     clearSettings();
     await expect(service.copySettings(operator)).resolves.toEqual({ suffix: '' });
     await service.updateCopySettings({ suffix: 'new' }, operator);
-    expect(storedBrowserOptions(settings.upsert.mock.calls[0]![2].browserOptions)).toEqual(
-      V2_RECHARGE_BROWSER_DEFAULTS
-    );
+    expect(settings.upsert.mock.calls[0]![2].browserOptions).toEqual({ accountCopySuffix: 'new' });
     await service.updateCopySettings({ suffix: '' }, operator);
     await expect(service.copySettings(operator)).resolves.toEqual({ suffix: '' });
+  });
+
+  it('管理员 A 保存后，另一电脑的新服务实例与管理员 B 读取和单行复制使用同一后缀', async () => {
+    const { service, createService } = fixture();
+    const otherAdmin = { ...operator, id: 'fixture-other-admin' };
+    await service.updateCopySettings({ suffix: '所有管理员共用\n查询说明' }, operator);
+    const otherComputer = createService();
+    await expect(otherComputer.copySettings(operator)).resolves.toEqual({
+      suffix: '所有管理员共用\n查询说明'
+    });
+    await expect(otherComputer.copySettings(otherAdmin)).resolves.toEqual({
+      suffix: '所有管理员共用\n查询说明'
+    });
+    await expect(otherComputer.copyAccount('account-1', otherAdmin)).resolves.toEqual({
+      text: `${email}----${password}----${secret}----${code}\n所有管理员共用\n查询说明`
+    });
+  });
+
+  it('共享后缀清空后，不恢复个人历史后缀，其他管理员复制时也不追加', async () => {
+    const { service, createService, rows, persisted } = fixture();
+    await service.updateCopySettings({ suffix: '' }, operator);
+    persisted.findMany.mockClear();
+    const otherComputer = createService();
+    const otherAdmin = { ...operator, id: 'fixture-other-admin' };
+    await expect(otherComputer.copySettings(otherAdmin)).resolves.toEqual({ suffix: '' });
+    await expect(otherComputer.copyAccount('account-1', otherAdmin)).resolves.toEqual({
+      text: `${email}----${password}----${secret}----${code}`
+    });
+    expect(persisted.findMany).not.toHaveBeenCalled();
+    expect(rows.get(operator.id)?.browserOptions.accountCopySuffix).toBe('查询入口\n说明');
+  });
+
+  it('尚无共享配置时，所有管理员兼容同一最新非空历史后缀，读取不迁移或改写个人记录', async () => {
+    const { service, createService, rows, settings, persisted } = fixture();
+    rows.set('fixture-other-admin', {
+      ownerId: 'fixture-other-admin',
+      browserOptions: { accountCopySuffix: '较新的已保存后缀' },
+      updatedAt: new Date('2026-10-02T00:00:00Z')
+    });
+    rows.set('fixture-empty-admin', {
+      ownerId: 'fixture-empty-admin',
+      browserOptions: { accountCopySuffix: '' },
+      updatedAt: new Date('2026-10-03T00:00:00Z')
+    });
+    const personalBefore = structuredClone([...rows.entries()]);
+    await expect(service.copySettings(operator)).resolves.toEqual({
+      suffix: '较新的已保存后缀'
+    });
+    await expect(
+      createService().copySettings({ ...operator, id: 'fixture-new-admin' })
+    ).resolves.toEqual({ suffix: '较新的已保存后缀' });
+    await expect(service.copyAccount('account-1', operator)).resolves.toEqual({
+      text: `${email}----${password}----${secret}----${code}\n较新的已保存后缀`
+    });
+    expect([...rows.entries()]).toEqual(personalBefore);
+    expect(settings.upsert).not.toHaveBeenCalled();
+    expect(persisted.upsert).not.toHaveBeenCalled();
+  });
+
+  it('每次单行复制读取数据库最新共享后缀，不沿用此前读取的值', async () => {
+    const { service, createService } = fixture();
+    await service.updateCopySettings({ suffix: '原后缀' }, operator);
+    const otherComputer = createService();
+    await expect(otherComputer.copySettings(operator)).resolves.toEqual({ suffix: '原后缀' });
+    await service.updateCopySettings({ suffix: '更新后的后缀' }, operator);
+    await expect(otherComputer.copyAccount('account-1', operator)).resolves.toEqual({
+      text: `${email}----${password}----${secret}----${code}\n更新后的后缀`
+    });
   });
 
   it.each([

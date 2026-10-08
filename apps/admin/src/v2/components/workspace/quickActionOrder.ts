@@ -25,11 +25,12 @@ export function sortQuickActions(items: V2QuickActionItem[], ids: string[]) {
   );
 }
 
-export function writeQuickActionOrder(userId: string, ids: string[]) {
-  if (!userId) throw new Error('无法识别当前用户，请重新登录后重试');
+// Only read/remove the previous browser-only order during migration. New orders live in the API.
+export function clearLegacyQuickActionOrder(userId: string) {
+  if (!userId) return;
   try {
-    localStorage.setItem(quickActionOrderKey(userId), JSON.stringify(ids));
+    localStorage.removeItem(quickActionOrderKey(userId));
   } catch {
-    throw new Error('浏览器无法保存顺序，请允许本站存储后重新拖动');
+    // A confirmed database order takes precedence even when legacy storage cannot be cleared.
   }
 }
