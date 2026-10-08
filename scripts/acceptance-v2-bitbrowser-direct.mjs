@@ -815,6 +815,7 @@ try {
   assert.equal(jobs[0].result.status, 'session_ready');
   assert.equal(jobs[0].result.account_matched, true);
   assert.equal(codeRequests, previousCodeRequests);
+  await page.getByText('网页已直连比特浏览器，登录进度见执行状态', { exact: true }).waitFor();
   assert.equal(progressStages.get(manualJobId).includes('login_code_submitted'), false);
   await waitFor(
     async () =>

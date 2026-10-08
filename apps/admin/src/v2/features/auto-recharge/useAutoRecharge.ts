@@ -1165,7 +1165,7 @@ export function useAutoRecharge() {
       currentId.value = id;
       await directOpen.start(launch, credential, windowName.value.trim());
       connectorStatus.value = 'online';
-      connectorMessage.value = '网页已直连比特浏览器，正在核对登录';
+      connectorMessage.value = '网页已直连比特浏览器，登录进度见执行状态';
       if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       error.value = getApiErrorMessage(cause);
