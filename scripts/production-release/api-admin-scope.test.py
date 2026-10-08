@@ -1139,6 +1139,19 @@ class ReleaseFailureTests(unittest.TestCase):
 
 
 class NativeHandoffGeneratedTests(unittest.TestCase):
+    def test_native_handoff_exec_uses_explicit_root_and_fixed_container_id(self):
+        cid, module_sha = 'a' * 64, 'b' * 64
+        result = {'status': 'OBSERVED', 'nativeCount': 0, 'nativeCountObserved': True,
+                  'signalsAttempted': 0, 'zeroObservations': 2, 'resourceClosed': True,
+                  'readOnly': True, 'code': 'none'}
+        controller = SimpleNamespace(require=d.require, run=MagicMock(return_value=json.dumps(result)))
+        profile = {'workerProjection': {registration.WORKER_PREFIX + 'fingerprint_runtime.py': {'sha256': module_sha}}}
+        with patch.object(registration, 'registration_profile', return_value=profile):
+            self.assertEqual(registration.native_handoff(controller, ROOT, cid), result)
+        source = registration.NATIVE_HANDOFF_SOURCE.replace('__RECOVER__', 'False').replace('__MODULE_SHA__', repr(module_sha))
+        controller.run.assert_called_once_with('docker', 'exec', '--user', '0:0', '-i', cid,
+                                               'python', '-B', '-c', source, timeout=20)
+
     @contextmanager
     def fixture(self, rows=None, outcome='exit', changed_on_open=False, inaccessible=False, unknown_exe=False):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:

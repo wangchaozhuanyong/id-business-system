@@ -554,7 +554,7 @@ def native_handoff(d, directory, container_id, *, recover=False):
     module_sha = registration_profile(d, Path(REGISTRATION_DIRECTORY))['workerProjection'][WORKER_PREFIX + 'fingerprint_runtime.py']['sha256']
     source = NATIVE_HANDOFF_SOURCE.replace('__RECOVER__', repr(recover)).replace('__MODULE_SHA__', repr(module_sha))
     try:
-        value = json.loads(d.run('docker', 'exec', '-i', container_id, 'python', '-B', '-c', source, timeout=20))
+        value = json.loads(d.run('docker', 'exec', '--user', '0:0', '-i', container_id, 'python', '-B', '-c', source, timeout=20))
     except Exception:
         raise RegistrationRecoveryError('API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE', {
             'confirmed': False, 'signalsAttempted': None if recover else 0, 'nativeCount': 0,
