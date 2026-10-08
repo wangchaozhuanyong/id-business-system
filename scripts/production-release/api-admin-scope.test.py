@@ -10,6 +10,7 @@ import subprocess
 import shutil
 import select
 import signal
+import stat
 import sys
 import tarfile
 import tempfile
@@ -1586,6 +1587,300 @@ class RegistrationRecoveryTests(unittest.TestCase):
             self.assertNotIn('recoveryDiagnostic', value)
         unknown = {**diagnostic, 'signalsAttempted': None, 'nativeCountObserved': False}
         self.assertEqual(transport.safe_failure({**receipt, 'recoveryDiagnostic': unknown}, 'API_REGISTRATION')['recoveryDiagnostic'], unknown)
+
+
+class ContinuationTests(unittest.TestCase):
+    def generated_probe(self, business=False, change='none'):
+        source = registration.BUSINESS_SOURCE if business else registration.CONTINUATION_TASK_SOURCE
+        script = r'''const vm=require('node:vm'),fs=require('node:fs'),c=require('node:crypto');
+const input=JSON.parse(fs.readFileSync(0,'utf8')),sha=x=>c.createHash('sha256').update(x).digest('hex');
+const id='fixture-job',owner='fixture-owner',account='fixture-account',profile='reg_'+'a'.repeat(64),key='fixture-key-'.repeat(4);
+const email='fixture-email-hash',mac=x=>c.createHmac('sha256',key).update('api-registration-handoff:').update(JSON.stringify(x)).digest('hex');
+const job={id,owner_id:owner,account_id:account,email_hash:email,browser_profile_id:profile,attempt:12,state:'partial',step:'password',
+ reason:'session_load_timeout',registered:true,password_verified:false,mfa_verified:false,nonce_hash:null,lease_until:null,
+ updated_at:new Date('2026-10-08T14:18:32.726Z'),password_encrypted:'fixture-encrypted-candidate'};
+const acc={id:account,email_hash:email,registered:true,deleted_at:null,password_encrypted:null,totp_secret_encrypted:null,password_present:false,mfa_present:false};
+const event=(action,time,afterData)=>({id:time,userId:owner,action:'id_business_v2.auto_registration.'+action,
+ module:'id_business_v2',objectType:'registration_job',objectId:id,createdAt:new Date(time),afterData});
+let audits=[event('launch','2026-10-08T14:09:44.118Z',{attempt:11}),
+ event('profile_rebound','2026-10-08T14:09:50.000Z',{attempt:11,browserProfileId:profile,accountId:account}),
+ event('progress','2026-10-08T14:10:00.000Z',{step:'password_verified',passwordVerified:true,mfaVerified:true}),
+ event('progress','2026-10-08T14:10:01.000Z',{step:'mfa_verified',passwordVerified:true,mfaVerified:true}),
+ event('launch','2026-10-08T14:18:17.565Z',{attempt:12}),
+ event('progress','2026-10-08T14:18:32.726Z',{step:'password',passwordVerified:false,mfaVerified:false})];
+const rebound=audits[1];
+switch(input.change){
+ case 'wrong-owner':job.owner_id='other';break;
+ case 'wrong-account':job.account_id='other';break;
+ case 'wrong-email':job.email_hash='other';break;
+ case 'wrong-attempt':job.attempt=13;break;
+ case 'updated':job.updated_at=new Date('2026-10-08T14:18:32.727Z');break;
+ case 'active':job.lease_until=new Date('2099-01-01');break;
+ case 'candidate-missing':job.password_encrypted=null;break;
+ case 'wrong-profile':job.browser_profile_id='reg_'+'b'.repeat(64);break;
+ case 'rebound-attempt':rebound.afterData.attempt=10;break;
+ case 'rebound-owner':rebound.userId='other';break;
+ case 'rebound-account':rebound.afterData.accountId='other';break;
+ case 'duplicate-rebound':audits.push({...rebound,id:'duplicate'});break;
+ case 'new-rebound':audits.push(event('profile_rebound','2026-10-08T14:18:18.000Z',{attempt:12,browserProfileId:'reg_'+'b'.repeat(64),accountId:account}));break;
+ case 'wrong-launch':audits[0].createdAt=new Date('2026-10-08T14:09:44.119Z');break;
+ case 'extra-launch':audits.push(event('launch','2026-10-08T14:11:00.000Z',{attempt:12}));break;
+ case 'cancelled':audits.push(event('cancel','2026-10-08T14:18:30.000Z',{}));break;
+ case 'inherited-flags':job.password_verified=true;job.mfa_verified=true;break;
+ case 'fresh':job.password_verified=true;job.mfa_verified=true;audits.push(
+  event('progress','2026-10-08T14:18:34.000Z',{step:'password_verified',passwordVerified:true,mfaVerified:false}),
+  event('progress','2026-10-08T14:18:35.000Z',{step:'mfa_verified',passwordVerified:true,mfaVerified:true}));break;
+ case 'inexact-fresh':job.password_verified=true;job.mfa_verified=true;audits.push(
+  event('progress','2026-10-08T14:18:34.000Z',{step:'password',passwordVerified:true,mfaVerified:true}));break;
+}
+const tx={$queryRaw:async strings=>strings.join('').includes('chatgpt_accounts')?[acc]:[job],auditLog:{findMany:async q=>{
+ let rows=audits.filter(x=>Object.entries(q.where).every(([k,v])=>{
+  if(k==='createdAt')return (!v.gte||x.createdAt>=v.gte)&&(!v.lt||x.createdAt<v.lt);
+  if(k==='action'&&typeof v==='object')return v.in.includes(x.action);return x[k]===v;}));
+ rows.sort((a,b)=>a.createdAt-b.createdAt||a.id.localeCompare(b.id));
+ if(q.orderBy?.[0]?.createdAt==='desc')rows.reverse();rows=rows.slice(0,q.take);
+ return q.select?rows.map(x=>Object.fromEntries(Object.keys(q.select).map(k=>[k,x[k]]))):rows;
+}}};
+class PrismaClient{$transaction(fn){return fn(tx)}$disconnect(){return Promise.resolve()}}
+let result=[];
+let code=input.source.replaceAll('__TASK__',JSON.stringify(id)).replaceAll('__BINDING__',JSON.stringify({
+ accountSha256:sha(account),ownerSha256:sha(owner),profileSha256:sha('old-profile')})).replaceAll('__EMAIL_MAC__',JSON.stringify(mac('email:'+email)));
+(async()=>{await vm.runInNewContext(code,{require:n=>n==='@prisma/client'?{PrismaClient}:require(n),Date,
+ process:{env:{AUTO_RECHARGE_WORKER_TOKEN:key}},console:{log:x=>result.push(JSON.parse(x))}});console.log(JSON.stringify(result));})()
+ .catch(()=>{console.log('[{"fixtureFailure":true}]');process.exitCode=1});'''
+        result=subprocess.run(['node','-e',script],input=json.dumps({'source':source,'change':change}),
+            text=True,capture_output=True,cwd=ROOT,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        values=json.loads(result.stdout);self.assertEqual(len(values),1)
+        self.assertNotIn('fixture-encrypted-candidate',result.stdout)
+        self.assertNotIn('fixture-key-',result.stdout)
+        return values[0]
+
+    def test_generated_a12_snapshot_binds_exact_job_profile_chain_and_opaque_hashes(self):
+        value=self.generated_probe()
+        self.assertEqual(value['attempt'],12);self.assertTrue(value['passwordCandidatePresent'])
+        for field in ('jobHmac','accountHmac','auditHmac','emailHashHmac'):
+            self.assertRegex(value[field],r'^[a-f0-9]{64}$')
+        for change in ('wrong-owner','wrong-account','wrong-email','wrong-attempt','updated','active','candidate-missing',
+            'wrong-profile','rebound-attempt','rebound-owner','rebound-account','duplicate-rebound','new-rebound',
+            'wrong-launch','extra-launch','cancelled'):
+            with self.subTest(change=change):
+                self.assertEqual(self.generated_probe(change=change),{'diagnosticError':'API_ADMIN_REGISTRATION_TASK_UNAVAILABLE'})
+
+    def test_generated_business_same_profile_resume_binds_a11_without_reusing_prior_success(self):
+        for change in ('none','inherited-flags','inexact-fresh'):
+            with self.subTest(change=change):
+                value=self.generated_probe(business=True,change=change)
+                self.assertTrue(value['profileBindingConfirmed'])
+                self.assertFalse(value['officialThisAttempt']);self.assertFalse(value['passwordThisAttempt']);self.assertFalse(value['mfaThisAttempt'])
+        value=self.generated_probe(business=True,change='fresh')
+        self.assertTrue(value['officialThisAttempt']);self.assertTrue(value['passwordThisAttempt']);self.assertTrue(value['mfaThisAttempt'])
+        self.assertEqual(value['passwordAt'],'2026-10-08T14:18:34.000Z')
+        for change in ('wrong-profile','rebound-attempt','rebound-owner','rebound-account','duplicate-rebound','new-rebound','wrong-launch','extra-launch'):
+            with self.subTest(change=change):
+                value=self.generated_probe(business=True,change=change)
+                self.assertFalse(value['profileBindingConfirmed'])
+                self.assertFalse(value['officialThisAttempt'])
+
+    @contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); directory = base / 'releases' / 'published18e'; directory.mkdir(parents=True)
+            old = base / 'releases' / 'published-e7'; old.mkdir()
+            (base / 'current').symlink_to(directory)
+            manifest = {'commit': registration.CONTINUATION_CURRENT, 'sourceTree': registration.CONTINUATION_TREE,
+                'previousCommit': registration.REGISTRATION_CURRENT, 'previousRelease': str(old),
+                'apiRegistrationPublication': {'scope': 'API_REGISTRATION'}}
+            measured = registration_proof(); measured['commit'] = registration.CONTINUATION_CURRENT
+            measured['sourceTree'] = registration.CONTINUATION_TREE
+            proof_sha = registration.fingerprint(measured)
+            (directory / 'release-manifest.json').write_text(json.dumps(manifest))
+            (directory / registration.PROOF_FILE).write_text(json.dumps(measured))
+            (directory / registration.STATE_FILE).write_text(json.dumps({'buildProofSha256': proof_sha,
+                'registrationTask': registration_task()}))
+            states_value = states()
+            for name, row in states_value.items(): row['containerId'] = hashlib.sha256(name.encode()).hexdigest()
+            stack.enter_context(patch.object(registration, 'REGISTRATION_DIRECTORY', str(old)))
+            stack.enter_context(patch.object(registration, 'CONTINUATION_PROOF_SHA', proof_sha))
+            stack.enter_context(patch.object(registration, 'CONTINUATION_STATES_SHA', registration.fingerprint(states_value)))
+            stack.enter_context(patch.object(registration, 'CONTINUATION_CONTAINER', states_value['auto-registration']['containerId']))
+            controller = SimpleNamespace(**vars(d)); controller.BASE = base
+            controller.require = lambda ok, message: d.require(ok or message == 'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED', message)
+            task = {**registration_task(), 'attempt': 12, 'binding': {**registration.TASK_BINDING, 'profileSha256': '9' * 64}}
+            controller.compose = MagicMock(return_value=json.dumps(task))
+            controller.service_state = MagicMock(return_value=states_value['auto-registration'])
+            stack.enter_context(patch.object(registration, 'snapshot', return_value=states_value))
+            stack.enter_context(patch.object(registration, 'configuration_hashes', return_value={'config': 'fixed'}))
+            stack.enter_context(patch.object(registration, 'baseline', return_value=(directory, manifest, states_value, {})))
+            retained = [True]; closes = []
+            def private(_d, _directory, *, close=False, retained=True):
+                if close: closes.append(True); retained_value[0] = False
+                return {'confirmed': True, 'privatePostAttempted': close, 'cancelled': not retained,
+                        'retained': False if close else retained, 'busy': False, 'attempt': 12}
+            retained_value = retained
+            private_mock = stack.enter_context(patch.object(registration, 'registration_private', side_effect=private))
+            stack.enter_context(patch.object(registration, 'jobs_idle', side_effect=lambda *_args, **_kw: {
+                'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
+                'registrationWindowRetained': retained[0]}))
+            native = {'status': 'API_REGISTRATION_NATIVE_OBSERVED', 'nativeCount': 0, 'nativeCountObserved': True,
+                'signalsAttempted': 0, 'zeroObservations': 2, 'resourceClosed': True, 'readOnly': True, 'code': 'none'}
+            native_mock = stack.enter_context(patch.object(registration, 'native_handoff', return_value=native))
+            def audit(_d, _directory, path):
+                value = {'ok': True, 'checkCount': 49, 'violationCount': 0,
+                    'checks': [{'code': str(i), 'count': 0} for i in range(49)]}
+                path.write_text(json.dumps(value)); path.chmod(0o600)
+                return registration.audit_receipt(controller, path)
+            audit_mock = stack.enter_context(patch.object(registration, 'strict_audit', side_effect=audit))
+            yield SimpleNamespace(base=base, directory=directory, old=old, controller=controller, task=task,
+                states=states_value, stack=stack, retained=retained, closes=closes, private=private_mock,
+                native=native_mock, audit=audit_mock, manifest=manifest)
+
+    def test_measured_origin_and_new_profile_do_not_reuse_a10_binding(self):
+        with self.fixture() as f:
+            value = registration.registration_task(f.controller, f.directory)
+            self.assertEqual(value, f.task)
+            source = f.controller.compose.call_args.args[-1]
+            self.assertIn("j.attempt===12", source)
+            self.assertIn(registration.CONTINUATION_UPDATED, source)
+            self.assertIn("rebound[0].afterData?.attempt===11", source)
+            self.assertNotIn('__EMAIL_MAC__', source)
+            for changed in ({'attempt': 10}, {'emailHashHmac': '8' * 64}, {'binding': registration.TASK_BINDING},
+                            {'passwordCandidatePresent': False}, {'jobHmac': 'SECRET'}):
+                # An a10 profile could never satisfy the a11 audit binding in the
+                # generated reader; the typed receipt also preserves exact hashes.
+                if changed == {'binding': registration.TASK_BINDING}: continue
+                f.controller.compose.return_value = json.dumps({**f.task, **changed})
+                with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                    registration.registration_task(f.controller, f.directory)
+
+    def test_origin_rejects_changed_proof_chain_or_preservation_binding(self):
+        with self.fixture() as f:
+            path = f.directory / 'release-manifest.json'; original = path.read_text()
+            for changed in ({'previousCommit': 'f' * 40}, {'previousRelease': str(f.base / 'elsewhere')}, {'sourceTree': 'f' * 40}):
+                path.write_text(json.dumps({**f.manifest, **changed}))
+                with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, 'CONTINUATION_CHANGED'):
+                    registration.continuation_origin(f.controller, f.directory)
+            path.write_text(original)
+            (f.directory / registration.PROOF_FILE).write_text('{}')
+            with self.assertRaisesRegex(RuntimeError, 'CONTINUATION_CHANGED'):
+                registration.continuation_origin(f.controller, f.directory)
+
+    def test_snapshot_is_readonly_exact_stable_and_old_marker_directory_is_separate(self):
+        with self.fixture() as f:
+            value = registration.continuation_snapshot(f.controller, f.directory)
+            self.assertEqual(value['task']['attempt'], 12)
+            self.assertEqual(value['snapshotSha256'], registration.fingerprint({k:v for k,v in value.items() if k!='snapshotSha256'}))
+            self.assertEqual(f.closes, [])
+            self.assertNotEqual(registration.continuation_folder(f.controller), registration.handoff_directory(f.controller))
+            self.assertFalse(registration.continuation_folder(f.controller).exists())
+            self.assertEqual(f.native.call_count,2)
+            self.assertNotIn('recover', f.native.call_args.kwargs)
+
+    def test_snapshot_rejects_container_or_task_drift(self):
+        with self.fixture() as f:
+            with patch.object(registration, 'CONTINUATION_STATES_SHA', '0' * 64):
+                with self.assertRaisesRegex(RuntimeError, 'CONTINUATION_CHANGED'):
+                    registration.continuation_snapshot(f.controller, f.directory)
+            f.controller.compose.side_effect = [json.dumps(f.task), json.dumps({**f.task,'jobHmac':'0'*64})]
+            with self.assertRaisesRegex(RuntimeError, 'CONTINUATION_MOVED'):
+                registration.continuation_snapshot(f.controller, f.directory)
+            self.assertEqual(f.closes, [])
+
+    def test_once_a12_handoff_is_closed_zero_native_and_preserves_a10_marker(self):
+        with self.fixture() as f:
+            old = registration.handoff_directory(f.controller); old.mkdir(parents=True)
+            (old/'confirmed.json').write_text('immutable-old-evidence')
+            value = registration.registration_handoff(f.controller, registration.CONTINUATION_CURRENT)
+            self.assertTrue(value['resourceClosed']); self.assertEqual(len(f.closes), 1)
+            self.assertEqual((old/'confirmed.json').read_text(), 'immutable-old-evidence')
+            folder = registration.continuation_folder(f.controller)
+            for name in ('snapshot.json','attempt.json','confirmed.json','before-audit.json','after-audit.json'):
+                self.assertEqual(stat.S_IMODE((folder/name).stat().st_mode),0o400)
+            self.assertEqual(json.loads((folder/'attempt.json').read_text())['attempt'],12)
+            with self.assertRaisesRegex(RuntimeError, 'ALREADY_ATTEMPTED'):
+                registration.registration_handoff(f.controller, registration.CONTINUATION_CURRENT)
+            self.assertEqual(len(f.closes), 1)
+
+    def test_first_409_failure_is_preserved_and_duplicate_cancel_rejected(self):
+        with self.fixture() as f:
+            original=f.private.side_effect
+            def fail(_d,_directory,**kw):
+                if kw.get('close'):
+                    f.closes.append(True); raise registration.RegistrationHandoffError(registration.HANDOFF_FAILURE)
+                return original(_d,_directory,**kw)
+            f.private.side_effect=fail
+            with self.assertRaises(registration.RegistrationHandoffError):
+                registration.registration_handoff(f.controller, registration.CONTINUATION_CURRENT)
+            marker=registration.continuation_folder(f.controller)/'failure.json'; first=marker.read_bytes()
+            self.assertEqual(json.loads(first),registration.HANDOFF_FAILURE)
+            with self.assertRaisesRegex(RuntimeError,'ALREADY_ATTEMPTED'):
+                registration.registration_handoff(f.controller, registration.CONTINUATION_CURRENT)
+            self.assertEqual(marker.read_bytes(),first); self.assertEqual(len(f.closes),1)
+
+    def test_post_close_native_failure_retains_consumed_post_diagnostic(self):
+        with self.fixture() as f:
+            ok=f.native.return_value
+            f.native.side_effect=[ok,ok,{**ok,'resourceClosed':False,'nativeCount':1,'zeroObservations':0}]
+            with self.assertRaisesRegex(RuntimeError,'NATIVE_REMAINS'):
+                registration.registration_handoff(f.controller, registration.CONTINUATION_CURRENT)
+            folder=registration.continuation_folder(f.controller)
+            self.assertTrue(json.loads((folder/'failure.json').read_text())['privatePostAttempted'])
+            self.assertFalse((folder/'confirmed.json').exists()); self.assertEqual(len(f.closes),1)
+
+    def test_existing_publication_cannot_skip_new_handoff(self):
+        with self.fixture() as f:
+            with self.assertRaises(FileNotFoundError):
+                registration.require_registration_handoff(f.controller,f.directory,f.manifest)
+            self.assertEqual(f.closes,[])
+
+    def test_closed_record_rechecks_worker_cid_even_after_retained_false(self):
+        with self.fixture() as f:
+            registration.registration_handoff(f.controller,registration.CONTINUATION_CURRENT)
+            f.controller.service_state.return_value={**f.states['auto-registration'],'containerId':'0'*64}
+            with self.assertRaisesRegex(RuntimeError,'NATIVE_CONTAINER_CHANGED'):
+                registration.require_registration_handoff(f.controller,f.directory,f.manifest)
+            self.assertEqual(len(f.closes),1)
+
+    def test_closed_record_rechecks_origin_manifest_and_configuration_after_api_switch(self):
+        with self.fixture() as f:
+            registration.registration_handoff(f.controller,registration.CONTINUATION_CURRENT)
+            # Only the API container changes between the two controlled switches.
+            f.states['api']['containerId']='f'*64
+            registration.require_continuation_handoff(f.controller,f.directory)
+            path=f.directory/'release-manifest.json'; original=path.read_text()
+            path.write_text(json.dumps({**f.manifest,'deployedAt':'changed'}))
+            with self.assertRaisesRegex(RuntimeError,'CONTINUATION_CHANGED'):
+                registration.require_continuation_handoff(f.controller,f.directory)
+            path.write_text(original)
+            with patch.object(registration,'configuration_hashes',return_value={'config':'changed'}):
+                with self.assertRaisesRegex(RuntimeError,'CONTINUATION_CHANGED'):
+                    registration.require_continuation_handoff(f.controller,f.directory)
+
+    def test_marker_budget_types_and_existing_failure_cannot_be_treated_as_confirmed(self):
+        with self.fixture() as f:
+            registration.registration_handoff(f.controller,registration.CONTINUATION_CURRENT)
+            folder=registration.continuation_folder(f.controller); path=folder/'attempt.json'; value=json.loads(path.read_text())
+            path.chmod(0o600);path.write_text(json.dumps({**value,'privatePostBudget':True}));path.chmod(0o400)
+            with self.assertRaisesRegex(RuntimeError,'CONTINUATION_CHANGED'):
+                registration.require_continuation_handoff(f.controller,f.directory)
+            path.chmod(0o600);path.write_text(json.dumps(value));path.chmod(0o400)
+            (folder/'failure.json').write_text('{}')
+            with self.assertRaisesRegex(RuntimeError,'CONTINUATION_FAILED'):
+                registration.require_continuation_handoff(f.controller,f.directory)
+
+    def test_business_diagnostic_reads_only_closed_new_fields_and_marks_old_elapsed_unmeasured(self):
+        prefix='Registration verification failed job='+registration.TASK_ID+' attempt=12 '
+        common='phase=field_read error_type=Stop browser_code=none cleanup=False reason=session_load_timeout subphase=email_form_readiness '
+        tail='form_state=not_observed email_submit_returned=False owned_context=True'
+        controller=SimpleNamespace(require=d.require,service_state=MagicMock(return_value={'containerId':'a'*64}))
+        for extra,readiness,elapsed in (('', 'not_observed',None),
+            (' email_readiness=no_handler prepare_elapsed_seconds=60','no_handler',60),
+            (' email_readiness=unknown prepare_elapsed_seconds=99','unknown',None),
+            (' email_readiness=SECRET prepare_elapsed_seconds=1','not_observed',None)):
+            with self.subTest(extra=extra),patch.object(registration.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=prefix+common+tail+extra,stderr='')):
+                value=registration.business_logs(controller,ROOT,{'attempt':12,'launchAt':registration.CONTINUATION_LAUNCH})['firstFailure']
+                self.assertEqual(value['emailReadiness'],readiness);self.assertEqual(value['prepareElapsedSeconds'],elapsed)
+                self.assertNotIn('SECRET',json.dumps(value))
 
 
 if __name__ == '__main__':

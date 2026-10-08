@@ -1,5 +1,6 @@
 """Real browser DOM fixture; all requests are fulfilled locally in memory."""
 import asyncio
+import re
 import base64
 import os
 import json
@@ -1137,6 +1138,12 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             return email, submit, None
         flow.email_submit_control = AsyncMock(side_effect=control)
         flow.email_submit_ready = AsyncMock(return_value=True)
+        async def submit_state(email, button, **kwargs):
+            return 'native_handler' if await flow.email_submit_ready(email, button, **kwargs) else 'no_handler'
+        flow.email_submit_state = AsyncMock(side_effect=submit_state)
+        # These isolated tests explicitly provide their initial deadline; the
+        # production 60s preparation path is exercised by its dedicated tests.
+        flow.login_prepare_budget = lambda: flow.recovery_budget()
         flow.email_submit_unchanged = AsyncMock(return_value=True)
         return flow, verification, page
 
@@ -1202,6 +1209,7 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 flow.job.wait_code.assert_not_awaited(); page.goto.assert_awaited_once()
 
     async def test_initial_missing_email_and_password_observation_exhaustion_are_distinct(self):
+        from browser_session import SessionBudget
         from registration_browser import EMAIL_INPUT
         for exhausted in [False, True]:
             with self.subTest(exhausted=exhausted):
@@ -1210,6 +1218,8 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 if exhausted:
                     flow.field = AsyncMock(side_effect=lambda _page, selector:email if selector == EMAIL_INPUT else None)
                     flow.button = AsyncMock(return_value=None); flow.identity = AsyncMock(return_value=None)
+                else:
+                    flow.login_prepare_budget = lambda:SessionBudget(.03, cancelled=flow.job.cancelled.is_set)
                 with self.assertLogs('registration', level='WARNING'):
                     with self.assertRaises(Stop): await flow.verify_login()
                 error = flow.job.registration_verification_error
@@ -1910,6 +1920,220 @@ class VerificationCheckpointTests(unittest.IsolatedAsyncioTestCase):
         fields[2].press.assert_awaited_once();context.close.assert_awaited_once()
 
 
+class VerificationLoginPreparationBudgetTests(unittest.IsolatedAsyncioTestCase):
+    """Real cancellable budget operations with a deterministic offline clock."""
+    def fixture(self, *, owned=False, navigation=0, ready_at=100, state='native_handler'):
+        from browser_session import SessionBudget
+        flow, context, page, email, password = VerificationEmailReadinessTests.flow(self, owned)
+        del flow.login_prepare_budget  # Exercise the production method, not a supplied test deadline.
+        clock = [100.0]; budgets = []; writes = []; waits = []
+        flow.data.update(passwordVerified=False, mfaVerified=False)
+        flow.job.deadline = None
+        def check():
+            if flow.job.cancelled.is_set():raise Stop('operation_cancelled')
+        flow.job.check = check
+        async def navigate(*_args, **_kwargs):
+            clock[0] += navigation
+            return SimpleNamespace(status=200)
+        page.goto.side_effect = navigate
+        async def settle(seconds=2):
+            waits.append(seconds); clock[0] += seconds
+        flow.settle = settle
+        async def ready(*_args, **_kwargs):
+            flow.email_readiness_state = state if clock[0] >= ready_at else 'no_handler'
+            return flow.email_readiness_state in {'native_handler', 'react_handler', 'not_required'}
+        flow.email_submit_ready.side_effect = ready
+        async def fill(_value):
+            self.assertGreaterEqual(clock[0], ready_at)
+            writes.append(('fill', clock[0]))
+        email.fill.side_effect = fill
+        flow.job.prepare_mail.side_effect = lambda *_args, **_kwargs:writes.append(('prepare', clock[0]))
+        email.press.side_effect = lambda *_args, **_kwargs:writes.append(('submit', clock[0]))
+        def factory(seconds, **kwargs):
+            kwargs.setdefault('clock', lambda:clock[0])
+            budget = SessionBudget(seconds, **kwargs)
+            budgets.append(budget)
+            return budget
+        return SimpleNamespace(flow=flow, context=context, page=page, email=email, password=password,
+            clock=clock, budgets=budgets, writes=writes, waits=waits, factory=factory, owned=owned)
+
+    async def execute(self, fixture, **kwargs):
+        with patch('registration_browser.time', SimpleNamespace(monotonic=lambda:fixture.clock[0])), patch(
+                'registration_browser.SessionBudget', side_effect=fixture.factory):
+            return await fixture.flow.verify_login(_owned_context=fixture.owned, **kwargs)
+
+    def assert_no_login_write(self, fixture):
+        for field in (fixture.email, fixture.password):
+            field.fill.assert_not_awaited(); field.press.assert_not_awaited()
+        fixture.flow.job.prepare_mail.assert_not_called(); fixture.flow.job.wait_code.assert_not_awaited()
+        self.assertEqual(fixture.writes, [])
+        self.assertFalse(fixture.flow.data['passwordVerified']); self.assertFalse(fixture.flow.data['mfaVerified'])
+
+    def assert_single_login(self, fixture):
+        fixture.email.fill.assert_awaited_once_with(fixture.flow.data['email'])
+        fixture.email.press.assert_awaited_once_with('Enter')
+        fixture.password.fill.assert_awaited_once_with(fixture.flow.data['password'])
+        fixture.password.press.assert_awaited_once_with('Enter')
+        fixture.flow.job.prepare_mail.assert_called_once_with('password', new_request=True)
+        fixture.flow.job.wait_code.assert_not_awaited(); fixture.page.goto.assert_awaited_once()
+        self.assertEqual([name for name, _time in fixture.writes], ['fill', 'prepare', 'submit'])
+        self.assertFalse(fixture.flow.data['passwordVerified']); self.assertFalse(fixture.flow.data['mfaVerified'])
+
+    async def test_navigation_consuming_sixteen_seconds_reaches_one_login_in_both_contexts(self):
+        # The original 15s run() rejected the completed GET before any field read.
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                fixture = self.fixture(owned=owned, navigation=16)
+                self.assertIs(await self.execute(fixture), not owned)
+                self.assertEqual(fixture.budgets[0].seconds, 60)
+                self.assert_single_login(fixture)
+                self.assertEqual(fixture.writes[0][1], 116)
+                self.assertEqual(fixture.context.close.await_count, 0 if owned else 1)
+
+    async def test_cold_navigation_and_late_handler_share_one_budget_and_submit_once(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                fixture = self.fixture(owned=owned, navigation=14, ready_at=138)
+                self.assertIs(await self.execute(fixture), not owned)
+                self.assert_single_login(fixture)
+                self.assertEqual(sum(budget.seconds == 60 for budget in fixture.budgets), 1)
+                self.assertEqual(fixture.budgets[0].started, 100)
+                self.assertGreater(fixture.flow.email_submit_ready.await_count, 1)
+                self.assertLess(fixture.writes[0][1], 160)
+
+    async def test_navigation_and_hydration_cannot_restart_the_sixty_second_budget(self):
+        fixture = self.fixture(navigation=35, ready_at=165)
+        with self.assertLogs('registration', level='WARNING'):
+            with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+        self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+        self.assertEqual(len(fixture.budgets), 1)
+        self.assertGreaterEqual(fixture.clock[0], 160)
+        self.assertLess(fixture.clock[0], 160.2)
+        self.assert_no_login_write(fixture); fixture.page.goto.assert_awaited_once()
+
+    async def test_missing_email_can_hydrate_in_the_original_budget_before_one_login(self):
+        from registration_browser import EMAIL_INPUT
+        fixture = self.fixture(navigation=16, ready_at=122)
+        original_field = fixture.flow.field.side_effect
+        fixture.flow.field.side_effect = lambda page, selector:(
+            None if selector == EMAIL_INPUT and fixture.clock[0] < 120 else original_field(page, selector))
+        self.assertIs(await self.execute(fixture), True)
+        self.assert_single_login(fixture)
+        self.assertEqual(sum(budget.seconds == 60 for budget in fixture.budgets), 1)
+
+    async def test_existing_profile_or_job_deadline_wins_before_fill_and_is_preserved(self):
+        for kind in ('profile', 'job', 'both'):
+            with self.subTest(kind=kind):
+                fixture = self.fixture(navigation=8, ready_at=115)
+                if kind in {'profile', 'both'}:fixture.flow.job._profile_prepare_deadline = 112
+                if kind in {'job', 'both'}:fixture.flow.job.deadline = 111 if kind == 'both' else 112
+                with self.assertLogs('registration', level='WARNING'):
+                    with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+                self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+                self.assertEqual(fixture.budgets[0].seconds, 11 if kind == 'both' else 12)
+                self.assert_no_login_write(fixture)
+                if kind != 'job':self.assertEqual(fixture.flow.job._profile_prepare_deadline, 112)
+
+    async def test_cancellation_during_passive_readiness_never_fills_or_prepares(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                fixture = self.fixture(owned=owned, navigation=8, ready_at=150)
+                original_settle = fixture.flow.settle
+                async def cancel(seconds=2):
+                    await original_settle(seconds)
+                    fixture.flow.job.cancelled.set()
+                fixture.flow.settle = cancel
+                with self.assertLogs('registration', level='WARNING'):
+                    with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+                self.assertEqual(stopped.exception.report['reason'], 'operation_cancelled')
+                self.assert_no_login_write(fixture)
+                self.assertEqual(fixture.context.close.await_count, 0 if owned else 1)
+
+    async def test_absent_or_unknown_handler_never_writes_and_has_bounded_private_diagnostics(self):
+        for state in ('no_handler', 'unknown'):
+            with self.subTest(state=state):
+                fixture = self.fixture(state=state)
+                with self.assertLogs('registration', level='WARNING') as logs:
+                    with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+                self.assertEqual(stopped.exception.report['reason'], 'session_load_timeout')
+                self.assert_no_login_write(fixture)
+                text = '\n'.join(logs.output)
+                self.assertIn('email_readiness=' + state, text)
+                measured = re.findall(r'prepare_elapsed_seconds=(\d+)', text)
+                self.assertTrue(measured); self.assertTrue(all(0 <= int(value) <= 60 for value in measured))
+                for private in (fixture.flow.data['email'], fixture.flow.data['password'], fixture.page.url, '123456'):
+                    self.assertNotIn(private, text)
+
+    async def test_stable_ambiguous_submit_is_rejected_before_any_wait_or_write(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                fixture = self.fixture(owned=owned)
+                fixture.flow.email_submit_control.return_value = (fixture.email, None, 'ambiguous')
+                fixture.flow.email_submit_control.side_effect = None
+                with self.assertLogs('registration', level='WARNING'):
+                    with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+                self.assertEqual(stopped.exception.report['reason'], 'form_unrecognized')
+                self.assert_no_login_write(fixture); self.assertEqual(fixture.waits, [])
+                fixture.flow.email_submit_ready.assert_not_awaited()
+
+    async def test_missing_email_with_multiple_code_or_password_fields_remains_ambiguous(self):
+        from registration_browser import CODE_INPUT, PASSWORD_INPUT
+        for selector in (CODE_INPUT, PASSWORD_INPUT):
+            with self.subTest(selector=selector):
+                fixture = self.fixture()
+                fixture.flow.field.side_effect = None; fixture.flow.field.return_value = None
+                original = fixture.page.locator
+                visible = SimpleNamespace(is_visible=AsyncMock(return_value=True))
+                matches = SimpleNamespace(count=AsyncMock(return_value=2), nth=lambda _index:visible)
+                fixture.page.locator = lambda requested:matches if requested == selector else original(requested)
+                with self.assertLogs('registration', level='WARNING'):
+                    with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+                self.assertEqual(stopped.exception.report['reason'], 'login_form_ambiguous')
+                self.assert_no_login_write(fixture); self.assertEqual(fixture.waits, [])
+
+    async def test_reusing_flow_resets_old_readiness_before_a_failed_next_navigation(self):
+        fixture = self.fixture()
+        self.assertIs(await self.execute(fixture), True)
+        self.assert_single_login(fixture)
+        self.assertEqual(fixture.flow.email_readiness_state, 'native_handler')
+        fixture.page.goto.side_effect = Stop('http_error', http_status=503)
+        with self.assertLogs('registration', level='WARNING') as logs:
+            with self.assertRaises(Stop):await self.execute(fixture)
+        self.assertEqual(fixture.flow.email_readiness_state, 'not_observed')
+        self.assertIn('email_readiness=not_observed', '\n'.join(logs.output))
+        fixture.email.fill.assert_awaited_once(); fixture.email.press.assert_awaited_once()
+        fixture.flow.job.prepare_mail.assert_called_once(); fixture.password.press.assert_awaited_once()
+        self.assertEqual(fixture.page.goto.await_count, 2)
+
+    async def test_preparation_sixty_seconds_keeps_identity_recovery_fifteen_seconds(self):
+        fixture = self.fixture()
+        with patch('registration_browser.time', SimpleNamespace(monotonic=lambda:fixture.clock[0])), patch(
+                'registration_browser.SessionBudget', side_effect=fixture.factory):
+            self.assertEqual(fixture.flow.login_prepare_budget().seconds, 60)
+            self.assertEqual(fixture.flow.recovery_budget().seconds, 15)
+
+    async def test_later_otp_failure_keeps_completed_preparation_elapsed_without_acceptance(self):
+        from registration_browser import CODE_INPUT
+        fixture = self.fixture(navigation=16)
+        code = fixture.flow.field.side_effect(fixture.page, CODE_INPUT)
+        fixture.flow.identity.side_effect = [None, None]
+        async def delayed_mail():
+            fixture.clock[0] += 121
+            raise Stop('mailbox_timeout')
+        fixture.flow.job.wait_code.side_effect = delayed_mail
+        with patch('registration_browser.login_code_type', AsyncMock(return_value='email')), self.assertLogs(
+                'registration', level='WARNING') as logs:
+            with self.assertRaises(Stop) as stopped:await self.execute(fixture)
+        self.assertEqual(stopped.exception.report['reason'], 'mailbox_timeout')
+        measured = re.findall(r'prepare_elapsed_seconds=(\d+)', '\n'.join(logs.output))
+        self.assertTrue(measured); self.assertEqual(set(measured), {'16'})
+        self.assertIn('email_submit_returned=True', logs.output[-1])
+        fixture.email.press.assert_awaited_once(); fixture.password.press.assert_awaited_once()
+        fixture.flow.job.prepare_mail.assert_called_once(); fixture.flow.job.wait_code.assert_awaited_once()
+        code.fill.assert_not_awaited(); code.press.assert_not_awaited()
+        self.assertFalse(fixture.flow.data['passwordVerified']); self.assertFalse(fixture.flow.data['mfaVerified'])
+
+
 class VerificationEmailReadinessTests(unittest.IsolatedAsyncioTestCase):
     def flow(self, owned=False):
         if owned:
@@ -1955,12 +2179,12 @@ class VerificationEmailReadinessTests(unittest.IsolatedAsyncioTestCase):
                 email.fill.assert_not_awaited(); email.press.assert_not_awaited()
                 flow.job.prepare_mail.assert_not_called(); flow.job.wait_code.assert_not_awaited()
 
-    async def test_navigation_and_settle_do_not_start_a_fresh_email_budget(self):
+    async def test_navigation_does_not_start_a_fresh_email_budget(self):
         from browser_session import SessionBudget
         flow, _context, page, email, _password = self.flow()
         clock = [0.0]
         async def navigation(*_args, **_kwargs):
-            clock[0] = 12
+            clock[0] = 15
             return SimpleNamespace(status=200)
         async def settle(seconds=2): clock[0] += seconds
         page.goto.side_effect = navigation; flow.settle = settle
@@ -3314,6 +3538,8 @@ class VerificationIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_main_document_timeout_keeps_budget_and_never_enters_login(self):
         self.flow.settle = RegistrationBrowser.settle.__get__(self.flow)
         await self.fixture('document_timeout'); started = time.monotonic()
+        # The total job deadline remains stricter than the new 60s preparation stage.
+        self.job.deadline = started + 15
         with self.assertLogs('registration',level='WARNING'):
             with self.assertRaises(Stop) as stopped:await self.flow.verify_login()
         self.assertEqual(stopped.exception.report['reason'],'session_load_timeout')
@@ -6064,20 +6290,21 @@ class VerificationEmailHydrationBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.flow.context = context; self.flow.page = await context.new_page()
             self.flow.registration_state[REGISTERED_AUTH_RECOVERY] = {
                 'context':context,'page':self.flow.page,'submitted':False,'guard':None}
-        actual_ready = RegistrationBrowser.email_submit_ready.__get__(self.flow)
+        actual_state = RegistrationBrowser.email_submit_state.__get__(self.flow)
         self.readiness_checks = 0
-        async def ready(email, button, *, page=None):
-            result = await actual_ready(email, button, page=page)
+        async def state(email, button, *, page=None):
+            result = await actual_state(email, button, page=page)
             self.readiness_checks += 1
-            if mode == 'never':self.assertFalse(result)
+            ready = result in {'native_handler', 'react_handler', 'not_required'}
+            if mode == 'never':self.assertFalse(ready)
             if mode == 'delayed' and not self.armed:
-                self.assertFalse(result); self.assertEqual(self.inputs,0)
+                self.assertFalse(ready); self.assertEqual(self.inputs,0)
                 self.job.prepare_mail.assert_not_called()
                 self.assertEqual(await page.locator('input[type="email"]').input_value(),'')
                 self.armed = True
                 await page.evaluate("document.dispatchEvent(new Event('fixture-arm'))")
             return result
-        self.flow.email_submit_ready = ready
+        self.flow.email_submit_state = state
         def prepare(step, *, new_request=False):
             self.job.step = step
             if mode.startswith('callback'):
@@ -6107,6 +6334,46 @@ class VerificationEmailHydrationBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(self.job.payload['passwordVerified']); self.assertFalse(self.job.payload['mfaVerified'])
                 if owned:
                     self.assertEqual(context.pages,[self.flow.page]);await context.close()
+                else:self.assertIs(self.flow.page,original)
+
+    async def test_cold_get_and_native_delayed_hydration_use_one_preparation_budget(self):
+        from browser_session import SessionBudget
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                context, original = await self.login_fixture(owned)
+                clock = [100.0]; budgets = []
+                def delayed_commit(page):
+                    actual_goto = page.goto
+                    async def goto(*args, **kwargs):
+                        response = await actual_goto(*args, **kwargs)
+                        clock[0] += 16  # The actual routed GET spends more than the old 15s cap.
+                        return response
+                    page.goto = goto
+                if owned:
+                    delayed_commit(self.flow.page)
+                else:
+                    actual_new_page = context.new_page
+                    async def new_page():
+                        page = await actual_new_page(); delayed_commit(page); return page
+                    context.new_page = new_page
+                def budget(seconds, **kwargs):
+                    kwargs.setdefault('clock', lambda:clock[0])
+                    result = SessionBudget(seconds, **kwargs); budgets.append(result); return result
+                with patch('registration_browser.time', SimpleNamespace(monotonic=lambda:clock[0])), patch(
+                        'registration_browser.SessionBudget', side_effect=budget):
+                    self.assertIs(await asyncio.wait_for(self.flow.verify_login(_owned_context=owned),45), not owned)
+                self.assertEqual(sum(value.seconds == 60 for value in budgets), 1)
+                self.assertEqual(budgets[0].started, 100)
+                self.assertGreater(self.readiness_checks, 1)
+                self.assertEqual(self.prehydration_inputs,0); self.assertEqual(self.inputs,1)
+                self.assertEqual(self.native_queries,0); self.assertEqual(self.login_errors,[])
+                self.assertEqual([path for method,path in self.requests if method=='POST' and path!='/fixture/input'],
+                                 ['/fixture/email','/fixture/password','/fixture/code'])
+                self.assertEqual([path for _method,path in self.requests if path=='/auth/login'],['/auth/login'])
+                self.job.prepare_mail.assert_called_once_with('password',new_request=True)
+                self.job.wait_code.assert_awaited_once()
+                self.assertFalse(self.job.payload['passwordVerified']);self.assertFalse(self.job.payload['mfaVerified'])
+                if owned:await context.close()
                 else:self.assertIs(self.flow.page,original)
 
     async def test_native_email_code_return_and_same_email_identity_checkpoints_are_closed(self):

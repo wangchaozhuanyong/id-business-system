@@ -59,6 +59,15 @@ TASK_BINDING = {'accountSha256': '4764c0440ec5bde3d20c74064096b3720a3d7d6ac63736
     'ownerSha256': 'ed198d0daf9ef5910f54dc16b3a7a6f4db0cf55c1935309f838071365ab7196d'}
 HANDOFF_FAILURE = {'confirmed': False, 'privatePostAttempted': True, 'failurePhase': 'close',
     'privatePostHttpStatus': 409, 'controlledReason': 'fingerprint_cleanup_failed', 'rawOutputSuppressed': True}
+CONTINUATION_CURRENT = '18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8'
+CONTINUATION_TREE = '591a9e29f92327c80d2b35fe99adcfd8d91d983b'
+CONTINUATION_PROOF_SHA = '3932a8cf0199c5291a88b44e1b9e6fab4220953fdedbcf20f2b9f3615c4e52cf'
+CONTINUATION_STATES_SHA = '6396341ce2e5ecf8378cf573c9e16eaed2869cda5a3a448f7fea825a15f31dd3'
+CONTINUATION_CONTAINER = '16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add'
+CONTINUATION_ATTEMPT = 12
+CONTINUATION_LAUNCH = '2026-10-08T14:18:17.565Z'
+CONTINUATION_UPDATED = '2026-10-08T14:18:32.726Z'
+CONTINUATION_PROFILE_LAUNCH = '2026-10-08T14:09:44.118Z'
 
 
 def image_service(service):
@@ -281,6 +290,10 @@ def jobs_idle(d, directory, *, allow_retained=False):
     result = {'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
               'registrationWindowRetained': runtime['registrationWindowRetained']}
     if REGISTRATION and not allow_retained and runtime['registrationWindowRetained']:
+        if continuation_origin(d, directory):
+            require_continuation_handoff(d, directory)
+            result['registrationResourceClosed'] = True
+            return result
         path = handoff_directory(d) / 'confirmed.json'
         d.require(path.exists(), 'API_ADMIN_REGISTRATION_WINDOW_RETAINED')
         record = handoff_json(d, handoff_directory(d), 'confirmed.json')
@@ -380,13 +393,90 @@ except BaseException:
 '''
 
 
+CONTINUATION_TASK_SOURCE = r'''const {PrismaClient}=require('@prisma/client'),c=require('node:crypto');
+const p=new PrismaClient({log:[]}),id=__TASK__,binding=__BINDING__,emailMac=__EMAIL_MAC__;
+const need=x=>{if(!x)throw Error();},bit=x=>x===true||x===1||x===1n;
+const sha=x=>c.createHash('sha256').update(x||'').digest('hex');
+const canon=x=>typeof x==='bigint'?x.toString():x instanceof Date?x.toISOString():Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
+const key=process.env.AUTO_RECHARGE_WORKER_TOKEN;
+const mac=x=>c.createHmac('sha256',key).update('api-registration-handoff:').update(JSON.stringify(canon(x))).digest('hex');
+async function read(tx){
+ const rows=await tx.$queryRaw`SELECT * FROM id_business_v2_registration_jobs WHERE id=${id}`;
+ need(rows.length===1);const j=rows[0];
+ need(j.id===id&&j.attempt===12&&j.state==='partial'&&j.step==='password'&&j.reason==='session_load_timeout'
+  &&bit(j.registered)&&!bit(j.password_verified)&&!bit(j.mfa_verified)&&j.nonce_hash===null&&j.lease_until===null
+  &&j.updated_at.toISOString()==='2026-10-08T14:18:32.726Z'&&typeof j.password_encrypted==='string'&&j.password_encrypted.length>0
+  &&typeof j.browser_profile_id==='string'&&/^reg_[a-f0-9]{64}$/.test(j.browser_profile_id)
+  &&sha(j.account_id)===binding.accountSha256&&sha(j.owner_id)===binding.ownerSha256&&mac('email:'+j.email_hash)===emailMac);
+ const accounts=await tx.$queryRaw`SELECT * FROM id_business_v2_chatgpt_accounts WHERE email_hash=${j.email_hash} ORDER BY id`;
+ need(accounts.length===1&&accounts[0].id===j.account_id&&accounts[0].email_hash===j.email_hash&&bit(accounts[0].registered)
+  &&accounts[0].deleted_at===null&&accounts[0].password_encrypted===null&&accounts[0].totp_secret_encrypted===null);
+ const audits=await tx.auditLog.findMany({where:{module:'id_business_v2',objectType:'registration_job',objectId:id,
+  createdAt:{gte:new Date('2026-10-08T14:09:44.118Z')}},orderBy:[{createdAt:'asc'},{id:'asc'}],take:1001});
+ need(audits.length<1001&&audits.every(x=>x.userId===j.owner_id));
+ const launches=audits.filter(x=>x.action==='id_business_v2.auto_registration.launch');
+ const rebound=audits.filter(x=>x.action==='id_business_v2.auto_registration.profile_rebound');
+ need(launches.length===2&&launches[0].afterData?.attempt===11&&launches[0].createdAt.toISOString()==='2026-10-08T14:09:44.118Z'
+  &&launches[1].afterData?.attempt===12&&launches[1].createdAt.toISOString()==='2026-10-08T14:18:17.565Z'
+  &&rebound.length===1&&rebound[0].afterData?.attempt===11&&rebound[0].afterData.browserProfileId===j.browser_profile_id
+  &&rebound[0].afterData.accountId===j.account_id&&rebound[0].createdAt>=launches[0].createdAt&&rebound[0].createdAt<launches[1].createdAt
+  &&!audits.some(x=>x.action==='id_business_v2.auto_registration.cancel'));
+ return {taskId:id,attempt:12,registered:true,passwordVerified:false,mfaVerified:false,leaseActive:false,noncePresent:false,
+  passwordCandidatePresent:true,binding:{accountSha256:binding.accountSha256,ownerSha256:binding.ownerSha256,profileSha256:sha(j.browser_profile_id)},
+  emailHashHmac:emailMac,jobHmac:mac(rows),accountHmac:mac(accounts),auditHmac:mac(audits)};
+}
+(async()=>{need(typeof key==='string'&&key.length>=32);const value=await p.$transaction(async tx=>{
+ const a=await read(tx),b=await read(tx);need(JSON.stringify(a)===JSON.stringify(b));return b;
+},{isolationLevel:'RepeatableRead',timeout:25000});console.log(JSON.stringify(value));})()
+.catch(()=>{console.log('{"diagnosticError":"API_ADMIN_REGISTRATION_TASK_UNAVAILABLE"}');})
+.finally(async()=>{try{await p.$disconnect();}catch{process.exitCode=1;}});'''
+
+
+def continuation_origin(d, directory):
+    path = directory / 'release-manifest.json'
+    if not path.exists():
+        if not hasattr(d, 'BASE'):
+            return None
+        path = (d.BASE / 'current').resolve() / 'release-manifest.json'
+    if not path.exists():
+        return None
+    manifest = json.loads(path.read_text())
+    if manifest.get('commit') == CONTINUATION_CURRENT:
+        origin = path.parent
+    elif manifest.get('previousCommit') == CONTINUATION_CURRENT and manifest.get('apiRegistrationPublication'):
+        origin = Path(manifest['previousRelease'])
+    else:
+        return None
+    d.require(origin.parent == d.BASE / 'releases' and not origin.is_symlink(), 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    old = json.loads((origin / 'release-manifest.json').read_text())
+    proof = json.loads((origin / PROOF_FILE).read_text())
+    record = json.loads((origin / STATE_FILE).read_text())
+    d.require(old['commit'] == CONTINUATION_CURRENT and old['sourceTree'] == CONTINUATION_TREE
+              and old['previousCommit'] == REGISTRATION_CURRENT and old['previousRelease'] == REGISTRATION_DIRECTORY
+              and fingerprint(proof) == CONTINUATION_PROOF_SHA and record['buildProofSha256'] == CONTINUATION_PROOF_SHA
+              and record['registrationTask']['binding'] == TASK_BINDING
+              and record['registrationTask']['taskId'] == TASK_ID and record['registrationTask']['attempt'] == TASK_ATTEMPT
+              and re.fullmatch(r'[a-f0-9]{64}', record['registrationTask']['emailHashHmac']),
+              'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    return origin
+
+
 def registration_task(d, directory):
-    code = TASK_SOURCE.replace('__TASK__', json.dumps(TASK_ID)).replace('__ATTEMPT__', str(TASK_ATTEMPT)).replace('__BINDING__', json.dumps(TASK_BINDING))
+    origin = continuation_origin(d, directory)
+    attempt = CONTINUATION_ATTEMPT if origin else TASK_ATTEMPT
+    code = (CONTINUATION_TASK_SOURCE if origin else TASK_SOURCE).replace('__TASK__', json.dumps(TASK_ID)).replace('__ATTEMPT__', str(attempt)).replace('__BINDING__', json.dumps(TASK_BINDING))
+    if origin:
+        email_mac = json.loads((origin / STATE_FILE).read_text())['registrationTask']['emailHashHmac']
+        code = code.replace('__EMAIL_MAC__', json.dumps(email_mac))
     value = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', code, timeout=40))
     fields = {'taskId', 'attempt', 'registered', 'passwordVerified', 'mfaVerified', 'leaseActive',
               'noncePresent', 'passwordCandidatePresent', 'binding', 'emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'}
     d.require(isinstance(value, dict) and set(value) == fields and value['taskId'] == TASK_ID
-              and type(value['attempt']) is int and value['attempt'] == TASK_ATTEMPT and value['binding'] == TASK_BINDING
+              and type(value['attempt']) is int and value['attempt'] == attempt
+              and isinstance(value['binding'], dict) and set(value['binding']) == set(TASK_BINDING)
+              and (value['binding'] == TASK_BINDING if not origin else all(value['binding'][n] == TASK_BINDING[n]
+                  for n in ('accountSha256', 'ownerSha256')) and re.fullmatch(r'[a-f0-9]{64}', value['binding']['profileSha256'])
+                  and value['emailHashHmac'] == email_mac)
               and all(value[n] is True for n in ('registered', 'passwordCandidatePresent'))
               and all(value[n] is False for n in ('passwordVerified', 'mfaVerified', 'leaseActive', 'noncePresent'))
               and all(re.fullmatch(r'[a-f0-9]{64}', value[n]) for n in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac')),
@@ -395,7 +485,8 @@ def registration_task(d, directory):
 
 
 def registration_private(d, directory, *, close=False, retained=True):
-    code = PRIVATE_SOURCE.replace('__TASK__', TASK_ID).replace('__ATTEMPT__', str(TASK_ATTEMPT))
+    attempt = CONTINUATION_ATTEMPT if continuation_origin(d, directory) else TASK_ATTEMPT
+    code = PRIVATE_SOURCE.replace('__TASK__', TASK_ID).replace('__ATTEMPT__', str(attempt))
     code = code.replace('__CANCELLED__', repr(not retained)).replace('__RETAINED__', repr(retained)).replace('__CLOSE__', repr(close))
     value = json.loads(d.compose(directory, 'exec', '-T', 'auto-registration', 'python', '-B', '-c', code, timeout=45))
     if value.get('confirmed') is not True:
@@ -411,7 +502,7 @@ def registration_private(d, directory, *, close=False, retained=True):
         raise RegistrationHandoffError(value)
     d.require(set(value) == {'confirmed', 'privatePostAttempted', 'cancelled', 'retained', 'busy', 'attempt'}
               and value['privatePostAttempted'] is close and value['busy'] is False
-              and type(value['attempt']) is int and value['attempt'] == TASK_ATTEMPT
+              and type(value['attempt']) is int and value['attempt'] == attempt
               and value['retained'] is (False if close else retained)
               and value['cancelled'] is (True if close else not retained), 'API_ADMIN_REGISTRATION_PRIVATE_UNAVAILABLE')
     return value
@@ -621,7 +712,19 @@ async function read(tx){
  const rebound=await tx.auditLog.findMany({where:{...where('profile_rebound'),createdAt:{gte:since}},take:1001,select:{userId:true,createdAt:true,afterData:true}});
  need(rebound.length<1001&&events.every(x=>x.userId===j.owner_id));
  const matches=rebound.filter(x=>x.userId===j.owner_id&&x.afterData?.attempt===j.attempt&&sha(x.afterData.accountId)===binding.accountSha256&&x.afterData.browserProfileId===j.browser_profile_id);
- need(matches.length<=1);const bound=matches.length===1;
+ need(matches.length<=1);let bound=matches.length===1&&rebound.length===1;
+ if(!bound&&rebound.length===0&&j.attempt>=12){
+  const start=launches.find(x=>x.afterData?.attempt===11&&x.createdAt.toISOString()==='2026-10-08T14:09:44.118Z');
+  if(start){
+   const history=await tx.auditLog.findMany({where:{...where('profile_rebound'),createdAt:{gte:start.createdAt,lt:since}},
+    orderBy:[{createdAt:'asc'},{id:'asc'}],take:1001,select:{userId:true,createdAt:true,afterData:true}});
+   const chain=launches.filter(x=>x.createdAt>=start.createdAt).slice().reverse();
+   bound=history.length===1&&history[0].userId===j.owner_id&&history[0].afterData?.attempt===11
+    &&sha(history[0].afterData.accountId)===binding.accountSha256&&history[0].afterData.browserProfileId===j.browser_profile_id
+    &&chain.length===j.attempt-10&&chain.every((x,i)=>x.userId===j.owner_id&&x.afterData?.attempt===11+i)
+    &&chain[chain.length-1]===launch;
+  }
+ }
  const codes=await tx.auditLog.findMany({where:{...where('code_read'),createdAt:{gte:since}},orderBy:[{createdAt:'asc'},{id:'asc'}],take:1001,select:{afterData:true}});
  const valid=events.length<=1000&&bound;
  const first=predicate=>valid?events.find(x=>predicate(x.afterData))?.createdAt?.toISOString()||null:null;
@@ -694,10 +797,20 @@ def business_logs(d, directory, task):
             failures += 1
             cleanup += int(value[4] == 'True')
             if value[4] == 'False':
+                tail = line[value.end():]
+                observed = re.fullmatch(r'form_state=(not_observed|code|identity|password|password_choice|empty) '
+                    r'email_submit_returned=(True|False) owned_context=(True|False)'
+                    r'(?: email_readiness=(native_handler|react_handler|no_handler|unknown|not_required|not_observed) '
+                    r'prepare_elapsed_seconds=([0-9]{1,2}))?\s*', tail)
                 last_failure = {'phase': value[1] if value[1] in phases else 'none', 'errorType': value[2],
                     'browserCode': value[3] if value[3] in codes else 'none',
                     'reason': value[5] if value[5] in reasons else 'none',
-                    'subphase': value[6] if value[6] in subphases else 'none'}
+                    'subphase': value[6] if value[6] in subphases else 'none',
+                    'formState': observed[1] if observed else 'not_observed',
+                    'emailSubmitReturned': observed[2] == 'True' if observed else None,
+                    'ownedContext': observed[3] == 'True' if observed else None,
+                    'emailReadiness': observed[4] if observed and observed[4] else 'not_observed',
+                    'prepareElapsedSeconds': int(observed[5]) if observed and observed[5] and int(observed[5]) <= 60 else None}
                 if first_failure is None:
                     first_failure = last_failure
     return {'checkpoints': checkpoints, 'failureCount': failures, 'cleanupFailureCount': cleanup,
@@ -748,8 +861,150 @@ def registration_business(d, expected):
         'encryptedPasswordPresent', 'encryptedMfaPresent', 'profileBindingConfirmed', 'officialThisAttempt',
         'passwordThisAttempt', 'mfaThisAttempt')) and task['progressTruncated'] is False
     confirmed = confirmed and task['state'] == 'completed' and task['step'] == 'completed' and task['leaseActive'] is False
-    return {'status': 'API_REGISTRATION_BUSINESS_OBSERVED', 'commit': expected, 'task': task,
-            'diagnostic': logs, 'businessAcceptanceConfirmed': confirmed, 'readOnly': True}
+    result = {'status': 'API_REGISTRATION_BUSINESS_OBSERVED', 'commit': expected, 'task': task,
+              'diagnostic': logs, 'businessAcceptanceConfirmed': confirmed, 'readOnly': True}
+    if expected == CONTINUATION_CURRENT and task['attempt'] == CONTINUATION_ATTEMPT:
+        result['releaseSnapshot'] = continuation_snapshot(d, directory, runtime['services'])
+    return result
+
+
+def continuation_folder(d):
+    return d.BASE / '.staging' / ('api-registration-handoff-' + CONTINUATION_CURRENT + '-attempt12')
+
+
+def continuation_snapshot(d, directory, states=None):
+    origin = continuation_origin(d, directory)
+    d.require(origin == directory, 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    before = snapshot(d, directory) if states is None else states
+    d.require(fingerprint(before) == CONTINUATION_STATES_SHA, 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    task = registration_task(d, directory)
+    guards = jobs_idle(d, directory, allow_retained=True)
+    private = registration_private(d, directory, retained=guards['registrationWindowRetained'])
+    native = native_handoff(d, directory, before['auto-registration']['containerId'])
+    d.require(native['readOnly'] is True and native['signalsAttempted'] == 0,
+              'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    raw_manifest = (directory / 'release-manifest.json').read_bytes()
+    value = {'version': 1, 'scope': SCOPE, 'commit': CONTINUATION_CURRENT, 'sourceTree': CONTINUATION_TREE,
+             'manifestSha256': hashlib.sha256(raw_manifest).hexdigest(), 'buildProofSha256': CONTINUATION_PROOF_SHA,
+             'servicesSha256': CONTINUATION_STATES_SHA, 'configurationSha256': fingerprint(configuration_hashes(directory)),
+             'task': task, 'guards': guards, 'private': private, 'native': native,
+             'launchAt': CONTINUATION_LAUNCH, 'updatedAt': CONTINUATION_UPDATED}
+    d.require(registration_task(d, directory) == task and snapshot(d, directory) == before
+              and (directory / 'release-manifest.json').read_bytes() == raw_manifest
+              and fingerprint(configuration_hashes(directory)) == value['configurationSha256']
+              and registration_private(d, directory, retained=guards['registrationWindowRetained']) == private
+              and native_handoff(d, directory, before['auto-registration']['containerId']) == native,
+              'API_ADMIN_REGISTRATION_CONTINUATION_MOVED')
+    return {**value, 'snapshotSha256': fingerprint(value)}
+
+
+def require_continuation_handoff(d, directory):
+    origin = continuation_origin(d, directory)
+    d.require(origin is not None, 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    folder = continuation_folder(d)
+    record = handoff_json(d, folder, 'confirmed.json')
+    captured = handoff_json(d, folder, 'snapshot.json')
+    attempt = handoff_json(d, folder, 'attempt.json')
+    d.require(not (folder / 'failure.json').exists() and not (folder / 'failure.json').is_symlink(),
+              'API_ADMIN_REGISTRATION_CONTINUATION_FAILED')
+    fields = {'version', 'scope', 'commit', 'task', 'snapshotSha256', 'containerId', 'privateCancelConfirmed',
+              'databaseWrites', 'accountPreserved', 'taskPreserved', 'passwordCandidatePreserved', 'windowRetained',
+              'resourceClosed', 'audit', 'nativeProbeSourceSha256'}
+    task = registration_task(d, directory)
+    wanted = {'taskId': TASK_ID, 'attempt': CONTINUATION_ATTEMPT, 'privatePostBudget': 1,
+              'snapshotSha256': captured['snapshotSha256']}
+    d.require(set(captured) == {'version', 'scope', 'commit', 'sourceTree', 'manifestSha256', 'buildProofSha256',
+        'servicesSha256', 'configurationSha256', 'task', 'guards', 'private', 'native', 'launchAt', 'updatedAt', 'snapshotSha256'}
+        and captured['snapshotSha256'] == fingerprint({k: v for k, v in captured.items() if k != 'snapshotSha256'})
+        and captured['commit'] == CONTINUATION_CURRENT and captured['sourceTree'] == CONTINUATION_TREE
+        and captured['buildProofSha256'] == CONTINUATION_PROOF_SHA and captured['servicesSha256'] == CONTINUATION_STATES_SHA
+        and captured['manifestSha256'] == hashlib.sha256((origin / 'release-manifest.json').read_bytes()).hexdigest()
+        and captured['configurationSha256'] == fingerprint(configuration_hashes(origin))
+        and type(captured['version']) is int and captured['version'] == 1 and captured['scope'] == SCOPE
+        and fingerprint(captured['task']) == fingerprint(task) and captured['launchAt'] == CONTINUATION_LAUNCH
+        and captured['updatedAt'] == CONTINUATION_UPDATED and fingerprint(attempt) == fingerprint(wanted)
+        and set(record) == fields and type(record['version']) is int and record['version'] == 1
+        and record['scope'] == SCOPE and record['commit'] == CONTINUATION_CURRENT
+        and fingerprint(record['task']) == fingerprint(task) and record['snapshotSha256'] == captured['snapshotSha256']
+        and type(record['databaseWrites']) is int and record['databaseWrites'] == 0
+        and record['nativeProbeSourceSha256'] == hashlib.sha256(NATIVE_HANDOFF_SOURCE.encode()).hexdigest()
+        and all(record[n] is True for n in ('privateCancelConfirmed', 'accountPreserved', 'taskPreserved',
+            'passwordCandidatePreserved', 'resourceClosed')) and record['windowRetained'] is False,
+        'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    for name in ('before-audit.json', 'after-audit.json'):
+        handoff_json(d, folder, name)
+        d.require(audit_receipt(d, folder / name) == record['audit'], 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+    state = d.service_state(directory, 'auto-registration', include_container_id=True, include_environment_hash=True)
+    d.require(state['containerId'] == record['containerId'] == CONTINUATION_CONTAINER,
+              'API_ADMIN_REGISTRATION_NATIVE_CONTAINER_CHANGED')
+    registration_private(d, directory, retained=False)
+    observed = native_handoff(d, directory, record['containerId'])
+    d.require(observed['resourceClosed'] is True and observed['zeroObservations'] == 2 and observed['signalsAttempted'] == 0,
+              'API_ADMIN_REGISTRATION_NATIVE_REMAINS')
+    d.require(registration_task(d, directory) == task and d.service_state(directory, 'auto-registration',
+        include_container_id=True, include_environment_hash=True) == state,
+        'API_ADMIN_REGISTRATION_CONTINUATION_MOVED')
+    return record
+
+
+def continuation_handoff(d, expected):
+    d.require(REGISTRATION and expected == CONTINUATION_CURRENT, 'API_ADMIN_SCOPE_CONFLICT')
+    os.umask(0o077)
+    with (d.BASE / '.deploy.lock').open('a') as lock:
+        d.fcntl.flock(lock, d.fcntl.LOCK_EX | d.fcntl.LOCK_NB)
+        directory, manifest, states, evidence = baseline(d, expected, check_jobs=False)
+        folder = continuation_folder(d)
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        d.require(folder.resolve() == folder and folder.stat().st_uid == 0 and stat.S_IMODE(folder.stat().st_mode) == 0o700,
+                  'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED')
+        d.require(not (folder / 'attempt.json').exists() and not (folder / 'attempt.json').is_symlink(),
+                  'API_ADMIN_REGISTRATION_HANDOFF_ALREADY_ATTEMPTED')
+        captured = continuation_snapshot(d, directory, states)
+        d.require(captured['guards']['registrationWindowRetained'] is True, 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+        for name, value in (('snapshot.json', captured), ('attempt.json', {'taskId': TASK_ID,
+            'attempt': CONTINUATION_ATTEMPT, 'privatePostBudget': 1, 'snapshotSha256': captured['snapshotSha256']})):
+            with (folder / name).open('x') as stream:
+                json.dump(value, stream, sort_keys=True)
+            (folder / name).chmod(0o400)
+        close_started = False
+        try:
+            before_audit = strict_audit(d, directory, folder / 'before-audit.json')
+            (folder / 'before-audit.json').chmod(0o400)
+            close_started = True
+            registration_private(d, directory, close=True)
+            d.require(registration_task(d, directory) == captured['task'] and snapshot(d, directory) == states
+                      and hashlib.sha256((directory / 'release-manifest.json').read_bytes()).hexdigest() == captured['manifestSha256']
+                      and fingerprint(configuration_hashes(directory)) == captured['configurationSha256'],
+                      'API_ADMIN_REGISTRATION_CONTINUATION_MOVED')
+            guards = jobs_idle(d, directory, allow_retained=True)
+            d.require(guards['registrationWindowRetained'] is False, 'API_ADMIN_REGISTRATION_WINDOW_RETAINED')
+            registration_private(d, directory, retained=False)
+            native = native_handoff(d, directory, states['auto-registration']['containerId'])
+            d.require(native['resourceClosed'] is True and native['zeroObservations'] == 2 and native['signalsAttempted'] == 0,
+                      'API_ADMIN_REGISTRATION_NATIVE_REMAINS')
+            after_audit = strict_audit(d, directory, folder / 'after-audit.json')
+            (folder / 'after-audit.json').chmod(0o400)
+            d.require(after_audit == before_audit, 'API_ADMIN_REGISTRATION_CONTINUATION_MOVED')
+            record = {'version': 1, 'scope': SCOPE, 'commit': expected, 'task': captured['task'],
+                'snapshotSha256': captured['snapshotSha256'], 'containerId': states['auto-registration']['containerId'],
+                'privateCancelConfirmed': True, 'databaseWrites': 0, 'accountPreserved': True, 'taskPreserved': True,
+                'passwordCandidatePreserved': True, 'windowRetained': False, 'resourceClosed': True, 'audit': after_audit,
+                'nativeProbeSourceSha256': hashlib.sha256(NATIVE_HANDOFF_SOURCE.encode()).hexdigest()}
+            with (folder / 'confirmed.json').open('x') as stream:
+                json.dump(record, stream, sort_keys=True)
+            (folder / 'confirmed.json').chmod(0o400)
+            require_continuation_handoff(d, directory)
+            return {'status': 'API_REGISTRATION_HANDOFF_VERIFIED', 'commit': expected, 'privateCancelPerformed': True,
+                    'resourceClosed': True, 'accountPreserved': True, 'taskPreserved': True,
+                    'passwordCandidatePreserved': True, 'databaseWrites': 0, 'businessAcceptanceConfirmed': False}
+        except Exception as error:
+            diagnostic = error.diagnostic if isinstance(error, RegistrationHandoffError) else {
+                'confirmed': False, 'privatePostAttempted': close_started, 'failurePhase': 'after_status' if close_started else 'status',
+                'privatePostHttpStatus': None, 'controlledReason': 'none', 'rawOutputSuppressed': True}
+            with (folder / 'failure.json').open('x') as stream:
+                json.dump(diagnostic, stream, sort_keys=True)
+            (folder / 'failure.json').chmod(0o400)
+            raise
 
 
 def handoff_directory(d):
@@ -906,8 +1161,10 @@ def registration_handoff_recovery(d, expected, *, recover=False):
 
 
 def require_registration_handoff(d, directory, manifest):
+    if continuation_origin(d, directory):
+        return require_continuation_handoff(d, directory)
     if manifest.get('apiRegistrationPublication'):
-        return
+        d.require(False, 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
     record = handoff_json(d, handoff_directory(d), 'confirmed.json')
     if record.get('version') == 2:
         return require_native_handoff(d, directory, record)
@@ -922,7 +1179,8 @@ def registration_preflight(d, expected, *, require_closed=False):
     guards = jobs_idle(d, directory, allow_retained=True)
     task = registration_task(d, directory)
     registration_private(d, directory, retained=guards['registrationWindowRetained'])
-    closed = require_closed or (handoff_directory(d) / 'confirmed.json').exists()
+    origin = continuation_origin(d, directory)
+    closed = require_closed or ((continuation_folder(d) if origin else handoff_directory(d)) / 'confirmed.json').exists()
     if closed:
         require_registration_handoff(d, directory, manifest)
     folder = Path(__file__).parent
@@ -936,6 +1194,8 @@ def registration_preflight(d, expected, *, require_closed=False):
 
 
 def registration_handoff(d, expected):
+    if expected == CONTINUATION_CURRENT:
+        return continuation_handoff(d, expected)
     d.require(REGISTRATION and expected == REGISTRATION_CURRENT, 'API_ADMIN_SCOPE_CONFLICT')
     os.umask(0o077)
     with (d.BASE / '.deploy.lock').open('a') as lock:
@@ -1077,6 +1337,10 @@ def baseline(d, expected, *, check_jobs=True):
             d.require(REGISTRATION and manifest['apiRegistrationPublication']['scope'] == SCOPE,
                       'API_ADMIN_SCOPE_CONFLICT')
             proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
+            d.require(continuation_origin(d, previous) is not None, 'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
+            if expected == CONTINUATION_CURRENT:
+                d.require(fingerprint(proof) == CONTINUATION_PROOF_SHA and fingerprint(states) == CONTINUATION_STATES_SHA,
+                          'API_ADMIN_REGISTRATION_CONTINUATION_CHANGED')
             d.require(manifest['apiRegistrationPublication'] == {'version': 1, 'scope': SCOPE,
                 'buildProofSha256': fingerprint(proof), 'workersPublished': True,
                 'cacheStatus': 'SKIPPED', 'configurationChanged': False}, 'API_ADMIN_REGISTRATION_PROVENANCE_CHANGED')

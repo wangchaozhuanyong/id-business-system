@@ -19,6 +19,7 @@ BIRTH_INPUT = 'input[type="date"], input[name="birthday"], input[name="birthdate
 AGE_INPUT = 'input[name="age"], input[autocomplete="age"]'
 PROFILE_SUBMIT = r'^(continue|submit|finish|next|创建账户|创建账号|继续|完成|下一步)$'
 REGISTRATION_OBSERVE_SECONDS = 15
+REGISTRATION_LOGIN_PREPARE_SECONDS = 60
 REGISTRATION_VIEWS = {'verification', 'code', 'profile', 'unknown', 'registered', 'existing', 'email', 'signup'}
 REGISTRATION_WRITES = {'email_submit', 'code_submit', 'profile_submit', 'signup_click'}
 IDENTITY_RECOVERY = 'identity_recovery_readonly'
@@ -91,6 +92,7 @@ class RegistrationBrowser:
         self.email_request_handlers = []
         self.email_requests = {}
         self.email_request_phase = 'before_click'
+        self.email_readiness_state = 'not_observed'
         authentication = self.registration_state.get(REGISTERED_AUTH_RECOVERY)
         if authentication is not None:
             if (type(authentication) is not dict or set(authentication) != {'context', 'page', 'submitted', 'guard'}
@@ -460,14 +462,18 @@ class RegistrationBrowser:
             return handle, None, 'ambiguous' if len(associated) > 1 else 'wrong_scope'
         return handle, associated[0], None
 
-    async def email_submit_ready(self, email, button, *, page=None):
+    async def email_submit_state(self, email, button, *, page=None):
         """Only an exact GET form's observable submit handler permits filling it."""
         self.official(self.page if page is None else page)
         value = await button.evaluate('''(node, email) => {
             const readiness = ''' + EMAIL_SUBMIT_READINESS + ''';
             return email.isConnected ? readiness(email.form, node) : 'unknown';
         }''', email)
-        return value in {'native_handler', 'react_handler', 'not_required'}
+        self.email_readiness_state = value if type(value) is str and value in EMAIL_FORM_SEMANTICS['submit_readiness'] else 'unknown'
+        return self.email_readiness_state
+
+    async def email_submit_ready(self, email, button, *, page=None):
+        return await self.email_submit_state(email, button, page=page) in {'native_handler', 'react_handler', 'not_required'}
 
     async def email_submit_unchanged(self, email, button, form, page, url, *, verification_context=None, observe=None):
         if ((verification_context is None) != (observe is None)
@@ -569,6 +575,17 @@ class RegistrationBrowser:
         if type(deadline) in {int, float}:
             seconds = min(seconds, max(0, deadline - time.monotonic()))
         return SessionBudget(seconds, cancelled=self.job.cancelled.is_set)
+
+    def login_prepare_budget(self):
+        # A full initial login page has the same bounded budget as the existing
+        # password login flow. Passive identity recovery keeps its 15-second cap.
+        self.job.check()
+        now = time.monotonic()
+        deadline = now + REGISTRATION_LOGIN_PREPARE_SECONDS
+        for previous in (getattr(self.job, 'deadline', None), getattr(self.job, '_profile_prepare_deadline', None)):
+            if type(previous) in {int, float} and -float('inf') < previous < float('inf'):
+                deadline = min(deadline, previous)
+        return SessionBudget(max(0, deadline - now), cancelled=self.job.cancelled.is_set)
 
     async def registered_identity(self):
         # This is an identity read in the retained Page, never registration replay.
@@ -1448,6 +1465,7 @@ class RegistrationBrowser:
                 or authentication.get('context') is not self.context or authentication.get('page') is not self.page
                 or authentication.get('submitted') is not False or self.page not in self.context.pages))):
             raise Stop('builtin_profile_missing')
+        self.email_readiness_state = 'not_observed'
         verification = None
         page = None
         primary_error = None
@@ -1461,6 +1479,8 @@ class RegistrationBrowser:
         email_submit_returned = False
         email_code_returned = False
         pending_email_challenge = object()
+        budget = None
+        prepare_elapsed_seconds = None
         phases = {'context_create', 'context_route', 'page_create', 'navigation', 'navigation_guard',
                   'body_read', 'field_read', 'email_code_wait', 'email_code_fill', 'email_code_submit',
                   'identity_read', 'email_fill', 'mail_prepare', 'email_submit', 'password_choice',
@@ -1539,13 +1559,18 @@ class RegistrationBrowser:
             job_id = getattr(self.job, 'id', None)
             attempt = getattr(self.job, 'attempt', None)
             code = report.get('browser_error_code')
+            readiness = self.email_readiness_state
+            if type(readiness) is not str or readiness not in EMAIL_FORM_SEMANTICS['submit_readiness'] | {'not_observed'}:
+                readiness = 'unknown'
+            elapsed = (prepare_elapsed_seconds if prepare_elapsed_seconds is not None else
+                       min(60, max(0, int(budget.elapsed))) if budget is not None else 0)
             logging.getLogger('registration').warning(
-                'Registration verification failed job=%s attempt=%s phase=%s error_type=%s browser_code=%s cleanup=%s reason=%s subphase=%s form_state=%s email_submit_returned=%s owned_context=%s',
+                'Registration verification failed job=%s attempt=%s phase=%s error_type=%s browser_code=%s cleanup=%s reason=%s subphase=%s form_state=%s email_submit_returned=%s owned_context=%s email_readiness=%s prepare_elapsed_seconds=%s',
                 job_id if type(job_id) is str and JOB_ID.fullmatch(job_id) else 'unknown',
                 attempt if type(attempt) is int and 0 < attempt <= 2147483647 else 0,
                 details['phase'], details['error_type'],
                 code if type(code) is str and code in RETRYABLE_NETWORK_CODES else 'none', cleanup,
-                details['reason'], details['subphase'], details['form_state'], email_submit_returned, _owned_context)
+                details['reason'], details['subphase'], details['form_state'], email_submit_returned, _owned_context, readiness, elapsed)
         submitted_email = False
         submitted_password = False
         submitted_totp = False
@@ -1865,7 +1890,7 @@ class RegistrationBrowser:
             if not _owned_context:await verification.route('**/*', self.guard)
             mark('page_create')
             page = self.page if _owned_context else await verification.new_page()
-            budget = self.recovery_budget()
+            budget = self.login_prepare_budget()
             navigation_readonly = None
             # No email, password or OTP has been entered: only the fixed GET can
             # be repeated once, in this clean Page and the same total budget.
@@ -1898,28 +1923,27 @@ class RegistrationBrowser:
                     note('retry_guard_install')
                     await verification.route('**/*', readonly)
                     navigation_readonly = readonly
-            # The existing navigation budget also pays for settling, hydration
-            # and the mail callback fence. No fresh budget is started for email.
-            await budget.run(lambda: self.settle(3), 'verification_email_settle')
-            await budget.run(safe_page, 'verification_email_page')
-            mark('field_read')
-            note('email_field_read')
-            email = await budget.run(lambda: self.field(page, EMAIL_INPUT), 'verification_email_field')
-            if not email:
-                note('email_field_missing')
-                raise Stop('verification_required')
-            if navigation_readonly:
-                mark('navigation_guard')
-                note('retry_guard_remove')
-                await budget.run(lambda: verification.unroute('**/*', navigation_readonly), 'verification_email_guard')
-                navigation_readonly = None
+            # Navigation, passive hydration and the callback fence share one
+            # absolute deadline. Readiness replaces the fixed pre-input sleep.
+            email = None
             async def prepare_email():
-                nonlocal email
+                nonlocal email, navigation_readonly
                 note('email_form_readiness')
                 while True:
                     budget.remaining_ms()
                     await safe_page()
                     mark('field_read')
+                    note('email_field_read')
+                    email = await self.field(page, EMAIL_INPUT)
+                    if not email:
+                        # field() masks ambiguous selectors for other flows;
+                        # this initial login must stop on a visible ambiguity.
+                        await unique_visible(page, EMAIL_INPUT)
+                        note('email_field_missing')
+                        if await unique_visible(page, CODE_INPUT) or await unique_visible(page, PASSWORD_INPUT):
+                            raise Stop('verification_required')
+                        await self.settle(.1)
+                        continue
                     note('email_form_readiness')
                     email_handle, submit, reason = await self.email_submit_control(email, require_valid=False, page=page)
                     if not submit or reason:
@@ -1927,10 +1951,11 @@ class RegistrationBrowser:
                     if await self.email_submit_ready(email_handle, submit, page=page):
                         break
                     await self.settle(.1)
-                    email = await self.field(page, EMAIL_INPUT)
-                    if not email:
-                        note('email_form_changed')
-                        raise Stop('form_unrecognized')
+                if navigation_readonly:
+                    mark('navigation_guard')
+                    note('retry_guard_remove')
+                    await budget.run(lambda: verification.unroute('**/*', navigation_readonly), 'verification_email_guard')
+                    navigation_readonly = None
                 form = (await email_handle.evaluate_handle('(node) => node.form')).as_element()
                 url = page.url
                 mark('email_fill')
@@ -1979,6 +2004,7 @@ class RegistrationBrowser:
             if _owned_context:authentication['submitted'] = True
             await budget.run(lambda: email_handle.press('Enter'), 'verification_email_submit')
             email_submit_returned = True
+            prepare_elapsed_seconds = min(60, max(0, int(budget.elapsed)))
             await self.settle(3)
             chose_password = False
             for _ in range(60):
