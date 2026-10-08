@@ -1194,9 +1194,14 @@ class Registration96IO:
         identity = file_identity(Path(path).lstat())
         raw = read_actual_file(Path(path), modes=allowed, limit=limit, owner=owner)
         require(file_identity(Path(path).lstat()) == identity, 'OBSERVED_FILE_CHANGED')
-        measured = (raw, allowed, limit, identity, owner)
-        require(str(path) not in self.observed_files or self.observed_files[str(path)] == measured, 'OBSERVED_FILE_CHANGED')
-        self.observed_files[str(path)] = measured
+        prior = self.observed_files.get(str(path))
+        require(prior is None or (prior[0] == raw and prior[3:] == (identity, owner)), 'OBSERVED_FILE_CHANGED')
+        if prior is not None:
+            # Repeated reads may tighten policy without changing the file.
+            allowed = tuple(sorted(set(prior[1]) & set(allowed)))
+            require(bool(allowed), 'OBSERVED_FILE_CHANGED')
+            limit = min(prior[2], limit)
+        self.observed_files[str(path)] = (raw, allowed, limit, identity, owner)
         return raw
 
     def unchanged(self):

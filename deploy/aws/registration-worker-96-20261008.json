@@ -34,10 +34,10 @@
     "scripts/production-release/build-images.sh": "df75d80b741e15628f72f8ee8746f4483f4e786f8e1347bb1cd4026b7c0bb245",
     "scripts/production-release/dispatch.sh": "05e53128eccfc91218932b85950b1bd6d062ce4368d01a79bb3ed8239cd8a18f",
     "scripts/production-release/push-images.sh": "0c4791a4c9a9e11d7d6e084dfe548f1bb230b1feea6aff301c43806b52e33c36",
-    "scripts/production-release/registration-onboarding-96.py": "f17c8ca3ba5d7532ce86c6e8069624da2e9c8868783ab797f9f2a4b08c2fea21",
-    "scripts/production-release/registration-onboarding-96.test.py": "822692b7f7b03cb0b0b259c1d4b20f6d0588fd4f94df5f3b0bcdfac6a6825ee4",
+    "scripts/production-release/registration-onboarding-96.py": "7dd54407c7069538d1b5d63d1632780ec5af5fa52006ce4cad4c717f937da88c",
+    "scripts/production-release/registration-onboarding-96.test.py": "0685922f18d57a3af72677da64004420338b5420695436d66b969363e1c73b0b",
     "scripts/production-release/registration-only-transport.test.py": "466c2b47dc4bf87f9fa29df54d09fef021116ca62148a91e01eaaffd7669903a",
-    "scripts/production-release/remote-deploy.py": "418d8b32323597966d388a9ac5a5aae3982cdbed8a342e522f42e64cc0cf6f90",
+    "scripts/production-release/remote-deploy.py": "58c7705ee8ad91458a478a397e7c66202738280737f07ae12927c5d2e712a920",
     "scripts/production-release/validate-release-selection.sh": "95f2230c092247793cc735c5622bb0dd43909f67c7d6115184d30e01ea99520e"
   },
   "enabled": true,
