@@ -1,24 +1,34 @@
 #!/usr/bin/env node
-/* global document, getComputedStyle */
+/* global document, getComputedStyle, requestAnimationFrame */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const quickActionMigrationOnly = process.argv.includes('--quick-action-migration-only');
 const configuredUrl = process.env.V2_INTERACTION_ADMIN_URL;
 const baseUrl = new URL(configuredUrl || 'http://127.0.0.1:5390');
 assert.ok(['localhost', '127.0.0.1', '::1'].includes(baseUrl.hostname), '仅允许本机验收');
 const output = path.resolve(
   root,
-  process.argv[2] ?? '.runtime/refresh-interaction-consistency-20261001/browser'
+  process.argv.slice(2).find((arg) => !arg.startsWith('--')) ??
+    '.runtime/refresh-interaction-consistency-20261001/browser'
 );
-assert.ok(!path.relative(root, output).startsWith('..'), '验收产物必须位于当前项目');
+const commonGitDirectory = execFileSync(
+  'git',
+  ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+  { cwd: root, encoding: 'utf8' }
+).trim();
+const projectRoot =
+  path.basename(commonGitDirectory) === '.git' ? path.dirname(commonGitDirectory) : root;
+assert.ok(!path.relative(projectRoot, output).startsWith('..'), '验收产物必须位于当前项目');
 mkdirSync(output, { recursive: true });
 const checks = [];
 const errors = [];
+let simulatedWrites = 0;
 let browser;
 let server;
 
@@ -46,16 +56,28 @@ try {
     );
   const deadline = Date.now() + 30_000;
   while (
-    !(await fetch(new URL('/async-consistency-fixture.html', baseUrl)).catch(() => null))?.ok
+    !(
+      await fetch(
+        new URL(quickActionMigrationOnly ? '/login' : '/async-consistency-fixture.html', baseUrl)
+      ).catch(() => null)
+    )?.ok
   ) {
     assert.ok(Date.now() < deadline && server?.exitCode == null, '验收服务器未启动');
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   browser = await chromium.launch();
-  for (const theme of ['light', 'dark']) {
-    for (const width of [1440, 901, 900, 768, 390]) await verifyFixture(theme, width);
+  if (quickActionMigrationOnly) {
+    for (const theme of ['light', 'dark'])
+      for (const width of [1440, 390]) {
+        await verifyQuickActionMigration(theme, width, false);
+        await verifyQuickActionMigration(theme, width, true);
+      }
+  } else {
+    for (const theme of ['light', 'dark']) {
+      for (const width of [1440, 901, 900, 768, 390]) await verifyFixture(theme, width);
+    }
+    await verifyRealRoutes();
   }
-  await verifyRealRoutes();
   assert.deepEqual(errors, []);
   writeFileSync(
     path.join(output, 'checks.json'),
@@ -64,8 +86,11 @@ try {
         ok: true,
         checks,
         errors,
+        simulatedWrites,
         businessWrites: 0,
-        data: 'local synthetic fixtures and intercepted read responses'
+        data: quickActionMigrationOnly
+          ? 'actual local product route; synthetic data; every API read/write intercepted'
+          : 'local synthetic fixtures and intercepted read responses'
       },
       null,
       2
@@ -76,14 +101,192 @@ try {
       ok: true,
       checks: checks.length,
       themes: 2,
-      widths: 5,
+      widths: quickActionMigrationOnly ? 2 : 5,
+      simulatedWrites,
       businessWrites: 0,
       output
     })
   );
+} catch (error) {
+  writeFileSync(
+    path.join(output, 'failure.json'),
+    JSON.stringify({ checks, errors, error: error.message, businessWrites: 0 }, null, 2)
+  );
+  throw error;
 } finally {
   await browser?.close();
   server?.kill('SIGTERM');
+}
+
+async function verifyQuickActionMigration(theme, width, databaseConfirmed) {
+  const page = await browser.newPage({ viewport: { width, height: 1000 } });
+  page.setDefaultTimeout(10_000);
+  page.on('pageerror', (error) => errors.push(error.message));
+  const user = {
+    id: '11111111-1111-4111-8111-111111111111',
+    username: 'quick-action-fixture',
+    displayName: '便捷操作验收管理员',
+    roles: ['admin'],
+    permissions: [],
+    mustResetPassword: false
+  };
+  const ids = ['22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  const now = '2026-10-09T00:00:00.000Z';
+  const rows = ids.map((id, index) => ({
+    id,
+    title: `本地合成回复${index + 1}`,
+    content: `用于取消与重试验收的合成正文${index + 1}`,
+    createdAt: now,
+    updatedAt: now
+  }));
+  const legacyKey = `id-business-v2:quick-action-order:${encodeURIComponent(user.id)}`;
+  await page.addInitScript(
+    ({ user, theme, legacyKey, ids }) => {
+      localStorage.setItem('apple_business_access_token', 'local-quick-action-fixture');
+      localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+      localStorage.setItem('id-business-v2-theme', theme);
+      localStorage.setItem(legacyKey, JSON.stringify([...ids].reverse()));
+    },
+    { user, theme, legacyKey, ids }
+  );
+  let customOrder = false;
+  let writeCount = 0;
+  let releaseWrite;
+  const firstWrite = new Promise((resolve) => (releaseWrite = resolve));
+  const record = (scenario, detail = {}) =>
+    checks.push({ theme, width, databaseConfirmed, scenario, ...detail });
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.origin !== baseUrl.origin) {
+      errors.push('便捷操作验收禁止访问外部系统');
+      return route.abort();
+    }
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    let data = { items: [], total: 0, page: 1, pageSize: 20 };
+    if (request.method() !== 'GET') {
+      assert.equal(request.method(), 'PUT', '仅允许拦截排序保存');
+      assert.ok(url.pathname.endsWith('/quick-actions/order'), '仅允许模拟便捷操作排序');
+      assert.deepEqual(request.postDataJSON(), {
+        quickActionIds: [...ids].reverse(),
+        expectedQuickActionIds: ids,
+        initializeOnly: true
+      });
+      writeCount += 1;
+      simulatedWrites += 1;
+      if (writeCount === 1) {
+        await firstWrite;
+        return route.fulfill({
+          status: 500,
+          json: { success: false, message: '本地合成排序保存失败' }
+        });
+      }
+      customOrder = true;
+      data = { items: [...rows].reverse(), hasCustomOrder: true };
+    } else if (url.pathname.endsWith('/quick-actions'))
+      data = { items: customOrder ? [...rows].reverse() : rows, hasCustomOrder: customOrder };
+    else if (/\/auth\/(me|session)$/.test(url.pathname)) data = user;
+    else if (url.pathname.endsWith('/branding/public'))
+      data = { appName: 'ID 业务管理', logoText: 'ID', logoUrl: '/brand/default-logo.svg' };
+    else if (url.pathname.endsWith('/time')) data = { now, timezone: 'Asia/Shanghai' };
+    else if (url.pathname.endsWith('/change-versions')) data = { generatedAt: now, versions: {} };
+    else if (url.pathname.endsWith('/renewals/warning-summary'))
+      data = { total: 0, warningDays: 7 };
+    else if (url.pathname.endsWith('/sensitive-access/approvals/summary')) data = { pending: 0 };
+    else if (url.pathname.endsWith('/bootstrap'))
+      data = { list: data, options: { statuses: [], permissions: [] }, generatedAt: now };
+    await route.fulfill({
+      json: {
+        success: true,
+        data,
+        message: 'OK',
+        requestId: 'quick-action-fixture',
+        timestamp: now
+      }
+    });
+  });
+  await page.goto(new URL('/v2/system/roles', baseUrl).href, { waitUntil: 'domcontentloaded' });
+  await phase(page, 'ready', '.v2-roles-page .v2-async-region');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.v2Theme), theme);
+  const drawer = page.locator('.v2-quick-actions-drawer.el-drawer');
+  const entry = page.getByRole('button', { name: '便捷操作', exact: true });
+  await entry.click();
+  const deadline = Date.now() + 10_000;
+  while (writeCount === 0) {
+    assert.ok(Date.now() < deadline, '首次旧顺序同步请求未启动');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await drawer.locator('.el-drawer__close-btn').click();
+  await drawer.waitFor({ state: 'hidden' });
+  record('actual-drawer-closes-during-legacy-initialization');
+  if (databaseConfirmed) {
+    customOrder = true;
+    await entry.click();
+    await phase(page, 'ready', '.v2-quick-actions-drawer .v2-async-region');
+    await settleDrawer(drawer);
+  }
+  const finished = page.waitForEvent('requestfinished', {
+    predicate: (request) => request.url().endsWith('/quick-actions/order')
+  });
+  releaseWrite();
+  await finished;
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  const retry = drawer.getByRole('button', { name: '重试同步', exact: true });
+  if (databaseConfirmed) {
+    assert.equal(await retry.count(), 0);
+    assert.deepEqual(
+      await drawer
+        .locator('[data-sort-id]:visible')
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-sort-id'))),
+      [...ids].reverse()
+    );
+    assert.equal(await page.evaluate((key) => localStorage.getItem(key), legacyKey), null);
+    assert.equal(writeCount, 1);
+    record('database-confirmation-ignores-cancelled-write-late-failure');
+  } else {
+    await entry.click();
+    await phase(page, 'ready', '.v2-quick-actions-drawer .v2-async-region');
+    await retry.waitFor();
+    await settleDrawer(drawer);
+    assert.equal(await retry.isEnabled(), true);
+    assert.equal(writeCount, 1, '重开不得自动重发失败 PUT');
+    assert.notEqual(await page.evaluate((key) => localStorage.getItem(key), legacyKey), null);
+    const box = await retry.boundingBox();
+    assert.ok(
+      box.x >= 0 && box.x + box.width <= width && box.y + box.height <= 1000,
+      `重试按钮必须完整位于 ${width}×1000 可视区域：${JSON.stringify(box)}`
+    );
+    record('failed-cancelled-migration-reopens-with-visible-explicit-retry', { retryBox: box });
+    await page.screenshot({ path: path.join(output, `${theme}-${width}-retry-notice.png`) });
+    await retry.click();
+    await retry.waitFor({ state: 'hidden' });
+    await phase(page, 'ready', '.v2-quick-actions-drawer .v2-async-region');
+    assert.equal(writeCount, 2, '只有明确重试才发送第二次 PUT');
+    assert.equal(await page.evaluate((key) => localStorage.getItem(key), legacyKey), null);
+    record('explicit-retry-confirms-database-order-and-removes-legacy-storage');
+  }
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+    ),
+    false
+  );
+  await page.screenshot({
+    path: path.join(
+      output,
+      `${theme}-${width}-${databaseConfirmed ? 'confirmed-late-error' : 'retry-success'}.png`
+    )
+  });
+  await page.close();
+}
+
+async function settleDrawer(drawer) {
+  await drawer.evaluate(async (node) => {
+    const transitions = node
+      .getAnimations({ subtree: true })
+      .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity);
+    await Promise.all(transitions.map((animation) => animation.finished.catch(() => undefined)));
+  });
 }
 
 async function verifyFixture(theme, width) {

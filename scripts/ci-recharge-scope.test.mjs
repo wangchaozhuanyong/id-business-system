@@ -567,6 +567,57 @@ test('shared record spacing and its browser acceptance stay in the admin scope',
     adminCheckCommands('admin', paths).some((args) => args.includes('acceptance:v2-table-layout'))
   );
 });
+test('direct login and workspace browser acceptance stay in exact admin scope', () => {
+  const scripts = [
+    'scripts/acceptance-v2-bitbrowser-direct.mjs',
+    'scripts/acceptance-v2-refresh-interaction.mjs'
+  ];
+  const paths = [
+    ...scripts,
+    'apps/admin/src/v2/components/workspace/useV2QuickActions.ts',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts',
+    'docs/V2_TASKS.md'
+  ];
+  for (const script of scripts) {
+    assert.equal(isAdminOnly([script]), true);
+    assert.equal(checkMode([script], schema, schema), 'admin');
+    assert.deepEqual(selectedParts([script]), ['guards', 'admin']);
+    assert.equal(affectsPart('admin', [script]), true);
+    for (const part of ['api', 'connector', 'migration', 'security'])
+      assert.equal(affectsPart(part, [script]), false);
+  }
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  const checks = adminUiGuardChecks('admin', paths);
+  for (const guard of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(checks.includes(guard));
+  const commands = adminCheckCommands('admin', paths);
+  assert.ok(
+    commands.some((args) => args.join(' ') === 'run test --workspace @apple-business/admin')
+  );
+  assert.ok(
+    commands.some((args) => args.join(' ') === 'run build --workspace @apple-business/admin')
+  );
+  assert.ok(commands.some((args) => args.includes('acceptance:v2-auto-recharge')));
+  for (const other of [
+    'scripts/acceptance-v2-bitbrowser-direct-other.mjs',
+    'scripts/acceptance-v2-refresh-interaction-other.mjs',
+    'apps/api/src/id-business-v2/workspace/example.ts',
+    'apps/admin/src/auth/login.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'packages/shared/src/index.ts',
+    'package-lock.json'
+  ])
+    assert.equal(checkMode([...paths, other], schema, schema), 'full', other);
+});
 test('Vendure mailbox integration runs only its shared, admin, API and guard checks', () => {
   const paths = [
     '.env.example',

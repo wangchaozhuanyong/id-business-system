@@ -100,6 +100,23 @@ function automaticLogin(states: string[], submitWaits = 0) {
   return actions;
 }
 
+function pendingCode() {
+  let resolve!: (value: string) => void;
+  let reject!: (cause: unknown) => void;
+  const code = vi.fn(
+    () =>
+      new Promise<string>((accept, decline) => {
+        resolve = accept;
+        reject = decline;
+      })
+  );
+  return {
+    code,
+    resolve: () => resolve('123456'),
+    reject: () => reject(new DirectBrowserError('official_login_not_verified'))
+  };
+}
+
 describe('仅登录窗口失败不会转成长时间的假验证等待', () => {
   it.each(['unauthenticated', 'email'])('JSON 会话失效立即失败：%s', async (kind) => {
     mock.evaluate.mockResolvedValue({ kind });
@@ -271,5 +288,146 @@ describe('账号密码自动登录的入口与表单提交', () => {
     expect(actions.filter((action) => action === 'submit')).toHaveLength(count);
     controller.abort();
     await cancelled;
+  });
+});
+
+describe('等待2FA时持续核对官网与任务截止', () => {
+  it('取码尚未完成时继续观察，码到达后只提交一次', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin(['code', 'code', 'identity']);
+    const pending = pendingCode();
+    const progress = vi.fn();
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'fixture-password' } },
+      '测试窗口',
+      new AbortController().signal,
+      { progress, code: pending.code }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(actions.filter((action) => action === 'code')).toHaveLength(0);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect((await result).status).toBe('session_ready');
+    expect(actions.filter((action) => action === 'submit')).toHaveLength(1);
+    expect(pending.code).toHaveBeenCalledOnce();
+    expect(progress.mock.calls.filter(([stage]) => stage === 'login_code_required')).toHaveLength(
+      1
+    );
+    expect(progress.mock.calls.filter(([stage]) => stage === 'login_code_submitted')).toHaveLength(
+      1
+    );
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    '原窗口人工完成登录后识别身份，迟到取码%s不提交或覆盖成功',
+    async (completion) => {
+      vi.useFakeTimers();
+      const actions = automaticLogin(['code', 'identity']);
+      const pending = pendingCode();
+      const progress = vi.fn();
+      const input = { login: { email: 'user@example.com', password: 'fixture-password' } };
+      const result = runDirectLogin(settings, input, '测试窗口', new AbortController().signal, {
+        progress,
+        code: pending.code
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      const outcome = await result;
+      expect(outcome).toMatchObject({ status: 'session_ready', account_matched: true });
+      pending[completion]();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await result).toBe(outcome);
+      expect(actions.filter((action) => action === 'inspect')).toHaveLength(2);
+      expect(actions.filter((action) => action === 'code' || action === 'submit')).toHaveLength(0);
+      expect(pending.code).toHaveBeenCalledOnce();
+      expect(progress.mock.calls.some(([stage]) => stage === 'login_code_submitted')).toBe(false);
+      expect(mock.close).toHaveBeenCalledOnce();
+      expect(input.login.password).toBe('');
+    }
+  );
+
+  it.each(['resolve', 'reject'] as const)(
+    '无输入时守住自动预算并在30分钟结束，迟到取码%s不再提交',
+    async (completion) => {
+      vi.useFakeTimers();
+      const startedAt = Date.now();
+      const actions = automaticLogin(['code']);
+      const pending = pendingCode();
+      const progress = vi.fn();
+      const input = { login: { email: 'user@example.com', password: 'fixture-password' } };
+      const result = runDirectLogin(
+        {
+          ...settings,
+          browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, sessionWaitMinutes: 1 }
+        },
+        input,
+        '测试窗口',
+        new AbortController().signal,
+        { progress, code: pending.code }
+      );
+      const failed = expect(result).rejects.toThrow('未能确认官网账号登录成功');
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(
+        progress.mock.calls.filter(([stage]) => stage === 'verification_required')
+      ).toHaveLength(1);
+      expect(actions.filter((action) => action === 'inspect').length).toBeGreaterThan(1);
+      expect(pending.code).toHaveBeenCalledOnce();
+      vi.setSystemTime(startedAt + 30 * 60_000);
+      await vi.advanceTimersByTimeAsync(1000);
+      await failed;
+      pending[completion]();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(actions.filter((action) => action === 'code' || action === 'submit')).toHaveLength(0);
+      expect(progress.mock.calls.some(([stage]) => stage === 'login_code_submitted')).toBe(false);
+      expect(mock.close).toHaveBeenCalledOnce();
+      expect(input.login.password).toBe('');
+    }
+  );
+
+  it.each(['resolve', 'reject'] as const)(
+    '等待2FA期间可立即取消，迟到取码%s不恢复执行',
+    async (completion) => {
+      vi.useFakeTimers();
+      const actions = automaticLogin(['code']);
+      const pending = pendingCode();
+      const controller = new AbortController();
+      const result = runDirectLogin(
+        settings,
+        { login: { email: 'user@example.com', password: 'fixture-password' } },
+        '测试窗口',
+        controller.signal,
+        { progress: vi.fn(), code: pending.code }
+      );
+      const cancelled = expect(result).rejects.toThrow('已停止');
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await cancelled;
+      pending[completion]();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(actions.filter((action) => action === 'code' || action === 'submit')).toHaveLength(0);
+      expect(pending.code).toHaveBeenCalledOnce();
+      expect(mock.close).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('取码等待中出现官网挑战，完成后继续原验证码步骤且不再次取码', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin(['code', 'manual', 'code', 'identity']);
+    const pending = pendingCode();
+    const progress = vi.fn();
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'fixture-password' } },
+      '测试窗口',
+      new AbortController().signal,
+      { progress, code: pending.code }
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(progress).toHaveBeenCalledWith('verification_required', { user_action_required: true });
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect((await result).status).toBe('session_ready');
+    expect(actions.filter((action) => action === 'submit')).toHaveLength(1);
+    expect(pending.code).toHaveBeenCalledOnce();
   });
 });
