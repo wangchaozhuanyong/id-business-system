@@ -321,13 +321,18 @@ import json,os,subprocess,sys,time
 from pathlib import Path
 args=sys.argv[1:];assert args[0]=='-'
 if len(args)==3:
- clock=[0.0];time.monotonic=lambda:clock[0]
- time.sleep=lambda value:clock.__setitem__(0,clock[0]+float(os.environ['TASK_STORAGE_SLEEP_ADVANCE']))
+ clock=[0.0];real_monotonic=time.monotonic;real_sleep=time.sleep
+ simulated_monotonic=lambda:clock[0]
+ simulated_sleep=lambda value:clock.__setitem__(0,clock[0]+float(os.environ['TASK_STORAGE_SLEEP_ADVANCE']))
+ time.monotonic=simulated_monotonic;time.sleep=simulated_sleep
  original_run=subprocess.run
  def bounded_run(*args,**kwargs):
   limit=kwargs['timeout'];assert 0<limit<=min(30,660-clock[0])
   with Path(os.environ['TASK_STORAGE_TIMING_LOG']).open('a')as target:target.write(json.dumps({'at':clock[0],'timeout':limit})+'\\n')
-  return original_run(*args,**kwargs)
+  # Native child-process waits must not advance this process's simulated workflow clock.
+  time.monotonic=real_monotonic;time.sleep=real_sleep
+  try:return original_run(*args,**kwargs)
+  finally:time.monotonic=simulated_monotonic;time.sleep=simulated_sleep
  subprocess.run=bounded_run
 sys.argv=args
 exec(compile(sys.stdin.read(),'actual-storage-workflow-step','exec'),{'__name__':'__main__'})

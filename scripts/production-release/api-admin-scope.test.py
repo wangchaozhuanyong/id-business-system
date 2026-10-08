@@ -1743,6 +1743,44 @@ class MigrationScopeTests(unittest.TestCase):
             self.assertIn('information_schema.STATISTICS', query)
             self.assertNotIn('UPDATE ', query)
 
+    def test_native_boolean_database_status_verifies_pending_and_applied(self):
+        for applied in (False, True):
+            with self.subTest(applied=applied):
+                value = migration_database_fixture(applied=applied)
+                for row in value['rows']:
+                    row['finished'], row['rolledBack'] = True, False
+                state = migration.migration_database_state(self.database_controller(value), ROOT)
+                self.assertEqual(state['status'], 'APPLIED' if applied else 'PENDING')
+                self.assertTrue(state['schemaVerified'])
+
+    def test_database_status_rejects_strings_floats_null_and_non_binary_integers(self):
+        for field in ('finished', 'rolledBack'):
+            for bad in ('0', '1', 'true', 'false', 0.0, 1.0, None, -1, 2, [], {}):
+                with self.subTest(field=field, bad=bad):
+                    value = migration_database_fixture()
+                    value['rows'][0][field] = bad
+                    with self.assertRaisesRegex(RuntimeError, 'MIGRATION_HISTORY_CHANGED'):
+                        migration.migration_database_state(self.database_controller(value), ROOT)
+
+    def test_database_status_requires_exactly_one_finished_or_rolled_back(self):
+        for finished, rolled_back in ((False, False), (True, True), (0, 0), (1, 1)):
+            with self.subTest(finished=finished, rolled_back=rolled_back):
+                value = migration_database_fixture()
+                value['rows'][0].update(finished=finished, rolledBack=rolled_back)
+                with self.assertRaisesRegex(RuntimeError, 'MIGRATION_HISTORY_CHANGED'):
+                    migration.migration_database_state(self.database_controller(value), ROOT)
+
+    def test_rolled_back_boolean_history_keeps_required_successful_names_and_checksums(self):
+        value = migration_database_fixture()
+        for row in value['rows']:
+            row['finished'], row['rolledBack'] = True, False
+        value['rows'].append({**value['rows'][0], 'finished': False, 'rolledBack': True})
+        state = migration.migration_database_state(self.database_controller(value), ROOT)
+        self.assertEqual(state['status'], 'PENDING')
+        value['rows'][-1]['checksum'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'MIGRATION_HISTORY_CHANGED'):
+            migration.migration_database_state(self.database_controller(value), ROOT)
+
     def test_database_partial_ddl_unresolved_or_foreign_history_and_index_drift_fail_closed(self):
         for change in ('checksum', 'missing-old', 'extra', 'duplicate', 'unresolved', 'partial-column', 'column-default', 'unsigned', 'index-column', 'index-unique'):
             value = migration_database_fixture(applied=True)

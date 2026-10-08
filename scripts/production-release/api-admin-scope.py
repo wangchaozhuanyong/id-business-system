@@ -222,7 +222,7 @@ def migration_database_state(d, directory):
     for row in value['rows']:
         d.require(isinstance(row, dict) and set(row) == {'name', 'checksum', 'finished', 'rolledBack'}
                   and row['name'] in expected and row['checksum'] == expected[row['name']]
-                  and all(type(row[n]) is int and row[n] in (0, 1) for n in ('finished', 'rolledBack'))
+                  and all(type(row[n]) in (bool, int) and row[n] in (0, 1) for n in ('finished', 'rolledBack'))
                   and row['finished'] + row['rolledBack'] == 1,
                   'API_ADMIN_MIGRATION_HISTORY_CHANGED')
         if row['finished']:
