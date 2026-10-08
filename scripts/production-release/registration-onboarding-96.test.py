@@ -14,6 +14,7 @@ import os
 import tempfile
 
 MODULE = Path(__file__).with_name('registration-onboarding-96.py')
+ADAPTER_TEST_OUTPUT = MODULE.resolve().parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
 spec = importlib.util.spec_from_file_location('disabled_registration96', MODULE)
 scope = importlib.util.module_from_spec(spec); spec.loader.exec_module(scope)
 
@@ -694,6 +695,11 @@ def adapter_fixture():
 
 
 class Registration96AdapterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        ADAPTER_TEST_OUTPUT.mkdir(parents=True, exist_ok=True)
+
     def reject(self, reason, function, *args, **kwargs):
         with self.assertRaises(scope.Registration96Error) as fail: function(*args, **kwargs)
         self.assertEqual(str(fail.exception), reason)
@@ -765,8 +771,7 @@ class Registration96AdapterTests(unittest.TestCase):
         self.reject('CARRIER_PUBLIC_MAP_CHANGED', scope.expected_runtime_map, encoded(bad), f['profile_raw'], f['candidate'], f['context'], f['record'])
 
     def test_private_reads_writes_nofollow_singlelink_mode_and_owner(self):
-        output = MODULE.parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
-        output.mkdir(parents=True, exist_ok=True)
+        output = ADAPTER_TEST_OUTPUT
         with tempfile.TemporaryDirectory(dir=output) as directory:
             path = Path(directory) / 'closed.json'; scope.write_private_file(path, b'{}')
             self.assertEqual(scope.read_actual_file(path), b'{}')
@@ -870,7 +875,7 @@ class Registration96AdapterTests(unittest.TestCase):
 
     def test_file_identity_race_after_read_is_rejected(self):
         from types import SimpleNamespace
-        output = MODULE.parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
+        output = ADAPTER_TEST_OUTPUT
         with tempfile.TemporaryDirectory(dir=output) as directory:
             path = Path(directory) / 'closed.json'; scope.write_private_file(path, b'{}')
             real_fstat = scope.os.fstat; calls = []
@@ -903,7 +908,7 @@ class Registration96AdapterTests(unittest.TestCase):
     def test_build_receipt_only_after_context_bytes_are_written_and_measured(self):
         f = adapter_fixture()
         worker, projection = scope.build_projection(f['basis'], f['candidate'], f['context'], f['record'], carried=f['carried'])
-        output = MODULE.parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
+        output = ADAPTER_TEST_OUTPUT
         with tempfile.TemporaryDirectory(dir=output) as directory:
             parent = self.parent()
             def write(root, files):
@@ -959,7 +964,7 @@ class Registration96AdapterTests(unittest.TestCase):
         self.assertEqual(len(exact), 6)
 
     def test_baseline_absence_rejects_present_file_broken_symlink_and_directory_change(self):
-        output = MODULE.parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
+        output = ADAPTER_TEST_OUTPUT
         with tempfile.TemporaryDirectory(dir=output) as directory:
             adapter = scope.Registration96IO(self.parent(), production=False, budget=210)
             adapter.baseline = {'current': directory}
@@ -975,7 +980,7 @@ class Registration96AdapterTests(unittest.TestCase):
             self.reject('BASELINE_DIRECTORY_CHANGED', adapter.baseline_absence)
 
     def test_stage_reads_override_only_from_pinned_previous_bytes_and_never_repairs_current(self):
-        output = MODULE.parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
+        output = ADAPTER_TEST_OUTPUT
         with tempfile.TemporaryDirectory(dir=output) as directory:
             current, previous, release = (Path(directory) / n for n in ('current', 'previous', 'newrelease'))
             current.mkdir(); previous.mkdir()
@@ -1040,7 +1045,7 @@ class Registration96AdapterTests(unittest.TestCase):
         self.reject('READBACK_PUBLIC_MAP_CHANGED', scope.validate_readback, d['readback'], d['context'], d['record'], d['profile_raw'], d['projection'], bad)
 
     def test_public_actual664_only_exact_compose_path(self):
-        output = MODULE.parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
+        output = ADAPTER_TEST_OUTPUT
         with tempfile.TemporaryDirectory(dir=output) as directory:
             path = Path(directory) / 'docker-compose.aws-mysql.yml'
             path.write_bytes(b'SYNTHETIC compose'); path.chmod(0o664)
