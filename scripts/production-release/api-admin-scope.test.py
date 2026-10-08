@@ -908,7 +908,7 @@ class RegistrationHandoffTests(unittest.TestCase):
 
 class ReleaseFailureTests(unittest.TestCase):
     def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False,
-                    selected_scope=scope):
+                    selected_scope=scope, handoff_check=None, idle_check=None, after_api=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -933,6 +933,11 @@ class ReleaseFailureTests(unittest.TestCase):
             before = states()
             controller = SimpleNamespace(**vars(d)); controller.BASE = base
             controller.compose = MagicMock(); controller.wait_healthy = MagicMock()
+            if after_api is not None:
+                def compose(*command, **kwargs):
+                    if command[-1] == 'api': after_api()
+                    return ''
+                controller.compose.side_effect = compose
             controller.rollback_service = MagicMock(); controller.point_current = MagicMock()
             controller.environment_values = lambda path: {'APP_PUBLIC_URL': 'https://example.test'}
             controller.fresh_backup = MagicMock(return_value={'name': 'backup'})
@@ -979,6 +984,8 @@ class ReleaseFailureTests(unittest.TestCase):
             stack.enter_context(patch.object(scope, 'require_preserved', return_value=before))
             stack.enter_context(patch.object(scope, 'strict_audit', return_value={'checksSha256': 'rules'}))
             idle = stack.enter_context(patch.object(scope, 'jobs_idle'))
+            stack.enter_context(patch.object(scope, 'require_registration_handoff', side_effect=handoff_check))
+            if idle_check is not None: idle.side_effect = idle_check
             stack.enter_context(patch.object(scope, 'verify_running'))
             stack.enter_context(patch.object(scope, 'readback', return_value={'status': 'API_ADMIN_VERIFIED'}))
             restore = copy.deepcopy(before)
@@ -1036,6 +1043,28 @@ class ReleaseFailureTests(unittest.TestCase):
         self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_PAIR_CHANGED')
         controller.compose.assert_not_called()
         controller.rollback_service.assert_not_called()
+
+    def test_api_switch_then_retained_false_and_registration_cid_drift_blocks_worker_switch(self):
+        with RegistrationRecoveryTests().fixture() as f:
+            registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            original_require = registration.require_registration_handoff
+            observed_guards = []
+            def idle_check(*args, **kwargs):
+                value = f.original_idle(f.controller, f.directory)
+                observed_guards.append(value['registrationWindowRetained'])
+                return value
+            def handoff_check(_controller, _previous, manifest):
+                return original_require(f.controller, f.directory, manifest)
+            def after_api():
+                f.controller.registration_runtime_state.return_value['registrationWindowRetained'] = False
+                f.controller.service_state.return_value = {**f.states['auto-registration'], 'containerId': 'f' * 64}
+            code, result, controller, _, _ = self.run_release(selected_scope=registration,
+                idle_check=idle_check, handoff_check=handoff_check, after_api=after_api)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_CONTAINER_CHANGED')
+            self.assertEqual(result['servicesAttempted'], ['api'])
+            self.assertEqual([call.args[-1] for call in controller.compose.call_args_list], ['api'])
+            self.assertIn(True, observed_guards); self.assertIn(False, observed_guards)
 
     def test_registration_failed_health_rolls_back_without_touching_other_five(self):
         code, result, controller, _, _ = self.run_release(selected_scope=registration, fail_at='api-health')

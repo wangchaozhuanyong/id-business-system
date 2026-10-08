@@ -1362,6 +1362,7 @@ def _release_locked(d, args):
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
                 if REGISTRATION:
+                    require_registration_handoff(d, previous, old)
                     d.require(registration_task(d, previous) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
             changed.append(name)
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name, timeout=300)
