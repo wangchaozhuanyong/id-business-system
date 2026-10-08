@@ -43,16 +43,88 @@ class DisabledRegistration96Tests(unittest.TestCase):
         return actual, sealed, pair
 
     def test_default_module_cli_and_ssm_are_disabled(self):
-        self.assertIs(scope.ENABLED, False)
-        self.rejected('REGISTRATION96_DISABLED', scope.ssm_parameters)
-        with patch.object(scope, 'ENABLED', True):
-            self.rejected('REGISTRATION96_DISABLED', scope.assert_enabled)
+        disabled = {'ENABLED': False, 'BASELINE_SCHEMA_SHA256': None, 'FORMAL_BASELINE_SHA256': None,
+            'FINAL_SOURCE_PAIR_SHA256': None, 'HANDOFF_SHA256': None}
         stream = io.StringIO()
-        with redirect_stdout(stream):
+        with patch.multiple(scope, **disabled), \
+                patch.object(scope.os, 'open', side_effect=AssertionError('file accessed')), \
+                patch.object(scope.subprocess, 'run', side_effect=AssertionError('provider accessed')), \
+                redirect_stdout(stream):
+            self.assertIs(scope.ENABLED, False)
+            self.rejected('REGISTRATION96_DISABLED', scope.ssm_parameters)
+            with patch.object(scope, 'ENABLED', True):
+                self.rejected('REGISTRATION96_DISABLED', scope.assert_enabled)
             self.assertEqual(scope.main(['--registration-worker-96', '--enable', 'synthetic-private']), 2)
         self.assertEqual(json.loads(stream.getvalue()), {'status': 'REGISTRATION96_DISABLED',
             'enabled': False, 'productionOperations': 0, 'parametersGenerated': False})
         self.assertNotIn('synthetic-private', stream.getvalue())
+
+    def test_actual_source_activation_pins_and_loader_bind_tracked_carriers(self):
+        # This branch uses the imported source values, never patched enablement.
+        # It closes local bytes and pins, not provider origin or live acceptance.
+        root = MODULE.resolve().parents[2]
+        module_raw = scope.read_actual_file(MODULE.resolve(), modes=(0o644,), limit=scope.MODULE_MAX_BYTES)
+        controller = MODULE.with_name('remote-deploy.py').resolve()
+        controller_raw = scope.read_actual_file(controller, modes=(0o644,), limit=scope.CARRIER_MAX_BYTES)
+        loader = [node for node in ast.parse(controller_raw).body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'REGISTRATION96_MODULE_SHA256']
+        self.assertEqual(len(loader), 1)
+        loader_pin = ast.literal_eval(loader[0].value)
+        actual_pins = [scope.BASELINE_SCHEMA_SHA256, scope.FORMAL_BASELINE_SHA256,
+            scope.FINAL_SOURCE_PAIR_SHA256, scope.HANDOFF_SHA256]
+        self.assertIsInstance(scope.ENABLED, bool)
+        if scope.ENABLED is False:
+            self.assertEqual(actual_pins, [None] * 4)
+            self.assertIsNone(loader_pin)
+            return
+        self.assertTrue(all(scope.digest(value) for value in actual_pins))
+        self.assertEqual(loader_pin, scope.sha256(module_raw))
+        carrier_raw = scope.read_actual_file(root / scope.BASELINE_CARRIER_FILE,
+            modes=(0o644,), limit=scope.BASELINE_MAX_BYTES)
+        profile_raw = scope.read_actual_file(root / scope.PROFILE_FILE,
+            modes=(0o644,), limit=scope.PROFILE_MAX_BYTES)
+        carrier = scope.closed_json(carrier_raw)
+        profile = scope.closed_json(profile_raw, limit=scope.PROFILE_MAX_BYTES)
+        self.assertEqual(set(carrier), scope.CARRIER_KEYS)
+        self.assertEqual(carrier['status'], 'FROZEN_REGISTRATION96_FINITE_CARRIER')
+        self.assertEqual(profile['id'], scope.PROFILE_ID)
+        self.assertIs(profile['enabled'], True)
+        self.assertEqual(profile['baselineCarrierSha256'], scope.sha256(carrier_raw))
+        self.assertEqual(scope.BASELINE_SCHEMA_SHA256, profile['baselineSchemaSha256'])
+        self.assertEqual(scope.BASELINE_SCHEMA_SHA256, carrier['schemaSha256'])
+        baseline_raw, baseline = scope.decode_raw(carrier['baselineRawBase64'], 'baseline',
+            carrier['baselineRawSha256'], carrier['baselineCanonicalSha256'])
+        _, old = scope.decode_raw(carrier['baseline95RawBase64'], '95',
+            carrier['baseline95RawSha256'], carrier['baseline95CanonicalSha256'], ascii=False)
+        scope.decode_raw(carrier['proProfileRawBase64'], 'pro',
+            carrier['proProfileRawSha256'], carrier['proProfileCanonicalSha256'])
+        self.assertEqual(scope.FORMAL_BASELINE_SHA256, scope.sha256(baseline_raw))
+        self.assertEqual(scope.FORMAL_BASELINE_SHA256, profile['baselineReceiptSha256'])
+        self.assertEqual(profile['baselineCanonicalSha256'], scope.canonical_sha256(baseline))
+        self.assertEqual(scope.FINAL_SOURCE_PAIR_SHA256, scope.canonical_sha256(profile['registrationSourceSha256']))
+        self.assertEqual(profile['registrationSourceSha256'], scope.REGISTRATION_SOURCE_SHA256)
+        pair = {}
+        for name, expected in scope.REGISTRATION_SOURCE_SHA256.items():
+            raw = scope.read_actual_file(root / name, modes=(0o644,), limit=8 * 1024 * 1024)
+            self.assertEqual(scope.sha256(raw), expected)
+            pair[name] = (raw, '100644')
+        self.assertEqual(profile['workerProjection'], scope.worker_delta(old['actualRegistrationWorkerSourceSha256'],
+            carrier['sealed95WorkerProjection'], pair))
+        self.assertEqual(profile['workerProjectionSha256'], scope.canonical_sha256(profile['workerProjection']))
+        self.assertEqual(profile['registrationHandoff'], scope.check_handoff(carrier['handoff']))
+        self.assertEqual(scope.HANDOFF_SHA256, carrier['handoff']['receiptSha256'])
+        self.assertEqual(set(profile['controlSourceSha256']), scope.CONTROL_FILES)
+        self.assertEqual(set(profile['sourceModes']), scope.CONTROL_FILES)
+        for name in scope.CONTROL_FILES:
+            cap = scope.MODULE_MAX_BYTES if name == 'scripts/production-release/registration-onboarding-96.py' \
+                else scope.CARRIER_MAX_BYTES if name == 'scripts/production-release/remote-deploy.py' else 8 * 1024 * 1024
+            raw = scope.read_actual_file(root / name, modes=(0o644,), limit=cap)
+            self.assertEqual(scope.sha256(raw), profile['controlSourceSha256'][name])
+            self.assertEqual(scope.local_git(root, 'ls-files', '--stage', '--', name).split()[0], profile['sourceModes'][name])
+        self.assertEqual(profile['scope']['servicesUpdated'], ['auto-registration'])
+        self.assertFalse(profile['scope']['financialWritesAllowed'])
+        self.assertFalse(profile['scope']['cacheCleanupAllowed'])
 
     def test_only_stdlib_adapter_and_no_dynamic_historical_execution(self):
         tree = ast.parse(MODULE.read_bytes())
@@ -391,10 +463,13 @@ class FiniteRegistration96Tests(unittest.TestCase):
         with self.assertRaises(scope.Registration96Error): function(*args, **kwargs)
 
     def test_complete_synthetic_baseline_validates_without_claiming_actual_acceptance(self):
-        f = fixture(); result = scope.validate_baseline(f['raw'], f['context'])
-        self.assertEqual(result, f['record']); self.assertFalse(result['businessAcceptanceConfirmed'])
-        self.assertEqual(result['officialOtpAccepted'], 'NOT_MEASURED')
-        self.assertFalse(scope.ENABLED); self.assertIsNone(scope.FORMAL_BASELINE_SHA256)
+        disabled = {'ENABLED': False, 'BASELINE_SCHEMA_SHA256': None, 'FORMAL_BASELINE_SHA256': None,
+            'FINAL_SOURCE_PAIR_SHA256': None, 'HANDOFF_SHA256': None}
+        with patch.multiple(scope, **disabled):
+            f = fixture(); result = scope.validate_baseline(f['raw'], f['context'])
+            self.assertEqual(result, f['record']); self.assertFalse(result['businessAcceptanceConfirmed'])
+            self.assertEqual(result['officialOtpAccepted'], 'NOT_MEASURED')
+            self.assertFalse(scope.ENABLED); self.assertIsNone(scope.FORMAL_BASELINE_SHA256)
 
     def test_pinned_formal_producer_raw_receipt_and_missing_freeze_reject(self):
         f = fixture()
@@ -713,10 +788,12 @@ class Registration96AdapterTests(unittest.TestCase):
 
     def test_disabled_cli_no_parent_file_subprocess_or_provider_access(self):
         stream = io.StringIO()
+        disabled = {'ENABLED': False, 'BASELINE_SCHEMA_SHA256': None, 'FORMAL_BASELINE_SHA256': None,
+            'FINAL_SOURCE_PAIR_SHA256': None, 'HANDOFF_SHA256': None}
         class Forbidden(dict):
             def get(self, *_a): raise AssertionError('parent accessed')
             def __getitem__(self, _key): raise AssertionError('parent accessed')
-        with patch.object(scope.os, 'open', side_effect=AssertionError('file accessed')), patch.object(scope.subprocess, 'run', side_effect=AssertionError('provider accessed')), redirect_stdout(stream):
+        with patch.multiple(scope, **disabled), patch.object(scope.os, 'open', side_effect=AssertionError('file accessed')), patch.object(scope.subprocess, 'run', side_effect=AssertionError('provider accessed')), redirect_stdout(stream):
             rc = scope.registration96_cli(['--registration-worker-96', '--secret', 'synthetic-private'], Forbidden())
         self.assertEqual(rc, 2)
         self.assertNotIn('synthetic-private', stream.getvalue())
@@ -1126,6 +1203,42 @@ class Registration96AdapterTests(unittest.TestCase):
             else:
                 self.assertEqual(value['status'], prior['status']); self.assertEqual(value['phase'], 'image')
             self.assertNotIn('private', stream.getvalue())
+
+    def test_cli_release_generated_timestamp_satisfies_actual_helper_and_manifest_contracts(self):
+        f = deployment_fixture(); ops = SyntheticHelpers(f)
+        args = ['--registration-worker-96', '--registration96-baseline-sha256', 'a' * 64,
+            '--commit', f['context']['candidate']['commit'], '--source-tree', f['context']['candidate']['tree'],
+            '--repository', '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+            '--expected-current', scope.CURRENT_COMMIT, '--run-id', '3', '--run-attempt', '1', '--ci-run-id', '3']
+        pins = {'ENABLED': True, 'BASELINE_SCHEMA_SHA256': 'a' * 64, 'FORMAL_BASELINE_SHA256': 'b' * 64,
+            'FINAL_SOURCE_PAIR_SHA256': 'c' * 64, 'HANDOFF_SHA256': 'd' * 64}
+        adapter = scope.Registration96IO(self.parent(), production=False, budget=1800)
+        adapter.frozen, adapter.baseline, adapter.projection = f['context'], f['record'], f['projection']
+        adapter.profile_raw, adapter.baseline_raw, adapter.candidate = f['profile_raw'], f['raw'], f['candidate']
+        adapter.prepare = lambda *_args: None; adapter.public = lambda _directory: f['public']; adapter.build = lambda: None
+        adapter.lock_acquire = lambda: None; adapter.helpers = lambda: ops.functions
+        instant = scope.datetime(2026, 10, 8, 1, 0, tzinfo=scope.timezone.utc)
+        stream = io.StringIO()
+        # Keep the real helper, its timestamp guard, and the manifest validation.
+        # Only provider operations use RAM fixtures; no release proof is persisted.
+        with patch.multiple(scope, **pins), patch.object(scope, 'Registration96IO', return_value=adapter), \
+                patch.object(scope, 'archive_tree', return_value=f['context']['candidate']['tree']), \
+                patch.object(scope, 'datetime') as clock, \
+                patch.object(scope, 'release_helpers', wraps=scope.release_helpers) as helper, \
+                patch.object(Path, 'exists', return_value=False), patch.object(Path, 'is_symlink', return_value=False), \
+                redirect_stdout(stream):
+            clock.now.return_value = instant
+            rc = scope.registration96_cli(args, {})
+        self.assertEqual(rc, 0, stream.getvalue())
+        helper.assert_called_once()
+        self.assertEqual(helper.call_args.args[5], f['release'])
+        self.assertEqual(helper.call_args.args[6], '2026-10-08T01:00:00.000Z')
+        self.assertTrue(scope.iso(helper.call_args.args[6]))
+        manifest = next(args[1] for name, args in ops.trace if name == 'write_manifest')
+        self.assertEqual(manifest['deployedAt'], helper.call_args.args[6])
+        self.assertEqual(ops.calls['switch_registration'], 1)
+        self.assertEqual(ops.calls['point_current'], 1)
+        self.assertFalse(json.loads(stream.getvalue())['businessAcceptanceConfirmed'])
 
 
 if __name__ == '__main__': unittest.main()

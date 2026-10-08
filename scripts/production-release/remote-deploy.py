@@ -12571,7 +12571,7 @@ def load_registration_interstitial95():
     return globals()
 
 
-REGISTRATION96_MODULE_SHA256 = None
+REGISTRATION96_MODULE_SHA256 = 'f17c8ca3ba5d7532ce86c6e8069624da2e9c8868783ab797f9f2a4b08c2fea21'
 
 
 def load_registration96():

@@ -1285,9 +1285,9 @@ if name=='aws':
 
     def test_real96_defaults_exit_before_any_file_or_provider_io(self):
         module=self.actual_module()
-        with patch.object(module.os,'open',side_effect=AssertionError('Unexpected file I/O')),patch.object(module.subprocess,'run',side_effect=AssertionError('Unexpected provider')),patch.object(module,'Registration96IO',side_effect=AssertionError('Unexpected adapter')):
+        with patch.object(module,'ENABLED',False),patch.object(module.os,'open',side_effect=AssertionError('Unexpected file I/O')),patch.object(module.subprocess,'run',side_effect=AssertionError('Unexpected provider')),patch.object(module,'Registration96IO',side_effect=AssertionError('Unexpected adapter')):
             result=module.registration96_cli(['--registration-worker-96'],{})
-        self.assertEqual(result,2);self.assertFalse(module.ENABLED)
+            self.assertEqual(result,2);self.assertFalse(module.ENABLED)
 
     def test_disabled_missing_carriers_wrong_h_and_drift_stop_before_provider(self):
         changes=[('disabled',lambda r: self.mutate_profile(r,enabled=False)),('wrongH',lambda r:self.mutate_profile(r,baselineCarrierSha256='0'*64))]

@@ -23,11 +23,11 @@ from datetime import datetime, timezone
 
 
 PROFILE_ID = 'registration-worker-96-20261008'
-ENABLED = False
-BASELINE_SCHEMA_SHA256 = None
-FORMAL_BASELINE_SHA256 = None
-FINAL_SOURCE_PAIR_SHA256 = None
-HANDOFF_SHA256 = None
+ENABLED = True
+BASELINE_SCHEMA_SHA256 = 'b6767c8e65df5f7fbab1873770c2185692f1dca24f03f8d1accca22f4e2cecb5'
+FORMAL_BASELINE_SHA256 = '41007c7c7cf525c65f50297a87c9e9a986503cbb2c023ac8b57fb1de675d6434'
+FINAL_SOURCE_PAIR_SHA256 = '438a131c2005465cb55cf07fd72e0b0f882b61bff6c1740200f459195aed1ea9'
+HANDOFF_SHA256 = '32b03f92066f1fcc5316c1aafbb626fd8d7365f044891f7e21235840f02a4275'
 CARRIER_MAX_BYTES = 1024 * 1024
 MODULE_MAX_BYTES = PROFILE_MAX_BYTES = 128 * 1024
 BASELINE_MAX_BYTES = 4 * 1024 * 1024
@@ -1771,7 +1771,7 @@ def registration96_cli(argv, parent_namespace):
         io.release = io.base / 'releases' / (stamp + '-' + io.frozen['candidate']['commit'][:12])
         require(not io.release.exists() and not io.release.is_symlink(), 'RELEASE_LOCATION_INVALID')
         io.lock_acquire()
-        deployed_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        deployed_at = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         result = release_helpers(io.frozen, io.baseline_raw, io.profile_raw, io.projection, runtime,
             str(io.release), deployed_at, io.helpers(), public=public, candidate=io.candidate)
         io.lock_close()
