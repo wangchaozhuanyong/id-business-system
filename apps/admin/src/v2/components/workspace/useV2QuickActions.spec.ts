@@ -48,8 +48,12 @@ function list(ids = [a, b], hasCustomOrder: boolean | undefined = false): V2Quic
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((accept) => (resolve = accept));
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
 }
 
 let scope: EffectScope;
@@ -170,6 +174,120 @@ describe('database quick reply order', () => {
     await read();
     expect(mock.reorder).toHaveBeenCalledTimes(2);
     expect(flow.migrationError.value).toBe('');
+  });
+
+  it('shows an explicit retry after closing during a failed legacy migration without replaying it on reopen', async () => {
+    values.set(quickActionOrderKey('user-a'), JSON.stringify([b, a]));
+    const saved = deferred<V2QuickActionList>();
+    mock.reorder.mockReturnValueOnce(saved.promise);
+    const controller = new AbortController();
+    const pending = read(controller.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await nextTick();
+    expect(mock.reorder).toHaveBeenCalledOnce();
+    open.value = false;
+    controller.abort();
+    saved.reject(new Error('保存失败'));
+    await cancelled;
+    expect(flow.migrationError.value).toContain('重试同步');
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(true);
+
+    open.value = true;
+    data.value = await read();
+    expect(flow.items.value.map((item) => item.id)).toEqual([a, b]);
+    expect(flow.migrationError.value).toContain('重试同步');
+    expect(mock.reorder).toHaveBeenCalledOnce();
+    await read();
+    expect(mock.reorder).toHaveBeenCalledOnce();
+
+    await flow.refresh();
+    data.value = await read();
+    expect(mock.reorder).toHaveBeenCalledTimes(2);
+    expect(flow.items.value.map((item) => item.id)).toEqual([b, a]);
+    expect(flow.migrationError.value).toBe('');
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(false);
+  });
+
+  it('confirms a cancelled but committed migration by reading the database without another write', async () => {
+    values.set(quickActionOrderKey('user-a'), JSON.stringify([b, a]));
+    const saved = deferred<V2QuickActionList>();
+    mock.reorder.mockReturnValueOnce(saved.promise);
+    const controller = new AbortController();
+    const pending = read(controller.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await nextTick();
+    open.value = false;
+    controller.abort();
+    saved.resolve(list([b, a], true));
+    await cancelled;
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(true);
+    expect(flow.migrationError.value).toContain('重试同步');
+
+    open.value = true;
+    mock.list.mockResolvedValue(list([b, a], true));
+    data.value = await read();
+    expect(flow.items.value.map((item) => item.id)).toEqual([b, a]);
+    expect(flow.migrationError.value).toBe('');
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(false);
+    expect(mock.reorder).toHaveBeenCalledOnce();
+  });
+
+  it('does not restore an old cancellation error after another read confirms the database order', async () => {
+    values.set(quickActionOrderKey('user-a'), JSON.stringify([b, a]));
+    const saved = deferred<V2QuickActionList>();
+    mock.reorder.mockReturnValueOnce(saved.promise);
+    const controller = new AbortController();
+    const pending = read(controller.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await nextTick();
+    controller.abort();
+    mock.list.mockResolvedValue(list([b, a], true));
+    data.value = await read();
+    saved.reject(new Error('响应失败，但另一台电脑已同步'));
+    await cancelled;
+    expect(flow.migrationError.value).toBe('');
+    expect(flow.items.value.map((item) => item.id)).toEqual([b, a]);
+    expect(mock.reorder).toHaveBeenCalledOnce();
+  });
+
+  it('does not show a cancelled migration failure for a later login identity', async () => {
+    values.set(quickActionOrderKey('user-a'), JSON.stringify([b, a]));
+    const saved = deferred<V2QuickActionList>();
+    mock.reorder.mockReturnValueOnce(saved.promise);
+    const controller = new AbortController();
+    const pending = read(controller.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await nextTick();
+    controller.abort();
+    userId.value = 'user-b';
+    identityEpoch.value += 1;
+    await nextTick();
+    saved.reject(new Error('上一身份保存失败'));
+    await cancelled;
+    expect(flow.migrationError.value).toBe('');
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(true);
+    expect(removeItem).not.toHaveBeenCalled();
+
+    values.set(quickActionOrderKey('user-b'), JSON.stringify([b, a]));
+    expect(await read()).toEqual(list([b, a], true));
+    expect(mock.reorder).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not show a late legacy migration failure after its owner unmounts', async () => {
+    values.set(quickActionOrderKey('user-a'), JSON.stringify([b, a]));
+    const saved = deferred<V2QuickActionList>();
+    mock.reorder.mockReturnValueOnce(saved.promise);
+    const controller = new AbortController();
+    const pending = read(controller.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await nextTick();
+    controller.abort();
+    scope.stop();
+    saved.reject(new Error('保存失败'));
+    await cancelled;
+    expect(flow.migrationError.value).toBe('');
+    expect(values.has(quickActionOrderKey('user-a'))).toBe(true);
+    expect(removeItem).not.toHaveBeenCalled();
   });
 
   it('blocks writes and migration while read-only', async () => {

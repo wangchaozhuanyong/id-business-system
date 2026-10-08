@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { createRenderer, h, nextTick, ref, ssrContextKey, type Component } from 'vue';
 import {
   normalizeV2RechargeBrowserOptions,
   V2_RECHARGE_BROWSER_DEFAULTS,
-  V2_RECHARGE_BROWSER_PROFILE_KEYS
+  V2_RECHARGE_BROWSER_PROFILE_KEYS,
+  type V2RechargeBrowserOptions
 } from '@apple-business/shared';
+import RechargeWindowOptions from './RechargeWindowOptions.vue';
 import {
   directProfileOptions,
   verifyDirectProfileConfiguration,
@@ -21,7 +24,67 @@ const settings: DirectBrowserSettings = {
   dynamicProxyUrl: 'https://proxy.example/extract'
 };
 
+function mountWindowOptions(initial: V2RechargeBrowserOptions) {
+  const model = ref(initial);
+  // Exercise the actual component watcher without depending on browser layout.
+  const renderer = createRenderer<object, object>({
+    createElement: () => ({}),
+    createText: () => ({}),
+    createComment: () => ({}),
+    insert: () => {},
+    remove: () => {},
+    setText: () => {},
+    setElementText: () => {},
+    patchProp: () => {},
+    parentNode: () => null,
+    nextSibling: () => null
+  });
+  // Vitest compiles SFCs for SSR; retain the real setup while omitting the layout.
+  const component = { ...RechargeWindowOptions, render: () => null } as Component;
+  const app = renderer.createApp({ setup: () => () => h(component, { modelValue: model.value }) });
+  app.provide(ssrContextKey, { modules: new Set() });
+  app.mount({});
+  return { model, unmount: () => app.unmount() };
+}
+
 describe('比特窗口系统、内核与尺寸配置', () => {
+  it.each(['10', '11'] as const)(
+    '读回已保存的 Windows %s 时不被默认版本覆盖',
+    async (osVersion) => {
+      const mounted = mountWindowOptions({
+        ...V2_RECHARGE_BROWSER_DEFAULTS,
+        os: 'MacIntel',
+        osVersion: ''
+      });
+      const saved = { ...V2_RECHARGE_BROWSER_DEFAULTS, osVersion, openWidth: 1800 };
+      try {
+        mounted.model.value = { ...saved };
+        await nextTick();
+        expect(mounted.model.value).toEqual(saved);
+      } finally {
+        mounted.unmount();
+      }
+    }
+  );
+
+  it('手动切换到 Windows 时补默认版本，切换其它系统时清理 Windows 版本', async () => {
+    const mounted = mountWindowOptions({
+      ...V2_RECHARGE_BROWSER_DEFAULTS,
+      os: 'MacIntel',
+      osVersion: ''
+    });
+    try {
+      mounted.model.value.os = 'Win32';
+      await nextTick();
+      expect(mounted.model.value.osVersion).toBe('11');
+      mounted.model.value.os = 'Linux x86_64';
+      await nextTick();
+      expect(mounted.model.value.osVersion).toBe('');
+    } finally {
+      mounted.unmount();
+    }
+  });
+
   it('默认请求 Windows 11、指定内核和大窗口，并由客户端生成匹配的标识', () => {
     const result = directProfileOptions(settings);
     expect(result.browserFingerPrint).toMatchObject({

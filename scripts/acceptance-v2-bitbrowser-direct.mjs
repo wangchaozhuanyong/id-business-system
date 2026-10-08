@@ -80,6 +80,7 @@ let authenticated = false;
 let identityMismatch = false;
 let profileSync = false;
 let manualVerification = false;
+let manualCode = false;
 let connectorRequests = 0;
 let apiStarts = 0;
 let codeRequests = 0;
@@ -87,6 +88,7 @@ let settingsSaves = 0;
 let endpoint;
 let createdFingerprint;
 let jobs = [];
+const progressStages = new Map();
 const vite = spawn(
   process.execPath,
   [
@@ -120,7 +122,7 @@ const json = (response, data) => {
 const success = (route, data) =>
   route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
 const form = (type, next) =>
-  `<!doctype html><title>模拟官方登录</title><form onsubmit="event.preventDefault();location.href='${next}'"><input type="${type === 'code' ? 'text' : type}" name="${type === 'code' ? 'code' : type}" ${type === 'code' ? 'autocomplete="one-time-code"' : ''}><button type="submit">继续</button></form>`;
+  `<!doctype html><meta charset="utf-8"><title>模拟官方登录</title><form onsubmit="event.preventDefault();location.href='${next}'"><input type="${type === 'code' ? 'text' : type}" name="${type === 'code' ? 'code' : type}" ${type === 'code' ? 'autocomplete="one-time-code"' : ''}><button type="submit">继续</button></form>`;
 
 try {
   await waitFor(async () => (await fetch(localOrigin).catch(() => null))?.ok);
@@ -271,9 +273,13 @@ try {
             assert.equal(request.postDataJSON().staticProxyCredentials, undefined);
             assert.equal(request.postDataJSON().browserOptions.coreVersion, '152');
             assert.equal(request.postDataJSON().browserOptions.os, 'Win32');
-            assert.equal(request.postDataJSON().browserOptions.osVersion, '11');
+            assert.equal(
+              request.postDataJSON().browserOptions.osVersion,
+              settingsSaves ? '10' : '11'
+            );
             assert.equal(request.postDataJSON().browserOptions.openWidth, 1600);
             assert.equal(request.postDataJSON().browserOptions.openHeight, 1000);
+            settings.browserOptions = request.postDataJSON().browserOptions;
             settingsSaves++;
           }
           return success(route, settings);
@@ -317,7 +323,7 @@ try {
                 status: 'active',
                 subscriptionState: 'never_subscribed',
                 hasPassword: true,
-                hasTotp: true
+                hasTotp: !manualCode
               }
             ],
             total: 1
@@ -396,6 +402,9 @@ try {
               status: 409,
               json: { success: false, message: '执行窗口已结束' }
             });
+          const stages = progressStages.get(job.id) ?? [];
+          stages.push(input.result.stage);
+          progressStages.set(job.id, stages);
           job.result = { ...job.result, ...input.result };
           job.state =
             input.type === 'finished'
@@ -569,6 +578,34 @@ try {
   await waitFor(async () => settingsSaves === 1);
   assert.equal(settingsSaves, 1);
   await page.getByRole('dialog', { name: '比特浏览器直连设置' }).waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '比特浏览器直连设置', exact: true }).click();
+  await settingsDialog
+    .locator('.el-form-item')
+    .filter({ has: page.getByRole('combobox', { name: 'Windows 版本', exact: true }) })
+    .locator('.el-select__wrapper')
+    .click();
+  await page.getByRole('option', { name: 'Windows 10', exact: true }).click();
+  await settingsDialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await waitFor(() => settingsSaves === 2);
+  await settingsDialog.waitFor({ state: 'hidden' });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.getByRole('button', { name: '比特浏览器直连设置', exact: true }).click();
+    const version = settingsDialog.getByRole('combobox', { name: 'Windows 版本', exact: true });
+    assert.equal(
+      await version.evaluate((element) => element.closest('.el-select').textContent.trim()),
+      'Windows 10'
+    );
+    assert.equal(settings.browserOptions.osVersion, '10');
+    await version.scrollIntoViewIfNeeded();
+    await settingsDialog.screenshot({
+      path: resolve(output, `${width}-saved-windows-10.png`),
+      animations: 'disabled'
+    });
+    await settingsDialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await settingsDialog.waitFor({ state: 'hidden' });
+    results.push({ scenario: 'Windows 10 保存后重开保留显式版本', width, ok: true });
+  }
   for (const width of [1440, 1024, 901, 900, 768, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const theme of ['light', 'dark']) {
@@ -728,6 +765,74 @@ try {
   assert.equal(jobs[0].result.status, 'session_ready');
   assert.equal(connectorRequests, 0);
   results.push({ scenario: '失去原控制器的任务停止成功后可再次登录', ok: true });
+  manualCode = true;
+  authenticated = false;
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await page.getByText('仅登录窗口', { exact: true }).click();
+  await page.getByText('已保存账号', { exact: true }).click();
+  await select.click();
+  await page.getByRole('option', { name: fixtureEmail, exact: true }).click();
+  const previousJobId = jobs[0].id;
+  const previousCodeRequests = codeRequests;
+  await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).click();
+  await waitFor(
+    () => jobs[0]?.id !== previousJobId && jobs[0]?.result.stage === 'login_code_required',
+    35_000
+  );
+  const manualJobId = jobs[0].id;
+  const officialPage = controlledContext
+    .pages()
+    .filter((item) => item.url() === 'https://auth.openai.com/code')
+    .at(-1);
+  assert.ok(officialPage, '本次模拟原官网窗口应已等待验证码');
+  await officialPage.getByRole('textbox').fill('123456');
+  await officialPage
+    .getByRole('button', { name: '继续', exact: true })
+    .click()
+    .catch((error) => {
+      writeFileSync(
+        resolve(output, 'manual-code-failure.json'),
+        JSON.stringify(
+          {
+            previousCodeRequests,
+            codeRequests,
+            state: jobs[0].state,
+            stage: jobs[0].result.stage,
+            stages: progressStages.get(manualJobId),
+            officialUrl: officialPage.url(),
+            windows: controlledContext.pages().map((item) => item.url()),
+            runtimeErrors: errors
+          },
+          null,
+          2
+        )
+      );
+      throw error;
+    });
+  await waitFor(() => jobs[0]?.state === 'finished', 20_000);
+  assert.equal(jobs[0].id, manualJobId);
+  assert.equal(jobs[0].result.status, 'session_ready');
+  assert.equal(jobs[0].result.account_matched, true);
+  assert.equal(codeRequests, previousCodeRequests);
+  assert.equal(progressStages.get(manualJobId).includes('login_code_submitted'), false);
+  await waitFor(
+    async () =>
+      await page.getByRole('button', { name: '打开比特浏览器并登录', exact: true }).isEnabled()
+  );
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.screenshot({
+      path: resolve(output, `${width}-manual-official-code-completed.png`),
+      animations: 'disabled'
+    });
+  }
+  results.push({
+    scenario: '管理页等待手动验证码时，在原官网窗口完成验证后自动识别登录并释放表单',
+    ok: true,
+    automaticCodeRequests: 0,
+    automaticCodeSubmissions: 0
+  });
   await context.close();
   if (!built) {
     const protocolContext = await browser.newContext();

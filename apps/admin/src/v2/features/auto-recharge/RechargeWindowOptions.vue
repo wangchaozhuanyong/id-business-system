@@ -223,7 +223,9 @@ const options = defineModel<V2RechargeBrowserOptions>({ required: true });
 watch(
   () => options.value.os,
   (os) => {
-    options.value.osVersion = os === 'Win32' ? '11' : '';
+    if (os !== 'Win32') options.value.osVersion = '';
+    else if (options.value.osVersion !== '10' && options.value.osVersion !== '11')
+      options.value.osVersion = '11';
   }
 );
 defineProps<{ registration?: boolean }>();

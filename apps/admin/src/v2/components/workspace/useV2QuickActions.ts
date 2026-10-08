@@ -20,6 +20,7 @@ export function useV2QuickActions(options: {
   let disposed = false;
   let writeRevision = 0;
   let legacyMigrationAllowed = true;
+  let legacyMigrationConfirmed = false;
   const key = () => `quick-actions:${options.userId() || 'anonymous'}`;
   const isCurrent = (userId: string, epoch: number) =>
     !disposed && options.userId() === userId && sessionCoordinator.identityEpoch.value === epoch;
@@ -32,6 +33,7 @@ export function useV2QuickActions(options: {
       savingOrder.value = false;
       migrationError.value = '';
       legacyMigrationAllowed = true;
+      legacyMigrationConfirmed = false;
       options.open.value = false;
     }
   );
@@ -48,6 +50,7 @@ export function useV2QuickActions(options: {
       const result = await idBusinessV2WorkspaceApi.listQuickActions({ signal });
       if (signal.aborted || !isCurrent(userId, epoch)) throw cancelled();
       if (result.hasCustomOrder === true) {
+        legacyMigrationConfirmed = true;
         migrationError.value = '';
         clearLegacyQuickActionOrder(userId);
         return result;
@@ -74,11 +77,19 @@ export function useV2QuickActions(options: {
         });
         if (signal.aborted || !isCurrent(userId, epoch)) throw cancelled();
         if (updated.hasCustomOrder !== true) throw new Error('服务器尚未确认顺序，请稍后重试');
+        legacyMigrationConfirmed = true;
         clearLegacyQuickActionOrder(userId);
         return updated;
       } catch (error) {
-        if (signal.aborted || !isCurrent(userId, epoch)) throw cancelled();
-        migrationError.value = `原浏览器顺序同步失败：${getApiErrorMessage(error)}`;
+        if (!isCurrent(userId, epoch)) throw cancelled();
+        // Closing the drawer cancels its read, but the initialization write may still fail/commit.
+        // Retain an explicit retry notice until a later database read confirms the saved order.
+        if (!legacyMigrationConfirmed) {
+          migrationError.value = signal.aborted
+            ? '原浏览器顺序尚未确认同步，请点击重试同步。'
+            : `原浏览器顺序同步失败：${getApiErrorMessage(error)}`;
+        }
+        if (signal.aborted) throw cancelled();
         return result;
       }
     }
@@ -110,6 +121,7 @@ export function useV2QuickActions(options: {
       });
       if (!isCurrent(userId, epoch)) throw cancelled();
       if (updated.hasCustomOrder !== true) throw new Error('服务器尚未确认顺序，请刷新后重试');
+      legacyMigrationConfirmed = true;
       primeV2Query({ scope: 'workspace', key: key(), data: updated });
       clearLegacyQuickActionOrder(userId);
       migrationError.value = '';
