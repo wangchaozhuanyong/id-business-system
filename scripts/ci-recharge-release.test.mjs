@@ -997,6 +997,8 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
           ([
             'verify_api_admin',
             'release_api_admin',
+            'verify_api_admin_migration',
+            'release_api_admin_migration',
             'verify_api_registration',
             'handoff_api_registration',
             'release_api_registration',
@@ -5777,5 +5779,412 @@ test('registration96 selects one registration release and complete independent r
       (step) => step.name.includes('fixed 96') && !step.name.includes('runtime approval')
     ))
       assert.equal(workflowPredicate(step.if)(inputs), false, step.name);
+  }
+});
+
+const apiAdminMigrationOperations = ['verify_api_admin_migration', 'release_api_admin_migration'];
+const apiAdminMigrationRejectedSelections = [
+  { HISTORICAL_EXCEPTION: 'historical-finance-20261005' },
+  { HISTORICAL_EXCEPTION: postCleanupPolicy },
+  { HISTORICAL_EXCEPTION: 'registration-worker-96-20261008' },
+  { RELEASE_ADMIN_ONLY: 'true' },
+  { RELEASE_ADMIN_ONLY: 'unexpected' },
+  { REUSE_IMAGE_RUN: '222' },
+  { REUSE_IMAGE_COMMIT: 'd'.repeat(40) },
+  { REUSE_IMAGE_RUN_ID: '222' },
+  { REUSE_IMAGE_RUN_ATTEMPT: '1' },
+  { POST_CLEANUP_SEAL_SHA256: fixtureSeal },
+  { ORDER_ARCHIVE_SEAL_SHA256: fixtureSeal },
+  { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: fixtureSeal },
+  {
+    RELEASE_BROWSER_CACHE_IMAGE:
+      '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' +
+      'a'.repeat(40) +
+      '-222-1-auto-recharge'
+  },
+  { RELEASE_BROWSER_CACHE_IMAGE_ID: 'sha256:' + 'a'.repeat(64) }
+];
+
+function apiAdminMigrationProofTransport(root, env, sourceCheckStatus = 0) {
+  const proofLog = join(root, 'proof.log');
+  writeFileSync(proofLog, '');
+  // Observe the external proof producer; its full source and migration checks
+  // run in the Python scope tests.
+  writeFileSync(
+    join(root, 'bin', 'python3'),
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_PROOF_LOG"\n' +
+      'case "$*" in\n' +
+      '"-B scripts/production-release/remote-deploy.py --check-api-admin-migration-source") exit "$TASK_SOURCE_CHECK_STATUS" ;;\n' +
+      '"-B scripts/production-release/remote-deploy.py --write-api-admin-migration-build-proof") exit 0 ;;\n' +
+      '*) exit 97 ;;\nesac\n',
+    { mode: 0o755 }
+  );
+  return {
+    ...env,
+    RELEASE_OPERATION: 'release_api_admin_migration',
+    SOURCE_TREE: 'c'.repeat(40),
+    TASK_PROOF_LOG: proofLog,
+    TASK_SOURCE_CHECK_STATUS: String(sourceCheckStatus)
+  };
+}
+
+test('API Admin migration selection accepts only a fresh unsealed none policy before any effect', () => {
+  for (const operation of apiAdminMigrationOperations)
+    fixture(({ env, log }) => {
+      const selected = { ...env, RELEASE_OPERATION: operation };
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: selected,
+        stdio: 'pipe'
+      });
+      for (const rejected of apiAdminMigrationRejectedSelections)
+        assert.throws(
+          () =>
+            execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+              env: { ...selected, ...rejected },
+              stdio: 'pipe'
+            }),
+          (error) => error.status === 1,
+          JSON.stringify({ operation, ...rejected })
+        );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+    });
+});
+
+test('API Admin migration actual builds and pushes only API Admin and the one-shot migration image', () => {
+  fixture(({ root, env, log }) => {
+    const selected = apiAdminMigrationProofTransport(root, env);
+    writeFileSync(
+      env.TASK_CHANGED_PATHS,
+      'apps/admin/src/v2/components/workspace/V2QuickActions.vue'
+    );
+    execFileSync('bash', ['scripts/production-release/build-images.sh'], {
+      env: selected,
+      stdio: 'pipe'
+    });
+    assert.equal(readFileSync(env.GITHUB_ENV, 'utf8'), 'RELEASE_ADMIN_ONLY=false\n');
+    const builds = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('build '));
+    assert.equal(builds.length, 3);
+    const services = builds.map((line) => line.match(/-999999-1-(api|admin|migrate) \.$/)?.[1]);
+    assert.deepEqual([...services].sort(), ['admin', 'api', 'migrate']);
+    for (const build of builds) {
+      assert.ok(build.includes('--platform linux/amd64'));
+      assert.ok(build.includes(`org.opencontainers.image.revision=${env.RELEASE_COMMIT}`));
+      assert.ok(build.includes(`id-business-v2.source-tree=${selected.SOURCE_TREE}`));
+      assert.equal(build.includes('worker/Dockerfile'), false);
+    }
+    assert.ok(builds.find((line) => line.endsWith('-api .')).includes('--target runtime'));
+    assert.ok(builds.find((line) => line.endsWith('-migrate .')).includes('--target migration'));
+    assert.ok(builds.find((line) => line.endsWith('-admin .')).includes('apps/admin/Dockerfile'));
+    assert.deepEqual(readFileSync(selected.TASK_PROOF_LOG, 'utf8').trim().split('\n'), [
+      '-B scripts/production-release/remote-deploy.py --check-api-admin-migration-source',
+      '-B scripts/production-release/remote-deploy.py --write-api-admin-migration-build-proof'
+    ]);
+    execFileSync('bash', ['scripts/production-release/push-images.sh'], {
+      env: selected,
+      stdio: 'pipe'
+    });
+    const pushes = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('push '));
+    assert.equal(pushes.length, 3);
+    assert.deepEqual(pushes.map((line) => line.split('-').at(-1)).sort(), [
+      'admin',
+      'api',
+      'migrate'
+    ]);
+    assert.equal(readFileSync(log, 'utf8').includes('auto-recharge'), false);
+    assert.equal(readFileSync(log, 'utf8').includes('media-resolver'), false);
+  });
+});
+
+test('API Admin migration source rejection stops before Docker or runner publication proof', () => {
+  fixture(({ root, env, log }) => {
+    const selected = apiAdminMigrationProofTransport(root, env, 23);
+    assert.throws(
+      () =>
+        execFileSync('bash', ['scripts/production-release/build-images.sh'], {
+          env: selected,
+          stdio: 'pipe'
+        }),
+      (error) => error.status === 23
+    );
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+    assert.deepEqual(readFileSync(selected.TASK_PROOF_LOG, 'utf8').trim().split('\n'), [
+      '-B scripts/production-release/remote-deploy.py --check-api-admin-migration-source'
+    ]);
+  });
+});
+
+test('API Admin migration actual mutation entries reject reused sealed cached and verification selections', () => {
+  for (const rejected of [
+    ...apiAdminMigrationRejectedSelections,
+    { RELEASE_OPERATION: 'verify_api_admin_migration' }
+  ]) {
+    for (const entry of ['build-images', 'push-images'])
+      fixture(({ env, log }) => {
+        assert.throws(
+          () =>
+            execFileSync('bash', [`scripts/production-release/${entry}.sh`], {
+              env: {
+                ...env,
+                RELEASE_OPERATION: 'release_api_admin_migration',
+                ...rejected
+              },
+              stdio: 'pipe'
+            }),
+          (error) => error.status === 1,
+          `${entry}: ${JSON.stringify(rejected)}`
+        );
+        assert.equal(readFileSync(log, 'utf8'), '');
+        assert.equal(existsSync(env.GITHUB_ENV), false);
+      });
+    dispatchFixture(
+      'none',
+      'a'.repeat(40),
+      ({ execute, parametersFile, awsLog }) => {
+        assert.throws(
+          () => execute(rejected),
+          (error) => error.status === 1
+        );
+        assert.equal(existsSync(parametersFile), false);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+      },
+      { RELEASE_OPERATION: 'release_api_admin_migration' }
+    );
+  }
+});
+
+test('API Admin migration dispatch binds its independent proof and cannot select an old or Worker release', () => {
+  dispatchFixture(
+    'none',
+    'a'.repeat(40),
+    ({ execute, root, parametersFile, awsLog }) => {
+      const directory = join(root, '.deploy/production-release');
+      mkdirSync(directory, { recursive: true });
+      mkdirSync(join(root, 'scripts/production-release'), { recursive: true });
+      for (const name of ['remote-deploy.py', 'api-admin-scope.py'])
+        writeFileSync(
+          join(root, 'scripts/production-release', name),
+          readFileSync(`scripts/production-release/${name}`)
+        );
+      const rawProof = Buffer.from('{"fixture":"reviewed-migration-build"}\n');
+      writeFileSync(join(directory, 'api-admin-migration-build-proof.json'), rawProof);
+      execute();
+      const commands = JSON.parse(readFileSync(parametersFile, 'utf8')).commands;
+      const command = commands.find((value) => value.includes(' --commit '));
+      const args = command.split(' ');
+      assert.equal(args.filter((value) => value === '--api-admin-migration-only').length, 1);
+      assert.equal(args.filter((value) => value === '--api-admin-build-proof').length, 1);
+      assert.deepEqual(
+        Buffer.from(args[args.indexOf('--api-admin-build-proof') + 1], 'base64'),
+        rawProof
+      );
+      assert.equal(
+        args.some(
+          (value) =>
+            ['--api-admin-only', '--api-registration-only', '--admin-only'].includes(value) ||
+            value.startsWith('--image-') ||
+            value.startsWith('--historical-') ||
+            value.startsWith('--registration-worker-') ||
+            value.startsWith('--recharge-pro-')
+        ),
+        false
+      );
+      assert.ok(commands.some((value) => value.includes('/api-admin-scope.py')));
+      assert.equal(
+        readFileSync(awsLog, 'utf8')
+          .split('\n')
+          .filter((line) => line.startsWith('ssm send-command ')).length,
+        1
+      );
+    },
+    { RELEASE_OPERATION: 'release_api_admin_migration' }
+  );
+});
+
+test('API Admin migration workflow selects one preflight and readback with no automatic cleanup or Worker path', () => {
+  const executable = (name) => workflowSteps.find((step) => step.name === name);
+  for (const operation of apiAdminMigrationOperations) {
+    assert.ok(workflowInputs.operation.options.includes(operation));
+    const inputs = { operation, historical_exception: 'none', reuse_image_run: '' };
+    const enabled = workflowSteps.filter((step) => !step.if || workflowPredicate(step.if)(inputs));
+    const preflight = enabled.filter(
+      (step) => step.run === 'python3 -B scripts/production-release/api-admin-readonly.py preflight'
+    );
+    assert.equal(preflight.length, 1);
+    assert.ok(
+      workflowSteps.indexOf(preflight[0]) <
+        workflowSteps.indexOf(executable('Build images on the GitHub runner'))
+    );
+    for (const name of [
+      'Build images on the GitHub runner',
+      'Push immutable images',
+      'Deploy through the production instance',
+      'Independently read back API Admin running images and preserved services'
+    ])
+      assert.equal(
+        enabled.includes(executable(name)),
+        operation === 'release_api_admin_migration',
+        name
+      );
+    const evidence = enabled.filter(
+      (step) => step.with?.path === '.deploy/production-release/api-admin-migration-*.json'
+    );
+    assert.equal(evidence.length, 1);
+    assert.match(evidence[0].if, /always\(\)/);
+    for (const name of [
+      'Resolve reviewed immutable browser dependency cache',
+      'Verify reusable build and unchanged application source',
+      'Hand off the bound completed registration window once',
+      'Recover only the bound failed registration browser resource handoff',
+      'Verify or maintain recoverable unused project image cache',
+      'Maintain service rollback image cache independently after fixed release',
+      'Save API Admin build and independent runtime evidence',
+      'Save API Registration independent scope evidence'
+    ])
+      assert.equal(enabled.includes(executable(name)), false, name);
+    assert.equal(
+      enabled.some((step) => step.name.includes('fixed') && !step.name.includes('approval')),
+      false
+    );
+  }
+});
+
+function apiAdminMigrationCli(args) {
+  // Exercise the real command routing and parser with only the scope boundary
+  // replaced. No baseline, Docker, network, migration, or production path is touched.
+  const harness = String.raw`import contextlib,io,json,runpy,sys
+from pathlib import Path
+path=Path(sys.argv[1]).resolve();args=json.loads(sys.argv[2]);calls=[]
+def load_scope(filename,init_globals=None,**kwargs):
+ if Path(filename).name!='api-admin-scope.py':raise RuntimeError('UNEXPECTED_SCOPE_MODULE')
+ calls.append({'scope':init_globals['SCOPE']})
+ def record(name,*values):
+  calls.append({'method':name,'values':list(values)})
+  return {'status':'FIXTURE_SCOPE_RESULT'}
+ def release(controller,parsed):
+  record('release',parsed.api_admin_migration_only,parsed.commit,parsed.source_tree,parsed.api_admin_build_proof)
+  return 0
+ return {'migration_source_check':lambda controller:record('source'),
+  'build_proof':lambda controller:record('build'),
+  'migration_preflight':lambda controller,expected:record('preflight',expected),
+  'readback':lambda controller,expected:record('readback',expected),'release':release}
+runpy.run_path=load_scope;sys.argv=[str(path),*args];output=io.StringIO();errors=io.StringIO();status=0
+with contextlib.redirect_stdout(output),contextlib.redirect_stderr(errors):
+ try:exec(compile(path.read_text(),str(path),'exec'),{'__name__':'__main__','__file__':str(path)})
+ except SystemExit as error:
+  status=error.code if isinstance(error.code,int) else 1
+  if isinstance(error.code,str):errors.write(error.code)
+print(json.dumps({'status':status,'calls':calls,'stdout':output.getvalue(),'stderr':errors.getvalue()}))
+`;
+  return JSON.parse(
+    execFileSync(
+      'python3',
+      ['-B', '-c', harness, 'scripts/production-release/remote-deploy.py', JSON.stringify(args)],
+      { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }
+    )
+  );
+}
+
+const apiAdminMigrationCliInputs = [
+  '--api-admin-migration-only',
+  '--commit',
+  'b'.repeat(40),
+  '--source-tree',
+  'c'.repeat(40),
+  '--repository',
+  '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+  '--expected-current',
+  'a'.repeat(40),
+  '--run-id',
+  '999999',
+  '--run-attempt',
+  '1',
+  '--ci-run-id',
+  '111',
+  '--api-admin-build-proof',
+  'eyJmaXh0dXJlIjp0cnVlfQ=='
+];
+
+test('API Admin migration real CLI routes each exact command to the separate scope only', () => {
+  for (const [args, method, values] of [
+    [['--check-api-admin-migration-source'], 'source', []],
+    [['--write-api-admin-migration-build-proof'], 'build', []],
+    [
+      ['--api-admin-migration-preflight', '--expected-current', 'a'.repeat(40)],
+      'preflight',
+      ['a'.repeat(40)]
+    ],
+    [
+      ['--api-admin-migration-readback', '--expected-current', 'b'.repeat(40)],
+      'readback',
+      ['b'.repeat(40)]
+    ],
+    [
+      apiAdminMigrationCliInputs,
+      'release',
+      [true, 'b'.repeat(40), 'c'.repeat(40), 'eyJmaXh0dXJlIjp0cnVlfQ==']
+    ]
+  ]) {
+    const result = apiAdminMigrationCli(args);
+    assert.equal(result.status, 0, JSON.stringify({ args, result }));
+    assert.equal(result.stderr, '');
+    assert.deepEqual(result.calls, [{ scope: 'API_ADMIN_MIGRATION' }, { method, values }]);
+  }
+});
+
+test('API Admin migration real CLI rejects old release flags before loading any controller', () => {
+  for (const extra of [
+    ['--api-admin-only'],
+    ['--api-registration-only'],
+    ['--admin-only'],
+    ['--historical-finance-exception'],
+    ['--historical-finance-post-cleanup'],
+    ['--recharge-pro-pricing'],
+    ['--recharge-pro-6f5'],
+    ['--registration-worker-96'],
+    ['--image-commit', 'd'.repeat(40)],
+    ['--image-run-id', '222'],
+    ['--image-run-attempt', '1'],
+    ['--post-cleanup-seal-sha256', fixtureSeal],
+    ['--order-archive-seal-sha256', fixtureSeal],
+    ['--order-archive-prepared-images-sha256', fixtureSeal],
+    ['--check-fixed-recharge-scope'],
+    ['--unknown-release-mode']
+  ]) {
+    const result = apiAdminMigrationCli([...apiAdminMigrationCliInputs, ...extra]);
+    assert.equal(result.status, 1, JSON.stringify(extra));
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^API_ADMIN_SCOPE_CONFLICT$/);
+    assert.deepEqual(result.calls, []);
+  }
+});
+
+test('API Admin migration readonly commands reject malformed or extra inputs before scope effects', () => {
+  for (const args of [
+    ['--check-api-admin-migration-source', '--admin-only'],
+    ['--write-api-admin-migration-build-proof', '--admin-only'],
+    ['--api-admin-migration-preflight'],
+    ['--api-admin-migration-preflight', '--expected-current', 'A'.repeat(40)],
+    ['--api-admin-migration-preflight', '--expected-current', 'a'.repeat(40), '--admin-only'],
+    ['--api-admin-migration-readback', '--expected-current', 'a'.repeat(39)],
+    [
+      '--api-admin-migration-readback',
+      '--expected-current',
+      'a'.repeat(40),
+      '--api-registration-only'
+    ]
+  ]) {
+    const result = apiAdminMigrationCli(args);
+    assert.equal(result.status, 1, JSON.stringify(args));
+    assert.deepEqual(result.calls, [{ scope: 'API_ADMIN_MIGRATION' }]);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.status, 'API_ADMIN_MIGRATION_VERIFICATION_FAILED');
+    assert.equal(receipt.code, 'API_ADMIN_INPUT_INVALID');
+    assert.equal(result.stderr, '');
   }
 });

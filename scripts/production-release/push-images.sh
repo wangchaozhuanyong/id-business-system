@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
+[[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration ]] || exit 1
 
-if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
+if [[ "${RELEASE_OPERATION:-release}" == release_api_admin_migration ]]; then
+  services=(api admin migrate)
+elif [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
   services=(api admin)
 elif [[ "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
   services=(api auto-recharge)

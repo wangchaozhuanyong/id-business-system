@@ -12604,6 +12604,7 @@ def main():
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
     parser.add_argument('--api-admin-only', action='store_true')
+    parser.add_argument('--api-admin-migration-only', action='store_true')
     parser.add_argument('--api-registration-only', action='store_true')
     parser.add_argument('--api-admin-build-proof')
     parser.add_argument('--historical-finance-exception', action='store_true')
@@ -12637,6 +12638,9 @@ def main():
     parser.add_argument('--registration-worker-94', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
+    if args.api_admin_migration_only:
+        scope, controller = api_admin_scope('API_ADMIN_MIGRATION')
+        return scope.release(controller, args)
     if args.api_registration_only:
         scope, controller = api_admin_scope('API_REGISTRATION')
         return scope.release(controller, args)
@@ -13260,6 +13264,32 @@ def load_registration96():
 
 
 if __name__ == '__main__':
+    if '--api-admin-migration-only' in sys.argv[1:] and any(
+            token.startswith('--') and token not in ('--api-admin-migration-only', '--api-admin-build-proof',
+                '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id')
+            for token in sys.argv[1:]):
+        raise SystemExit('API_ADMIN_SCOPE_CONFLICT')
+    if sys.argv[1:2] and sys.argv[1] in ('--check-api-admin-migration-source', '--write-api-admin-migration-build-proof',
+            '--api-admin-migration-preflight', '--api-admin-migration-readback'):
+        try:
+            scope, controller = api_admin_scope('API_ADMIN_MIGRATION')
+            if sys.argv[1:] == ['--check-api-admin-migration-source']:
+                scope.migration_source_check(controller)
+            elif sys.argv[1:] == ['--write-api-admin-migration-build-proof']:
+                scope.build_proof(controller)
+            else:
+                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                        and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'API_ADMIN_INPUT_INVALID')
+                result = (scope.readback(controller, sys.argv[3]) if sys.argv[1] == '--api-admin-migration-readback'
+                          else scope.migration_preflight(controller, sys.argv[3]))
+                print(json.dumps(result))
+        except Exception as error:
+            message = str(error)
+            code = message if re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', message) else 'API_ADMIN_READ_UNAVAILABLE'
+            print(json.dumps({'status': 'API_ADMIN_MIGRATION_VERIFICATION_FAILED', 'code': code,
+                              'errorType': type(error).__name__}))
+            raise SystemExit(1) from None
+        raise SystemExit(0)
     if (RECHARGE_PRICING_ID in sys.argv or '--recharge-pro-pricing' in sys.argv) and any(
             (token.startswith(('--registration-worker', '--recharge-pro-')) and token != '--recharge-pro-pricing')
             or token.startswith('registration-worker-')
