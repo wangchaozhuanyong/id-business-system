@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ipaddress
 import json
 import mimetypes
@@ -798,8 +799,45 @@ def self_test() -> None:
         raise AssertionError("expired worker ticket was accepted")
 
 
-if __name__ == "__main__":
-    if "--self-test" in os.sys.argv:
+def listener_host(value):
+    try:
+        return str(ipaddress.IPv4Address(value))
+    except ipaddress.AddressValueError:
+        raise argparse.ArgumentTypeError("监听地址必须是 IPv4 地址") from None
+
+
+def listener_port(value):
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("监听端口必须是 1 至 65535 的整数") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("监听端口必须是 1 至 65535 的整数")
+    return port
+
+
+def main(argv=None):
+    global F2_BRIDGE
+    parser = argparse.ArgumentParser(description="独立媒体解析器")
+    parser.add_argument("--host", type=listener_host, default="0.0.0.0")
+    parser.add_argument("--port", type=listener_port, default=PORT)
+    parser.add_argument("--f2-bridge", type=Path, default=Path(F2_BRIDGE))
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    options = parser.parse_args(argv)
+    if options.self_test:
         self_test()
-    else:
-        MediaResolverServer(("0.0.0.0", PORT), MediaResolverHandler).serve_forever()
+        return 0
+    bridge = options.f2_bridge.expanduser().resolve()
+    if not bridge.is_file():
+        raise SystemExit("F2 媒体桥接文件不存在")
+    F2_BRIDGE = str(bridge)
+    if options.check:
+        return 0
+    with MediaResolverServer((options.host, options.port), MediaResolverHandler) as listener:
+        listener.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -437,6 +437,8 @@ export function safeDocument(value: unknown): Record<string, unknown> {
   if (['hcaptcha', 'bank'].includes(String(input.handoff_kind)))
     result.handoff_kind = input.handoff_kind;
   if (canonicalTime(input.handoff_expires_at)) result.handoff_expires_at = input.handoff_expires_at;
+  if (canonicalTime(input.confirmation_expires_at))
+    result.confirmation_expires_at = input.confirmation_expires_at;
   if (typeof input.handoff_session_id === 'string' && uuidPattern.test(input.handoff_session_id))
     result.handoff_session_id = input.handoff_session_id;
   if (
@@ -480,6 +482,7 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     return {
       plan: V2_RECHARGE_PLANS.includes(quote.plan as never) ? quote.plan : null,
       today: money(quote.today),
+      ...(quote.credit !== undefined ? { credit: money(quote.credit) } : {}),
       tax: money(quote.tax),
       renewal: money(quote.renewal),
       source: quote.source === 'official_checkout_visible_text' ? quote.source : null,

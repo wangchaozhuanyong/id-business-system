@@ -1,3 +1,4 @@
+import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
 import { computed, nextTick, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { rechargeApi, rechargeConnectorApi } from './api';
@@ -23,7 +24,8 @@ export async function readBrowserCatalog(
       access.connectorToken = '';
     }
   }
-  await rechargeConnectorApi.health(form.connectorUrl, signal);
+  const rechargeUrl = normalizeV2RechargeConnectorUrl(form.connectorUrl);
+  await rechargeConnectorApi.health(rechargeUrl, signal);
   const access =
     form.connectorToken && form.localApiToken
       ? {
@@ -35,12 +37,13 @@ export async function readBrowserCatalog(
       : await rechargeApi.browserCatalogAccess({ signal });
   try {
     if (
-      (!form.connectorToken && form.connectorUrl !== access.connectorUrl) ||
+      (!form.connectorToken &&
+        rechargeUrl !== normalizeV2RechargeConnectorUrl(access.connectorUrl)) ||
       (!form.localApiToken && form.localApiUrl !== access.localApiUrl)
     ) {
       throw new Error('连接地址已更换，请填写该地址对应的密钥后刷新列表');
     }
-    access.connectorUrl = form.connectorUrl;
+    access.connectorUrl = rechargeUrl;
     access.localApiUrl = form.localApiUrl;
     access.connectorToken = form.connectorToken || access.connectorToken;
     access.localApiToken = form.localApiToken || access.localApiToken;

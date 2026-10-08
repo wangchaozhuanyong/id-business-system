@@ -7,9 +7,16 @@ if [ "$#" -lt 1 ]; then
 fi
 
 CONNECTOR_PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-CONNECTOR_RUNTIME_DIR="$CONNECTOR_PROJECT_DIR/.runtime/auto-recharge-connector"
+# Recharge uses a dedicated process, port and minimal BitBrowser dependencies.
+for argument in "$@"; do
+  case "$argument" in
+    --role|--role=*) echo "充值助手角色固定为 recharge，不接受角色参数"; exit 2 ;;
+  esac
+done
+CONNECTOR_ROLE="recharge"
+CONNECTOR_RUNTIME_DIR="$CONNECTOR_PROJECT_DIR/.runtime/bitbrowser-recharge-assistant"
+CONNECTOR_REQUIREMENTS="$CONNECTOR_PROJECT_DIR/apps/api/src/id-business-v2/auto-recharge/worker/requirements-bitbrowser.lock.txt"
 CONNECTOR_VENV="$CONNECTOR_RUNTIME_DIR/venv"
-CONNECTOR_REQUIREMENTS="$CONNECTOR_PROJECT_DIR/apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt"
 CONNECTOR_ENTRY="$CONNECTOR_PROJECT_DIR/apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py"
 CONNECTOR_PYTHON=""
 
@@ -32,12 +39,12 @@ elif ! "$CONNECTOR_VENV/bin/python" -c 'import sys; raise SystemExit(sys.version
   echo "现有连接器虚拟环境低于 Python 3.11，请删除 $CONNECTOR_VENV 后重试"
   exit 2
 fi
-CONNECTOR_SETUPTOOLS_VERSION="84.0.0"
-CONNECTOR_REQUIREMENTS_HASH="$("$CONNECTOR_VENV/bin/python" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read() + sys.argv[2].encode()).hexdigest())' "$CONNECTOR_REQUIREMENTS" "$CONNECTOR_SETUPTOOLS_VERSION")"
+CONNECTOR_REQUIREMENTS_HASH="$("$CONNECTOR_VENV/bin/python" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$CONNECTOR_REQUIREMENTS")"
 CONNECTOR_INSTALLED_HASH="$(cat "$CONNECTOR_RUNTIME_DIR/requirements.sha256" 2>/dev/null || true)"
 if [ "$CONNECTOR_REQUIREMENTS_HASH" != "$CONNECTOR_INSTALLED_HASH" ]; then
-  "$CONNECTOR_VENV/bin/python" -m pip install --disable-pip-version-check -r "$CONNECTOR_REQUIREMENTS" "setuptools==$CONNECTOR_SETUPTOOLS_VERSION"
+  "$CONNECTOR_VENV/bin/python" -m pip install --disable-pip-version-check -r "$CONNECTOR_REQUIREMENTS"
   "$CONNECTOR_VENV/bin/python" -m pip check
   printf '%s\n' "$CONNECTOR_REQUIREMENTS_HASH" > "$CONNECTOR_RUNTIME_DIR/requirements.sha256"
 fi
-exec "$CONNECTOR_VENV/bin/python" "$CONNECTOR_ENTRY" "$@"
+cd "$CONNECTOR_PROJECT_DIR"
+exec "$CONNECTOR_VENV/bin/python" "$CONNECTOR_ENTRY" --role="$CONNECTOR_ROLE" "$@"

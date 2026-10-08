@@ -1,50 +1,30 @@
 <template>
-  <el-form-item label="ChatGPT 账号" required>
-    <el-input
-      v-model="email"
-      name="chatgpt-recharge-email"
-      type="email"
-      autocomplete="off"
-      maxlength="250"
-      placeholder="输入账号邮箱"
+  <el-form-item class="recharge-full-row" label="ChatGPT 账号" required>
+    <el-select
+      v-model="accountId"
+      filterable
+      aria-label="选择 ChatGPT 账号"
+      placeholder="从 ChatGPT 账号资料中选择"
+      :loading="loading"
+      :disabled="disabled"
     >
-      <template #append>
-        <el-dropdown :disabled="disabled || loading" trigger="click" @command="selectAccount">
-          <AppButton size="small" variant="ghost" :disabled="disabled || loading">
-            {{ loading ? '读取账号中' : '选择账号' }}
-          </AppButton>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item
-                v-for="account in accounts"
-                :key="account.id"
-                :command="account.id"
-                :disabled="!account.hasPassword"
-              >
-                {{ account.emailMasked }}{{ account.hasPassword ? '' : ' · 请先补充密码' }}
-              </el-dropdown-item>
-              <el-dropdown-item v-if="!accounts.length" disabled>暂无待用账号</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </template>
-    </el-input>
+      <el-option
+        v-for="account in accounts"
+        :key="account.id"
+        :value="account.id"
+        :label="rechargeAccountOptionLabel(account)"
+        :disabled="!account.hasPassword"
+      />
+    </el-select>
     <p v-if="error" class="recharge-error" role="alert">
       {{ getApiErrorMessage(error) }}
       <AppButton size="small" variant="ghost" @click="emit('retry')">重试读取账号</AppButton>
     </p>
-  </el-form-item>
-  <el-form-item label="登录密码" required>
-    <!-- 第三方账号凭据，避免浏览器回填本站保存的登录密码。 -->
-    <el-input
-      v-model="password"
-      name="chatgpt-recharge-password"
-      type="password"
-      show-password
-      autocomplete="new-password"
-      maxlength="1024"
-      placeholder="仅用于本次官网登录"
-    />
+    <p class="recharge-note">
+      使用该账号已保存的登录密码。未保存密码时，请先到
+      <router-link to="/v2/auto-recharge/chatgpt-accounts">ChatGPT 账号</router-link>补充登录密码。
+      已保存 2FA 时自动取码，其他验证在所属比特窗口完成。
+    </p>
   </el-form-item>
 </template>
 
@@ -52,21 +32,13 @@
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import type { BankChatgptAccount } from './bank-recharge-api';
-const props = defineProps<{
+import { rechargeAccountOptionLabel } from './recharge-account-options';
+defineProps<{
   accounts: BankChatgptAccount[];
   loading: boolean;
   disabled: boolean;
   error: unknown;
 }>();
 const emit = defineEmits<{ retry: [] }>();
-const email = defineModel<string>('email', { required: true });
-const password = defineModel<string>('password', { required: true });
 const accountId = defineModel<string>('accountId', { required: true });
-const loginMethod = defineModel<'json' | 'password' | 'saved'>('loginMethod', { required: true });
-function selectAccount(id: string) {
-  if (props.disabled || !props.accounts.some((account) => account.id === id && account.hasPassword))
-    return;
-  accountId.value = id;
-  loginMethod.value = 'saved';
-}
 </script>

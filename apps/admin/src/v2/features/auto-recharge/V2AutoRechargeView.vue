@@ -1,13 +1,9 @@
 <template>
   <section class="v2-page-layout recharge-page">
     <RechargePageContext
-      :server-mode="operationMode === 'server_payment'"
-      :locked="formLocked"
       :direct-mode="operationMode === 'open_browser'"
-      :connector-status="operationMode === 'server_payment' ? 'unknown' : connectorStatus"
-      :connector-message="
-        operationMode === 'server_payment' ? '服务器代理与执行器在提交时检查' : connectorMessage
-      "
+      :connector-status="connectorStatus"
+      :connector-message="connectorMessage"
       @settings="openProxySettings"
       @history="historyOpen = true"
     />
@@ -22,10 +18,11 @@
       <div class="recharge-grid">
         <section class="recharge-panel recharge-entry-panel" aria-labelledby="recharge-form-title">
           <div class="recharge-section-heading">
-            <h2 id="recharge-form-title">一键开通资料</h2>
+            <h2 id="recharge-form-title">比特浏览器充值</h2>
             <span>{{ operationModeLabels[operationMode] }}</span>
           </div>
           <el-form
+            ref="paymentFormRef"
             name="chatgpt-auto-recharge"
             autocomplete="off"
             :model="details"
@@ -38,16 +35,14 @@
             <div class="recharge-mode-fields">
               <el-form-item label="操作模式" required>
                 <el-radio-group v-model="operationMode">
-                  <el-radio-button value="payment">本机充值</el-radio-button>
-                  <el-radio-button value="server_payment">服务器充值</el-radio-button>
-                  <el-radio-button value="open_browser">仅登录窗口</el-radio-button>
+                  <el-radio-button value="payment">比特浏览器充值</el-radio-button>
+                  <el-radio-button value="open_browser">仅登录账号</el-radio-button>
                 </el-radio-group>
               </el-form-item>
               <el-form-item label="登录方式" required>
                 <el-radio-group v-model="loginMethod">
                   <el-radio-button value="json">授权 JSON</el-radio-button>
                   <el-radio-button value="password">账号密码</el-radio-button>
-                  <el-radio-button value="saved">已保存账号</el-radio-button>
                 </el-radio-group>
               </el-form-item>
             </div>
@@ -88,62 +83,15 @@
                   }}。
                 </p>
               </el-form-item>
-              <template v-else-if="loginMethod === 'saved'">
-                <el-form-item class="recharge-full-row" label="ChatGPT 账号" required>
-                  <el-select
-                    v-model="selectedBankAccountId"
-                    filterable
-                    aria-label="选择已保存的 ChatGPT 账号"
-                    placeholder="选择账号后自动读取登录资料"
-                    :loading="bankAccountsQuery.phase.value === 'initial-loading'"
-                  >
-                    <el-option
-                      v-for="item in savedBankAccounts"
-                      :key="item.id"
-                      :value="item.id"
-                      :label="rechargeAccountOptionLabel(item)"
-                      :disabled="!item.hasPassword"
-                    />
-                  </el-select>
-                </el-form-item>
-                <p v-if="bankAccountsQuery.error.value" class="recharge-error" role="alert">
-                  {{ getApiErrorMessage(bankAccountsQuery.error.value) }}
-                  <AppButton variant="soft" @click="bankAccountsQuery.refresh">重试</AppButton>
-                </p>
-                <p class="recharge-note">
-                  {{
-                    operationMode === 'server_payment'
-                      ? '已保存 2FA 时在官网要求验证时自动取码；其他验证会停止并提示人工处理。'
-                      : '2FA 已保存时官网要求验证会自动取码；未保存时在当前窗口手动完成。'
-                  }}
-                </p>
-              </template>
-              <template v-else>
-                <RechargePasswordLoginFields
-                  v-model:email="loginEmail"
-                  v-model:password="loginPassword"
-                  v-model:account-id="selectedBankAccountId"
-                  v-model:login-method="loginMethod"
-                  :accounts="savedBankAccounts"
-                  :loading="bankAccountsQuery.phase.value === 'initial-loading'"
-                  :disabled="formLocked"
-                  :error="bankAccountsQuery.error.value"
-                  @retry="bankAccountsQuery.refresh"
-                />
-                <RechargeTotpFields
-                  v-model:source="totpSource"
-                  v-model:secret-input="totpSecretInput"
-                  v-model:saved-account-id="savedTotpAccountId"
-                  :server-mode="operationMode === 'server_payment'"
-                  :saved-accounts="savedTotpAccounts"
-                  :secret-error="totpSecretError"
-                  :loading="savedTotpQuery.phase.value === 'initial-loading'"
-                  :error="
-                    savedTotpQuery.error.value ? getApiErrorMessage(savedTotpQuery.error.value) : ''
-                  "
-                  @retry="savedTotpQuery.refresh"
-                />
-              </template>
+              <RechargePasswordLoginFields
+                v-else
+                v-model:account-id="selectedBankAccountId"
+                :accounts="savedBankAccounts"
+                :loading="bankAccountsQuery.phase.value === 'initial-loading'"
+                :disabled="formLocked"
+                :error="bankAccountsQuery.error.value"
+                @retry="bankAccountsQuery.refresh"
+              />
             </div>
             <el-form-item v-if="operationMode === 'open_browser'" label="窗口名称" required>
               <el-input
@@ -154,12 +102,7 @@
             </el-form-item>
 
             <div v-else class="recharge-fields recharge-options-grid">
-              <el-form-item
-                v-if="operationMode !== 'server_payment'"
-                class="recharge-full-row"
-                label="窗口名称"
-                required
-              >
+              <el-form-item class="recharge-full-row" label="窗口名称" required>
                 <el-input
                   v-model="windowName"
                   maxlength="80"
@@ -177,41 +120,18 @@
                 "
                 @retry="bankCurrenciesQuery.refresh"
               />
-              <V2RechargePaymentCapField
-                v-if="operationMode === 'server_payment'"
-                :plan="plan"
-                :currency-code="lockedCurrency"
-                :caps="paymentCapsQuery.data.value?.items ?? []"
-                :phase="paymentCapsQuery.phase.value"
-                :load-error="
-                  paymentCapsQuery.error.value
-                    ? getApiErrorMessage(paymentCapsQuery.error.value)
-                    : ''
-                "
-                @refresh="paymentCapsQuery.refresh"
-              />
-              <el-form-item v-else label="最高付款" required>
+              <el-form-item label="最高付款" required>
                 <el-input v-model="maxAmount" inputmode="decimal" maxlength="12">
                   <template #append>{{ lockedCurrency }}</template>
                 </el-input>
               </el-form-item>
               <V2RechargeProxySelect
-                v-if="
-                  operationMode === 'server_payment' ||
-                  availableProxyCountries.length ||
-                  proxyCountriesQuery.error.value
-                "
+                v-if="availableProxyCountries.length || proxyCountriesQuery.error.value"
                 v-model:country-code="selectedProxyCountryCode"
                 v-model:proxy-id="selectedProxyId"
                 :countries="availableProxyCountries"
                 :login-country-restriction="loginCountryRestriction"
                 :proxies="availableProxies"
-                :default-proxy-id="
-                  operationMode === 'server_payment' &&
-                  serverProxySettings.settingsQuery.data.value?.proxy?.status === 'active'
-                    ? serverProxySettings.settingsQuery.data.value.proxy.id
-                    : ''
-                "
                 :loading="proxiesQuery.phase.value === 'initial-loading'"
                 :error="
                   proxyCountriesQuery.error.value || proxiesQuery.error.value
@@ -226,7 +146,6 @@
                 "
                 @update:country-code="markProxySelectionManual"
                 @update:proxy-id="markProxySelectionManual"
-                @use-default="useServerDefaultProxy"
               />
             </div>
 
@@ -243,7 +162,7 @@
                       details.email ||
                       (loginMethod === 'json'
                         ? '载入授权 JSON 后自动使用账号邮箱'
-                        : '填写账号邮箱后自动使用')
+                        : '选择账号后自动使用')
                     }}
                   </span>
                 </el-form-item>
@@ -259,7 +178,11 @@
                   @select="selectSavedCard"
                   @retry="paymentCardsQuery.refresh"
                 />
-                <V2RechargePaymentFields v-model="details" :name-match="nameMatch" />
+                <V2RechargePaymentFields
+                  v-model="details"
+                  :name-match="nameMatch"
+                  :validate-event="!resettingPaymentFields"
+                />
                 <V2RechargeBillingAddressFields
                   v-model="details"
                   v-model:source="addressSource"
@@ -302,11 +225,19 @@
           <p v-if="error" class="recharge-error" role="alert">{{ error }}</p>
           <RechargeResult :job="selected" :mode="operationMode" @refresh="refresh" />
           <div class="recharge-actions">
+            <AppButton v-if="canContinueSameAccount" variant="primary" @click="continueSameAccount"
+              >继续为此账号升级</AppButton
+            >
+            <RechargeLocalPaymentControl
+              v-if="selected?.action === 'bitbrowser'"
+              :job="selected"
+              @refresh="refresh"
+            />
             <p v-if="needsCode && !needsManualCode" class="recharge-note" role="status">
               {{ autoCodeMessage }}
             </p>
             <AppButton
-              v-if="needsCode && autoCodeFailureJobId === selected?.id && totpReady"
+              v-if="needsCode && autoCodeFailureJobId === selected?.id && automaticCodeReady"
               :loading="autoCodeBusy"
               @click="retryAutomaticCode"
               >重试自动取码</AppButton
@@ -356,14 +287,7 @@
         </section>
       </div>
     </V2AsyncRegion>
-    <RechargeBrowserSettings
-      v-if="settingsOpen && operationMode !== 'server_payment'"
-      :settings="browserSettings"
-    />
-    <RechargeServerProxySettings
-      v-if="serverProxySettings.open.value"
-      :settings="serverProxySettings"
-    />
+    <RechargeBrowserSettings v-if="settingsOpen" :settings="browserSettings" />
     <RechargeHistoryDrawer
       v-if="historyOpen"
       v-model="historyOpen"
@@ -381,31 +305,29 @@
 <script setup lang="ts">
 import AppButton from '@/components/ui/AppButton.vue';
 import { defineAsyncComponent, ref } from 'vue';
+import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
-import RechargeTotpFields from './RechargeTotpFields.vue';
 import RechargePasswordLoginFields from './RechargePasswordLoginFields.vue';
 import RechargeSubmission from './RechargeSubmission.vue';
 import { rechargeRules } from './recharge-form';
 import RechargePageContext from './RechargePageContext.vue';
 import { useAutoRecharge } from './useAutoRecharge';
-import { rechargeAccountOptionLabel } from './recharge-account-options';
 import V2SavedPaymentCardField from './V2SavedPaymentCardField.vue';
 import V2RechargePaymentFields from './V2RechargePaymentFields.vue';
 import V2RechargeProxySelect from './V2RechargeProxySelect.vue';
 import V2RechargePlanCurrencyFields from './V2RechargePlanCurrencyFields.vue';
 import V2RechargeBillingAddressFields from './V2RechargeBillingAddressFields.vue';
-import V2RechargePaymentCapField from './V2RechargePaymentCapField.vue';
 const RechargeResult = defineAsyncComponent(() => import('./RechargeResult.vue'));
 const RechargeBrowserSettings = defineAsyncComponent(() => import('./RechargeBrowserSettings.vue'));
-const RechargeServerProxySettings = defineAsyncComponent(
-  () => import('./RechargeServerProxySettings.vue')
+const RechargeLocalPaymentControl = defineAsyncComponent(
+  () => import('./RechargeLocalPaymentControl.vue')
 );
 const RechargeHistoryDrawer = defineAsyncComponent(() => import('./RechargeHistoryDrawer.vue'));
 const historyOpen = ref(false);
+const paymentFormRef = ref<FormInstance>();
 const operationModeLabels = {
-  server_payment: '单账户 · 服务器 · 单次付款',
-  open_browser: '单账户 · 单窗口 · 免付款',
+  open_browser: '辅助登录 · 免付款',
   payment: '单账户 · 单窗口 · 单次付款'
 };
 const {
@@ -430,20 +352,11 @@ const {
   savedPaymentCards,
   paymentCardsQuery,
   paymentCardLoading,
+  resettingPaymentFields,
   selectSavedCard,
   bankCurrenciesQuery,
   availableCurrencyOptions,
-  paymentCapsQuery,
-  loginEmail,
-  loginPassword,
   loginCode,
-  totpSource,
-  totpSecretInput,
-  savedTotpAccountId,
-  savedTotpAccounts,
-  savedTotpQuery,
-  totpSecretError,
-  totpReady,
   plan,
   windowName,
   lockedCurrency,
@@ -471,14 +384,15 @@ const {
   resumeActionLabel,
   needsCode,
   needsManualCode,
+  automaticCodeReady,
+  canContinueSameAccount,
+  continueSameAccount,
   autoCodeBusy,
   autoCodeFailureJobId,
   autoCodeMessage,
   workflowMessage,
   browserSettings,
-  serverProxySettings,
   openProxySettings,
-  useServerDefaultProxy,
   markProxySelectionManual,
   settingsOpen,
   connectorStatus,
@@ -495,6 +409,6 @@ const {
   retryAutomaticCode,
   cancel,
   refresh
-} = useAutoRecharge();
+} = useAutoRecharge({ clearPaymentValidation: () => paymentFormRef.value?.clearValidate() });
 </script>
 <style scoped src="./auto-recharge.css"></style>

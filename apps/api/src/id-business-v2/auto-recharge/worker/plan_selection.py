@@ -4,7 +4,6 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from playwright.async_api import expect
 from checkout_core import Stop
 from plans import PRO_GROUP, PRO_PRICE_PLANS, PRO_USAGE_LABELS, selection_spec
 
@@ -16,6 +15,7 @@ PRICING_URL = "https://chatgpt.com/pricing"
 UPGRADE = re.compile(r"^\s*(?:Upgrade|Upgrade plan|升级|升级套餐)\s*$", re.I)
 PERSONAL = re.compile(r"^(?:Toggle for switching to Personal plans|切换以改为个人套餐|改为个人套餐|Personal|个人)$", re.I)
 PLUS = re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)\s*$", re.I)
+PLUS_UPGRADE = re.compile(r"^\s*(?:Upgrade to Plus|升级至\s*Plus|升级到\s*Plus)\s*$", re.I)
 GO = re.compile(r"^\s*(?:Get Go|Try Go|Upgrade to Go|Get ChatGPT Go|获取\s*Go|试用\s*Go|升级至\s*Go|升级到\s*Go|订阅\s*Go|获得\s*Go)\s*$", re.I)
 PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro(?:\s*版本)?)\s*$", re.I)
 PRO_UPGRADE = re.compile(r"^\s*(?:Upgrade to Pro|升级至\s*Pro|升级到\s*Pro)\s*$", re.I)
@@ -27,6 +27,12 @@ GO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Go\s*$", re.I)
 PRO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Pro\s*$", re.I)
 STEPS = {'open_menu', 'pricing_page', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'}
 ERROR_TYPES = {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}
+
+
+def expect(locator):
+    # The local assistant can start before browser execution loads Playwright.
+    from playwright.async_api import expect as browser_expect
+    return browser_expect(locator)
 
 
 def safe_diagnostics(value):
@@ -467,7 +473,7 @@ class Selection:
             self.diagnostics['selected'] = True
         self.step('choose_plan')
         button = (await pro_button(scope, target_plan, require_upgrade) if pro else
-                  buttons(scope, GO if target_plan == 'go' else PLUS))
+                  buttons(scope, GO if target_plan == 'go' else PLUS_UPGRADE if require_upgrade else PLUS))
         await self.ready(button, 'official_plan_option_not_found')
         await self.observe(scope)
         self.report('plan_selection', diagnostics=safe_diagnostics(self.diagnostics))
@@ -510,7 +516,7 @@ async def verify_selected_plan(page, target_plan, *, require_upgrade=False):
     scope = await plan_scope(page)
     pro = selection_spec(target_plan)['price_usd'] is not None
     button = (await pro_button(scope, target_plan, require_upgrade) if pro else
-              buttons(scope, GO if target_plan == 'go' else PLUS))
+              buttons(scope, GO if target_plan == 'go' else PLUS_UPGRADE if require_upgrade else PLUS))
     if await button.count() != 1 or not await button.is_enabled():
         raise Stop('selected_plan_changed', stage='plan_selection')
     if pro:

@@ -122,6 +122,37 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+  if (
+    changed.some(
+      (path) =>
+        /^scripts\/(?:native-[\w.-]+|start-native-worker(?:\.test)?\.mjs|doctor(?:\.test)?\.mjs|lib\/native-mysql-[\w.-]+)$/.test(
+          path
+        ) ||
+        [
+          'scripts/acceptance-v2-financial-integrity.mjs',
+          'scripts/acceptance-v2-rollback-integrity.mjs',
+          'scripts/acceptance-v2-data-governance.mjs',
+          'scripts/acceptance-v2-data-governance.test.mjs',
+          'scripts/acceptance-native-child-output.test.mjs',
+          'scripts/ci-recharge-migration.py',
+          'scripts/production-release/audit-retention-mysql.test.py',
+          'scripts/lib/native_mysql_fixture.py'
+        ].includes(path)
+    )
+  )
+    npm('run', 'test:native-runtime');
+  if (
+    changed.some((path) =>
+      [
+        'apps/api/src/id-business-v2/workspace/media-resolver/server.py',
+        'apps/api/src/id-business-v2/workspace/media-resolver/test_native_startup.py'
+      ].includes(path)
+    )
+  )
+    run('python3', [
+      '-B',
+      'apps/api/src/id-business-v2/workspace/media-resolver/test_native_startup.py'
+    ]);
   if (changed.some((path) => historicalReleaseControlPaths.includes(path))) {
     run('node', ['--test', 'scripts/v2-release-history-policy.test.mjs']);
     run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);
@@ -177,7 +208,7 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
   if (changed.some((path) => registrationControlPaths.includes(path))) {
     run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
-    run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
+    run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py', 'ReleaseScopeTests']);
   }
   if (hasRegistrationOnboardingScope(changed))
     run('python3', ['-B', 'scripts/production-release/registration-onboarding-96.test.py']);
@@ -227,7 +258,7 @@ if (part === 'guards') {
     run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
   if (changed.some((path) => registrationControlPaths.includes(path))) {
     run('node', ['--test', 'scripts/v2-registration-finance-audit.test.mjs']);
-    run('python3', ['-B', 'scripts/production-release/registration-only-transport.test.py']);
+    run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py', 'ReleaseScopeTests']);
   }
   if (hasRegistrationOnboardingScope(changed))
     run('python3', ['-B', 'scripts/production-release/registration-onboarding-96.test.py']);
@@ -269,9 +300,6 @@ if (part === 'guards') {
       '@apple-business/api',
       '--',
       'src/id-business-v2/auto-recharge',
-      ...(changed.some((path) => path.startsWith('apps/api/src/id-business-v2/auto-registration/'))
-        ? ['src/id-business-v2/auto-registration']
-        : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/auth/'))
         ? ['src/auth', 'src/security']
         : []),
@@ -313,17 +341,13 @@ if (part === 'guards') {
       'test_bitbrowser_options',
       'test_bitbrowser_connector',
       'test_bitbrowser_upgrade',
+      'test_owned_recharge_profile',
       'test_connector_health',
       'test_session_retry',
       fullPro ? 'test_pro' : 'test_pro.ProMenuDiagnosticsTests',
       'test_server',
       'test_worker_isolation',
       'test_server_proxy',
-      'test_registration',
-      'test_registration_builtin',
-      'test_registration_browser',
-      'test_registration_auto_code',
-      'test_registration_mail_events',
       'test_fingerprint_runtime',
       'test_password_login',
       'test_subscribe',

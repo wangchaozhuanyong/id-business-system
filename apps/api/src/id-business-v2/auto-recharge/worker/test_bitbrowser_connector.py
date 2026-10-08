@@ -1,5 +1,12 @@
 import asyncio
 import json
+import time
+import threading
+import io
+import contextlib
+import subprocess
+import sys
+from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -45,11 +52,29 @@ def payload():
             "maxAmount": "30.00",
             "maxAmountMinor": 3000,
             "authorizeSinglePayment": True,
+            "manualPaymentConfirmation": True,
         },
         "callbackUrl": "https://admin.example/api/id-business-v2/auto-recharge/local/" + JOB_ID,
         "agentToken": "a" * 64,
         "authorizeSinglePayment": True,
     }
+
+
+def confirmed(job, quote, last4):
+    """Synthetic explicit human confirmation; never connects to a browser."""
+    job.account_key = job.account_key or "c" * 64
+    original = job.callback.send
+    def callback(body):
+        result = original(body)
+        if body.get("result", {}).get("status") == "awaiting_confirmation":
+            pending = job.state()["result"]
+            job.signal_confirm(pending["nonce"], pending["quote_digest"])
+        return result
+    job.callback.send = callback
+    try:
+        return job.confirm(quote, last4)
+    finally:
+        job.callback.send = original
 
 
 def resolution_payload():
@@ -90,7 +115,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
                 {"authorizeSinglePayment": False},
                 {"extra": "field"},
                 {"details": {**value["details"], "number": "123"}},
-                {"address": {**value["address"], "city": "Other"}},
+                {"address": {**value["address"], "country": "invalid"}},
                 {"safety": {**value["safety"], "maxAmountMinor": 2000}}):
             with self.subTest(change=change), self.assertRaises(Stop):
                 connector.validate_payload({**value, **change})
@@ -244,6 +269,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
     def test_currency_amount_and_tax_guards_run_before_payment(self):
         job = connector.LocalJob(payload())
         job.progress = MagicMock()
+        job.callback.send = MagicMock(return_value={})
         money = {"amount": "20.00", "amount_minor": 2000, "currency": "USD"}
         quote = {
             "plan": "plus",
@@ -252,7 +278,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
             "renewal": money,
             "renewal_interval": "monthly",
         }
-        self.assertTrue(job.confirm(quote, "4444"))
+        self.assertTrue(confirmed(job, quote, "4444"))
         job.progress.assert_called_once()
         with self.assertRaises(Stop):
             job.confirm({**quote, "today": {**money, "currency": "PHP"}}, "4444")
@@ -260,6 +286,173 @@ class BitBrowserConnectorTests(unittest.TestCase):
             job.confirm({**quote, "today": {**money, "amount": "40.00", "amount_minor": 4000}}, "4444")
         with self.assertRaises(Stop):
             job.confirm({**quote, "tax": None}, "4444")
+
+    def test_actual_confirmation_waits_and_nonce_is_single_use_quote_bound(self):
+        job = connector.LocalJob(payload())
+        job.account_key = "c" * 64
+        job.callback.send = MagicMock(return_value={})
+        amount = {"currency": "USD", "amount_minor": 2000, "amount": "20.00"}
+        quote = {"plan": "plus", "today": amount, "renewal": amount,
+                 "tax": {"currency": "USD", "amount_minor": 0, "amount": "0.00"},
+                 "renewal_interval": "monthly"}
+        outcome = []
+        thread = threading.Thread(target=lambda: outcome.append(job.confirm(quote, "4444")))
+        thread.start()
+        for _ in range(100):
+            if job.state()["status"] == "awaiting_confirmation":
+                break
+            time.sleep(.005)
+        state = job.state()["result"]
+        self.assertTrue(thread.is_alive())
+        self.assertFalse(job.payment_request_sent)
+        with self.assertRaises(Stop):
+            job.signal_confirm(state["nonce"], "f" * 64)
+        with self.assertRaises(Stop):
+            job.signal_confirm("wrong", state["quote_digest"])
+        job.signal_resume()
+        self.assertTrue(thread.is_alive())
+        self.assertNotIn(state["nonce"], str(job.callback.send.call_args_list))
+        job.signal_confirm(state["nonce"], state["quote_digest"])
+        thread.join(1)
+        self.assertEqual(outcome, [True])
+        with self.assertRaises(Stop):
+            job.signal_confirm(state["nonce"], state["quote_digest"])
+        with self.assertRaises(Stop):
+            job.confirm(quote, "4444")
+        self.assertNotIn("nonce", job.state()["result"])
+
+    def test_confirmation_account_binding_and_expiry_cannot_be_reused(self):
+        amount = {"currency": "USD", "amount_minor": 2000, "amount": "20.00"}
+        quote = {"plan": "plus", "today": amount, "renewal": amount,
+                 "tax": {"currency": "USD", "amount_minor": 0, "amount": "0.00"},
+                 "renewal_interval": "monthly"}
+        for change in ("account", "quote", "expiry"):
+            job = connector.LocalJob(payload())
+            job.account_key = "c" * 64
+            def callback(body):
+                if body.get("result", {}).get("status") != "awaiting_confirmation":
+                    return {}
+                state = job.state()["result"]
+                if change == "account":
+                    job.account_key = "d" * 64
+                elif change == "quote":
+                    quote["today"] = {**amount, "amount_minor": 2100, "amount": "21.00"}
+                else:
+                    job.pending_confirmation["expires_at"] = time.time() - 1
+                try:
+                    job.signal_confirm(state["nonce"], state["quote_digest"])
+                except Stop:
+                    job.cancelled = True
+                    job.confirmation_event.set()
+                return {}
+            job.callback.send = callback
+            with self.subTest(change=change), self.assertRaises(Stop):
+                job.confirm(quote, "4444")
+            self.assertFalse(job.payment_request_sent)
+            quote["today"] = amount
+
+    def test_retired_registration_role_and_payload_cannot_use_recharge_registry(self):
+        with self.assertRaisesRegex(ValueError, "unsupported connector role"):
+            connector.Registry("registration")
+        recharge = connector.Registry("recharge")
+        with self.assertRaises(Stop):
+            recharge.start({"mode": "registration", "id": JOB_ID})
+        self.assertEqual(recharge.jobs, {})
+
+    def test_health_and_authenticated_http_confirmation_use_dedicated_role(self):
+        job = connector.LocalJob(payload())
+        job.account_key = "c" * 64
+        job.callback.send = MagicMock(return_value={})
+        amount = {"currency": "USD", "amount_minor": 2000, "amount": "20.00"}
+        quote = {"plan": "plus", "today": amount, "renewal": amount,
+                 "tax": {"currency": "USD", "amount_minor": 0, "amount": "0.00"},
+                 "renewal_interval": "monthly"}
+        outcome = []
+        thread = threading.Thread(target=lambda: outcome.append(job.confirm(quote, "4444")))
+        thread.start()
+        for _ in range(100):
+            if job.state()["status"] == "awaiting_confirmation":
+                break
+            time.sleep(.005)
+        registry = connector.Registry("recharge")
+        registry.jobs[job.id] = job
+        handler = object.__new__(connector.Handler)
+        handler.allowed_origins = {"https://admin.example"}
+        handler.connector_token = "fixture-connector"
+        handler.headers = {"Origin": "https://admin.example", "X-Auto-Recharge-Connector": "fixture-connector"}
+        handler.reply = MagicMock()
+        with patch.object(connector, 'REGISTRY', registry):
+            handler.path = '/health'
+            handler.do_GET()
+            health = handler.reply.call_args.args[1]
+            self.assertEqual(health['version'], 4)
+            self.assertEqual(health['role'], 'recharge')
+            self.assertIn('manual-payment-confirmation', health['capabilities'])
+            self.assertIn('recharge-process-isolation', health['capabilities'])
+            self.assertNotIn('account-registration', health['capabilities'])
+            handler.path = '/jobs/' + job.id
+            handler.do_GET()
+            state = handler.reply.call_args.args[1]['result']
+            handler.path += '/confirm'
+            body = json.dumps({'nonce': state['nonce'], 'quoteDigest': state['quote_digest']}).encode()
+            handler.headers['Content-Length'] = str(len(body))
+            handler.rfile = io.BytesIO(body)
+            handler.do_POST()
+            self.assertEqual(handler.reply.call_args.args, (200, {'ok': True}))
+            handler.rfile = io.BytesIO(body)
+            handler.do_POST()
+            self.assertEqual(handler.reply.call_args.args[0], 409)
+        thread.join(1)
+        self.assertEqual(outcome, [True])
+
+    def test_command_default_and_recharge_role_use_only_dedicated_recharge_port(self):
+        for argv in ([], ['--role', 'recharge']):
+            with (patch.object(connector, 'ThreadingHTTPServer') as server,
+                  patch.object(connector, 'load_connector_token', return_value='fixture') as token,
+                  patch.object(connector, 'REGISTRY', connector.Registry('recharge')),
+                  contextlib.redirect_stdout(io.StringIO())):
+                connector.main([*argv, '--allowed-origin', 'https://admin.example'])
+                server.assert_called_once_with(('127.0.0.1', 55322), connector.Handler)
+                self.assertIn('bitbrowser-recharge-assistant', str(token.call_args.args[0]))
+                self.assertEqual(connector.REGISTRY.role, 'recharge')
+
+    def test_retired_registration_cli_role_is_rejected_before_token_or_listener(self):
+        with (patch.object(connector, 'ThreadingHTTPServer') as server,
+              patch.object(connector, 'load_connector_token') as token,
+              contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit)):
+            connector.main(['--role', 'registration', '--allowed-origin', 'https://admin.example'])
+        server.assert_not_called()
+        token.assert_not_called()
+
+    def test_recharge_assistant_imports_without_server_browser_dependencies(self):
+        folder = Path(__file__).resolve().parent
+        script = """import builtins,sys
+sys.path.insert(0,sys.argv[1])
+original = builtins.__import__
+def minimal(name,*args,**kwargs):
+    if name.split('.')[0] in {'camoufox','browserforge','numpy','fingerprint_runtime','server','playwright'}:
+        raise ImportError('server browser dependency unavailable')
+    return original(name,*args,**kwargs)
+builtins.__import__ = minimal
+import bitbrowser_connector
+assert bitbrowser_connector.Registry('recharge').role == 'recharge'
+"""
+        result = subprocess.run([sys.executable, '-I', '-c', script, str(folder)],
+                                text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lock = (folder / 'requirements-bitbrowser.lock.txt').read_text()
+        for unused in ('camoufox', 'browserforge', 'numpy'):
+            self.assertNotIn(unused, lock)
+
+    def test_real_billing_address_is_not_fixed_to_one_fixture_city(self):
+        value = payload()
+        value["address"] = {**value["address"], "country": "PH", "city": "Manila",
+                            "state": "Metro Manila", "postalCode": "1000", "line1": "Synthetic street"}
+        self.assertIs(connector.validate_payload(value), value)
+        for authorized in (False, None):
+            with self.assertRaises(Stop):
+                connector.validate_payload({**value, "safety": {
+                    **value["safety"], "manualPaymentConfirmation": authorized}})
 
     def test_payment_progress_never_falls_back_to_zero_attempts(self):
         job = connector.LocalJob(payload())

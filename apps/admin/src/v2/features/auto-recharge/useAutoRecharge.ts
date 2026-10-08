@@ -1,4 +1,5 @@
-import { computed, onScopeDispose, reactive, ref, toRefs, watch } from 'vue';
+import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
+import { computed, nextTick, onScopeDispose, reactive, ref, toRefs, watch } from 'vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import type {
   V2RechargeAddress,
@@ -10,20 +11,16 @@ import type {
   V2RechargeBitBrowserSettings,
   V2RechargeDetails,
   V2RechargeJob,
-  V2RechargePaymentCap,
   V2RechargePlan
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { useRechargeManualPaymentConfirmation } from './useRechargeManualPaymentConfirmation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
-import { useRechargeServerProxySettings } from './useRechargeServerProxySettings';
 import { useRechargeNameMatch } from './useRechargeNameMatch';
-import { useRechargeTotp } from './useRechargeTotp';
 import { bankRechargeApi } from './bank-recharge-api';
 import { canSelectRechargeAccount } from './recharge-account-options';
 import { currencyOptions } from './recharge-presentation';
@@ -39,7 +36,9 @@ const activeStates = new Set([
   'confirming'
 ]);
 const requiresPolling = (job: V2RechargeJob) =>
-  ['running', 'awaiting_human_verification', 'confirming'].includes(job.state);
+  ['running', 'awaiting_confirmation', 'awaiting_human_verification', 'confirming'].includes(
+    job.state
+  );
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function isAlreadyResolved(
@@ -124,26 +123,23 @@ async function loadCountryProxies(countryCode: string, signal?: AbortSignal) {
   }
 }
 
-export function useAutoRecharge() {
-  const manualPaymentConfirmation = useRechargeManualPaymentConfirmation();
+export function useAutoRecharge(options: { clearPaymentValidation?: () => void } = {}) {
   const execution = useV2SessionDraft('auto-recharge-execution', () => ({
     currentId: ref(''),
     paymentJobId: ref(''),
     settledJobId: '',
     completePaymentSave: null as (() => boolean) | null,
-    totpRevision: 0
+    secretRevision: 0
   }));
   const { currentId, paymentJobId } = execution;
   const formDraft = useV2FormDraft('auto-recharge-form', () => ({
-    operationMode: 'server_payment' as 'server_payment' | 'payment' | 'open_browser',
-    loginMethod: 'json' as 'json' | 'password' | 'saved',
+    operationMode: 'payment' as 'payment' | 'open_browser',
+    loginMethod: 'json' as 'json' | 'password',
     selectedBankAccountId: '',
     selectedPaymentCardId: '',
     selectedCardBillingAddressId: '',
     manualAddressSelectionRevision: 0,
     selectedBankAccountEmail: '',
-    loginEmail: '',
-    loginPassword: '',
     jsonInput: '',
     sessionJson: '',
     jsonError: '',
@@ -158,6 +154,13 @@ export function useAutoRecharge() {
     details: emptyDetails()
   }));
   formDraft.open('new');
+  // 同一标签页仍持有旧表单草稿时，只迁移入口与账号来源，不沿用旧的手填密码。
+  const restored = formDraft.form as unknown as Record<string, unknown>;
+  if (restored.operationMode === 'server_payment') formDraft.form.operationMode = 'payment';
+  if (restored.loginMethod === 'saved') formDraft.form.loginMethod = 'password';
+  formDraft.form.addressSource = 'library';
+  delete restored.loginEmail;
+  delete restored.loginPassword;
   const {
     operationMode,
     loginMethod,
@@ -166,8 +169,6 @@ export function useAutoRecharge() {
     selectedCardBillingAddressId,
     manualAddressSelectionRevision,
     selectedBankAccountEmail,
-    loginEmail,
-    loginPassword,
     jsonInput,
     sessionJson,
     jsonError,
@@ -191,6 +192,7 @@ export function useAutoRecharge() {
   const error = ref('');
   const importing = ref(false);
   const paymentCardLoading = ref(false);
+  const resettingPaymentFields = ref(false);
   const connectorStatus = ref<ConnectorStatus>('unknown');
   const connectorMessage = ref('尚未检测本机连接器');
   const localAccess = ref<{ connectorUrl: string; connectorToken: string } | null>(null);
@@ -235,12 +237,6 @@ export function useAutoRecharge() {
     key: 'auto-recharge-bank-currencies',
     query: ({ signal }) => bankRechargeApi.listCurrencies({ signal })
   });
-  const paymentCapsQuery = useV2ModuleQuery<{ items: V2RechargePaymentCap[] }>({
-    moduleKey: 'auto-recharge',
-    scope: 'auto-recharge',
-    key: 'auto-recharge-payment-caps',
-    query: ({ signal }) => rechargeApi.listPaymentCaps({ signal })
-  });
   const paymentCardsQuery = useV2ModuleQuery({
     moduleKey: 'bank-recharge-cards',
     scope: 'auto-recharge',
@@ -275,33 +271,26 @@ export function useAutoRecharge() {
   const browserSettings = useRechargeBrowserSettings(
     connectorStatus,
     connectorMessage,
-    computed(() => operationMode.value === 'server_payment'),
+    ref(false),
     computed(() => operationMode.value === 'open_browser')
   );
   const directOpen = useBitBrowserDirectOpen(refresh, (message) => {
     error.value = message;
   });
   const { settingsQuery } = browserSettings;
-  const serverProxySettings = useRechargeServerProxySettings();
   function openProxySettings() {
-    if (operationMode.value === 'server_payment') serverProxySettings.setOpen(true);
-    else browserSettings.setSettingsOpen(true);
+    browserSettings.setSettingsOpen(true);
   }
-  const totp = useRechargeTotp(loginMethod);
   watch(
-    [totp.source, totp.secretInput, totp.savedAccountId, () => details.value.cvc],
-    () => execution.totpRevision++,
+    () => details.value.cvc,
+    () => execution.secretRevision++,
     { flush: 'sync' }
   );
 
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() =>
     (addressQuery.data.value?.items ?? [])
-      .filter((item) =>
-        operationMode.value === 'server_payment'
-          ? item.status !== 'disabled'
-          : item.status === 'unused'
-      )
+      .filter((item) => item.status !== 'disabled')
       .sort(
         (a, b) =>
           (a.usedAt ?? '').localeCompare(b.usedAt ?? '') ||
@@ -310,9 +299,7 @@ export function useAutoRecharge() {
       )
   );
   const savedBankAccounts = computed(() =>
-    (bankAccountsQuery.data.value?.items ?? []).filter((item) =>
-      canSelectRechargeAccount(item, plan.value)
-    )
+    (bankAccountsQuery.data.value?.items ?? []).filter((item) => canSelectRechargeAccount(item))
   );
   const savedPaymentCards = computed(() =>
     (paymentCardsQuery.data.value?.items ?? []).filter(
@@ -320,46 +307,7 @@ export function useAutoRecharge() {
     )
   );
   const availableProxyCountries = computed(() => proxyCountriesQuery.data.value?.items ?? []);
-  let appliedDefaultProxyId = '';
-  function markProxySelectionManual() {
-    appliedDefaultProxyId = '';
-  }
-  function useServerDefaultProxy() {
-    const proxy = serverProxySettings.settingsQuery.data.value?.proxy;
-    if (
-      operationMode.value !== 'server_payment' ||
-      proxy?.status !== 'active' ||
-      !availableProxyCountries.value.includes(proxy.countryCode)
-    )
-      return;
-    selectedProxyCountryCode.value = proxy.countryCode;
-    selectedProxyId.value = proxy.id;
-    appliedDefaultProxyId = proxy.id;
-  }
-  watch(
-    [
-      operationMode,
-      () => serverProxySettings.settingsQuery.data.value,
-      availableProxyCountries,
-      lockedCurrency
-    ],
-    () => {
-      if (operationMode.value !== 'server_payment') return;
-      const proxy = serverProxySettings.settingsQuery.data.value?.proxy;
-      if (
-        (!selectedProxyId.value && !selectedProxyCountryCode.value) ||
-        (appliedDefaultProxyId && selectedProxyId.value === appliedDefaultProxyId)
-      ) {
-        if (proxy?.status === 'active') useServerDefaultProxy();
-        else if (appliedDefaultProxyId && selectedProxyId.value === appliedDefaultProxyId) {
-          selectedProxyCountryCode.value = '';
-          selectedProxyId.value = '';
-          appliedDefaultProxyId = '';
-        }
-      }
-    },
-    { immediate: true }
-  );
+  function markProxySelectionManual() {}
   const availableProxies = computed(() =>
     selectedProxyCountryCode.value
       ? (proxiesQuery.data.value?.items ?? []).filter(
@@ -371,7 +319,7 @@ export function useAutoRecharge() {
     () =>
       proxyCountriesQuery.phase.value === 'ready' &&
       !proxyCountriesQuery.error.value &&
-      ((operationMode.value !== 'server_payment' && availableProxyCountries.value.length === 0) ||
+      (availableProxyCountries.value.length === 0 ||
         Boolean(
           selectedProxyCountryCode.value &&
           selectedProxyId.value &&
@@ -445,16 +393,7 @@ export function useAutoRecharge() {
   const selectedBankAccount = computed(() =>
     savedBankAccounts.value.find((item) => item.id === selectedBankAccountId.value)
   );
-  const loginCountryRestriction = computed(() => {
-    const firstCountry = selectedBankAccount.value?.firstLoginNetwork?.countryCode;
-    return operationMode.value === 'server_payment' &&
-      loginMethod.value === 'saved' &&
-      firstCountry &&
-      selectedProxyCountryCode.value &&
-      firstCountry !== selectedProxyCountryCode.value
-      ? firstCountry
-      : '';
-  });
+  const loginCountryRestriction = ref('');
   const availableCurrencyOptions = computed(() =>
     (bankCurrenciesQuery.data.value?.items ?? [])
       .filter((item) => item.active)
@@ -465,47 +404,27 @@ export function useAutoRecharge() {
           `${item.name}（${item.code}）`
       }))
   );
-  const paymentCap = computed(() =>
-    paymentCapsQuery.data.value?.items.find(
-      (item) => item.plan === plan.value && item.currencyCode === lockedCurrency.value
-    )
-  );
   const selectedAddress = computed<V2RechargeAddress | undefined>(() =>
-    operationMode.value === 'server_payment' && addressSource.value === 'manual'
-      ? undefined
-      : availableAddresses.value.find((address) => address.id === selectedAddressId.value)
-  );
-  watch(
-    () => details.value.country,
-    (country) => {
-      if (
-        operationMode.value === 'server_payment' &&
-        addressSource.value === 'manual' &&
-        country !== country.toUpperCase()
-      ) {
-        details.value.country = country.toUpperCase();
-        return;
-      }
-    }
+    availableAddresses.value.find((address) => address.id === selectedAddressId.value)
   );
   const selected = computed(() =>
     currentId.value
       ? jobs.value.find((job) => job.id === currentId.value)
-      : jobs.value.find((job) => activeStates.has(job.state))
+      : (jobs.value.find((job) => activeStates.has(job.state)) ??
+        jobs.value.find((job) => job.state === 'unknown' && job.result.payment_attempted === true))
   );
   const active = computed(() => jobs.value.some((job) => activeStates.has(job.state)));
   const currentSettingsReady = computed(() =>
-    operationMode.value === 'server_payment'
-      ? Boolean(selectedProxyCountryCode.value && selectedProxyId.value)
-      : settingsReady(
-          settingsQuery.data.value,
-          operationMode.value === 'payment' && Boolean(selectedProxyId.value),
-          operationMode.value === 'open_browser'
-        )
+    settingsReady(
+      settingsQuery.data.value,
+      operationMode.value === 'payment' && Boolean(selectedProxyId.value),
+      operationMode.value === 'open_browser'
+    )
   );
   const formLocked = computed(
     () =>
       busy.value ||
+      resettingPaymentFields.value ||
       active.value ||
       directOpen.running.value ||
       paymentCardLoading.value ||
@@ -528,16 +447,10 @@ export function useAutoRecharge() {
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
       ? Boolean(sessionJson.value && !importing.value && !jsonError.value)
-      : loginMethod.value === 'saved'
-        ? Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
-        : emailPattern.test(loginEmail.value.trim()) &&
-          Boolean(loginPassword.value) &&
-          totp.ready.value
+      : Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
   );
-  const automaticCodeReady = computed(() =>
-    loginMethod.value === 'saved'
-      ? Boolean(selectedBankAccount.value?.hasTotp)
-      : totp.ready.value && totp.source.value !== 'manual'
+  const automaticCodeReady = computed(
+    () => loginMethod.value === 'password' && Boolean(selectedBankAccount.value?.hasTotp)
   );
   const nameMatch = useRechargeNameMatch(
     details,
@@ -551,17 +464,13 @@ export function useAutoRecharge() {
     () =>
       Boolean(
         credentialReady.value &&
-        (operationMode.value === 'server_payment' && addressSource.value === 'manual'
-          ? true
-          : Boolean(selectedAddress.value)) &&
-        (operationMode.value === 'server_payment' || windowName.value.trim()) &&
+        Boolean(selectedAddress.value) &&
+        windowName.value.trim() &&
         /^[A-Z]{3}$/.test(lockedCurrency.value) &&
         availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value) &&
         proxySelectionReady.value &&
         !loginCountryRestriction.value &&
-        (operationMode.value === 'server_payment'
-          ? Boolean(paymentCap.value)
-          : /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value)) &&
+        /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value) &&
         !nameMatch.error.value &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
@@ -600,20 +509,18 @@ export function useAutoRecharge() {
     const job = selected.value;
     if (!job) return false;
     return Boolean(
-      ['bitbrowser', 'server'].includes(job.action) &&
+      job.action === 'bitbrowser' &&
       ['finished', 'unknown'].includes(job.state) &&
-      (job.action === 'server'
-        ? Number(job.result.payment_requests_sent ?? 0) === 1
-        : job.result.payment_attempted === true ||
-          Number(job.result.payment_requests_sent ?? 0) === 1) &&
+      (job.result.payment_attempted === true ||
+        Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
       job.result.payment_status !== 'declined' &&
       job.result.operator_resolution !== 'confirmed_no_bank_request' &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
       credentialReady.value &&
-      (job.action === 'server' ||
-        (windowName.value.trim() && settingsReady(settingsQuery.data.value))) &&
+      windowName.value.trim() &&
+      settingsReady(settingsQuery.data.value) &&
       !busy.value &&
       !active.value &&
       query.phase.value === 'ready'
@@ -677,6 +584,36 @@ export function useAutoRecharge() {
       ? '我已完成验证，刷新核对'
       : '我已完成验证，继续原任务'
   );
+  const canContinueSameAccount = computed(() => {
+    const job = selected.value;
+    return Boolean(
+      job &&
+      job.action === 'bitbrowser' &&
+      job.state === 'finished' &&
+      job.result.status === 'subscription_activated' &&
+      job.result.payment_status === 'paid' &&
+      job.result.payment_outcome === 'subscription_activated' &&
+      job.result.account_matched === true &&
+      ['go', 'plus'].includes(job.plan) &&
+      !formLocked.value
+    );
+  });
+  function continueSameAccount() {
+    const job = selected.value;
+    if (!canContinueSameAccount.value || !job) return;
+    if (job.chatgptAccountId) selectedBankAccountId.value = job.chatgptAccountId;
+    plan.value = job.plan === 'go' ? 'plus' : 'pro-5x';
+    operationMode.value = 'payment';
+    details.value.cvc = '';
+    authorizeSinglePayment.value = false;
+    currentId.value = '';
+    localAccess.value = null;
+    error.value =
+      loginMethod.value === 'json'
+        ? '请重新载入此账号的授权 JSON，并填写本次安全码与单次授权。'
+        : '';
+  }
+
   const workflowMessage = computed(() => {
     const job = selected.value;
     if (
@@ -694,7 +631,7 @@ export function useAutoRecharge() {
         : '官网要求 TOTP 验证码，正在使用系统 2FA 功能自动取码并提交。';
     if (job?.state === 'awaiting_human_verification' && job.result.transport === 'web_direct')
       return '请在已打开的比特官网窗口完成验证；网页会自动核对登录结果，也可点击刷新核对。';
-    if (job?.action === 'server' && job.state === 'awaiting_confirmation')
+    if (job?.state === 'awaiting_confirmation')
       return '官网报价已取得，等待本人核对金额并确认本次单次付款。';
     if (job?.action === 'server' && job.state === 'awaiting_human_verification')
       return '官网要求本人验证，请打开原付款验证窗口完成验证后核对原单。';
@@ -713,52 +650,31 @@ export function useAutoRecharge() {
           ? '账号登录成功，比特浏览器窗口已打开，可进行手动操作。'
           : '本次登录已停止，请查看具体原因并检查原窗口。';
       }
-      if (job.result.status === 'subscription_activated') return '充值成功，订阅已开通。';
+      if (job.result.status === 'already_subscribed')
+        return '官网已核实该账号已是目标套餐，本次未提交付款。';
+      if (job.result.status === 'subscription_activated')
+        return '付款与套餐生效均已核实；可继续为同一账号选择下一套餐。';
       return paymentRetryBlocked.value
         ? '本次付款已有提交记录，请只读复查原订单；填写资料已保留。'
         : '本次充值未成功，填写资料已保留；修正原因后可再次执行。';
     }
-    if (!currentSettingsReady.value)
-      return operationMode.value === 'server_payment'
-        ? '请先配置服务器代理 IP，或选择已保存的代理 IP。'
-        : '请先完成比特浏览器设置和本机连接密钥。';
-    if (
-      loginMethod.value === 'password' &&
-      emailPattern.test(loginEmail.value.trim()) &&
-      loginPassword.value &&
-      !totp.ready.value
-    )
-      return '请选择已保存的 2FA 账号或粘贴有效密钥；其他验证方式可选手动完成。';
+    if (!currentSettingsReady.value) return '请先完成比特浏览器设置和本机充值助手的连接配置。';
     if (!credentialReady.value)
       return loginMethod.value === 'json'
-        ? '粘贴授权 JSON 后会自动载入账号和注册邮箱。'
-        : operationMode.value === 'server_payment'
-          ? '填写账号和密码后，系统将使用内置指纹浏览器登录。'
-          : '填写账号和密码后可在比特浏览器登录。';
-    if (operationMode.value === 'open_browser') {
+        ? '粘贴授权 JSON 后会自动载入账号邮箱。'
+        : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
+    if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
-    }
-    return operationMode.value === 'server_payment'
-      ? '补齐银行卡资料并确认付款上限后，服务器将使用已配置代理执行。'
-      : '补齐窗口名称、卡资料、未使用地址和付款上限后，即可一键执行。';
+    return '补齐银行卡、账单地址与付款上限，核价后等待你确认本次付款。';
   });
 
-  watch([loginEmail, loginMethod], () => {
+  watch(loginMethod, () => {
     details.value.email =
-      loginMethod.value === 'saved'
+      loginMethod.value === 'password'
         ? selectedBankAccountEmail.value
-        : loginMethod.value === 'password'
-          ? loginEmail.value.trim()
-          : sessionJson.value
-            ? registrationEmail(JSON.parse(sessionJson.value))
-            : '';
-    if (
-      loginMethod.value === 'password' &&
-      !windowName.value.trim() &&
-      loginEmail.value.includes('@')
-    ) {
-      windowName.value = `ChatGPT-${loginEmail.value.split('@')[0]}`;
-    }
+        : sessionJson.value
+          ? registrationEmail(JSON.parse(sessionJson.value))
+          : '';
   });
 
   watch(selectedBankAccountId, async (id) => {
@@ -768,15 +684,11 @@ export function useAutoRecharge() {
       const identity = await bankRechargeApi.accountIdentity(id);
       if (selectedBankAccountId.value !== id || disposed) return;
       selectedBankAccountEmail.value = identity.email;
-      if (loginMethod.value === 'saved') details.value.email = identity.email;
+      if (loginMethod.value === 'password') details.value.email = identity.email;
       if (!windowName.value.trim()) windowName.value = `ChatGPT-${identity.email.split('@')[0]}`;
     } catch (cause) {
       if (selectedBankAccountId.value === id) error.value = getApiErrorMessage(cause);
     }
-  });
-
-  watch(loginMethod, (method) => {
-    if (method === 'json') totp.clearSecret();
   });
 
   watch(
@@ -790,11 +702,7 @@ export function useAutoRecharge() {
       () => addressQuery.error.value
     ],
     () => {
-      if (
-        operationMode.value === 'open_browser' ||
-        (operationMode.value === 'server_payment' && addressSource.value === 'manual')
-      )
-        return;
+      if (operationMode.value === 'open_browser') return;
       let address = selectedAddress.value;
       if (!address) {
         if (addressQuery.phase.value !== 'ready' || addressQuery.error.value) return;
@@ -851,37 +759,41 @@ export function useAutoRecharge() {
         paymentJob.result.payment_status !== 'paid'
       )
         return;
-      if (execution.completePaymentSave?.()) {
+      const completePaymentSave = execution.completePaymentSave;
+      execution.completePaymentSave = null;
+      if (completePaymentSave?.()) {
+        resettingPaymentFields.value = true;
         clearCard();
-        details.value.name = '';
-        details.value.email = '';
         sessionJson.value = '';
         jsonInput.value = '';
         jsonError.value = '';
-        loginEmail.value = '';
-        loginPassword.value = '';
         selectedPaymentCardId.value = '';
-        selectedBankAccountId.value = '';
-        selectedBankAccountEmail.value = '';
         authorizeSinglePayment.value = false;
-        totp.clearSecret();
         // 清理已提交快照后，为下一笔输入重新登记同一表单。
         formDraft.open('new', { ...formDraft.form });
+        await nextTick();
+        options.clearPaymentValidation?.();
+        resettingPaymentFields.value = false;
       }
       execution.completePaymentSave = null;
       execution.settledJobId = paymentJob.id;
       paymentJobId.value = '';
-      await addressQuery.refresh();
+      await Promise.allSettled([
+        addressQuery.refresh(),
+        paymentCardsQuery.refresh(),
+        bankAccountsQuery.refresh()
+      ]);
     },
     { deep: true, immediate: true, flush: 'post' }
   );
 
   function beginPaymentSave(id: string) {
     const complete = formDraft.beginSave();
-    const totpRevision = execution.totpRevision;
+    const secretRevision = execution.secretRevision;
     return () => {
       paymentJobId.value = id;
-      execution.completePaymentSave = () => execution.totpRevision === totpRevision && complete();
+      execution.completePaymentSave = () =>
+        execution.secretRevision === secretRevision && complete();
     };
   }
 
@@ -892,15 +804,13 @@ export function useAutoRecharge() {
   }
 
   async function localCredential(savedLogin?: { email: string; password: string }) {
-    if (loginMethod.value === 'saved') {
-      if (!selectedBankAccountId.value) throw new Error('请先选择已保存的 ChatGPT 账号');
-      return {
-        login: savedLogin ?? (await bankRechargeApi.loginCredential(selectedBankAccountId.value))
-      };
+    if (loginMethod.value === 'password') {
+      if (!selectedBankAccountId.value) throw new Error('请先选择已保存密码的 ChatGPT 账号');
+      const credential =
+        savedLogin ?? (await bankRechargeApi.loginCredential(selectedBankAccountId.value));
+      return { login: { email: credential.email, password: credential.password } };
     }
-    return loginMethod.value === 'json'
-      ? { sessionJson: sessionJson.value }
-      : { login: { email: loginEmail.value.trim(), password: loginPassword.value } };
+    return { sessionJson: sessionJson.value };
   }
 
   function acceptSession(reportInvalid = true) {
@@ -985,10 +895,6 @@ export function useAutoRecharge() {
 
   async function start() {
     if (!canStart.value) return;
-    if (operationMode.value === 'server_payment') {
-      await startServer();
-      return;
-    }
     if (!selectedAddress.value) return;
     busy.value = true;
     error.value = '';
@@ -1020,13 +926,14 @@ export function useAutoRecharge() {
         cardId: paymentCard.cardId,
         billingName: details.value.name,
         expectedEmail: details.value.email,
-        ...(loginMethod.value === 'saved'
+        ...(loginMethod.value === 'password'
           ? {
               chatgptAccountId: selectedBankAccountId.value,
               useSavedCredentials: true
             }
           : {}),
-        authorizeSinglePayment: true
+        authorizeSinglePayment: true,
+        manualPaymentConfirmation: true
       });
       currentId.value = id;
       rememberPaymentSave();
@@ -1051,6 +958,7 @@ export function useAutoRecharge() {
         address: launch.address,
         bitBrowser: launch.bitBrowser,
         safety: launch.safety,
+        ...(launch.ownedProfile ? { ownedProfile: launch.ownedProfile } : {}),
         callbackUrl: rechargeCallbackUrl(id),
         agentToken: launch.agentToken,
         authorizeSinglePayment: true
@@ -1085,66 +993,6 @@ export function useAutoRecharge() {
     }
   }
 
-  async function startServer() {
-    if (!canStart.value || (addressSource.value === 'library' && !selectedAddress.value)) return;
-    busy.value = true;
-    error.value = '';
-    const id = crypto.randomUUID();
-    const rememberPaymentSave = beginPaymentSave(id);
-    const previousId = currentId.value;
-    let accepted = false;
-    currentId.value = id;
-    try {
-      await nameMatch.ensureReady();
-      await rechargeApi.startServer({
-        id,
-        action: 'server',
-        ...(loginMethod.value === 'json'
-          ? { sessionJson: sessionJson.value }
-          : loginMethod.value === 'saved'
-            ? { chatgptAccountId: selectedBankAccountId.value }
-            : {
-                login: {
-                  email: loginEmail.value.trim(),
-                  password: loginPassword.value,
-                  ...(totp.source.value === 'secret'
-                    ? { totpSecret: totp.secretInput.value.trim() }
-                    : totp.source.value === 'saved'
-                      ? { totpAccountId: totp.savedAccountId.value }
-                      : {})
-                }
-              }),
-        plan: plan.value,
-        ...(selectedPaymentCardId.value ? { cardId: selectedPaymentCardId.value } : {}),
-        ...(addressSource.value === 'manual'
-          ? { manualAddress: true as const }
-          : { addressId: selectedAddress.value!.id }),
-        details: { ...details.value },
-        lockedCurrency: lockedCurrency.value,
-        authorizeSinglePayment: true,
-        manualPaymentConfirmation: manualPaymentConfirmation.value,
-        ...(selectedProxyId.value
-          ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
-          : {})
-      });
-      accepted = true;
-      rememberPaymentSave();
-    } catch (cause) {
-      error.value = getApiErrorMessage(cause);
-    } finally {
-      await refresh();
-      if (
-        !accepted &&
-        currentId.value === id &&
-        query.phase.value === 'ready' &&
-        !query.error.value &&
-        !jobs.value.some((job) => job.id === id)
-      )
-        currentId.value = previousId;
-      busy.value = false;
-    }
-  }
-
   async function startOpen() {
     if (!canStartOpen.value) return;
     busy.value = true;
@@ -1166,7 +1014,6 @@ export function useAutoRecharge() {
       await directOpen.start(launch, credential, windowName.value.trim());
       connectorStatus.value = 'online';
       connectorMessage.value = '网页已直连比特浏览器，登录进度见执行状态';
-      if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       error.value = getApiErrorMessage(cause);
       if (launch && !directOpen.owns(id)) {
@@ -1191,11 +1038,8 @@ export function useAutoRecharge() {
     currentId.value = id;
     localAccess.value = null;
     const job = jobs.value.find((item) => item.id === id);
-    if (job?.action === 'server') {
-      operationMode.value = 'server_payment';
-      if (job.chatgptAccountId && loginMethod.value === 'saved')
-        selectedBankAccountId.value = job.chatgptAccountId;
-    }
+    if (job?.chatgptAccountId && loginMethod.value === 'password')
+      selectedBankAccountId.value = job.chatgptAccountId;
   }
 
   async function recheck() {
@@ -1207,30 +1051,6 @@ export function useAutoRecharge() {
     const rememberPaymentSave = beginPaymentSave(id);
     let launch: V2RechargeBitBrowserRecheckLaunch | null = null;
     try {
-      if (source.action === 'server') {
-        await rechargeApi.recheckServer({
-          id,
-          sourceJobId: source.id,
-          ...(loginMethod.value === 'json'
-            ? { sessionJson: sessionJson.value }
-            : loginMethod.value === 'saved'
-              ? { chatgptAccountId: selectedBankAccountId.value }
-              : {
-                  login: {
-                    email: loginEmail.value.trim(),
-                    password: loginPassword.value,
-                    ...(totp.source.value === 'secret'
-                      ? { totpSecret: totp.secretInput.value.trim() }
-                      : totp.source.value === 'saved'
-                        ? { totpAccountId: totp.savedAccountId.value }
-                        : {})
-                  }
-                })
-        });
-        currentId.value = id;
-        rememberPaymentSave();
-        return;
-      }
       await browserSettings.checkSavedConnection();
       if (disposed) return;
       launch = await rechargeApi.recheckBitBrowser({
@@ -1287,7 +1107,7 @@ export function useAutoRecharge() {
     try {
       const saved = settingsQuery.data.value;
       if (!saved?.connectorTokenConfigured) throw new Error('请先保存本机连接密钥。');
-      await rechargeConnectorApi.health(saved.connectorUrl);
+      await rechargeConnectorApi.health(normalizeV2RechargeConnectorUrl(saved.connectorUrl));
       if (disposed) return;
       const response = await rechargeApi.resolveNoBankRequest(source.id, {
         confirmNoBankRequest: true,
@@ -1425,10 +1245,7 @@ export function useAutoRecharge() {
       if (autoCodeSubmittedJobId.value !== jobId) autoCodeAttempted.delete(jobId);
     };
     try {
-      const code =
-        loginMethod.value === 'saved'
-          ? (await bankRechargeApi.totpCode(selectedBankAccountId.value)).token
-          : await totp.freshCode();
+      const code = (await bankRechargeApi.totpCode(selectedBankAccountId.value)).token;
       if (!/^[0-9]{6,8}$/.test(code)) throw new Error('2FA 验证码格式无效');
       if (disposed || !needsCode.value || selected.value?.id !== jobId) {
         releaseSkippedAttempt();
@@ -1575,7 +1392,6 @@ export function useAutoRecharge() {
   });
 
   return {
-    manualPaymentConfirmation,
     query,
     addressQuery,
     jobs,
@@ -1599,23 +1415,12 @@ export function useAutoRecharge() {
     savedPaymentCards,
     paymentCardsQuery,
     paymentCardLoading,
+    resettingPaymentFields,
     selectSavedCard,
     nameMatch,
     bankCurrenciesQuery,
     availableCurrencyOptions,
-    paymentCapsQuery,
-    paymentCap,
-    loginEmail,
-    loginPassword,
     loginCode,
-    totp,
-    totpSource: totp.source,
-    totpSecretInput: totp.secretInput,
-    savedTotpAccountId: totp.savedAccountId,
-    savedTotpAccounts: totp.savedAccounts,
-    savedTotpQuery: totp.savedAccountsQuery,
-    totpSecretError: totp.secretError,
-    totpReady: totp.ready,
     plan,
     windowName,
     lockedCurrency,
@@ -1642,15 +1447,16 @@ export function useAutoRecharge() {
     resumeActionLabel,
     needsCode,
     needsManualCode,
+    automaticCodeReady,
+    canContinueSameAccount,
+    continueSameAccount,
     autoCodeBusy,
     autoCodeMessage,
     autoCodeFailureJobId,
     autoCodeSubmittedJobId,
     workflowMessage,
     browserSettings,
-    serverProxySettings,
     openProxySettings,
-    useServerDefaultProxy,
     markProxySelectionManual,
     ...browserSettings,
     currentSettingsReady,

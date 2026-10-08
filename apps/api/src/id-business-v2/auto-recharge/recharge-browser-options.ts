@@ -4,6 +4,7 @@ import {
   V2_RECHARGE_BROWSER_DEFAULTS,
   V2_RECHARGE_BROWSER_PROFILE_KEYS,
   type V2RechargeBrowserOptions,
+  type V2RechargeBitBrowserLaunch,
   type V2RechargeStaticProxyCredentials
 } from '@apple-business/shared';
 import { object } from './recharge-validation';
@@ -162,4 +163,21 @@ export function validateStaticCredentials(
       fail('固定代理凭据');
   }
   return { username: input.username as string, password: input.password as string };
+}
+
+/** 仅将比特接口配置交给当前本机任务，不混入数据库或连接器管理字段。 */
+export function localBitBrowserLaunchOptions(
+  runtime: Omit<V2RechargeBitBrowserLaunch['bitBrowser'], 'proxyType'> & { proxyType: string }
+) {
+  if (!['http', 'https', 'socks5'].includes(runtime.proxyType)) fail('比特代理协议');
+  return {
+    localApiUrl: runtime.localApiUrl,
+    localApiToken: runtime.localApiToken,
+    groupName: runtime.groupName,
+    tagName: runtime.tagName,
+    proxyType: runtime.proxyType as 'http' | 'https' | 'socks5',
+    dynamicProxyUrl: runtime.dynamicProxyUrl,
+    browserOptions: runtime.browserOptions,
+    staticProxyCredentials: runtime.staticProxyCredentials
+  };
 }

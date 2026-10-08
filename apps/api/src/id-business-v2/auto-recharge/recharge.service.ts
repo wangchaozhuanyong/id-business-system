@@ -3,8 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  Optional,
-  ServiceUnavailableException
+  Optional
 } from '@nestjs/common';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -24,19 +23,17 @@ import {
   validateRechargeAddressStatus
 } from './recharge-address-validation';
 import {
-  hash,
   object,
   safeDocument,
   uuidPattern,
-  validateDetailsSubmission,
-  validateWorkerConfirmation
+  validateWorkerConfirmation,
+  assertFinalQuote
 } from './recharge-validation';
 import { completeUnknownPaymentResolution } from './recharge-resolution';
 import {
-  clearRechargeDetails,
   isBrowserProfileId,
-  rechargeDetailsWithAddress,
-  staleProfile
+  staleProfile,
+  findOwnedRechargeBrowserProfile
 } from './recharge-job-helpers';
 import { sendRechargeWorkerRequest } from './recharge-worker-client';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
@@ -60,10 +57,8 @@ import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
 import {
   readRechargeHandoff,
-  submitRechargeHandoff,
   serverHandoffProgressState,
-  serverQuoteConfirmationState,
-  assertManualServerConfirmationAllowed
+  serverQuoteConfirmationState
 } from './recharge-handoff';
 @Injectable()
 export class RechargeService {
@@ -152,203 +147,39 @@ export class RechargeService {
     );
   }
 
-  private async finishUnreceivedJob(id: string, ownerId: string, unknown: boolean) {
-    await this.transactions.execute(
-      async (tx) => {
-        await this.repository.lock(tx);
-        const job = await this.repository.findJob(tx, id);
-        if (!job || job.ownerId !== ownerId || job.state === 'finished') return;
-        await this.repository.updateJob(tx, id, {
-          state: unknown ? 'unknown' : 'finished',
-          leaseUntil: new Date(),
-          result: toV2JsonDocument({
-            ...object(job.result),
-            status: 'blocked',
-            reason: unknown ? 'worker_acceptance_unknown' : 'worker_not_received',
-            payment_requests_sent: 0
-          })
-        });
-      },
-      { changedScopes: ['auto-recharge'], requestId: id, retryMode: 'none' }
-    );
-  }
-
   async start(value: unknown, operator: AuthenticatedUser) {
-    return startRechargeJob(value, operator, {
-      repository: this.repository,
-      addressRepository: this.addressRepository,
-      transactions: this.transactions,
-      audit: this.audit,
-      bankAccounts: this.bankAccounts,
-      bankCards: this.bankCards,
-      names: this.names,
-      totpAccounts: this.totpAccounts,
-      settings: this.settings,
-      proxies: this.proxies,
-      finishUnreceivedJob: (id, ownerId, unknown) => this.finishUnreceivedJob(id, ownerId, unknown)
-    });
+    return startRechargeJob(value, operator, {});
   }
 
   async recheckServer(value: unknown, operator: AuthenticatedUser) {
-    return startServerRecheck(value, operator, {
-      repository: this.repository,
-      transactions: this.transactions,
-      audit: this.audit,
-      accounts: this.bankAccounts,
-      totpAccounts: this.totpAccounts,
-      proxies: this.proxies,
-      finishUnreceivedJob: (id, ownerId, unknown) => this.finishUnreceivedJob(id, ownerId, unknown)
-    });
+    return startServerRecheck(value, operator, {});
   }
 
-  async submitDetails(id: string, value: unknown, operator: AuthenticatedUser) {
-    if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
-    const input = validateDetailsSubmission(value);
-    const selected = await this.transactions.execute(
-      async (tx) => {
-        await this.repository.lock(tx);
-        const job = await this.repository.active(tx, id);
-        if (job.ownerId !== operator.id) throw new ForbiddenException('无权操作此任务');
-        if (job.action !== 'flow' || job.state !== 'awaiting_details') {
-          throw new ConflictException('当前任务未在等待付款资料');
-        }
-        const address = await this.addressRepository.requireUnused(
-          tx,
-          operator.id,
-          input.addressId
-        );
-        await this.repository.updateJob(tx, id, {
-          state: 'running',
-          result: toV2JsonDocument({ ...object(job.result), addressId: address.id })
-        });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.details',
-          objectType: 'recharge_job',
-          objectId: id,
-          afterData: { addressId: address.id },
-          remark: '提交本次付款资料并重新核价'
-        });
-        return address;
-      },
-      { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
-    );
-    try {
-      const receipt = await sendRechargeWorkerRequest(
-        `/jobs/${id}/details`,
-        {
-          details: rechargeDetailsWithAddress(input.details, selected)
-        },
-        id,
-        'details_received'
-      );
-      if (receipt !== 'accepted') {
-        await this.finishUnreceivedJob(id, operator.id, receipt === 'unknown');
-        throw new ServiceUnavailableException(
-          receipt === 'unknown'
-            ? '付款资料接收结果待核验，资料已保留在当前页面，系统不会自动重发'
-            : '执行器未接收付款资料，请重新开始'
-        );
-      }
-      return { id };
-    } finally {
-      clearRechargeDetails(input.details);
-    }
+  async submitDetails(
+    id: string,
+    value: unknown,
+    operator: AuthenticatedUser
+  ): Promise<{ id: string }> {
+    void id;
+    void value;
+    void operator;
+    throw new ConflictException('服务器付款资料提交已停用，请在比特浏览器充值页面操作');
   }
-  async confirm(id: string, nonce: unknown, operator: AuthenticatedUser) {
-    if (typeof nonce !== 'string' || !/^[a-f0-9]{64}$/.test(nonce)) {
-      throw new BadRequestException('报价确认已失效，请重新核价');
-    }
-    await this.transactions.execute(
-      async (tx) => {
-        await this.repository.lock(tx);
-        const job = await this.repository.active(tx, id);
-        if (job.ownerId !== operator.id) throw new ForbiddenException('无权操作此任务');
-        const result = object(job.result);
-        assertManualServerConfirmationAllowed(job, result);
-        if (job.state !== 'awaiting_confirmation' || job.nonceHash !== hash(nonce)) {
-          throw new ConflictException('报价已变化或本次确认已提交，禁止重复付款');
-        }
-        await this.repository.updateJob(tx, id, {
-          state: 'confirming',
-          ...(job.action === 'server'
-            ? { result: toV2JsonDocument({ ...result, manual_confirmation_accepted: true }) }
-            : {})
-        });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.confirm',
-          objectType: 'recharge_job',
-          objectId: id,
-          afterData: toV2JsonDocument(safeDocument(job.result)),
-          remark: '确认当前官方报价，仅提交一次'
-        });
-      },
-      { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
-    );
-    const receipt = await sendRechargeWorkerRequest(
-      '/jobs/' + id + '/confirm',
-      { nonce },
-      id,
-      'confirmation_received'
-    );
-    if (receipt !== 'accepted') {
-      if (receipt === 'not_received') {
-        await this.transactions.execute(
-          async (tx) => {
-            await this.repository.lock(tx);
-            const job = await this.repository.findJob(tx, id);
-            if (job?.ownerId === operator.id && job.state === 'confirming') {
-              await this.repository.updateJob(tx, id, {
-                state: 'awaiting_confirmation',
-                ...(job.action === 'server'
-                  ? {
-                      result: toV2JsonDocument({
-                        ...object(job.result),
-                        manual_confirmation_accepted: false
-                      })
-                    }
-                  : {})
-              });
-            }
-          },
-          { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
-        );
-      } else {
-        await this.transactions.execute(
-          async (tx) => {
-            await this.repository.lock(tx);
-            const job = await this.repository.findJob(tx, id);
-            if (job?.ownerId === operator.id && job.state === 'confirming') {
-              await this.repository.updateJob(tx, id, {
-                state: 'unknown',
-                leaseUntil: new Date(),
-                result: toV2JsonDocument({
-                  ...object(job.result),
-                  status: 'blocked',
-                  reason: 'confirmation_acceptance_unknown'
-                })
-              });
-            }
-          },
-          { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
-        );
-      }
-      throw new ServiceUnavailableException('付款确认接收结果待核验，只能刷新或复查原订单');
-    }
-    return { id };
+
+  async confirm(id: string, nonce: unknown, operator: AuthenticatedUser): Promise<{ id: string }> {
+    void id;
+    void nonce;
+    void operator;
+    throw new ConflictException('付款确认必须通过所属本机充值助手执行');
   }
   handoffFrame(id: string, operator: AuthenticatedUser) {
     return readRechargeHandoff(id, operator, { repository: this.repository });
   }
-  handoffCommand(id: string, input: unknown, operator: AuthenticatedUser) {
-    return submitRechargeHandoff(id, input, operator, {
-      repository: this.repository,
-      transactions: this.transactions,
-      audit: this.audit
-    });
+  async handoffCommand(id: string, input: unknown, operator: AuthenticatedUser): Promise<never> {
+    void id;
+    void input;
+    void operator;
+    throw new ConflictException('服务器远程操作已停用，请在所属比特浏览器窗口处理验证');
   }
   async cancel(id: string, operator: AuthenticatedUser) {
     const job = await this.repository.owned(id, operator.id);
@@ -406,7 +237,11 @@ export class RechargeService {
             .map((item) => staleProfile(item))
             .filter((item): item is { sourceJobId: string; profileId: string } => Boolean(item));
           await this.repository.updateJob(tx, id, { accountKey });
-          return { records, staleProfiles };
+          const ownedProfile =
+            job.action === 'bitbrowser'
+              ? findOwnedRechargeBrowserProfile(finished, job.ownerId, accountKey)
+              : undefined;
+          return { records, staleProfiles, ...(ownedProfile ? { ownedProfile } : {}) };
         }
         if (input.type === 'stale_profile_cleanup') {
           if (
@@ -493,13 +328,49 @@ export class RechargeService {
         let state = job.state;
         let nonceHash = job.nonceHash;
         if (input.type === 'progress' && job.action === 'bitbrowser') {
-          state = [
-            'verification_required',
-            'bank_verification_required',
-            'login_code_required'
-          ].includes(String(report.stage))
-            ? 'awaiting_human_verification'
-            : 'running';
+          if (report.status === 'awaiting_confirmation') {
+            const quote = object(report.quote);
+            const today = object(quote.today);
+            const limit = object(job.result);
+            assertFinalQuote(quote as never, job.plan, report.quote_authority, report);
+            if (
+              !job.accountKey ||
+              report.account_matched !== true ||
+              !/^[a-f0-9]{64}$/.test(String(report.quote_digest)) ||
+              typeof report.confirmation_expires_at !== 'string' ||
+              !Number.isFinite(Date.parse(report.confirmation_expires_at)) ||
+              Date.parse(report.confirmation_expires_at) <= Date.now() ||
+              Date.parse(report.confirmation_expires_at) > Date.now() + 10 * 60000 ||
+              today.currency !== limit.locked_currency ||
+              typeof today.amount_minor !== 'number' ||
+              today.amount_minor <= 0 ||
+              today.amount_minor > Number(limit.max_amount_minor) ||
+              !Number.isSafeInteger(limit.max_amount_minor)
+            )
+              throw new ConflictException('本机官网报价未完整核实或超出付款上限');
+            state = 'awaiting_confirmation';
+            await this.audit.append(tx, {
+              userId: job.ownerId,
+              module: 'id_business_v2',
+              action: 'id_business_v2.auto_recharge.bitbrowser.quote_verified',
+              objectType: 'recharge_job',
+              objectId: id,
+              afterData: {
+                plan: job.plan,
+                currency: String(today.currency),
+                amountMinor: today.amount_minor
+              },
+              remark: '本机官网报价已核实，等待本人在所属充值助手确认；尚未付款'
+            });
+          } else {
+            state = [
+              'verification_required',
+              'bank_verification_required',
+              'login_code_required'
+            ].includes(String(report.stage))
+              ? 'awaiting_human_verification'
+              : 'running';
+          }
         }
         if (input.type === 'progress' && job.action === 'server') {
           state = serverHandoffProgressState(job, report);

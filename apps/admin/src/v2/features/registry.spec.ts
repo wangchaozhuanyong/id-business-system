@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(34);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(32);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,19 +58,16 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(34);
+    expect(v2FeatureRegistry).toHaveLength(32);
   });
 
-  it('自动注册和名字数据表均为管理员入口', () => {
+  it('does not expose removed registration routes or navigation', () => {
+    expect(getV2RuntimeModuleDefinition('auto-registration')).toBeUndefined();
+    expect(getV2RuntimeModuleDefinition('registration-names')).toBeUndefined();
     expect(
-      v2NavigationSections
-        .find((section) => section.key === 'auto-registration')
-        ?.items.map((item) => item.key)
-    ).toEqual(['auto-registration', 'registration-names']);
-    for (const key of ['auto-registration', 'registration-names'])
-      expect(v2FeatureRegistry.find((feature) => feature.key === key)?.requiredRoles).toEqual([
-        'admin'
-      ]);
+      v2FeatureRegistry.some((feature) => feature.route.startsWith('/v2/auto-registration'))
+    ).toBe(false);
+    expect(v2NavigationSections.some((section) => section.key === 'auto-registration')).toBe(false);
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {

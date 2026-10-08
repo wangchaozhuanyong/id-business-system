@@ -50,11 +50,15 @@
 
 ## 本地开发
 
+本机默认直接运行 Node、MySQL 和 Python，不要求 Docker Desktop。先启动本项目独立的
+MySQL 8.4 实例，在 `.env` 中配置本机数据库地址，再按下述入口运行。已有数据库和其他项目
+的数据目录不能共用；不要把生产数据库地址用于本机开发。
+
 ```bash
 nvm use
-npm install
+npm ci
 npm run setup:env
-docker compose --env-file .env -f docker-compose.aws-mysql.yml up -d mysql
+npm run doctor -- --mysql-client=/已安装MySQL目录/bin/mysql --mysql-server=/已安装MySQL目录/bin/mysqld
 npm run prisma:mysql:generate
 npm run prisma:mysql:migrate:deploy
 npm run prisma:seed
@@ -62,9 +66,54 @@ npm run dev:api
 npm run dev:admin
 ```
 
+以上迁移和初始化仅用于已确认的独立开发库。`doctor` 默认只检查原生程序和配置，
+不会启动 MySQL、连接数据库或执行迁移；程序存在不代表数据库已就绪。
+MySQL 已在 PATH 时可省略两个路径参数。已有依赖按锁文件复用，不必每次安装；
+普通脚本测试可执行 `npm run test:native-runtime`。
+
+五类数据库检查都提供显式原生入口，追加已安装 MySQL 的 `--mysql-bin=/绝对目录`：
+
+- `npm run acceptance:v2-data-governance:native`
+- `npm run acceptance:v2-financial-integrity:native`
+- `npm run acceptance:v2-rollback-integrity:native`
+- `npm run check:recharge-migration:native`
+- `npm run check:audit-retention:native`
+
+这些检查仅创建自己的测试库；前三类会生成客户端与构建产物，须在隔离工作区执行。
+它们已在本机真实 MySQL 验证；正式 Linux CI 尚未切换，生产运行方式也未改变。
+`npm run native:backup -- check --bin-dir=/绝对目录` 默认仅预检，不连接数据库。
+七服务配置、备份恢复、财务制品封存和线上切换边界见 [脱离 Docker 说明](docs/DOCKER_INDEPENDENCE.md)。
+
 - 管理端：http://localhost:5374
 - API：http://localhost:3000/api
 - 健康检查：http://localhost:3000/api/health/ready
+
+### 本机比特充值助手
+
+网页只创建任务并保存权限、资料与结果；登录、套餐读取、核价与付款在当前电脑的比特浏览器执行。
+登录方式为授权 JSON 或选取 ChatGPT 账号库中的账号密码，不再提供重复的第三种登录入口。
+每次开通或升级独立创建任务，官网报价明确后等待本次人工确认。真实账号和付款验收继续暂停。
+
+使用已安装的 Python 3.11+ 和比特浏览器，先开启比特本地 API，然后在本项目内启动：
+
+```bash
+npm run auto-recharge:connector -- --allowed-origin=https://你的管理端域名
+```
+
+新充值助手版本为 4，默认监听本机 `127.0.0.1:55322`，依赖和运行目录为项目内
+`.runtime/bitbrowser-recharge-assistant/`；依赖版本不变时直接复用。
+启动脚本只安装锁定的四个比特依赖，不安装 Camoufox、不下载浏览器、不启动 Docker。
+旧的 `55321` 助手不能承担新版充值任务，网页会提示升级；已运行的旧窗口不会被静默接管。
+账号密码、银行卡安全码和一次性付款授权不要发到聊天或写到日志。
+
+自动注册页面、API 和新启动入口已退役；既有注册历史、迁移、账号和审计保留。
+历史服务器执行器原生工具仅保留兼容与诊断能力，新充值请求不能走服务器付款流程。
+完整比特方案与本地合成验收见 `docs/BITBROWSER_RECHARGE_REBUILD_RESULT_20261009.md`，
+统一上线与清理范围见 `docs/UNIFIED_RELEASE_20261009.md`。
+
+Docker 开发方式仍可显式选择：`npm run doctor:docker`。已有 Docker 数据不会自动删除。
+线上替换、数据库保护和回滚安排见 [Docker 脱离方案](docs/DOCKER_INDEPENDENCE.md)；
+线上尚未改为原生运行，不应直接卸载生产 Docker。
 
 ## 常用检查
 

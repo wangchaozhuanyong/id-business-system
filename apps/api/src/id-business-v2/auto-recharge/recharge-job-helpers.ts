@@ -1,5 +1,15 @@
-import type { V2RechargeDetails, V2RechargeStart } from '@apple-business/shared';
+import type {
+  V2RechargeDetails,
+  V2RechargeStart,
+  V2RechargeOwnedBrowserProfile
+} from '@apple-business/shared';
+import { uuidPattern } from './recharge-validation';
 import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
+import {
+  hasVerifiedRechargePayment,
+  isRechargeUpgrade,
+  rechargeUpgradePaymentReference
+} from './recharge-upgrade-protocol';
 
 export function parseRechargeTotpSecret(secret: string) {
   const configuration = parseIdBusinessV2TotpSecret(secret);
@@ -52,6 +62,65 @@ export function staleProfile(job: FinishedRechargeJob, includeCompleted = false)
   )
     return null;
   return { sourceJobId: job.id, profileId };
+}
+
+export function findOwnedRechargeBrowserProfile(
+  jobs: (FinishedRechargeJob & {
+    ownerId: string;
+    accountKey: string | null;
+    action: string;
+    state: string;
+    plan: string;
+  })[],
+  ownerId: string,
+  accountKey: string
+): V2RechargeOwnedBrowserProfile | undefined {
+  if (!/^[a-f0-9]{64}$/.test(accountKey)) return undefined;
+  for (const job of jobs) {
+    if (
+      job.ownerId !== ownerId ||
+      job.accountKey !== accountKey ||
+      job.action !== 'bitbrowser' ||
+      job.state !== 'finished' ||
+      !uuidPattern.test(job.id) ||
+      !job.result ||
+      typeof job.result !== 'object' ||
+      Array.isArray(job.result)
+    )
+      continue;
+    const result = job.result as Record<string, unknown>;
+    const evidence = result.payment_evidence as
+      | { kind?: unknown; identifier?: unknown; amount_minor?: unknown; currency?: unknown }
+      | undefined;
+    const today = (result.quote as { today?: typeof evidence } | undefined)?.today;
+    const paymentReference = isRechargeUpgrade(result)
+      ? rechargeUpgradePaymentReference(result)
+      : typeof result.checkout_identifier === 'string' &&
+        /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(result.checkout_identifier) &&
+        ((evidence?.kind === 'checkout_session' &&
+          evidence.identifier === result.checkout_identifier) ||
+          (evidence?.kind === 'payment_intent' &&
+            typeof evidence.identifier === 'string' &&
+            /^pi_[A-Za-z0-9]{1,180}$/.test(evidence.identifier)));
+    if (
+      !isBrowserProfileId(result.browser_profile_id) ||
+      result.mode === 'open_browser' ||
+      result.recheck_only === true ||
+      result.browser_cleanup_status === 'completed' ||
+      !hasVerifiedRechargePayment(result, job) ||
+      result.confirmation_requests_sent !== 1 ||
+      !paymentReference ||
+      typeof evidence?.amount_minor !== 'number' ||
+      !Number.isSafeInteger(evidence?.amount_minor) ||
+      evidence.amount_minor <= 0 ||
+      evidence?.amount_minor !== today?.amount_minor ||
+      typeof evidence?.currency !== 'string' ||
+      evidence.currency !== today?.currency
+    )
+      continue;
+    return { sourceJobId: job.id, profileId: result.browser_profile_id, accountKey };
+  }
+  return undefined;
 }
 
 export function rechargeDetailsWithAddress(

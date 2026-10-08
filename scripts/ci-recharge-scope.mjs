@@ -488,19 +488,6 @@ export function backendArchitectureGuardChecks(mode, paths) {
 
 export function adminCheckCommands(mode, paths) {
   const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
-  if (isRegistrationHydrationOnly(paths)) {
-    commands.push([
-      'run',
-      'test',
-      '--workspace',
-      '@apple-business/admin',
-      '--',
-      'src/api/requestPolicy.spec.ts',
-      'src/v2/features/auto-registration/useRegistrationPage.spec.ts'
-    ]);
-    commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
-    return commands;
-  }
   if (mode === 'mailbox') {
     commands.push([
       'run',

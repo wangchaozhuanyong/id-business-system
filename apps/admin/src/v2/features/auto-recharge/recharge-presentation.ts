@@ -55,6 +55,13 @@ const labels: Record<string, string> = {
   human_verification_ready: '原付款验证窗口已就绪',
   awaiting_details: '等待填写付款资料',
   awaiting_confirmation: '等待确认金额',
+  already_subscribed: '已是目标套餐，本次无需付款',
+  target_subscription_already_active: '官网已核实账号已开通目标套餐，本次未提交付款',
+  incompatible_existing_subscription: '官网当前套餐不支持本次开通或升级，请核对账号的可用入口',
+  payment_confirmation_expired: '本次报价确认已过期，尚未提交付款',
+  payment_confirmation_invalid: '本次确认凭据或报价已变化，已阻止付款',
+  recharge_process_required: '请启动独立的本机充值助手',
+
   confirming: '正在提交本次付款',
   finished: '本次操作已结束',
   unknown: '结果待核验',
@@ -172,7 +179,6 @@ const labels: Record<string, string> = {
   official_plan_selection_timeout: '选择官网套餐超时',
   official_plan_browser_error: '选择套餐时官网浏览器异常',
   selected_plan_changed: '官网选中套餐发生变化，已停止建单',
-  incompatible_existing_subscription: '已有不兼容订阅',
   official_upgrade_confirmation_not_found: '未找到唯一的官网升级确认入口，本次未付款',
   upgrade_payment_method_unverified: '未能核实官网本次选择的升级银行卡，本次未付款',
   upgrade_payment_method_changed: '官网升级付款卡已变化，本次未付款',
@@ -203,7 +209,6 @@ const labels: Record<string, string> = {
   account_has_other_payment_attempt: '该账户已有付款尝试，请选择原套餐复查',
   payment_quote_changed: '官网金额已变化，请重新核价',
   payment_quote_not_ready: '官网最终金额尚未稳定，本次未付款',
-  payment_confirmation_expired: '确认已过期，请重新核价',
   card_expiry_or_cvc_invalid: '银行卡有效期或安全码格式无效',
   billing_country_option_not_found: '官网未找到 United States 账单国家选项，已安全停止',
   network_unconfirmed: '浏览器出口未确认，暂不能提交付款',
@@ -439,6 +444,14 @@ export function subscriptionLabel(job: V2RechargeJob): string {
 }
 export function statusLabel(value: unknown) {
   return typeof value === 'string' ? (labels[value] ?? '待核验') : '未知';
+}
+
+export function officialCurrentPlanLabel(job: V2RechargeJob) {
+  const current = job.result.current_plan;
+  return typeof current === 'string' &&
+    ['free', 'go', 'plus', 'pro', 'pro-5x', 'pro-20x', 'pro-500', 'promax'].includes(current)
+    ? statusLabel(current)
+    : '尚未核实';
 }
 
 export function proxyAttemptLabel(job: V2RechargeJob): string {

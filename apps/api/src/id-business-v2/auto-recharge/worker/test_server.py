@@ -1,7 +1,11 @@
 import json
 import io
 import asyncio
+from contextlib import redirect_stderr
 from pathlib import Path
+import runpy
+import signal
+import socket
 import tempfile
 import threading
 import unittest
@@ -13,71 +17,43 @@ from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
-    def test_registration_dispatch_refusal_returns_only_controlled_reason(self):
+    def test_server_recharge_new_job_endpoint_is_retired_without_browser_side_effects(self):
         handler = object.__new__(server.Handler)
-        handler.path = '/registration/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-        body = b'{"attempt":1}'
-        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth', 'Content-Length': str(len(body))}
-        handler.reply = MagicMock()
-        for reason in ('worker_busy', 'builtin_original_window_pending', 'builtin_profile_missing'):
-            handler.rfile = io.BytesIO(body)
-            handler.reply.reset_mock()
-            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-                  patch.object(server, 'WORKER_ROLE', 'registration'),
-                  patch.object(server.registration_builtin, 'handle_request',
-                    side_effect=Stop(reason, unsafe='synthetic-private-details'))):
-                handler.do_POST()
-            handler.reply.assert_called_once_with(409, {'ok': False, 'reason': reason})
-        handler.rfile = io.BytesIO(body)
-        handler.reply.reset_mock()
+        handler.path = '/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
+        body = {'action': 'server', 'plan': 'plus'}
+        encoded = json.dumps(body).encode()
+        handler.headers['Content-Length'] = str(len(encoded))
+        handler.rfile = io.BytesIO(encoded)
+        handler.reply = unittest.mock.Mock()
         with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-              patch.object(server, 'WORKER_ROLE', 'registration'),
-              patch.object(server.registration_builtin, 'handle_request',
-                side_effect=Stop('synthetic-private-details'))):
+              patch.object(server, 'Job') as create_job,
+              patch.object(server, 'WORKER_ROLE', 'recharge')):
             handler.do_POST()
-        handler.reply.assert_called_once_with(400, {'ok': False})
+        self.assertEqual(handler.reply.call_args.args, (410, {
+            'ok': False, 'reason': 'server_recharge_retired'}))
+        create_job.assert_not_called()
 
-    def test_registration_health_protects_running_jobs_and_retained_partial_windows(self):
-        handler = object.__new__(server.Handler)
-        handler.path = '/registration/health'
-        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
-        handler.reply = MagicMock()
-        job = object.__new__(server.registration_builtin.RegistrationServerJob)
-        for done, profile, expected in [(False, None, (True, False)),
-                                        (True, {'job_id': 'fixture-job'}, (False, True)),
-                                        (True, None, (False, False))]:
-            job.done = done
-            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-                  patch.object(server, 'WORKER_ROLE', 'registration'),
-                  patch.object(server.Handler, 'job', job),
-                  patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
-                handler.do_GET()
-            status, value = handler.reply.call_args.args
-            self.assertEqual(status, 200)
-            self.assertEqual(value['workerRole'], 'registration')
-            self.assertEqual((value['registrationBusy'], value['registrationWindowRetained']), expected)
-            self.assertNotIn('job_id', value)
-
-    def test_registration_cancel_receipt_requires_closed_resources(self):
-        handler = object.__new__(server.Handler)
-        handler.path = '/registration/jobs/fixture-job/status'
-        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
-        handler.reply = MagicMock()
-        job = object.__new__(server.registration_builtin.RegistrationServerJob)
-        job.id, job.attempt, job.cancelled = 'fixture-job', 1, threading.Event()
-        job.cancelled.set()
-        for done, profile, expected in [(False, None, False),
-                                        (True, {'job_id': job.id}, False),
-                                        (True, None, True)]:
-            job.done = done
-            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-                  patch.object(server, 'WORKER_ROLE', 'registration'),
-                  patch.object(server.Handler, 'job', job),
-                  patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
-                handler.do_GET()
-            status, value = handler.reply.call_args.args
-            self.assertEqual(status, 200)
-            self.assertEqual(value['cancelled'], expected)
+    def test_removed_registration_routes_never_read_payload_or_modify_recharge_job(self):
+        job = MagicMock(done=False, cancelled=False, confirmed=False)
+        for path in ('/registration/health', '/registration/jobs/fixture/status',
+                     '/registration/jobs/fixture', '/registration/jobs/fixture/code',
+                     '/registration/jobs/fixture/cancel'):
+            for method in ('do_GET', 'do_POST'):
+                with self.subTest(path=path, method=method):
+                    handler = object.__new__(server.Handler)
+                    handler.path = path
+                    handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
+                    handler.reply = MagicMock()
+                    handler.rfile = MagicMock()
+                    with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                          patch.object(server, 'WORKER_ROLE', 'recharge'),
+                          patch.object(server.Handler, 'job', job)):
+                        getattr(handler, method)()
+                        self.assertIs(handler.job, job)
+                    handler.reply.assert_called_once_with(404, {'ok': False})
+                    handler.rfile.read.assert_not_called()
+                    self.assertEqual(job.mock_calls, [])
 
     def test_prepared_proxy_window_is_reused_once_and_login_failure_never_rotates_again(self):
         async def exercise():
@@ -1340,22 +1316,6 @@ class RechargeDriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         operation.assert_awaited_once()
         driver.stop.assert_awaited_once()
 
-    async def test_registration_isolated_path_retains_existing_driver(self):
-        runtime = server.PersistentBrowserRuntime(registration_owner=True)
-        old, fresh = MagicMock(stop=AsyncMock()), MagicMock(stop=AsyncMock())
-        runtime.playwright = old
-        browser = MagicMock(close=AsyncMock())
-        async def factory(_runtime):
-            self.assertIs(runtime.playwright, old)
-            runtime.playwright = fresh
-            return browser
-        operation = AsyncMock(return_value="ok")
-        self.assertEqual(await runtime._execute_isolated(operation, browser_factory=factory), "ok")
-        old.stop.assert_not_awaited()
-        fresh.stop.assert_not_awaited()
-        self.assertIs(runtime.playwright, fresh)
-        operation.assert_awaited_once()
-
     async def test_public_driver_stop_timeout_is_bounded_and_fences_repeated_calls(self):
         runtime = server.PersistentBrowserRuntime()
         driver = MagicMock(stop=AsyncMock())
@@ -1369,6 +1329,219 @@ class RechargeDriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await runtime._discard_playwright())
         self.assertTrue(runtime.driver_cleanup_failed)
         driver.stop.assert_awaited_once()
+
+
+class NativeStartupTests(unittest.TestCase):
+    def invoke(self, argv=(), *, start_error=None, stop_error=None):
+        events = []
+        runtime = MagicMock()
+        listener = MagicMock()
+        def start():
+            events.append('start')
+            if start_error:
+                raise start_error
+
+        def stop():
+            events.append('stop')
+            if stop_error:
+                raise stop_error
+
+        runtime.start.side_effect = start
+        runtime.stop.side_effect = stop
+        listener.serve_forever.side_effect = lambda: events.append('serve')
+        listener.server_close.side_effect = lambda: events.append('close')
+
+        def bind(address, handler):
+            events.append('bind')
+            self.assertIs(handler, server.Handler)
+            return listener
+
+        with (patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'),
+              patch.object(server, 'BROWSER_RUNTIME', runtime),
+              patch.object(server.fingerprint_runtime, 'fingerprint_ready', return_value=True) as ready,
+              patch.object(server, 'ThreadingHTTPServer', side_effect=bind) as factory):
+            if start_error or stop_error:
+                with self.assertRaisesRegex(RuntimeError, 'synthetic'):
+                    server.main(list(argv))
+            else:
+                self.assertEqual(server.main(list(argv)), 0)
+        return events, runtime, factory, ready
+
+    def test_default_linux_startup_binds_before_runtime_and_retains_original_paths(self):
+        events, runtime, factory, ready = self.invoke()
+        self.assertEqual(events, ['bind', 'start', 'serve', 'stop', 'close'])
+        factory.assert_called_once_with(('0.0.0.0', 8051), server.Handler)
+        ready.assert_called_once_with(None)
+        self.assertIsNone(runtime.executable_path)
+
+    def test_loopback_native_port_and_mac_engine_are_passed_to_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / 'Camoufox.app' / 'Contents' / 'MacOS' / 'camoufox'
+            events, runtime, factory, ready = self.invoke(
+                ['--host', '127.0.0.1', '--port', '8052', '--engine-path', str(binary)])
+        self.assertEqual(events, ['bind', 'start', 'serve', 'stop', 'close'])
+        factory.assert_called_once_with(('127.0.0.1', 8052), server.Handler)
+        ready.assert_called_once_with(binary.resolve())
+        self.assertEqual(runtime.executable_path, binary.resolve())
+
+    def test_invalid_listener_arguments_stop_before_any_runtime_or_socket(self):
+        for argv in (['--port', '0'], ['--port', '65536'], ['--port', 'not-a-port'],
+                     ['--host', 'https://127.0.0.1'], ['--host', 'localhost'],
+                     ['--host', '::1'], ['--unknown-option']):
+            with (self.subTest(argv=argv), redirect_stderr(io.StringIO()),
+                  patch.object(server, 'ThreadingHTTPServer') as listener,
+                  patch.object(server, 'BROWSER_RUNTIME') as runtime):
+                with self.assertRaises(SystemExit) as stopped:
+                    server.main(argv)
+                self.assertEqual(stopped.exception.code, 2)
+                listener.assert_not_called()
+                runtime.start.assert_not_called()
+
+    def test_missing_engine_is_rejected_before_binding_or_starting_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / 'missing-engine'
+            with (patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'),
+                  patch.object(server, 'ThreadingHTTPServer') as listener,
+                  patch.object(server, 'BROWSER_RUNTIME') as runtime):
+                with self.assertRaisesRegex(SystemExit, '内核不存在'):
+                    server.main(['--engine-path', str(missing)])
+                listener.assert_not_called()
+                runtime.start.assert_not_called()
+
+    def test_invalid_role_or_missing_authentication_never_binds(self):
+        for role, token, reason in (('invalid', 'fixture-worker-authentication-123456', '类型无效'),
+                                    ('registration', 'fixture-worker-authentication-123456', '类型无效'),
+                                    ('recharge', '', '凭据未配置')):
+            with (self.subTest(role=role), patch.object(server, 'WORKER_ROLE', role),
+                  patch.object(server, 'TOKEN', token),
+                  patch.object(server, 'ThreadingHTTPServer') as listener,
+                  patch.object(server, 'BROWSER_RUNTIME') as runtime):
+                with self.assertRaisesRegex(SystemExit, reason):
+                    server.main([])
+                listener.assert_not_called()
+                runtime.start.assert_not_called()
+
+    def test_real_port_conflict_cannot_start_a_second_browser_runtime(self):
+        with socket.socket() as occupied:
+            occupied.bind(('127.0.0.1', 0))
+            occupied.listen()
+            port = occupied.getsockname()[1]
+            with (patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'),
+                  patch.object(server.fingerprint_runtime, 'fingerprint_ready', return_value=True),
+                  patch.object(server, 'BROWSER_RUNTIME') as runtime):
+                with self.assertRaises(OSError):
+                    server.main(['--host', '127.0.0.1', '--port', str(port)])
+                runtime.start.assert_not_called()
+                runtime.stop.assert_not_called()
+
+    def test_browser_startup_failure_retires_listener_and_runtime(self):
+        events, runtime, _, _ = self.invoke(start_error=RuntimeError('synthetic startup'))
+        self.assertEqual(events, ['bind', 'start', 'stop', 'close'])
+        runtime.stop.assert_called_once_with()
+
+    def test_listener_is_closed_even_when_runtime_shutdown_fails(self):
+        events, _, _, _ = self.invoke(stop_error=RuntimeError('synthetic shutdown'))
+        self.assertEqual(events, ['bind', 'start', 'serve', 'stop', 'close'])
+
+    def test_import_does_not_install_process_signal_handlers(self):
+        with patch.object(signal, 'signal') as install:
+            runpy.run_path(str(Path(server.__file__)), run_name='synthetic_worker_import')
+        install.assert_not_called()
+
+    def test_cli_termination_signals_close_runtime_and_listener_and_restore_handler(self):
+        previous_term = signal.getsignal(signal.SIGTERM)
+        previous_int = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                with self.subTest(signum=signum):
+                    events = []
+                    runtime, listener = MagicMock(), MagicMock()
+                    runtime.start.side_effect = lambda: events.append('start')
+                    runtime.stop.side_effect = lambda: events.append('stop')
+                    listener.server_close.side_effect = lambda: events.append('close')
+
+                    def serve():
+                        events.append('serve')
+                        signal.raise_signal(signum)
+
+                    listener.serve_forever.side_effect = serve
+                    with (patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'),
+                          patch.object(server, 'BROWSER_RUNTIME', runtime),
+                          patch.object(server.fingerprint_runtime, 'fingerprint_ready', return_value=True),
+                          patch.object(server, 'ThreadingHTTPServer', return_value=listener)):
+                        self.assertEqual(server.cli(['--host', '127.0.0.1']), 0)
+                    self.assertEqual(events, ['start', 'serve', 'stop', 'close'])
+                    self.assertIs(signal.getsignal(signal.SIGTERM), previous_term)
+                    runtime.stop.assert_called_once_with()
+                    listener.server_close.assert_called_once_with()
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+
+    def test_cli_preflight_failure_restores_existing_signal_handler(self):
+        previous_int = signal.getsignal(signal.SIGINT)
+        previous_term = signal.getsignal(signal.SIGTERM)
+        with patch.object(server, 'TOKEN', ''):
+            with self.assertRaisesRegex(SystemExit, '凭据未配置'):
+                server.cli([])
+        self.assertIs(signal.getsignal(signal.SIGINT), previous_int)
+        self.assertIs(signal.getsignal(signal.SIGTERM), previous_term)
+
+    def test_cli_repeated_signals_cannot_interrupt_runtime_cleanup(self):
+        previous_int = signal.getsignal(signal.SIGINT)
+        previous_term = signal.getsignal(signal.SIGTERM)
+        for first in (signal.SIGINT, signal.SIGTERM):
+            for repeated in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(first=first, repeated=repeated):
+                    events = []
+                    runtime, listener = MagicMock(), MagicMock()
+
+                    def serve():
+                        events.append('serve')
+                        signal.raise_signal(first)
+
+                    def stop():
+                        events.append('stop_started')
+                        signal.raise_signal(repeated)
+                        events.append('stop_completed')
+
+                    listener.serve_forever.side_effect = serve
+                    runtime.stop.side_effect = stop
+                    listener.server_close.side_effect = lambda: events.append('close')
+                    with (patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'),
+                          patch.object(server, 'BROWSER_RUNTIME', runtime),
+                          patch.object(server.fingerprint_runtime, 'fingerprint_ready', return_value=True),
+                          patch.object(server, 'ThreadingHTTPServer', return_value=listener)):
+                        self.assertEqual(server.cli(['--host', '127.0.0.1']), 0)
+                    self.assertEqual(events, ['serve', 'stop_started', 'stop_completed', 'close'])
+                    self.assertIs(signal.getsignal(signal.SIGINT), previous_int)
+                    self.assertIs(signal.getsignal(signal.SIGTERM), previous_term)
+                    runtime.stop.assert_called_once_with()
+                    listener.server_close.assert_called_once_with()
+
+    def test_recharge_routes_and_authentication_remain_available(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/jobs/fixture/status'
+        self.assertTrue(handler.serves_path())
+        handler.headers = {'X-Recharge-Worker': 'wrong-fixture-authentication'}
+        handler.reply = MagicMock()
+        with patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'):
+            handler.do_GET()
+        handler.reply.assert_called_once_with(403, {'ok': False})
+
+    def test_mac_engine_reaches_existing_browser_launcher_without_browser_fallback(self):
+        async def exercise():
+            binary = Path('/synthetic/Camoufox.app/Contents/MacOS/camoufox')
+            runtime = server.PersistentBrowserRuntime(executable_path=binary)
+            runtime.playwright = MagicMock()
+            browser = MagicMock()
+            proxy = {'server': 'http://proxy.example.invalid:8080'}
+            with patch.object(server.fingerprint_runtime, 'launch_fingerprint_browser',
+                              new=AsyncMock(return_value=browser)) as launch:
+                self.assertIs(await runtime._new_browser(proxy=proxy), browser)
+            launch.assert_awaited_once_with(runtime.playwright, proxy=proxy, executable_path=binary)
+            runtime.playwright.chromium.launch.assert_not_called()
+        asyncio.run(exercise())
 
 
 if __name__ == '__main__':

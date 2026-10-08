@@ -4,9 +4,9 @@ const failureMessages = {
   timeout: '本机连接检测超时，请检查连接器和比特浏览器是否正常响应。',
   origin: '本机连接器未允许当前网站来源，请核对连接器的允许来源设置。',
   credentials: '本机连接密钥不匹配，请在设置中更新为当前连接器的密钥。',
-  version: '本机连接器版本过旧，请先更新并重启连接器，再检测连接。',
+  version: '当前本机服务不支持独立比特充值或版本过旧，请启动新版本机充值助手再检测。',
   protocol: '该地址返回的不是可用的自动充值连接器，请核对连接器地址与端口。',
-  busy: '本机连接器还有任务未结束，请先处理原任务。',
+  busy: '本机充值助手还有充值任务未结束，请先处理原充值任务。',
   bitbrowser:
     '连接器已连通，但比特浏览器接口不可用。请检查比特浏览器是否启动、接口地址和接口密钥。',
   rejected: '本机连接器拒绝了请求，请检查连接配置。',
@@ -28,6 +28,9 @@ const reasons: Record<string, FailureCode> = {
   bitbrowser_local_api_unavailable: 'bitbrowser',
   bitbrowser_local_api_rejected: 'bitbrowser',
   another_local_job_is_running: 'busy',
+  recharge_process_required: 'version',
+  confirmation_nonce_invalid: 'rejected',
+  confirmation_quote_changed: 'rejected',
   invalid_bitbrowser_configuration: 'rejected'
 };
 
@@ -89,16 +92,19 @@ export async function connectorRequest(
 }
 
 export function requireConnectorHealth(result: Record<string, unknown>) {
-  if (result.service !== 'id-business-v2-auto-recharge-connector' || result.version !== 3) {
+  if (result.service !== 'id-business-v2-auto-recharge-connector' || result.version !== 4) {
     throw new RechargeConnectorError(
-      typeof result.version === 'number' && result.version < 3 ? 'version' : 'protocol'
+      typeof result.version === 'number' && result.version < 4 ? 'version' : 'protocol'
     );
   }
+  if (result.role !== 'recharge') throw new RechargeConnectorError('version');
   if (result.originAllowed !== true) throw new RechargeConnectorError('origin');
   if (result.busy !== false) throw new RechargeConnectorError('busy');
   if (
     !Array.isArray(result.capabilities) ||
     ![
+      'manual-payment-confirmation',
+      'recharge-process-isolation',
       'browser-catalog',
       'browser-options',
       'browser-profile-v2',

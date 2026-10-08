@@ -81,7 +81,7 @@ function recordConnectorCommands(paths, failInstall = false) {
 test('connector installs its Python browser before testing with the same cache and working directory', () => {
   const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
   for (const [changed, fullPro] of [
-    ['registration_browser.py', false],
+    ['bitbrowser_connector.py', false],
     ['server.py', false],
     ['plan_selection.py', true]
   ]) {
@@ -100,7 +100,9 @@ test('connector installs its Python browser before testing with the same cache a
       assert.equal(call.browsersPath, resolve(root, worker, '.browsers'));
       assert.equal(call.bytecodeDisabled, '1');
     }
-    assert.ok(calls[testing].args.includes('test_registration_browser'));
+    assert.ok(calls[testing].args.includes('test_bitbrowser_connector'));
+    assert.ok(calls[testing].args.includes('test_owned_recharge_profile'));
+    assert.ok(calls[testing].args.every((name) => !name.startsWith('test_registration')));
     assert.ok(
       calls[testing].args.includes(fullPro ? 'test_pro' : 'test_pro.ProMenuDiagnosticsTests')
     );
@@ -109,7 +111,7 @@ test('connector installs its Python browser before testing with the same cache a
 
 test('connector stops before worker tests when its browser installation fails', () => {
   const { calls, failed } = recordConnectorCommands(
-    ['apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py'],
+    ['apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py'],
     true
   );
   assert.equal(failed, true);
@@ -146,6 +148,45 @@ test('CI-only control edits do not execute backend or business guards', () => {
   for (const gate of gates) assert.ok(calls.every((call) => !call.includes(gate)));
 });
 
+test('native media startup changes dispatch the standard-library regression once', () => {
+  const media = 'apps/api/src/id-business-v2/workspace/media-resolver';
+  const command = ['python3', '-B', `${media}/test_native_startup.py`];
+  for (const mode of ['full', 'recharge', 'ci-only']) {
+    for (const paths of [
+      [`${media}/server.py`],
+      [`${media}/test_native_startup.py`],
+      [`${media}/server.py`, `${media}/test_native_startup.py`]
+    ]) {
+      const calls = recordGuardCommands(mode, paths);
+      assert.equal(calls.filter((call) => call.join(' ') === command.join(' ')).length, 1);
+      assert.ok(calls.every((call) => !call.includes('test:native-runtime')));
+    }
+  }
+  const unrelated = recordGuardCommands('ci-only', ['scripts/ci-recharge-scope.mjs']);
+  assert.ok(unrelated.every((call) => call.join(' ') !== command.join(' ')));
+});
+
+test('native entry and backup transport edits run their bounded native tests without a database suite', () => {
+  for (const path of [
+    'scripts/native-services.mjs',
+    'scripts/lib/native-mysql-tools.mjs',
+    'scripts/acceptance-v2-rollback-integrity.mjs',
+    'scripts/acceptance-v2-data-governance.mjs',
+    'scripts/ci-recharge-migration.py',
+    'scripts/production-release/audit-retention-mysql.test.py',
+    'scripts/lib/native_mysql_fixture.py'
+  ]) {
+    const calls = recordGuardCommands('ci-only', [path]);
+    assert.equal(
+      calls.filter((call) => call.join(' ') === 'npm run test:native-runtime').length,
+      1
+    );
+    assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+  }
+  const calls = recordGuardCommands('ci-only', ['docs/DOCKER_INDEPENDENCE.md']);
+  assert.ok(calls.every((call) => !call.includes('test:native-runtime')));
+});
+
 test('full quality workflow includes each backend architecture gate', () => {
   const workflow = readFileSync(
     new URL('../.github/workflows/quality.yml', import.meta.url),
@@ -172,5 +213,67 @@ test('API Admin control edits execute their suite in both CI entry points', () =
       );
       assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
     }
+  }
+});
+
+test('native entry and backup transport edits run their bounded native tests without a database suite', () => {
+  for (const path of [
+    'scripts/native-services.mjs',
+    'scripts/lib/native-mysql-tools.mjs',
+    'scripts/acceptance-v2-rollback-integrity.mjs',
+    'scripts/acceptance-v2-data-governance.mjs',
+    'scripts/ci-recharge-migration.py',
+    'scripts/production-release/audit-retention-mysql.test.py',
+    'scripts/lib/native_mysql_fixture.py'
+  ]) {
+    const calls = recordGuardCommands('ci-only', [path]);
+    assert.equal(
+      calls.filter((call) => call.join(' ') === 'npm run test:native-runtime').length,
+      1
+    );
+    assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+  }
+  const calls = recordGuardCommands('ci-only', ['docs/DOCKER_INDEPENDENCE.md']);
+  assert.ok(calls.every((call) => !call.includes('test:native-runtime')));
+});
+
+test('API deletion and connector checks retain recharge suites without retired registration tests', () => {
+  const api = recordGuardCommands(
+    'recharge',
+    ['apps/api/src/id-business-v2/auto-registration/registration.module.ts'],
+    'api'
+  );
+  assert.ok(api.some((call) => call.includes('src/id-business-v2/auto-recharge')));
+  assert.ok(api.every((call) => !call.includes('src/id-business-v2/auto-registration')));
+  const connector = recordGuardCommands(
+    'recharge',
+    ['apps/api/src/id-business-v2/auto-recharge/worker/server.py'],
+    'connector'
+  );
+  const suites = connector.find((call) => call[0] === 'python3' && call.includes('unittest'));
+  assert.ok(suites.includes('test_recharge_email_code'));
+  assert.ok(suites.includes('test_server'));
+  assert.ok(suites.every((name) => !name.startsWith('test_registration')));
+});
+
+test('removed registration transport paths select retirement checks without executing deleted scripts', () => {
+  for (const part of ['guards', 'release-controls']) {
+    const calls = recordGuardCommands(
+      'ci-only',
+      ['scripts/production-release/registration-only-transport.test.py'],
+      part
+    );
+    assert.ok(
+      calls.some(
+        (call) =>
+          call.join(' ') ===
+          'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests'
+      )
+    );
+    assert.ok(
+      calls.every(
+        (call) => !call.includes('scripts/production-release/registration-only-transport.test.py')
+      )
+    );
   }
 });

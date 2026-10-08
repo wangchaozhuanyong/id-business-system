@@ -26,6 +26,10 @@
           <dd class="recharge-total">
             {{ price(job.result.quote?.today, quotePlaceholder(job)) }}
           </dd>
+          <template v-if="job.result.quote?.credit">
+            <dt>折抵金额</dt>
+            <dd>{{ price(job.result.quote.credit) }}</dd>
+          </template>
           <dt>税费</dt>
           <dd>
             {{ price(job.result.quote?.tax, quotePlaceholder(job))
@@ -49,20 +53,32 @@
         <dd>
           {{
             job.action === 'server'
-              ? '服务器充值'
+              ? '历史服务器充值'
               : job.result.mode === 'open_browser'
-                ? '仅登录窗口'
-                : '本机充值'
+                ? '仅登录账号'
+                : '比特浏览器充值'
           }}
         </dd>
         <template v-if="job.result.mode !== 'open_browser'">
-          <dt>开通套餐</dt>
+          <dt>目标套餐</dt>
           <dd>{{ planLabels[job.plan] }}</dd>
         </template>
+        <dt v-if="job.result.mode !== 'open_browser'">本次操作</dt>
+        <dd v-if="job.result.mode !== 'open_browser'">{{ operationLabel(job) }}</dd>
         <dt>账户核对</dt>
         <dd>{{ accountVerificationLabel(job) }}</dd>
-        <dt v-if="job.result.current_plan">当前套餐</dt>
-        <dd v-if="job.result.current_plan">{{ statusLabel(job.result.current_plan) }}</dd>
+        <template v-if="job.result.current_plan_before">
+          <dt>升级前套餐</dt>
+          <dd>{{ statusLabel(job.result.current_plan_before) }}</dd>
+        </template>
+        <dt>当前套餐</dt>
+        <dd>{{ officialCurrentPlanLabel(job) }}</dd>
+        <template v-if="job.result.subscription_period">
+          <dt>套餐生效</dt>
+          <dd>{{ formatV2DateTime(job.result.subscription_period.start) }}</dd>
+          <dt>当前周期结束</dt>
+          <dd>{{ formatV2DateTime(job.result.subscription_period.end) }}</dd>
+        </template>
         <dt v-if="job.result.card_last4">银行卡尾号</dt>
         <dd v-if="job.result.card_last4">{{ job.result.card_last4 }}</dd>
         <dt>执行阶段</dt>
@@ -71,6 +87,8 @@
           <dt>核实阶段</dt>
           <dd>{{ sessionPhaseLabel(job.result.session_phase) }}</dd>
         </template>
+        <dt v-if="job.result.browser_profile_id">执行窗口</dt>
+        <dd v-if="job.result.browser_profile_id">{{ job.result.browser_profile_id }}</dd>
         <dt v-if="job.result.window_name">窗口名称</dt>
         <dd v-if="job.result.window_name">{{ job.result.window_name }}</dd>
         <dt v-if="job.result.locked_currency">付款保护</dt>
@@ -130,11 +148,6 @@
         已关闭并清理 {{ job.result.stale_profiles_cleaned }} 个属于该账号的历史付款前失败窗口。
       </p>
       <slot />
-      <RechargeServerPaymentControl
-        v-if="job.action === 'server'"
-        :job="job"
-        @refresh="$emit('refresh')"
-      />
       <details class="recharge-diagnostics">
         <summary>执行详情</summary>
         <dl class="recharge-summary">
@@ -180,23 +193,23 @@
     </template>
     <div v-else class="recharge-empty">
       <h3>{{ mode === 'open_browser' ? '等待打开比特浏览器窗口' : '等待开始本次充值' }}</h3>
-      <p v-if="mode === 'server_payment'">
-        服务器会创建独立浏览器环境，提取代理 IP 后核价并执行单次付款。
-      </p>
-      <p v-else-if="mode === 'open_browser'">
+      <p v-if="mode === 'open_browser'">
         网页会直接连接当前电脑的比特浏览器并登录官网，完成后保留窗口供手动操作。
       </p>
-      <p v-else>连接器会新建比特浏览器窗口，官网登录核对后完成核价与付款保护。</p>
+      <p v-else>
+        本机充值助手连接比特浏览器，核实账号与当前套餐，取得开通或升级报价后等待你确认付款。
+      </p>
     </div>
   </div>
 </template>
 <script setup lang="ts">
-import { computed, defineAsyncComponent } from 'vue';
+import { computed } from 'vue';
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import {
   browserFailureLabel,
   accountVerificationLabel,
+  officialCurrentPlanLabel,
   executionStageLabel,
   sessionPhaseLabel,
   failureReasonLabel,
@@ -212,12 +225,15 @@ import {
 } from './recharge-presentation';
 const props = defineProps<{
   job?: V2RechargeJob;
-  mode?: 'server_payment' | 'payment' | 'open_browser';
+  mode?: 'payment' | 'open_browser';
 }>();
 defineEmits<{ refresh: [] }>();
-const RechargeServerPaymentControl = defineAsyncComponent(
-  () => import('./RechargeServerPaymentControl.vue')
-);
+function operationLabel(job: V2RechargeJob) {
+  if (job.result.status === 'already_subscribed') return '已开通，无需重复付款';
+  if (job.result.operation === 'subscription_upgrade')
+    return `${statusLabel(job.result.current_plan_before || '')} → ${planLabels[job.plan]} 升级`;
+  return job.result.account_matched ? '开通（以官网核实为准）' : '等待官网核实';
+}
 const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
 const proxyProgress = computed(() => (props.job ? proxyAttemptLabel(props.job) : ''));
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {

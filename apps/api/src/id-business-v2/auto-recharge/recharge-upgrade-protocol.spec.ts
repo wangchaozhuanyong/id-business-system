@@ -3,6 +3,7 @@ import { hash, safeDocument, assertFinalQuote } from './recharge-validation';
 import { projectRechargePaymentRecord } from './recharge-payment-facts';
 import {
   hasOfficialRechargeQuote,
+  hasVerifiedRechargePayment,
   rechargeUpgradeRecheckBinding,
   rechargeUpgradePaymentReference
 } from './recharge-upgrade-protocol';
@@ -82,6 +83,89 @@ describe('Plus升级Pro官方预览与原单付款绑定', () => {
         upgrade_invoice_identifier: 'in_other'
       })
     ).toBeNull();
+  });
+
+  it('Go 升级 Plus 使用独立预览、原操作和付款证明，不借用 Plus 来源', () => {
+    const goQuote = { ...quote, plan: 'plus' };
+    const goUpgrade = {
+      ...binding,
+      quote: goQuote,
+      current_plan_before: 'go',
+      target_plan: 'plus'
+    };
+    expect(hasOfficialRechargeQuote(goUpgrade)).toBe(true);
+    expect(rechargeUpgradeRecheckBinding(goUpgrade, 'plus')).toEqual(goUpgrade);
+    expect(
+      hasOfficialRechargeQuote({
+        ...goUpgrade,
+        target_plan: 'pro-20x',
+        quote: { ...goQuote, plan: 'pro-20x' }
+      })
+    ).toBe(false);
+    expect(
+      hasOfficialRechargeQuote({ ...goUpgrade, quote_authority: 'official_checkout_response' })
+    ).toBe(false);
+    const job = {
+      accountKey: 'a'.repeat(64),
+      action: 'bitbrowser',
+      plan: 'plus',
+      result: goUpgrade
+    };
+    const payment = {
+      ...goUpgrade,
+      account_key: job.accountKey,
+      payment_attempted: true,
+      confirmation_requests_sent: 1,
+      payment_status: 'paid',
+      upgrade_invoice_identifier: 'in_goupgrade',
+      payment_evidence: {
+        kind: 'invoice',
+        identifier: 'in_goupgrade',
+        amount_minor: 8000,
+        currency: 'USD'
+      }
+    };
+    const projected = projectRechargePaymentRecord(
+      job,
+      `payments/${hash(upgradeId)}.json`,
+      payment
+    );
+    expect(projected).toMatchObject({
+      current_plan_before: 'go',
+      target_plan: 'plus',
+      payment_requests_sent: 1
+    });
+    expect(
+      projectRechargePaymentRecord(
+        { ...job, result: { ...goUpgrade, current_plan_before: 'plus' } },
+        `payments/${hash(upgradeId)}.json`,
+        payment
+      )
+    ).toBeNull();
+    expect(
+      hasVerifiedRechargePayment(
+        {
+          ...payment,
+          status: 'subscription_activated',
+          payment_outcome: 'subscription_activated',
+          account_matched: true,
+          payment_requests_sent: 1
+        },
+        job
+      )
+    ).toBe(true);
+    expect(
+      hasVerifiedRechargePayment(
+        {
+          ...payment,
+          status: 'subscription_activated',
+          payment_outcome: 'subscription_activated',
+          account_matched: false,
+          payment_requests_sent: 1
+        },
+        job
+      )
+    ).toBe(false);
   });
 
   it('不能伪装checkout证据或将其他PI当本次升级成功', () => {

@@ -29,6 +29,7 @@ import {
   bankRechargePassword,
   bankRechargeText
 } from './bank-recharge-validation';
+import { isSupportedRechargeUpgrade } from './recharge-upgrade-protocol';
 import { supportedCurrencies, zeroDecimalCurrencies } from './recharge-local-validation';
 import { createLegacyCard } from './bank-recharge-card-legacy-create';
 import {
@@ -315,17 +316,7 @@ export class BankRechargeAccountService {
     if (!account.passwordEncrypted) throw new ConflictException('该账号尚未保存登录密码');
     return {
       email: this.encryption.decrypt(account.emailEncrypted)!,
-      password: this.encryption.decrypt(account.passwordEncrypted)!,
-      ...(account.totpSecretEncrypted
-        ? {
-            totp: {
-              secret: this.encryption.decrypt(account.totpSecretEncrypted)!,
-              algorithm: account.totpAlgorithm,
-              digits: account.totpDigits,
-              period: account.totpPeriod
-            }
-          }
-        : {})
+      password: this.encryption.decrypt(account.passwordEncrypted)!
     };
   }
 
@@ -345,6 +336,14 @@ export class BankRechargeAccountService {
     return recordVerifiedLoginNetwork(tx, input, this.repository, this.encryption, this.audit);
   }
 
+  // 历史套餐仅供核对；真实开通或升级入口与报价由本机官网重新证明。
+  async requireRechargeInspection(tx: V2CommandTransaction, id: string) {
+    const account = await this.requireActive(tx, id);
+    if (await this.repository.hasUnresolvedRechargePayment(tx, id, account.officialAccountKey))
+      throw new ConflictException('该账号有付款结果待核实的原订单，请先只读复查，不能再次付款');
+    return account;
+  }
+
   async assertRechargeEligible(
     tx: V2CommandTransaction,
     id: string,
@@ -359,14 +358,13 @@ export class BankRechargeAccountService {
       subscription?.status === 'active' &&
       (!subscription.dueAt || subscription.dueAt.getTime() > Date.now())
     ) {
-      const verifiedPlusUpgrade =
-        subscription.plan === 'plus' &&
-        ['pro-5x', 'pro-20x', 'pro-500'].includes(targetPlan) &&
+      const verifiedUpgrade =
+        isSupportedRechargeUpgrade(subscription.plan, targetPlan) &&
         Boolean(account.officialAccountKey) &&
         Boolean(subscription.currentOrderId) &&
         subscription.dueAt !== null &&
         subscription.dueAt.getTime() > Date.now();
-      if (!verifiedPlusUpgrade)
+      if (!verifiedUpgrade)
         throw new ConflictException('该账号仍有有效订阅或到期时间待核实，不能自动再次付款');
     }
     return account;

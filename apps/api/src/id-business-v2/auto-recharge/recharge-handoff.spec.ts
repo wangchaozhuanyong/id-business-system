@@ -211,31 +211,15 @@ describe('人工付款确认与当前任务状态', () => {
     });
     await expect(service.handoffFrame(id, operator)).rejects.toThrow('已结束');
   });
-  it('旧接管会话在审计和发送操作前拒绝', async () => {
-    const { service, audit } = harness();
-    await expect(
-      service.handoffCommand(id, { ...command(), sessionId: frameId }, operator)
-    ).rejects.toThrow('会话已变化');
+  it('历史服务器确认与接管操作已退役，不再授予远程付款或发送挑战资料', async () => {
+    const { service, audit, repository } = harness();
+    await expect(service.handoffCommand(id, command(), operator)).rejects.toThrow(
+      '服务器远程操作已停用'
+    );
+    await expect(service.confirm(id, report().nonce, operator)).rejects.toThrow('本机充值助手');
+    expect(repository.active).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
-  });
-  it('提交先核本人租约，审计只记录操作类型和编号，秘密不持久化', async () => {
-    const { service, audit, job } = harness();
-    const value = { commandId, sessionId, frameId, revision: 1, type: 'text', text: '246810' };
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      text: async () => JSON.stringify({ commandId, accepted: true })
-    } as never);
-    await service.handoffCommand(id, value, operator);
-    expect(audit.append.mock.calls[0]![1].afterData).toEqual({
-      commandId,
-      typeLabel: '输入验证资料'
-    });
-    expect(JSON.stringify(audit.append.mock.calls)).not.toContain(value.text);
-    expect(job.result).not.toHaveProperty('text');
-    job.leaseUntil = new Date(Date.now() - 1);
-    await expect(service.handoffCommand(id, value, operator)).rejects.toThrow('已结束');
-    expect(fetch).toHaveBeenCalledOnce();
   });
   it('开启时服务器报价回执进入人工确认，关闭及旧记录沿用自动确认', async () => {
     for (const mode of [true, false, undefined]) {
@@ -262,43 +246,6 @@ describe('人工付款确认与当前任务状态', () => {
     expect(audit.append).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
-  it('人工服务器确认只交付一次，重复及乱序报价不能再次放行', async () => {
-    const { service, job } = harness();
-    job.state = 'running';
-    await service.callback(id, { type: 'confirmation', result: report() });
-    vi.mocked(fetch).mockResolvedValue({ ok: true } as never);
-    await service.confirm(id, report().nonce, operator);
-    expect(job.state).toBe('confirming');
-    expect(job.result.manual_confirmation_accepted).toBe(true);
-    await expect(service.confirm(id, report().nonce, operator)).rejects.toThrow('禁止重复');
-    await expect(service.callback(id, { type: 'confirmation', result: report() })).rejects.toThrow(
-      '不能确认'
-    );
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-  it('并发确认只有一次可交付，另一请求被原子状态拒绝', async () => {
-    const { service, job } = harness();
-    job.state = 'running';
-    await service.callback(id, { type: 'confirmation', result: report() });
-    vi.mocked(fetch).mockResolvedValue({ ok: true } as never);
-    const results = await Promise.allSettled([
-      service.confirm(id, report().nonce, operator),
-      service.confirm(id, report().nonce, operator)
-    ]);
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-  it.each([{ account_matched: false }, { locked_currency: 'PHP' }, { max_amount_minor: 1000 }])(
-    '当前身份、币种或上限不符拒绝人工确认 %j',
-    async (changed) => {
-      const { service, job } = harness();
-      job.state = 'running';
-      await service.callback(id, { type: 'confirmation', result: report() });
-      Object.assign(job.result, changed);
-      await expect(service.confirm(id, report().nonce, operator)).rejects.toThrow('已变化');
-      expect(fetch).not.toHaveBeenCalled();
-    }
-  );
   it('等待验证保持已确认事实，退出验证后恢复付款核对；未知状态不能重开窗口', async () => {
     const { service, job } = harness();
     job.state = 'confirming';
@@ -374,14 +321,6 @@ describe('人工付款确认与当前任务状态', () => {
     ).rejects.toThrow('不能延长原等待时间');
     expect(job.result).toEqual(original);
     expect(job.state).toBe('awaiting_human_verification');
-  });
-  it('人工确认租约恰好到期时不能交付付款', async () => {
-    const { service, job } = harness();
-    job.state = 'running';
-    await service.callback(id, { type: 'confirmation', result: report() });
-    job.leaseUntil = new Date(Date.now());
-    await expect(service.confirm(id, report().nonce, operator)).rejects.toThrow('已结束');
-    expect(fetch).not.toHaveBeenCalled();
   });
   it('执行器不能切换人工开关、清除确认事实或伪造开启旧任务', () => {
     const job = makeJob();

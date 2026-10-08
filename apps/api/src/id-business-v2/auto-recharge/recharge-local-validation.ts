@@ -56,7 +56,8 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     'useSavedCredentials',
     'expectedEmail',
     'proxyId',
-    'proxyCountryCode'
+    'proxyCountryCode',
+    'manualPaymentConfirmation'
   ]);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
@@ -67,8 +68,10 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     !uuidPattern.test(input.addressId) ||
     input.authorizeSinglePayment !== true
   ) {
-    throw new BadRequestException('请选择套餐、未使用地址并明确授权单次付款');
+    throw new BadRequestException('请选择套餐、可用账单地址并明确授权单次付款');
   }
+  if (input.manualPaymentConfirmation !== undefined && input.manualPaymentConfirmation !== true)
+    throw new BadRequestException('比特充值必须在官网核价后人工确认');
   if (
     (input.cardId !== undefined || input.billingName !== undefined) &&
     (typeof input.cardId !== 'string' ||
@@ -133,7 +136,8 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     expectedEmail: input.expectedEmail as string | undefined,
     proxyId: input.proxyId as string | undefined,
     proxyCountryCode: input.proxyCountryCode as string | undefined,
-    authorizeSinglePayment: true
+    authorizeSinglePayment: true,
+    manualPaymentConfirmation: true
   } as V2RechargeBitBrowserStart & {
     maxAmountMinor: number;
     chatgptAccountId?: string;

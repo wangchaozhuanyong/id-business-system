@@ -127,6 +127,69 @@ export class BankRechargeRepository {
     );
   }
 
+  async hasUnresolvedRechargePayment(
+    tx: V2CommandTransaction,
+    accountId: string,
+    accountKey: string | null
+  ) {
+    const jobs = await tx.idBusinessV2RechargeJob.findMany({
+      where: {
+        OR: [{ chatgptAccountId: accountId }, ...(accountKey ? [{ accountKey }] : [])],
+        action: { in: ['prepare', 'flow', 'bitbrowser', 'server'] }
+      },
+      select: { id: true, ownerId: true, result: true }
+    });
+    const unresolved = jobs.filter(({ result }) => {
+      if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+      const report = result as Record<string, unknown>;
+      const attempted =
+        report.payment_attempted === true ||
+        report.payment_requests_sent === 1 ||
+        report.confirmation_requests_sent === 1;
+      const closed =
+        (report.payment_status === 'paid' &&
+          report.status === 'subscription_activated' &&
+          report.payment_outcome === 'subscription_activated') ||
+        report.payment_status === 'declined' ||
+        report.operator_resolution === 'confirmed_no_bank_request';
+      return attempted && !closed;
+    });
+    if (!unresolved.length) return false;
+    // 只读复查保留原任务的未知历史；严格核验后生成的原任务订单证明付款已闭合。
+    const verifiedOrders = await tx.idBusinessV2BankRechargeOrder.findMany({
+      where: {
+        accountId,
+        source: 'automatic',
+        verifiedAt: { not: null },
+        deletedAt: null,
+        status: { not: 'cancelled' },
+        OR: unresolved.map(({ id, ownerId }) => ({
+          rechargeJobId: id,
+          createdByUserId: ownerId
+        }))
+      },
+      select: {
+        rechargeJobId: true,
+        createdByUserId: true,
+        accountId: true,
+        source: true,
+        verifiedAt: true
+      }
+    });
+    return unresolved.some(
+      ({ id, ownerId }) =>
+        !verifiedOrders.some(
+          (order) =>
+            order.rechargeJobId === id &&
+            order.createdByUserId === ownerId &&
+            order.accountId === accountId &&
+            order.source === 'automatic' &&
+            order.verifiedAt instanceof Date &&
+            Number.isFinite(order.verifiedAt.getTime())
+        )
+    );
+  }
+
   async renewalWarningDays() {
     const setting = await this.prisma.idBusinessV2RenewalWarningSetting.findUnique({
       where: { scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE }

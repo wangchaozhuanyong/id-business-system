@@ -781,110 +781,16 @@ describe('single worker dispatch and confirmation', () => {
       })
     ).resolves.toEqual({ ok: true, updated: 0 });
   });
-  it('persists the job and audit before sending exactly one worker command', async () => {
-    await service.start(input(), operator);
-    expect(tx.idBusinessV2RechargeJob.create).toHaveBeenCalledOnce();
-    expect(audit.append).toHaveBeenCalledOnce();
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(tx.idBusinessV2RechargeJob.create.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(fetch).mock.invocationCallOrder[0]!
-    );
-    expect(JSON.stringify(tx.idBusinessV2RechargeJob.create.mock.calls)).not.toContain('synthetic');
-  });
-  it.each(['check', 'prepare'])('原 %s 任务初始期限仍为 16 分钟', async (action) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
-    await service.start(action === 'check' ? input() : prepareInput(), operator);
-    expect(tx.idBusinessV2RechargeJob.create.mock.calls.at(-1)![0].data.leaseUntil.getTime()).toBe(
-      Date.now() + 16 * 60000
-    );
-  });
-  it('服务器新任务初始期限覆盖 20 分钟代理准备并保留一分钟回执缓冲', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
-    const accounts = {
-      requireCurrency: vi.fn().mockResolvedValue({ minorUnits: 2 }),
-      encryptExpectedEmail: vi.fn().mockReturnValue('fixture-encrypted-email'),
-      loginNetworkGuard: vi.fn().mockResolvedValue(null)
-    };
-    const addresses = {
-      ...addressRepository,
-      requireAvailable: vi.fn().mockResolvedValue({
-        id: addressId,
-        country: 'US',
-        line1: '1221 SW Fourth Avenue',
-        city: 'Portland',
-        state: 'OR',
-        postalCode: '97204'
-      })
-    };
-    const settings = { requirePaymentCap: vi.fn().mockResolvedValue('100.00') };
-    const proxies = {
-      forCharge: vi.fn().mockResolvedValue({
-        id,
-        mode: 'dynamic',
-        type: 'http',
-        extractionUrl: 'https://proxy.example.invalid/fixture'
-      })
-    };
-    tx.idBusinessV2RechargeJob.create.mockImplementationOnce(async ({ data }) => data);
-    const serverService = new RechargeService(
-      repository as never,
-      addresses as never,
-      transaction as never,
-      audit as never,
-      accounts as never,
-      undefined,
-      settings as never,
-      undefined,
-      proxies as never
-    );
-    await serverService.start(
-      {
-        ...prepareInput(),
-        action: 'server',
-        proxyId: id,
-        proxyCountryCode: 'US',
-        lockedCurrency: 'MYR',
-        maxAmount: '100.00',
-        authorizeSinglePayment: true
-      },
-      operator
-    );
-    const data = tx.idBusinessV2RechargeJob.create.mock.calls.at(-1)![0].data;
-    expect(data.leaseUntil.getTime()).toBe(Date.now() + 21 * 60000);
-    expect(data.result).toMatchObject({
-      locked_currency: 'MYR',
-      max_amount_minor: 10000,
-      expected_proxy_country: 'US',
-      mode: 'server'
-    });
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-  it('repeated request id returns the original task without redispatch', async () => {
-    tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue({
-      id,
-      ownerId: operator.id,
-      plan: 'plus',
-      action: 'check'
-    });
-    await expect(service.start(input(), operator)).resolves.toEqual({ id });
+  it('停用服务器创建、资料提交和付款确认，不发出任何远程写请求', async () => {
+    await expect(service.start(input(), operator)).rejects.toThrow('服务器充值已停用');
+    await expect(
+      service.submitDetails(id, { addressId, details: paymentDetails }, operator)
+    ).rejects.toThrow('提交已停用');
+    await expect(service.confirm(id, 'a'.repeat(64), operator)).rejects.toThrow('本机充值助手');
     expect(fetch).not.toHaveBeenCalled();
-  });
-  it('rejects a deleted employee before creating or dispatching a recharge job', async () => {
-    tx.user.findUnique.mockResolvedValueOnce({ status: 'disabled', deletedAt: new Date() });
-    await expect(service.start(input(), operator)).rejects.toThrow('员工账号已停用或删除');
     expect(tx.idBusinessV2RechargeJob.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2RechargeJob.update).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-  it('does not dispatch while another job is running or after a database failure', async () => {
-    tx.idBusinessV2RechargeJob.findFirst.mockResolvedValue({ id: 'other' });
-    await expect(service.start(input(), operator)).rejects.toThrow();
-    expect(fetch).not.toHaveBeenCalled();
-    transaction.execute.mockRejectedValueOnce(new Error('database offline'));
-    await expect(service.start(input(), operator)).rejects.toThrow();
-    expect(fetch).not.toHaveBeenCalled();
   });
   it('任务列表只向符合条件的历史付款关联同账号 Free 核验记录', async () => {
     const sourceJobId = '33333333-3333-4333-8333-333333333333';
@@ -937,15 +843,6 @@ describe('single worker dispatch and confirmation', () => {
     });
     expect(response.items.every((job) => job.accountKey === undefined)).toBe(true);
   });
-  it('does not retry unknown worker acceptance', async () => {
-    vi.mocked(fetch).mockRejectedValue(new Error('timeout'));
-    await expect(service.start(input(), operator)).rejects.toThrow('不会自动重发');
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(fetch).mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(
-      1
-    );
-    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.method).toBeUndefined();
-  });
   it('列表纯读取恢复过期 confirming 原单，不写任务、不延长租约且不泄露标识', async () => {
     const accountKey = 'a'.repeat(64);
     const checkoutIdentifier = 'cs_historical_list';
@@ -997,75 +894,6 @@ describe('single worker dispatch and confirmation', () => {
     expect(job.state).toBe('confirming');
     expect(job.result).not.toHaveProperty('payment_requests_sent');
   });
-  it('loads the selected unused address and sends only the fixed location to the worker', async () => {
-    await service.start(prepareInput(), operator);
-    expect(addressRepository.requireUnused).toHaveBeenCalledWith(tx, operator.id, addressId);
-    expect(tx.idBusinessV2RechargeJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ result: { addressId } })
-    });
-    const workerBody = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
-    expect(workerBody.addressId).toBeUndefined();
-    expect(workerBody.details).toMatchObject({
-      country: 'US',
-      line1: '1221 SW Fourth Avenue',
-      line2: '',
-      city: 'Portland',
-      state: 'OR',
-      postal_code: '97204'
-    });
-    expect(JSON.stringify(workerBody.details)).not.toContain('Untrusted');
-  });
-  it('does not dispatch when the selected address is no longer unused', async () => {
-    addressRepository.requireUnused.mockRejectedValueOnce(new Error('address unavailable'));
-    await expect(service.start(prepareInput(), operator)).rejects.toThrow('address unavailable');
-    expect(fetch).not.toHaveBeenCalled();
-  });
-  it('accepts payment details only for the waiting flow and never persists secrets', async () => {
-    active.mockResolvedValue({
-      id,
-      ownerId: operator.id,
-      plan: 'plus',
-      action: 'flow',
-      state: 'awaiting_details',
-      result: { initial_quote: quote }
-    } as never);
-    const submitted = { addressId, details: { ...paymentDetails } };
-    await service.submitDetails(id, submitted, operator);
-    expect(addressRepository.requireUnused).toHaveBeenCalledWith(tx, operator.id, addressId);
-    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id } })
-    );
-    expect(JSON.stringify(tx.idBusinessV2RechargeJob.update.mock.calls)).not.toContain(
-      paymentDetails.number
-    );
-    const workerBody = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
-    expect(workerBody.details).toMatchObject({
-      number: paymentDetails.number,
-      country: 'US',
-      line1: '1221 SW Fourth Avenue',
-      city: 'Portland',
-      state: 'OR',
-      postal_code: '97204'
-    });
-    expect(submitted.details.number).toBe('');
-  });
-  it('reserves confirmation before dispatch and rejects repeated/stale confirmations', async () => {
-    const nonce = confirmationNonce(id, quote, 'x'.repeat(64));
-    const job = {
-      id,
-      ownerId: operator.id,
-      state: 'awaiting_confirmation',
-      nonceHash: hash(nonce),
-      result: { quote }
-    };
-    active.mockResolvedValue(job as never);
-    tx.idBusinessV2RechargeJob.update.mockImplementation(async () => {
-      job.state = 'confirming';
-    });
-    await service.confirm(id, nonce, operator);
-    await expect(service.confirm(id, nonce, operator)).rejects.toThrow();
-    expect(fetch).toHaveBeenCalledOnce();
-  });
   it('reconstructs the same confirmation credential after an API restart', async () => {
     const nonce = confirmationNonce(id, quote, 'x'.repeat(64));
     list.mockResolvedValue([
@@ -1091,34 +919,6 @@ describe('single worker dispatch and confirmation', () => {
     );
     const result = await service.list(operator);
     expect(result.items[0]?.result).toMatchObject({ nonce });
-  });
-  it('ends an unknown confirmation receipt immediately without resending', async () => {
-    const nonce = confirmationNonce(id, quote, 'x'.repeat(64));
-    const job = {
-      id,
-      ownerId: operator.id,
-      plan: 'plus',
-      action: 'flow',
-      state: 'awaiting_confirmation',
-      nonceHash: hash(nonce),
-      result: { quote, quote_authority: 'official_checkout_response' }
-    };
-    active.mockResolvedValue(job as never);
-    tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue(job);
-    tx.idBusinessV2RechargeJob.update.mockImplementation(async ({ data }) => {
-      Object.assign(job, data);
-      return job;
-    });
-    vi.mocked(fetch).mockRejectedValue(new Error('timeout'));
-    await expect(service.confirm(id, nonce, operator)).rejects.toThrow('只能刷新或复查');
-    expect(vi.mocked(fetch).mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(
-      1
-    );
-    expect(job.state).toBe('unknown');
-    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenLastCalledWith({
-      where: { id },
-      data: expect.objectContaining({ state: 'unknown', leaseUntil: expect.any(Date) })
-    });
   });
   it('refuses confirmation callbacks without explicit tax and official order authority', async () => {
     active.mockResolvedValue({

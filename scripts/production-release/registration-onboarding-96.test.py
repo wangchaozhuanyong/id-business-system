@@ -12,11 +12,23 @@ from unittest.mock import patch
 import base64
 import os
 import tempfile
+import subprocess
 
 MODULE = Path(__file__).with_name('registration-onboarding-96.py')
 ADAPTER_TEST_OUTPUT = MODULE.resolve().parents[2] / '.runtime/registration-runtime96-20261008/adapter-tests'
 spec = importlib.util.spec_from_file_location('disabled_registration96', MODULE)
 scope = importlib.util.module_from_spec(spec); spec.loader.exec_module(scope)
+
+
+def pinned_registration_source(name):
+    root = MODULE.resolve().parents[2]
+    raw = subprocess.check_output(['git', 'show', scope.REGISTRATION_SOURCE_COMMIT + ':' + name],
+        cwd=root)
+    mode = scope.local_git(root, 'ls-tree', scope.REGISTRATION_SOURCE_COMMIT, '--', name).split()[0]
+    if mode != '100644' or len(raw) > 8 * 1024 * 1024 \
+            or scope.sha256(raw) != scope.REGISTRATION_SOURCE_SHA256[name]:
+        raise AssertionError('Pinned historical registration source changed')
+    return raw
 
 
 class DisabledRegistration96Tests(unittest.TestCase):
@@ -64,8 +76,10 @@ class DisabledRegistration96Tests(unittest.TestCase):
         # It closes local bytes and pins, not provider origin or live acceptance.
         root = MODULE.resolve().parents[2]
         module_raw = scope.read_actual_file(MODULE.resolve(), modes=(0o644,), limit=scope.MODULE_MAX_BYTES)
-        controller = MODULE.with_name('remote-deploy.py').resolve()
-        controller_raw = scope.read_actual_file(controller, modes=(0o644,), limit=scope.CARRIER_MAX_BYTES)
+        # Inspect the immutable loader, not a candidate production96 carrier.
+        # Its strict carrier size limit stays in read_actual_file and is never widened.
+        controller_raw = subprocess.check_output(['git', 'show',
+            'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a:scripts/production-release/remote-deploy.py'], cwd=root)
         loader = [node for node in ast.parse(controller_raw).body
             if isinstance(node, ast.Assign) and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'REGISTRATION96_MODULE_SHA256']
@@ -106,7 +120,7 @@ class DisabledRegistration96Tests(unittest.TestCase):
         self.assertEqual(profile['registrationSourceSha256'], scope.REGISTRATION_SOURCE_SHA256)
         pair = {}
         for name, expected in scope.REGISTRATION_SOURCE_SHA256.items():
-            raw = scope.read_actual_file(root / name, modes=(0o644,), limit=8 * 1024 * 1024)
+            raw = pinned_registration_source(name)
             self.assertEqual(scope.sha256(raw), expected)
             pair[name] = (raw, '100644')
         self.assertEqual(profile['workerProjection'], scope.worker_delta(old['actualRegistrationWorkerSourceSha256'],
@@ -116,12 +130,17 @@ class DisabledRegistration96Tests(unittest.TestCase):
         self.assertEqual(scope.HANDOFF_SHA256, carrier['handoff']['receiptSha256'])
         self.assertEqual(set(profile['controlSourceSha256']), scope.CONTROL_FILES)
         self.assertEqual(set(profile['sourceModes']), scope.CONTROL_FILES)
+        # This immutable profile describes the e7 control tree, not today's
+        # retired entry points. Verify its original bytes and modes unchanged.
+        control_commit = 'e7c9862d58599995954883f1c1f6038283afffab'
         for name in scope.CONTROL_FILES:
             cap = scope.MODULE_MAX_BYTES if name == 'scripts/production-release/registration-onboarding-96.py' \
                 else scope.CARRIER_MAX_BYTES if name == 'scripts/production-release/remote-deploy.py' else 8 * 1024 * 1024
-            raw = scope.read_actual_file(root / name, modes=(0o644,), limit=cap)
+            raw = subprocess.check_output(['git', 'show', control_commit + ':' + name], cwd=root)
+            self.assertLessEqual(len(raw), cap)
             self.assertEqual(scope.sha256(raw), profile['controlSourceSha256'][name])
-            self.assertEqual(scope.local_git(root, 'ls-files', '--stage', '--', name).split()[0], profile['sourceModes'][name])
+            self.assertEqual(scope.local_git(root, 'ls-tree', control_commit, '--', name).split()[0],
+                profile['sourceModes'][name])
         self.assertEqual(profile['scope']['servicesUpdated'], ['auto-registration'])
         self.assertFalse(profile['scope']['financialWritesAllowed'])
         self.assertFalse(profile['scope']['cacheCleanupAllowed'])
@@ -318,7 +337,7 @@ def fixture():
         'profileSha256': h('profile bind'), 'accountSha256': h('account bind')}
     handoff = {'receiptSha256': h('new9 handoff'), 'taskId': scope.TASK_ID, 'attempt': 9, 'registered': True,
         'passwordLoginVerified': False, 'mfaLoginVerified': False, 'windowExists': False, 'leaseActive': False, 'busy': False}
-    candidate = {n: (MODULE.parents[2].joinpath(n).read_bytes(), '100644') for n in scope.SOURCE_PAIR}
+    candidate = {n: (pinned_registration_source(n), '100644') for n in scope.SOURCE_PAIR}
     candidate.update({n: (('SYNTHETIC FINAL CONTROL ' + n).encode(), '100755' if n.endswith('.sh') else '100644') for n in scope.CONTROL_FILES})
     finance = {'releaseSealSha256': h('seal'), 'candidateCommit': 'a' * 40, 'candidateTree': 'b' * 40, 'sourceTree': 'c' * 40,
         'images': {'api': 'sha256:' + h('api image')}, 'migration': {'applied': False}, 'preparedImagesSha256': h('prepared images'),

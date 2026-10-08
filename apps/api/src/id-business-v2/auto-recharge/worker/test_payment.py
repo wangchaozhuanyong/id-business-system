@@ -16,7 +16,7 @@ from playwright.async_api import async_playwright
 from attempt_ledger import AttemptLedger
 from browser_checkout import quote_from_text, workflow
 from checkout_core import ROOT, Stop, parse_browser_credential
-from pay import current_quote, include_payment_record, run_flow, run_payment
+from pay import current_quote, include_payment_record, run_checkout_flow, run_flow, run_payment
 from payment_recovery import recheck_in_context
 from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, billing_value_matches,
                           fill_billing_node, one_billing_field, select_country_option,
@@ -113,7 +113,7 @@ class StateTests(unittest.TestCase):
                 return {"status": "payment_cancelled"}
 
             with patch("pay.run_browser", new=local_browser), patch("pay.payment_handler", new=payment_stage):
-                result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                result = await run_checkout_flow(self.target, root, "plus", details_reader=lambda *_: details(),
                                         confirmer=lambda *_: False,
                                         session_budget=SimpleNamespace(seconds=120))
             self.assertEqual(result["status"], "payment_cancelled")
@@ -142,7 +142,7 @@ class StateTests(unittest.TestCase):
                 return {"status": "payment_cancelled"}
 
             with patch("pay.run_browser", new=local_browser), patch("pay.payment_handler", new=payment_stage):
-                result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                result = await run_checkout_flow(self.target, root, "plus", details_reader=lambda *_: details(),
                                         confirmer=lambda *_: False)
             self.assertEqual(result["status"], "payment_cancelled")
             self.assertTrue(observed["inspect_existing"])
@@ -166,7 +166,7 @@ class StateTests(unittest.TestCase):
                 return {"status": "payment_cancelled"}
 
             with patch("pay.run_browser", new=local_browser):
-                result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                result = await run_checkout_flow(self.target, root, "plus", details_reader=lambda *_: details(),
                                         confirmer=lambda *_: False)
             self.assertEqual(result["status"], "payment_cancelled")
             self.assertTrue(calls[0]["inspect_existing"])
@@ -190,13 +190,13 @@ class StateTests(unittest.TestCase):
                         "confirmation_requests_sent": 0}
 
             with patch("pay.run_browser", new=local_browser):
-                first = await run_flow(
+                first = await run_checkout_flow(
                     self.target, root, "plus", details_reader=lambda *_: details(),
                     confirmer=lambda *_: False, allow_checkout_replacement=True,
                 )
                 first_count = len(calls)
                 calls.clear()
-                second = await run_flow(
+                second = await run_checkout_flow(
                     self.target, root, "plus", details_reader=lambda *_: details(),
                     confirmer=lambda *_: False, allow_checkout_replacement=False,
                 )
@@ -249,7 +249,7 @@ class StateTests(unittest.TestCase):
                 self.assertIsNotNone(ledger.record['retry_of'])
             return {'status': 'session_verified', 'payment_requests_sent': 0}
         with patch('pay.run_browser', new=AsyncMock(side_effect=create_again)) as run:
-            result = asyncio.run(run_flow(self.target, self.root, 'plus',
+            result = asyncio.run(run_checkout_flow(self.target, self.root, 'plus',
                                          details_reader=lambda *_: details(), confirmer=lambda *_: False))
         self.assertEqual(run.await_count, 1)
         self.assertEqual(result['payment_requests_sent'], 0)
@@ -284,7 +284,7 @@ class StateTests(unittest.TestCase):
             return {'status': 'session_verified', 'payment_requests_sent': 0}
 
         with patch('pay.run_browser', new=AsyncMock(side_effect=create_again)) as run:
-            result = asyncio.run(run_flow(self.target, self.root, 'plus',
+            result = asyncio.run(run_checkout_flow(self.target, self.root, 'plus',
                                          details_reader=lambda *_: details(), confirmer=lambda *_: False))
         self.assertEqual(run.await_count, 1)
         self.assertEqual(result['payment_requests_sent'], 0)
@@ -337,7 +337,7 @@ class StateTests(unittest.TestCase):
                                 "stage": "payment_result", "account_matched": True, "current_plan": "plus"}
 
                     with patch("pay.run_browser", new=browser), patch("pay.payment_handler", new=payment):
-                        result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                        result = await run_checkout_flow(self.target, root, "plus", details_reader=lambda *_: details(),
                                                 confirmer=lambda *_: True)
                     self.assertTrue(result["checkout_replacement_performed"])
                     self.assertEqual(result["status"], "subscription_activated")

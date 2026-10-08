@@ -24,17 +24,13 @@
       :loading="busy"
       @click="$emit('start')"
     >
-      {{
-        operationMode === 'server_payment' ? '在服务器执行本次充值' : '连接比特浏览器并执行本次充值'
-      }}
+      在比特浏览器执行
     </AppButton>
     <p class="recharge-note">
       {{
-        operationMode === 'server_payment'
-          ? '本次安全码仅传至服务器执行器内存；已保存的卡号加密存储，取用留审计。'
-          : operationMode === 'open_browser'
-            ? '网页直连比特浏览器，无需本机连接器；登录过程中请保留当前页面，成功后窗口保留供手动操作。'
-            : '本次安全码只发送到本机连接器内存；已保存的卡号加密存储，取用留审计。'
+        operationMode === 'open_browser'
+          ? '网页直连比特浏览器，无需本机连接器；登录过程中请保留当前页面，成功后窗口保留供手动操作。'
+          : '核价后等待人工确认。安全码仅用于本机本次执行；已保存的卡号加密存储，取用留审计。'
       }}
     </p>
   </div>
@@ -43,7 +39,7 @@
 import AppButton from '@/components/ui/AppButton.vue';
 const authorizeSinglePayment = defineModel<boolean>({ required: true });
 defineProps<{
-  operationMode: 'server_payment' | 'payment' | 'open_browser';
+  operationMode: 'payment' | 'open_browser';
   canStart: boolean;
   canStartOpen: boolean;
   busy: boolean;

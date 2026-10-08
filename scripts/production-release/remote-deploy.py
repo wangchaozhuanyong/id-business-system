@@ -22,7 +22,9 @@ import urllib.request
 
 
 BASE = Path('/opt/id-business-v2')
+# Historical recharge receipts and rollback still validate their original service set.
 SERVICES = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')
+CURRENT_SERVICES = ('media-resolver', 'auto-recharge', 'api', 'admin')
 ALL_SERVICES = (*SERVICES, 'mysql', 'caddy')
 HISTORY_POLICY_ID = 'historical-finance-20261005'
 HISTORY_BASELINE = 'ed2f75b0f4075347224ce3b2c82a90ed514d8d22'
@@ -803,9 +805,7 @@ def release_services(admin_only, additions, edge_changed=False, *, historical_di
                  registration_only)) <= 1,
             'Historical release selection is ambiguous')
     if registration_only:
-        require(not admin_only and not additions and not edge_changed,
-                'Registration publication requires unchanged schema and one Worker only')
-        return ('auto-registration',), ('auto-recharge',)
+        raise RuntimeError('Automatic registration has been removed; registration releases are disabled')
     if historical_mailbox:
         require(not admin_only and not additions and not edge_changed,
                 'Mailbox release must update only the API without migrations or edge changes')
@@ -824,7 +824,7 @@ def release_services(admin_only, additions, edge_changed=False, *, historical_di
         require_diagnostics_migration_scope(additions, edge_changed)
         return ('auto-recharge',), ('auto-recharge',)
     require(not (admin_only and additions), 'Admin-only release contains migrations')
-    services = ('admin',) if admin_only else SERVICES
+    services = ('admin',) if admin_only else CURRENT_SERVICES
     require(not (admin_only and edge_changed), 'Admin-only release contains edge configuration changes')
     images = tuple(dict.fromkeys(image_service(service) for service in services))
     if not admin_only:
@@ -12588,9 +12588,20 @@ def recharge_pricing_e7_native_chain(previous, *, chain=None):
         external[str(path)] = [hashlib.sha256(raw).hexdigest(), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid]
         require(identity(info) == identity(path.lstat()), message)
     return {'sha256': historical_fingerprint({'releases': rows, 'external': external}), 'fileCount': files, 'directoryCount': directories, 'origin': directory}
+def reject_retired_registration_selection(arguments):
+    for token in arguments:
+        if token == '--api-registration-readback':
+            continue
+        if (token.startswith(('registration-worker-', '--registration-worker', '--registration-profile',
+                              '--check-fixed-registration', '--prepare-fixed-registration',
+                              '--api-registration', '--prepare-api-registration', '--write-api-registration'))
+                or token in ('historical-finance-20261005-registration-continuation',
+                             '--historical-finance-continuation')):
+            raise RuntimeError('Automatic registration has been removed; registration releases are disabled')
 
 
 def main():
+    reject_retired_registration_selection(sys.argv[1:])
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
     parser.add_argument('--source-tree', required=True)
@@ -13264,6 +13275,10 @@ def load_registration96():
 
 
 if __name__ == '__main__':
+    try:
+        reject_retired_registration_selection(sys.argv[1:])
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from None
     if '--api-admin-migration-only' in sys.argv[1:] and any(
             token.startswith('--') and token not in ('--api-admin-migration-only', '--api-admin-build-proof',
                 '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id')

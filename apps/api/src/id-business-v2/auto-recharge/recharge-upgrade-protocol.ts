@@ -2,24 +2,32 @@ const upgradePattern = /^upg_[a-f0-9]{32}$/;
 const invoicePattern = /^in_[A-Za-z0-9]{1,180}$/;
 const intentPattern = /^pi_[A-Za-z0-9]{1,180}$/;
 
+export function isSupportedRechargeUpgrade(current: unknown, target: unknown) {
+  return (
+    (current === 'go' && target === 'plus') ||
+    (current === 'plus' && ['pro-5x', 'pro-20x', 'pro-500'].includes(String(target)))
+  );
+}
+
 export function isRechargeUpgrade(result: Record<string, unknown>) {
   const quote = result.quote as { plan?: unknown } | undefined;
   return (
     result.operation === 'subscription_upgrade' &&
     typeof result.upgrade_identifier === 'string' &&
     upgradePattern.test(result.upgrade_identifier) &&
-    result.current_plan_before === 'plus' &&
+    isSupportedRechargeUpgrade(result.current_plan_before, result.target_plan ?? quote?.plan) &&
     (result.target_plan === undefined ||
       quote?.plan === undefined ||
       result.target_plan === quote.plan) &&
-    ['pro-5x', 'pro-20x', 'pro-500'].includes(String(result.target_plan ?? quote?.plan))
+    typeof (result.target_plan ?? quote?.plan) === 'string'
   );
 }
 
 export function hasOfficialRechargeQuote(result: Record<string, unknown>) {
   return result.operation === 'subscription_upgrade'
     ? isRechargeUpgrade(result) && result.quote_authority === 'official_upgrade_preview'
-    : result.quote_authority === 'official_checkout_response';
+    : result.quote_authority === 'official_checkout_response' &&
+        (result.current_plan_before === undefined || result.current_plan_before === 'free');
 }
 
 export function hasVerifiedRechargePayment(
@@ -61,7 +69,7 @@ export function rechargeUpgradeRecheckBinding(result: Record<string, unknown>, p
   return {
     operation: 'subscription_upgrade',
     upgrade_identifier: result.upgrade_identifier,
-    current_plan_before: 'plus',
+    current_plan_before: result.current_plan_before,
     target_plan: plan,
     quote: result.quote,
     quote_authority: result.quote_authority

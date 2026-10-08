@@ -1,5 +1,4 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
-import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import { connectorRequest, requireConnectorHealth } from './connector-transport';
 import type {
@@ -9,12 +8,8 @@ import type {
   V2RechargeAddressListQuery,
   V2RechargeAddressStatus,
   V2RechargeJob,
-  V2RechargeStart,
-  V2RechargeHandoffFrame,
-  V2RechargeHandoffCommand,
   V2RechargePaymentCap,
   V2RechargeBitBrowserSettings,
-  V2RechargeServerProxySettings,
   V2RechargeBrowserCatalog,
   V2RechargeBrowserCatalogAccess,
   UpdateV2RechargeBitBrowserSettingsInput,
@@ -28,28 +23,7 @@ import type {
   V2RechargeBitBrowserResolutionLaunch
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
-export const rechargeTotpApi = {
-  listSavedAccounts(options: ApiRequestOptions = {}) {
-    return idBusinessV2WorkspaceApi.listTotpAccounts(options);
-  }
-};
 export const rechargeApi = {
-  startServer(input: V2RechargeStart) {
-    return request<{ id: string }>(http.post(base, input));
-  },
-  confirmServer(id: string, nonce: string) {
-    return request<{ id: string }>(http.post(`${base}/${id}/confirm`, { nonce }));
-  },
-  handoffFrame(id: string, options: ApiRequestOptions = {}) {
-    return request<V2RechargeHandoffFrame>(
-      http.get(`${base}/${id}/handoff`, { signal: options.signal })
-    );
-  },
-  handoffCommand(id: string, command: V2RechargeHandoffCommand, options: ApiRequestOptions = {}) {
-    return request<{ commandId: string; accepted: true }>(
-      http.post(`${base}/${id}/handoff`, command, { signal: options.signal })
-    );
-  },
   listPaymentCaps(options: ApiRequestOptions = {}) {
     return request<{ items: V2RechargePaymentCap[] }>(
       http.get('/id-business-v2/auto-recharge/payment-caps', { signal: options.signal })
@@ -59,15 +33,6 @@ export const rechargeApi = {
     return request<V2RechargePaymentCap>(
       http.put(`/id-business-v2/auto-recharge/payment-caps/${plan}/${currencyCode}`, { maxAmount })
     );
-  },
-  recheckServer(input: {
-    id: string;
-    sourceJobId: string;
-    sessionJson?: string;
-    login?: { email: string; password: string; totpSecret?: string; totpAccountId?: string };
-    chatgptAccountId?: string;
-  }) {
-    return request<{ id: string }>(http.post(`${base}/server-recheck`, input));
   },
   cancelServer(id: string) {
     return request<{ id: string }>(http.post(`${base}/${id}/cancel`, {}));
@@ -82,19 +47,6 @@ export const rechargeApi = {
       http.get('/id-business-v2/auto-recharge/bitbrowser-settings', {
         signal: options.signal
       })
-    );
-  },
-  getServerProxySettings(options: ApiRequestOptions = {}) {
-    return request<V2RechargeServerProxySettings>(
-      http.get('/id-business-v2/auto-recharge/server-proxy-settings', { signal: options.signal })
-    );
-  },
-  updateServerProxySettings(proxyId: string | null) {
-    return withV2QueryInvalidation(
-      request<V2RechargeServerProxySettings>(
-        http.put('/id-business-v2/auto-recharge/server-proxy-settings', { proxyId })
-      ),
-      'auto-recharge'
     );
   },
   browserCatalogAccess(options: ApiRequestOptions = {}, directMode = false) {
@@ -212,6 +164,18 @@ export const rechargeConnectorApi = {
     return connectorRequest(connectorUrl, `/jobs/${id}`, {
       token: connectorToken,
       method: 'GET'
+    });
+  },
+  confirm(
+    connectorUrl: string,
+    connectorToken: string,
+    id: string,
+    nonce: string,
+    quoteDigest: string
+  ) {
+    return connectorRequest(connectorUrl, `/jobs/${id}/confirm`, {
+      token: connectorToken,
+      body: { nonce, quoteDigest }
     });
   },
   resume(connectorUrl: string, connectorToken: string, id: string) {

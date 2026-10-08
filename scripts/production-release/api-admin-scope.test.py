@@ -597,6 +597,7 @@ class RegistrationScopeTests(unittest.TestCase):
                 raw = (subprocess.check_output(['git', 'show', commit + ':' + name], cwd=ROOT)
                        if name in registration.WORKER_PAIR else (ROOT / name).read_bytes())
                 path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+            (root / '.dockerignore').write_bytes(b'unrelated native checkout changes\n')
             with patch.object(Path, 'cwd', return_value=root), patch.dict(os.environ, {'RELEASE_COMMIT': commit, 'SOURCE_TREE': tree}):
                 record = registration.prepare_registration_build(controller)
             rows = record['workerProjection']
@@ -606,7 +607,38 @@ class RegistrationScopeTests(unittest.TestCase):
             for name, row in rows.items():
                 self.assertEqual(registration.hashlib.sha256((context / name).read_bytes()).hexdigest(), row['sha256'])
             self.assertEqual(record['workerProjectionSha256'], registration.fingerprint(rows))
+            self.assertEqual(record['buildInputSourceCommit'], profile['workerBasisCommit'])
+            self.assertEqual(record['buildInputSha256'], profile['buildInputSha256'])
+            sealed_ignore = subprocess.check_output(['git', 'show', profile['workerBasisCommit'] + ':.dockerignore'], cwd=ROOT)
+            self.assertEqual((context / '.dockerignore').read_bytes(), sealed_ignore)
+            self.assertNotEqual((root / '.dockerignore').read_bytes(), sealed_ignore)
+            api_context = root / '.deploy/production-release/api-registration-api-build-context'
+            self.assertEqual((api_context / '.dockerignore').read_bytes(), subprocess.check_output(
+                ['git', 'show', commit + ':.dockerignore'], cwd=ROOT))
             self.assertEqual((context / 'scripts/audit-python-dependencies.py').read_bytes(), (ROOT / 'scripts/audit-python-dependencies.py').read_bytes())
+
+    def test_historical_worker_build_inputs_cannot_be_replaced_by_candidate_checkout(self):
+        commit = REGISTRATION_FIXTURE_COMMIT
+        tree = subprocess.check_output(['git', 'rev-parse', commit + '^{tree}'], cwd=ROOT, text=True).strip()
+        profile = registration.registration_profile(d, ROOT)
+        controller = SimpleNamespace(**vars(d))
+        controller.run = lambda *args, **kwargs: (commit if args == ('git', 'rev-parse', 'HEAD')
+            else tree if args == ('git', 'rev-parse', 'HEAD^{tree}') else d.run(*args, **kwargs))
+        original = subprocess.check_output
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            root = Path(temporary)
+            for name in registration.WORKER_PAIR | {registration.REGISTRATION_PROFILE}:
+                raw = original(['git', 'show', commit + ':' + name], cwd=ROOT) if name in registration.WORKER_PAIR else (ROOT / name).read_bytes()
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+            def changed(command, *args, **kwargs):
+                if command == ['git', 'show', profile['workerBasisCommit'] + ':.dockerignore']:
+                    return b'tampered sealed build input\n'
+                return original(command, *args, **kwargs)
+            with patch.object(Path, 'cwd', return_value=root), patch.dict(os.environ, {'RELEASE_COMMIT': commit, 'SOURCE_TREE': tree}), \
+                    patch.object(subprocess, 'check_output', side_effect=changed), \
+                    self.assertRaisesRegex(RuntimeError, '^API_ADMIN_REGISTRATION_BUILD_INPUT_CHANGED$'):
+                registration.prepare_registration_build(controller)
+            self.assertFalse((root / '.deploy/production-release/api-registration-build-context').exists())
     def test_scope_selection_keeps_default_and_service_names_isolated(self):
         self.assertEqual(scope.UPDATED, ('api', 'admin'))
         self.assertEqual(registration.UPDATED, ('api', 'auto-registration'))
@@ -649,8 +681,13 @@ class RegistrationScopeTests(unittest.TestCase):
             scope.validate_proof(d, value, COMMIT, TREE)
 
     def test_build_proof_rejects_pair_hash_that_is_not_the_actual_git_commit(self):
-        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
+        for name in registration.WORKER_PAIR:
+            result = subprocess.run(['git', 'cat-file', '-e', 'HEAD:' + name], cwd=ROOT, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, 'Retired registration source must stay absent from current HEAD')
+        # This negative proof belongs to the frozen historical registration build,
+        # whose files are deliberately absent from the current retirement candidate.
+        commit = REGISTRATION_FIXTURE_COMMIT
+        tree = subprocess.check_output(['git', 'rev-parse', commit + '^{tree}'], cwd=ROOT, text=True).strip()
         value = registration_proof()
         projection = {n: value[n] for n in ('workerProjection', 'workerProjectionSha256')}
         controller = SimpleNamespace(require=d.require, run=MagicMock(side_effect=[commit, tree]))
@@ -690,16 +727,14 @@ class RegistrationScopeTests(unittest.TestCase):
                     registration.registration_candidate_scope(controller(changed), commit)
                 reader.assert_not_called()
 
-    def test_registration_and_pricing_merge_keeps_both_entries_and_rejects_mixed_selection(self):
+    def test_retired_registration_cannot_dispatch_or_fall_through_to_pricing(self):
         arguments = ['remote-deploy.py', '--commit', COMMIT, '--source-tree', TREE,
             '--repository', REPOSITORY, '--expected-current', OLD, '--run-id', '123',
             '--run-attempt', '1', '--ci-run-id', '456', '--api-registration-only', '--recharge-pro-pricing']
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.object(d, 'BASE', Path(temporary)), \
              patch.object(sys, 'argv', arguments), patch.object(d, 'recharge_pricing_release') as pricing:
-            output = io.StringIO()
-            with redirect_stdout(output):
-                self.assertEqual(d.main(), 1)
-            self.assertEqual(json.loads(output.getvalue())['code'], 'API_ADMIN_SCOPE_CONFLICT')
+            with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'):
+                d.main()
             pricing.assert_not_called()
         arguments.remove('--api-registration-only')
         with patch.object(sys, 'argv', arguments), patch.object(d, 'recharge_pricing_release', return_value=0) as pricing:
@@ -779,7 +814,7 @@ class RegistrationScopeTests(unittest.TestCase):
         receipt['privateDiagnostic'] = {**diagnostic, 'rawError': 'SECRET RAW'}
         self.assertNotIn('privateDiagnostic', transport.safe_failure(receipt, 'API_REGISTRATION'))
 
-    def test_readonly_handoff_selection_does_not_add_general_command_input(self):
+    def test_historical_handoff_transport_remains_fixed_and_retired_cli_selection_is_disabled(self):
         for mode, closed, flag in (('preflight', False, 'verify'), ('preflight', True, 'preflight'),
                                    ('handoff', True, 'handoff'), ('readback', True, 'readback'), ('business', True, 'business')):
             commands = '\n'.join(transport.parameters(COMMIT, OLD, mode, 'API_REGISTRATION', require_closed=closed)['commands'])
@@ -789,11 +824,12 @@ class RegistrationScopeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             transport.parameters(COMMIT, OLD, 'handoff')
         for operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration', 'verify_registration_business'):
-            for changed, ok in (({}, True), ({'HISTORICAL_EXCEPTION': 'historical-finance-20261005'}, False),
-                                ({'REUSE_IMAGE_RUN': '1'}, False), ({'RELEASE_BROWSER_CACHE_IMAGE': 'cache'}, False)):
+            for changed in ({}, {'HISTORICAL_EXCEPTION': 'historical-finance-20261005'},
+                            {'REUSE_IMAGE_RUN': '1'}, {'RELEASE_BROWSER_CACHE_IMAGE': 'cache'}):
                 result = subprocess.run(['bash', 'scripts/production-release/validate-release-selection.sh'],
                     cwd=ROOT, env={**os.environ, 'RELEASE_OPERATION': operation, 'HISTORICAL_EXCEPTION': 'none', **changed}, capture_output=True)
-                self.assertEqual(result.returncode == 0, ok)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'registration releases are disabled', result.stderr)
 
     def test_workflow_separates_handoff_from_build_push_and_deploy(self):
         text = (ROOT / '.github/workflows/production-release.yml').read_text()
@@ -921,7 +957,8 @@ class RegistrationHandoffTests(unittest.TestCase):
 class ReleaseFailureTests(unittest.TestCase):
     def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False,
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
-                    migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False):
+                    migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
+                    migration_origin=None, migration_origin_guard=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1013,6 +1050,9 @@ class ReleaseFailureTests(unittest.TestCase):
             stack.enter_context(patch.object(scope, 'source_tree', return_value=TREE))
             stack.enter_context(patch.object(scope, 'configuration_hashes', return_value={'config': 'hash'}))
             evidence = {'manifestSha256': scope.hashlib.sha256(b'{}').hexdigest(), 'environmentSha256': 'env'}
+            if migration_origin is not None:
+                evidence['migrationOrigin'] = migration_origin
+                controller.migration_origin_guard = stack.enter_context(patch.object(scope, 'migration_successor_guard', side_effect=migration_origin_guard))
             if scope.MIGRATION_MODE:
                 evidence.update(guards=copy.deepcopy(guards), migrationState=copy.deepcopy(migration_state))
                 def database_state(*args):
@@ -2470,6 +2510,343 @@ class MigrationReleaseTests(unittest.TestCase):
                 self.assertFalse(result['inverseMigrationPerformed'])
                 self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_TASK_CHANGED')
                 self.assertFalse(any(call.args[1] == 'up' for call in controller.compose.call_args_list))
+
+
+class MigrationSuccessorReceiptTests(unittest.TestCase):
+    def context(self):
+        return {'version': 1, 'release': '/opt/id-business-v2/releases/20261008T175148Z-23c5841b9b7e',
+            'commit': scope.MIGRATION_SUCCESSOR_COMMIT, 'manifestSha256': scope.MIGRATION_SUCCESSOR_MANIFEST_SHA,
+            'buildProofSha256': scope.MIGRATION_SUCCESSOR_PROOF_SHA, 'migration': dict(scope.MIGRATION_IDENTITY),
+            'migrationState': {'name': scope.MIGRATION_NAME, 'sha256': scope.MIGRATION_IDENTITY['sha256'],
+                'status': 'APPLIED', 'schemaVerified': True, 'appliedMigrationsSha256': '7' * 64},
+            'task': migration_task(), 'guards': migration_guards()}
+
+    def preflight(self):
+        return {'status': 'API_ADMIN_BASELINE_VERIFIED', 'commit': scope.MIGRATION_SUCCESSOR_COMMIT,
+            'freeBytes': 10 * 1024**3, 'services': states(), 'guards': migration_guards(), 'migrationOrigin': self.context()}
+
+    def test_current_23c_seal_does_not_admit_old_fd16_or_replace_individual_proofs(self):
+        self.assertEqual(scope.MIGRATION_SUCCESSOR_COMMIT, '23c5841b9b7e60be715250cbb985fc0966c0bce3')
+        self.assertEqual(scope.MIGRATION_SUCCESSOR_MANIFEST_SHA, '117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639')
+        self.assertEqual(scope.MIGRATION_SUCCESSOR_PROOF_SHA, '6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c')
+        old = {'commit': 'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a',
+            'release': '/opt/id-business-v2/releases/20261008T162950Z-fd16cc2cbbec',
+            'manifestSha256': '73952f1c7807d7bf6e4f78d4c5c2eed20602a234c2fe0506538fbd1757f9bed0',
+            'buildProofSha256': 'b9d1a28a2a4251e777285da187db51d0989f8ae80e82d5925c172fee18b17ded'}
+        controller = SimpleNamespace(require=d.require, api_admin_scope=MagicMock())
+        for changed in (old, {'manifestSha256': old['manifestSha256']},
+                        {'buildProofSha256': old['buildProofSha256']}, {'manifestSha256': '0' * 64}):
+            context = {**self.context(), **changed}
+            receipt = {**self.preflight(), 'migrationOrigin': context}
+            with self.subTest(changed=changed):
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                    transport.validate_receipt(receipt, scope.MIGRATION_SUCCESSOR_COMMIT, 'preflight')
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_CHANGED$'):
+                    scope.migration_successor_guard(controller, RUNTIME, context)
+            controller.api_admin_scope.assert_not_called()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            controller.BASE = Path(temporary)
+            origin = controller.BASE / 'releases/20261008T162950Z-fd16cc2cbbec'
+            origin.mkdir(parents=True)
+            (origin / 'release-manifest.json').write_text(json.dumps({'commit': old['commit']}))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_CHANGED$'):
+                scope.migration_successor_origin(controller, origin)
+            controller.api_admin_scope.assert_not_called()
+
+    def test_first_preflight_requires_complete_original_migration_task_window_and_seven_services(self):
+        receipt = self.preflight()
+        transport.validate_receipt(receipt, scope.MIGRATION_SUCCESSOR_COMMIT, 'preflight')
+        for change in ('context', 'commit', 'manifest', 'proof', 'schema', 'sql', 'state', 'task', 'window', 'lease', 'service', 'disk', 'boolean-version'):
+            changed = copy.deepcopy(receipt)
+            context = changed['migrationOrigin']
+            if change == 'context': changed.pop('migrationOrigin')
+            elif change == 'commit': context['commit'] = OLD
+            elif change == 'manifest': context['manifestSha256'] = '0' * 64
+            elif change == 'proof': context['buildProofSha256'] = '0' * 64
+            elif change == 'schema': context['migration']['schemaAfterSha256'] = '0' * 64
+            elif change == 'sql': context['migrationState']['sha256'] = '0' * 64
+            elif change == 'state': context['migrationState']['status'] = 'PENDING'
+            elif change == 'task': context['task']['jobHmac'] = '0' * 64
+            elif change == 'window': context['guards']['registrationWindowRetained'] = False
+            elif change == 'lease': changed['guards']['registrationLeaseActive'] = True
+            elif change == 'service': changed['services'].pop('auto-registration')
+            elif change == 'disk': changed['freeBytes'] = 6 * 1024**3
+            else: context['version'] = True
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                transport.validate_receipt(changed, scope.MIGRATION_SUCCESSOR_COMMIT, 'preflight')
+
+    @contextmanager
+    def readback_fixture(self):
+        context, candidate = self.context(), proof()
+        receipt = {'status': 'API_ADMIN_VERIFIED', 'commit': COMMIT, 'sourceTree': TREE,
+            'buildProofSha256': scope.fingerprint(candidate), 'servicesUpdated': ['api', 'admin'], 'preservedServiceCount': 5,
+            'runningImagesAndContentMatched': True, 'environmentUnchanged': True,
+            'services': {name: {'image': row['imageId'], 'reference': row['reference']} for name, row in candidate['images'].items()},
+            'preservedMigrationOrigin': scope.migration_successor_marker(context), 'migrationPreserved': True,
+            'migrationPerformed': False, 'taskHmacMatched': True, 'windowPreserved': True, 'registrationWindowRetained': True}
+        before = {**self.preflight(), 'mode': 'preflight', 'releaseCandidateCommit': COMMIT,
+                  'workflowRunId': '123', 'workflowRunAttempt': '1'}
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.dict(os.environ,
+                RELEASE_COMMIT=COMMIT, GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1'):
+            directory = Path(temporary) / '.deploy/production-release'; directory.mkdir(parents=True)
+            (directory / scope.PROOF_FILE).write_text(json.dumps(candidate))
+            before_file = directory / 'api-admin-preflight-result.json'; before_file.write_text(json.dumps(before))
+            saved = os.getcwd(); os.chdir(temporary)
+            try: yield receipt, before, before_file
+            finally: os.chdir(saved)
+
+    def test_independent_readback_binds_origin_fingerprint_to_preflight_of_same_candidate_run_attempt(self):
+        with self.readback_fixture() as (receipt, before, before_file):
+            transport.validate_receipt(receipt, COMMIT, 'readback')
+            for field, value in [('releaseCandidateCommit', OLD), ('workflowRunId', '124'), ('workflowRunAttempt', '2'),
+                    ('status', 'UNVERIFIED'), ('mode', 'readback')]:
+                before_file.write_text(json.dumps({**before, field: value}))
+                with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                    transport.validate_receipt(receipt, COMMIT, 'readback')
+            before_file.write_text(json.dumps(before))
+            for field, value in [('preservedMigrationOrigin', {}), ('migrationPreserved', False), ('migrationPerformed', True),
+                    ('taskHmacMatched', False), ('windowPreserved', False), ('registrationWindowRetained', False)]:
+                with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                    transport.validate_receipt({**receipt, field: value}, COMMIT, 'readback')
+            before_file.unlink()
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                transport.validate_receipt(receipt, COMMIT, 'readback')
+
+    def test_context_bytes_changed_after_preflight_cannot_use_old_readback_marker(self):
+        with self.readback_fixture() as (receipt, before, before_file):
+            changed = copy.deepcopy(before)
+            changed['migrationOrigin']['migrationState']['appliedMigrationsSha256'] = '8' * 64
+            before_file.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                transport.validate_receipt(receipt, COMMIT, 'readback')
+
+
+class MigrationSuccessorTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self):
+        with MigrationReadbackTests().fixture() as (controller, current, manifest, candidate, image, task, private, handoff), ExitStack() as stack:
+            before = states()
+            for name in migration.UPDATED:
+                before[name].update(image=candidate['images'][name]['imageId'], reference=candidate['images'][name]['reference'])
+            manifest.update(commit=COMMIT, images={name: {'reference': row['reference'], 'digest': row['image'],
+                'sourceCommit': COMMIT if name in migration.UPDATED else OLD} for name, row in before.items() if name in d.SERVICES},
+                apiAdminMigrationPublication={'version': 1, 'scope': 'API_ADMIN_MIGRATION',
+                    'buildProofSha256': migration.fingerprint(candidate), 'workersPublished': False,
+                    'cacheStatus': 'SKIPPED', 'configurationChanged': False, 'schemaChanged': True,
+                    'migration': migration.MIGRATION_IDENTITY})
+            raw = json.dumps(manifest).encode(); (current / 'release-manifest.json').write_bytes(raw)
+            stack.enter_context(patch.object(scope, 'MIGRATION_SUCCESSOR_COMMIT', COMMIT))
+            stack.enter_context(patch.object(scope, 'MIGRATION_SUCCESSOR_MANIFEST_SHA', hashlib.sha256(raw).hexdigest()))
+            stack.enter_context(patch.object(scope, 'MIGRATION_SUCCESSOR_PROOF_SHA', migration.fingerprint(candidate)))
+            controller.api_admin_scope = MagicMock(return_value=(migration, controller))
+            controller.service_state = lambda _directory, name, **kwargs: before[name]
+            original_run = controller.run.side_effect
+            def inspect(*args, **kwargs):
+                if args[:3] == ('docker', 'image', 'inspect') and args[-1] == before['api']['image']:
+                    return json.dumps([{'Id': before['api']['image'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                        'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE}}}])
+                return original_run(*args, **kwargs)
+            controller.run.side_effect = inspect
+            stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
+            stack.enter_context(patch.object(scope, 'jobs_idle', return_value=migration_guards()))
+            yield controller, current, manifest, candidate, before, task, private, handoff, stack
+
+    def test_exact_origin_runs_original_three_image_migration_readback_without_migration_or_handoff(self):
+        with self.fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
+            apply = stack.enter_context(patch.object(migration, 'apply_migration'))
+            original_readback = stack.enter_context(patch.object(migration, 'readback', wraps=migration.readback))
+            result = scope.baseline(controller, COMMIT)
+            context = result[3]['migrationOrigin']
+            self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_MIGRATION_API_ADMIN_ORIGIN')
+            self.assertEqual(result[2], before)
+            self.assertEqual(context['task'], migration.MIGRATION_TASK)
+            self.assertEqual(context['migrationState']['status'], 'APPLIED')
+            self.assertEqual(context['buildProofSha256'], migration.fingerprint(candidate))
+            original_readback.assert_called_once_with(controller, COMMIT)
+            self.assertTrue(all('run' not in call.args[1:3] for call in controller.compose.call_args_list))
+            apply.assert_not_called(); handoff.assert_not_called()
+
+    def test_origin_requires_exact_approved_commit_manifest_and_proof(self):
+        for change in ('commit', 'manifest', 'proof'):
+            with self.subTest(change=change), self.fixture() as (controller, current, manifest, candidate, *_):
+                if change == 'commit': scope.MIGRATION_SUCCESSOR_COMMIT = OLD
+                elif change == 'manifest': (current / 'release-manifest.json').write_text(json.dumps({**manifest, 'unchecked': True}))
+                else:
+                    candidate['images']['api']['sha256'] = '8' * 64
+                    (current / migration.PROOF_FILE).write_text(json.dumps(candidate))
+                with self.assertRaises(RuntimeError): scope.baseline(controller, COMMIT, check_jobs=False)
+
+    def test_preservation_rejects_context_task_ddl_proof_or_window_drift(self):
+        for change in ('extra', 'origin-commit', 'origin-path', 'context-task', 'database', 'task', 'window', 'schema', 'proof'):
+            with self.subTest(change=change), self.fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
+                context = scope.migration_successor_origin(controller, current)
+                if change == 'extra': context['unchecked'] = True
+                elif change == 'origin-commit': context['commit'] = OLD
+                elif change == 'origin-path': context['release'] = str(controller.BASE)
+                elif change == 'context-task': context['task']['jobHmac'] = '8' * 64
+                elif change == 'database': controller.compose.return_value = json.dumps(migration_database_fixture(applied=False))
+                elif change == 'task': task.return_value = {**migration_task(), 'jobHmac': '8' * 64}
+                elif change == 'window': stack.enter_context(patch.object(migration, 'jobs_idle', return_value={**migration_guards(), 'registrationWindowRetained': False}))
+                elif change == 'schema': (current / migration.MIGRATION_SCHEMA).write_text('changed schema')
+                else:
+                    candidate['images'].pop('migrate'); (current / migration.PROOF_FILE).write_text(json.dumps(candidate))
+                with self.assertRaises(RuntimeError): scope.migration_successor_guard(controller, current, context)
+
+    @contextmanager
+    def successor_fixture(self):
+        with self.fixture() as (controller, origin, original_manifest, original_proof, before, task, private, handoff, stack):
+            context = scope.migration_successor_origin(controller, origin)
+            current = controller.BASE / 'releases/successor'; shutil.copytree(origin, current)
+            candidate = proof(); candidate['commit'] = OLD
+            for name, row in candidate['images'].items(): row['reference'] = row['reference'].replace(COMMIT, OLD)
+            after = copy.deepcopy(before)
+            for name, row in candidate['images'].items(): after[name].update(image=row['imageId'], reference=row['reference'])
+            override = json.loads((current / 'compose.release.json').read_text())
+            for name, row in candidate['images'].items(): override['services'][name] = {'image': row['reference'], 'pull_policy': 'never'}
+            (current / 'compose.release.json').write_text(json.dumps(override))
+            environment_sha = hashlib.sha256((origin / '.env.aws.production').read_bytes()).hexdigest()
+            record = {'before': before, 'after': after, 'environmentSha256': environment_sha,
+                'buildProofSha256': scope.fingerprint(candidate), 'migrationOrigin': context,
+                'configurationBefore': scope.configuration_hashes(origin), 'configurationAfter': scope.configuration_hashes(current)}
+            (current / scope.STATE_FILE).write_text(json.dumps(record))
+            (current / scope.PROOF_FILE).write_text(json.dumps(candidate))
+            manifest = {'commit': OLD, 'sourceTree': TREE, 'servicesUpdated': ['api', 'admin'], 'migrationApplied': False,
+                'newMigrations': [], 'previousRelease': str(origin), 'previousCommit': COMMIT,
+                'backupBeforeRelease': original_manifest['backupBeforeRelease'],
+                'dataAuditBefore': original_manifest['dataAuditBefore'], 'dataAuditAfter': original_manifest['dataAuditAfter'],
+                'images': {name: {'reference': row['reference'], 'digest': row['image'], 'sourceCommit': OLD if name in scope.UPDATED else OLD}
+                           for name, row in after.items() if name in d.SERVICES},
+                'apiAdminPublication': {'version': 1, 'scope': 'API_ADMIN', 'buildProofSha256': scope.fingerprint(candidate),
+                    'workersPublished': False, 'cacheStatus': 'SKIPPED', 'configurationChanged': False},
+                'preservedMigrationOrigin': scope.migration_successor_marker(context)}
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            (controller.BASE / 'current').unlink(); (controller.BASE / 'current').symlink_to(current)
+            stack.enter_context(patch.object(scope, 'snapshot', return_value=after))
+            stack.enter_context(patch.object(scope, 'verify_running'))
+            controller.migration_plan = MagicMock(return_value=[])
+            controller.service_state = lambda _directory, name, **kwargs: after[name]
+            original_run = controller.run.side_effect
+            def inspect(*args, **kwargs):
+                if args[:3] == ('docker', 'image', 'inspect') and args[-1] == after['api']['image']:
+                    return json.dumps([{'Id': after['api']['image'], 'Architecture': 'amd64', 'Config': {'Labels': {'org.opencontainers.image.revision': OLD}}}])
+                return original_run(*args, **kwargs)
+            controller.run.side_effect = inspect
+            yield controller, current, origin, manifest, record, context, stack
+
+    def test_successor_readback_has_no_new_migration_and_keeps_five_services_task_window_and_origin_proof(self):
+        with self.successor_fixture() as (controller, current, origin, manifest, record, context, stack):
+            apply = stack.enter_context(patch.object(migration, 'apply_migration'))
+            result = scope.readback(controller, OLD)
+            self.assertEqual(result['servicesUpdated'], ['api', 'admin'])
+            self.assertEqual(result['preservedServiceCount'], 5)
+            self.assertTrue(result['migrationPreserved']); self.assertFalse(result['migrationPerformed'])
+            self.assertTrue(result['taskHmacMatched']); self.assertTrue(result['windowPreserved'])
+            self.assertEqual(result['preservedMigrationOrigin'], scope.migration_successor_marker(context))
+            self.assertEqual(manifest['newMigrations'], [])
+            apply.assert_not_called()
+
+    def test_second_api_admin_successor_keeps_original_sealed_context_and_rechecks_it(self):
+        with self.successor_fixture() as (controller, previous, origin, prior_manifest, prior_record, context, stack):
+            commit = '9' * 40
+            current = controller.BASE / 'releases/second-successor'; shutil.copytree(previous, current)
+            candidate = json.loads((current / scope.PROOF_FILE).read_text()); candidate['commit'] = commit
+            before = copy.deepcopy(prior_record['after']); after = copy.deepcopy(before)
+            override = json.loads((current / 'compose.release.json').read_text())
+            for name, row in candidate['images'].items():
+                row['reference'] = row['reference'].replace(OLD, commit)
+                after[name].update(image=row['imageId'], reference=row['reference'])
+                override['services'][name] = {'image': row['reference'], 'pull_policy': 'never'}
+            (current / 'compose.release.json').write_text(json.dumps(override))
+            record = {**prior_record, 'before': before, 'after': after,
+                'buildProofSha256': scope.fingerprint(candidate),
+                'configurationBefore': scope.configuration_hashes(previous),
+                'configurationAfter': scope.configuration_hashes(current)}
+            manifest = {**prior_manifest, 'commit': commit, 'previousCommit': OLD, 'previousRelease': str(previous),
+                'images': {name: {'reference': row['reference'], 'digest': row['image'],
+                    'sourceCommit': commit if name in scope.UPDATED else OLD}
+                    for name, row in after.items() if name in d.SERVICES},
+                'apiAdminPublication': {**prior_manifest['apiAdminPublication'], 'buildProofSha256': scope.fingerprint(candidate)}}
+            (current / scope.PROOF_FILE).write_text(json.dumps(candidate))
+            (current / scope.STATE_FILE).write_text(json.dumps(record))
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            (controller.BASE / 'current').unlink(); (controller.BASE / 'current').symlink_to(current)
+            stack.enter_context(patch.object(scope, 'snapshot', return_value=after))
+            controller.service_state = lambda _directory, name, **kwargs: after[name]
+            original_run = controller.run.side_effect
+            def inspect(*args, **kwargs):
+                if args[:3] == ('docker', 'image', 'inspect') and args[-1] == after['api']['image']:
+                    return json.dumps([{'Id': after['api']['image'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                        'org.opencontainers.image.revision': commit}}}])
+                return original_run(*args, **kwargs)
+            controller.run.side_effect = inspect
+            guard = stack.enter_context(patch.object(scope, 'migration_successor_guard', wraps=scope.migration_successor_guard))
+            result = scope.readback(controller, commit)
+            self.assertEqual(result['preservedMigrationOrigin'], scope.migration_successor_marker(context))
+            self.assertEqual(record['migrationOrigin']['release'], str(origin))
+            self.assertTrue(result['migrationPreserved']); self.assertFalse(result['migrationPerformed'])
+            self.assertGreaterEqual(guard.call_count, 2)
+            self.assertTrue(all(call.args[2] == context for call in guard.call_args_list))
+            manifest.pop('preservedMigrationOrigin'); record.pop('migrationOrigin')
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            (current / scope.STATE_FILE).write_text(json.dumps(record))
+            with self.assertRaisesRegex(RuntimeError, 'MIGRATION_ORIGIN_CHANGED'): scope.readback(controller, commit)
+            manifest['preservedMigrationOrigin'] = scope.migration_successor_marker(context)
+            record['migrationOrigin'] = context
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            (current / scope.STATE_FILE).write_text(json.dumps(record))
+            (origin / migration.MIGRATION_SCHEMA).write_text('changed original schema')
+            with self.assertRaises(RuntimeError): scope.readback(controller, commit)
+
+    def test_successor_cannot_drop_marker_task_guard_or_backup_validation(self):
+        for change in ('marker', 'context', 'backup', 'check-task'):
+            with self.subTest(change=change), self.successor_fixture() as (controller, current, origin, manifest, record, context, stack):
+                if change == 'marker': manifest.pop('preservedMigrationOrigin'); (current / 'release-manifest.json').write_text(json.dumps(manifest))
+                elif change == 'context': record.pop('migrationOrigin'); (current / scope.STATE_FILE).write_text(json.dumps(record))
+                elif change == 'backup': (current / 'backup-verification.json').write_text('{}')
+                with self.assertRaises(RuntimeError): scope.readback(controller, OLD, check_task=change != 'check-task')
+
+    def test_two_image_release_preserves_original_migration_context_without_running_migrate(self):
+        with self.fixture() as (original, directory, *_):
+            context = scope.migration_successor_origin(original, directory)
+            code, result, controller, manifest, _ = ReleaseFailureTests().run_release(migration_origin=context)
+            self.assertEqual(code, 0)
+            self.assertEqual([call.args[-1] for call in controller.compose.call_args_list], ['admin', 'api'])
+            self.assertEqual(manifest['preservedMigrationOrigin'], scope.migration_successor_marker(context))
+            self.assertEqual(manifest['newMigrations'], []); self.assertFalse(manifest['migrationApplied'])
+            self.assertGreaterEqual(controller.migration_origin_guard.call_count, 6)
+            self.assertEqual(len([command for command in controller.commands if command[:2] == ('docker', 'pull')]), 2)
+
+    def test_new_task_or_window_after_api_switch_blocks_resource_rollback(self):
+        with self.fixture() as (original, directory, *_):
+            context = scope.migration_successor_origin(original, directory)
+            changed = False
+            def after_api():
+                nonlocal changed
+                changed = True
+            def guard(*args):
+                if changed: raise RuntimeError('API_ADMIN_REGISTRATION_TASK_CHANGED')
+            code, result, controller, manifest, persisted = ReleaseFailureTests().run_release(
+                migration_origin=context, migration_origin_guard=guard, after_api=after_api)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'API_ADMIN_PARTIAL_RECOVERY_REQUIRED')
+            self.assertEqual(result['servicesAttempted'], ['admin', 'api'])
+            self.assertFalse(result['rollbackOk']); self.assertTrue(persisted)
+            controller.rollback_service.assert_not_called()
+            controller.point_current.assert_not_called()
+
+    def test_origin_drift_before_pull_stops_publication_and_healthy_failure_rolls_back_only_two(self):
+        with self.fixture() as (original, directory, *_):
+            context = scope.migration_successor_origin(original, directory)
+            def guard(_controller, path, _context):
+                if path.name != 'previous': raise RuntimeError('API_ADMIN_MIGRATION_PRESERVATION_CHANGED')
+            code, result, controller, manifest, _ = ReleaseFailureTests().run_release(migration_origin=context, migration_origin_guard=guard)
+            self.assertEqual(code, 1); self.assertEqual(result['servicesAttempted'], [])
+            controller.compose.assert_not_called()
+            self.assertFalse(any(command[:2] == ('docker', 'pull') for command in controller.commands))
+            code, result, controller, manifest, _ = ReleaseFailureTests().run_release(migration_origin=context, fail_at='api-health')
+            self.assertEqual(code, 1); self.assertEqual(result['status'], 'API_ADMIN_FAILED_RESTORED')
+            self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list], ['api', 'admin'])
 
 
 if __name__ == '__main__':

@@ -85,7 +85,10 @@ export function projectRechargePaymentRecord(
     ![0, 1].includes(payment.confirmation_requests_sent as number) ||
     !['unknown', 'paid', 'declined', 'requires_action'].includes(String(payment.payment_status)) ||
     (payment.payment_status === 'paid' && !payment.payment_evidence) ||
-    (upgrade && (previous.operation !== 'subscription_upgrade' || !isRechargeUpgrade(previous))) ||
+    (upgrade &&
+      (previous.operation !== 'subscription_upgrade' ||
+        !isRechargeUpgrade(previous) ||
+        previous.current_plan_before !== payment.current_plan_before)) ||
     (upgrade &&
       payment.payment_status === 'paid' &&
       (!rechargeUpgradePaymentReference(payment) ||
@@ -102,7 +105,7 @@ export function projectRechargePaymentRecord(
       ? {
           operation: payment.operation,
           upgrade_identifier: identifier,
-          current_plan_before: 'plus',
+          current_plan_before: payment.current_plan_before,
           target_plan: payment.target_plan,
           ...(payment.upgrade_invoice_identifier
             ? { upgrade_invoice_identifier: payment.upgrade_invoice_identifier }

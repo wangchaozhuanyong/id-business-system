@@ -1,11 +1,21 @@
-import {
-  V2_ACCOUNT_OFFER_LABELS,
-  V2_REGISTRATION_STEP_LABELS,
-  type V2AccountOffer,
-  type V2RegistrationStep
-} from '@apple-business/shared';
+import { V2_ACCOUNT_OFFER_LABELS, type V2AccountOffer } from '@apple-business/shared';
 import type { V2AuditLogRecord } from './contracts';
 import { auditChangeFieldLabels, auditChangeValueLabels } from './audit-change-labels';
+
+// 已退役功能的历史审计仍需显示可读阶段，不依赖其执行代码。
+const historicalRegistrationStepLabels: Readonly<Record<string, string>> = {
+  queued: '准备注册',
+  email: '填写邮箱',
+  email_code: '验证邮箱',
+  profile: '填写资料',
+  registered: '注册已核实',
+  password: '设置密码',
+  password_verified: '密码已核实',
+  mfa: '设置双重验证',
+  mfa_verified: '双重验证已核实',
+  offer: '核实优惠',
+  completed: '流程结束'
+};
 
 const TECHNICAL_FIELDS = new Set([
   'id',
@@ -89,8 +99,7 @@ export function auditChangeValue(value: unknown, field: string): string {
   }
   const text = String(value);
   if (field === 'offerStatus') return V2_ACCOUNT_OFFER_LABELS[text as V2AccountOffer] ?? '待核实';
-  if (field === 'step')
-    return V2_REGISTRATION_STEP_LABELS[text as V2RegistrationStep] ?? '阶段待核对';
+  if (field === 'step') return historicalRegistrationStepLabels[text] ?? '阶段待核对';
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
     const date = new Date(text);
     if (!Number.isNaN(date.getTime()))
