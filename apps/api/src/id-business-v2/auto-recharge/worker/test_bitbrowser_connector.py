@@ -430,7 +430,7 @@ class BitBrowserConnectorTests(unittest.TestCase):
 sys.path.insert(0,sys.argv[1])
 original = builtins.__import__
 def minimal(name,*args,**kwargs):
-    if name.split('.')[0] in {'camoufox','browserforge','numpy','fingerprint_runtime','server'}:
+    if name.split('.')[0] in {'camoufox','browserforge','numpy','fingerprint_runtime','server','playwright'}:
         raise ImportError('server browser dependency unavailable')
     return original(name,*args,**kwargs)
 builtins.__import__ = minimal

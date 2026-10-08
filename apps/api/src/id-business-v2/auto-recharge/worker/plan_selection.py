@@ -4,7 +4,6 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from playwright.async_api import expect
 from checkout_core import Stop
 from plans import PRO_GROUP, PRO_PRICE_PLANS, PRO_USAGE_LABELS, selection_spec
 
@@ -28,6 +27,12 @@ GO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Go\s*$", re.I)
 PRO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Pro\s*$", re.I)
 STEPS = {'open_menu', 'pricing_page', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'}
 ERROR_TYPES = {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}
+
+
+def expect(locator):
+    # The local assistant can start before browser execution loads Playwright.
+    from playwright.async_api import expect as browser_expect
+    return browser_expect(locator)
 
 
 def safe_diagnostics(value):
