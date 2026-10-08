@@ -13745,6 +13745,7 @@ class FixedRechargePricingE7ContractTests(unittest.TestCase):
 
     def test_e7_manifest_and_source_basis_are_required_before_activation(self):
         draft = json.loads((self.project / deployment.RECHARGE_PRICING_FILE).read_bytes())
+        draft.update(enabled=False, approvalStatus='NOT_APPROVED')
         self.assertIs(deployment.recharge_pricing_scope(draft, require_approved=False), draft)
         with self.assertRaisesRegex(RuntimeError, 'not approved'): deployment.recharge_pricing_scope(draft)
         for mutate in (lambda p: p.update(expectedCurrent=deployment.RECHARGE_PRICING_CURRENT),

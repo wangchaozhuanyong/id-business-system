@@ -40,7 +40,7 @@
     "scripts/production-release/maintain-image-cache.test.py": "883ff82644f6907b714d0602bd53c5024fc261d7994b157899d989f50ec4b372",
     "scripts/production-release/push-images.sh": "c6c857dcba55a79d3635308f5b292b800d10531a73923e140938af5f4bd9792b",
     "scripts/production-release/remote-deploy.py": "099c22ce495e3a6c87bd8648b02dc279bb4ac1375f808f4f12db3a98c87f02e3",
-    "scripts/production-release/remote-deploy.test.py": "5c2a9c0510bf9597eef40ed1ee7566ee0414cc49b021886242a8c7e05512e725",
+    "scripts/production-release/remote-deploy.test.py": "aa4dced2a9555a9a9e6aadaf8e5679b5124a35f9ddcc7dfb0150bb085e73cd08",
     "scripts/production-release/validate-release-selection.sh": "0b6102b48564a49692908a0d8b8649b2e83ee11e6344e1b80bf6c25f78fd52bd"
   },
   "enabled": true,
