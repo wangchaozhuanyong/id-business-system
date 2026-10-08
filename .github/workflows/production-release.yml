@@ -769,9 +769,55 @@ jobs:
             --parameters file://.deploy/production-release/storage-maintenance.json \
             --query 'Command.CommandId' --output text)"
           wait_status=0
-          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?
-          aws ssm get-command-invocation --command-id "$command_id" \
-            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
+          if [[ "$STORAGE_OPERATION" = diagnose_storage ]]; then
+            if [[ ! "$command_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+              echo 'STORAGE_DIAGNOSTIC_COMMAND_ID_INVALID' >&2
+              exit 1
+            fi
+            printf 'STORAGE_DIAGNOSTIC_COMMAND_ID %s\n' "$command_id"
+            python3 - "$command_id" "$PRODUCTION_INSTANCE_ID" <<'PY_WAIT_STORAGE' || wait_status=$?
+          import subprocess
+          import sys
+          import time
+          deadline = time.monotonic() + 660
+          def fail(marker):
+              print(marker, file=sys.stderr)
+              raise SystemExit(1)
+          def invocation(query):
+              remaining = deadline - time.monotonic()
+              if remaining <= 0:
+                  fail('STORAGE_DIAGNOSTIC_WAIT_BUDGET_EXHAUSTED')
+              try:
+                  result = subprocess.run(['aws', 'ssm', 'get-command-invocation',
+                      '--command-id', sys.argv[1], '--instance-id', sys.argv[2],
+                      '--query', query, '--output', 'text'], capture_output=True,
+                      text=True, timeout=min(30, remaining))
+              except (OSError, subprocess.TimeoutExpired, UnicodeError):
+                  fail('STORAGE_DIAGNOSTIC_READ_UNAVAILABLE')
+              if result.returncode:
+                  fail('STORAGE_DIAGNOSTIC_READ_UNAVAILABLE')
+              return result.stdout
+          while True:
+              status = invocation('Status').strip()
+              if status == 'Success':
+                  sys.stdout.write(invocation('StandardOutputContent'))
+                  break
+              if status in ('Failed', 'Cancelled', 'TimedOut'):
+                  print('STORAGE_DIAGNOSTIC_REMOTE_' + status, file=sys.stderr)
+                  sys.stdout.write(invocation('StandardOutputContent'))
+                  raise SystemExit(1)
+              if status not in ('Pending', 'InProgress', 'Delayed', 'Cancelling'):
+                  fail('STORAGE_DIAGNOSTIC_UNKNOWN_STATUS')
+              remaining = deadline - time.monotonic()
+              if remaining <= 0:
+                  fail('STORAGE_DIAGNOSTIC_WAIT_BUDGET_EXHAUSTED')
+              time.sleep(min(10, remaining))
+          PY_WAIT_STORAGE
+          else
+            aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" || wait_status=$?
+            aws ssm get-command-invocation --command-id "$command_id" \
+              --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
+          fi
           exit "$wait_status"
 
       - name: Read requested release failure

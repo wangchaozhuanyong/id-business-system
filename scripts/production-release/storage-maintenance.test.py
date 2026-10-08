@@ -228,6 +228,33 @@ class StorageSafetyTests(unittest.TestCase):
                     archive.addfile(member, io.BytesIO(data))
             self.assertEqual(storage.archived_images(path), [])
 
+    def test_archive_metadata_budget_preserves_inventory_without_claiming_recovery(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory:
+            root = Path(directory).resolve()
+            (root / 'artifacts').mkdir()
+            for name in ('a.tar', 'b.tar', 'note.json'):
+                (root / 'artifacts' / name).write_bytes(b'public-fixture')
+            with patch.object(storage, 'BASE', root), patch.object(storage, 'archived_images',
+                    side_effect=RuntimeError('Archive metadata time budget exceeded')) as metadata:
+                result = storage.archive_inventory()
+            metadata.assert_called_once()
+        self.assertEqual([item['path'] for item in result],
+                         ['artifacts/a.tar', 'artifacts/b.tar', 'artifacts/note.json'])
+        self.assertTrue(all(item['bytes'] == len(b'public-fixture') for item in result))
+        self.assertTrue(all(item['archiveMetadataStatus'] == 'TIME_BUDGET_EXCEEDED'
+                            and 'dockerImages' not in item for item in result[:2]))
+        self.assertNotIn('archiveMetadataStatus', result[2])
+
+    def test_unknown_archive_runtime_failure_is_not_silently_accepted(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory:
+            root = Path(directory).resolve()
+            (root / 'artifacts').mkdir()
+            (root / 'artifacts/a.tar').write_bytes(b'public-fixture')
+            with patch.object(storage, 'BASE', root), patch.object(storage, 'archived_images',
+                    side_effect=RuntimeError('UNEXPECTED_METADATA_FAILURE')):
+                with self.assertRaisesRegex(RuntimeError, 'UNEXPECTED_METADATA_FAILURE'):
+                    storage.archive_inventory()
+
     def test_destructive_scope_requires_exact_approval(self):
         with self.assertRaisesRegex(RuntimeError, 'approval required'):
             storage.cleanup_audit(storage.EXPECTED, None)
@@ -294,6 +321,17 @@ class StorageSafetyTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as failure:
                 storage.read('diagnostic')
         self.assertNotIn('PRIVATE', str(failure.exception))
+
+    def test_timeout_reports_only_fixed_phase_without_private_command_or_output(self):
+        for command, phase in ((('du', 'PRIVATE_PATH'), 'DIRECTORY_USAGE'),
+                               (('docker', 'exec', 'PRIVATE_ARGUMENT'), 'DATABASE_QUERY'),
+                               (('docker', 'inspect', 'PRIVATE_ARGUMENT'), 'DOCKER_METADATA'),
+                               (('PRIVATE_COMMAND',), 'COMMAND')):
+            with self.subTest(phase=phase), patch.object(storage.subprocess, 'run',
+                    side_effect=subprocess.TimeoutExpired(command, 120,
+                        output='PRIVATE_STDOUT', stderr='PRIVATE_STDERR')):
+                with self.assertRaisesRegex(RuntimeError, '^Diagnostic command timed out: ' + phase + '$'):
+                    storage.read(*command)
 
     def test_retention_migration_cannot_expand_the_approved_exception(self):
         sql = Path('apps/api/prisma-mysql/migrations/' + storage.RETENTION_MIGRATION + '/migration.sql').read_text()

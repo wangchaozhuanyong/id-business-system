@@ -45,7 +45,13 @@ ROUTINE_ACTIONS = (
 
 
 def read(*args):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        kind = ('DIRECTORY_USAGE' if args and args[0] == 'du' else
+                'DATABASE_QUERY' if args[:2] == ('docker', 'exec') else
+                'DOCKER_METADATA' if args and args[0] == 'docker' else 'COMMAND')
+        raise RuntimeError('Diagnostic command timed out: ' + kind) from None
     if result.returncode:
         mysql_error = re.search(r'ERROR (\d+) \(([A-Z0-9]+)\)', result.stderr)
         if mysql_error:
@@ -93,6 +99,7 @@ def archive_inventory():
         return []
     result = []
     deadline = time.monotonic() + 120
+    metadata_budget_exhausted = False
     for path in sorted(root.rglob('*')):
         if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root):
             continue
@@ -101,10 +108,18 @@ def archive_inventory():
         item = {'path': str(path.relative_to(BASE)), 'bytes': stat.st_size,
                 'mtimeNs': stat.st_mtime_ns}
         if path.name.endswith(('.tar', '.tar.gz', '.tgz')):
-            try:
-                item['dockerImages'] = archived_images(path, deadline)
-            except (tarfile.TarError, ValueError, OSError):
-                item['archiveMetadataStatus'] = 'UNAVAILABLE'
+            if metadata_budget_exhausted:
+                item['archiveMetadataStatus'] = 'TIME_BUDGET_EXCEEDED'
+            else:
+                try:
+                    item['dockerImages'] = archived_images(path, deadline)
+                except RuntimeError as error:
+                    if str(error) != 'Archive metadata time budget exceeded':
+                        raise
+                    metadata_budget_exhausted = True
+                    item['archiveMetadataStatus'] = 'TIME_BUDGET_EXCEEDED'
+                except (tarfile.TarError, ValueError, OSError):
+                    item['archiveMetadataStatus'] = 'UNAVAILABLE'
         result.append(item)
     return result
 
