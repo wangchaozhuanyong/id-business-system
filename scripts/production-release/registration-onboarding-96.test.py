@@ -861,6 +861,70 @@ class Registration96AdapterTests(unittest.TestCase):
             self.reject('FILE_IDENTITY_INVALID', scope.read_actual_file, path, modes=(0o644,), owner=os.geteuid() + 1)
             self.reject('FILE_LOCATION_INVALID', scope.write_private_file, path, b'{}', exclusive=False)
 
+    def test_actual_profile_repeated_default_then_profile_cap_is_unchanged(self):
+        with tempfile.TemporaryDirectory(dir=ADAPTER_TEST_OUTPUT) as directory:
+            path = Path(directory) / 'pro-profile.json'
+            raw = b'{"id":"synthetic-pro"}'
+            path.write_bytes(raw); path.chmod(0o644)
+            adapter = scope.Registration96IO(self.parent(), production=False, budget=210)
+            self.assertEqual(adapter.read(path), raw)
+            self.assertEqual(adapter.read(path, limit=scope.PROFILE_MAX_BYTES), raw)
+            adapter.unchanged()
+
+    def test_repeated_reads_keep_strictest_cap_and_mode_for_final_check(self):
+        with tempfile.TemporaryDirectory(dir=ADAPTER_TEST_OUTPUT) as directory:
+            path = Path(directory) / 'pro-profile.json'
+            raw = b'{"id":"synthetic-pro"}'
+            path.write_bytes(raw); path.chmod(0o644)
+            adapter = scope.Registration96IO(self.parent(), production=False, budget=210)
+            adapter.read(path, modes=(0o644, 0o664))
+            adapter.read(path, modes=(0o644,), limit=scope.PROFILE_MAX_BYTES)
+            adapter.read(path, modes=(0o775, 0o664, 0o644))
+            self.reject('FILE_IDENTITY_INVALID', adapter.read, path, limit=len(raw) - 1)
+            self.reject('FILE_IDENTITY_INVALID', adapter.read, path, modes=(0o664,))
+            with patch.object(scope, 'read_actual_file', wraps=scope.read_actual_file) as reader:
+                adapter.unchanged()
+            reader.assert_called_once_with(path, modes=(0o644,), limit=scope.PROFILE_MAX_BYTES, owner=os.geteuid())
+
+    def test_observed_file_rejects_same_size_bytes_change_even_with_stable_metadata(self):
+        for stable_metadata in (False, True):
+            with self.subTest(stable_metadata=stable_metadata), tempfile.TemporaryDirectory(dir=ADAPTER_TEST_OUTPUT) as directory:
+                path = Path(directory) / 'closed.json'; scope.write_private_file(path, b'{"a":1}')
+                adapter = scope.Registration96IO(self.parent(), production=False, budget=210)
+                adapter.read(path, private=True)
+                original = path.lstat()
+                path.write_bytes(b'{"b":2}')
+                self.assertEqual(path.stat().st_size, original.st_size)
+                if stable_metadata:
+                    # Read the changed real bytes while isolating the cached-content guard.
+                    with patch.object(Path, 'lstat', return_value=original), patch.object(scope.os, 'fstat', return_value=original):
+                        self.reject('OBSERVED_FILE_CHANGED', adapter.read, path, private=True)
+                        self.reject('OBSERVED_FILE_CHANGED', adapter.unchanged)
+                else:
+                    self.reject('OBSERVED_FILE_CHANGED', adapter.read, path, private=True)
+                    self.reject('OBSERVED_FILE_CHANGED', adapter.unchanged)
+
+    def test_repeated_read_rejects_descriptor_identity_and_owner_changes(self):
+        from types import SimpleNamespace
+        for field in ('st_ino', 'st_uid'):
+            with self.subTest(field=field), tempfile.TemporaryDirectory(dir=ADAPTER_TEST_OUTPUT) as directory:
+                path = Path(directory) / 'closed.json'; scope.write_private_file(path, b'{}')
+                adapter = scope.Registration96IO(self.parent(), production=False, budget=210)
+                adapter.read(path, private=True)
+                real_fstat = scope.os.fstat; calls = []
+                def changed(fd):
+                    row = real_fstat(fd); calls.append(fd)
+                    if len(calls) == 2:
+                        attrs = {n: getattr(row, n) for n in ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns')}
+                        attrs[field] += 1
+                        return SimpleNamespace(**attrs)
+                    return row
+                with patch.object(scope.os, 'fstat', side_effect=changed):
+                    self.reject('FILE_IDENTITY_CHANGED', adapter.read, path, private=True)
+                adapter.unchanged()
+                adapter.owner = os.geteuid() + 1
+                self.reject('FILE_IDENTITY_INVALID', adapter.read, path, private=True)
+
     def test_real_git_archive_tree_matches_actual_current_git_tree_in_ram(self):
         import tarfile
         root = MODULE.parents[2]; commit = scope.local_git(root, 'rev-parse', 'HEAD')
