@@ -8,15 +8,20 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import sys
 import time
 import unittest
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from lib.native_mysql_fixture import NativeMysqlFixture, add_fixture_arguments, validate_fixture_arguments
 
 MIGRATION = Path('apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql')
 SCOPE = 'audit-routine-20261002T110000Z'
 spec = importlib.util.spec_from_file_location('storage', Path(__file__).with_name('storage-maintenance.py'))
 storage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(storage)
+fixture_args = argparse.Namespace(runtime='docker', mysql_bin=None, work_directory=None)
 
 
 def static_check():
@@ -35,11 +40,14 @@ class RetentionMysqlTests(unittest.TestCase):
 
     @classmethod
     def execute(cls, sql, user='root', expected_error=None):
-        result = cls.command('docker', 'exec', cls.container, 'sh', '-c',
-            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --host="$4" --protocol="$3" '
-            '--database=storage_retention_test --default-character-set=utf8mb4 '
-            '--batch --skip-column-names --user="$1" --execute="$2"', 'sh', user, sql,
-            'TCP' if user == 'root' else 'SOCKET', '127.0.0.1' if user == 'root' else 'localhost')
+        if cls.native_fixture is not None:
+            result = cls.native_fixture.execute(sql, user, cls.password if user != 'root' else None)
+        else:
+            result = cls.command('docker', 'exec', cls.container, 'sh', '-c',
+                'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --host="$4" --protocol="$3" '
+                '--database=storage_retention_test --default-character-set=utf8mb4 '
+                '--batch --skip-column-names --user="$1" --execute="$2"', 'sh', user, sql,
+                'TCP' if user == 'root' else 'SOCKET', '127.0.0.1' if user == 'root' else 'localhost')
         if expected_error:
             if result.returncode == 0 or not re.search(r'ERROR ' + str(expected_error) + r' \(', result.stderr):
                 code = re.search(r'ERROR (\d+) \(([A-Z0-9]+)\)', result.stderr)
@@ -54,13 +62,17 @@ class RetentionMysqlTests(unittest.TestCase):
         sql = static_check()
         cls.password = secrets.token_hex(24)
         cls.container = 'idv2-audit-retention-test-' + uuid.uuid4().hex[:12]
-        env = os.environ.copy()
-        env['MYSQL_ROOT_PASSWORD'] = cls.password
-        started = cls.command('docker', 'run', '--detach', '--rm', '--network', 'none',
-            '--name', cls.container, '-e', 'MYSQL_ROOT_PASSWORD', '-e',
-            'MYSQL_DATABASE=storage_retention_test', 'mysql:8.4', env=env)
-        if started.returncode:
-            raise AssertionError('Isolated MySQL fixture could not start')
+        cls.native_fixture = None
+        if fixture_args.runtime == 'native':
+            cls.native_fixture = NativeMysqlFixture('storage_retention_test', fixture_args.mysql_bin, fixture_args.work_directory)
+        else:
+            env = os.environ.copy()
+            env['MYSQL_ROOT_PASSWORD'] = cls.password
+            started = cls.command('docker', 'run', '--detach', '--rm', '--network', 'none',
+                '--name', cls.container, '-e', 'MYSQL_ROOT_PASSWORD', '-e',
+                'MYSQL_DATABASE=storage_retention_test', 'mysql:8.4', env=env)
+            if started.returncode:
+                raise AssertionError('Isolated MySQL fixture could not start')
         try:
             for _ in range(90):
                 try:
@@ -83,12 +95,18 @@ class RetentionMysqlTests(unittest.TestCase):
             cli_sql = cli_sql.removesuffix('END;\n') + 'END$$\nDELIMITER ;\n'
             cls.execute(cli_sql)
         except BaseException:
-            cls.command('docker', 'stop', cls.container)
+            if cls.native_fixture is not None:
+                cls.native_fixture.close()
+            else:
+                cls.command('docker', 'stop', cls.container)
             raise
 
     @classmethod
     def tearDownClass(cls):
-        cls.command('docker', 'stop', cls.container)
+        if cls.native_fixture is not None:
+            cls.native_fixture.close()
+        else:
+            cls.command('docker', 'stop', cls.container)
 
     def row(self, action=None, module='id_business_v2', user=None, manual=False,
             created='2026-10-02 10:59:59'):
@@ -168,7 +186,12 @@ class RetentionMysqlTests(unittest.TestCase):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--static', action='store_true')
+    add_fixture_arguments(parser)
     args = parser.parse_args()
+    validate_fixture_arguments(parser, args)
+    fixture_args = args
+    if args.runtime == 'native':
+        MIGRATION = Path(__file__).resolve().parents[2] / MIGRATION
     if args.static:
         static_check()
         print('Audit retention static scope verified; MySQL behavior awaits isolated CI fixture')

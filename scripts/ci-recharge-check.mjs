@@ -122,6 +122,25 @@ if (part === 'guards') {
     'scripts/ci-recharge-release.test.mjs',
     'scripts/admin-layout-rules.test.mjs'
   ]);
+  if (
+    changed.some(
+      (path) =>
+        /^scripts\/(?:native-[\w.-]+|start-native-worker(?:\.test)?\.mjs|doctor(?:\.test)?\.mjs|lib\/native-mysql-[\w.-]+)$/.test(
+          path
+        ) ||
+        [
+          'scripts/acceptance-v2-financial-integrity.mjs',
+          'scripts/acceptance-v2-rollback-integrity.mjs',
+          'scripts/acceptance-v2-data-governance.mjs',
+          'scripts/acceptance-v2-data-governance.test.mjs',
+          'scripts/acceptance-native-child-output.test.mjs',
+          'scripts/ci-recharge-migration.py',
+          'scripts/production-release/audit-retention-mysql.test.py',
+          'scripts/lib/native_mysql_fixture.py'
+        ].includes(path)
+    )
+  )
+    npm('run', 'test:native-runtime');
   if (changed.some((path) => historicalReleaseControlPaths.includes(path))) {
     run('node', ['--test', 'scripts/v2-release-history-policy.test.mjs']);
     run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);

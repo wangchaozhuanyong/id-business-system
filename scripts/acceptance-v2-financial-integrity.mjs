@@ -3,40 +3,64 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { V2_DATA_INTEGRITY_CHECKS } from './lib/v2-data-integrity-audit.mjs';
+import {
+  parseNativeMysqlTestOptions,
+  startNativeMysqlTestInstance
+} from './lib/native-mysql-test-instance.mjs';
 
 const containerName = `id-business-v2-financial-integrity-${process.pid}`;
 const databaseName = `id_business_v2_financial_integrity_${process.pid}`;
 const archiveDatabaseName = `id_business_v2_order_archive_integrity_${process.pid}`;
-const archiveOnly = process.argv.slice(2).includes('--order-archive-only');
-assert.ok(
-  process.argv.slice(2).every((argument) => argument === '--order-archive-only'),
-  '财务隔离验收只接受 --order-archive-only'
-);
-const rootPassword = 'v2_financial_integrity_root_only';
+const runtimeOptions = parseNativeMysqlTestOptions(process.argv.slice(2), ['--order-archive-only']);
+const archiveOnly = runtimeOptions.extraFlags.includes('--order-archive-only');
+let rootPassword = 'v2_financial_integrity_root_only';
 const auditUser = 'id_business_audit';
 const auditPassword = 'v2_financial_integrity_audit_only';
 const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
 let createdContainerId;
+let nativeInstance;
+const testCounts = [];
+const cleanupLabel =
+  runtimeOptions.runtime === 'native'
+    ? 'remove-owned-disposable-native-mysql'
+    : 'remove-owned-disposable-mysql-container';
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     encoding: 'utf8',
-    ...options
+    ...options,
+    ...(runtimeOptions.runtime === 'native' ? { stdio: 'pipe' } : {})
   });
   if (result.status !== 0) {
+    if (runtimeOptions.runtime === 'native')
+      throw new Error('财务原生验收子进程失败；SQL、凭据和原始输出已隐藏');
     const detail = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
     throw new Error(`${command} ${args.join(' ')} failed${detail ? `\n${detail}` : ''}`);
   }
+  recordTestCounts(result);
   return result.stdout?.trim() ?? '';
 }
 
+function recordTestCounts(result) {
+  if (runtimeOptions.runtime !== 'native' || result.status !== 0) return;
+  const ansi = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
+  const output = (result.stdout || '').replace(ansi, '');
+  for (const match of output.matchAll(/\b(Test Files|Tests)\s+(\d+) passed\s*\((\d+)\)/g))
+    testCounts.push({ kind: match[1], passed: Number(match[2]), total: Number(match[3]) });
+  for (const match of output.matchAll(/(?:^|\n)[ℹ#] (tests|pass|fail|skipped) (\d+)\b/g))
+    testCounts.push({ kind: match[1], count: Number(match[2]) });
+}
+
 function runAllowingFailure(command, args, options = {}) {
-  return spawnSync(command, args, {
+  const result = spawnSync(command, args, {
     cwd: process.cwd(),
     encoding: 'utf8',
-    ...options
+    ...options,
+    ...(runtimeOptions.runtime === 'native' ? { stdio: 'pipe' } : {})
   });
+  recordTestCounts(result);
+  return result;
 }
 
 function wait(milliseconds) {
@@ -44,6 +68,7 @@ function wait(milliseconds) {
 }
 
 function mysql(sql, database = databaseName) {
+  if (nativeInstance) return nativeInstance.query(sql, database);
   return run('docker', [
     'exec',
     containerName,
@@ -734,54 +759,64 @@ function verifyClosureCounterexamples() {
 
 async function main() {
   try {
-    createdContainerId = run('docker', [
-      'run',
-      '--rm',
-      '--detach',
-      '--name',
-      containerName,
-      '--label',
-      'codex.task=financial-integrity-acceptance',
-      '--memory=512m',
-      '--cpus=2',
-      '--env',
-      `MYSQL_ROOT_PASSWORD=${rootPassword}`,
-      '--env',
-      `MYSQL_DATABASE=${databaseName}`,
-      '--publish',
-      '127.0.0.1::3306',
-      'mysql:8.4',
-      '--character-set-server=utf8mb4',
-      '--collation-server=utf8mb4_0900_ai_ci',
-      '--default-time-zone=+00:00',
-      '--sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION',
-      '--log-bin-trust-function-creators=1'
-    ]);
-    assert.match(createdContainerId, /^[a-f0-9]{64}$/, '仅清理由当前验收创建的容器');
-
-    let ready = false;
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-      const probe = runAllowingFailure('docker', [
-        'exec',
+    let portMatch;
+    if (runtimeOptions.runtime === 'native') {
+      nativeInstance = await startNativeMysqlTestInstance({
+        mysqlBin: runtimeOptions.mysqlBin,
+        database: databaseName
+      });
+      rootPassword = nativeInstance.rootPassword;
+      portMatch = [String(nativeInstance.port), String(nativeInstance.port)];
+    } else {
+      createdContainerId = run('docker', [
+        'run',
+        '--rm',
+        '--detach',
+        '--name',
         containerName,
-        'mysqladmin',
-        'ping',
-        '--host=127.0.0.1',
-        '--user=root',
-        `--password=${rootPassword}`,
-        '--silent'
+        '--label',
+        'codex.task=financial-integrity-acceptance',
+        '--memory=512m',
+        '--cpus=2',
+        '--env',
+        `MYSQL_ROOT_PASSWORD=${rootPassword}`,
+        '--env',
+        `MYSQL_DATABASE=${databaseName}`,
+        '--publish',
+        '127.0.0.1::3306',
+        'mysql:8.4',
+        '--character-set-server=utf8mb4',
+        '--collation-server=utf8mb4_0900_ai_ci',
+        '--default-time-zone=+00:00',
+        '--sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION',
+        '--log-bin-trust-function-creators=1'
       ]);
-      if (probe.status === 0) {
-        ready = true;
-        break;
-      }
-      await wait(500);
-    }
-    if (!ready) throw new Error('财务完整性隔离 MySQL 在 60 秒内未就绪');
+      assert.match(createdContainerId, /^[a-f0-9]{64}$/, '仅清理由当前验收创建的容器');
 
-    const portOutput = run('docker', ['port', containerName, '3306/tcp']);
-    const portMatch = portOutput.match(/:(\d+)$/m);
-    if (!portMatch) throw new Error('无法解析财务完整性隔离 MySQL 端口');
+      let ready = false;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const probe = runAllowingFailure('docker', [
+          'exec',
+          containerName,
+          'mysqladmin',
+          'ping',
+          '--host=127.0.0.1',
+          '--user=root',
+          `--password=${rootPassword}`,
+          '--silent'
+        ]);
+        if (probe.status === 0) {
+          ready = true;
+          break;
+        }
+        await wait(500);
+      }
+      if (!ready) throw new Error('财务完整性隔离 MySQL 在 60 秒内未就绪');
+
+      const portOutput = run('docker', ['port', containerName, '3306/tcp']);
+      portMatch = portOutput.match(/:(\d+)$/m);
+      if (!portMatch) throw new Error('无法解析财务完整性隔离 MySQL 端口');
+    }
     const rootUrl = `mysql://root:${rootPassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
     const auditUrl = `mysql://${auditUser}:${auditPassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
 
@@ -801,7 +836,9 @@ async function main() {
         JSON.stringify({
           ok: true,
           archiveProof,
-          cleanup: 'remove-owned-disposable-mysql-container'
+          runtime: runtimeOptions.runtime,
+          ...(runtimeOptions.runtime === 'native' ? { testCounts } : {}),
+          cleanup: cleanupLabel
         })
       );
       return;
@@ -935,18 +972,21 @@ async function main() {
       /仅具备 SELECT\/SHOW VIEW 权限/
     );
 
-    const plaintextInsert = runAllowingFailure('docker', [
-      'exec',
-      containerName,
-      'mysql',
-      '--user=root',
-      `--password=${rootPassword}`,
-      databaseName,
-      '--execute',
-      `INSERT INTO users (id, username, display_name, phone, password_hash, updated_at)
+    const plaintextSql = `INSERT INTO users (id, username, display_name, phone, password_hash, updated_at)
      VALUES ('fa000000-0000-4000-8000-000000000001', 'plaintext-phone', '明文手机号',
-             '13800138000', 'integration-only', CURRENT_TIMESTAMP(6));`
-    ]);
+             '13800138000', 'integration-only', CURRENT_TIMESTAMP(6));`;
+    const plaintextInsert = nativeInstance
+      ? nativeInstance.queryResult(plaintextSql, databaseName)
+      : runAllowingFailure('docker', [
+          'exec',
+          containerName,
+          'mysql',
+          '--user=root',
+          `--password=${rootPassword}`,
+          databaseName,
+          '--execute',
+          plaintextSql
+        ]);
     assert.notEqual(plaintextInsert.status, 0);
     assert.match(`${plaintextInsert.stdout}\n${plaintextInsert.stderr}`, /Unknown column 'phone'/);
 
@@ -1022,10 +1062,13 @@ async function main() {
           'known-unbalanced-journal-detection',
           'known-completed-order-profit-mismatch-detection'
         ],
-        cleanup: 'remove-disposable-mysql-container'
+        runtime: runtimeOptions.runtime,
+        ...(runtimeOptions.runtime === 'native' ? { testCounts } : {}),
+        cleanup: cleanupLabel
       })
     );
   } finally {
+    if (nativeInstance) await nativeInstance.cleanup();
     if (createdContainerId && /^[a-f0-9]{64}$/.test(createdContainerId))
       runAllowingFailure('docker', ['rm', '--force', createdContainerId], { stdio: 'ignore' });
   }

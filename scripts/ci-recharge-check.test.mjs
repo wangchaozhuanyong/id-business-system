@@ -146,6 +146,27 @@ test('CI-only control edits do not execute backend or business guards', () => {
   for (const gate of gates) assert.ok(calls.every((call) => !call.includes(gate)));
 });
 
+test('native entry and backup transport edits run their bounded native tests without a database suite', () => {
+  for (const path of [
+    'scripts/native-services.mjs',
+    'scripts/lib/native-mysql-tools.mjs',
+    'scripts/acceptance-v2-rollback-integrity.mjs',
+    'scripts/acceptance-v2-data-governance.mjs',
+    'scripts/ci-recharge-migration.py',
+    'scripts/production-release/audit-retention-mysql.test.py',
+    'scripts/lib/native_mysql_fixture.py'
+  ]) {
+    const calls = recordGuardCommands('ci-only', [path]);
+    assert.equal(
+      calls.filter((call) => call.join(' ') === 'npm run test:native-runtime').length,
+      1
+    );
+    assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+  }
+  const calls = recordGuardCommands('ci-only', ['docs/DOCKER_INDEPENDENCE.md']);
+  assert.ok(calls.every((call) => !call.includes('test:native-runtime')));
+});
+
 test('full quality workflow includes each backend architecture gate', () => {
   const workflow = readFileSync(
     new URL('../.github/workflows/quality.yml', import.meta.url),
