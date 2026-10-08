@@ -189,11 +189,10 @@ export class RegistrationEventsService {
           if (!['email_code', 'password', 'mfa'].includes(nextStep))
             throw new BadRequestException('当前步骤不能读取邮件');
           patch.state = 'awaiting_email';
-          // Registration resumes its existing email challenge in the retained window.
-          // Password/MFA prepare_mail starts a new challenge, even after a progress event.
+          // Rearming the same bound challenge keeps its original mail boundary.
+          // Explicit new requests still reset it, including password/MFA challenges.
           patch.codeRequestedAt =
             input.newMailRequest === false &&
-            nextStep === 'email_code' &&
             row.codeRequestedAt &&
             profileId &&
             row.step === nextStep &&

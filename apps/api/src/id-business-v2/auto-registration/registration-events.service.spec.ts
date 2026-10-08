@@ -17,6 +17,7 @@ describe('原窗口验证码时间边界', () => {
       browserProfileId: 'reg_fixture_1',
       nonceHash: registrationTokenHash(token),
       codeRequestedAt: new Date(Date.now() - 120_000),
+      lastMailId: null as string | null,
       leaseUntil: new Date(Date.now() + 60_000),
       ...patch
     };
@@ -61,6 +62,58 @@ describe('原窗口验证码时间边界', () => {
     expect(f.repository.update.mock.calls[0][2].codeRequestedAt.getTime()).toBeGreaterThan(
       previousTime
     );
+  });
+  it.each(['password', 'mfa'])('原窗口同一%s挑战补齐保留时间和已消费邮件', async (step) => {
+    const f = fixture({
+      step,
+      registered: true,
+      passwordVerified: true,
+      lastMailId: 'fixture-prior-mail'
+    });
+    const previousTime = f.job.codeRequestedAt.getTime();
+    await f.service.event(f.job.id, f.token, {
+      type: 'waiting_email',
+      attempt: 2,
+      step,
+      newMailRequest: false
+    });
+    expect(f.job.codeRequestedAt.getTime()).toBe(previousTime);
+    expect(f.job.lastMailId).toBe('fixture-prior-mail');
+    expect(f.repository.update.mock.calls[0][2]).not.toHaveProperty('lastMailId');
+  });
+  it.each(['password', 'mfa'])('原窗口同一%s挑战明确新请求仍重置时间', async (step) => {
+    const f = fixture({ step, registered: true, passwordVerified: true });
+    const previousTime = f.job.codeRequestedAt.getTime();
+    await f.service.event(f.job.id, f.token, {
+      type: 'waiting_email',
+      attempt: 2,
+      step,
+      newMailRequest: true
+    });
+    expect(f.job.codeRequestedAt.getTime()).toBeGreaterThan(previousTime);
+  });
+  it.each(['password', 'mfa'])('跨入%s步骤的补齐不能沿用旧挑战时间', async (step) => {
+    const f = fixture({ registered: true, passwordVerified: true });
+    const previousTime = f.job.codeRequestedAt.getTime();
+    await f.service.event(f.job.id, f.token, {
+      type: 'waiting_email',
+      attempt: 2,
+      step,
+      newMailRequest: false
+    });
+    expect(f.job.codeRequestedAt.getTime()).toBeGreaterThan(previousTime);
+  });
+  it.each(['password', 'mfa'])('新窗口%s挑战的补齐不能沿用旧窗口时间', async (step) => {
+    const f = fixture({ step, registered: true, passwordVerified: true, browserProfileId: null });
+    const previousTime = f.job.codeRequestedAt.getTime();
+    await f.service.event(f.job.id, f.token, {
+      type: 'waiting_email',
+      attempt: 2,
+      step,
+      browserProfileId: 'reg_fixture_new',
+      newMailRequest: false
+    });
+    expect(f.job.codeRequestedAt.getTime()).toBeGreaterThan(previousTime);
   });
   it('旧执行器缺少新请求标记时沿用原时间重置行为', async () => {
     const f = fixture();
