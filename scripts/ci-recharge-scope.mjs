@@ -353,17 +353,23 @@ function isRegistrationHydrationOnly(paths) {
   );
 }
 
+const adminInteractionAcceptance = new Set([
+  'scripts/acceptance-v2-bitbrowser-direct.mjs',
+  'scripts/acceptance-v2-refresh-interaction.mjs'
+]);
 export function isAdminOnly(paths) {
   return (
     paths.some(
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
+        adminInteractionAcceptance.has(p) ||
         adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-order-archive-ui.mjs'
     ) &&
     paths.every(
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
+        adminInteractionAcceptance.has(p) ||
         p === 'apps/admin/src/components/ui/AppButton.vue' ||
         /^scripts\/(?:admin-skin-rules(?:\.test)?|check-v2-color-contrast|acceptance-v2-(?:color-contrast|skin-consistency|business-skin))\.mjs$/.test(
           p
@@ -698,6 +704,7 @@ export function selectedParts(paths) {
 
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
+  if (part === 'admin' && paths.some((path) => adminInteractionAcceptance.has(path))) return true;
   const common =
     /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
   const inputs = {
