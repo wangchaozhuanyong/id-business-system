@@ -1,4 +1,4 @@
-"""私网单用途执行器。注册与充值分别部署，业务标记先于官网写请求。"""
+"""私网充值执行器。业务标记先于官网写请求。"""
 from __future__ import annotations
 
 import asyncio
@@ -26,7 +26,6 @@ import payment_state
 import payment_network
 import subscription_upgrade
 import server_proxy
-import registration_builtin
 import fingerprint_runtime
 from payment_handoff import PaymentHandoff, challenge_frames
 from checkout_core import Stop, parse_browser_credential, session_cookies, unique_object, write_json
@@ -40,7 +39,6 @@ MAX_BODY = 96000
 WORKER_ROLE = os.environ.get("AUTO_RECHARGE_WORKER_ROLE", "recharge")
 TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
 API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
-REGISTRATION_API = API.removesuffix("/auto-recharge/internal") + "/auto-registration/local"
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
 RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-(?:go|pro-(?:5x|20x|500)))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
@@ -53,9 +51,8 @@ PUBLIC_KEYS.update("handoff_session_id handoff_generation".split())
 
 class PersistentBrowserRuntime:
     """Playwright 固定在同一事件循环；所属任务独占本执行器的浏览器进程。"""
-    def __init__(self, browser_factory=None, *, registration_owner=False, executable_path=None):
+    def __init__(self, browser_factory=None, *, executable_path=None):
         self.browser_factory = browser_factory
-        self.registration_owner = registration_owner
         self.executable_path = executable_path
         self.loop = None
         self.thread = None
@@ -99,11 +96,10 @@ class PersistentBrowserRuntime:
                 self.browser = None
 
     async def _execute_isolated(self, operation, *, proxy_factory=None, browser_factory=None):
-        # 注册保留原常驻驱动；服务器充值在单笔边界独占驱动，不重放业务操作。
+        # 服务器充值在单笔边界独占驱动，不重放业务操作。
         closed = await self._discard()
-        if not self.registration_owner:
-            if not closed or not await self._discard_playwright():
-                raise Stop("fingerprint_cleanup_failed")
+        if not closed or not await self._discard_playwright():
+            raise Stop("fingerprint_cleanup_failed")
         browser = None
         try:
             if browser_factory is not None:
@@ -117,12 +113,11 @@ class PersistentBrowserRuntime:
                 closed = await fingerprint_runtime.close_fingerprint_resource(browser)
             except Exception:
                 closed = False
-            if not self.registration_owner:
-                if not closed:
-                    # 关闭未确认时保留所有权，下一笔不能越过入口清理检查。
-                    self.browser = browser
-                # 清理失败不得覆盖可能已经发生的业务结果，也不得重放 operation。
-                await self._discard_playwright()
+            if not closed:
+                # 关闭未确认时保留所有权，下一笔不能越过入口清理检查。
+                self.browser = browser
+            # 清理失败不得覆盖可能已经发生的业务结果，也不得重放 operation。
+            await self._discard_playwright()
 
     async def _discard(self):
         browser, self.browser = self.browser, None
@@ -132,7 +127,7 @@ class PersistentBrowserRuntime:
             closed = await fingerprint_runtime.close_fingerprint_resource(browser)
         except Exception:
             closed = False
-        if not closed and not self.registration_owner:
+        if not closed:
             self.browser = browser
         return closed
 
@@ -152,8 +147,6 @@ class PersistentBrowserRuntime:
         return True
 
     async def _shutdown(self):
-        if self.registration_owner and registration_builtin.PROFILES.profile:
-            await registration_builtin.PROFILES.close(registration_builtin.PROFILES.profile['job_id'])
         await self._discard()
         playwright, self.playwright = self.playwright, None
         if playwright is not None:
@@ -166,15 +159,6 @@ class PersistentBrowserRuntime:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self.loop = loop
-        try:
-            if self.registration_owner:
-                loop.run_until_complete(self._ensure_browser())
-        except BaseException as exc:
-            self.startup_error = exc
-            self.ready.set()
-            loop.run_until_complete(self._shutdown())
-            loop.close()
-            return
         self.ready.set()
         try:
             loop.run_forever()
@@ -188,8 +172,7 @@ class PersistentBrowserRuntime:
                 return
             self.ready.clear()
             self.startup_error = None
-            name = "registration-browser" if self.registration_owner else "recharge-browser"
-            self.thread = threading.Thread(target=self._thread_main, name=name, daemon=True)
+            self.thread = threading.Thread(target=self._thread_main, name="recharge-browser", daemon=True)
             self.thread.start()
         if not self.ready.wait(timeout) or not self.started:
             raise RuntimeError("persistent_browser_startup_failed") from self.startup_error
@@ -206,11 +189,6 @@ class PersistentBrowserRuntime:
         future = asyncio.run_coroutine_threadsafe(self._execute_isolated(
             operation, proxy_factory=proxy_factory, browser_factory=browser_factory), self.loop)
         return future.result()
-
-    def run_registration(self, operation):
-        if not self.started:
-            raise RuntimeError("persistent_browser_not_started")
-        return asyncio.run_coroutine_threadsafe(operation(), self.loop).result()
 
     def discard(self, timeout=30):
         if self.started:
@@ -229,7 +207,7 @@ class PersistentBrowserRuntime:
         self.loop = None
 
 
-BROWSER_RUNTIME = PersistentBrowserRuntime(registration_owner=WORKER_ROLE == "registration")
+BROWSER_RUNTIME = PersistentBrowserRuntime()
 
 
 async def current_totp(config):
@@ -1012,8 +990,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def serves_path(self):
-        if WORKER_ROLE == "registration":
-            return self.path.startswith("/registration/")
         return WORKER_ROLE == "recharge" and self.path.startswith("/jobs/")
 
     def do_GET(self):
@@ -1027,13 +1003,6 @@ class Handler(BaseHTTPRequestHandler):
         if not self.serves_path():
             self.reply(404, {"ok": False})
             return
-        if self.path == "/registration/health":
-            self.reply(200, {"ready": BROWSER_RUNTIME.started, "workerRole": WORKER_ROLE,
-                             "engine": "camoufox", "mailDeliveryVersion": 1,
-                             "registrationBusy": (isinstance(self.job, registration_builtin.RegistrationServerJob)
-                                                  and not self.job.done),
-                             "registrationWindowRetained": registration_builtin.PROFILES.profile is not None})
-            return
         parts = self.path.strip("/").split("/")
         if (len(parts) == 3 and parts[0] == 'jobs' and parts[2] == 'handoff'
                 and JOB_ID.fullmatch(parts[1]) and isinstance(self.job, Job) and self.job.id == parts[1]):
@@ -1042,24 +1011,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.reply(409, {'ok': False})
             return
-        if (len(parts) == 4 and parts[:2] == ["registration", "jobs"] and parts[3] == "status"):
-            job = self.job
-            if not isinstance(job, registration_builtin.RegistrationServerJob) or job.id != parts[2]:
-                self.reply(404, {"ok": False})
-                return
-            self.reply(200, {"accepted": True, "attempt": job.attempt,
-                             "cancelled": (job.cancelled.is_set() and job.done
-                                           and not (registration_builtin.PROFILES.profile
-                                                    and registration_builtin.PROFILES.profile['job_id'] == job.id)),
-                             "done": job.done})
-            return
         if (len(parts) != 3 or parts[0] != "jobs" or parts[2] != "status"
                 or not JOB_ID.fullmatch(parts[1]) or not self.job or self.job.id != parts[1]):
             self.reply(404, {"ok": False})
             return
         self.reply(200, {"ok": True, "accepted": True, "details_received": getattr(self.job, "details_received", False),
                          "confirmation_received": getattr(self.job, "confirmed", False),
-                         "cancelled": (self.job.cancelled.is_set() if isinstance(self.job, registration_builtin.RegistrationServerJob) else self.job.cancelled), "done": self.job.done})
+                         "cancelled": self.job.cancelled, "done": self.job.done})
 
     def do_POST(self):
         if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
@@ -1073,15 +1031,6 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= MAX_BODY:
                 raise ValueError()
             body = json.loads(self.rfile.read(length), object_pairs_hook=unique_object)
-            if self.path.startswith("/registration/"):
-                with self.lock:
-                    previous = Handler.job
-                    job = registration_builtin.handle_request(self, body, REGISTRATION_API, BROWSER_RUNTIME)
-                    if job is not previous:
-                        Handler.job = job
-                        threading.Thread(target=job.run, daemon=True).start()
-                self.reply(202, {"ok": True})
-                return
             parts = self.path.strip("/").split("/")
             if len(parts) < 2 or parts[0] != "jobs" or not JOB_ID.fullmatch(parts[1]):
                 raise ValueError()
@@ -1093,12 +1042,11 @@ class Handler(BaseHTTPRequestHandler):
             with self.lock:
                 if len(parts) == 2:
                     # New recharge browser work is local BitBrowser only. Existing
-                    # tasks may still be cancelled; registration remains separate.
+                    # tasks may still be cancelled without starting a new browser.
                     self.reply(410, {"ok": False, "reason": "server_recharge_retired"})
                     return
                 elif len(parts) == 3 and parts[2] in {"details", "confirm", "cancel"}:
-                    if (not self.job or self.job.id != parts[1] or self.job.done
-                            or isinstance(self.job, registration_builtin.RegistrationServerJob)):
+                    if not self.job or self.job.id != parts[1] or self.job.done:
                         raise ValueError()
                     if parts[2] == "details":
                         self.job.submit_details(body)
@@ -1107,12 +1055,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise ValueError()
             self.reply(202, {"ok": True})
-        except Exception as error:
-            if self.path.startswith('/registration/'):
-                rejection = registration_builtin.dispatch_rejection(error)
-                if rejection:
-                    self.reply(409, rejection)
-                    return
+        except Exception:
             self.reply(400, {"ok": False})
 
 
@@ -1134,7 +1077,7 @@ def listener_port(value):
 
 
 def startup_options(argv=None):
-    parser = argparse.ArgumentParser(description="独立注册或充值执行器")
+    parser = argparse.ArgumentParser(description="独立充值执行器")
     parser.add_argument("--host", type=listener_host, default="0.0.0.0")
     parser.add_argument("--port", type=listener_port, default=8051)
     parser.add_argument("--engine-path", type=Path)
@@ -1146,13 +1089,13 @@ def startup_options(argv=None):
 
 def main(argv=None):
     options = startup_options(argv)
-    if WORKER_ROLE not in {"recharge", "registration"}:
+    if WORKER_ROLE != "recharge":
         raise SystemExit("执行器类型无效")
     if len(TOKEN) < 32:
         raise SystemExit("执行器凭据未配置")
     if not fingerprint_runtime.fingerprint_ready(options.engine_path):
         raise SystemExit("指纹浏览器内核不存在")
-    # 先取得监听端口所有权；绑定失败时不能启动第二套注册窗口或浏览器。
+    # 先取得监听端口所有权；绑定失败时不能启动第二套浏览器。
     listener = ThreadingHTTPServer((options.host, options.port), Handler)
     try:
         BROWSER_RUNTIME.executable_path = options.engine_path

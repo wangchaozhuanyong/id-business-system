@@ -4,13 +4,11 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { configureProductionTrustedProxy } from './common/http/trusted-client-ip';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { AppModule } from './app.module';
-import { configureRegistrationNameImportBodyParser } from './id-business-v2/auto-registration/public-api';
 import { apiListenerHost } from './common/http/listener-options';
 
 async function bootstrap() {
   const host = apiListenerHost(process.argv.slice(2));
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  configureRegistrationNameImportBodyParser(app);
   configureProductionTrustedProxy(app);
   const allowedOrigins = process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())

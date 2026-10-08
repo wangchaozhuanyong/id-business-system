@@ -35,8 +35,8 @@ export function parseNativeWorkerOptions(argv) {
   if (values.help) return { help: true };
   const role = values.role ?? 'recharge';
   const host = values.host ?? '127.0.0.1';
-  const rawPort = values.port ?? (role === 'registration' ? '8052' : '8051');
-  if (!['recharge', 'registration'].includes(role)) throw new Error('执行器类型无效');
+  const rawPort = values.port ?? '8051';
+  if (role !== 'recharge') throw new Error('执行器类型无效');
   if (!loopbackHosts.has(host)) throw new Error('本机执行器只能监听回环地址');
   if (!/^\d+$/.test(rawPort) || Number(rawPort) < 1 || Number(rawPort) > 65535) {
     throw new Error('执行器端口无效');
@@ -55,6 +55,7 @@ export function parseNativeWorkerOptions(argv) {
 }
 
 export function nativeWorkerLaunch(options, environment = process.env) {
+  if (options.role !== 'recharge') throw new Error('执行器类型无效');
   const token = environment.AUTO_RECHARGE_WORKER_TOKEN ?? '';
   if (token.length < 32) throw new Error('执行器凭据未配置，须通过现有环境变量传入');
   let callback;
@@ -144,7 +145,7 @@ export async function startNativeWorker(argv, dependencies = {}) {
     options = parseNativeWorkerOptions(argv);
     if (options.help) {
       log(
-        '用法：npm run auto-recharge:native -- --role=recharge|registration --python=已安装环境 --engine-path=内核绝对路径 [--port=8051] [--check]'
+        '用法：npm run auto-recharge:native -- --role=recharge --python=已安装环境 --engine-path=内核绝对路径 [--port=8051] [--check]'
       );
       return 0;
     }
@@ -190,9 +191,7 @@ export async function startNativeWorker(argv, dependencies = {}) {
     log('无法创建本项目执行器运行目录');
     return 1;
   }
-  log(
-    `启动本机${options.role === 'registration' ? '注册' : '充值'}执行器：${options.host}:${options.port}`
-  );
+  log(`启动本机充值执行器：${options.host}:${options.port}`);
   return launchWorker(launch);
 }
 

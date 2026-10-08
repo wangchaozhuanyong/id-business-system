@@ -12,28 +12,24 @@ const args = [
   '--engine-path=/fixture/Camoufox.app/Contents/MacOS/camoufox'
 ];
 
-test('两个角色使用不同默认端口和运行目录，凭据仅由环境传递', () => {
+test('充值保留默认端口和环境变量授权，拒绝注册类型', () => {
   const recharge = nativeWorkerLaunch(parseNativeWorkerOptions(args), {
     AUTO_RECHARGE_WORKER_TOKEN: token,
     UNRELATED_SECRET: 'do-not-pass',
     PATH: '/fixture/bin'
   });
-  const registration = nativeWorkerLaunch(
-    parseNativeWorkerOptions([...args, '--role=registration']),
-    {
-      AUTO_RECHARGE_WORKER_TOKEN: token
-    }
-  );
   assert.equal(recharge.args[recharge.args.indexOf('--port') + 1], '8051');
-  assert.equal(registration.args[registration.args.indexOf('--port') + 1], '8052');
-  assert.notEqual(recharge.cwd, registration.cwd);
   assert.equal(recharge.env.AUTO_RECHARGE_WORKER_TOKEN, token);
-  assert.equal(registration.env.AUTO_RECHARGE_WORKER_ROLE, 'registration');
+  assert.equal(recharge.env.AUTO_RECHARGE_WORKER_ROLE, 'recharge');
   assert.equal(recharge.env.UNRELATED_SECRET, undefined);
   assert.equal(recharge.args.includes(token), false);
   assert.equal(
     recharge.env.AUTO_RECHARGE_CALLBACK_URL,
     'http://127.0.0.1:3000/api/id-business-v2/auto-recharge/internal'
+  );
+  assert.throws(() => parseNativeWorkerOptions([...args, '--role=registration']));
+  assert.throws(() =>
+    nativeWorkerLaunch({ ...parseNativeWorkerOptions(args), role: 'registration' }, {})
   );
 });
 
@@ -132,14 +128,14 @@ test('实际启动仅创建当前角色目录，并调用已有 Python/Worker', 
     }
   });
   assert.equal(
-    await startNativeWorker([...args, '--role=registration', '--port=18052'], f.dependencies),
+    await startNativeWorker([...args, '--role=recharge', '--port=18051'], f.dependencies),
     0
   );
   assert.equal(directories.length, 1);
   assert.equal(directories[0].options.mode, 0o700);
   assert.equal(directories[0].path, launch.cwd);
   assert.equal(launch.command, 'fixture-python');
-  assert.ok(launch.args.includes('18052'));
+  assert.ok(launch.args.includes('18051'));
   assert.ok(launch.args[1].endsWith('/worker/server.py'));
   assert.equal(f.output.join('\n').includes(token), false);
 });

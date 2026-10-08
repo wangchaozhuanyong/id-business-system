@@ -88,31 +88,28 @@ MySQL 已在 PATH 时可省略两个路径参数。已有依赖按锁文件复�
 - API：http://localhost:3000/api
 - 健康检查：http://localhost:3000/api/health/ready
 
-### 本机注册与充值执行器
+### 本机比特充值助手
 
-复用已安装的 Python 3.11+ 虚拟环境与经过锁定校验的 Camoufox 内核，不自动安装软件或
-下载浏览器。通过已有环境变量 `AUTO_RECHARGE_WORKER_TOKEN` 提供独立随机凭据，
-不要把凭据写到命令参数、报告或聊天中。启动入口不会读取 `.env`；应由本机运行环境加载配置。
+网页只创建任务并保存权限、资料与结果；登录、套餐读取、核价与付款在当前电脑的比特浏览器执行。
+登录方式为授权 JSON 或选取 ChatGPT 账号库中的账号密码，不再提供重复的第三种登录入口。
+每次开通或升级独立创建任务，官网报价明确后等待本次人工确认。真实账号和付款验收继续暂停。
+
+使用已安装的 Python 3.11+ 和比特浏览器，先开启比特本地 API，然后在本项目内启动：
 
 ```bash
-# 只检查前置条件，不启动服务
-npm run auto-recharge:native -- --python=/已安装虚拟环境/bin/python --engine-path=/已安装Camoufox/Camoufox.app/Contents/MacOS/camoufox --check
-
-# 分别在两个终端或独立进程中启动
-npm run auto-recharge:native -- --role=recharge --python=/已安装虚拟环境/bin/python --engine-path=/已安装Camoufox/Camoufox.app/Contents/MacOS/camoufox
-npm run auto-recharge:native -- --role=registration --python=/已安装虚拟环境/bin/python --engine-path=/已安装Camoufox/Camoufox.app/Contents/MacOS/camoufox
+npm run auto-recharge:connector -- --allowed-origin=https://你的管理端域名
 ```
 
-两个角色默认只监听本机 `127.0.0.1`，充值端口 8051，注册端口 8052，可显式传入 `--port`。
-各自使用项目内 `.runtime/native-workers/角色/` 运行目录；共用已经安装的依赖和浏览器程序，
-进程、任务和端口独立。端口被占用时先停止启动，不再创建第二套浏览器；Ctrl+C 或正常终止
-会清理本进程的浏览器及监听端口。
+新充值助手版本为 4，默认监听本机 `127.0.0.1:55322`，依赖和运行目录为项目内
+`.runtime/bitbrowser-recharge-assistant/`；依赖版本不变时直接复用。
+启动脚本只安装锁定的四个比特依赖，不安装 Camoufox、不下载浏览器、不启动 Docker。
+旧的 `55321` 助手不能承担新版充值任务，网页会提示升级；已运行的旧窗口不会被静默接管。
+账号密码、银行卡安全码和一次性付款授权不要发到聊天或写到日志。
 
-本机 API 配置沿用 `AUTO_RECHARGE_WORKER_URL=http://127.0.0.1:8051`、
-`AUTO_REGISTRATION_WORKER_URL=http://127.0.0.1:8052`，保持 API 与相应执行器的授权配置一致。
-Worker 默认回调本机 API 的 `/api/id-business-v2/auto-recharge/internal`，
-可用已有 `AUTO_RECHARGE_CALLBACK_URL` 指定其他本机端口；本机入口拒绝远程回调和公开监听。
-启动及健康检查不会自动执行注册或付款。
+自动注册页面、API 和新启动入口已退役；既有注册历史、迁移、账号和审计保留。
+历史服务器执行器原生工具仅保留兼容与诊断能力，新充值请求不能走服务器付款流程。
+完整比特方案与本地合成验收见 `docs/BITBROWSER_RECHARGE_REBUILD_RESULT_20261009.md`，
+统一上线与清理范围见 `docs/UNIFIED_RELEASE_20261009.md`。
 
 Docker 开发方式仍可显式选择：`npm run doctor:docker`。已有 Docker 数据不会自动删除。
 线上替换、数据库保护和回滚安排见 [Docker 脱离方案](docs/DOCKER_INDEPENDENCE.md)；

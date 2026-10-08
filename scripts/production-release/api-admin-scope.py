@@ -83,6 +83,12 @@ MIGRATION_IDENTITY = {
     'schemaBeforeSha256': 'c70cbcb110bb48c395b7e7284dedc0486a9afc125d940c455c0bafc1cffc701d',
     'schemaAfterSha256': '8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197',
     'baselineFilesSha256': 'c2179090dd600b3b33a56fe8384e8a7020a4e0cb6eb9a97f509352ee22f4df0a'}
+# One verified migration publication may become the origin of an API/Admin-only
+# successor. Its original three-image proof and task/window remain authoritative;
+# this is not a new migration mode or an admission of arbitrary old manifests.
+MIGRATION_SUCCESSOR_COMMIT = 'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a'
+MIGRATION_SUCCESSOR_MANIFEST_SHA = '73952f1c7807d7bf6e4f78d4c5c2eed20602a234c2fe0506538fbd1757f9bed0'
+MIGRATION_SUCCESSOR_PROOF_SHA = 'b9d1a28a2a4251e777285da187db51d0989f8ae80e82d5925c172fee18b17ded'
 
 
 def image_service(service):
@@ -144,7 +150,10 @@ def prepare_registration_build(d):
     d.require({n for n in projection if projection[n] != profile['workerProjection'][n]} == WORKER_PAIR,
               'API_ADMIN_REGISTRATION_PAIR_CHANGED')
     for name, digest in profile['buildInputSha256'].items():
-        raw = (root / name).read_bytes()
+        # Only these sealed inputs enter the historical Worker build context.
+        # The API context below uses the complete candidate Git archive instead;
+        # a new API/native .dockerignore must not silently alter this Worker.
+        raw = subprocess.check_output(['git', 'show', profile['workerBasisCommit'] + ':' + name])
         d.require(hashlib.sha256(raw).hexdigest() == digest, 'API_ADMIN_REGISTRATION_BUILD_INPUT_CHANGED')
         files[name] = raw
     target.mkdir(parents=True, mode=0o700)
@@ -153,7 +162,9 @@ def prepare_registration_build(d):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
         path.chmod(0o755 if projection.get(name, {}).get('mode') == '100755' else 0o644)
-    record = {'workerProjection': projection, 'workerProjectionSha256': fingerprint(projection)}
+    record = {'workerProjection': projection, 'workerProjectionSha256': fingerprint(projection),
+              'buildInputSourceCommit': profile['workerBasisCommit'],
+              'buildInputSha256': dict(profile['buildInputSha256'])}
     path = target.parent / 'api-registration-build-projection.json'
     with path.open('x') as stream:
         json.dump(record, stream, sort_keys=True)
@@ -265,6 +276,83 @@ def migration_task_guard(d, directory, task, guards):
     registration_private(d, directory, retained=guards['registrationWindowRetained'])
 
 
+def migration_successor_marker(context):
+    return {'version': 1, 'commit': context['commit'], 'manifestSha256': context['manifestSha256'],
+            'buildProofSha256': context['buildProofSha256'], 'preservationSha256': fingerprint(context)}
+
+
+def migration_successor_origin(d, directory):
+    d.require(SCOPE == 'API_ADMIN' and directory.parent == d.BASE / 'releases'
+              and not directory.is_symlink(), 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    raw = (directory / 'release-manifest.json').read_bytes()
+    manifest = json.loads(raw)
+    d.require(manifest.get('commit') == MIGRATION_SUCCESSOR_COMMIT
+              and hashlib.sha256(raw).hexdigest() == MIGRATION_SUCCESSOR_MANIFEST_SHA,
+              'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    original, _ = d.api_admin_scope('API_ADMIN_MIGRATION')
+    receipt = original.readback(d, MIGRATION_SUCCESSOR_COMMIT)
+    record = json.loads((directory / original.STATE_FILE).read_text())
+    d.require(receipt.get('buildProofSha256') == MIGRATION_SUCCESSOR_PROOF_SHA
+              and receipt.get('migration') == MIGRATION_IDENTITY
+              and receipt.get('migrationState', {}).get('status') == 'APPLIED'
+              and receipt.get('migrationApplied') is True and receipt.get('taskHmacMatched') is True
+              and receipt.get('windowPreserved') is True and receipt.get('registrationWindowRetained') is True,
+              'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    context = {'version': 1, 'release': str(directory), 'commit': MIGRATION_SUCCESSOR_COMMIT,
+               'manifestSha256': MIGRATION_SUCCESSOR_MANIFEST_SHA,
+               'buildProofSha256': MIGRATION_SUCCESSOR_PROOF_SHA, 'migration': dict(MIGRATION_IDENTITY),
+               'migrationState': receipt['migrationState'], 'task': record['registrationTask'],
+               'guards': record['registrationGuards']}
+    migration_successor_guard(d, directory, context)
+    return context
+
+
+def migration_successor_guard(d, directory, context):
+    fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256',
+              'migration', 'migrationState', 'task', 'guards'}
+    d.require(SCOPE == 'API_ADMIN' and isinstance(context, dict) and set(context) == fields
+              and type(context['version']) is int and context['version'] == 1 and context['commit'] == MIGRATION_SUCCESSOR_COMMIT
+              and context['manifestSha256'] == MIGRATION_SUCCESSOR_MANIFEST_SHA
+              and context['buildProofSha256'] == MIGRATION_SUCCESSOR_PROOF_SHA
+              and context['migration'] == MIGRATION_IDENTITY,
+              'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    source = Path(context['release'])
+    d.require(source.parent == d.BASE / 'releases' and source.is_dir() and not source.is_symlink()
+              and hashlib.sha256((source / 'release-manifest.json').read_bytes()).hexdigest()
+              == MIGRATION_SUCCESSOR_MANIFEST_SHA, 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    original, _ = d.api_admin_scope('API_ADMIN_MIGRATION')
+    source_manifest = json.loads((source / 'release-manifest.json').read_text())
+    proof = original.validate_proof(d, json.loads((source / original.PROOF_FILE).read_text()),
+                                   MIGRATION_SUCCESSOR_COMMIT, source_manifest['sourceTree'])
+    original_record = json.loads((source / original.STATE_FILE).read_text())
+    d.require(fingerprint(proof) == MIGRATION_SUCCESSOR_PROOF_SHA
+              and context['task'] == original_record['registrationTask'] == original.MIGRATION_TASK
+              and context['guards'] == original_record['registrationGuards'],
+              'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    predecessor = Path(source_manifest['previousRelease'])
+    d.require(predecessor.parent == d.BASE / 'releases' and predecessor.is_dir() and not predecessor.is_symlink()
+              and original.configuration_hashes(source) == original_record['configurationAfter']
+              and original.configuration_hashes(predecessor) == original_record['configurationBefore']
+              and hashlib.sha256((source / '.env.aws.production').read_bytes()).hexdigest()
+              == original_record['environmentSha256'], 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    d.require(original.audit_receipt(d, source / 'before-audit.json') == source_manifest['dataAuditBefore']
+              and original.audit_receipt(d, source / 'after-audit.json') == source_manifest['dataAuditAfter']
+              and source_manifest['dataAuditBefore']['checksSha256'] == source_manifest['dataAuditAfter']['checksSha256'],
+              'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    backup = json.loads((source / 'backup-verification.json').read_text())
+    d.require(backup.get('name') == source_manifest['backupBeforeRelease'] and backup.get('s3Verified') is True
+              and type(backup.get('size')) is int and backup['size'] > 0
+              and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')), 'API_ADMIN_MIGRATION_BACKUP_CHANGED')
+    original.migration_source_check(d, source)
+    original.migration_source_check(d, directory)
+    state = original.migration_database_state(d, directory)
+    d.require(state['status'] == 'APPLIED' and state == context['migrationState']
+              and all(original_record['migration'][name] == state[name] for name in state),
+              'API_ADMIN_MIGRATION_PRESERVATION_CHANGED')
+    original.verify_migration_image(d, directory, proof)
+    original.migration_task_guard(d, directory, context['task'], context['guards'])
+
+
 def migration_preflight(d, expected):
     d.require(MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
     directory, manifest, states, evidence = baseline(d, expected)
@@ -355,7 +443,15 @@ def build_proof(d):
         d.require(all(hashlib.sha256(subprocess.check_output(['git', 'show', commit + ':' + n])).hexdigest()
                       == projection['workerProjection'][n]['sha256'] for n in WORKER_PAIR),
                   'API_ADMIN_REGISTRATION_PAIR_CHANGED')
-        result.update(scope=SCOPE, **projection)
+        sealed = registration_profile(d, Path.cwd())
+        context = Path('.deploy/production-release/api-registration-build-context')
+        d.require(projection.get('buildInputSourceCommit') == sealed['workerBasisCommit']
+                  and projection.get('buildInputSha256') == sealed['buildInputSha256']
+                  and all(hashlib.sha256((context / name).read_bytes()).hexdigest() == digest
+                          for name, digest in sealed['buildInputSha256'].items()),
+                  'API_ADMIN_REGISTRATION_BUILD_INPUT_CHANGED')
+        result.update(scope=SCOPE, workerProjection=projection['workerProjection'],
+                      workerProjectionSha256=projection['workerProjectionSha256'])
     for service in IMAGE_SERVICES:
         reference = (os.environ['RELEASE_REPOSITORY'] + ':' + commit + '-'
                      + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'] + '-' + image_service(service))
@@ -1268,19 +1364,24 @@ def baseline(d, expected, *, check_jobs=True):
                   == manifest['images']['api']['sourceCommit'], 'API_ADMIN_BASELINE_API_REVISION_CHANGED')
         source = {'imageId': metadata['Id'], 'revision': labels['org.opencontainers.image.revision']}
         stage = 'PROJECTION'
+        migration_origin = None
         if manifest.get('apiAdminMigrationPublication'):
-            d.require(MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
-            proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
-            d.require(manifest['apiAdminMigrationPublication'] == {'version': 1, 'scope': SCOPE,
-                'buildProofSha256': fingerprint(proof), 'workersPublished': False,
-                'cacheStatus': 'SKIPPED', 'configurationChanged': False, 'schemaChanged': True,
-                'migration': MIGRATION_IDENTITY} and manifest.get('migrationApplied') is True
-                and manifest.get('newMigrations') == [MIGRATION_FILE],
-                'API_ADMIN_MIGRATION_PROVENANCE_CHANGED')
-            migration_source_check(d, previous)
-            verify_running(d, previous, proof)
-            verify_migration_image(d, previous, proof)
-            source['kind'] = 'API_ADMIN_MIGRATION_BUILD_PROVEN'
+            if SCOPE == 'API_ADMIN':
+                migration_origin = migration_successor_origin(d, previous)
+                source['kind'] = 'VERIFIED_MIGRATION_API_ADMIN_ORIGIN'
+            else:
+                d.require(MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
+                proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
+                d.require(manifest['apiAdminMigrationPublication'] == {'version': 1, 'scope': SCOPE,
+                    'buildProofSha256': fingerprint(proof), 'workersPublished': False,
+                    'cacheStatus': 'SKIPPED', 'configurationChanged': False, 'schemaChanged': True,
+                    'migration': MIGRATION_IDENTITY} and manifest.get('migrationApplied') is True
+                    and manifest.get('newMigrations') == [MIGRATION_FILE],
+                    'API_ADMIN_MIGRATION_PROVENANCE_CHANGED')
+                migration_source_check(d, previous)
+                verify_running(d, previous, proof)
+                verify_migration_image(d, previous, proof)
+                source['kind'] = 'API_ADMIN_MIGRATION_BUILD_PROVEN'
         elif manifest.get('apiRegistrationPublication'):
             d.require(REGISTRATION or MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
             origin, _ = d.api_admin_scope('API_REGISTRATION')
@@ -1301,6 +1402,23 @@ def baseline(d, expected, *, check_jobs=True):
             proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
             verify_running(d, previous, proof)
             source['kind'] = 'API_ADMIN_BUILD_PROVEN'
+            record = json.loads((previous / STATE_FILE).read_text())
+            predecessor = Path(manifest.get('previousRelease', ''))
+            predecessor_origin = None
+            if predecessor.parent == d.BASE / 'releases' and (predecessor / 'release-manifest.json').is_file():
+                predecessor_manifest = json.loads((predecessor / 'release-manifest.json').read_text())
+                predecessor_origin = predecessor_manifest.get('preservedMigrationOrigin')
+                if predecessor_origin is not None:
+                    d.require(not predecessor.is_symlink() and predecessor_manifest.get('commit') == manifest.get('previousCommit'),
+                              'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+            if (manifest.get('preservedMigrationOrigin') or record.get('migrationOrigin')
+                    or predecessor_origin is not None or manifest.get('previousCommit') == MIGRATION_SUCCESSOR_COMMIT):
+                migration_origin = record.get('migrationOrigin')
+                migration_successor_guard(d, previous, migration_origin)
+                d.require(manifest.get('preservedMigrationOrigin') == migration_successor_marker(migration_origin),
+                          'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+                d.require(predecessor_origin is None or predecessor_origin == manifest['preservedMigrationOrigin'],
+                          'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
         elif manifest.get('fixedRegistrationRelease', {}).get('id') == d.REGISTRATION_FOLLOWUP_ID:
             # 94 keeps the 815 API/Admin image; its own manifest revision describes only the Worker.
             d.require('apiAdminPublication' not in manifest, 'API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS')
@@ -1368,6 +1486,8 @@ def baseline(d, expected, *, check_jobs=True):
             'apiSource': source, 'guards': guards, 'freeBytes': free_bytes}
         if MIGRATION_MODE:
             evidence['migrationState'] = migration_state
+        if migration_origin is not None:
+            evidence['migrationOrigin'] = migration_origin
         return previous, manifest, states, evidence
     except Exception as error:
         code = str(error)
@@ -1491,6 +1611,21 @@ def readback(d, expected, *, check_task=True):
         jobs_idle(d, previous)
         d.require(registration_task(d, previous) == record['registrationTask'], 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
     migration = {}
+    retained_origin = evidence.get('migrationOrigin')
+    if retained_origin is not None:
+        d.require(check_task and record.get('migrationOrigin') == retained_origin
+                  and manifest.get('preservedMigrationOrigin') == migration_successor_marker(retained_origin),
+                  'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+        migration_successor_guard(d, previous, retained_origin)
+        backup = json.loads((previous / 'backup-verification.json').read_text())
+        d.require(backup.get('name') == manifest.get('backupBeforeRelease') and backup.get('s3Verified') is True
+                  and type(backup.get('size')) is int and backup['size'] > 0
+                  and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')),
+                  'API_ADMIN_MIGRATION_BACKUP_CHANGED')
+        migration.update(preservedMigrationOrigin=migration_successor_marker(retained_origin),
+                         migrationPreserved=True, migrationPerformed=False,
+                         taskHmacMatched=True, windowPreserved=True,
+                         registrationWindowRetained=True)
     if MIGRATION_MODE:
         state = migration_database_state(d, previous)
         d.require(state['status'] == 'APPLIED' and all(record['migration'][n] == state[n] for n in state)
@@ -1550,6 +1685,9 @@ def _release_locked(d, args):
                           args.repository, args.run_id, args.run_attempt)
     os.umask(0o077)
     previous, old, before, evidence = baseline(d, args.expected_current)
+    retained_origin = evidence.get('migrationOrigin')
+    if retained_origin is not None:
+        migration_successor_guard(d, previous, retained_origin)
     original_task = registration_task(d, previous) if REGISTRATION or MIGRATION_MODE else None
     if MIGRATION_MODE:
         migration_task_guard(d, previous, original_task, evidence['guards'])
@@ -1592,6 +1730,8 @@ def _release_locked(d, args):
             override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
         require_preserved(d, previous, target, before, environment, all_services=True)
+        if retained_origin is not None:
+            migration_successor_guard(d, target, retained_origin)
         step = 'images'
         d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         password = d.run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
@@ -1622,6 +1762,8 @@ def _release_locked(d, args):
                   'API_ADMIN_BASELINE_MOVED')
         require_preserved(d, previous, target, before, environment, all_services=True)
         jobs_idle(d, previous)
+        if retained_origin is not None:
+            migration_successor_guard(d, target, retained_origin)
         if MIGRATION_MODE:
             step = 'migration'
             migration_task_guard(d, previous, original_task, evidence['guards'])
@@ -1632,6 +1774,8 @@ def _release_locked(d, args):
         step = 'switch'
         for name in SWITCH_ORDER:
             require_preserved(d, previous, target, before, environment)
+            if retained_origin is not None:
+                migration_successor_guard(d, target, retained_origin)
             if MIGRATION_MODE:
                 migration_task_guard(d, previous, original_task, evidence['guards'])
             if name == 'api' or REGISTRATION:
@@ -1661,6 +1805,9 @@ def _release_locked(d, args):
         if MIGRATION_MODE:
             migration_task_guard(d, target, original_task, evidence['guards'])
             record.update(registrationGuards=evidence['guards'], migration=migration_result)
+        if retained_origin is not None:
+            migration_successor_guard(d, target, retained_origin)
+            record['migrationOrigin'] = retained_origin
         (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
         (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
         manifest = {'images': old['images'],
@@ -1685,6 +1832,8 @@ def _release_locked(d, args):
                  **({'schemaChanged': True, 'migration': dict(MIGRATION_IDENTITY)} if MIGRATION_MODE else {})}})
         if MIGRATION_MODE:
             manifest['migrationPerformed'] = migration_result['performed']
+        if retained_origin is not None:
+            manifest['preservedMigrationOrigin'] = migration_successor_marker(retained_origin)
         (target / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_MOVED')
         d.point_current(target, f'{stamp}-publish')
@@ -1705,6 +1854,8 @@ def _release_locked(d, args):
         rollback = {}
         for name in reversed(changed):
             try:
+                if retained_origin is not None:
+                    migration_successor_guard(d, target, retained_origin)
                 if name == 'api' or REGISTRATION or MIGRATION_MODE:
                     jobs_idle(d, target)
                 if MIGRATION_MODE:
@@ -1726,6 +1877,8 @@ def _release_locked(d, args):
                           'API_ADMIN_ROLLBACK_NOT_RESTORED')
                 if MIGRATION_MODE:
                     migration_task_guard(d, previous, original_task, evidence['guards'])
+                if retained_origin is not None:
+                    migration_successor_guard(d, previous, retained_origin)
             except Exception:
                 rollback_ok = False
         if rollback_ok and (d.BASE / 'current').resolve() == target:

@@ -802,37 +802,24 @@ class LocalJob:
 
 
 class Registry:
-    def __init__(self, role="registration"):
-        if role not in {"recharge", "registration"}:
+    def __init__(self, role="recharge"):
+        if role != "recharge":
             raise ValueError("unsupported connector role")
         self.role = role
         self.lock = threading.Lock()
         self.jobs = {}
 
-    def start(self, payload, origin=None):
+    def start(self, payload):
+        if not isinstance(payload, dict) or payload.get('mode') not in {
+                'payment', 'recheck', 'open_browser', 'resolve_unknown_payment'}:
+            raise Stop('invalid_connector_payload')
         with self.lock:
-            registration = isinstance(payload, dict) and payload.get("mode") == "registration"
-            if registration != (self.role == "registration"):
-                raise Stop("connector_role_mismatch")
-            job_id = payload.get("id") if isinstance(payload, dict) else None
+            job_id = payload.get("id")
             if job_id in self.jobs:
-                previous = self.jobs[job_id]
-                if isinstance(payload, dict) and payload.get('mode') == 'registration':
-                    attempt = payload.get('attempt')
-                    previous_attempt = getattr(previous, 'attempt', None)
-                    if previous_attempt == attempt:
-                        return previous
-                    if not previous.done or type(attempt) is not int or previous_attempt is None or attempt <= previous_attempt:
-                        raise Stop('another_local_job_is_running')
-                else:
-                    return previous
+                return self.jobs[job_id]
             if any(not job.done for job in self.jobs.values()):
                 raise Stop("another_local_job_is_running")
-            if isinstance(payload, dict) and payload.get('mode') == 'registration':
-                from registration_job import RegistrationJob
-                job = RegistrationJob(payload, origin, BitBrowserClient)
-            else:
-                job = LocalJob(payload)
+            job = LocalJob(payload)
             self.jobs[job.id] = job
             threading.Thread(target=job.run, name=f"bitbrowser-{job.id[:8]}", daemon=True).start()
             return job
@@ -894,10 +881,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             capabilities = ["browser-catalog", "browser-options", "browser-profile-v2", "session-load-retry",
                             "same-window-page-refresh", "password-login", "login-code"]
-            capabilities += (["manual-payment-confirmation", "recharge-process-isolation",
-                              "payment-unknown-resolution", "prepayment-page-recovery",
-                              "stale-owned-profile-cleanup"] if REGISTRY.role == "recharge"
-                             else ["account-registration"])
+            capabilities += ["manual-payment-confirmation", "recharge-process-isolation",
+                             "payment-unknown-resolution", "prepayment-page-recovery",
+                             "stale-owned-profile-cleanup"]
             return self.reply(200, {"ok": True, "version": 4,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "role": REGISTRY.role, "capabilities": capabilities,
@@ -934,7 +920,7 @@ class Handler(BaseHTTPRequestHandler):
                     client.token = ""
                     body.clear()
             if self.path == "/jobs":
-                job = REGISTRY.start(body, self.allowed_origin())
+                job = REGISTRY.start(body)
                 return self.reply(202, {"ok": True, "id": job.id, "accepted": True})
             match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")/(resume|cancel|code|confirm)", self.path)
             if not match:
@@ -949,20 +935,13 @@ class Handler(BaseHTTPRequestHandler):
                 job.signal_confirm(body["nonce"], body["quoteDigest"])
                 body.clear()
             elif match.group(2) == "code":
-                if not isinstance(job, LocalJob):
-                    if not isinstance(body, dict) or set(body) - {'code', 'attempt', 'step', 'mailId'} or 'code' not in body:
-                        raise Stop('invalid_login_code')
-                    job.signal_code(body['code'], body.get('attempt'), body.get('step'), body.get('mailId'))
-                elif not isinstance(body, dict) or set(body) != {"code"}:
+                if not isinstance(body, dict) or set(body) != {"code"}:
                     raise Stop("invalid_login_code")
                 else:
                     job.signal_code(body["code"])
                 body.clear()
             elif match.group(2) == "resume":
-                if not isinstance(job, LocalJob):
-                    job.signal_resume(body)
-                else:
-                    job.signal_resume()
+                job.signal_resume()
             else:
                 job.signal_cancel()
             return self.reply(200, {"ok": True})
@@ -988,14 +967,13 @@ def load_connector_token(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="ID 业务管理系统本机比特浏览器连接器")
-    parser.add_argument("--role", choices=("recharge", "registration"), default="registration")
+    parser.add_argument("--role", choices=("recharge",), default="recharge")
     parser.add_argument("--port", type=int)
     parser.add_argument("--allowed-origin", action="append", required=True)
     parser.add_argument("--token-file")
     args = parser.parse_args(argv)
-    args.port = args.port or (55322 if args.role == "recharge" else 55321)
-    args.token_file = args.token_file or (".runtime/bitbrowser-recharge-assistant/connector.token"
-        if args.role == "recharge" else ".runtime/auto-recharge-connector/connector.token")
+    args.port = args.port or 55322
+    args.token_file = args.token_file or ".runtime/bitbrowser-recharge-assistant/connector.token"
     if args.port < 1024 or args.port > 65535:
         parser.error("端口必须介于 1024 与 65535")
     origins = set()

@@ -1,5 +1,7 @@
 # ID 业务管理系统脱离 Docker 方案
 
+2026-10-09 范围更新：用户确认移除自动注册、保留自动充值。当前源码的 Compose 和原生配置生成器仅保留六个常驻服务，不再生成注册服务或接受注册启动参数。下文七服务、双角色及注册窗口验证属于退役前历史证据；生产旧注册容器尚未在本次本地修改中停用，历史证据不能证明线上退役。
+
 日期：2026-10-08。状态：**本机空业务库、API、管理端及原生财务检查联调通过；Linux 原生配置和备份入口已实现，线上尚未切换**。
 
 用户已批准本机原生化并要求继续未完成的实现。本轮补齐原生运行、七服务配置生成、备份恢复和只读财务检查入口，并执行本机隔离验证。生产安装、数据库迁移、服务切换和旧 Docker 退役尚未执行；此前批准的一台临时 Linux 测试机已运行并按时清理；线上执行须按实际现场、制品和维护窗口审阅，真实充值在扣款前停止。
@@ -25,16 +27,15 @@
 
 ## 2. 目标服务及替换范围
 
-| 当前服务            | 目标运行方式                                           | 必须保留的行为                                                    |
-| ------------------- | ------------------------------------------------------ | ----------------------------------------------------------------- |
-| `mysql`             | 同版本原生 MySQL 8.4，独立服务账号和数据目录           | 原数据库、字符集/排序规则、时区、SQL mode、账号权限、触发器和例程 |
-| `api`               | Node 24 的构建产物，由 systemd 管理                    | Prisma MySQL 客户端、认证/加密配置、回调和健康接口                |
-| `admin`             | 原生 Nginx 提供前端静态产物                            | SPA 路由、API/实时连接代理、超时、真实客户端地址和缓存规则        |
-| `caddy`             | 原生 Caddy                                             | 原域名、证书/账户存储、安全响应头和 HTTPS                         |
-| `auto-recharge`     | Python 3.12、锁定依赖和浏览器，由独立 systemd 单元管理 | 单次付款、人工确认、代理及任务窗口所有权                          |
-| `auto-registration` | 独立 Python 3.12 进程和临时目录                        | 注册任务、原窗口、角色隔离和续接规则                              |
-| `media-resolver`    | Python 3.11，独立 yt-dlp/F2 环境及 ffmpeg              | 当前媒体功能、出站限制、临时文件和超时                            |
-| `migrate`（单次）   | 独立受控 Prisma 迁移入口                               | 仅执行已经批准的当前系统新增 migration；本次脱 Docker 不要求改表  |
+| 当前服务          | 目标运行方式                                           | 必须保留的行为                                                    |
+| ----------------- | ------------------------------------------------------ | ----------------------------------------------------------------- |
+| `mysql`           | 同版本原生 MySQL 8.4，独立服务账号和数据目录           | 原数据库、字符集/排序规则、时区、SQL mode、账号权限、触发器和例程 |
+| `api`             | Node 24 的构建产物，由 systemd 管理                    | Prisma MySQL 客户端、认证/加密配置、回调和健康接口                |
+| `admin`           | 原生 Nginx 提供前端静态产物                            | SPA 路由、API/实时连接代理、超时、真实客户端地址和缓存规则        |
+| `caddy`           | 原生 Caddy                                             | 原域名、证书/账户存储、安全响应头和 HTTPS                         |
+| `auto-recharge`   | Python 3.12、锁定依赖和浏览器，由独立 systemd 单元管理 | 单次付款、人工确认、代理及任务窗口所有权                          |
+| `media-resolver`  | Python 3.11，独立 yt-dlp/F2 环境及 ffmpeg              | 当前媒体功能、出站限制、临时文件和超时                            |
+| `migrate`（单次） | 独立受控 Prisma 迁移入口                               | 仅执行已经批准的当前系统新增 migration；本次脱 Docker 不要求改表  |
 
 现行生产 Compose 中两个浏览器执行器的默认入口仍为 `0.0.0.0:8051`，彼此有独立容器网络。本轮新增 CLI 地址／端口／内核路径参数，旧无参数启动兼容；本机包装入口固定环回监听，默认充值 8051、注册 8052。上线替换还须调整已有 API Worker URL 与 Worker callback URL，不能把两者合成同一进程。媒体端口已有配置入口。API 新增显式 `--host`；媒体新增 `--host`、`--port`、`--f2-bridge` 和仅预检的 `--check`，无参数保留原容器行为。本轮没有新增环境变量；后续新增环境配置时同步更新 `.env.example`，只提供占位值。内部服务仅绑定环回或明确的私有接口，只有网关公开 80/443。
 
@@ -42,7 +43,7 @@
 
 ### 本轮新增原生工具
 
-- `scripts/native-services.mjs`：默认只读取公开模板，生成七个独立服务账号、状态目录、私有环境文件路径和候选配置。只有 `--write --output-dir=本项目新目录` 才写出配置；`--installed-check` 与 `--health` 不安装或启动服务。MySQL 健康检查用私有客户端文件执行 `SELECT 1`，不把 `mysqladmin ping` 视为认证成功。
+- `scripts/native-services.mjs`：默认只读取公开模板，生成六个独立服务账号、状态目录、私有环境文件路径和候选配置。只有 `--write --output-dir=本项目新目录` 才写出配置；`--installed-check` 与 `--health` 不安装或启动服务。MySQL 健康检查用私有客户端文件执行 `SELECT 1`，不把 `mysqladmin ping` 视为认证成功。
 - API、两个浏览器执行器和媒体服务使用各自文件系统命名空间内的有界 `/tmp`：分别沿用 64／512／512／640 MiB，共享内存 `/dev/shm` 各限 256 MiB；`/var/tmp` 只读。四个角色的 `HOME`／`TMPDIR` 指向 `/tmp`，宿主 `0700` 运行目录在服务内只读，避免绕过限额写入另一条临时路径。按 [systemd 252 官方配置](https://github.com/systemd/systemd/blob/v252/man/systemd.exec.xml)及[挂载优先级实现](https://github.com/systemd/systemd/blob/v252/src/core/namespace.c)，有界角色使用 `TemporaryFileSystem` 而关闭会覆盖同路径 tmpfs 的 `PrivateTmp`；MySQL、Nginx 和 Caddy 保留原宿主可见 socket／PID 目录。配置回执仍标 `NOT_MEASURED`，现场须测量真实 `/tmp`／`/dev/shm` 的容量、不可执行／只读属性和跨角色隔离；持久状态、浏览器缓存及日志容量另需核验，不能把 tmpfs 限额当作总磁盘上限。
 - Caddy 管理 API 使用本服务 `0700` 运行目录内的 `admin.sock`，不监听宿主环回 `2019`；公开网站的 80/443 和 HTTPS 规则保持原模板。健康检查由 Caddy 服务账号运行 `--health=caddy --runtime-dir=/run/独立运行根目录`，仅访问固定 socket 的 `GET /config/`，核对规范路径、属主和私有权限，丢弃配置响应，失败不回退 TCP。语法及默认 socket 权限遵循 [Caddy 官方管理入口文档](https://caddyserver.com/docs/caddyfile/options#admin)和[网络地址文档](https://caddyserver.com/docs/conventions#network-addresses)。Linux 上其他六个服务账号是否均无法访问该入口仍为 `NOT_MEASURED`，须现场验证。
 - `scripts/native-mysql-backup.mjs`：默认 `check` 不连接数据库。`backup` 使用明确的原生程序目录、既有私有客户端文件和加密密钥文件；单次一致性备份保留例程、事件和触发器。`verify` 只初始化自己创建的新实例，禁止接受已有数据库或客户端文件作为恢复目标。归档认证、摘要及原恢复保护失败即停止；S3 上传和保留策略仅准备参数，未执行。

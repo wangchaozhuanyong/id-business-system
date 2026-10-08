@@ -59,6 +59,35 @@ function fixture(run, outputDirectory = '.deploy') {
   }
 }
 
+function assertRegistrationReleaseRetired(profile) {
+  assert.equal(workflowInputs.historical_exception.options.includes(profile), false);
+  const first = workflowSteps[0];
+  assert.equal(first.name, 'Reject removed automatic registration releases');
+  assert.ok(first.run.includes('registration-worker-*'));
+  fixture(({ root, env, log }) => {
+    for (const script of [
+      'validate-release-selection.sh',
+      'build-images.sh',
+      'push-images.sh',
+      'dispatch.sh'
+    ]) {
+      assert.throws(
+        () =>
+          execFileSync('bash', ['scripts/production-release/' + script], {
+            env: { ...env, HISTORICAL_EXCEPTION: profile },
+            stdio: 'pipe'
+          }),
+        (error) =>
+          error.status === 1 && /registration releases are disabled/.test(error.stderr.toString()),
+        script
+      );
+    }
+    assert.equal(readFileSync(log, 'utf8'), '');
+    assert.equal(existsSync(env.GITHUB_ENV), false);
+    assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+  });
+}
+
 const workflowPredicate = (expression) => (inputs) =>
   new Function('inputs', 'startsWith', 'always', `return (${expression});`)(
     inputs,
@@ -274,6 +303,40 @@ const fixtureSeal = 'e'.repeat(64);
 const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
 const workflowInputs = workflow.on.workflow_dispatch.inputs;
 const workflowSteps = workflow.jobs.release.steps;
+
+test('retired API registration operations stop before build proof Docker AWS or dispatch', () => {
+  const first = workflowSteps[0];
+  assert.equal(first.name, 'Reject removed automatic registration releases');
+  for (const operation of [
+    'verify_api_registration',
+    'handoff_api_registration',
+    'release_api_registration',
+    'verify_registration_business',
+    'verify_registration_handoff',
+    'recover_registration_handoff'
+  ]) {
+    assert.equal(workflowInputs.operation.options.includes(operation), false);
+    fixture(({ root, env, log }) => {
+      const selected = { ...env, RELEASE_OPERATION: operation };
+      for (const args of [
+        ['-c', first.run],
+        ['scripts/production-release/validate-release-selection.sh'],
+        ['scripts/production-release/build-images.sh'],
+        ['scripts/production-release/push-images.sh'],
+        ['scripts/production-release/dispatch.sh']
+      ])
+        assert.throws(
+          () => execFileSync('bash', args, { env: selected, stdio: 'pipe' }),
+          (error) =>
+            error.status === 1 && /registration releases are disabled/.test(String(error.stderr)),
+          `${operation}: ${args.join(' ')}`
+        );
+      assert.equal(readFileSync(log, 'utf8'), '');
+      assert.equal(existsSync(env.GITHUB_ENV), false);
+      assert.equal(existsSync(join(root, '.deploy/production-release/ssm-999999.json')), false);
+    });
+  }
+});
 
 function storageDiagnosticStepFixture(
   statuses,
@@ -890,6 +953,17 @@ test('release archive cache selection prevents mixed publication scopes before c
   assert.deepEqual(selectedParts(paths), ['guards']);
 });
 
+test('all automatic registration release profiles stop before build push and AWS transport', () => {
+  for (const profile of [
+    'registration-worker-b8-80-20261006',
+    'registration-worker-956-20261006',
+    ...['85', '86', '87', '88', '89'].map((value) => `registration-worker-${value}-20261006`),
+    ...['90', '91', '92', '93', '94'].map((value) => `registration-worker-${value}-20261007`),
+    'registration-worker-95-20261008',
+    'historical-finance-20261005-registration-continuation'
+  ])
+    assertRegistrationReleaseRetired(profile);
+});
 const postCleanupEnv = {
   HISTORICAL_EXCEPTION: postCleanupPolicy,
   EXPECTED_CURRENT: postCleanupBaseline,
@@ -917,22 +991,11 @@ test('always workflow evidence still respects the explicit API Admin operation s
   assert.equal(workflowPredicate('!always()')({}), false);
 });
 
-test('bound registration closure observation and recovery cannot build or publish images', () => {
-  const modes = {
-    verify_registration_handoff: 'handoff-observe',
-    recover_registration_handoff: 'handoff-recover'
-  };
-  const evidence = workflowSteps.find(
-    (step) => step.name === 'Save API Registration independent scope evidence'
-  );
-  for (const [operation, mode] of Object.entries(modes)) {
-    assert.ok(workflowInputs.operation.options.includes(operation));
-    const selected = workflowSteps.filter(
-      (step) => step.run === `python3 -B scripts/production-release/api-admin-readonly.py ${mode}`
-    );
-    assert.equal(selected.length, 1);
-    assert.equal(workflowPredicate(selected[0].if)({ operation }), true);
-    assert.equal(workflowPredicate(evidence.if)({ operation }), true);
+test('retired registration closure observation and recovery reject before image publication', () => {
+  const first = workflowSteps[0];
+  assert.equal(first.name, 'Reject removed automatic registration releases');
+  for (const operation of ['verify_registration_handoff', 'recover_registration_handoff']) {
+    assert.equal(workflowInputs.operation.options.includes(operation), false);
     for (const name of [
       'Build images on the GitHub runner',
       'Push immutable images',
@@ -949,16 +1012,20 @@ test('bound registration closure observation and recovery cannot build or publis
       );
     }
     fixture(({ env, log }) => {
-      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
-        env: { ...env, RELEASE_OPERATION: operation },
-        stdio: 'pipe'
-      });
-      assert.throws(() =>
-        execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
-          env: { ...env, RELEASE_OPERATION: operation, HISTORICAL_EXCEPTION: postCleanupPolicy },
-          stdio: 'pipe'
-        })
-      );
+      for (const historical of ['none', postCleanupPolicy])
+        for (const args of [
+          ['-c', first.run],
+          ['scripts/production-release/validate-release-selection.sh']
+        ])
+          assert.throws(
+            () =>
+              execFileSync('bash', args, {
+                env: { ...env, RELEASE_OPERATION: operation, HISTORICAL_EXCEPTION: historical },
+                stdio: 'pipe'
+              }),
+            (error) =>
+              error.status === 1 && /registration releases are disabled/.test(String(error.stderr))
+          );
       assert.equal(readFileSync(log, 'utf8'), '');
     });
   }
@@ -1218,6 +1285,7 @@ test('preparation permits only build push and evidence and cannot reach dispatch
     .filter((step) => !step.if || workflowPredicate(step.if)(inputs))
     .map((step) => step.name);
   assert.deepEqual(enabled, [
+    'Reject removed automatic registration releases',
     'Check out the requested main commit',
     'Verify exact source and passing Quality Gate',
     'Validate release policy and reviewed seal selection',
@@ -1357,7 +1425,7 @@ test('actual full-mode release controls select each missing suite once without r
   assert.deepEqual(guardCommands(paths, { part: 'release-controls' }), [
     'node --test scripts/ci-recharge-release.test.mjs',
     'node --test scripts/v2-registration-finance-audit.test.mjs',
-    'python3 -B scripts/production-release/registration-only-transport.test.py',
+    'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
@@ -1755,12 +1823,6 @@ test('real historical dispatch selects only the flag approved for its exact base
       '--historical-finance-continuation'
     ],
     [
-      'historical-finance-20261005-registration-continuation',
-      'd0f359dc78b2d2b166893bfec8545609f5baa16d',
-      '--historical-finance-continuation',
-      '--historical-finance-exception'
-    ],
-    [
       'historical-finance-20261005',
       'ed2f75b0f4075347224ce3b2c82a90ed514d8d22',
       '--historical-finance-exception',
@@ -1834,7 +1896,7 @@ test('real historical dispatch rejects reused or wrong baselines before paramete
     });
 });
 
-test('worker CI runs card setup, full upgrade and registration browser regression modules', () => {
+test('worker CI runs card setup and full recharge regression modules without registration', () => {
   fixture(({ root, env }) => {
     const log = join(root, 'worker-arguments.txt');
     writeFileSync(
@@ -1855,10 +1917,7 @@ test('worker CI runs card setup, full upgrade and registration browser regressio
       'test_subscription_upgrade',
       'test_upgrade_card_selection',
       'test_upgrade_card_flow',
-      'test_registration_browser',
-      'test_registration_builtin',
       'test_worker_isolation',
-      'test_registration_auto_code',
       'test_payment_3ds',
       'test_payment_handoff',
       'test_recharge_email_code',
@@ -2289,6 +2348,7 @@ test('actual independent archive preparation builds and pushes exactly API migra
     .filter((step) => !step.if || workflowPredicate(step.if)(preparationInputs))
     .map((step) => step.name);
   assert.deepEqual(enabled, [
+    'Reject removed automatic registration releases',
     'Check out the requested main commit',
     'Verify exact source and passing Quality Gate',
     'Validate release policy and reviewed seal selection',
@@ -3177,11 +3237,7 @@ test('Pro business CI prepares the locked Python Chromium before the full Pro mo
       assert.deepEqual(tests.slice(0, 2), ['-m', 'unittest']);
       assert.equal(tests.filter((name) => name === 'test_pro').length, 1);
       assert.equal(tests.includes('test_pro.ProMenuDiagnosticsTests'), false);
-      for (const regression of [
-        'test_worker_isolation',
-        'test_registration_browser',
-        'test_server_proxy'
-      ])
+      for (const regression of ['test_worker_isolation', 'test_server_proxy'])
         assert.ok(tests.includes(regression), regression);
       assert.deepEqual(commands.slice(5), commands.slice(1, 4));
     });
@@ -3192,7 +3248,7 @@ test('control-only and other worker CI changes install Chromium in one cache whi
   for (const changed of [
     'deploy/aws/recharge-pro-main80-20261006.json',
     `${worker}/pay.py`,
-    `${worker}/registration_browser.py`,
+    `${worker}/bitbrowser_connector.py`,
     `${worker}/plan_selection.py.backup`,
     `${worker}/test_pro.py/extra`
   ])
@@ -3220,7 +3276,9 @@ test('control-only and other worker CI changes install Chromium in one cache whi
       assert.deepEqual(tests.slice(0, 2), ['-m', 'unittest']);
       assert.equal(tests.filter((name) => name === 'test_pro.ProMenuDiagnosticsTests').length, 1);
       assert.equal(tests.includes('test_pro'), false);
-      assert.ok(tests.includes('test_registration_browser'));
+      assert.ok(tests.includes('test_bitbrowser_connector'));
+      assert.ok(tests.includes('test_owned_recharge_profile'));
+      assert.ok(tests.every((name) => !name.startsWith('test_registration')));
       assert.equal(commands[3], commands[1]);
     });
 });
@@ -3637,188 +3695,43 @@ test('main80 actual readback parser accepts the 21-field 49-check proof and reje
   );
 });
 
-test('fixed 89 Pro bridge selection accepts actual d2 and rejects stale or combined inputs before effects', () => {
-  const baseline = 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3';
-  fixture(({ env, log }) => {
-    const approved = {
-      ...env,
-      HISTORICAL_EXCEPTION: 'registration-worker-89-20261006',
-      EXPECTED_CURRENT: baseline,
-      RELEASE_ADMIN_ONLY: 'false',
-      REUSE_IMAGE_COMMIT: '',
-      REUSE_IMAGE_RUN_ID: '',
-      REUSE_IMAGE_RUN_ATTEMPT: ''
-    };
-    const select = (fields = {}) =>
-      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
-        env: { ...approved, ...fields },
-        stdio: 'pipe'
-      });
-    select();
-    for (const fields of [
-      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
-      { EXPECTED_CURRENT: '4c200c4ae08bb8214ff8e0955f8237ce85069cc6' },
-      { EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c' },
-      { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
-      { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
-      { EXPECTED_CURRENT: 'f'.repeat(40) },
-      { RELEASE_ADMIN_ONLY: 'true' },
-      { RELEASE_OPERATION: 'verify_unused_cache' },
-      { RELEASE_OPERATION: 'prepare_order_archive_release' },
-      { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
-      { REUSE_IMAGE_RUN: '123' },
-      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
-      { REUSE_IMAGE_RUN_ID: '123' },
-      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
-      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
-      { ORDER_ARCHIVE_SEAL_SHA256: 'a'.repeat(64) },
-      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'a'.repeat(64) }
-    ]) {
-      assert.throws(
-        () => select(fields),
-        (error) => error.status === 1
-      );
-      assert.equal(readFileSync(log, 'utf8'), '');
-    }
-    select({
-      HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006',
-      EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
-    });
-    assert.throws(() => select({ HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006' }));
-    assert.equal(readFileSync(log, 'utf8'), '');
-  });
+test('registration-worker-89-20261006 retains historical recharge evidence and rejects current publication selection', () => {
+  const profile = 'registration-worker-89-20261006';
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed 89 Pro bridge workflow build and both dispatch selectors retain the independent main80 b91 anchor', () => {
-  const baseline = 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3';
-  const old = 'b91b626a71ed2c7c2473d080551b3b10b693b0cb';
-  const approval = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 89 registration runtime approval'
-  );
-  assert.equal(approval.if, "inputs.historical_exception == 'registration-worker-89-20261006'");
-  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
-  assert.equal(approval.run.includes(old), false);
-  for (const filename of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
-    const source = readFileSync(`scripts/production-release/${filename}`, 'utf8');
-    const branch = source
-      .split('== registration-worker-89-20261006 ]]; then')[1]
-      .split(/\n(?:fi|elif )/)[0];
-    assert.ok(branch.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
-    assert.equal(branch.includes(old), false);
-    assert.ok(source.includes(`recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = ${old}`));
-  }
-  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8');
-  const python89 = dispatch
-    .split("elif history_policy == 'registration-worker-89-20261006':")[1]
-    .split('\nelif ')[0];
-  assert.ok(python89.includes(`assert previous == '${baseline}' and admin_only == 'false'`));
-  assert.ok(python89.includes("scope_flag += ' --registration-worker-89'"));
-  assert.equal(python89.includes(old), false);
-  assert.ok(dispatch.includes(`assert previous == '${old}' and admin_only == 'false'`));
-  const rechargeApproval = workflowSteps.find(
-    (step) => step.name === 'Verify fixed recharge runtime approval'
-  );
-  assert.ok(
-    rechargeApproval.run.includes(`recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = ${old}`)
-  );
+test('registration-worker-89-20261006 retains historical recharge evidence and rejects current publication', () => {
+  const profile = 'registration-worker-89-20261006';
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed 90 hydration selection accepts actual c3 and rejects stale or combined inputs before effects', () => {
-  const baseline = 'c3cad767b372738b2193e60584b0a53daa53b65f';
-  fixture(({ env, log }) => {
-    const approved = {
-      ...env,
-      HISTORICAL_EXCEPTION: 'registration-worker-90-20261007',
-      EXPECTED_CURRENT: baseline,
-      RELEASE_ADMIN_ONLY: 'false',
-      REUSE_IMAGE_COMMIT: '',
-      REUSE_IMAGE_RUN_ID: '',
-      REUSE_IMAGE_RUN_ATTEMPT: ''
-    };
-    const select = (fields = {}) =>
-      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
-        env: { ...approved, ...fields },
-        stdio: 'pipe'
-      });
-    select();
-    for (const fields of [
-      { EXPECTED_CURRENT: 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' },
-      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
-      { EXPECTED_CURRENT: '4c200c4ae08bb8214ff8e0955f8237ce85069cc6' },
-      { EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c' },
-      { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
-      { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
-      { EXPECTED_CURRENT: 'f'.repeat(40) },
-      { RELEASE_ADMIN_ONLY: 'true' },
-      { RELEASE_OPERATION: 'verify_unused_cache' },
-      { RELEASE_OPERATION: 'prepare_order_archive_release' },
-      { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
-      { REUSE_IMAGE_RUN: '123' },
-      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
-      { REUSE_IMAGE_RUN_ID: '123' },
-      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
-      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
-      { ORDER_ARCHIVE_SEAL_SHA256: 'a'.repeat(64) },
-      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'a'.repeat(64) }
-    ]) {
-      assert.throws(
-        () => select(fields),
-        (error) => error.status === 1
-      );
-      assert.equal(readFileSync(log, 'utf8'), '');
-    }
-    select({
-      HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006',
-      EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
-    });
-    assert.throws(() => select({ HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006' }));
-    assert.equal(readFileSync(log, 'utf8'), '');
-  });
+test('registration-worker-90-20261007 retains historical recharge evidence and rejects current publication selection', () => {
+  const profile = 'registration-worker-90-20261007';
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed 90 hydration workflow confines dual builds and explicit readback to its profile', () => {
-  const approval = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 90 registration runtime approval'
-  );
-  assert.equal(approval.if, "inputs.historical_exception == 'registration-worker-90-20261007'");
-  assert.ok(
-    approval.run.includes('test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f')
-  );
-  for (const name of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
-    const source = readFileSync(`scripts/production-release/${name}`, 'utf8');
-    const branch = source
-      .split(
-        /\n(?:if|elif) \[\[ "\$\{HISTORICAL_EXCEPTION:-none\}" == registration-worker-90-20261007 \]\]; then/
-      )[1]
-      .split(/\n(?:fi|elif )/)[0];
-    assert.ok(
-      branch.includes('test "$EXPECTED_CURRENT" = c3cad767b372738b2193e60584b0a53daa53b65f')
-    );
-    assert.ok(
-      source.includes(
-        'recharge-pro-main80-20261006) test "$EXPECTED_CURRENT" = b91b626a71ed2c7c2473d080551b3b10b693b0cb'
-      )
-    );
-  }
-  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8');
-  const branch = build
-    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; then')[1]
-    .split('\nfi')[0];
-  assert.ok(branch.includes('registration-admin-build-context'));
-  assert.ok(
-    branch.includes('build_image admin "$registration_admin_context/apps/admin/Dockerfile" runtime')
-  );
-  assert.ok(branch.includes('build_image auto-recharge "$registration_context/'));
-  assert.equal(branch.includes('build_image api'), false);
-  assert.equal(branch.includes('build_image migrate'), false);
-  const readback = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 90 registration deployment independently'
-  );
-  assert.ok(readback.run.includes("profile_id='registration-worker-90-20261007'"));
-  assert.ok(readback.run.includes('raw output suppressed'));
+test('registration-worker-90-20261007 retains historical recharge evidence and rejects current publication', () => {
+  const profile = 'registration-worker-90-20261007';
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed 90 hydration CI targets only the reviewed mixed source and retains all UI rules', () => {
+test('deleted registration frontend paths retain UI guards without scheduling deleted suites', () => {
   const profile = 'deploy/aws/registration-worker-90-20261007.json';
   const paths = [
     profile,
@@ -3841,8 +3754,7 @@ test('fixed 90 hydration CI targets only the reviewed mixed source and retains a
     '--workspace',
     '@apple-business/admin',
     '--',
-    'src/api/requestPolicy.spec.ts',
-    'src/v2/features/auto-registration/useRegistrationPage.spec.ts'
+    'src/v2/features/auto-recharge'
   ]);
   const guards = adminUiGuardChecks('recharge', paths);
   for (const rule of [
@@ -3865,103 +3777,22 @@ test('fixed 90 hydration CI targets only the reviewed mixed source and retains a
     assert.equal(checkMode([...paths, extra]), 'full');
 });
 
-test('fixed 91 profile observation selection accepts actual 01cec519 and rejects stale or combined inputs before effects', () => {
-  const baseline = '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af';
-  fixture(({ env, log }) => {
-    const approved = {
-      ...env,
-      HISTORICAL_EXCEPTION: 'registration-worker-91-20261007',
-      EXPECTED_CURRENT: baseline,
-      RELEASE_ADMIN_ONLY: 'false',
-      REUSE_IMAGE_COMMIT: '',
-      REUSE_IMAGE_RUN_ID: '',
-      REUSE_IMAGE_RUN_ATTEMPT: ''
-    };
-    const select = (fields = {}) =>
-      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
-        env: { ...approved, ...fields },
-        stdio: 'pipe'
-      });
-    select();
-    for (const fields of [
-      { EXPECTED_CURRENT: 'c3cad767b372738b2193e60584b0a53daa53b65f' },
-      { HISTORICAL_EXCEPTION: 'registration-worker-90-20261007' },
-      { HISTORICAL_EXCEPTION: 'registration-worker-89-20261006' },
-      { EXPECTED_CURRENT: 'd2e22e623d0e19851c79ffe43396f5f97a99b8d3' },
-      { EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb' },
-      { EXPECTED_CURRENT: '4c200c4ae08bb8214ff8e0955f8237ce85069cc6' },
-      { EXPECTED_CURRENT: '651f62902fba74ddd189b34932084573b39d245c' },
-      { EXPECTED_CURRENT: 'fd3a6da610c505c2b7a51601cf854182991ffd12' },
-      { EXPECTED_CURRENT: '80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b' },
-      { EXPECTED_CURRENT: 'f'.repeat(40) },
-      { RELEASE_ADMIN_ONLY: 'true' },
-      { RELEASE_OPERATION: 'verify_unused_cache' },
-      { RELEASE_OPERATION: 'prepare_order_archive_release' },
-      { RELEASE_OPERATION: 'prepare_post_cleanup_release' },
-      { REUSE_IMAGE_RUN: '123' },
-      { REUSE_IMAGE_COMMIT: env.RELEASE_COMMIT },
-      { REUSE_IMAGE_RUN_ID: '123' },
-      { REUSE_IMAGE_RUN_ATTEMPT: '1' },
-      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
-      { ORDER_ARCHIVE_SEAL_SHA256: 'a'.repeat(64) },
-      { ORDER_ARCHIVE_PREPARED_IMAGES_SHA256: 'a'.repeat(64) }
-    ]) {
-      assert.throws(
-        () => select(fields),
-        (error) => error.status === 1
-      );
-      assert.equal(readFileSync(log, 'utf8'), '');
-    }
-    select({
-      HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006',
-      EXPECTED_CURRENT: 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
-    });
-    assert.throws(() => select({ HISTORICAL_EXCEPTION: 'recharge-pro-main80-20261006' }));
-    assert.equal(readFileSync(log, 'utf8'), '');
-  }, '.runtime/registration-profile-observation-release-20261007/node-selection');
+test('registration-worker-91-20261007 retains historical recharge evidence and rejects current publication selection', () => {
+  const profile = 'registration-worker-91-20261007';
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed 91 profile observation workflow confines fresh Worker builds and explicit readback to its profile', () => {
+test('registration-worker-91-20261007 retains historical recharge evidence and rejects current publication', () => {
   const profile = 'registration-worker-91-20261007';
-  const baseline = '01cec5190b9fb48bc63c3f3eb8a4fa6f6f6345af';
-  const approval = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 91 registration runtime approval'
-  );
-  assert.equal(approval.if, `inputs.historical_exception == '${profile}'`);
-  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
-  assert.ok(approval.run.includes(`--registration-profile ${profile}`));
-  for (const name of ['build-images.sh', 'push-images.sh', 'dispatch.sh']) {
-    const source = readFileSync(`scripts/production-release/${name}`, 'utf8');
-    const branch = source.split(`== ${profile} ]]; then`)[1].split(/\n(?:fi|elif )/)[0];
-    assert.ok(branch.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
-    assert.ok(branch.includes(`--registration-profile ${profile}`));
-  }
-  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
-    .split(`== ${profile} ]]; then`)[1]
-    .split('\nfi')[0];
-  assert.equal((build.match(/build_image /g) || []).length, 1);
-  assert.ok(build.includes('build_image auto-recharge "$registration_context/'));
-  assert.equal(build.includes('registration-admin-build-context'), false);
-  const push = readFileSync('scripts/production-release/push-images.sh', 'utf8')
-    .split(`== ${profile} ]]; then`)[1]
-    .split('\nelif ')[0];
-  assert.ok(push.includes('services=(auto-recharge)'));
-  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8')
-    .split(`elif history_policy == '${profile}':`)[1]
-    .split('\nelif ')[0];
-  assert.ok(dispatch.includes("scope_flag += ' --registration-worker-91'"));
-  const readback = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 91 registration deployment independently'
-  );
-  assert.ok(readback.run.includes(`profile_id='${profile}'`));
-  assert.ok(readback.run.includes('raw output suppressed'));
-  const skipped = workflowSteps.find(
-    (step) => step.name === 'Record skipped cache maintenance for fixed 91 registration release'
-  );
-  assert.equal(
-    skipped.if,
-    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
-  );
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
 const recharge974Identity = 'recharge-pro-974-20261007';
@@ -4289,98 +4120,22 @@ test('formatting excludes only the generated Worker browser cache and retains fu
   }
 });
 
-test('fixed92 transport and workflow bind API80 plus actual91 projections without generic services or cache maintenance', () => {
+test('registration-worker-92-20261007 retains historical recharge evidence and rejects current publication', () => {
   const profile = 'registration-worker-92-20261007';
-  const baseline = '974c62cc1681012ecff897aefc90d2cd9900004a';
-  const approval = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 92 registration runtime approval'
-  );
-  assert.equal(approval.if, `inputs.historical_exception == '${profile}'`);
-  assert.ok(approval.run.includes(`test "$EXPECTED_CURRENT" = ${baseline}`));
-  assert.ok(approval.run.includes(`--registration-profile ${profile}`));
-  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
-    .split(`\nif [[ "${'${HISTORICAL_EXCEPTION:-none}'}" == ${profile} ]]; then`)[1]
-    .split('\nfi')[0];
-  assert.equal((build.match(/build_image /g) || []).length, 2);
-  assert.ok(
-    build.includes(
-      'build_image api "$registration_api_context/apps/api/Dockerfile.mysql" runtime "$registration_api_context"'
-    )
-  );
-  assert.ok(build.includes('build_image auto-recharge "$registration_context/'));
-  assert.equal(build.includes('build_image admin'), false);
-  assert.equal(build.includes('build_image migrate'), false);
-  const push = readFileSync('scripts/production-release/push-images.sh', 'utf8')
-    .split(`== ${profile} ]]; then`)[1]
-    .split('\nelif ')[0];
-  assert.ok(push.includes('services=(api auto-recharge)'));
-  assert.ok(push.includes('id-business-v2.api-projection-sha256'));
-  assert.ok(push.includes('id-business-v2.api-compiled-source-sha256'));
-  assert.ok(push.includes('id-business-v2.worker-projection-sha256'));
-  const dispatch = readFileSync('scripts/production-release/dispatch.sh', 'utf8')
-    .split(`elif history_policy == '${profile}':`)[1]
-    .split('\nelif ')[0];
-  assert.ok(dispatch.includes("scope_flag += ' --registration-worker-92'"));
-  const artifact = workflowSteps.find(
-    (step) => step.name === 'Save fixed 92 registration API and Worker build projection'
-  );
-  assert.equal(
-    artifact.if,
-    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
-  );
-  assert.equal(
-    artifact.with.name,
-    'registration-worker-92-build-projection-${{ github.run_id }}-${{ github.run_attempt }}'
-  );
-  assert.equal(artifact.with.path, '.deploy/production-release/registration-build-projection.json');
-  const readback = workflowSteps.find(
-    (step) => step.name === 'Verify fixed 92 registration deployment independently'
-  );
-  assert.ok(readback.run.includes(`profile_id='${profile}'`));
-  assert.ok(readback.run.includes('fixed-registration-92-readback.json'));
-  assert.ok(readback.run.includes('raw output suppressed'));
-  const skipped = workflowSteps.find(
-    (step) => step.name === 'Record skipped cache maintenance for fixed 92 registration release'
-  );
-  assert.equal(
-    skipped.if,
-    `inputs.operation == 'release' && inputs.historical_exception == '${profile}'`
-  );
-  const maintenance = workflowSteps.find(
-    (step) => step.name === 'Verify or maintain recoverable unused project image cache'
-  );
-  assert.ok(maintenance.if.includes(`inputs.historical_exception != '${profile}'`));
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed93 builds Worker once and keeps current92 API and the new retention implementation', () => {
+test('registration-worker-93-20261007 retains historical recharge evidence and rejects current publication', () => {
   const profile = 'registration-worker-93-20261007';
-  const raw = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
-  assert.equal(raw.expectedCurrent, '2f24cf81007429ea474da404a30bc74da9d43ce1');
-  assert.deepEqual(raw.scope.servicesUpdated, ['auto-registration']);
-  assert.deepEqual(raw.scope.imageServices, ['auto-recharge']);
-  assert.equal(raw.scope.preservedServices.length, 6);
-  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
-    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == ' + profile + ' ]]; then')[1]
-    .split('\nfi')[0];
-  assert.equal((build.match(/build_image /g) || []).length, 1);
-  assert.ok(build.includes('registration-build-context'));
-  assert.equal(build.includes('build_image api'), false);
-  const workflow = readFileSync('.github/workflows/production-release.yml', 'utf8');
-  assert.ok(workflow.includes('Verify fixed 93 registration deployment independently'));
-  assert.ok(workflow.includes('fixed-registration-93-readback-filter.py'));
-  assert.ok(
-    workflow.includes('Maintain service rollback image cache independently after fixed release')
-  );
-  assert.ok(
-    readFileSync('scripts/production-release/build-images.sh', 'utf8').includes(
-      'validate_browser_cache_reference'
-    )
-  );
-  assert.ok(
-    readFileSync('scripts/production-release/maintain-image-cache.py', 'utf8').includes(
-      'current-service-rollback-explicit-dependencies-ecr-cache-v2'
-    )
-  );
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
 const recharge2fIdentity = 'recharge-pro-2f-20261007';
@@ -4699,17 +4454,13 @@ test('fixed 2f actual readonly workflow requires the complete 21 field 49 zero p
   }, recharge2fIdentity);
 });
 
-test('fixed93 and fixed 2f workflow approvals remain exclusive after integration', () => {
+test('retired registration and fixed 2f preserve the existing recharge approval', () => {
+  assertRegistrationReleaseRetired('registration-worker-93-20261007');
   const registrationApproval = 'Verify fixed 93 registration runtime approval';
   const registrationReadback = 'Verify fixed 93 registration deployment independently';
   const rechargeApproval = 'Verify fixed 2f recharge runtime approval';
   const rechargeReadback = 'Verify fixed recharge deployment independently';
   for (const [profile, required, excluded] of [
-    [
-      'registration-worker-93-20261007',
-      [registrationApproval, registrationReadback],
-      [rechargeApproval, rechargeReadback]
-    ],
     [
       'recharge-pro-2f-20261007',
       [rechargeApproval, rechargeReadback],
@@ -4740,125 +4491,22 @@ test('fixed93 and fixed 2f workflow approvals remain exclusive after integration
   }
 });
 
-test('fixed94 preserves815 API Admin and D3 Pro while rebuilding the reviewed registration92 basis only', () => {
+test('registration-worker-94-20261007 retains historical recharge evidence and rejects current publication', () => {
   const profile = 'registration-worker-94-20261007';
-  const raw = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
-  assert.equal(raw.expectedCurrent, '815fae391b172d6c368ea2ad25225f52a1272808');
-  assert.equal(raw.runtimeBaseline.status, 'VERIFIED_815_RUNTIME_BASELINE');
-  assert.equal(raw.runtimeBaseline.manifest.commit, raw.expectedCurrent);
-  assert.equal(Object.keys(raw.controlSourceSha256).length, 23);
-  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.py']);
-  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.test.py']);
-  assert.equal(raw.workerBasisCommit, '2f24cf81007429ea474da404a30bc74da9d43ce1');
-  assert.deepEqual(raw.scope.servicesUpdated, ['auto-registration']);
-  assert.deepEqual(raw.scope.imageServices, ['auto-recharge']);
-  assert.equal(raw.scope.preservedServices.length, 6);
-  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
-    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == ' + profile + ' ]]; then')[1]
-    .split('\nfi')[0];
-  assert.equal((build.match(/build_image /g) || []).length, 1);
-  assert.ok(build.includes('registration-build-context'));
-  assert.equal(build.includes('build_image api'), false);
-  const required = [
-    'Verify fixed 94 registration runtime approval',
-    'Verify fixed 94 registration deployment independently',
-    'Save fixed 94 registration Worker build projection',
-    'Record skipped cache maintenance for fixed 94 registration release'
-  ];
-  const exclusive = [
-    'Verify fixed 93 registration runtime approval',
-    'Verify fixed 93 registration deployment independently',
-    'Verify fixed 2f recharge runtime approval',
-    'Verify fixed recharge deployment independently'
-  ];
-  const enabled = workflowSteps
-    .filter(
-      (step) =>
-        !step.if ||
-        workflowPredicate(step.if)({
-          operation: 'release',
-          historical_exception: profile,
-          reuse_image_run: ''
-        })
-    )
-    .map((step) => step.name);
-  for (const name of required) assert.ok(enabled.includes(name), name);
-  for (const name of [
-    ...exclusive,
-    'Verify or maintain recoverable unused project image cache',
-    'Verify reusable build and unchanged application source'
-  ])
-    assert.equal(enabled.includes(name), false, name);
-  assert.ok(
-    enabled.includes('Maintain service rollback image cache independently after fixed release')
-  );
-  execFileSync(
-    'python3',
-    ['scripts/production-release/remote-deploy.test.py', 'Registration94ScopeTests'],
-    { encoding: 'utf8' }
-  );
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
-test('fixed95 preserves94 and815 API Admin and D3 Pro while rebuilding the reviewed registration92 basis only', () => {
+test('registration-worker-95-20261008 retains historical recharge evidence and rejects current publication', () => {
   const profile = 'registration-worker-95-20261008';
-  const raw = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
-  assert.equal(raw.expectedCurrent, '4c170e661c871dc14dccc98a8d6e5cf983141341');
-  assert.equal(raw.runtimeBaseline.status, 'VERIFIED_94_API815_RUNTIME_BASELINE');
-  assert.equal(raw.runtimeBaseline.manifest.commit, raw.expectedCurrent);
-  assert.equal(Object.keys(raw.controlSourceSha256).length, 24);
-  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.py']);
-  assert.ok(raw.controlSourceSha256['scripts/production-release/registration-interstitial-95.py']);
-  assert.ok(raw.controlSourceSha256['scripts/production-release/api-admin-scope.test.py']);
-  assert.equal(raw.workerBasisCommit, '2f24cf81007429ea474da404a30bc74da9d43ce1');
-  assert.deepEqual(raw.scope.servicesUpdated, ['auto-registration']);
-  assert.deepEqual(raw.scope.imageServices, ['auto-recharge']);
-  assert.equal(raw.scope.preservedServices.length, 6);
-  const build = readFileSync('scripts/production-release/build-images.sh', 'utf8')
-    .split('\nif [[ "${HISTORICAL_EXCEPTION:-none}" == ' + profile + ' ]]; then')[1]
-    .split('\nfi')[0];
-  assert.equal((build.match(/build_image /g) || []).length, 1);
-  assert.ok(build.includes('registration-build-context'));
-  assert.equal(build.includes('build_image api'), false);
-  const required = [
-    'Verify fixed 95 registration runtime approval',
-    'Verify fixed 95 registration deployment independently',
-    'Save fixed 95 registration Worker build projection',
-    'Record skipped cache maintenance for fixed 95 registration release'
-  ];
-  const exclusive = [
-    'Verify fixed 94 registration runtime approval',
-    'Verify fixed 94 registration deployment independently',
-    'Verify fixed 93 registration runtime approval',
-    'Verify fixed 93 registration deployment independently',
-    'Verify fixed 2f recharge runtime approval',
-    'Verify fixed recharge deployment independently'
-  ];
-  const enabled = workflowSteps
-    .filter(
-      (step) =>
-        !step.if ||
-        workflowPredicate(step.if)({
-          operation: 'release',
-          historical_exception: profile,
-          reuse_image_run: ''
-        })
-    )
-    .map((step) => step.name);
-  for (const name of required) assert.ok(enabled.includes(name), name);
-  for (const name of [
-    ...exclusive,
-    'Verify or maintain recoverable unused project image cache',
-    'Verify reusable build and unchanged application source'
-  ])
-    assert.equal(enabled.includes(name), false, name);
-  assert.ok(
-    enabled.includes('Maintain service rollback image cache independently after fixed release')
-  );
-  execFileSync(
-    'python3',
-    ['scripts/production-release/remote-deploy.test.py', 'Registration95ScopeTests'],
-    { encoding: 'utf8' }
-  );
+  const historical = JSON.parse(readFileSync('deploy/aws/' + profile + '.json', 'utf8'));
+  assert.match(historical.expectedCurrent, /^[a-f0-9]{40}$/);
+  assert.ok(historical.scope.servicesUpdated.includes('auto-registration'));
+  assert.ok(historical.scope.preservedServices.includes('auto-recharge'));
+  assertRegistrationReleaseRetired(profile);
 });
 
 const rechargePricingIdentity = 'recharge-pro-pricing-045-20261008';
@@ -4895,7 +4543,15 @@ function recharge4cTransport(root, env, overrides = {}) {
       ]
     : ['plan_selection.py', 'test_pro.py']) {
     const path = 'apps/api/src/id-business-v2/auto-recharge/worker/' + name;
-    workerProjection[path].sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
+    const raw = existsSync(path)
+      ? readFileSync(path)
+      : execFileSync('git', [
+          'show',
+          JSON.parse(readFileSync(`deploy/aws/${identity}.json`, 'utf8')).sourceBasis.commit +
+            ':' +
+            path
+        ]);
+    workerProjection[path].sha256 = createHash('sha256').update(raw).digest('hex');
   }
   assert.equal(Object.keys(workerProjection).length, 60);
   mkdirSync(join(root, 'deploy/aws'), { recursive: true });
@@ -5706,7 +5362,9 @@ test('exact pricing main5b carry keeps transport and finance guards without pret
   for (const part of ['guards', 'release-controls']) {
     const commands = guardCommands(paths, { part });
     assert.ok(
-      commands.includes('python3 -B scripts/production-release/registration-only-transport.test.py')
+      commands.includes(
+        'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests'
+      )
     );
     assert.ok(commands.includes('node --test scripts/v2-registration-finance-audit.test.mjs'));
     assert.equal(
@@ -5734,7 +5392,9 @@ test('registration96 control-only CI executes actual finite and transport guards
       commands.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py')
     );
     assert.ok(
-      commands.includes('python3 -B scripts/production-release/registration-only-transport.test.py')
+      commands.includes(
+        'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests'
+      )
     );
     assert.ok(commands.includes('node --test scripts/v2-registration-finance-audit.test.mjs'));
     assert.equal(
@@ -6164,7 +5824,12 @@ test('API Admin migration real CLI rejects old release flags before loading any 
     const result = apiAdminMigrationCli([...apiAdminMigrationCliInputs, ...extra]);
     assert.equal(result.status, 1, JSON.stringify(extra));
     assert.equal(result.stdout, '');
-    assert.match(result.stderr, /^API_ADMIN_SCOPE_CONFLICT$/);
+    assert.equal(
+      result.stderr,
+      ['--api-registration-only', '--registration-worker-96'].includes(extra[0])
+        ? 'Automatic registration has been removed; registration releases are disabled'
+        : 'API_ADMIN_SCOPE_CONFLICT'
+    );
     assert.deepEqual(result.calls, []);
   }
 });
@@ -6194,6 +5859,15 @@ test('API Admin migration readonly commands reject malformed or extra inputs bef
   ]) {
     const result = apiAdminMigrationCli(args);
     assert.equal(result.status, 1, JSON.stringify(args));
+    if (args.includes('--api-registration-only')) {
+      assert.deepEqual(result.calls, []);
+      assert.equal(result.stdout, '');
+      assert.equal(
+        result.stderr,
+        'Automatic registration has been removed; registration releases are disabled'
+      );
+      continue;
+    }
     assert.deepEqual(result.calls, [{ scope: 'API_ADMIN_MIGRATION' }]);
     const receipt = JSON.parse(result.stdout);
     assert.equal(receipt.status, 'API_ADMIN_MIGRATION_VERIFICATION_FAILED');

@@ -3,65 +3,6 @@ import { defineV2TableSchema } from '@/v2/components/tableSystem';
 const table = defineV2TableSchema;
 
 export const v2TableSchemas = {
-  registrationNames: {
-    main: table({
-      id: 'registration-names.main',
-      feature: 'registration-names',
-      role: 'primary',
-      mobileMode: 'scroll',
-      rowKey: { kind: 'path', value: 'id' },
-      columns: [
-        { key: 'displayName', label: '名字', kind: 'text', widthPreset: 'wide', pin: 'start' },
-        { key: 'active', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'usageCount', label: '使用次数', kind: 'numeric', widthPreset: 'standard' },
-        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
-      ]
-    })
-  },
-  registrationJobs: {
-    main: table({
-      id: 'auto-registration.main',
-      feature: 'auto-registration',
-      role: 'secondary',
-      mobileMode: 'scroll',
-      rowKey: { kind: 'path', value: 'id' },
-      columns: [
-        {
-          key: 'emailMasked',
-          label: '注册邮箱',
-          kind: 'identifier',
-          widthPreset: 'wide',
-          pin: 'start'
-        },
-        { key: 'displayName', label: '名字', kind: 'text', widthPreset: 'standard' },
-        { key: 'state', label: '任务状态', kind: 'status', widthPreset: 'standard' },
-        { key: 'step', label: '当前步骤', kind: 'text', widthPreset: 'wide' },
-        { key: 'offerStatus', label: '优惠状况', kind: 'status', widthPreset: 'standard' },
-        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
-      ]
-    })
-  },
-  registrationMailboxes: {
-    main: table({
-      id: 'auto-registration.mailboxes',
-      feature: 'auto-registration',
-      role: 'primary',
-      mobileMode: 'scroll',
-      rowKey: { kind: 'path', value: 'id' },
-      columns: [
-        { key: 'email', label: '隐藏邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
-        { key: 'primaryEmail', label: '所属主邮箱', kind: 'identifier', widthPreset: 'wide' },
-        { key: 'status', label: '邮箱状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'registered', label: '注册状态', kind: 'status', widthPreset: 'standard' },
-        { key: 'registrationCountryCode', label: '国家', kind: 'text', widthPreset: 'standard' },
-        { key: 'note', label: '备注', kind: 'text', widthPreset: 'wide' },
-        { key: 'updatedAt', label: '邮箱更新时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
-      ]
-    })
-  },
   chatgptAccounts: {
     main: table({
       id: 'chatgpt-accounts.main',
@@ -1447,11 +1388,6 @@ export const v2TableSchemas = {
 } as const;
 
 export const v2TablesByFeature = {
-  'auto-registration': [
-    v2TableSchemas.registrationMailboxes.main,
-    v2TableSchemas.registrationJobs.main
-  ],
-  'registration-names': [v2TableSchemas.registrationNames.main],
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],

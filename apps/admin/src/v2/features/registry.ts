@@ -1,7 +1,5 @@
 import { autoRechargeNamesFeature } from '@/v2/features/auto-recharge/names-manifest';
 import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
-import { autoRegistrationFeature } from '@/v2/features/auto-registration/manifest';
-import { registrationNamesFeature } from '@/v2/features/auto-registration/names-manifest';
 import { chatgptAccountsFeature } from '@/v2/features/auto-recharge/chatgpt-accounts-manifest';
 import { bankRechargeCardsFeature } from '@/v2/features/auto-recharge/bank-cards-manifest';
 import { rechargeProxiesFeature } from '@/v2/features/auto-recharge/recharge-proxies-manifest';
@@ -35,8 +33,6 @@ import { topupRecordsFeature } from '@/v2/features/topup-records/manifest';
 import { topupWorkbenchFeature } from '@/v2/features/topups/manifest';
 
 export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
-  autoRegistrationFeature,
-  registrationNamesFeature,
   autoRechargeFeature,
   chatgptAccountsFeature,
   bankRechargeCardsFeature,
@@ -93,7 +89,6 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
     items: navigationItems('总览')
   },
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
-  { key: 'auto-registration', title: '自动注册', items: navigationItems('自动注册') },
   { key: 'auto-recharge', title: '自动充值', items: navigationItems('自动充值') },
   {
     key: 'business',

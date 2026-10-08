@@ -113,6 +113,25 @@ describe('audit log presentation', () => {
     ).toEqual([{ key: 'registrationAge', label: '注册年龄', before: '未记录', after: '21' }]);
   });
 
+  it('退役后历史注册审计仍展示中文阶段及未知阶段的受控文案', () => {
+    const row = {
+      id: 'historical-registration-audit',
+      module: 'id_business_v2',
+      action: 'id_business_v2.auto_registration.update',
+      objectType: 'registration_job',
+      objectId: 'synthetic-job',
+      createdAt: '2026-10-03T08:00:00Z',
+      beforeData: { step: 'mfa' },
+      afterData: { step: 'mfa_verified' }
+    };
+    expect(operationAuditChanges(row)).toEqual([
+      expect.objectContaining({ before: '设置双重验证', after: '双重验证已核实' })
+    ]);
+    expect(
+      operationAuditChanges({ ...row, afterData: { step: 'unexpected_internal_step' } })
+    ).toEqual([expect.objectContaining({ after: '阶段待核对' })]);
+  });
+
   it('translates known English notes and hides uncontrolled English-only values', () => {
     expect(auditRemarkLabel('User logged in', 'login')).toBe('用户登录成功');
     expect(

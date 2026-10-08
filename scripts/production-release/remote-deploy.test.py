@@ -30,6 +30,23 @@ reuse = importlib.util.module_from_spec(reuse_spec)
 reuse_spec.loader.exec_module(reuse)
 
 
+HISTORICAL_RELEASE_SCOPE = [node for node in ast.parse(subprocess.check_output(['git', 'show',
+    'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a:scripts/production-release/remote-deploy.py'],
+    cwd=Path(__file__).resolve().parents[2])).body
+    if isinstance(node, ast.FunctionDef) and node.name == 'release_services']
+if len(HISTORICAL_RELEASE_SCOPE) != 1:
+    raise AssertionError('Pinned historical release scope unavailable')
+
+
+@contextmanager
+def synthetic_historical_release_scope():
+    """Reproduce old receipts locally without reopening any current CLI entry."""
+    namespace = dict(vars(deployment))
+    exec(compile(ast.Module(body=HISTORICAL_RELEASE_SCOPE, type_ignores=[]), 'pinned-historical-release-scope', 'exec'), namespace)
+    with patch.object(deployment, 'release_services', namespace['release_services']):
+        yield
+
+
 class ReleaseScopeTests(unittest.TestCase):
     def test_admin_only_never_selects_api_workers_or_migration_image(self):
         services, images = deployment.release_services(True, [])
@@ -42,13 +59,14 @@ class ReleaseScopeTests(unittest.TestCase):
 
     def test_other_scope_retains_the_full_release(self):
         services, images = deployment.release_services(False, ['20261001_example'])
-        self.assertEqual(services, deployment.SERVICES)
+        self.assertEqual(services, deployment.CURRENT_SERVICES)
+        self.assertNotIn('auto-registration', services)
         self.assertEqual(images, ('media-resolver', 'auto-recharge', 'api', 'admin', 'migrate'))
 
 
     def test_edge_changes_switch_caddy_without_building_an_edge_image(self):
         services, images = deployment.release_services(False, [], True)
-        self.assertEqual(services, (*deployment.SERVICES, 'caddy'))
+        self.assertEqual(services, (*deployment.CURRENT_SERVICES, 'caddy'))
         self.assertEqual(images, ('media-resolver', 'auto-recharge', 'api', 'admin', 'migrate'))
         with self.assertRaisesRegex(RuntimeError, 'edge configuration'):
             deployment.release_services(True, [], True)
@@ -61,12 +79,12 @@ class ReleaseScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'did not become healthy'):
                 deployment.wait_healthy(None, 'admin')
 
-    def test_independent_workers_pin_the_same_built_image_reference(self):
+    def test_current_release_excludes_registration_image_reference(self):
         services, images = deployment.release_services(False, [], True)
         tags = {service: 'fixture-' + service for service in images}
         references = deployment.release_image_references(services, images, 'fixture-registry', tags)
-        self.assertEqual(references['auto-registration'], references['auto-recharge'])
-        self.assertEqual(references['auto-registration'], 'fixture-registry:fixture-auto-recharge')
+        self.assertNotIn('auto-registration', references)
+        self.assertEqual(references['auto-recharge'], 'fixture-registry:fixture-auto-recharge')
         self.assertIn('migrate', references)
         self.assertNotIn('caddy', references)
         services, images = deployment.release_services(True, [])
@@ -109,6 +127,56 @@ class ReleaseScopeTests(unittest.TestCase):
                          ('old', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
                           '--force-recreate', 'auto-registration'))
         health.assert_called_once_with('old', 'auto-registration')
+
+    def test_registration_selection_is_rejected_before_release_operations(self):
+        for tokens in [
+            ['--registration-worker-95'],
+            ['--registration-worker-96'],
+            ['--check-fixed-registration-scope'],
+            ['--prepare-fixed-registration-build', '--registration-profile', 'registration-worker-92-20261007'],
+            ['--historical-finance-continuation'],
+            ['--api-registration-only'],
+            ['--prepare-api-registration-build'],
+            ['--write-api-registration-build-proof'],
+            ['--api-registration-verify'],
+            ['--api-registration-preflight'],
+            ['--api-registration-handoff'],
+            ['--api-registration-business'],
+            ['--api-registration-handoff-observe'],
+            ['--api-registration-handoff-recover'],
+        ]:
+            with self.subTest(tokens=tokens):
+                with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'):
+                    deployment.reject_retired_registration_selection(tokens)
+                result = subprocess.run(['python3', '-B', str(Path(__file__).with_name('remote-deploy.py')), *tokens],
+                    capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('registration releases are disabled', result.stderr)
+        deployment.reject_retired_registration_selection(['--recharge-pro-6f5'])
+        deployment.reject_retired_registration_selection(
+            ['--api-registration-readback', '--expected-current', 'a' * 40])
+        with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'):
+            deployment.release_services(False, [], registration_only=True)
+
+    def test_retired_api_registration_stops_before_scope_or_runtime_access(self):
+        with patch.object(deployment, 'api_admin_scope') as scope, \
+                patch.object(deployment, 'compose') as compose, \
+                patch.object(deployment.subprocess, 'run') as transport, \
+                patch('sys.argv', ['remote-deploy.py', '--api-registration-only']):
+            with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'):
+                deployment.main()
+        scope.assert_not_called()
+        compose.assert_not_called()
+        transport.assert_not_called()
+
+    def test_registration_build_push_and_dispatch_stop_before_transport(self):
+        environment = {'PATH': '/usr/bin:/bin', 'HISTORICAL_EXCEPTION': 'registration-worker-95-20261008'}
+        for name in ('build-images.sh', 'push-images.sh', 'dispatch.sh'):
+            with self.subTest(name=name):
+                result = subprocess.run(['bash', str(Path(__file__).with_name(name))],
+                    env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('registration releases are disabled', result.stderr)
 
 
 class CurrentJobDatabaseTests(unittest.TestCase):
@@ -3102,7 +3170,7 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 rollback = stack.enter_context(patch.object(deployment, 'rollback_service'))
                 google_drive = stack.enter_context(patch.object(deployment, 'configure_google_drive_sync',
                     wraps=deployment.configure_google_drive_sync))
-                with redirect_stdout(output):
+                with redirect_stdout(output), synthetic_historical_release_scope():
                     try:
                         result = deployment.main(); error = None
                     except RuntimeError as failure:
@@ -3364,7 +3432,8 @@ class MaintenanceContinuationTests(unittest.TestCase):
         for additions, edge in [(['new.sql'], False), ([], True)]:
             with self.assertRaises(RuntimeError):
                 deployment.require_maintenance_scope(additions, edge)
-        services, images = deployment.release_services(False, [])
+        with synthetic_historical_release_scope():
+            services, images = deployment.release_services(False, [])
         self.assertEqual(services, deployment.SERVICES)
         self.assertEqual(len(images), 5)
         self.assertIn('migrate', images)
@@ -6531,7 +6600,8 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         for name, value in (('RECHARGE_MAIN80_POLICY_SHA256', policy_digest),
                 ('RECHARGE_MAIN80_FINANCE', {**deployment.RECHARGE_MAIN80_FINANCE, 'policySha256': policy_digest})):
             changed = patch.object(deployment, name, value); changed.start(); self.addCleanup(changed.stop)
-        self.contents = {name: (project / name).read_bytes() for name in
+        self.contents = {name: ((project / name).read_bytes() if (project / name).is_file() else
+            subprocess.check_output(['git', 'show', deployment.RECHARGE_MAIN80_CURRENT + ':' + name], cwd=project)) for name in
             deployment.RECHARGE_SCOPE_CANDIDATES | deployment.RECHARGE_MAIN80_CONTROLS | set(deployment.RECHARGE_MAIN80_CARRIED_SOURCE)}
         # An independent c3 successor cannot mutate the frozen main80 business fixture.
         for name, digest in deployment.RECHARGE_MAIN80_BUSINESS.items():
@@ -6877,13 +6947,12 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
             with self.subTest(flag=flag,registration=registration_flag), patch.object(deployment.sys, 'argv', argv +
                     [flag, registration_flag]), patch.object(deployment, 'registration_release') as dispatch, \
                     patch.object(deployment, 'run') as commands, patch.object(deployment.urllib.request, 'urlopen') as download:
-                with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
+                with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
                 dispatch.assert_not_called(); commands.assert_not_called(); download.assert_not_called()
         with patch.object(deployment.sys, 'argv', argv + ['--registration-worker-b8-80']), \
                 patch.object(deployment, 'registration_release', return_value=42) as dispatch:
-            self.assertEqual(deployment.main(), 42)
-            self.assertTrue(dispatch.call_args.args[0].registration_worker_b8_80)
-            self.assertFalse(dispatch.call_args.args[0].recharge_pro_main80)
+            with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
+            dispatch.assert_not_called()
         with self.assertRaisesRegex(RuntimeError, 'selection changed'):
             deployment.registration_release(SimpleNamespace(expected_current=deployment.REGISTRATION_CURRENT,
                 admin_only=False, recharge_pro_main80=True))
@@ -7461,7 +7530,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
         cls.runtime.mkdir(parents=True, exist_ok=True)
         cls.candidate = {}
         for name, digest in cls.profile['registrationSourceSha256'].items():
-            raw = (cls.root / name).read_bytes()
+            raw = (cls.root / name).read_bytes() if (cls.root / name).is_file() else b''
             if deployment.hashlib.sha256(raw).hexdigest() != digest:
                 raw = subprocess.check_output(['git', 'show', deployment.REGISTRATION_SOURCE + ':' + name], cwd=cls.root)
             cls.candidate[name] = (raw, '100644')
@@ -7480,8 +7549,8 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
 
     def test_fixed_profile_accepts_exact_80_registration_lane(self):
         self.assertEqual(deployment.registration_profile(copy.deepcopy(self.profile)), self.profile)
-        self.assertEqual(deployment.release_services(False, [], registration_only=True),
-                         (('auto-registration',), ('auto-recharge',)))
+        with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'):
+            deployment.release_services(False, [], registration_only=True)
 
     def test_profile_rejects_old_baseline_expanded_business_and_finance_scope(self):
         changes = [
@@ -7837,7 +7906,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                 if email_observation:
                     candidate[deployment.REGISTRATION_EMAIL_REQUEST_FILE] = ((self.root / deployment.REGISTRATION_EMAIL_REQUEST_FILE).read_bytes(), '100644')
                 for path, digest in profile['registrationSourceSha256'].items():
-                    raw = (self.root / path).read_bytes()
+                    raw = (self.root / path).read_bytes() if (self.root / path).is_file() else b''
                     if deployment.hashlib.sha256(raw).hexdigest() != digest:
                         raw = subprocess.check_output(['git', 'show', contract['source'] + ':' + path], cwd=self.root)
                     candidate[path] = (raw, '100644')
@@ -7913,7 +7982,7 @@ class FixedRegistrationRuntimeScopeTests(unittest.TestCase):
                 stack.enter_context(patch.object(deployment.shutil, 'disk_usage', return_value=SimpleNamespace(free=20 * 1024**3)))
                 stack.enter_context(patch.object(deployment.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
                 rollback = stack.enter_context(patch.object(deployment, 'rollback_service'))
-                with redirect_stdout(output):
+                with redirect_stdout(output), synthetic_historical_release_scope():
                     try: result = deployment.registration_release(args)
                     except RuntimeError: result = 'BLOCKED'
                     if readback and result == 0:
@@ -9919,7 +9988,7 @@ class Registration90HydrationScopeTests(unittest.TestCase):
                 stack.enter_context(patch.object(deployment.shutil, 'disk_usage', return_value=SimpleNamespace(free=20 * 1024**3)))
                 stack.enter_context(patch.object(deployment.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
                 rollback = stack.enter_context(patch.object(deployment, 'rollback_service'))
-                with redirect_stdout(output):
+                with redirect_stdout(output), synthetic_historical_release_scope():
                     code = deployment.registration_release(args)
                     current = (base / 'current').resolve()
                     if code == 0:
@@ -10332,7 +10401,7 @@ class Registration91ProfileObservationTests(unittest.TestCase):
                 stack.enter_context(patch.object(deployment.shutil, 'disk_usage', return_value=SimpleNamespace(free=20 * 1024**3)))
                 stack.enter_context(patch.object(deployment.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
                 rollback = stack.enter_context(patch.object(deployment, 'rollback_service'))
-                with redirect_stdout(output):
+                with redirect_stdout(output), synthetic_historical_release_scope():
                     code = deployment.registration_release(args)
                     current = (base / 'current').resolve()
                     if code == 0:
@@ -12245,7 +12314,7 @@ class Registration93ScopeTests(unittest.TestCase):
                 patch.object(deployment, 'registration_login_release') as registration, \
                 patch.object(deployment, 'recharge_2f_release') as recharge, \
                 patch.object(deployment, 'run') as command, patch.object(deployment, 'registration_download') as download:
-            with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
+            with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
             registration.assert_not_called(); recharge.assert_not_called()
             command.assert_not_called(); download.assert_not_called()
         for flag, expected, excluded in [('--registration-worker-93', 'registration_login_release', 'recharge_2f_release'),
@@ -12253,8 +12322,13 @@ class Registration93ScopeTests(unittest.TestCase):
             with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', argv + [flag]), \
                     patch.object(deployment, expected, return_value='selected-only') as selected, \
                     patch.object(deployment, excluded) as other:
-                self.assertEqual(deployment.main(), 'selected-only')
-                selected.assert_called_once(); other.assert_not_called()
+                if flag.startswith('--registration-worker'):
+                    with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
+                    selected.assert_not_called()
+                else:
+                    self.assertEqual(deployment.main(), 'selected-only')
+                    selected.assert_called_once()
+                other.assert_not_called()
 
     def test_actual92_baseline_and_all_legacy_functions_profiles_keep_exact_pins(self):
         baseline = ast.parse(subprocess.check_output(['git','show',deployment.REGISTRATION_LOGIN_CURRENT + ':scripts/production-release/remote-deploy.py'],cwd=self.root))
@@ -12426,11 +12500,11 @@ class Registration94ScopeTests(unittest.TestCase):
         for flag in ('--registration-worker-93', '--recharge-pro-2f', '--api-admin-only'):
             with self.subTest(flag=flag), patch.object(deployment.sys, 'argv', argv + [flag]), \
                     patch.object(deployment, 'registration_followup_release') as release, patch.object(deployment, 'run') as command:
-                with self.assertRaisesRegex(RuntimeError, 'ambiguous'): deployment.main()
+                with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
                 release.assert_not_called(); command.assert_not_called()
         with patch.object(deployment.sys, 'argv', argv + ['--api-admin-build-proof', 'synthetic-no-secrets']), \
                 patch.object(deployment, 'registration_followup_release') as release, patch.object(deployment, 'api_admin_scope') as scope:
-            with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_SCOPE_REQUIRED'): deployment.main()
+            with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
             release.assert_not_called(); scope.assert_not_called()
         api_args = [x for x in argv if x != '--registration-worker-94'] + ['--api-admin-only', '--api-admin-build-proof', 'synthetic-no-secrets']
         api_release = MagicMock(return_value='selected-api-admin'); controller = object()
@@ -12439,7 +12513,8 @@ class Registration94ScopeTests(unittest.TestCase):
             self.assertEqual(deployment.main(), 'selected-api-admin')
             api_release.assert_called_once(); registration.assert_not_called()
         with patch.object(deployment.sys, 'argv', argv), patch.object(deployment, 'registration_followup_release', return_value='selected94') as selected:
-            self.assertEqual(deployment.main(), 'selected94'); selected.assert_called_once()
+            with self.assertRaisesRegex(RuntimeError, 'registration releases are disabled'): deployment.main()
+            selected.assert_not_called()
 
     def test_actual_d3_baseline_is_closed_and_source_maps_match_preserved92_plus_pro(self):
         fixed = deployment.REGISTRATION_FOLLOWUP_BASELINE
@@ -13384,8 +13459,14 @@ class FixedRechargePricingNativeTests(unittest.TestCase):
     def setUp(self):
         self.draft = json.loads((self.project / deployment.RECHARGE_PRICING_FILE).read_bytes())
         self.draft.update(enabled=False, approvalStatus='NOT_APPROVED')
-        self.contents = {name: (self.project / name).read_bytes() for name in
+        self.contents = {name: ((self.project / name).read_bytes() if (self.project / name).is_file() else
+            subprocess.check_output(['git', 'show', self.draft['sourceBasis']['commit'] + ':' + name], cwd=self.project)) for name in
             deployment.RECHARGE_D3FB_CANDIDATES | deployment.RECHARGE_2F_CONTROLS | set(deployment.RECHARGE_PRICING_CARRIED)}
+        for name in deployment.RECHARGE_D3FB_WORKER:
+            raw = subprocess.check_output(['git', 'show',
+                'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a:' + name], cwd=self.project)
+            self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), self.draft['candidateSourceSha256'][name])
+            self.contents[name] = raw
         # Carried files belong to the immutable predecessor, not this checkout.
         for name, digest in self.draft['carriedSourceOnlySha256'].items():
             raw = subprocess.check_output(['git', 'show', self.draft['sourceBasis']['commit'] + ':' + name], cwd=self.project)
@@ -13529,7 +13610,8 @@ class FixedRechargePricingNativeTests(unittest.TestCase):
                     result = subprocess.run(['python3', '-B', deployment.__file__, *args], cwd=self.project, capture_output=True, text=True, timeout=10)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, '')
-                    self.assertEqual(result.stderr.strip(), 'Fixed pricing selection is ambiguous; raw output suppressed')
+                    self.assertEqual(result.stderr.strip(),
+                        'Automatic registration has been removed; registration releases are disabled')
 
     def test_original045_producer_profile_bytes_and_modes_are_pinned(self):
         self.assertEqual(deployment.hashlib.sha256(self.original).hexdigest(), deployment.RECHARGE_PRICING_PRODUCER)

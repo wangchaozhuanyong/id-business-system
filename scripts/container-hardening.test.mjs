@@ -131,10 +131,7 @@ test('registration and recharge run in separate bounded workers with one image b
   assert.match(compose, /registration-control:\s+internal: true/u);
   for (const path of ['.env.example', '.env.aws.production.example']) {
     assert.match(readProjectFile(path), /^AUTO_RECHARGE_WORKER_ROLE=recharge$/mu);
-    assert.match(
-      readProjectFile(path),
-      /^AUTO_REGISTRATION_WORKER_URL=http:\/\/auto-registration:8051$/mu
-    );
+    assert.doesNotMatch(readProjectFile(path), /AUTO_REGISTRATION_WORKER_URL/u);
     assert.match(
       readProjectFile(path),
       /^AUTO_RECHARGE_WORKER_IMAGE=id-business-v2-auto-recharge:local$/mu

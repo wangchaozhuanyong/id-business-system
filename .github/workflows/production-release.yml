@@ -14,12 +14,6 @@ on:
           - release_api_admin
           - verify_api_admin_migration
           - release_api_admin_migration
-          - verify_api_registration
-          - handoff_api_registration
-          - release_api_registration
-          - verify_registration_business
-          - verify_registration_handoff
-          - recover_registration_handoff
           - verify_recharge_release
           - verify_mailbox
           - verify_cache
@@ -77,7 +71,6 @@ on:
         options:
           - none
           - historical-finance-20261005
-          - historical-finance-20261005-registration-continuation
           - historical-finance-20261005-recharge-diagnostics
           - historical-finance-20261005-maintenance-continuation
           - historical-finance-20261005-mailbox-batch
@@ -89,20 +82,6 @@ on:
           - recharge-pro-4c-20261008
           - recharge-pro-6f5-20261008
           - recharge-pro-pricing-045-20261008
-          - registration-worker-b8-80-20261006
-          - registration-worker-956-20261006
-          - registration-worker-85-20261006
-          - registration-worker-86-20261006
-          - registration-worker-87-20261006
-          - registration-worker-88-20261006
-          - registration-worker-89-20261006
-          - registration-worker-90-20261007
-          - registration-worker-91-20261007
-          - registration-worker-92-20261007
-          - registration-worker-93-20261007
-          - registration-worker-94-20261007
-          - registration-worker-95-20261008
-          - registration-worker-96-20261008
 
           - historical-finance-20261005-post-cleanup
           - historical-finance-20261005-order-archive
@@ -159,6 +138,19 @@ jobs:
       REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Reject removed automatic registration releases
+        run: |
+          case "$RELEASE_OPERATION" in
+            *_api_registration|*_registration_business|*_registration_handoff)
+              echo 'Automatic registration has been removed; registration releases are disabled' >&2
+              exit 1 ;;
+          esac
+          case "$HISTORICAL_EXCEPTION" in
+            registration-worker-*|historical-finance-20261005-registration-continuation)
+              echo 'Automatic registration has been removed; registration releases are disabled' >&2
+              exit 1 ;;
+          esac
+
       - name: Check out the requested main commit
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

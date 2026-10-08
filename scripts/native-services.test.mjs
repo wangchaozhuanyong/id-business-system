@@ -61,13 +61,13 @@ test('默认结构预检只读取三个公开源契约，不读取秘密或调�
   );
 });
 
-test('七服务独立非 root 账号、私有目录、固定角色端口与停止进程组', () => {
+test('六服务独立非 root 账号、私有目录、固定角色端口与停止进程组', () => {
   const bundle = nativeServiceBundle(options());
-  assert.equal(Object.keys(bundle.manifest.services).length, 7);
-  assert.equal(new Set(Object.values(bundle.manifest.services).map((spec) => spec.user)).size, 7);
+  assert.equal(Object.keys(bundle.manifest.services).length, 6);
+  assert.equal(new Set(Object.values(bundle.manifest.services).map((spec) => spec.user)).size, 6);
   for (const service of services) {
     const unit = bundle.files[`systemd/id-business-v2-${service}.service`];
-    const bounded = ['api', 'recharge', 'registration', 'media'].includes(service);
+    const bounded = ['api', 'recharge', 'media'].includes(service);
     assert.match(unit, new RegExp(`User=idv2-${service}\\n`));
     assert.match(unit, /ProtectSystem=strict\n/);
     assert.match(unit, new RegExp(`PrivateTmp=${bounded ? 'false' : 'true'}\\n`));
@@ -86,17 +86,13 @@ test('七服务独立非 root 账号、私有目录、固定角色端口与停�
     assert.doesNotMatch(unit, /docker|sudo|User=root|chown|chmod|migrate deploy/i);
   }
   const recharge = bundle.files['systemd/id-business-v2-recharge.service'];
-  const registration = bundle.files['systemd/id-business-v2-registration.service'];
+  assert.equal(bundle.files['systemd/id-business-v2-registration.service'], undefined);
   assert.match(recharge, /env AUTO_RECHARGE_WORKER_ROLE=recharge /);
   assert.match(recharge, /xvfb-run -n 91 /);
   assert.match(recharge, /--host=127\.0\.0\.1 --port=8051 /);
-  assert.match(registration, /env AUTO_RECHARGE_WORKER_ROLE=registration /);
-  assert.match(registration, /xvfb-run -n 92 /);
-  assert.match(registration, /--host=127\.0\.0\.1 --port=8052 /);
-  assert.match(recharge, /-\/run\/id-business-v2-native\/registration/);
   assert.match(
     bundle.files['systemd/id-business-v2-api.service'],
-    /AUTO_REGISTRATION_WORKER_URL=http:\/\/127\.0\.0\.1:8052/
+    /AUTO_RECHARGE_WORKER_URL=http:\/\/127\.0\.0\.1:8051/
   );
   assert.match(
     bundle.files['systemd/id-business-v2-media.service'],
@@ -114,7 +110,6 @@ test('API、浏览器与媒体的临时 tmpfs 限额沿用 Compose，共享内�
   for (const [service, composeName] of [
     ['api', 'api'],
     ['recharge', 'auto-recharge'],
-    ['registration', 'auto-registration'],
     ['media', 'media-resolver']
   ]) {
     const contract = compose.match(
@@ -129,7 +124,7 @@ test('API、浏览器与媒体的临时 tmpfs 限额沿用 Compose，共享内�
       '/var/tmp:ro,noexec,nosuid,nodev,size=1M,mode=1777',
       '/dev/shm:rw,noexec,nosuid,nodev,size=256M,mode=1777'
     ]);
-    if (['recharge', 'registration'].includes(service)) assert.match(contract, /shm_size: 256m/);
+    if (['recharge'].includes(service)) assert.match(contract, /shm_size: 256m/);
     assert.deepEqual(bundle.manifest.services[service].temporaryStorage, {
       directory: '/tmp',
       maxBytes: size * 1024 * 1024,
@@ -152,7 +147,7 @@ test('API、浏览器与媒体的临时 tmpfs 限额沿用 Compose，共享内�
 
 test('受限角色 HOME/TMPDIR 使用容量目录，宿主私有 runtime 不成为另一条可写临时路径', () => {
   const bundle = nativeServiceBundle(options());
-  for (const service of ['api', 'recharge', 'registration', 'media']) {
+  for (const service of ['api', 'recharge', 'media']) {
     const unit = bundle.files[`systemd/id-business-v2-${service}.service`];
     const runtime = `/run/id-business-v2-native/${service}`;
     assert.match(unit, /Environment=HOME=\/tmp TMPDIR=\/tmp /);
@@ -167,7 +162,7 @@ test('受限角色 HOME/TMPDIR 使用容量目录，宿主私有 runtime 不成�
     assert.match(unit, /RuntimeDirectoryMode=0700\n/);
     assert.doesNotMatch(unit, new RegExp(`TemporaryFileSystem=.*${runtime}`));
   }
-  for (const service of ['recharge', 'registration']) {
+  for (const service of ['recharge']) {
     const unit = bundle.files[`systemd/id-business-v2-${service}.service`];
     assert.match(unit, /MemoryMax=1G\nMemorySwapMax=512M\nTasksMax=512\n/);
   }
@@ -506,7 +501,7 @@ function installedFixture({ missing, unsafe, duplicateUid, symlink, rootUid } = 
 test('Linux 安装预检缺秘密文件、源码或独立用户时关闭；Mac 不假装 systemd 已运行', () => {
   assert.equal(checkInstalledNativeServices(options(), installedFixture()).ok, true);
   for (const settings of [
-    { missing: '/etc/id-business-v2-secrets/registration/service.env' },
+    { missing: '/etc/id-business-v2-secrets/recharge/service.env' },
     { missing: '/etc/id-business-v2-native/nginx.conf' },
     { missing: '/opt/id-business-v2/releases/candidate/apps/admin/dist/index.html' },
     { missing: '/etc/id-business-v2-secrets/mysql/health.cnf' },
@@ -526,7 +521,7 @@ test('Linux 安装预检缺秘密文件、源码或独立用户时关闭；Mac �
   );
   for (const alias of [
     '/opt/id-business-v2/releases/candidate',
-    '/etc/id-business-v2-secrets/registration'
+    '/etc/id-business-v2-secrets/recharge'
   ]) {
     const fixture = installedFixture();
     fixture.realPath = (path) => (path === alias ? '/unapproved/alias' : path);
@@ -579,46 +574,47 @@ test('公开源模板变化即停止，不静默生成遗漏代理行为的配�
   assert.throws(() => nativeServiceBundle(options(), () => 'changed public template'));
 });
 
-test('角色健康只请求固定回环端口，凭据用头传递，错误角色及授权拒绝不通过', async () => {
+test('已退役注册服务在任何请求前停止', async () => {
+  assert.equal(
+    await nativeServiceHealth('registration', {
+      fetcher: () => assert.fail('retired service must not make requests')
+    }),
+    false
+  );
+  assert.throws(() => parseNativeServicesOptions(['--health=registration']));
+  assert.equal(services.includes('registration'), false);
+});
+
+test('充值健康保留角色校验和独立授权查询', async () => {
   const token = 'synthetic-native-worker-authorization-32';
   const calls = [];
   const fetcher = async (url, init) => {
     calls.push({ url, init });
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ ready: true, workerRole: 'registration' })
-    };
+    return url.endsWith('/health')
+      ? { ok: true, json: async () => ({ ok: true, workerRole: 'recharge' }) }
+      : { status: 404, body: { cancel: async () => {} } };
   };
-  assert.equal(
-    await nativeServiceHealth('registration', {
-      environment: { AUTO_RECHARGE_WORKER_TOKEN: token },
-      fetcher
-    }),
-    true
-  );
-  assert.equal(calls[0].url, 'http://127.0.0.1:8052/registration/health');
-  assert.equal(calls[0].init.headers['X-Recharge-Worker'], token);
-  assert.equal(calls[0].init.redirect, 'error');
-  assert.equal(calls[0].url.includes(token), false);
   assert.equal(
     await nativeServiceHealth('recharge', {
       environment: { AUTO_RECHARGE_WORKER_TOKEN: token },
       fetcher
     }),
-    false
+    true
   );
+  assert.equal(calls[0].url, 'http://127.0.0.1:8051/health');
+  assert.equal(calls[1].init.headers['X-Recharge-Worker'], token);
+  assert.equal(calls[1].init.redirect, 'error');
   assert.equal(
-    await nativeServiceHealth('registration', {
-      environment: {},
-      fetcher: () => assert.fail('missing auth stops before request')
+    await nativeServiceHealth('recharge', {
+      environment: { AUTO_RECHARGE_WORKER_TOKEN: token },
+      fetcher: async () => ({ ok: true, json: async () => ({ ok: true, workerRole: 'other' }) })
     }),
     false
   );
   assert.equal(
-    await nativeServiceHealth('registration', {
-      environment: { AUTO_RECHARGE_WORKER_TOKEN: token },
-      fetcher: async () => ({ ok: false, status: 403 })
+    await nativeServiceHealth('recharge', {
+      environment: {},
+      fetcher: () => assert.fail('缺少授权不发起请求')
     }),
     false
   );

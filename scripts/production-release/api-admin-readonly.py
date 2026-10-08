@@ -72,11 +72,52 @@ def safe_failure(receipt, scope='API_ADMIN'):
     return {'status': scope + '_VERIFICATION_FAILED', 'code': 'API_ADMIN_REMOTE_VERIFICATION_FAILED'}
 
 
+def validate_migration_origin(namespace, context):
+    fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256',
+              'migration', 'migrationState', 'task', 'guards'}
+    if (not isinstance(context, dict) or set(context) != fields or type(context.get('version')) is not int
+            or context['version'] != 1 or context.get('commit') != namespace['MIGRATION_SUCCESSOR_COMMIT']
+            or context.get('manifestSha256') != namespace['MIGRATION_SUCCESSOR_MANIFEST_SHA']
+            or context.get('buildProofSha256') != namespace['MIGRATION_SUCCESSOR_PROOF_SHA']
+            or context.get('migration') != namespace['MIGRATION_IDENTITY']
+            or not isinstance(context.get('release'), str)
+            or not re.fullmatch(r'/opt/id-business-v2/releases/[0-9]{8}T[0-9]{6}Z-'
+                                + namespace['MIGRATION_SUCCESSOR_COMMIT'][:12], context['release'])):
+        raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
+    state, task, guards = (context.get(name) for name in ('migrationState', 'task', 'guards'))
+    if (not all(isinstance(value, dict) for value in (state, task, guards))
+            or set(state) != {'name', 'sha256', 'status', 'schemaVerified', 'appliedMigrationsSha256'}
+            or state.get('name') != namespace['MIGRATION_NAME'] or state.get('sha256') != namespace['MIGRATION_IDENTITY']['sha256']
+            or state.get('status') != 'APPLIED' or state.get('schemaVerified') is not True
+            or not isinstance(state.get('appliedMigrationsSha256'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', state['appliedMigrationsSha256'])
+            or task != namespace['MIGRATION_TASK'] or type(task.get('attempt')) is not int
+            or type(task.get('auditCount')) is not int
+            or any(task.get(name) is not True for name in ('registered', 'passwordCandidatePresent'))
+            or any(task.get(name) is not False for name in ('passwordVerified', 'mfaVerified', 'leaseActive', 'noncePresent'))
+            or set(guards) != {'rechargeIdle', 'registrationBusy', 'registrationLeaseActive', 'registrationWindowRetained'}
+            or guards.get('rechargeIdle') is not True or guards.get('registrationWindowRetained') is not True
+            or guards.get('registrationBusy') is not False or guards.get('registrationLeaseActive') is not False):
+        raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
+    return namespace['migration_successor_marker'](context)
+
+
 def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
     wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_OBSERVED' if mode == 'handoff-observe' else '_HANDOFF_VERIFIED' if mode in ('handoff', 'handoff-recover')
                       else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
     if not isinstance(receipt, dict) or receipt.get('status') != wanted or receipt.get('commit') != expected:
         raise RuntimeError('API_ADMIN_RECEIPT_CHANGED')
+    if scope == 'API_ADMIN' and mode == 'preflight':
+        import runpy
+        namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
+        if expected == namespace['MIGRATION_SUCCESSOR_COMMIT'] or receipt.get('migrationOrigin') is not None:
+            validate_migration_origin(namespace, receipt.get('migrationOrigin'))
+            if (type(receipt.get('freeBytes')) is not int or receipt['freeBytes'] <= 6 * 1024**3
+                    or receipt.get('guards') != receipt['migrationOrigin']['guards']
+                    or set(receipt.get('services', {})) != {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'}
+                    or any(not isinstance(row, dict) or row.get('status') != 'running'
+                           for row in receipt['services'].values())):
+                raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
     if scope == 'API_ADMIN_MIGRATION' and mode == 'preflight':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
@@ -126,6 +167,25 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                 or receipt.get('migrationState', {}).get('schemaVerified') is not True
                 or not re.fullmatch(r'[a-f0-9]{64}', receipt.get('migrationState', {}).get('appliedMigrationsSha256', ''))):
             raise RuntimeError('API_ADMIN_MIGRATION_READBACK_CHANGED')
+        if scope == 'API_ADMIN':
+            before_file = Path('.deploy/production-release/api-admin-preflight-result.json')
+            before = json.loads(before_file.read_text()) if before_file.is_file() else {}
+            context = before.get('migrationOrigin')
+            if context is not None or receipt.get('preservedMigrationOrigin') is not None:
+                marker = validate_migration_origin(namespace, context)
+                if (before.get('status') != 'API_ADMIN_BASELINE_VERIFIED'
+                        or before.get('mode') != 'preflight'
+                        or before.get('releaseCandidateCommit') != expected
+                        or os.environ.get('RELEASE_COMMIT') != expected
+                        or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ID', ''))
+                        or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ATTEMPT', ''))
+                        or before.get('workflowRunId') != os.environ['GITHUB_RUN_ID']
+                        or before.get('workflowRunAttempt') != os.environ['GITHUB_RUN_ATTEMPT']
+                        or receipt.get('preservedMigrationOrigin') != marker
+                        or receipt.get('migrationPreserved') is not True or receipt.get('migrationPerformed') is not False
+                        or receipt.get('taskHmacMatched') is not True or receipt.get('windowPreserved') is not True
+                        or receipt.get('registrationWindowRetained') is not True):
+                    raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
     return receipt
 
 
@@ -175,7 +235,10 @@ def main():
             print(json.dumps(failure))
             raise RuntimeError(failure['code'])
         validate_receipt(receipt, expected, mode, scope)
-        target.write_text(json.dumps({'commandId': command_id, 'mode': mode, **receipt}, indent=2) + '\n')
+        target.write_text(json.dumps({'commandId': command_id, 'mode': mode,
+            'releaseCandidateCommit': os.environ['RELEASE_COMMIT'],
+            'workflowRunId': os.environ.get('GITHUB_RUN_ID', ''),
+            'workflowRunAttempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''), **receipt}, indent=2) + '\n')
         print(json.dumps(receipt))
         return 0
     raise RuntimeError('API_ADMIN_READONLY_TIMEOUT')

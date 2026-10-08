@@ -1,3 +1,19 @@
+export const V2_ACCOUNT_OFFERS = [
+  'unknown',
+  'free_trial',
+  'half_price',
+  'full_price',
+  'other'
+] as const;
+export type V2AccountOffer = (typeof V2_ACCOUNT_OFFERS)[number];
+export const V2_ACCOUNT_OFFER_LABELS: Record<V2AccountOffer, string> = {
+  unknown: '待核实',
+  free_trial: '0元购',
+  half_price: '半价号',
+  full_price: '全折扣号',
+  other: '其他优惠'
+};
+
 export const V2_RECHARGE_PLANS = ['go', 'plus', 'pro-5x', 'pro-20x', 'pro-500'] as const;
 export type V2RechargePlan = (typeof V2_RECHARGE_PLANS)[number];
 // 手工记录已发生的付款；此目录不授予执行器新的自动付款能力。

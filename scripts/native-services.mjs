@@ -6,22 +6,13 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const services = Object.freeze([
-  'mysql',
-  'api',
-  'admin',
-  'caddy',
-  'recharge',
-  'registration',
-  'media'
-]);
+export const services = Object.freeze(['mysql', 'api', 'admin', 'caddy', 'recharge', 'media']);
 export const ports = Object.freeze({
   mysql: 3306,
   api: 3000,
   admin: 8080,
   caddy: null,
   recharge: 8051,
-  registration: 8052,
   media: 8787
 });
 const pathNames = [
@@ -47,7 +38,7 @@ const pathNames = [
 const workerEntry = 'apps/api/src/id-business-v2/auto-recharge/worker/server.py';
 const mediaEntry = 'apps/api/src/id-business-v2/workspace/media-resolver/server.py';
 const bridgeEntry = 'apps/api/src/id-business-v2/workspace/media-resolver/f2_bridge.py';
-const temporaryMiB = Object.freeze({ api: 64, recharge: 512, registration: 512, media: 640 });
+const temporaryMiB = Object.freeze({ api: 64, recharge: 512, media: 640 });
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 const unitName = (service) => `id-business-v2-${service}.service`;
 const userName = (service) => `idv2-${service}`;
@@ -177,7 +168,7 @@ export function nativeServiceBundle(options, read = readFileSync) {
         cwd: state
       },
       api: {
-        start: `/usr/bin/env NODE_ENV=production AUTH_PROVIDER=local APP_PORT=3000 AUTO_RECHARGE_WORKER_URL=http://127.0.0.1:8051 AUTO_REGISTRATION_WORKER_URL=http://127.0.0.1:8052 ID_BUSINESS_V2_MEDIA_RESOLVER_URL=http://127.0.0.1:8787 ${options.node} ${options['release-dir']}/apps/api/dist/main.js --host=127.0.0.1`,
+        start: `/usr/bin/env NODE_ENV=production AUTH_PROVIDER=local APP_PORT=3000 AUTO_RECHARGE_WORKER_URL=http://127.0.0.1:8051 ID_BUSINESS_V2_MEDIA_RESOLVER_URL=http://127.0.0.1:8787 ${options.node} ${options['release-dir']}/apps/api/dist/main.js --host=127.0.0.1`,
         after: ['mysql', 'media'],
         cwd: options['release-dir']
       },
@@ -194,10 +185,6 @@ export function nativeServiceBundle(options, read = readFileSync) {
       },
       recharge: {
         start: `/usr/bin/env AUTO_RECHARGE_WORKER_ROLE=recharge AUTO_RECHARGE_CALLBACK_URL=http://127.0.0.1:3000/api/id-business-v2/auto-recharge/internal ${options['xvfb-run']} -n 91 -e /dev/stderr -s "-screen 0 1280x1024x24 -nolisten tcp" ${options['worker-python']} -B ${options['release-dir']}/${workerEntry} --host=127.0.0.1 --port=8051 --engine-path=${options['engine-path']}`,
-        cwd: runtime
-      },
-      registration: {
-        start: `/usr/bin/env AUTO_RECHARGE_WORKER_ROLE=registration AUTO_RECHARGE_CALLBACK_URL=http://127.0.0.1:3000/api/id-business-v2/auto-recharge/internal ${options['xvfb-run']} -n 92 -e /dev/stderr -s "-screen 0 1280x1024x24 -nolisten tcp" ${options['worker-python']} -B ${options['release-dir']}/${workerEntry} --host=127.0.0.1 --port=8052 --engine-path=${options['engine-path']}`,
         cwd: runtime
       },
       media: {
@@ -217,7 +204,7 @@ export function nativeServiceBundle(options, read = readFileSync) {
       ])
       .join(' ');
     files[`systemd/${unitName(service)}`] =
-      `[Unit]\nDescription=ID business V2 native ${service}\nAfter=network-online.target ${dependencies}\nWants=network-online.target\n${dependencies ? `Requires=${dependencies}\n` : ''}\n[Service]\nType=simple\nUser=${userName(service)}\nGroup=${userName(service)}\nWorkingDirectory=${spec.cwd}\nEnvironmentFile=${environmentFile}\nEnvironment=HOME=${temporaryRoot} TMPDIR=${temporaryRoot} PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n${['recharge', 'registration'].includes(service) ? `Environment=PLAYWRIGHT_BROWSERS_PATH=${state}/browser-cache\n` : ''}StateDirectory=${basename(options['state-dir'])}/${service}\nStateDirectoryMode=0700\nRuntimeDirectory=${basename(options['runtime-dir'])}/${service}\nRuntimeDirectoryMode=0700\nUMask=0077\nProtectSystem=strict\nProtectHome=true\nPrivateTmp=${temporarySize ? 'false' : 'true'}\n${temporaryFilesystems}NoNewPrivileges=true\nReadOnlyPaths=${options['release-dir']} ${options['config-dir']}${temporarySize ? ` ${runtime}` : ''}\nReadWritePaths=${state}${temporarySize ? '' : ` ${runtime}`}\nInaccessiblePaths=${forbidden}\n${service === 'caddy' ? 'AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n' : 'CapabilityBoundingSet=\n'}${['recharge', 'registration'].includes(service) ? 'MemoryMax=1G\nMemorySwapMax=512M\nTasksMax=512\n' : ''}${service === 'media' ? 'MemoryMax=768M\nTasksMax=128\n' : ''}${spec.pre ? `ExecStartPre=${spec.pre}\n` : ''}ExecStart=${spec.start}\nExecStartPost=${health}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nKillSignal=SIGTERM\nTimeoutStartSec=60s\nTimeoutStopSec=45s\n\n[Install]\nWantedBy=multi-user.target\n`;
+      `[Unit]\nDescription=ID business V2 native ${service}\nAfter=network-online.target ${dependencies}\nWants=network-online.target\n${dependencies ? `Requires=${dependencies}\n` : ''}\n[Service]\nType=simple\nUser=${userName(service)}\nGroup=${userName(service)}\nWorkingDirectory=${spec.cwd}\nEnvironmentFile=${environmentFile}\nEnvironment=HOME=${temporaryRoot} TMPDIR=${temporaryRoot} PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n${service === 'recharge' ? `Environment=PLAYWRIGHT_BROWSERS_PATH=${state}/browser-cache\n` : ''}StateDirectory=${basename(options['state-dir'])}/${service}\nStateDirectoryMode=0700\nRuntimeDirectory=${basename(options['runtime-dir'])}/${service}\nRuntimeDirectoryMode=0700\nUMask=0077\nProtectSystem=strict\nProtectHome=true\nPrivateTmp=${temporarySize ? 'false' : 'true'}\n${temporaryFilesystems}NoNewPrivileges=true\nReadOnlyPaths=${options['release-dir']} ${options['config-dir']}${temporarySize ? ` ${runtime}` : ''}\nReadWritePaths=${state}${temporarySize ? '' : ` ${runtime}`}\nInaccessiblePaths=${forbidden}\n${service === 'caddy' ? 'AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n' : 'CapabilityBoundingSet=\n'}${service === 'recharge' ? 'MemoryMax=1G\nMemorySwapMax=512M\nTasksMax=512\n' : ''}${service === 'media' ? 'MemoryMax=768M\nTasksMax=128\n' : ''}${spec.pre ? `ExecStartPre=${spec.pre}\n` : ''}ExecStart=${spec.start}\nExecStartPost=${health}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nKillSignal=SIGTERM\nTimeoutStartSec=60s\nTimeoutStopSec=45s\n\n[Install]\nWantedBy=multi-user.target\n`;
     specs[service] = {
       user: userName(service),
       port: ports[service],
@@ -554,29 +541,24 @@ export async function nativeServiceHealth(
     }
   }
   const token = environment.AUTO_RECHARGE_WORKER_TOKEN ?? '';
-  if (['recharge', 'registration'].includes(service) && token.length < 32) return false;
+  if (service === 'recharge' && token.length < 32) return false;
   try {
     const path = {
       api: '/api/health/ready',
       admin: '/',
       recharge: '/health',
-      registration: '/registration/health',
       media: '/health'
     }[service];
-    const headers = service === 'registration' ? { 'X-Recharge-Worker': token } : {};
+    const headers = {};
     const response = await fetcher(`http://127.0.0.1:${ports[service]}${path}`, {
       headers,
       signal: AbortSignal.timeout(3000),
       redirect: 'error'
     });
     if (!response.ok) return false;
-    if (['recharge', 'registration'].includes(service)) {
+    if (service === 'recharge') {
       const body = await response.json();
-      if (
-        body.workerRole !== service ||
-        (service === 'registration' ? body.ready !== true : body.ok !== true)
-      )
-        return false;
+      if (body.workerRole !== service || body.ok !== true) return false;
       if (service === 'recharge') {
         const authorized = await fetcher(
           'http://127.0.0.1:8051/jobs/00000000-0000-0000-0000-000000000000/status',

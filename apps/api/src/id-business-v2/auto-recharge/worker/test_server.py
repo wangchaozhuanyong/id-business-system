@@ -34,71 +34,26 @@ class ServerTests(unittest.TestCase):
             'ok': False, 'reason': 'server_recharge_retired'}))
         create_job.assert_not_called()
 
-    def test_registration_dispatch_refusal_returns_only_controlled_reason(self):
-        handler = object.__new__(server.Handler)
-        handler.path = '/registration/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-        body = b'{"attempt":1}'
-        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth', 'Content-Length': str(len(body))}
-        handler.reply = MagicMock()
-        for reason in ('worker_busy', 'builtin_original_window_pending', 'builtin_profile_missing'):
-            handler.rfile = io.BytesIO(body)
-            handler.reply.reset_mock()
-            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-                  patch.object(server, 'WORKER_ROLE', 'registration'),
-                  patch.object(server.registration_builtin, 'handle_request',
-                    side_effect=Stop(reason, unsafe='synthetic-private-details'))):
-                handler.do_POST()
-            handler.reply.assert_called_once_with(409, {'ok': False, 'reason': reason})
-        handler.rfile = io.BytesIO(body)
-        handler.reply.reset_mock()
-        with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-              patch.object(server, 'WORKER_ROLE', 'registration'),
-              patch.object(server.registration_builtin, 'handle_request',
-                side_effect=Stop('synthetic-private-details'))):
-            handler.do_POST()
-        handler.reply.assert_called_once_with(400, {'ok': False})
-
-    def test_registration_health_protects_running_jobs_and_retained_partial_windows(self):
-        handler = object.__new__(server.Handler)
-        handler.path = '/registration/health'
-        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
-        handler.reply = MagicMock()
-        job = object.__new__(server.registration_builtin.RegistrationServerJob)
-        for done, profile, expected in [(False, None, (True, False)),
-                                        (True, {'job_id': 'fixture-job'}, (False, True)),
-                                        (True, None, (False, False))]:
-            job.done = done
-            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-                  patch.object(server, 'WORKER_ROLE', 'registration'),
-                  patch.object(server.Handler, 'job', job),
-                  patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
-                handler.do_GET()
-            status, value = handler.reply.call_args.args
-            self.assertEqual(status, 200)
-            self.assertEqual(value['workerRole'], 'registration')
-            self.assertEqual((value['registrationBusy'], value['registrationWindowRetained']), expected)
-            self.assertNotIn('job_id', value)
-
-    def test_registration_cancel_receipt_requires_closed_resources(self):
-        handler = object.__new__(server.Handler)
-        handler.path = '/registration/jobs/fixture-job/status'
-        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
-        handler.reply = MagicMock()
-        job = object.__new__(server.registration_builtin.RegistrationServerJob)
-        job.id, job.attempt, job.cancelled = 'fixture-job', 1, threading.Event()
-        job.cancelled.set()
-        for done, profile, expected in [(False, None, False),
-                                        (True, {'job_id': job.id}, False),
-                                        (True, None, True)]:
-            job.done = done
-            with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
-                  patch.object(server, 'WORKER_ROLE', 'registration'),
-                  patch.object(server.Handler, 'job', job),
-                  patch.object(server.registration_builtin.PROFILES, 'profile', profile)):
-                handler.do_GET()
-            status, value = handler.reply.call_args.args
-            self.assertEqual(status, 200)
-            self.assertEqual(value['cancelled'], expected)
+    def test_removed_registration_routes_never_read_payload_or_modify_recharge_job(self):
+        job = MagicMock(done=False, cancelled=False, confirmed=False)
+        for path in ('/registration/health', '/registration/jobs/fixture/status',
+                     '/registration/jobs/fixture', '/registration/jobs/fixture/code',
+                     '/registration/jobs/fixture/cancel'):
+            for method in ('do_GET', 'do_POST'):
+                with self.subTest(path=path, method=method):
+                    handler = object.__new__(server.Handler)
+                    handler.path = path
+                    handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
+                    handler.reply = MagicMock()
+                    handler.rfile = MagicMock()
+                    with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+                          patch.object(server, 'WORKER_ROLE', 'recharge'),
+                          patch.object(server.Handler, 'job', job)):
+                        getattr(handler, method)()
+                        self.assertIs(handler.job, job)
+                    handler.reply.assert_called_once_with(404, {'ok': False})
+                    handler.rfile.read.assert_not_called()
+                    self.assertEqual(job.mock_calls, [])
 
     def test_prepared_proxy_window_is_reused_once_and_login_failure_never_rotates_again(self):
         async def exercise():
@@ -1361,22 +1316,6 @@ class RechargeDriverLifecycleTests(unittest.IsolatedAsyncioTestCase):
         operation.assert_awaited_once()
         driver.stop.assert_awaited_once()
 
-    async def test_registration_isolated_path_retains_existing_driver(self):
-        runtime = server.PersistentBrowserRuntime(registration_owner=True)
-        old, fresh = MagicMock(stop=AsyncMock()), MagicMock(stop=AsyncMock())
-        runtime.playwright = old
-        browser = MagicMock(close=AsyncMock())
-        async def factory(_runtime):
-            self.assertIs(runtime.playwright, old)
-            runtime.playwright = fresh
-            return browser
-        operation = AsyncMock(return_value="ok")
-        self.assertEqual(await runtime._execute_isolated(operation, browser_factory=factory), "ok")
-        old.stop.assert_not_awaited()
-        fresh.stop.assert_not_awaited()
-        self.assertIs(runtime.playwright, fresh)
-        operation.assert_awaited_once()
-
     async def test_public_driver_stop_timeout_is_bounded_and_fences_repeated_calls(self):
         runtime = server.PersistentBrowserRuntime()
         driver = MagicMock(stop=AsyncMock())
@@ -1471,6 +1410,7 @@ class NativeStartupTests(unittest.TestCase):
 
     def test_invalid_role_or_missing_authentication_never_binds(self):
         for role, token, reason in (('invalid', 'fixture-worker-authentication-123456', '类型无效'),
+                                    ('registration', 'fixture-worker-authentication-123456', '类型无效'),
                                     ('recharge', '', '凭据未配置')):
             with (self.subTest(role=role), patch.object(server, 'WORKER_ROLE', role),
                   patch.object(server, 'TOKEN', token),
@@ -1579,24 +1519,15 @@ class NativeStartupTests(unittest.TestCase):
                     runtime.stop.assert_called_once_with()
                     listener.server_close.assert_called_once_with()
 
-    def test_native_roles_keep_distinct_ports_routes_and_authentication(self):
-        for role, port in (('recharge', '8051'), ('registration', '8052')):
-            with self.subTest(role=role), patch.object(server, 'WORKER_ROLE', role):
-                _, _, listener, _ = self.invoke(['--host', '127.0.0.1', '--port', port])
-                listener.assert_called_once_with(('127.0.0.1', int(port)), server.Handler)
-                handler = object.__new__(server.Handler)
-                own = '/jobs/fixture/status' if role == 'recharge' else '/registration/health'
-                other = '/registration/health' if role == 'recharge' else '/jobs/fixture/status'
-                handler.path = own
-                self.assertTrue(handler.serves_path())
-                handler.path = other
-                self.assertFalse(handler.serves_path())
-                handler.path = own
-                handler.headers = {'X-Recharge-Worker': 'wrong-fixture-authentication'}
-                handler.reply = MagicMock()
-                with patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'):
-                    handler.do_GET()
-                handler.reply.assert_called_once_with(403, {'ok': False})
+    def test_recharge_routes_and_authentication_remain_available(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/jobs/fixture/status'
+        self.assertTrue(handler.serves_path())
+        handler.headers = {'X-Recharge-Worker': 'wrong-fixture-authentication'}
+        handler.reply = MagicMock()
+        with patch.object(server, 'TOKEN', 'fixture-worker-authentication-123456'):
+            handler.do_GET()
+        handler.reply.assert_called_once_with(403, {'ok': False})
 
     def test_mac_engine_reaches_existing_browser_launcher_without_browser_fallback(self):
         async def exercise():

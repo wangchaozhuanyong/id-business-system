@@ -351,15 +351,13 @@ class BitBrowserConnectorTests(unittest.TestCase):
             self.assertFalse(job.payment_request_sent)
             quote["today"] = amount
 
-    def test_roles_cannot_share_registration_and_recharge_registry(self):
-        registration = connector.Registry("registration")
+    def test_retired_registration_role_and_payload_cannot_use_recharge_registry(self):
+        with self.assertRaisesRegex(ValueError, "unsupported connector role"):
+            connector.Registry("registration")
         recharge = connector.Registry("recharge")
-        with self.assertRaises(Stop) as reason:
-            registration.start(payload())
-        self.assertEqual(reason.exception.report["reason"], "connector_role_mismatch")
         with self.assertRaises(Stop):
             recharge.start({"mode": "registration", "id": JOB_ID})
-        self.assertIsNot(registration.jobs, recharge.jobs)
+        self.assertEqual(recharge.jobs, {})
 
     def test_health_and_authenticated_http_confirmation_use_dedicated_role(self):
         job = connector.LocalJob(payload())
@@ -407,18 +405,24 @@ class BitBrowserConnectorTests(unittest.TestCase):
         thread.join(1)
         self.assertEqual(outcome, [True])
 
-    def test_command_roles_preserve_registration_port_and_recharge_isolation(self):
-        for role, expected_port, expected_token_dir in (
-                ('registration', 55321, 'auto-recharge-connector'),
-                ('recharge', 55322, 'bitbrowser-recharge-assistant')):
+    def test_command_default_and_recharge_role_use_only_dedicated_recharge_port(self):
+        for argv in ([], ['--role', 'recharge']):
             with (patch.object(connector, 'ThreadingHTTPServer') as server,
                   patch.object(connector, 'load_connector_token', return_value='fixture') as token,
-                  patch.object(connector, 'REGISTRY', connector.Registry(role)),
+                  patch.object(connector, 'REGISTRY', connector.Registry('recharge')),
                   contextlib.redirect_stdout(io.StringIO())):
-                connector.main(['--role', role, '--allowed-origin', 'https://admin.example'])
-                server.assert_called_once_with(('127.0.0.1', expected_port), connector.Handler)
-                self.assertIn(expected_token_dir, str(token.call_args.args[0]))
-                self.assertEqual(connector.REGISTRY.role, role)
+                connector.main([*argv, '--allowed-origin', 'https://admin.example'])
+                server.assert_called_once_with(('127.0.0.1', 55322), connector.Handler)
+                self.assertIn('bitbrowser-recharge-assistant', str(token.call_args.args[0]))
+                self.assertEqual(connector.REGISTRY.role, 'recharge')
+
+    def test_retired_registration_cli_role_is_rejected_before_token_or_listener(self):
+        with (patch.object(connector, 'ThreadingHTTPServer') as server,
+              patch.object(connector, 'load_connector_token') as token,
+              contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit)):
+            connector.main(['--role', 'registration', '--allowed-origin', 'https://admin.example'])
+        server.assert_not_called()
+        token.assert_not_called()
 
     def test_recharge_assistant_imports_without_server_browser_dependencies(self):
         folder = Path(__file__).resolve().parent
