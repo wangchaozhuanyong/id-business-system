@@ -6,11 +6,13 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import os
 import tarfile
 import tempfile
 import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('storage', Path(__file__).with_name('storage-maintenance.py'))
@@ -165,6 +167,250 @@ class StorageReadonlyBaselineTests(unittest.TestCase):
             'previousCommit': self.PREVIOUS,
             'manifestSha256': '52f2582e5edeb9e1c9af63c70fff4ca5a5bdad11c0fd7fb8f090fd1670b4c2eb',
             'previousManifestSha256': '0aacc82fc257bc2c4837a4b513223a01ec4f608fbacc0b009c1551b5ceb18b97'})
+
+
+class ReleaseArchiveCacheTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self):
+        with StorageReadonlyBaselineTests().fixture() as baseline, ExitStack() as stack:
+            self.root, self.current, self.previous = baseline[:3]
+            self.path = self.root / storage.ARCHIVE_CACHE_RELATIVE
+            self.path.parent.mkdir(parents=True)
+            self.payload = b'H' * 65536 + b'C' * 65536 + b'T' * 65536
+            self.path.write_bytes(self.payload)
+            self.neighbor = self.path.parent / 'ci-release-manifest.json'
+            self.neighbor.write_text(json.dumps({'commit': 'f35785f0b90ff750c55fb33ed06ae8d0f7af5feb',
+                'releaseTag': 'v2-production-20260907T085408Z', 'artifact': {
+                    'file': storage.ARCHIVE_CACHE_FILE, 'sha256': hashlib.sha256(self.payload).hexdigest()}}))
+            self.sums = self.path.parent / 'SHA256SUMS'
+            # The old producer writes release-manifest.json; deployment renames only its local copy.
+            self.sums.write_text(hashlib.sha256(self.payload).hexdigest() + '  ' + storage.ARCHIVE_CACHE_FILE
+                + '\n' + hashlib.sha256(self.neighbor.read_bytes()).hexdigest() + '  release-manifest.json\n')
+            self.configuration = ('fixture-private-bucket', 'mysql/daily', 'ap-northeast-1')
+            self.commands, self.cloud, self.mounts, self.processes = [], None, [], []
+            self.upload_failure, self.head_change, self.range_change, self.after_ranges = False, {}, False, None
+            original_iterdir = Path.iterdir
+
+            def iterdir(path):
+                return iter(self.processes) if path == Path('/proc') else original_iterdir(path)
+
+            stack.enter_context(patch.object(storage, 'ARCHIVE_CACHE_SIZE', len(self.payload)))
+            stack.enter_context(patch.object(Path, 'iterdir', iterdir))
+            stack.enter_context(patch.object(storage, 'helper', side_effect=lambda name:
+                SimpleNamespace(configuration=lambda: self.configuration) if name == 'cleanup-verified-backups'
+                else self.fail('Unexpected helper')))
+            self.command_mock = stack.enter_context(patch.object(storage.subprocess, 'run', side_effect=self.command))
+            yield
+
+    def command(self, arguments, **options):
+        self.commands.append(arguments)
+        self.assertLessEqual(options['timeout'], 300)
+        self.assertEqual(options['env']['AWS_MAX_ATTEMPTS'], '1')
+        if arguments[:2] == ['docker', 'ps']:
+            return SimpleNamespace(returncode=0, stdout='a' * 64 + '\n', stderr='')
+        if arguments[:2] == ['docker', 'inspect']:
+            self.assertEqual(arguments[2:4], ['--format', '{{json .Mounts}}'])
+            return SimpleNamespace(returncode=0, stdout=json.dumps(self.mounts), stderr='')
+        self.assertEqual(arguments[:2], ['aws', 's3api'])
+        if 'put-object' in arguments:
+            self.assertEqual(arguments[arguments.index('--if-none-match') + 1], '*')
+            self.assertEqual(arguments[arguments.index('--body') + 1], str(self.path))
+            self.assertEqual(arguments[arguments.index('--server-side-encryption') + 1], 'AES256')
+            if self.upload_failure:
+                return SimpleNamespace(returncode=1, stdout='', stderr='private-upload-fixture-output')
+            self.cloud = self.path.read_bytes()
+            return SimpleNamespace(returncode=0, stdout='{}', stderr='')
+        if 'head-object' in arguments:
+            if self.cloud is None:
+                return SimpleNamespace(returncode=1, stdout='', stderr='private-head-fixture-output')
+            value = {'ContentLength': len(self.cloud),
+                'ChecksumSHA256': base64.b64encode(hashlib.sha256(self.cloud).digest()).decode(),
+                'ServerSideEncryption': 'AES256', **self.head_change}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr='')
+        self.assertIn('get-object', arguments)
+        start, end = map(int, arguments[arguments.index('--range') + 1].removeprefix('bytes=').split('-'))
+        destination = Path(arguments[-3])
+        self.assertTrue(destination.is_relative_to(self.root / 'maintenance/release-artifact-cache'))
+        content = self.cloud[start:end+1]
+        destination.write_bytes(b'X' * len(content) if self.range_change else content)
+        if start and self.after_ranges:
+            self.after_ranges()
+        return SimpleNamespace(returncode=0, stdout='{}', stderr='')
+
+    def plan(self):
+        return storage.release_archive_cache(storage.ARCHIVE_CACHE_CURRENT)
+
+    def apply(self, digest):
+        return storage.release_archive_cache(storage.ARCHIVE_CACHE_CURRENT, digest, apply=True)
+
+    def aws_operations(self):
+        return [next(name for name in ('put-object', 'head-object', 'get-object') if name in arguments)
+                for arguments in self.commands if arguments[0] == 'aws']
+
+    def test_readonly_plan_binds_file_neighbors_baseline_and_private_target_without_cloud_write(self):
+        with self.fixture():
+            result = self.plan()
+            plan = result['plan']
+            self.assertEqual(result['mode'], 'PLAN_ONLY')
+            self.assertEqual(result['planSha256'], storage.archive_digest(plan))
+            self.assertEqual(plan['archive']['sha256'], hashlib.sha256(self.payload).hexdigest())
+            self.assertEqual(plan['archive']['identity'], storage.archive_identity(self.path.stat()))
+            self.assertEqual(set(plan['neighborSha256']), {'ci-release-manifest.json', 'SHA256SUMS'})
+            self.assertEqual(plan['currentManifestSha256'], hashlib.sha256(
+                (self.current / 'release-manifest.json').read_bytes()).hexdigest())
+            self.assertEqual(plan['previousManifestSha256'], hashlib.sha256(
+                (self.previous / 'release-manifest.json').read_bytes()).hexdigest())
+            self.assertNotIn(self.configuration[0], json.dumps(result))
+            self.assertEqual(self.aws_operations(), [])
+            self.assertTrue(self.path.exists())
+
+    def test_success_verifies_cloud_and_ranges_then_removes_only_fixed_archive_with_durable_receipt(self):
+        with self.fixture():
+            original = {p: p.read_bytes() for p in (self.neighbor, self.sums,
+                self.current / 'release-manifest.json', self.previous / 'release-manifest.json')}
+            self.head_change['Expiration'] = 'expiry-date="Sat, 09 Jan 2027 00:00:00 GMT", rule-id="fixture"'
+            with patch.object(storage.os, 'fsync', wraps=os.fsync) as synced:
+                result = self.apply(self.plan()['planSha256'])
+            self.assertFalse(self.path.exists())
+            self.assertTrue(result['cloudRecoveryVerified'])
+            self.assertEqual(result['removedRelativePath'], storage.ARCHIVE_CACHE_RELATIVE)
+            self.assertEqual(result['remoteExpiration'], '2027-01-09T00:00:00+00:00')
+            self.assertTrue(result['retentionPolicyExisting'])
+            self.assertEqual(self.aws_operations(), ['put-object', 'head-object', 'get-object', 'get-object'])
+            self.assertGreaterEqual(synced.call_count, 5)
+            for path, content in original.items():
+                self.assertEqual(path.read_bytes(), content)
+            receipt = next((self.root / 'maintenance/release-artifact-cache').glob('*.json'))
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(receipt.read_bytes()), result)
+
+    def test_missing_or_wrong_exact_plan_cannot_upload_or_delete(self):
+        with self.fixture():
+            for digest in (None, 'invalid', 'a' * 64):
+                with self.subTest(digest=digest), self.assertRaises(RuntimeError):
+                    self.apply(digest)
+            self.assertTrue(self.path.exists())
+            self.assertEqual(self.aws_operations(), [])
+
+    def test_changed_file_neighbors_or_s3_target_invalidates_plan_before_upload(self):
+        for location in ('bytes', 'identity', 'manifest', 'checksums', 'target'):
+            with self.subTest(location=location), self.fixture():
+                digest = self.plan()['planSha256']
+                if location == 'bytes':
+                    self.path.write_bytes(b'X' + self.payload[1:])
+                elif location == 'identity':
+                    data = self.path.read_bytes(); self.path.unlink(); self.path.write_bytes(data)
+                elif location == 'manifest':
+                    self.neighbor.write_text(self.neighbor.read_text() + '\n')
+                elif location == 'checksums':
+                    self.sums.write_text(self.sums.read_text() + '\n')
+                else:
+                    self.configuration = ('different-fixture-bucket', *self.configuration[1:])
+                with self.assertRaises(RuntimeError):
+                    self.apply(digest)
+                self.assertTrue(self.path.exists())
+                self.assertEqual(self.aws_operations(), [])
+
+    def test_cloud_wrong_hash_size_encryption_or_checksum_type_never_removes_archive(self):
+        for change in ({'ChecksumSHA256': 'wrong'}, {'ContentLength': 1},
+                       {'ServerSideEncryption': 'aws:kms'}, {'ChecksumType': 'COMPOSITE'}):
+            with self.subTest(change=change), self.fixture():
+                digest = self.plan()['planSha256']; self.head_change = change
+                with self.assertRaisesRegex(RuntimeError, 'cloud recovery identity differs'):
+                    self.apply(digest)
+                self.assertTrue(self.path.exists())
+                self.assertEqual(self.aws_operations(), ['put-object', 'head-object'])
+
+    def test_upload_failure_without_verified_recovery_keeps_archive_and_suppresses_raw_output(self):
+        with self.fixture():
+            self.upload_failure = True
+            with self.assertRaisesRegex(RuntimeError, 'command failed: HEAD') as error:
+                self.apply(self.plan()['planSha256'])
+            self.assertNotIn('private-', str(error.exception))
+            self.assertTrue(self.path.exists())
+            self.assertEqual(self.aws_operations(), ['put-object', 'head-object'])
+
+    def test_existing_same_cloud_copy_can_resume_after_single_conditional_upload_failure(self):
+        with self.fixture():
+            self.cloud = self.payload; self.upload_failure = True
+            result = self.apply(self.plan()['planSha256'])
+            self.assertTrue(result['cloudRecoveryVerified'])
+            self.assertFalse(self.path.exists())
+            self.assertEqual(self.aws_operations(), ['put-object', 'head-object', 'get-object', 'get-object'])
+
+    def test_cloud_range_mismatch_and_local_change_after_upload_prevent_removal(self):
+        for kind in ('range', 'local'):
+            with self.subTest(kind=kind), self.fixture():
+                digest = self.plan()['planSha256']
+                if kind == 'range':
+                    self.range_change = True
+                else:
+                    self.after_ranges = lambda: self.path.write_bytes(b'X' + self.payload[1:])
+                with self.assertRaises(RuntimeError):
+                    self.apply(digest)
+                self.assertTrue(self.path.exists())
+
+    def test_container_mount_and_open_descriptor_block_plan_before_upload(self):
+        for kind in ('mount', 'fd'):
+            with self.subTest(kind=kind), self.fixture():
+                if kind == 'mount':
+                    self.mounts = [{'Source': str(self.path.parent), 'Type': 'bind'}]
+                else:
+                    process = self.root / 'proc-fixture/12345678'
+                    (process / 'fd').mkdir(parents=True)
+                    (process / 'fd/4').symlink_to(self.path)
+                    self.processes = [process]
+                with self.assertRaisesRegex(RuntimeError, 'mounted|open by another process'):
+                    self.plan()
+                self.assertTrue(self.path.exists())
+                self.assertEqual(self.aws_operations(), [])
+
+    def test_tmpfs_without_host_source_is_allowed_but_malformed_or_unknown_mounts_fail_closed(self):
+        for source in ('', None):
+            with self.subTest(validSource=source), self.fixture():
+                self.mounts = [{'Type': 'tmpfs', 'Source': source, 'Destination': '/tmp',
+                                'Mode': '', 'RW': True, 'Propagation': ''}]
+                self.assertEqual(self.plan()['mode'], 'PLAN_ONLY')
+                self.assertTrue(self.path.exists())
+                self.assertEqual(self.aws_operations(), [])
+        for mount in (
+                {'Type': 'tmpfs', 'Source': '/host', 'Destination': '/tmp'},
+                {'Type': 'tmpfs', 'Source': '', 'Destination': 'tmp'},
+                {'Type': 'tmpfs', 'Source': '', 'Destination': None},
+                {'Type': 'tmpfs', 'Source': 0, 'Destination': '/tmp'},
+                {'Type': 'unknown', 'Source': '/host', 'Destination': '/tmp'},
+                {'Type': 'bind', 'Source': '', 'Destination': '/tmp'},
+                {'Type': 'volume', 'Source': None, 'Destination': '/tmp'}):
+            with self.subTest(invalidMount=mount), self.fixture():
+                self.mounts = [mount]
+                with self.assertRaisesRegex(RuntimeError, 'mount inventory unavailable'):
+                    self.plan()
+                self.assertTrue(self.path.exists())
+                self.assertEqual(self.aws_operations(), [])
+
+    def test_archive_symlink_or_wrong_baseline_is_rejected_without_commands(self):
+        with self.fixture():
+            saved = self.path.with_suffix('.saved'); self.path.rename(saved); self.path.symlink_to(saved)
+            with self.assertRaisesRegex(RuntimeError, 'path changed'):
+                self.plan()
+            self.command_mock.assert_not_called()
+            for expected in (storage.EXPECTED, StorageReadonlyBaselineTests.PREVIOUS, 'f' * 40):
+                with self.assertRaisesRegex(RuntimeError, 'production baseline differs'):
+                    storage.release_archive_cache(expected)
+            self.command_mock.assert_not_called()
+
+    def test_cli_uses_existing_envelope_and_rejects_conflicting_write_inputs(self):
+        with self.fixture(), redirect_stdout(io.StringIO()) as output:
+            arguments = ['storage-maintenance.py', '--operation', 'verify-release-archive-cache',
+                         '--expected-current', storage.ARCHIVE_CACHE_CURRENT]
+            with patch.object(sys, 'argv', arguments):
+                storage.main()
+            envelope = json.loads(output.getvalue().removeprefix('STORAGE_MAINTENANCE '))
+            result = json.loads(gzip.decompress(base64.b64decode(envelope['payload'])))
+            self.assertEqual(result['mode'], 'PLAN_ONLY')
+            for extra in (['--plan-sha256', 'a' * 64], ['--approved-scope', storage.APPROVED_SCOPE]):
+                with patch.object(sys, 'argv', arguments + extra), self.assertRaises(RuntimeError):
+                    storage.main()
 
 
 class StorageSafetyTests(unittest.TestCase):

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { gzipSync } from 'node:zlib';
 import { load as loadYaml } from 'js-yaml';
 import {
   adminCheckCommands,
@@ -281,7 +282,10 @@ function storageDiagnosticStepFixture(
     operation = 'diagnose_storage',
     sleepAdvance = 102,
     waiterExit = 0,
-    commandId = '11111111-1111-4111-8111-111111111111'
+    commandId = '11111111-1111-4111-8111-111111111111',
+    expectedCurrent = 'e7c9862d58599995954883f1c1f6038283afffab',
+    cachePlanSha256 = '',
+    producerOutput = 'STORAGE_MAINTENANCE fixture-readonly-receipt\n'
   } = {}
 ) {
   fixture(({ root, env }) => {
@@ -295,10 +299,12 @@ function storageDiagnosticStepFixture(
     const countFile = join(root, 'storage-poll-count');
     const statusesFile = join(root, 'storage-statuses.json');
     const timingFile = join(root, 'storage-call-timing.jsonl');
+    const outputFile = join(root, 'storage-producer-output.txt');
     writeFileSync(awsLog, '');
     writeFileSync(countFile, '0');
     writeFileSync(statusesFile, JSON.stringify(statuses));
     writeFileSync(timingFile, '');
+    writeFileSync(outputFile, producerOutput);
     for (const path of [
       'scripts/production-release/storage-maintenance.py',
       'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql',
@@ -351,7 +357,7 @@ elif args[1]=='get-command-invocation':
   rows=json.loads(Path(os.environ['TASK_STORAGE_STATUSES']).read_text());print(rows[min(n,len(rows)-1)])
  else:
   assert query=='StandardOutputContent'
-  print('STORAGE_MAINTENANCE fixture-readonly-receipt')
+  sys.stdout.write(Path(os.environ['TASK_STORAGE_PRODUCER_OUTPUT']).read_text())
 else:raise RuntimeError('Unreviewed fake AWS operation')
 `,
       { mode: 0o755 }
@@ -361,8 +367,9 @@ else:raise RuntimeError('Unreviewed fake AWS operation')
         cwd: root,
         env: {
           ...env,
-          EXPECTED_CURRENT: 'e7c9862d58599995954883f1c1f6038283afffab',
+          EXPECTED_CURRENT: expectedCurrent,
           STORAGE_OPERATION: operation,
+          CACHE_PLAN_SHA256: cachePlanSha256,
           PRODUCTION_INSTANCE_ID: 'i-local-fixture-only',
           TASK_STORAGE_AWS_LOG: awsLog,
           TASK_STORAGE_POLL_COUNT: countFile,
@@ -370,7 +377,8 @@ else:raise RuntimeError('Unreviewed fake AWS operation')
           TASK_STORAGE_SLEEP_ADVANCE: String(sleepAdvance),
           TASK_STORAGE_WAITER_EXIT: String(waiterExit),
           TASK_STORAGE_COMMAND_ID: commandId,
-          TASK_STORAGE_TIMING_LOG: timingFile
+          TASK_STORAGE_TIMING_LOG: timingFile,
+          TASK_STORAGE_PRODUCER_OUTPUT: outputFile
         },
         encoding: 'utf8',
         stdio: 'pipe',
@@ -381,7 +389,9 @@ else:raise RuntimeError('Unreviewed fake AWS operation')
       awsLog,
       countFile,
       timingFile,
-      parametersFile: join(root, '.deploy/production-release/storage-maintenance.json')
+      parametersFile: join(root, '.deploy/production-release/storage-maintenance.json'),
+      receiptFile: join(root, '.deploy/production-release/release-archive-cache-result.json'),
+      commandFile: join(root, '.deploy/production-release/release-archive-cache-command-id.txt')
     });
   });
 }
@@ -520,6 +530,324 @@ test('storage diagnosis polling leaves all other storage operations on their ori
       );
 });
 
+const releaseArchivePath =
+  'artifacts/v2-production-20260907T085408Z-f35785f0b90ff750c55fb33ed06ae8d0f7af5feb/id-business-v2-v2-production-20260907T085408Z-f35785f0b90ff750c55fb33ed06ae8d0f7af5feb.tar.gz';
+const canonicalArchiveJson = (value) =>
+  JSON.stringify(
+    (function sorted(item) {
+      if (Array.isArray(item)) return item.map(sorted);
+      if (item && typeof item === 'object')
+        return Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((key) => [key, sorted(item[key])])
+        );
+      return item;
+    })(value)
+  );
+const archivePlanDigest = (plan) =>
+  createHash('sha256').update(canonicalArchiveJson(plan)).digest('hex');
+const archiveEnvelope = (receipt) =>
+  'STORAGE_MAINTENANCE ' +
+  JSON.stringify({
+    encoding: 'gzip+base64',
+    payload: gzipSync(JSON.stringify(receipt)).toString('base64')
+  }) +
+  '\n';
+function releaseArchiveReceipt(applied = false) {
+  const plan = {
+    version: 1,
+    policy: 'fixed-release-archive-cache-f35785-20261008',
+    currentCommit: 'e7c9862d58599995954883f1c1f6038283afffab',
+    currentManifestSha256: '52f2582e5edeb9e1c9af63c70fff4ca5a5bdad11c0fd7fb8f090fd1670b4c2eb',
+    previousCommit: '04570d75c779fd91a0933ef9416f6d62698b6b91',
+    previousManifestSha256: '0aacc82fc257bc2c4837a4b513223a01ec4f608fbacc0b009c1551b5ceb18b97',
+    archive: {
+      relativePath: releaseArchivePath,
+      sha256: 'a'.repeat(64),
+      identity: {
+        dev: 1,
+        ino: 2,
+        mode: 0o100644,
+        uid: 0,
+        gid: 0,
+        nlink: 1,
+        size: 1953925922,
+        mtimeNs: 3,
+        ctimeNs: 4
+      }
+    },
+    neighborSha256: { 'ci-release-manifest.json': 'b'.repeat(64), SHA256SUMS: 'c'.repeat(64) },
+    s3TargetSha256: 'd'.repeat(64)
+  };
+  return {
+    mode: applied ? 'APPLIED' : 'PLAN_ONLY',
+    status: 'COMPLETE',
+    currentCommit: plan.currentCommit,
+    planSha256: archivePlanDigest(plan),
+    plan,
+    freeBytesBefore: 6400000000,
+    freeBytesAfter: applied ? 8353925922 : 6400000000,
+    existingBackupStorage: true,
+    retentionPolicyExisting: true,
+    remoteExpiration: null,
+    ...(applied ? { cloudRecoveryVerified: true, removedRelativePath: releaseArchivePath } : {})
+  };
+}
+
+test('release archive cache uses fixed CLI JSON receipts bounded SSM and exclusive workflow operations', () => {
+  for (const operation of ['verify_release_archive_cache', 'archive_release_cache']) {
+    const applied = operation === 'archive_release_cache';
+    const receipt = releaseArchiveReceipt(applied);
+    if (applied) receipt.remoteExpiration = '2027-01-06T00:00:00+00:00';
+    storageDiagnosticStepFixture(
+      ['Pending', 'Success'],
+      ({ execute, awsLog, countFile, parametersFile, receiptFile, commandFile }) => {
+        assert.match(
+          execute(),
+          /STORAGE_DIAGNOSTIC_COMMAND_ID 11111111-1111-4111-8111-111111111111/
+        );
+        assert.equal(readFileSync(countFile, 'utf8'), '2');
+        assert.deepEqual(JSON.parse(readFileSync(receiptFile, 'utf8')), receipt);
+        assert.equal(readFileSync(commandFile, 'utf8'), '11111111-1111-4111-8111-111111111111\n');
+        assert.equal(readFileSync(awsLog, 'utf8').includes('ssm wait '), false);
+        const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+        assert.deepEqual(parameters.executionTimeout, ['600']);
+        assert.equal(parameters.commands.length, 1);
+        const cliOperation = applied ? 'archive-release-cache' : 'verify-release-archive-cache';
+        assert.ok(
+          parameters.commands[0].endsWith(
+            `--operation ${cliOperation} --expected-current ${receipt.currentCommit}${applied ? ' --plan-sha256 ' + receipt.planSha256 : ''}`
+          )
+        );
+      },
+      {
+        operation,
+        cachePlanSha256: applied ? receipt.planSha256 : '',
+        producerOutput: archiveEnvelope(receipt)
+      }
+    );
+    assert.ok(workflowInputs.operation.options.includes(operation));
+    for (const name of [
+      'Build images on the GitHub runner',
+      'Push immutable images',
+      'Deploy through the production instance',
+      'Verify or maintain recoverable unused project image cache'
+    ]) {
+      const step = workflowSteps.find((row) => row.name === name);
+      assert.equal(
+        workflowPredicate(step.if)({
+          operation,
+          historical_exception: 'none',
+          reuse_image_run: ''
+        }),
+        false,
+        name
+      );
+    }
+    const evidence = workflowSteps.find(
+      (row) => row.name === 'Save release archive cache verification and execution evidence'
+    );
+    assert.equal(workflowPredicate(evidence.if)({ operation }), true);
+  }
+  assert.equal('command' in workflowInputs, false);
+  assert.equal('script' in workflowInputs, false);
+});
+
+test('release archive cache rejects wrong baseline or missing malformed and misplaced digest before SSM', () => {
+  for (const options of [
+    { operation: 'archive_release_cache', cachePlanSha256: '' },
+    {
+      operation: 'archive_release_cache',
+      cachePlanSha256: 'a'.repeat(64) + '\n--operation cleanup-audit'
+    },
+    { operation: 'verify_release_archive_cache', cachePlanSha256: 'a'.repeat(64) },
+    {
+      operation: 'verify_release_archive_cache',
+      expectedCurrent: '04570d75c779fd91a0933ef9416f6d62698b6b91'
+    }
+  ])
+    storageDiagnosticStepFixture(
+      ['Success'],
+      ({ execute, awsLog, countFile }) => {
+        assert.throws(execute);
+        assert.equal(readFileSync(awsLog, 'utf8'), '');
+        assert.equal(readFileSync(countFile, 'utf8'), '0');
+      },
+      options
+    );
+});
+
+test('release archive cache rejects altered JSON proof without saving or publishing its payload', () => {
+  const mutations = [
+    (r) => {
+      r.status = 'PARTIAL';
+    },
+    (r) => {
+      r.currentCommit = 'f'.repeat(40);
+    },
+    (r) => {
+      r.planSha256 = 'f'.repeat(64);
+    },
+    (r) => {
+      r.plan.archive.relativePath += '.other';
+      r.planSha256 = archivePlanDigest(r.plan);
+    },
+    (r) => {
+      r.plan.previousManifestSha256 = 'e'.repeat(64);
+      r.planSha256 = archivePlanDigest(r.plan);
+    },
+    (r) => {
+      r.plan.archive.identity.size++;
+      r.planSha256 = archivePlanDigest(r.plan);
+    },
+    (r) => {
+      r.existingBackupStorage = false;
+    },
+    (r) => {
+      r.retentionPolicyExisting = false;
+    },
+    (r) => {
+      r.privateEnvironment = 'PRIVATE_FIXTURE_VALUE';
+    },
+    (r) => {
+      r.remoteExpiration = '2027-01-01T00:00:00Z';
+    }
+  ];
+  for (const mutate of mutations) {
+    const receipt = releaseArchiveReceipt();
+    mutate(receipt);
+    storageDiagnosticStepFixture(
+      ['Success'],
+      ({ execute, receiptFile }) => {
+        assert.throws(
+          execute,
+          (error) =>
+            error.status === 1 &&
+            String(error.stderr).includes('RELEASE_ARCHIVE_CACHE_RESULT_UNAVAILABLE') &&
+            !String(error.stdout).includes('STORAGE_MAINTENANCE')
+        );
+        assert.equal(existsSync(receiptFile), false);
+      },
+      { operation: 'verify_release_archive_cache', producerOutput: archiveEnvelope(receipt) }
+    );
+  }
+  for (const change of [
+    { cloudRecoveryVerified: false },
+    { removedRelativePath: releaseArchivePath + '.other' }
+  ]) {
+    const receipt = { ...releaseArchiveReceipt(true), ...change };
+    storageDiagnosticStepFixture(
+      ['Success'],
+      ({ execute, receiptFile }) => {
+        assert.throws(execute);
+        assert.equal(existsSync(receiptFile), false);
+      },
+      {
+        operation: 'archive_release_cache',
+        cachePlanSha256: receipt.planSha256,
+        producerOutput: archiveEnvelope(receipt)
+      }
+    );
+  }
+  const receipt = releaseArchiveReceipt(true);
+  storageDiagnosticStepFixture(
+    ['Success'],
+    ({ execute, receiptFile }) => {
+      assert.throws(execute);
+      assert.equal(existsSync(receiptFile), false);
+    },
+    {
+      operation: 'archive_release_cache',
+      cachePlanSha256: 'f'.repeat(64),
+      producerOutput: archiveEnvelope(receipt)
+    }
+  );
+});
+
+test('release archive cache keeps bounded failure semantics and records only its UUID when receipt is unavailable', () => {
+  for (const [status, marker] of [
+    ['InProgress', 'STORAGE_DIAGNOSTIC_WAIT_BUDGET_EXHAUSTED'],
+    ['Unknown', 'STORAGE_DIAGNOSTIC_UNKNOWN_STATUS'],
+    ['Failed', 'STORAGE_DIAGNOSTIC_REMOTE_Failed']
+  ]) {
+    const receipt = releaseArchiveReceipt(true);
+    storageDiagnosticStepFixture(
+      [status],
+      ({ execute, receiptFile, commandFile, awsLog }) => {
+        assert.throws(
+          execute,
+          (error) => error.status === 1 && String(error.stderr).includes(marker)
+        );
+        assert.equal(existsSync(receiptFile), false);
+        assert.equal(readFileSync(commandFile, 'utf8'), '11111111-1111-4111-8111-111111111111\n');
+        assert.equal(
+          readFileSync(awsLog, 'utf8').includes('StandardOutputContent'),
+          status === 'Failed'
+        );
+      },
+      {
+        operation: 'archive_release_cache',
+        sleepAdvance: 120,
+        cachePlanSha256: receipt.planSha256,
+        producerOutput: archiveEnvelope(receipt)
+      }
+    );
+  }
+  storageDiagnosticStepFixture(
+    ['Success'],
+    ({ execute, receiptFile }) => {
+      assert.throws(
+        execute,
+        (error) =>
+          error.status === 1 &&
+          String(error.stderr).includes('RELEASE_ARCHIVE_CACHE_RESULT_UNAVAILABLE') &&
+          !String(error.stdout).includes('PRIVATE_FIXTURE_VALUE')
+      );
+      assert.equal(existsSync(receiptFile), false);
+    },
+    { operation: 'verify_release_archive_cache', producerOutput: 'PRIVATE_FIXTURE_VALUE\n' }
+  );
+});
+
+test('release archive cache selection prevents mixed publication scopes before credentials and remains control only', () => {
+  for (const operation of ['verify_release_archive_cache', 'archive_release_cache'])
+    for (const override of [
+      null,
+      { EXPECTED_CURRENT: 'f'.repeat(40) },
+      { HISTORICAL_EXCEPTION: postCleanupPolicy },
+      { RELEASE_ADMIN_ONLY: 'true' },
+      { REUSE_IMAGE_RUN: '123' },
+      { POST_CLEANUP_SEAL_SHA256: 'a'.repeat(64) },
+      { RELEASE_BROWSER_CACHE_IMAGE: 'fixture' }
+    ])
+      fixture(({ env, log }) => {
+        const execute = () =>
+          execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+            env: {
+              ...env,
+              RELEASE_OPERATION: operation,
+              EXPECTED_CURRENT: 'e7c9862d58599995954883f1c1f6038283afffab',
+              CACHE_PLAN_SHA256: operation === 'archive_release_cache' ? 'a'.repeat(64) : '',
+              ...override
+            },
+            stdio: 'pipe'
+          });
+        if (override) assert.throws(execute);
+        else execute();
+        assert.equal(readFileSync(log, 'utf8'), '');
+      });
+  const paths = [
+    '.github/workflows/production-release.yml',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/production-release/storage-maintenance.py',
+    'scripts/production-release/storage-maintenance.test.py'
+  ];
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+});
+
 const postCleanupEnv = {
   HISTORICAL_EXCEPTION: postCleanupPolicy,
   EXPECTED_CURRENT: postCleanupBaseline,
@@ -637,7 +965,9 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
             'release_api_registration',
             'verify_registration_business',
             'verify_registration_handoff',
-            'recover_registration_handoff'
+            'recover_registration_handoff',
+            'verify_release_archive_cache',
+            'archive_release_cache'
           ].includes(operation)
             ? String(error.stderr) === ''
             : String(error.stderr).includes('supports preparation or release only'))

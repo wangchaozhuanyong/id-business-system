@@ -261,6 +261,17 @@ PY_REGISTRATION96_PROJECTION
 
 # Selection only; the remote policy still verifies the reviewed source proof.
 validate_release_selection() {
+  if [[ "${RELEASE_OPERATION:-release}" == verify_release_archive_cache || "${RELEASE_OPERATION:-release}" == archive_release_cache ]]; then
+    [[ "${HISTORICAL_EXCEPTION:-none}" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ "${EXPECTED_CURRENT:-}" == e7c9862d58599995954883f1c1f6038283afffab ]] || return 1
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || return 1
+    if [[ "$RELEASE_OPERATION" == archive_release_cache ]]; then
+      [[ "${CACHE_PLAN_SHA256:-}" =~ ^[a-f0-9]{64}$ ]] || return 1
+    else
+      [[ -z "${CACHE_PLAN_SHA256:-}" ]] || return 1
+    fi
+    return 0
+  fi
   local policy="${HISTORICAL_EXCEPTION:-none}"
   if [[ "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == verify_api_admin || "${RELEASE_OPERATION:-release}" == release_api_registration || "${RELEASE_OPERATION:-release}" == verify_api_registration || "${RELEASE_OPERATION:-release}" == handoff_api_registration || "${RELEASE_OPERATION:-release}" == verify_registration_business || "${RELEASE_OPERATION:-release}" == verify_registration_handoff || "${RELEASE_OPERATION:-release}" == recover_registration_handoff ]]; then
     [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
