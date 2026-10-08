@@ -1,17 +1,20 @@
 import base64
 import copy
+import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
+import signal
 import sys
 import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,7 +72,7 @@ def states():
 
 class JobGuardTests(unittest.TestCase):
     def controller(self, busy=False, retained=True, count='0'):
-        return SimpleNamespace(require=d.require, assert_no_active_recharge=MagicMock(),
+        return SimpleNamespace(BASE=RUNTIME / 'no-handoff', require=d.require, assert_no_active_recharge=MagicMock(),
             registration_runtime_state=MagicMock(return_value={'supported': True, 'registrationBusy': busy,
                 'registrationWindowRetained': retained}), current_job_database=MagicMock(return_value='current_db'),
             compose=MagicMock(return_value=count))
@@ -1104,6 +1107,356 @@ class ReleaseFailureTests(unittest.TestCase):
         self.assertEqual(result['status'], 'API_ADMIN_PARTIAL_RECOVERY_REQUIRED')
         self.assertFalse(result['rollbackOk'])
         controller.point_current.assert_not_called()
+
+
+class NativeHandoffGeneratedTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, rows=None, outcome='exit', changed_on_open=False, inaccessible=False, unknown_exe=False):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); proc = base / 'proc'; engine = base / 'engine'
+            proc.mkdir(); engine.mkdir(); (engine / 'camoufox').write_bytes(b'synthetic engine')
+            module = base / 'fingerprint_runtime.py'
+            module.write_bytes((ROOT / (registration.WORKER_PREFIX + 'fingerprint_runtime.py')).read_bytes())
+            starts = {}; links = {}; fd_to_pid = {}; signals = []
+            def state(pid, kind, stamp=123):
+                folder = proc / str(pid); folder.mkdir(exist_ok=True); (folder / 'fd').mkdir(exist_ok=True)
+                (folder / 'stat').write_text(f'{pid} (synthetic process) {kind} ' + '0 ' * 18 + f'{stamp} 0\n')
+                starts[pid] = stamp
+            for pid, kind in rows or []:
+                state(pid, kind); links[str(proc / str(pid) / 'exe')] = str(engine / ('unknown' if unknown_exe else 'camoufox'))
+            original_readlink = os.readlink
+            def readlink(path):
+                name = str(path)
+                if name.endswith('/ns/pid'): return 'pid:[42]'
+                if inaccessible and name.startswith(str(proc) + '/'): raise PermissionError('PRIVATE RAW ERROR')
+                if name in links: return links[name]
+                return original_readlink(path)
+            def pidfd_open(pid, flags):
+                self.assertEqual(flags, 0)
+                if changed_on_open: state(pid, 'S', starts[pid] + 1)
+                fd_to_pid[pid + 1000] = pid
+                return pid + 1000
+            def send(fd, sig, info, flags):
+                self.assertEqual((sig, info, flags), (signal.SIGTERM, None, 0))
+                pid = fd_to_pid[fd]; signals.append(pid)
+                if outcome == 'exit': shutil.rmtree(proc / str(pid))
+                elif outcome == 'zombie': state(pid, 'Z', starts[pid])
+            original_stat = Path.stat
+            def owned_stat(path, *args, **kwargs):
+                value = original_stat(path, *args, **kwargs)
+                values = {name: getattr(value, name) for name in dir(value) if name.startswith('st_')}
+                values['st_uid'] = 0
+                return SimpleNamespace(**values)
+            stack.enter_context(patch.object(Path, 'stat', autospec=True, side_effect=owned_stat))
+            stack.enter_context(patch.object(os, 'readlink', side_effect=readlink))
+            stack.enter_context(patch.object(os, 'geteuid', return_value=0))
+            stack.enter_context(patch.object(os, 'getpid', return_value=900))
+            stack.enter_context(patch.object(os, 'pidfd_open', side_effect=pidfd_open, create=True))
+            stack.enter_context(patch.object(signal, 'pidfd_send_signal', side_effect=send, create=True))
+            stack.enter_context(patch.object(os, 'close'))
+            stack.enter_context(patch('time.sleep'))
+            stack.enter_context(patch('time.monotonic', side_effect=[n / 2 for n in range(200)]))
+            def execute(recover):
+                source = registration.NATIVE_HANDOFF_SOURCE.replace('__RECOVER__', repr(recover)).replace(
+                    '__MODULE_SHA__', repr(hashlib.sha256(module.read_bytes()).hexdigest()))
+                source = source.replace("Path('/proc')", f'Path({str(proc)!r})').replace(
+                    "Path('/opt/camoufox')", f'Path({str(engine)!r})').replace(
+                    "Path('/app/fingerprint_runtime.py')", f'Path({str(module)!r})')
+                output = io.StringIO()
+                with redirect_stdout(output): exec(compile(source, '<actual-native-handoff>', 'exec'), {})
+                result = json.loads(output.getvalue())
+                self.assertNotIn('PRIVATE', output.getvalue())
+                self.assertNotIn(str(base), output.getvalue())
+                return result
+            yield SimpleNamespace(execute=execute, signals=signals, state=state, links=links, proc=proc)
+
+    def test_actual_generated_observer_counts_live_native_without_signals(self):
+        with self.fixture([(7, 'S')]) as f:
+            result = f.execute(False)
+            self.assertEqual((result['status'], result['nativeCount'], result['signalsAttempted']), ('OBSERVED', 1, 0))
+            self.assertEqual(f.signals, [])
+
+    def test_actual_generated_recovery_uses_pidfd_single_term_and_two_zero_observations(self):
+        with self.fixture([(7, 'S'), (8, 'R')]) as f:
+            result = f.execute(True)
+            self.assertEqual((result['status'], result['signalsAttempted'], result['zeroObservations']), ('RECOVERED', 2, 2))
+            self.assertTrue(result['resourceClosed']); self.assertEqual(f.signals, [7, 8])
+
+    def test_no_native_means_no_signal(self):
+        with self.fixture() as f:
+            result = f.execute(True)
+            self.assertEqual((result['signalsAttempted'], result['nativeCount'], result['zeroObservations']), (0, 0, 2))
+
+    def test_pid_reuse_after_pidfd_open_refuses_all_signals(self):
+        with self.fixture([(7, 'S')], changed_on_open=True) as f:
+            result = f.execute(True)
+            self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_PID_REUSED')
+            self.assertEqual(f.signals, [])
+
+    def test_pid_one_and_self_are_never_signalled(self):
+        for pid in (1, 900):
+            with self.subTest(pid=pid), self.fixture([(pid, 'S')]) as f:
+                result = f.execute(True)
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_PID_OWNER')
+                self.assertEqual(f.signals, [])
+
+    def test_native_remaining_never_becomes_closed(self):
+        with self.fixture([(7, 'S')], outcome='remain') as f:
+            result = f.execute(True)
+            self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_REMAINS')
+            self.assertEqual(result['signalsAttempted'], 1); self.assertFalse(result['resourceClosed'])
+
+    def test_zombie_or_dead_with_empty_fds_and_stable_namespace_is_inactive(self):
+        for kind in ('Z', 'X'):
+            with self.subTest(kind=kind), self.fixture([(7, kind)], inaccessible=True) as f:
+                result = f.execute(True)
+                self.assertEqual((result['status'], result['signalsAttempted']), ('RECOVERED', 0))
+
+    def test_term_to_zombie_proves_no_executing_resource_without_kill(self):
+        with self.fixture([(7, 'S')], outcome='zombie') as f:
+            result = f.execute(True)
+            self.assertEqual((result['status'], result['signalsAttempted'], result['zeroObservations']), ('RECOVERED', 1, 2))
+
+    def test_live_permission_error_is_not_a_zero_observation(self):
+        with self.fixture([(7, 'S')], inaccessible=True) as f:
+            result = f.execute(True)
+            self.assertEqual(result['status'], 'FAILED'); self.assertFalse(result['nativeCountObserved'])
+            self.assertEqual(f.signals, [])
+
+    def test_deleted_or_unknown_kernel_executable_is_rejected(self):
+        for deleted in (False, True):
+            with self.subTest(deleted=deleted), self.fixture([(7, 'S')], unknown_exe=not deleted) as f:
+                if deleted: f.links[str(f.proc / '7' / 'exe')] += ' (deleted)'
+                result = f.execute(True)
+                self.assertEqual(result['status'], 'FAILED'); self.assertEqual(f.signals, [])
+
+    def test_inactive_process_with_open_fd_is_not_accepted(self):
+        with self.fixture([(7, 'Z')]) as f:
+            (f.proc / '7' / 'fd' / '3').write_text('synthetic fd')
+            result = f.execute(True)
+            self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_PROC_READ')
+            self.assertEqual(f.signals, [])
+
+
+class RegistrationRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, *, retained=True):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); directory = base / 'releases' / 'original'; directory.mkdir(parents=True)
+            controller = SimpleNamespace(**vars(d)); controller.BASE = base
+            stack.enter_context(patch.object(registration, 'REGISTRATION_DIRECTORY', str(directory)))
+            folder = registration.handoff_directory(controller); folder.mkdir(mode=0o700, parents=True)
+            def put(name, value):
+                path = folder / name
+                if path.exists(): path.chmod(0o600)
+                path.write_text(json.dumps(value)); path.chmod(0o400); return path
+            put('attempt.json', {'taskId': registration.TASK_ID, 'attempt': 10, 'privatePostBudget': 1})
+            put('failure.json', registration.HANDOFF_FAILURE)
+            bad_owner = []; original_lstat = Path.lstat
+            def owned_lstat(path, *args, **kwargs):
+                value = original_lstat(path, *args, **kwargs)
+                values = {name: getattr(value, name) for name in dir(value) if name.startswith('st_')}
+                if path.is_relative_to(base): values['st_uid'] = 501 if path.name in bad_owner else 0
+                return SimpleNamespace(**values)
+            stack.enter_context(patch.object(Path, 'lstat', autospec=True, side_effect=owned_lstat))
+            all_states = states()
+            for index, row in enumerate(all_states.values(), 1): row['containerId'] = str(index) * 64
+            stack.enter_context(patch.object(registration, 'REGISTRATION_STATES_SHA', registration.fingerprint(all_states)))
+            manifest = {'commit': registration.REGISTRATION_CURRENT}
+            evidence = {'manifestSha256': '1' * 64, 'environmentSha256': '2' * 64, 'apiSource': {'sha256': '3' * 64}}
+            base_read = stack.enter_context(patch.object(registration, 'baseline', return_value=(directory, manifest, all_states, evidence)))
+            stack.enter_context(patch.object(registration, 'configuration_hashes', return_value={'config': '4' * 64}))
+            task_read = stack.enter_context(patch.object(registration, 'registration_task', return_value=registration_task()))
+            original_idle = registration.jobs_idle
+            idle = stack.enter_context(patch.object(registration, 'jobs_idle', return_value={
+                'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False, 'registrationWindowRetained': retained}))
+            private_calls = []
+            def private(*args, **kwargs):
+                self.assertFalse(kwargs.get('close', False)); private_calls.append(kwargs)
+                return {'confirmed': True, 'privatePostAttempted': False, 'cancelled': not retained,
+                        'retained': retained, 'busy': False, 'attempt': 10}
+            stack.enter_context(patch.object(registration, 'registration_private', side_effect=private))
+            def audit(_d, _directory, path):
+                path.write_text(json.dumps({'ok': True, 'checkCount': 49, 'violationCount': 0,
+                    'checks': [{'code': f'C{n}', 'count': 0} for n in range(49)]})); path.chmod(0o600)
+                return registration.audit_receipt(_d, path)
+            audit_read = stack.enter_context(patch.object(registration, 'strict_audit', side_effect=audit))
+            recovered = []; native_calls = []
+            def native(*args, **kwargs):
+                active = kwargs.get('recover', False); native_calls.append(active)
+                if active: recovered.append(True)
+                count = 0 if recovered or not retained else 1
+                return {'status': 'RECOVERED' if active else 'OBSERVED', 'nativeCount': count,
+                    'nativeCountObserved': True, 'signalsAttempted': 1 if active else 0,
+                    'zeroObservations': 2 if not count else 0, 'resourceClosed': not count, 'readOnly': not active, 'code': 'none'}
+            native_read = stack.enter_context(patch.object(registration, 'native_handoff', side_effect=native))
+            controller.service_state = MagicMock(return_value=all_states['auto-registration'])
+            controller.assert_no_active_recharge = MagicMock()
+            controller.registration_runtime_state = MagicMock(return_value={'supported': True,
+                'registrationBusy': False, 'registrationWindowRetained': retained})
+            controller.current_job_database = MagicMock(return_value='database')
+            controller.compose = MagicMock(return_value='0')
+            yield SimpleNamespace(controller=controller, directory=directory, folder=folder, put=put,
+                bad_owner=bad_owner, states=all_states, evidence=evidence, baseline=base_read, task=task_read,
+                idle=idle, original_idle=original_idle, private_calls=private_calls, native=native_read,
+                native_calls=native_calls, recovered=recovered, audit=audit_read)
+
+    def test_observe_is_readonly_and_preserves_original_failure(self):
+        with self.fixture() as f:
+            first = (f.folder / 'failure.json').read_bytes()
+            result = registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT)
+            self.assertEqual(result['status'], 'API_REGISTRATION_HANDOFF_OBSERVED')
+            self.assertEqual(result['native']['nativeCount'], 1); self.assertTrue(result['readOnly'])
+            self.assertEqual(f.native_calls, [False, False]); self.assertFalse((f.folder / 'recovery-attempt.json').exists())
+            self.assertEqual(first, (f.folder / 'failure.json').read_bytes())
+
+    def test_recover_records_honest_memory_retention_and_consumes_single_pass(self):
+        with self.fixture() as f:
+            first = (f.folder / 'failure.json').read_bytes()
+            result = registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            record = registration.handoff_json(f.controller, f.folder, 'confirmed.json')
+            self.assertEqual(record['version'], 2); self.assertFalse(record['privateCancelConfirmed'])
+            self.assertTrue(record['privateMemoryRetained']); self.assertTrue(record['resourceClosed'])
+            self.assertEqual(result['signalsAttempted'], 1); self.assertEqual(sum(f.native_calls), 1)
+            self.assertEqual(first, (f.folder / 'failure.json').read_bytes())
+            with self.assertRaisesRegex(RuntimeError, 'ALREADY_CONFIRMED'):
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            self.assertEqual(sum(f.native_calls), 1)
+            with patch.object(registration, 'jobs_idle', f.original_idle):
+                guards = registration.jobs_idle(f.controller, f.directory)
+            self.assertTrue(guards['registrationWindowRetained']); self.assertTrue(guards['registrationResourceClosed'])
+
+    def test_already_closed_reconciliation_never_signals(self):
+        with self.fixture(retained=False) as f:
+            result = registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            record = registration.handoff_json(f.controller, f.folder, 'confirmed.json')
+            self.assertEqual(record, registration.ordinary_handoff_record(registration_task()))
+            self.assertFalse(result['privateCancelPerformed']); self.assertEqual(result['signalsAttempted'], 0)
+            self.assertFalse(any(f.native_calls))
+
+    def test_closed_get_with_remaining_native_cannot_reconcile_or_signal(self):
+        with self.fixture(retained=False) as f:
+            f.native.return_value = {'resourceClosed': False}; f.native.side_effect = None
+            with self.assertRaisesRegex(RuntimeError, 'NATIVE_REMAINS'):
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            self.assertFalse((f.folder / 'recovery-attempt.json').exists()); self.assertFalse(any(f.native_calls))
+
+    def test_unknown_failure_and_boolean_budget_are_rejected_before_actions(self):
+        for change in ('reason', 'status', 'budget'):
+            with self.subTest(change=change), self.fixture() as f:
+                if change == 'budget': f.put('attempt.json', {'taskId': registration.TASK_ID, 'attempt': 10, 'privatePostBudget': True})
+                else: f.put('failure.json', {**registration.HANDOFF_FAILURE,
+                    'controlledReason' if change == 'reason' else 'privatePostHttpStatus': 'none' if change == 'reason' else 500})
+                with self.assertRaisesRegex(RuntimeError, 'FAILURE_CHANGED'):
+                    registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+                f.baseline.assert_not_called(); f.native.assert_not_called()
+
+    def test_nonowner_failure_and_active_job_are_rejected_without_marker(self):
+        for cause in ('owner', 'active'):
+            with self.subTest(cause=cause), self.fixture() as f:
+                if cause == 'owner': f.bad_owner.append('failure.json')
+                else: f.idle.side_effect = RuntimeError('API_ADMIN_REGISTRATION_BUSY')
+                with self.assertRaises(RuntimeError):
+                    registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+                self.assertFalse((f.folder / 'recovery-attempt.json').exists()); f.native.assert_not_called()
+
+    def test_pid_failure_is_persisted_without_overwriting_original_first_cause(self):
+        with self.fixture() as f:
+            first = (f.folder / 'failure.json').read_bytes(); initial = f.native.side_effect
+            diagnostic = {'confirmed': False, 'signalsAttempted': 0, 'nativeCount': 1,
+                          'nativeCountObserved': True, 'rawOutputSuppressed': True}
+            def native(*args, **kwargs):
+                if kwargs.get('recover'): raise registration.RegistrationRecoveryError('API_ADMIN_REGISTRATION_NATIVE_PID_REUSED', diagnostic)
+                return initial(*args, **kwargs)
+            f.native.side_effect = native
+            with self.assertRaisesRegex(RuntimeError, 'PID_REUSED'):
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            self.assertEqual(registration.handoff_json(f.controller, f.folder, 'recovery-failure.json'), diagnostic)
+            self.assertEqual(first, (f.folder / 'failure.json').read_bytes()); self.assertFalse((f.folder / 'confirmed.json').exists())
+            with self.assertRaisesRegex(RuntimeError, 'ALREADY_ATTEMPTED'):
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+
+    def test_later_database_drift_preserves_actual_signal_count(self):
+        with self.fixture() as f:
+            f.task.side_effect = [registration_task(), {**registration_task(), 'jobHmac': '9' * 64}]
+            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_MOVED'):
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            diagnostic = registration.handoff_json(f.controller, f.folder, 'recovery-failure.json')
+            self.assertEqual(diagnostic['signalsAttempted'], 1); self.assertFalse((f.folder / 'confirmed.json').exists())
+
+    def test_transport_unknown_after_recovery_start_is_not_forged_zero(self):
+        with self.fixture() as f:
+            initial = f.native.side_effect
+            def native(*args, **kwargs):
+                if kwargs.get('recover'): raise RuntimeError('API_ADMIN_TRANSPORT_FAILED')
+                return initial(*args, **kwargs)
+            f.native.side_effect = native
+            with self.assertRaisesRegex(RuntimeError, 'TRANSPORT_FAILED'):
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            self.assertIsNone(registration.handoff_json(f.controller, f.folder, 'recovery-failure.json')['signalsAttempted'])
+
+    def test_later_readonly_native_failure_does_not_erase_previous_signals(self):
+        with self.fixture() as f:
+            initial = f.native.side_effect
+            def native(*args, **kwargs):
+                if f.recovered and not kwargs.get('recover'):
+                    raise registration.RegistrationRecoveryError('API_ADMIN_REGISTRATION_NATIVE_PROC_READ', {
+                        'confirmed': False, 'signalsAttempted': 0, 'nativeCount': 0,
+                        'nativeCountObserved': False, 'rawOutputSuppressed': True})
+                return initial(*args, **kwargs)
+            f.native.side_effect = native
+            with self.assertRaises(registration.RegistrationRecoveryError) as caught:
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+            self.assertEqual(caught.exception.diagnostic['signalsAttempted'], 1)
+            self.assertEqual(registration.handoff_json(f.controller, f.folder, 'recovery-failure.json')['signalsAttempted'], 1)
+            self.assertFalse((f.folder / 'confirmed.json').exists())
+
+    def test_cli_emits_recovery_diagnostic_after_later_failure(self):
+        with self.fixture() as f:
+            f.task.side_effect = [registration_task(), {**registration_task(), 'jobHmac': '9' * 64}]
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = registration.registration_cli(f.controller, ['--api-registration-handoff-recover',
+                    '--expected-current', registration.REGISTRATION_CURRENT])
+            value = json.loads(output.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(value['errorType'], 'RegistrationRecoveryError')
+            self.assertEqual(value['recoveryDiagnostic']['signalsAttempted'], 1)
+            self.assertEqual(value['code'], 'API_ADMIN_REGISTRATION_RECOVERY_MOVED')
+
+    def test_native_record_rejects_failed_recovery_and_bool_marker(self):
+        for change in ('failure', 'pass', 'post'):
+            with self.subTest(change=change), self.fixture() as f:
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+                record = registration.handoff_json(f.controller, f.folder, 'confirmed.json')
+                if change == 'failure': f.put('recovery-failure.json', {'confirmed': False})
+                else:
+                    marker = registration.handoff_json(f.controller, f.folder, 'recovery-attempt.json')
+                    marker['signalPassBudget' if change == 'pass' else 'privatePostBudget'] = True if change == 'pass' else False
+                    f.put('recovery-attempt.json', marker); record['recoveryAttemptSha256'] = registration.fingerprint(marker)
+                with self.assertRaises(RuntimeError): registration.require_native_handoff(f.controller, f.directory, record)
+
+    def test_new_native_or_container_replacement_invalidates_recovery_confirmation(self):
+        for change in ('native', 'container'):
+            with self.subTest(change=change), self.fixture() as f:
+                registration.registration_handoff_recovery(f.controller, registration.REGISTRATION_CURRENT, recover=True)
+                record = registration.handoff_json(f.controller, f.folder, 'confirmed.json')
+                if change == 'native': f.recovered.clear()
+                else: f.controller.service_state.return_value = {**f.states['auto-registration'], 'containerId': 'f' * 64}
+                with self.assertRaises(RuntimeError): registration.require_native_handoff(f.controller, f.directory, record)
+
+    def test_recovery_failure_transport_accepts_only_closed_typed_diagnostic(self):
+        diagnostic = {'confirmed': False, 'signalsAttempted': 1, 'nativeCount': 0,
+                      'nativeCountObserved': True, 'rawOutputSuppressed': True}
+        receipt = {'status': 'API_REGISTRATION_VERIFICATION_FAILED', 'code': 'API_ADMIN_REGISTRATION_NATIVE_REMAINS',
+                   'errorType': 'RegistrationRecoveryError', 'recoveryDiagnostic': diagnostic}
+        self.assertEqual(transport.safe_failure(receipt, 'API_REGISTRATION')['recoveryDiagnostic'], diagnostic)
+        for changed in ({'rawError': 'PRIVATE RAW'}, {'nativeCount': -1}, {'nativeCount': True},
+                        {'signalsAttempted': True}, {'signalsAttempted': -1}, {'nativeCountObserved': 1}):
+            value = transport.safe_failure({**receipt, 'recoveryDiagnostic': {**diagnostic, **changed}}, 'API_REGISTRATION')
+            self.assertNotIn('recoveryDiagnostic', value)
+        unknown = {**diagnostic, 'signalsAttempted': None, 'nativeCountObserved': False}
+        self.assertEqual(transport.safe_failure({**receipt, 'recoveryDiagnostic': unknown}, 'API_REGISTRATION')['recoveryDiagnostic'], unknown)
 
 
 if __name__ == '__main__':

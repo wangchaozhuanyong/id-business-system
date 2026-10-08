@@ -300,6 +300,53 @@ test('always workflow evidence still respects the explicit API Admin operation s
   assert.equal(workflowPredicate('!always()')({}), false);
 });
 
+test('bound registration closure observation and recovery cannot build or publish images', () => {
+  const modes = {
+    verify_registration_handoff: 'handoff-observe',
+    recover_registration_handoff: 'handoff-recover'
+  };
+  const evidence = workflowSteps.find(
+    (step) => step.name === 'Save API Registration independent scope evidence'
+  );
+  for (const [operation, mode] of Object.entries(modes)) {
+    assert.ok(workflowInputs.operation.options.includes(operation));
+    const selected = workflowSteps.filter(
+      (step) => step.run === `python3 -B scripts/production-release/api-admin-readonly.py ${mode}`
+    );
+    assert.equal(selected.length, 1);
+    assert.equal(workflowPredicate(selected[0].if)({ operation }), true);
+    assert.equal(workflowPredicate(evidence.if)({ operation }), true);
+    for (const name of [
+      'Build images on the GitHub runner',
+      'Push immutable images',
+      'Deploy through the production instance'
+    ]) {
+      const step = workflowSteps.find((value) => value.name === name);
+      assert.equal(
+        workflowPredicate(step.if)({
+          operation,
+          historical_exception: 'none',
+          reuse_image_run: ''
+        }),
+        false
+      );
+    }
+    fixture(({ env, log }) => {
+      execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+        env: { ...env, RELEASE_OPERATION: operation },
+        stdio: 'pipe'
+      });
+      assert.throws(() =>
+        execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+          env: { ...env, RELEASE_OPERATION: operation, HISTORICAL_EXCEPTION: postCleanupPolicy },
+          stdio: 'pipe'
+        })
+      );
+      assert.equal(readFileSync(log, 'utf8'), '');
+    });
+  }
+});
+
 test('workflow wires a separate empty-by-default seal and rejects all non-release operations before AWS', () => {
   assert.equal(workflowInputs.historical_exception.default, 'none');
   assert.ok(workflowInputs.historical_exception.options.includes(postCleanupPolicy));
@@ -341,7 +388,9 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
             'verify_api_registration',
             'handoff_api_registration',
             'release_api_registration',
-            'verify_registration_business'
+            'verify_registration_business',
+            'verify_registration_handoff',
+            'recover_registration_handoff'
           ].includes(operation)
             ? String(error.stderr) === ''
             : String(error.stderr).includes('supports preparation or release only'))

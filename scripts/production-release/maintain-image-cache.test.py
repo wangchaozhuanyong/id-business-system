@@ -762,6 +762,59 @@ class DependencyRetentionTests(unittest.TestCase):
         self.assertTrue(set(self.ids[4:7]) <= set(result['imageIds']))
         self.assertIn('registration-worker-95-20261008', cache.FIXED_REGISTRATION_IDS)
 
+    def test_fixed96_retains_sealed_finance_pro_and_per_service_rollback_images(self):
+        import hashlib
+        profile, _, _ = self.fixed('registration-worker-96-20261008')
+        result = self.collect()
+        self.assertEqual(set(result['imageIds']), {self.ids[1], self.ids[3], self.pro_image, *self.ids[4:]})
+        self.assertEqual(result['evidenceSha256'][str(profile.relative_to(self.base))],
+            hashlib.sha256(profile.read_bytes()).hexdigest())
+        self.assertEqual(result['serviceRollback']['auto-registration']['commit'], self.rows[1]['commit'])
+        self.assertEqual(result['serviceRollback']['auto-recharge']['commit'], self.rows[2]['commit'])
+        active = 'sha256:' + '9' * 64
+        protected = cache.protected_images(self.rows[0], self.rows[1], {active}, result)
+        inventory = [{'id': image, 'repoTags': [cache.REPOSITORY + ':' + 'e' * 40
+            + '-' + str(index + 1) + '-1-auto-recharge']}
+            for index, image in enumerate(sorted(protected))]
+        self.assertEqual(cache.make_plan(self.rows[0]['commit'], self.rows[1], protected,
+            inventory, result)['items'], [])
+        self.assertTrue(all(command[:5] == ('docker', 'image', 'inspect', '--format', '{{.Id}}')
+            for command in self.commands))
+
+    def test_fixed96_changed_profile_seal_pro_or_unknown97_blocks_before_docker(self):
+        for location, reason in (('profile', 'profile changed'), ('seal', 'seal changed'),
+                ('pro', 'Pro image dependency changed'), ('id', 'Unknown fixed release dependency')):
+            with self.subTest(location=location):
+                profile, seal, _ = self.fixed('registration-worker-96-20261008')
+                if location == 'profile':
+                    profile.write_text(profile.read_text() + '\n')
+                elif location == 'seal':
+                    self.write(seal, {'images': {}})
+                elif location == 'pro':
+                    changed = json.loads(json.dumps(self.rows[3]))
+                    changed['images']['auto-recharge']['digest'] = 'sha256:' + '9' * 64
+                    self.write(self.paths[3] / 'release-manifest.json', changed)
+                else:
+                    self.rows[0]['fixedRegistrationRelease']['id'] = 'registration-worker-97-20261008'
+                    self.write(self.paths[0] / 'release-manifest.json', self.rows[0])
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    self.collect()
+                self.assertEqual(self.commands, [])
+
+    def test_fixed96_skipped_cache_still_requires_manual_exact_plan(self):
+        retention = RetentionTests(); retention.setUp()
+        retention.manifest['fixedRegistrationRelease'] = {
+            'id': 'registration-worker-96-20261008', 'cacheStatus': 'SKIPPED'}
+        retention.manifest['dataAuditAfter'] = {'checkCount': 49, 'violationCount': 0}
+        with patch.object(cache, 'verify_deployment') as audit:
+            with self.assertRaisesRegex(RuntimeError, 'separately approved exact plan'):
+                retention.invoke(['--apply', '--approved-policy', cache.POLICY,
+                    '--deployment-run', 'github-actions-123-1'])
+            audit.assert_not_called()
+        result, calls = retention.invoke(['--apply', '--approved-policy', cache.POLICY,
+            '--approved-plan-sha256', cache.plan_digest(retention.plan)])
+        self.assertEqual((result['mode'], calls), ('APPLIED', 1))
+
     def fixed(self, profile_id='registration-worker-91-20261007'):
         import hashlib
         seal = {'images': {'admin': self.ids[4], 'api': self.ids[5], 'migrate': self.ids[6]}}
