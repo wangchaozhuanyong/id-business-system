@@ -909,7 +909,7 @@ class RegistrationHandoffTests(unittest.TestCase):
 
 class ReleaseFailureTests(unittest.TestCase):
     def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False,
-                    selected_scope=scope, handoff_check=None, idle_check=None, after_api=None):
+                    selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -959,7 +959,7 @@ class ReleaseFailureTests(unittest.TestCase):
                 if scope.REGISTRATION:
                     for name in scope.WORKER_PAIR:
                         raw = b'candidate-pair'; candidate['workerProjection'][name]['sha256'] = scope.hashlib.sha256(raw).hexdigest()
-                        info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name); info.size = len(raw); info.mode = 0o644
+                        info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name); info.size = len(raw); info.mode = archive_pair_mode
                         archive.addfile(info, io.BytesIO(raw))
                     candidate['workerProjectionSha256'] = scope.fingerprint(candidate['workerProjection'])
                     candidate['images']['auto-registration'].update(scope.worker_content(candidate['workerProjection']))
@@ -1044,6 +1044,23 @@ class ReleaseFailureTests(unittest.TestCase):
         self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_PAIR_CHANGED')
         controller.compose.assert_not_called()
         controller.rollback_service.assert_not_called()
+
+    def test_registration_archive_pair_accepts_only_normal_non_executable_source_modes(self):
+        for mode in (0o644, 0o664):
+            with self.subTest(mode=oct(mode)):
+                code, _, controller, manifest, _ = self.run_release(selected_scope=registration, archive_pair_mode=mode)
+                self.assertEqual(code, 0)
+                self.assertEqual(manifest['servicesUpdated'], ['api', 'auto-registration'])
+                controller.rollback_service.assert_not_called()
+        for mode in (0o666, 0o755, 0o777, 0o4644):
+            with self.subTest(mode=oct(mode)):
+                code, result, controller, _, _ = self.run_release(selected_scope=registration, archive_pair_mode=mode)
+                self.assertEqual(code, 1)
+                self.assertEqual(result['status'], 'API_REGISTRATION_FAILED_BEFORE_SWITCH')
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_PAIR_CHANGED')
+                self.assertEqual(result['servicesAttempted'], [])
+                controller.compose.assert_not_called()
+                controller.rollback_service.assert_not_called()
 
     def test_api_switch_then_retained_false_and_registration_cid_drift_blocks_worker_switch(self):
         with RegistrationRecoveryTests().fixture() as f:
