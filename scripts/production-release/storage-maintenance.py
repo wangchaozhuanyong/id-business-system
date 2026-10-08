@@ -20,6 +20,15 @@ REVIEWED_BASELINES = {
     EXPECTED: PREVIOUS,
     'cecc14b530fd32d595fe5ae14612fbde68ae9175': EXPECTED,
 }
+READ_ONLY_BASELINES = {
+    'e7c9862d58599995954883f1c1f6038283afffab': {
+        'release': '20261008T020705Z-e7c9862d5859',
+        'manifestSha256': '52f2582e5edeb9e1c9af63c70fff4ca5a5bdad11c0fd7fb8f090fd1670b4c2eb',
+        'previousRelease': '20261007T221905Z-04570d75c779',
+        'previousCommit': '04570d75c779fd91a0933ef9416f6d62698b6b91',
+        'previousManifestSha256': '0aacc82fc257bc2c4837a4b513223a01ec4f608fbacc0b009c1551b5ceb18b97',
+    },
+}
 APPROVED_SCOPE = 'audit-routine-20261002T110000Z'
 CUTOFF = '2026-10-02 11:00:00'
 MAX_APPROVED_COUNT = 19848
@@ -101,11 +110,9 @@ def archive_inventory():
 
 
 def diagnose(expected=EXPECTED):
-    manifest = json.loads((BASE / 'current/release-manifest.json').read_text())
-    if manifest['commit'] != expected:
-        raise RuntimeError('Production baseline changed')
+    initial_baseline = readonly_baseline(expected)
     project = None
-    for line in (BASE / 'current/.env.aws.production').read_text().splitlines():
+    for line in (initial_baseline[0] / '.env.aws.production').read_text().splitlines():
         if line.startswith('COMPOSE_PROJECT_NAME='):
             project = line.split('=', 1)[1].strip()
             break
@@ -177,8 +184,8 @@ def diagnose(expected=EXPECTED):
             result.setdefault('maintenanceReceipts', {})[name] = json.loads(path.read_text())
     backups = sorted((BASE / 'backups/mysql').glob('id-business-v2-*.sql.gz'))
     result['latestLocalBackupName'] = backups[-1].name if backups else None
-    if json.loads((BASE / 'current/release-manifest.json').read_text())['commit'] != expected:
-        raise RuntimeError('Production baseline changed during diagnostics')
+    require(readonly_baseline(expected) == initial_baseline,
+            'Production baseline changed during diagnostics')
     return result
 
 
@@ -197,6 +204,39 @@ def baseline(expected):
     require(json.loads((previous / 'release-manifest.json').read_text())['commit'] == REVIEWED_BASELINES[expected],
             'Rollback baseline changed')
     return (BASE / 'current').resolve()
+
+
+def readonly_baseline(expected):
+    """Pin the diagnostic release chain without widening cleanup authorization."""
+    reviewed = READ_ONLY_BASELINES.get(expected)
+    if reviewed is None:
+        directory = baseline(expected)
+    else:
+        directory = (BASE / 'current').resolve()
+        require(directory == BASE / 'releases' / reviewed['release'], 'Unexpected release path')
+    manifest_bytes = (directory / 'release-manifest.json').read_bytes()
+    manifest = json.loads(manifest_bytes)
+    require(manifest['commit'] == expected, 'Production baseline changed')
+    previous = Path(manifest['previousRelease']).resolve()
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    if reviewed is not None:
+        require(Path(manifest['previousRelease']) == BASE / 'releases' / reviewed['previousRelease']
+                and previous == BASE / 'releases' / reviewed['previousRelease'],
+                'Unexpected rollback path')
+        require(manifest.get('previousCommit') == reviewed['previousCommit'], 'Rollback baseline changed')
+        require(manifest_sha == reviewed['manifestSha256'], 'Production manifest bytes changed')
+    else:
+        require(previous.parent == BASE / 'releases', 'Unexpected rollback path')
+    previous_bytes = (previous / 'release-manifest.json').read_bytes()
+    previous_manifest = json.loads(previous_bytes)
+    previous_sha = hashlib.sha256(previous_bytes).hexdigest()
+    require(previous_manifest['commit'] == (reviewed['previousCommit'] if reviewed
+                                           else REVIEWED_BASELINES[expected]),
+            'Rollback baseline changed')
+    if reviewed is not None:
+        require(previous_sha == reviewed['previousManifestSha256'], 'Production manifest bytes changed')
+    require((BASE / 'current').resolve() == directory, 'Production release pointer changed')
+    return directory, manifest_sha, previous, previous_sha
 
 
 def project_mysql():
@@ -462,14 +502,15 @@ def main():
     parser.add_argument('--legacy-plan-json')
     parser.add_argument('--retention-migration-sql')
     args = parser.parse_args()
-    baseline(args.expected_current)
     if args.operation == 'diagnose':
         result = diagnose(args.expected_current)
-    elif args.operation == 'cleanup-audit':
-        result = cleanup_audit(args.expected_current, args.approved_scope, args.retention_migration_sql)
     else:
-        result = cleanup_legacy_cache(args.expected_current, args.legacy_plan_json,
-                                      apply=args.operation == 'cleanup-legacy-cache')
+        baseline(args.expected_current)
+        if args.operation == 'cleanup-audit':
+            result = cleanup_audit(args.expected_current, args.approved_scope, args.retention_migration_sql)
+        else:
+            result = cleanup_legacy_cache(args.expected_current, args.legacy_plan_json,
+                                          apply=args.operation == 'cleanup-legacy-cache')
     encoded = base64.b64encode(gzip.compress(json.dumps(result).encode())).decode()
     print('STORAGE_MAINTENANCE ' + json.dumps({'encoding': 'gzip+base64', 'payload': encoded}))
 
