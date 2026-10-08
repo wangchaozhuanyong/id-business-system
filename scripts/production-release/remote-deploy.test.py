@@ -13386,6 +13386,11 @@ class FixedRechargePricingNativeTests(unittest.TestCase):
         self.draft.update(enabled=False, approvalStatus='NOT_APPROVED')
         self.contents = {name: (self.project / name).read_bytes() for name in
             deployment.RECHARGE_D3FB_CANDIDATES | deployment.RECHARGE_2F_CONTROLS | set(deployment.RECHARGE_PRICING_CARRIED)}
+        # Carried files belong to the immutable predecessor, not this checkout.
+        for name, digest in self.draft['carriedSourceOnlySha256'].items():
+            raw = subprocess.check_output(['git', 'show', self.draft['sourceBasis']['commit'] + ':' + name], cwd=self.project)
+            self.assertEqual(deployment.hashlib.sha256(raw).hexdigest(), digest, name)
+            self.contents[name] = raw
         for key, names in (('candidateSourceSha256', deployment.RECHARGE_D3FB_CANDIDATES),
                 ('controlSourceSha256', deployment.RECHARGE_2F_CONTROLS)):
             self.draft[key] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in names}
