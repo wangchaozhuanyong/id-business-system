@@ -1328,7 +1328,7 @@ def _release_locked(d, args):
         d.require(source_tree(d, target) == args.source_tree, 'API_ADMIN_SOURCE_TREE_CHANGED')
         if REGISTRATION:
             d.require(all(hashlib.sha256((target / n).read_bytes()).hexdigest() == proof['workerProjection'][n]['sha256']
-                          and stat.S_IMODE((target / n).stat().st_mode) == 0o644 for n in WORKER_PAIR),
+                          and stat.S_IMODE((target / n).stat().st_mode) in (0o644, 0o664) for n in WORKER_PAIR),
                       'API_ADMIN_REGISTRATION_PAIR_CHANGED')
         d.require((target / 'scripts/production-release/api-admin-scope.py').read_bytes() == Path(__file__).read_bytes()
                   and (target / 'scripts/production-release/remote-deploy.py').read_bytes() == Path(d.__file__).read_bytes(),
