@@ -34,6 +34,7 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/recharge-pro-2f-20261007.json',
   'deploy/aws/recharge-pro-4c-20261008.json',
   'deploy/aws/recharge-pro-6f5-20261008.json',
+  'deploy/aws/recharge-pro-pricing-045-20261008.json',
   'scripts/v2-release-mailbox-audit.mjs',
   'scripts/v2-release-mailbox-audit.test.mjs',
   'deploy/aws/historical-finance-20261005-mailbox-batch.json',
@@ -108,6 +109,31 @@ function isRecharge6f5Only(paths) {
   return (
     paths.includes(recharge6f5Profile) &&
     paths.every((path) => recharge6f5Sources.has(path) || recharge6f5Controls.has(path))
+  );
+}
+const rechargePricingProfile = 'deploy/aws/recharge-pro-pricing-045-20261008.json';
+const rechargePricingSources = new Set([
+  ...recharge6f5Sources,
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
+]);
+const rechargePricingControls = new Set(
+  [...recharge6f5Controls].filter((path) => path !== recharge6f5Profile)
+);
+for (const path of [
+  'deploy/aws/registration-baseline-96-20261008.json',
+  'deploy/aws/registration-worker-96-20261008.json',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/production-release/registration-onboarding-96.py',
+  'scripts/production-release/registration-onboarding-96.test.py',
+  'scripts/production-release/registration-only-transport.test.py'
+])
+  rechargePricingControls.add(path);
+rechargePricingControls.add(rechargePricingProfile);
+function isRechargePricingOnly(paths) {
+  return (
+    paths.includes(rechargePricingProfile) &&
+    paths.every((path) => rechargePricingSources.has(path) || rechargePricingControls.has(path))
   );
 }
 const registrationProfileObservationProfile = 'deploy/aws/registration-worker-91-20261007.json';
@@ -203,6 +229,7 @@ const registrationOnboardingSources = new Set([
   'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
 ]);
 export const hasRegistrationOnboardingScope = (paths) =>
+  !isRechargePricingOnly(paths) &&
   paths.some((path) =>
     [
       registrationOnboardingProfile,
@@ -278,6 +305,8 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (paths.includes(rechargePricingProfile))
+    return paths.every((path) => rechargePricingControls.has(path));
   if (hasRegistrationOnboardingScope(paths))
     return isRegistrationOnboardingOnly(paths) && paths.every(isRegistrationOnboardingControl);
   if (paths.includes(recharge6f5Profile))
@@ -362,6 +391,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (paths.includes(rechargePricingProfile)) {
+    if (!isRechargePricingOnly(paths)) return 'full';
+    return paths.some((path) => rechargePricingSources.has(path)) ? 'recharge' : 'ci-only';
+  }
   if (hasRegistrationOnboardingScope(paths)) {
     if (!isRegistrationOnboardingOnly(paths)) return 'full';
     return paths.some((path) => registrationOnboardingSources.has(path)) ? 'recharge' : 'ci-only';
@@ -532,6 +565,8 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(rechargePricingProfile))
+    return isRechargePricingOnly(paths) && paths.some((path) => rechargePricingSources.has(path));
   if (hasRegistrationOnboardingScope(paths))
     return (
       isRegistrationOnboardingOnly(paths) &&
@@ -587,6 +622,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (paths.includes(rechargePricingProfile)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (hasRegistrationOnboardingScope(paths)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationInterstitialProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
@@ -607,6 +643,10 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (isRechargePricingOnly(paths))
+    return paths.some((path) => rechargePricingSources.has(path))
+      ? ['guards', 'connector']
+      : ['guards'];
   if (isRegistrationOnboardingOnly(paths))
     return [
       'guards',

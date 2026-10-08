@@ -26,6 +26,67 @@ const files = [
   'apps/admin/src/v2/features/auto-recharge/example.vue',
   'apps/api/prisma-mysql/schema.prisma'
 ];
+test('fixed pricing 045 carries only the exact main5b sources and metadata without expanding services or database suites', () => {
+  const profile = 'deploy/aws/recharge-pro-pricing-045-20261008.json';
+  const sources = [
+    'plan_selection.py',
+    'test_pro.py',
+    'registration_browser.py',
+    'test_registration_browser.py'
+  ].map((name) => 'apps/api/src/id-business-v2/auto-recharge/worker/' + name);
+  const controls = [
+    profile,
+    'docs/V2_TASKS.md',
+    '.github/workflows/production-release.yml',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    ...[
+      'build-images.sh',
+      'push-images.sh',
+      'dispatch.sh',
+      'validate-release-selection.sh',
+      'remote-deploy.py',
+      'remote-deploy.test.py',
+      'maintain-image-cache.py',
+      'maintain-image-cache.test.py'
+    ].map((name) => 'scripts/production-release/' + name)
+  ];
+  controls.push(
+    'deploy/aws/registration-baseline-96-20261008.json',
+    'deploy/aws/registration-worker-96-20261008.json',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/production-release/registration-onboarding-96.py',
+    'scripts/production-release/registration-onboarding-96.test.py',
+    'scripts/production-release/registration-only-transport.test.py'
+  );
+  assert.equal(hasRegistrationOnboardingScope(controls), false);
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const selected of [sources, ...sources.map((source) => [source])]) {
+    const paths = [...controls, ...selected];
+    assert.equal(isCiOnly(paths), false);
+    assert.equal(isRechargeOnly(paths, schema, schema), true);
+    assert.equal(isTargetedOnly(paths, schema, schema), true);
+    assert.equal(checkMode(paths, schema, schema), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+    assert.deepEqual(adminUiGuardChecks('recharge', paths), []);
+    assert.deepEqual(backendArchitectureGuardChecks('recharge', paths), []);
+  }
+  for (const outside of [
+    'deploy/aws/recharge-pro-6f5-20261008.json',
+    profile + '.backup',
+    'deploy/aws/registration-worker-95-20261008.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/auto-recharge/worker/server.py',
+    'scripts/production-release/service-image-retention.py',
+    'apps/admin/src/v2/features/auto-recharge/AutoRechargePage.vue'
+  ]) {
+    assert.equal(checkMode([...controls, ...sources, outside], schema, schema), 'full');
+    assert.equal(hasRegistrationOnboardingScope([...controls, ...sources, outside]), true);
+    assert.equal(isCiOnly([...controls, outside]), false);
+  }
+});
 test('registration96 uses its fifteen exact release controls and only the reviewed browser pair', () => {
   const controls = [...registrationOnboardingControls];
   const pair = [

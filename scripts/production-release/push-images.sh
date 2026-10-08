@@ -137,10 +137,11 @@ elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]
   test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}"
   python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope
   services=(auto-recharge)
-elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-6f5-20261008 ]]; then
+elif [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-6f5-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-pricing-045-20261008 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   case "$HISTORICAL_EXCEPTION" in
     recharge-pro-4c-20261008) test "$EXPECTED_CURRENT" = 4c170e661c871dc14dccc98a8d6e5cf983141341 ;;
+    recharge-pro-pricing-045-20261008) test "$EXPECTED_CURRENT" = e7c9862d58599995954883f1c1f6038283afffab ;;
     recharge-pro-6f5-20261008) test "$EXPECTED_CURRENT" = 6f5e5cc252886d5f86592e307147b40c13577585 ;;
     *) exit 1 ;;
   esac
@@ -168,7 +169,7 @@ def read(path):
     return json.loads(raw, object_pairs_hook=unique)
 
 identity = os.environ['HISTORICAL_EXCEPTION']
-if identity not in ('recharge-pro-4c-20261008', 'recharge-pro-6f5-20261008'):
+if identity not in ('recharge-pro-4c-20261008', 'recharge-pro-6f5-20261008', 'recharge-pro-pricing-045-20261008'):
     raise SystemExit('Fixed recharge push identity unavailable')
 profile = read(Path('deploy/aws/' + identity + '.json'))
 marker = read(Path('.deploy/production-release/fixed-recharge-build-projection.json'))

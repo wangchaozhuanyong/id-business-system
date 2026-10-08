@@ -1,0 +1,497 @@
+{
+  "approvalStatus": "APPROVED",
+  "baselineRelease": {
+    "afterAuditSha256": "deb861342f37e8da41223df88cddb32b62eca95456b08105a33273f48b1a1b6a",
+    "beforeAuditSha256": "8e90a2ca15f2e8ecdc74df2b4c68076a7d4f0b98c1b2d3aef1666d52475bd806",
+    "buildInputSha256": "ca419689221bbb67ac9ef9fdaa0023f447d1b487e69f3c0668788a1d11c720ba",
+    "commit": "e7c9862d58599995954883f1c1f6038283afffab",
+    "composeSha256": "05cd335251b31010af76b6c727927c2ae04158c481cb64186156229a3f6801b8",
+    "deploymentRun": "github-actions-37715981512-1",
+    "manifestSha256": "52f2582e5edeb9e1c9af63c70fff4ca5a5bdad11c0fd7fb8f090fd1670b4c2eb",
+    "overrideCanonicalSha256": "101abc354df0a46c543cbf8f720924e4f99704e633122d1a2d09382cca6f4e09",
+    "overrideRawSha256": "53d97afda6e540c93782d6bae63546213f078deb7de61d85e551e13edfce6ad9",
+    "previousCommit": "04570d75c779fd91a0933ef9416f6d62698b6b91",
+    "sourceArchiveSha256": "79a2f4de23f9274955fabc3b18ad4ddbc80ef4ed157ba5b446ddadc931aac11b",
+    "sourceTree": "1141040aa57661695aeb599ad698997ea09337ba"
+  },
+  "candidateSourceSha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": "123f6f30d4b01db6efef213100f4b5b90f211064d2eacfc7ffb3bcf28ecf8604",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": "3898ba5a47a9911eca8c05bdec4c48768d4ad2499f1bba6b39c4d6039c53a5f6",
+    "docs/V2_TASKS.md": "27abbb03ad576cb8cf58c1f2f21a9f9cc3c1af92dff30e43d9a8d0098d47fe6c"
+  },
+  "carriedSourceOnlySha256": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": "6beec99bb17be46890e2e105c935b59ec1dff066a21f164b266fcf4c5b914c40",
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": "6ceff54be34e6271acc2c4d3428d5c5871ae0ac6f4efcb9e4492c0858ad9e5a0",
+    "deploy/aws/registration-baseline-96-20261008.json": "356abcd30abe69980ed134292c4c44d9765ea0521dfef5472d088c74d6acf749",
+    "deploy/aws/registration-worker-96-20261008.json": "642440292a6a1f25a73cb155398c03eb396453e59f9bd229d617b5f60b079299",
+    "scripts/ci-recharge-check.mjs": "432863e05a4f32348338e2dd1d794f389b730876711060447855a9baf0bf7f2c",
+    "scripts/production-release/registration-onboarding-96.py": "7dd54407c7069538d1b5d63d1632780ec5af5fa52006ce4cad4c717f937da88c",
+    "scripts/production-release/registration-onboarding-96.test.py": "0685922f18d57a3af72677da64004420338b5420695436d66b969363e1c73b0b",
+    "scripts/production-release/registration-only-transport.test.py": "466c2b47dc4bf87f9fa29df54d09fef021116ca62148a91e01eaaffd7669903a"
+  },
+  "controlSourceSha256": {
+    ".github/workflows/production-release.yml": "7d783b5b1d0815d18ae3e076c4c6d8f1eda6777ad8f73309bd2608bcd52b8b7d",
+    "scripts/ci-recharge-release.test.mjs": "cc34185e171b3a33665ae5311cbe2e410c0ccea3685da8479987bc43f1e6bf06",
+    "scripts/ci-recharge-scope.mjs": "0cea254c9bd5432b16b438dadeca2ef1855d04a1caa590bd3682813cea9360a7",
+    "scripts/ci-recharge-scope.test.mjs": "854063df53700b106bc517be2619c328899457adb1e4386e6a847d971c3b11dd",
+    "scripts/production-release/build-images.sh": "a26b84f7cab58d475abfbcef002f1fb1a1a8b58911fcdd09f8e747b35a33222d",
+    "scripts/production-release/dispatch.sh": "3f04e5500cddc7c7228c6fbf2c258ca542bae9c25f68079122e4dfdb1e6d9874",
+    "scripts/production-release/maintain-image-cache.py": "1249e14f65739cf8487d87f2db1f39cc566f6c0a5fcca0a11fa5f465ceb99844",
+    "scripts/production-release/maintain-image-cache.test.py": "883ff82644f6907b714d0602bd53c5024fc261d7994b157899d989f50ec4b372",
+    "scripts/production-release/push-images.sh": "c6c857dcba55a79d3635308f5b292b800d10531a73923e140938af5f4bd9792b",
+    "scripts/production-release/remote-deploy.py": "099c22ce495e3a6c87bd8648b02dc279bb4ac1375f808f4f12db3a98c87f02e3",
+    "scripts/production-release/remote-deploy.test.py": "aa4dced2a9555a9a9e6aadaf8e5679b5124a35f9ddcc7dfb0150bb085e73cd08",
+    "scripts/production-release/validate-release-selection.sh": "0b6102b48564a49692908a0d8b8649b2e83ee11e6344e1b80bf6c25f78fd52bd"
+  },
+  "enabled": true,
+  "expectedCurrent": "e7c9862d58599995954883f1c1f6038283afffab",
+  "financeClearance": {
+    "checkCount": 49,
+    "checksSha256": "94ca7901c5aed650f4d6c8856af86f9a0928f1660ea806372a1b1f41479288f2",
+    "evidence": {
+      "cash-five-clearance-completion-source-index-20261006-v2.json": "f92fc07094fe7aacdf7762d331b96f5fe1b5cf1ebdb0267df59f7ac7c59cc8a2",
+      "cash-five-clearance-five-real-ui-actions-20261006-v1.json": "28a07113cc4f399c885ba66e2afe4d55dbe5a70fe3841749e7fbda99a390dde8",
+      "cash-five-clearance-independent-actual-final-review-20261006-v1.json": "a74b8c4631a36d182eca28266e50f36e62db72518a4a3ea8d4f78f4783e094fe",
+      "cash-five-clearance-inventory-after-20261006-v4.report.json": "2921c7d8f81bfdac3f7e8b17a8bba85fe2fc3c3d17fd52b07c482b57c3f7cc1d",
+      "cash-five-clearance-inventory-fresh-before-20261006-v4.report.json": "a458e31568c3810d229c0696a81cc185269bd50d426330837750a632d51cec0d",
+      "cash-five-clearance-real49-after-20261006-v1.report.json": "b89ed31f7b2f948c441a8d25fc412c0d8278182adec19386ff541bda54669788"
+    },
+    "executedCheckCount": 49,
+    "metadataSha256": "4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb",
+    "mode": "STRICT_ZERO_AFTER_APPROVED_REVERSALS_49",
+    "reversalAuditSha256": "d90da27ad60e57116ef68f8e9e8a4f2af110cbd0e50b67d06937cf0946d8e3fc",
+    "reversalChainSha256": "22b06da04b6aca6af194b7ed1053eb8f5f9851926c0a68478bf0f614a613aea9",
+    "reversalCount": 5,
+    "rulesSha256": "fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a",
+    "scope": {
+      "deletedOrderSha256": [
+        "a2ffdcf9fc09b3731b9b7fbdf41581ba5a810084ffc15172175b3ae67daed82d",
+        "c06d6d101d1525ffdc8e8fd7790a7a038a20a71f8a833020698ca3010fc9df79"
+      ],
+      "protectedOrderSha256": "4b95901aeeb2fdd34d0fe8784ebf0d4da58ccf2341bf27469f71bb3114e6332b"
+    },
+    "sourceCommit": "6a82a774f2a65e00d4f260c629f7152bf7935d1d",
+    "sources": {
+      "accounts": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 2,
+        "sha256": "7e3f38a53838c3edc387498e6bb0ea8585af89b3606a0979c6d10441680172fb"
+      },
+      "cashJournals": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 15,
+        "sha256": "eba994ee593ab87b49e2c9d772e6b81dd5f84a8a5376c0a946e8f9258d61aa96"
+      },
+      "cashLines": {
+        "ids": ["02d8080d-68d8-4095-8b60-a30d5cd6c4e0", "c6866d24-097b-44c5-b3a7-f3a3dcc11b23"],
+        "rowCount": 15,
+        "sha256": "6564164dd9d17c0617120e483ba79fbadeb0148c8c522066d137aa6a79059b79"
+      },
+      "expenses": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 5,
+        "sha256": "740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c"
+      },
+      "journals": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 5,
+        "sha256": "51b7f09183c5cfeb4c107cefde6ce1c652d1f0167dbd7c567c34b7e50964f4fb"
+      },
+      "lines": {
+        "ids": [
+          "0e095178-8455-4f1d-8e45-d12b09064702",
+          "10eb0ed7-3ce4-42a7-93e1-b83a898efe15",
+          "49ba9779-9ff8-4bb8-8dd2-f587865f2a9e",
+          "5a9ca0f0-2855-48e6-a50f-690dc64ebb65",
+          "eb3f0d75-3802-49ab-8f3f-86fae65d8514"
+        ],
+        "rowCount": 10,
+        "sha256": "f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c"
+      }
+    },
+    "unavailableCheckCount": 0,
+    "version": 1,
+    "violationCount": 0
+  },
+  "financeValidator": {
+    "candidateTree": "fbf9bd6e903ad8d7b83cf5701fde5c96347d5c1b",
+    "checkCount": 49,
+    "checksSha256": "e1158ece628a1f952fe7cd9ab6c480208b0f3006575405af2cb9393971eefdd1",
+    "cleanupReceiptSha256": "f788c9328fd9f8eed17aa058a449d1f427f7ebadce97b2f29a0a321dc792315f",
+    "exceptionsSha256": "410340139d3ea77de19103e20d0577946cd920ce9ec229978f0fd3d081644bc9",
+    "executedCheckCount": 49,
+    "gateSha256": {
+      "after": "a312a13b61f5e56a1901f81a2fd0094c7da588e1012fc09dc2b7a8cd55075ab3",
+      "before": "257f88bdc796c62582f9d8f4d8e7dc67b0fe5f46ae8d0370c53dcf16b535fa23"
+    },
+    "kind": "EXISTING_SEALED_ORDER_ARCHIVE_49",
+    "metadataSha256": "4ddafe1b4870da8e8a99871213e8cfd48282741fd8b977a37cfdb13e2292ddeb",
+    "policyCanonicalSha256": "91096c5c2cf5d6b1a3210794ec3cdf20aef54fe457d11b75df1735416d7c3511",
+    "policyId": "historical-finance-20261005-order-archive",
+    "policyRawSha256": "243101271c3087f8bc87521972c0d698a2e2e444044268ec5eebf05b93b6e778",
+    "preparationRunAttempt": 1,
+    "preparationRunId": 37362644900,
+    "preparedImagesSha256": "4ed683fae91fc60df43e2b068d4d18782e0d977676320fda5b194de72302f57d",
+    "releaseSealSha256": "a3e241c715ceb01c18427f56d98a4ea173598afb3874e8b4522ce43a07d3fc0c",
+    "rulesSha256": "fb3b0007d8db5a33cea63244cd0dfc17995e986f59c20dc2ea63a5add241e73a",
+    "sourceAnchorSha256": "39dd801292f081560fdaf7db2feb6cdd6f3c1bc8b730ca9add4d33a472466920",
+    "sourceCommit": "80bddb1a8d8fa1b5f768a146d90f2bc1fe77ac9b",
+    "sourceProjectionTree": "d9c2e534f0e71d5c88ffc4db492c4db2e79a9370",
+    "sources": {
+      "accounts": {
+        "rowCount": 2,
+        "sha256": "95e4a89173c5241290875f79cd96ac6c2e68e809b840dac3ff1987afb5bfab82"
+      },
+      "cashJournals": {
+        "rowCount": 10,
+        "sha256": "7af63905fa4958871ed5d724ce51fafae336e8317295e5b1bf68a6533070ba26"
+      },
+      "cashLines": {
+        "rowCount": 10,
+        "sha256": "0cb3f1804059f9610f81ce015f4e872b5152861a365ce772ee18f13f3151bef1"
+      },
+      "expenses": {
+        "rowCount": 5,
+        "sha256": "740c382d78e85a9354083af0100bdbb65a5d6fb32035540387a17bc0e8541f2c"
+      },
+      "journals": {
+        "rowCount": 5,
+        "sha256": "df7e1a47198be81db1d59414d1204e50732cebcf77c8ad9a136bdfbea2e635b3"
+      },
+      "lines": {
+        "rowCount": 10,
+        "sha256": "f6c9e5d8df16ab6e8dc07140f44bd3c8db6bc0c97dd282ee7012f6f222e4a37c"
+      }
+    },
+    "unavailableCheckCount": 0,
+    "violationCount": 5
+  },
+  "id": "recharge-pro-pricing-045-20261008",
+  "kind": "FIXED_RECHARGE_RUNTIME_SCOPE",
+  "nativeBaseline": {
+    "apiBuildProofCanonicalSha256": "b690cb62f0a5602107458a45d8706a8d9d74e2c523741441186e9b339ecc787a",
+    "apiBuildProofRawSha256": "681609e18f8964b07b7df9f8f328639a2b68f7ecd7d4b44af7400ce503f3600f",
+    "apiReadbackSha256": "9512931c6fa85ed7abad39f1e1e7961ad96eba0075e1c49419b2016402d303ab",
+    "apiScopeProducerSha256": "04426d66bcdf51a52b63966d27b49e7a7f79469839258678773465fb34939b40",
+    "apiStateRawSha256": "29b3ea692aa59ad2de24443969ec55e2b8bb8931e288721e501010ec62f1c56f",
+    "configuredPreservedStatesSha256": "6a63695ea014b0b378ee358ad6b1dafdf448f22036c856946c1f0653f481c30c",
+    "nativeChainSha256": "14f3f862469c89fd6e32ee639542812896f12467dc7ff901193b3bb70848faf3",
+    "nativeDirectoryCount": 5364,
+    "nativeFileCount": 39336,
+    "origin815StoredProofSha256": "223ecf9bbc152c5f77a1e15f0a9db558a87014e32f7ce4cebbc4bd7ca540197b",
+    "originD3StoredProofSha256": "d1b61e0e064dca608f239cd882e82f67062c095496a55206961673a6e39e09e1",
+    "predecessorProfileCanonicalSha256": "44f2689046f718bace2cc757cf9c4332c91fd608006eaf28c55dcf092f4ff0d8",
+    "predecessorStoredContextSha256": "2851b770a198580c7356097631828cd6f0a5f0b7b6a5ccbe9be218bef433a3bf",
+    "preservedStatesSha256": "71065ee6109a128b34e33a8c3c725a9824c16c30c1f4e85d2def0e91bc5895d5",
+    "producerSha256": "58c7705ee8ad91458a478a397e7c66202738280737f07ae12927c5d2e712a920",
+    "rechargeProfileRawSha256": "233870eaa3d794fa0cbbc1fa2d826a062744db4410a13643c2d6b79ed0643d0b",
+    "rechargeReadbackSha256": "a0b14f2e84d94b958f217b53d0222705950c5c1049b72a8bce5f12465347f7b3",
+    "registration96BaselineCarrierSha256": "356abcd30abe69980ed134292c4c44d9765ea0521dfef5472d088c74d6acf749",
+    "registration96ModuleSha256": "7dd54407c7069538d1b5d63d1632780ec5af5fa52006ce4cad4c717f937da88c",
+    "registration96ProfileCanonicalSha256": "aaa330f599b9e5bebe059b39e4705af1d9511805e38bbfc9ffc2b655f4ca87b7",
+    "registration96ProfileRawSha256": "642440292a6a1f25a73cb155398c03eb396453e59f9bd229d617b5f60b079299",
+    "registration96ReadbackSha256": "e70f3c4d05e6977419c8270a24fb2737ca4f0e34283ae0bb3c3d10979652f2ce",
+    "registration96StoredContextSha256": "e9b0b16810b163ca219982cccc4cfff67f0b30b3245d4168424a249eef212976",
+    "registrationProfileCanonicalSha256": "781d2df59f571ef5fc822ee6a87da0cdfdf10797e60b21ba9659d807065ab241",
+    "registrationProfileRawSha256": "34557de4908655ebab2811e3ea77614e749e6041500aad1be80a301b6f13d5b6",
+    "registrationReadbackSha256": "d424131166aa394d6086f0d99e3037b102d7e4b013e6e6a9029f2fcaf5a5e399",
+    "retainedMigrateSha256": "5783636d595b38e9d83c558582920362438064c0d6e0322e463c77a06f8f31d5",
+    "runtimeStatesSha256": "64590d2d8fd6b06f40866438c793ee4b0a75d39846c4098e700f56b565ad06d5"
+  },
+  "scope": {
+    "cacheCleanupAllowed": false,
+    "databaseGrantSyncAllowed": false,
+    "financialWritesAllowed": false,
+    "googleDriveConfigAllowed": false,
+    "imageReuseAllowed": false,
+    "imageServices": ["auto-recharge"],
+    "migrationDeploymentAllowed": false,
+    "preservedServices": ["auto-registration", "api", "admin", "media-resolver", "mysql", "caddy"],
+    "registrationRestartAllowed": false,
+    "servicesUpdated": ["auto-recharge"]
+  },
+  "sourceBasis": {
+    "commit": "e7c9862d58599995954883f1c1f6038283afffab",
+    "tree": "1141040aa57661695aeb599ad698997ea09337ba"
+  },
+  "sourceModes": {
+    ".github/workflows/production-release.yml": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": 420,
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": 420,
+    "deploy/aws/registration-baseline-96-20261008.json": 420,
+    "deploy/aws/registration-worker-96-20261008.json": 420,
+    "docs/V2_TASKS.md": 420,
+    "scripts/ci-recharge-check.mjs": 420,
+    "scripts/ci-recharge-release.test.mjs": 420,
+    "scripts/ci-recharge-scope.mjs": 420,
+    "scripts/ci-recharge-scope.test.mjs": 420,
+    "scripts/production-release/build-images.sh": 420,
+    "scripts/production-release/dispatch.sh": 420,
+    "scripts/production-release/maintain-image-cache.py": 420,
+    "scripts/production-release/maintain-image-cache.test.py": 420,
+    "scripts/production-release/push-images.sh": 420,
+    "scripts/production-release/registration-onboarding-96.py": 420,
+    "scripts/production-release/registration-onboarding-96.test.py": 420,
+    "scripts/production-release/registration-only-transport.test.py": 420,
+    "scripts/production-release/remote-deploy.py": 420,
+    "scripts/production-release/remote-deploy.test.py": 420,
+    "scripts/production-release/validate-release-selection.sh": 420
+  },
+  "version": 1,
+  "workerProjection": {
+    "apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile": {
+      "mode": "100644",
+      "sha256": "02b60dd182958a78decaed2860370b5045ece07eb6599d55dc954ab2fbd57cf8"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/attempt_ledger.py": {
+      "mode": "100644",
+      "sha256": "f774f5bdc8f1ba63c9cb0453df1a1021166dccc72710e7b73590762151b9d0c2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_catalog.py": {
+      "mode": "100644",
+      "sha256": "25891362c051cc61224a46da6ca6cd8a13f58063f49715240650ad4b1aa165c2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py": {
+      "mode": "100644",
+      "sha256": "a711c24d610c1ca0f20d274f055d5f5ef7fc0d9f537575c482a60bf59d815bd1"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_options.py": {
+      "mode": "100644",
+      "sha256": "ecad088dbd059534baf9c3013fac79fbd7e46999242e834046a134f69ee6c915"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py": {
+      "mode": "100644",
+      "sha256": "02228a4023d46640280c28503b7fa3d7d2721ef75c9f92f6566735884248e754"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_checkout.py": {
+      "mode": "100644",
+      "sha256": "e644be9d68bbab358dc07ce1c3fb90a77fe0ff556017f19130726a2fa67cd6dc"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_password_login.py": {
+      "mode": "100644",
+      "sha256": "39a7d789098ed167c0b3e6e4b592553487bddf9e3d43bf64c1ff3a2667913ef6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/browser_session.py": {
+      "mode": "100644",
+      "sha256": "d4f1117bf8ca579ea0cbaa92e16f7866af31a05bab10767dff8570033241182c"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/checkout_core.py": {
+      "mode": "100644",
+      "sha256": "1c6d38709f76a36aa2d3d230270786d182feeac7f2e1595bae3e9e69dd9d3a66"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/fingerprint_runtime.py": {
+      "mode": "100644",
+      "sha256": "9d190ac3a4edf3546391b4e7e40ace3193445aaf5d6f57ed0737d09db439af6d"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/install_fingerprint_browser.py": {
+      "mode": "100644",
+      "sha256": "f9ff9588b729ec3ebf8f1390bc363736c9e25716e3b89d5e80c98634b99382b3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/pay.py": {
+      "mode": "100644",
+      "sha256": "132ac0782b4652c5d3aba6d7d27bcdd674d409052a08bdef816a2d6b74bcf6bb"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_3ds.py": {
+      "mode": "100644",
+      "sha256": "f89ccbd14abb1eef1c28314a44a54ffd1237b42ab3e9c079933c8487981df5b3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_form.py": {
+      "mode": "100644",
+      "sha256": "3bfe34586f373d88ffa0128a227784ed89502bfbfcc758bef98a29c5807ceae6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_handoff.py": {
+      "mode": "100644",
+      "sha256": "a2a97522e1a1eadd17de7d27f1006d1cbe5229db677d5cb764c22ee596c3e373"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_network.py": {
+      "mode": "100644",
+      "sha256": "109579fffede89c7c5bc4e15b815df44f7f14eca9f7fad704ecc6236767bf887"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_recovery.py": {
+      "mode": "100644",
+      "sha256": "18815675c48b8240dd0f44b1cfe29690a085b71a404007d208147cc5020f3372"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/payment_state.py": {
+      "mode": "100644",
+      "sha256": "52be6d21af6d39e8a0d96ae1133d4845a41882984c7c3af6589e937799ef00ac"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py": {
+      "mode": "100644",
+      "sha256": "123f6f30d4b01db6efef213100f4b5b90f211064d2eacfc7ffb3bcf28ecf8604"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/plans.py": {
+      "mode": "100644",
+      "sha256": "17d6f205929cb86b329900f1afbf1fc72615be1a19f7aea2229470408def3a8c"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py": {
+      "mode": "100644",
+      "sha256": "6beec99bb17be46890e2e105c935b59ec1dff066a21f164b266fcf4c5b914c40"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_builtin.py": {
+      "mode": "100644",
+      "sha256": "bd6f3bb856288c792ed9d194e829a7f7abbd888869aec66165a6e4a029a4e774"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_job.py": {
+      "mode": "100644",
+      "sha256": "aaad2d3a5ab389c3e8f4bd1cce94a51923ff0265c0f6e97d4085d3723f30cc18"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/registration_security.py": {
+      "mode": "100644",
+      "sha256": "dcc5ead05ea4fdd24f36d29dbdd79438f34bb75fb957552852487b7a6c62568b"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt": {
+      "mode": "100644",
+      "sha256": "5625010a0ce5fc9aced3847cfe6d231e047e93586a3403a5e54edd1e10c67493"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/server.py": {
+      "mode": "100644",
+      "sha256": "1165d274e47eca72c5c097b94541a434f79ff51744cd8305b58581e07a2da0d9"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/server_proxy.py": {
+      "mode": "100644",
+      "sha256": "699262e2bac0f719f36c5a745f4fa913f94a049c9117f37a90c5eaa3e9be7ded"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscribe.py": {
+      "mode": "100644",
+      "sha256": "ca2cd9192d72e09355317bad643058b5da27366ebca7ba2068612833b193e3e2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/subscription_upgrade.py": {
+      "mode": "100644",
+      "sha256": "c8d4c0f5e8d3ef47c48b098a01b0ee912376609f6a3be918c31904f2479ff31e"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_catalog.py": {
+      "mode": "100644",
+      "sha256": "b01e2786e7904b2f49eba3d2096385afd5cee672b5c79a53e69724acb0ca1580"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_connector.py": {
+      "mode": "100644",
+      "sha256": "86ae3dc9ae745161699ac6ba466797a15c2218f88f6aba0f5fe3c29e523af769"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_options.py": {
+      "mode": "100644",
+      "sha256": "457a6e3bded2e5d9ce8ee1826e53c064c7e46117cea4f7ba86965ef5f9c7d6ea"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_bitbrowser_upgrade.py": {
+      "mode": "100644",
+      "sha256": "67307c21a1912c805b559c278d3f9c6da025c2f7e1deeaccbfce19cfb620e8ae"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_browser.py": {
+      "mode": "100644",
+      "sha256": "f037b56fc532cc50783e6e8b666fb0eda947da78b23549d32e64c5cbd5a7d6b2"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_connector_health.py": {
+      "mode": "100644",
+      "sha256": "a34c0d3f0fea79747f5bf6302b4b5eee965241feba9ba8f78c836d2a43b123c3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_fingerprint_runtime.py": {
+      "mode": "100644",
+      "sha256": "ba0bf129607345a165a08a43fc0b3ddaae5ed345f3174a5de2221eb0db3aee19"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_go.py": {
+      "mode": "100644",
+      "sha256": "5f772b1e32d9c801eb5e4099fcb287a6bda4aad5958282f4b1097a940df4e4d3"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_password_login.py": {
+      "mode": "100644",
+      "sha256": "74a1ac5f66b781f3ac7f6d82d4d2d89ce35744467783b09f42490cc2d8d5fff6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment.py": {
+      "mode": "100644",
+      "sha256": "9533ff06288adebca4f00a0ee069a3bf5bcfefce62c8075be0214ce2b800866b"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_3ds.py": {
+      "mode": "100644",
+      "sha256": "a0702cc92ae22b9feb8e1aa41e4e28fb848f377555d84aa9d7c4346da010c5e6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_payment_handoff.py": {
+      "mode": "100644",
+      "sha256": "3df55a3ed61bef2e469f080c60b92c07fefdd63b9fc1523aedb9d8350f99e8d7"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_pro.py": {
+      "mode": "100644",
+      "sha256": "3898ba5a47a9911eca8c05bdec4c48768d4ad2499f1bba6b39c4d6039c53a5f6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_recharge_email_code.py": {
+      "mode": "100644",
+      "sha256": "4466a9de202b9156a2851f24d91e9618d401ebed517bc41259d9865f0d71a7ca"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration.py": {
+      "mode": "100644",
+      "sha256": "c409f1d4a36fc759aa3bf649d08e93938ff5497b9261b635f28cc02e324bcec0"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_auto_code.py": {
+      "mode": "100644",
+      "sha256": "b9115e2d6f91bc0b847380b763d4bdd88391268bbfa7bb5ad1c1e3e4c8c82ed6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py": {
+      "mode": "100644",
+      "sha256": "6ceff54be34e6271acc2c4d3428d5c5871ae0ac6f4efcb9e4492c0858ad9e5a0"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_builtin.py": {
+      "mode": "100644",
+      "sha256": "1d542dbd37870978a2c4b1bc0cd2878df8438d46d3b507684777204418f41bbe"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_registration_mail_events.py": {
+      "mode": "100644",
+      "sha256": "161cbe50b6342e7c3498baf4cc09c5c1400fe54079fd73ad0361d52aa9b52f0c"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_server.py": {
+      "mode": "100644",
+      "sha256": "3fefb10aa4ad38ef7022f29ee74da481b832476016253cb3a043aa9eda7a4fcb"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_server_proxy.py": {
+      "mode": "100644",
+      "sha256": "94a3365c502a0124f495097583d2a5bb942f242ea0195fc004312fc5f4a336f5"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_session_retry.py": {
+      "mode": "100644",
+      "sha256": "90886b6cc726455a0c103064bce57cfe3b6c4be13bba8f50553cce9cdaac3481"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscribe.py": {
+      "mode": "100644",
+      "sha256": "8ff45feb9f4d47b89580a6a3d84a0f520f442c56843588b82e4bbee977ee22d6"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_subscription_upgrade.py": {
+      "mode": "100644",
+      "sha256": "7b2cc952e7709537858b6790bf803c891b7b26426dd774dbb62b1444916ccb0a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_upgrade_card_flow.py": {
+      "mode": "100644",
+      "sha256": "2cc5ad8d65ca9c3d40bcfb296f0e71758c75ad9f0a0a0f9a7c3e09e94a023b16"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_upgrade_card_selection.py": {
+      "mode": "100644",
+      "sha256": "3091d23596423d2d3578273766a993de558a744c70b06c85cc404a4e8af40f1a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/test_worker_isolation.py": {
+      "mode": "100644",
+      "sha256": "4220256c3ad075ed765017d39a72092864da99bc85a525e0cbded4532e71a99b"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_authentication.py": {
+      "mode": "100644",
+      "sha256": "53c42dd9f5daf4053a81e7eb54286020292ec589a0311dfedaf1d41be47506f5"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_card_network.py": {
+      "mode": "100644",
+      "sha256": "b0ade78a203c7b0f83982a817c171271d961c3cb4c99fd27682f63019605ce6a"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/worker/upgrade_card_selection.py": {
+      "mode": "100644",
+      "sha256": "ee65947bca3509b0ff68c0fd45effc648f436e8ba507ec7a59b2beb95f32178e"
+    }
+  }
+}

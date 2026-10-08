@@ -12790,7 +12790,8 @@ class Registration95ScopeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),'0'*64)
             source_raw=source.read_bytes()
             source.write_bytes((self.root/'scripts/production-release/remote-deploy.py').read_bytes())
-            with self.assertRaisesRegex(RuntimeError,'Fixed registration interstitial carrier source changed'):
+            rejection = 'Fixed recharge source unavailable' if source.stat().st_size > 1024 * 1024 else 'Fixed registration interstitial carrier source changed'
+            with self.assertRaisesRegex(RuntimeError,rejection):
                 ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
             source.write_bytes(source_raw);source.chmod(0o600)
             with self.assertRaises(RuntimeError):ns['registration_interstitial_verify_carrier'](sha(source),sha(profile))
@@ -13368,6 +13369,455 @@ class FixedRecharge6f5NativeTests(unittest.TestCase):
         with patch.object(deployment,'recharge_974_release',return_value='selected')as release:
             args=SimpleNamespace();self.assertEqual(deployment.recharge_6f5_release(args),'selected')
             release.assert_called_once_with(args,profile_id=deployment.RECHARGE_6F5_ID)
+
+
+class FixedRechargePricingNativeTests(unittest.TestCase):
+    """Local finite fixtures; hashes filled here never constitute provider evidence."""
+    @classmethod
+    def setUpClass(cls):
+        cls.project = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.project / '.runtime/recharge-pro-f812-integration-20261007/live-selector-local/integration-4c/pricing-release-successor/main5b-successor/control-test-fixtures'
+        cls.runtime.mkdir(parents=True, exist_ok=True); cls.runtime.chmod(0o700)
+        cls.original = subprocess.check_output(['git', 'show', deployment.RECHARGE_PRICING_CURRENT + ':scripts/production-release/remote-deploy.py'], cwd=cls.project)
+        cls.original_profile = subprocess.check_output(['git', 'show', deployment.RECHARGE_PRICING_CURRENT + ':' + deployment.RECHARGE_6F5_FILE], cwd=cls.project)
+
+    def setUp(self):
+        self.draft = json.loads((self.project / deployment.RECHARGE_PRICING_FILE).read_bytes())
+        self.draft.update(enabled=False, approvalStatus='NOT_APPROVED')
+        self.contents = {name: (self.project / name).read_bytes() for name in
+            deployment.RECHARGE_D3FB_CANDIDATES | deployment.RECHARGE_2F_CONTROLS | set(deployment.RECHARGE_PRICING_CARRIED)}
+        for key, names in (('candidateSourceSha256', deployment.RECHARGE_D3FB_CANDIDATES),
+                ('controlSourceSha256', deployment.RECHARGE_2F_CONTROLS)):
+            self.draft[key] = {name: deployment.hashlib.sha256(self.contents[name]).hexdigest() for name in names}
+        self.profile = copy.deepcopy(self.draft); self.profile.update(enabled=True, approvalStatus='APPROVED')
+        for group in ('baselineRelease', 'nativeBaseline'):
+            for key, value in self.profile[group].items():
+                if value is None: self.profile[group][key] = 100 if key.endswith('Count') else 'e' * 64
+
+    @contextmanager
+    def producer_fixture(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve(); previous = base / 'releases' / ('20261008T120000Z-' + deployment.RECHARGE_PRICING_CURRENT[:12])
+            previous.mkdir(parents=True); (base / 'current').symlink_to(previous)
+            for name, raw in (('scripts/production-release/remote-deploy.py', self.original),
+                    (deployment.RECHARGE_6F5_FILE, self.original_profile)):
+                path = previous / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw); path.chmod(0o644)
+            stack.enter_context(patch.object(deployment, 'BASE', base))
+            yield SimpleNamespace(base=base, previous=previous)
+
+    def test_pending_nullable_measurement_cannot_execute_or_download(self):
+        self.assertEqual(len(self.draft['baselineRelease']), 12)
+        self.assertEqual(len(self.draft['nativeBaseline']), 28)
+        self.assertEqual(len(self.draft['sourceModes']), 23)
+        self.assertIs(deployment.recharge_pricing_scope(self.draft, require_approved=False), self.draft)
+        with self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(self.draft)
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            root = Path(temporary).resolve(); path = root / deployment.RECHARGE_PRICING_FILE
+            path.parent.mkdir(parents=True); path.write_text(json.dumps(self.draft)); path.chmod(0o644)
+            with patch.object(deployment, '__file__', str(root / 'scripts/production-release/remote-deploy.py')), \
+                    patch.object(deployment, 'registration_download') as download, patch.object(deployment, 'run') as command:
+                with self.assertRaisesRegex(RuntimeError, 'scope is not approved'):
+                    deployment.prepare_recharge_d3fb_build(_profile_id=deployment.RECHARGE_PRICING_ID)
+                download.assert_not_called(); command.assert_not_called()
+        self.assertIs(deployment.recharge_pricing_scope(self.profile), self.profile)
+
+    def test_each_baseline_native_and_scope_field_is_mandatory_before_approval(self):
+        for group in ('baselineRelease', 'nativeBaseline'):
+            for key in self.profile[group]:
+                bad = copy.deepcopy(self.profile); bad[group][key] = None
+                with self.subTest(group=group, missing=key), self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad)
+        mutations = [lambda p: p.update(expectedCurrent=deployment.RECHARGE_6F5_CURRENT),
+            lambda p: p['sourceBasis'].update(commit=deployment.RECHARGE_PRICING_CURRENT),
+            lambda p: p['scope'].update(registrationRestartAllowed=True),
+            lambda p: p['financeValidator'].update(checkCount=48),
+            lambda p: p['nativeBaseline'].update(nativeFileCount=True),
+            lambda p: p['baselineRelease'].update(manifestSha256='a' * 64),
+            lambda p: p['carriedSourceOnlySha256'].update(unreviewed='a' * 64),
+            lambda p: p['sourceModes'].update({'docs/V2_TASKS.md': 0o600}), lambda p: p.update(unreviewed=True)]
+        for mutate in mutations:
+            bad = copy.deepcopy(self.profile); mutate(bad)
+            with self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad)
+
+    def test_complete60_preserves56_and_carries_exact_main5b_registration_and_metadata_bytes(self):
+        baseline = json.loads(self.original_profile)['workerProjection']
+        delta = {name for name in baseline if baseline[name] != self.profile['workerProjection'][name]}
+        self.assertEqual(delta, deployment.RECHARGE_D3FB_WORKER | set(deployment.RECHARGE_PRICING_CARRIED_WORKER))
+        self.assertEqual(len(set(baseline) - delta), 56)
+        for name in set(baseline) - deployment.RECHARGE_D3FB_WORKER:
+            bad = copy.deepcopy(self.profile); bad['workerProjection'][name]['sha256'] = 'a' * 64
+            with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad)
+        for name, digest in deployment.RECHARGE_PRICING_CARRIED.items():
+            self.assertEqual(deployment.hashlib.sha256(self.contents[name]).hexdigest(), digest)
+            bad = copy.deepcopy(self.profile); bad['carriedSourceOnlySha256'][name] = 'a' * 64
+            with self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad)
+
+    def test_actual23_source_hashes_modes_and_foreign_delta_reject_before_actions(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary, ExitStack() as stack:
+            root = Path(temporary).resolve(); path = root / deployment.RECHARGE_PRICING_FILE
+            for name, raw in self.contents.items():
+                candidate = root / name; candidate.parent.mkdir(parents=True, exist_ok=True); candidate.write_bytes(raw); candidate.chmod(0o644)
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(self.profile)); path.chmod(0o644)
+            replies = {'rev-parse': deployment.RECHARGE_PRICING_SOURCE_BASIS['tree'], 'diff': '', 'ls-files': ''}
+            def git(*args, **kwargs):
+                self.assertEqual(args[:3], ('git', '-C', str(root))); return replies[args[3]]
+            stack.enter_context(patch.object(deployment, '__file__', str(root / 'scripts/production-release/remote-deploy.py')))
+            stack.enter_context(patch.object(deployment, 'run', side_effect=git))
+            self.assertEqual(deployment.check_recharge_pricing_scope(), (root, self.profile))
+            for name in self.contents:
+                candidate = root / name; raw = candidate.read_bytes()
+                if name in set(deployment.RECHARGE_PRICING_CARRIED) - set(deployment.RECHARGE_PRICING_CARRIED_WORKER):
+                    candidate.unlink()
+                    with self.subTest(missing_file=name), self.assertRaises((RuntimeError, OSError)): deployment.check_recharge_pricing_scope()
+                    candidate.write_bytes(raw)
+                candidate.write_bytes(raw + b'\n')
+                with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.check_recharge_pricing_scope()
+                candidate.write_bytes(raw); candidate.chmod(0o600)
+                with self.assertRaises(RuntimeError): deployment.check_recharge_pricing_scope()
+                candidate.chmod(0o644)
+            for command in ('diff', 'ls-files'):
+                replies[command] = 'apps/api/src/id-business-v2/foreign.ts'
+                with self.assertRaises(RuntimeError): deployment.check_recharge_pricing_scope()
+                replies[command] = ''
+
+    def test_main5b_six_public_carry_paths_are_mandatory_before_any_service_action(self):
+        public = set(deployment.RECHARGE_PRICING_CARRIED) - set(deployment.RECHARGE_PRICING_CARRIED_WORKER)
+        self.assertEqual(len(public), 6)
+        self.assertEqual(len(deployment.RECHARGE_PRICING_CARRIED_WORKER), 2)
+        self.assertTrue(public.isdisjoint(self.profile['workerProjection']))
+        for name in public:
+            bad = copy.deepcopy(self.profile); del bad['carriedSourceOnlySha256'][name]
+            with self.subTest(missing_map=name), self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad)
+            bad = copy.deepcopy(self.profile); del bad['sourceModes'][name]
+            with self.subTest(missing_mode=name), self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad)
+        main = subprocess.check_output(['git', 'show', deployment.RECHARGE_PRICING_SOURCE_BASIS['commit'] + ':scripts/production-release/remote-deploy.py'], cwd=self.project)
+        main_tree = ast.parse(main); candidate_tree = ast.parse(Path(deployment.__file__).read_bytes())
+        old = next(n for n in main_tree.body if isinstance(n, ast.FunctionDef) and n.name == 'load_registration96')
+        new = next(n for n in candidate_tree.body if isinstance(n, ast.FunctionDef) and n.name == 'load_registration96')
+        self.assertEqual(ast.dump(old), ast.dump(new))
+        self.assertEqual(deployment.REGISTRATION96_MODULE_SHA256, deployment.RECHARGE_PRICING_CARRIED['scripts/production-release/registration-onboarding-96.py'])
+        worker96 = json.loads(self.contents['deploy/aws/registration-worker-96-20261008.json'])
+        self.assertEqual(worker96['controlSourceSha256']['scripts/production-release/remote-deploy.py'], deployment.hashlib.sha256(main).hexdigest())
+        self.assertLess(len(main), 1024 * 1024)
+        self.assertGreater(len(Path(deployment.__file__).read_bytes()), 1024 * 1024)
+
+    def test_projected_source_keeps_six_main5b_files_and_rejects_each_missing_candidate(self):
+        public = set(deployment.RECHARGE_PRICING_CARRIED) - set(deployment.RECHARGE_PRICING_CARRIED_WORKER)
+        candidate = {name: (raw, '100644') for name, raw in self.contents.items()}
+        candidate[deployment.RECHARGE_PRICING_FILE] = (json.dumps(self.profile).encode(), '100644')
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            previous = Path(temporary).resolve(); keep = previous / 'preserved-source.txt'
+            keep.write_bytes(b'fixed045-preserved-source'); keep.chmod(0o644)
+            with patch.object(deployment, 'run') as command, patch.object(deployment.urllib.request, 'urlopen') as network:
+                projected = deployment.recharge_d3fb_source_files(previous, self.profile, candidate)
+                self.assertEqual(projected['preserved-source.txt'], (keep.read_bytes(), '100644'))
+                for name in public:
+                    self.assertEqual(projected[name], candidate[name])
+                    bad = dict(candidate); del bad[name]
+                    with self.subTest(missing=name), self.assertRaisesRegex(RuntimeError, 'candidate source changed'):
+                        deployment.recharge_d3fb_source_files(previous, self.profile, bad)
+                command.assert_not_called(); network.assert_not_called()
+
+    def test_cli_pricing_and96_reject_before_frozen_module_or_production_commands(self):
+        for pricing in (deployment.RECHARGE_PRICING_ID, '--recharge-pro-pricing'):
+            for registration in ('registration-worker-96-20261008', '--registration-worker-96'):
+                for args in ([pricing, registration], [registration, pricing]):
+                    result = subprocess.run(['python3', '-B', deployment.__file__, *args], cwd=self.project, capture_output=True, text=True, timeout=10)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, '')
+                    self.assertEqual(result.stderr.strip(), 'Fixed pricing selection is ambiguous; raw output suppressed')
+
+    def test_original045_producer_profile_bytes_and_modes_are_pinned(self):
+        self.assertEqual(deployment.hashlib.sha256(self.original).hexdigest(), deployment.RECHARGE_PRICING_PRODUCER)
+        self.assertEqual(deployment.hashlib.sha256(self.original_profile).hexdigest(), deployment.RECHARGE_PRICING_PROFILE_RAW)
+        with self.producer_fixture() as f:
+            namespace, profile = deployment.recharge_pricing_native_producer(f.previous)
+            self.assertEqual(namespace['BASE'], f.base)
+            self.assertEqual(deployment.historical_fingerprint(profile), deployment.RECHARGE_PRICING_PROFILE_CANONICAL)
+            for name in ('scripts/production-release/remote-deploy.py', deployment.RECHARGE_6F5_FILE):
+                path = f.previous / name; raw = path.read_bytes(); path.write_bytes(raw + b' ')
+                with self.subTest(name=name), self.assertRaises(RuntimeError): deployment.recharge_pricing_native_producer(f.previous)
+                path.write_bytes(raw); path.chmod(0o600)
+                with self.assertRaises(RuntimeError): deployment.recharge_pricing_native_producer(f.previous)
+                path.chmod(0o644)
+
+    def test_unique_seventeen_release_chain_and_original_allowlist_are_separate(self):
+        self.assertEqual(len(deployment.RECHARGE_PRICING_CHAIN), 17)
+        old_tree = ast.parse(self.original); new_tree = ast.parse(Path(deployment.__file__).read_bytes())
+        for name in ('recharge_974_native_chain', 'recharge_6f5_native_producer', 'recharge_6f5_origin4c', 'recharge_6f5_baseline_fields'):
+            old = next(n for n in old_tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+            new = next(n for n in new_tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+            self.assertEqual(ast.dump(old), ast.dump(new), name)
+        with patch.object(deployment, 'fixed_recharge_bytes') as read:
+            with self.assertRaises(RuntimeError): deployment.recharge_974_native_chain(Path('/unread'), chain=deployment.RECHARGE_PRICING_CHAIN)
+            for chain in (deployment.RECHARGE_6F5_CHAIN, deployment.RECHARGE_PRICING_CHAIN[1:], (('a' * 40, 'b' * 40),) + deployment.RECHARGE_6F5_CHAIN):
+                with self.assertRaises(RuntimeError): deployment.recharge_pricing_native_chain(Path('/unread'), chain=chain)
+            read.assert_not_called()
+        fixture = FixedRecharge974NativeTests(); fixture.runtime = self.runtime
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary:
+            f = fixture.chain_fixture(temporary)
+            with f.stack:
+                previous = f.paths[0]
+                for commit, tree in reversed(deployment.RECHARGE_PRICING_CHAIN[:6]):
+                    current = f.base / 'releases' / ('20261008T120000Z-' + commit[:12]); current.mkdir(mode=0o700)
+                    (current / 'release-manifest.json').write_text(json.dumps({'commit': commit, 'sourceTree': tree,
+                        'previousCommit': json.loads((previous / 'release-manifest.json').read_bytes())['commit'], 'previousRelease': str(previous)}))
+                    (current / 'release-manifest.json').chmod(0o600); (current / 'public.py').write_bytes(b'local-fixture\n'); previous = current
+                good = deployment.recharge_pricing_native_chain(previous)
+                self.assertEqual(good['origin'], f.paths[-1])
+                (previous / 'public.py').write_bytes(b'drift')
+                self.assertNotEqual(deployment.recharge_pricing_native_chain(previous)['sha256'], good['sha256'])
+
+    def test_native_observer_retains_migrate_and_tail_reread_separately_from_seven_services(self):
+        with tempfile.TemporaryDirectory(dir=self.runtime) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve(); previous = base / 'previous'; previous.mkdir(); (base / 'current').symlink_to(previous)
+            old = json.loads(self.original_profile); frozen = old['nativeBaseline']['retainedMigrateSha256']
+            namespace = {'recharge_6f5_api_receipt': MagicMock(return_value={}), 'recharge_6f5_registration_receipt': MagicMock(return_value={})}
+            stored = (namespace, old, {'fixedRechargeRelease': {}}, previous, previous, {})
+            stack.enter_context(patch.object(deployment, 'BASE', base))
+            origin = stack.enter_context(patch.object(deployment, 'recharge_pricing_stored_origin', return_value=stored))
+            fields = stack.enter_context(patch.object(deployment, 'recharge_pricing_baseline_fields', return_value=self.profile['baselineRelease']))
+            chain = stack.enter_context(patch.object(deployment, 'recharge_pricing_native_chain', return_value={'sha256': 'f' * 64, 'fileCount': 17, 'directoryCount': 17}))
+            stack.enter_context(patch.object(deployment, 'service_state', return_value={}))
+            stack.enter_context(patch.object(deployment, 'main80_recharge_preserved_states', return_value={}))
+            retained = stack.enter_context(patch.object(deployment, 'recharge_2f_retained_migrate', side_effect=[frozen, frozen]))
+            result = deployment.recharge_pricing_observe_native(previous)
+            self.assertEqual(result['nativeBaseline']['retainedMigrateSha256'], frozen)
+            self.assertEqual(origin.call_count, 1); self.assertEqual(fields.call_count, 2); self.assertEqual(chain.call_count, 2)
+            self.assertEqual(retained.call_count, 2)
+            retained.side_effect = ['a' * 64]
+            with self.assertRaisesRegex(RuntimeError, 'retained migration baseline'): deployment.recharge_pricing_observe_native(previous)
+            retained.side_effect = [frozen, 'a' * 64]
+            with self.assertRaisesRegex(RuntimeError, 'observation changed'): deployment.recharge_pricing_observe_native(previous)
+
+    def test_actual_complete60_build_has_only_four_reviewed_worker_overlays(self):
+        FixedRechargeD3fbNativeTests.setUpClass()
+        legacy = FixedRechargeD3fbNativeTests(); legacy.setUp()
+        with legacy.real_build_fixture() as f, ExitStack() as stack:
+            profile = copy.deepcopy(self.profile)
+            profile['baselineRelease']['buildInputSha256'] = f.profile['baselineRelease']['buildInputSha256']
+            for name, raw in self.contents.items():
+                path = f.root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw); path.chmod(0o644)
+            stack.enter_context(patch.object(deployment, 'check_recharge_pricing_scope', return_value=(f.root, profile)))
+            deployment.prepare_recharge_d3fb_build(_profile_id=deployment.RECHARGE_PRICING_ID)
+            context = f.root / '.deploy/production-release/fixed-recharge-context'
+            actual = deployment.fixed_recharge_file_map(context, names=profile['workerProjection'])
+            self.assertEqual({name: {'sha256': digest, 'mode': '100755' if mode & 0o111 else '100644'}
+                for name, (digest, mode) in actual.items()}, profile['workerProjection'])
+            delta = deployment.RECHARGE_D3FB_WORKER | set(deployment.RECHARGE_PRICING_CARRIED_WORKER)
+            for name, (raw, mode) in legacy.worker_d3.items():
+                self.assertEqual((context / name).read_bytes(), self.contents[name] if name in delta else raw)
+            self.assertEqual(len(set(actual) - delta), 56)
+            marker = json.loads((context.parent / 'fixed-recharge-build-projection.json').read_bytes())
+            self.assertEqual(marker['id'], deployment.RECHARGE_PRICING_ID)
+            self.assertEqual(marker['workerProjectionSha256'], deployment.historical_fingerprint(profile['workerProjection']))
+            self.assertEqual(len(actual), 60)
+
+    def test_audit_shares_only_its_before_tuple_and_rereads_independently_after_audit(self):
+        previous = Path('/local-fixture-previous'); directory = Path('/local-fixture-candidate')
+        audit = MagicMock(return_value={'stage': 'before'})
+        namespace = {'recharge_6f5_audit': audit}
+        old_profile = json.loads(self.original_profile)
+        origin = Path('/local-fixture-origin')
+        proof = (namespace, old_profile, {}, origin, origin, {})
+        with patch.object(deployment, 'recharge_pricing_stored_origin', return_value=proof) as stored, \
+                patch.object(deployment, 'recharge_pricing_baseline') as baseline, \
+                patch.object(deployment, 'fixed_recharge_bytes', return_value=b'{}'):
+            result = deployment.recharge_pricing_audit(directory, directory / 'before-audit.json', stage='before',
+                source=origin, auditor_source=origin, profile=self.profile, previous=previous)
+            self.assertEqual(result, {'stage': 'before'}); stored.assert_called_once_with(previous)
+            self.assertEqual(baseline.call_count, 2)
+            self.assertEqual(baseline.call_args_list[0].kwargs, {'_stored_origin': proof})
+            self.assertEqual(baseline.call_args_list[1].kwargs, {})
+            audit.assert_called_once_with(directory, directory / 'before-audit.json', stage='before', source=origin,
+                auditor_source=origin, profile=old_profile, previous=origin, before_receipt=None)
+            baseline.reset_mock(); baseline.side_effect = [None, RuntimeError('tail phase reread changed')]
+            with self.assertRaisesRegex(RuntimeError, 'tail phase reread'):
+                deployment.recharge_pricing_audit(directory, directory / 'after-audit.json', stage='after',
+                    source=origin, auditor_source=origin, profile=self.profile, previous=previous)
+
+    def test_api_tuple_reuse_is_lexical_and_ordinary_calls_require_new_origin_proof(self):
+        previous = Path('/local-fixture-previous'); directory = Path('/local-fixture-candidate')
+        reader = MagicMock(return_value={'localFixture': True})
+        old_profile = json.loads(self.original_profile); origin = Path('/local-fixture-origin')
+        proof = ({'recharge_6f5_api_receipt': reader}, old_profile, {}, origin, origin, {})
+        with patch.object(deployment, 'recharge_pricing_stored_origin', return_value=proof) as stored:
+            deployment.recharge_pricing_api_receipt(previous, directory, _stored_origin=proof)
+            stored.assert_not_called(); reader.assert_called_once_with(origin, directory, old_profile)
+            reader.reset_mock(); deployment.recharge_pricing_api_receipt(previous, directory)
+            stored.assert_called_once_with(previous); reader.assert_called_once_with(origin, directory, old_profile)
+
+    def test_context_zero49_and_exact21_readback_reject_every_drift(self):
+        args = SimpleNamespace(commit='a' * 40, source_tree='b' * 40, expected_current=deployment.RECHARGE_PRICING_E7_CURRENT)
+        gates = {stage: {'checkCount': 49, 'violationCount': 0, 'registrationFinanceGate': {'stage': stage, 'status': deployment.REGISTRATION_CLEARANCE['mode']}} for stage in ('before', 'after')}
+        context = deployment.recharge_pricing_context(args, self.profile, gates['before'], gates['after'])
+        self.assertEqual(context['id'], deployment.RECHARGE_PRICING_ID)
+        self.assertEqual(context['servicesUpdated'], ['auto-recharge'])
+        self.assertEqual(context['historicalRecharge045']['sourceCommit'], deployment.RECHARGE_PRICING_CURRENT)
+        for key, value in (('checkCount', 48), ('violationCount', 1), ('violationCount', False)):
+            bad = copy.deepcopy(gates['after']); bad[key] = value
+            with self.assertRaises(RuntimeError): deployment.recharge_pricing_context(args, self.profile, gates['before'], bad)
+        receipt = deployment.recharge_pricing_readback_receipt('a' * 40, 'b' * 40, 'c' * 64)
+        self.assertEqual(len(receipt), 21); self.assertEqual(receipt['previousCommit'], deployment.RECHARGE_PRICING_E7_CURRENT)
+        self.assertEqual(receipt['checkCount'], 49); self.assertEqual(receipt['violationCount'], 0)
+        self.assertIs(deployment.validate_recharge_pricing_readback_projection(receipt, 'a' * 40, 'b' * 40, 'c' * 64), receipt)
+        for key in receipt:
+            bad = copy.deepcopy(receipt); bad[key] = None
+            with self.subTest(key=key), self.assertRaises(RuntimeError): deployment.validate_recharge_pricing_readback_projection(bad, 'a' * 40, 'b' * 40, 'c' * 64)
+
+    def test_generic_pricing96_mix_rejects_before_file_network_lock_and_commands(self):
+        with patch.object(deployment.Path, 'open') as file_open, patch.object(deployment, 'run') as command, \
+                patch.object(deployment.urllib.request, 'urlopen') as network, patch.object(deployment.fcntl, 'flock') as lock:
+            with self.assertRaisesRegex(RuntimeError, 'selection is ambiguous'):
+                deployment.recharge_974_release(SimpleNamespace(registration_worker_96=True), profile_id=deployment.RECHARGE_PRICING_ID)
+            file_open.assert_not_called(); command.assert_not_called(); network.assert_not_called(); lock.assert_not_called()
+
+    def test_mixed_registration_api_flags_reject_before_service_actions(self):
+        for flag in ('registration_worker_94', 'registration_worker_95', 'registration_worker_96', 'api_admin_only', 'api_admin_build_proof'):
+            with patch.object(deployment, 'recharge_974_release') as release:
+                with self.assertRaises(RuntimeError): deployment.recharge_pricing_release(SimpleNamespace(**{flag: True}))
+                release.assert_not_called()
+        with patch.object(deployment, 'recharge_974_release', return_value='selected') as release:
+            args = SimpleNamespace(); self.assertEqual(deployment.recharge_pricing_release(args), 'selected')
+            release.assert_called_once_with(args, profile_id=deployment.RECHARGE_PRICING_ID)
+
+
+
+class FixedRechargePricingE7ContractTests(unittest.TestCase):
+    """Synthetic boundary fixtures verify logic only, never production observations."""
+    @classmethod
+    def setUpClass(cls):
+        cls.project = Path(__file__).resolve().parents[2]
+        cls.runtime = cls.project / '.runtime/recharge-pro-f812-integration-20261007/live-selector-local/integration-4c/pricing-release-successor/main5b-successor/e7-successor/control-test-fixtures'
+        cls.runtime.mkdir(parents=True, exist_ok=True)
+        path = cls.project / 'scripts/production-release/registration-onboarding-96.py'
+        cls.module = {'__name__': 'finite96_pure_fixture', '__file__': str(path)}
+        exec(compile(path.read_bytes(), str(path), 'exec'), cls.module)
+
+    def receipt_fixture(self):
+        value = {key: {'localFixture': key} for key in self.module['READBACK_KEYS']}
+        value['workerHealth'] = {'ready': True, 'registrationBusy': False, 'registrationWindowRetained': False,
+            'workerRole': 'registration', 'engine': 'camoufox', 'mailDeliveryVersion': 1}
+        stable = {key: item for key, item in value['workerHealth'].items()
+            if key not in {'registrationBusy', 'registrationWindowRetained'}}
+        contract = {'metadata': {'localFixture': True},
+            'fieldCanonicalSha256': {key: self.module['canonical_sha256'](item) for key, item in value.items()},
+            'workerHealthStableKeys': sorted(stable), 'workerHealthStableCanonicalSha256': self.module['canonical_sha256'](stable)}
+        return value, contract
+
+    def test_fresh_retained_window_and_busy_are_real_bools_without_idle_rewrite(self):
+        value, contract = self.receipt_fixture()
+        with patch.object(deployment, 'RECHARGE_PRICING_E7_READBACK_CONTRACT', contract):
+            for busy, retained in ((False, False), (False, True), (True, True), (True, False)):
+                value['workerHealth'].update(registrationBusy=busy, registrationWindowRetained=retained)
+                self.assertIs(deployment.validate_recharge_pricing_e7_readback(value, contract, self.module), value)
+                self.assertEqual(value['workerHealth']['registrationBusy'], busy)
+                self.assertEqual(value['workerHealth']['registrationWindowRetained'], retained)
+            with self.assertRaises(self.module['Registration96Error']): self.module['validate_health'](value['workerHealth'], idle=True)
+
+    def test_each_of28_closed_fields_and_stable_health_rejects_drift(self):
+        value, contract = self.receipt_fixture()
+        with patch.object(deployment, 'RECHARGE_PRICING_E7_READBACK_CONTRACT', contract):
+            for key in value:
+                bad = copy.deepcopy(value); del bad[key]
+                with self.subTest(missing=key), self.assertRaises(RuntimeError): deployment.validate_recharge_pricing_e7_readback(bad, contract, self.module)
+            for key in set(value) - {'workerHealth'}:
+                bad = copy.deepcopy(value); bad[key] = {'localFixture': 'changed'}
+                with self.subTest(changed=key), self.assertRaises(RuntimeError): deployment.validate_recharge_pricing_e7_readback(bad, contract, self.module)
+            for key in value['workerHealth']:
+                bad = copy.deepcopy(value); bad['workerHealth'][key] = 'wrong-type'
+                with self.subTest(health=key), self.assertRaises(RuntimeError): deployment.validate_recharge_pricing_e7_readback(bad, contract, self.module)
+            bad = copy.deepcopy(value); bad['extra'] = True
+            with self.assertRaises(RuntimeError): deployment.validate_recharge_pricing_e7_readback(bad, contract, self.module)
+            with self.assertRaises(RuntimeError): deployment.validate_recharge_pricing_e7_readback(value, {}, self.module)
+
+    def test_old17_and_new18_chain_entries_remain_disjoint_finite_contracts(self):
+        self.assertEqual(len(deployment.RECHARGE_PRICING_CHAIN), 17)
+        self.assertEqual(len(deployment.RECHARGE_PRICING_E7_CHAIN), 18)
+        self.assertEqual(deployment.RECHARGE_PRICING_E7_CHAIN[1:], deployment.RECHARGE_PRICING_CHAIN)
+        for function, wrong in ((deployment.recharge_pricing_native_chain, deployment.RECHARGE_PRICING_E7_CHAIN),
+                (deployment.recharge_pricing_e7_native_chain, deployment.RECHARGE_PRICING_CHAIN)):
+            with patch.object(deployment, 'fixed_recharge_bytes') as reader:
+                with self.assertRaises(RuntimeError): function(Path('/never-read'), chain=wrong)
+                reader.assert_not_called()
+        binding = deployment.fixed_recharge_binding(deployment.RECHARGE_PRICING_ID)
+        self.assertEqual(binding['current'], deployment.RECHARGE_PRICING_E7_CURRENT)
+        self.assertEqual(binding['previous'], deployment.RECHARGE_PRICING_CURRENT)
+
+    def test_e7_manifest_and_source_basis_are_required_before_activation(self):
+        draft = json.loads((self.project / deployment.RECHARGE_PRICING_FILE).read_bytes())
+        draft.update(enabled=False, approvalStatus='NOT_APPROVED')
+        self.assertIs(deployment.recharge_pricing_scope(draft, require_approved=False), draft)
+        with self.assertRaisesRegex(RuntimeError, 'not approved'): deployment.recharge_pricing_scope(draft)
+        for mutate in (lambda p: p.update(expectedCurrent=deployment.RECHARGE_PRICING_CURRENT),
+                lambda p: p['sourceBasis'].update(commit=deployment.RECHARGE_PRICING_CURRENT),
+                lambda p: p['baselineRelease'].update(manifestSha256=deployment.RECHARGE_PRICING_MANIFEST),
+                lambda p: p['nativeBaseline'].update(registration96ModuleSha256='a' * 64)):
+            bad = copy.deepcopy(draft); mutate(bad)
+            with self.assertRaises(RuntimeError): deployment.recharge_pricing_scope(bad, require_approved=False)
+
+    def test_preserved_runtime_allows_only_current_recharge_and_two_health_bools_to_change(self):
+        value, contract = self.receipt_fixture()
+        running = {key: value[key] for key in deployment.RECHARGE_PRICING_E7_RUNNING_KEYS}
+        running['liveServices'] = {name: {'containerId': name + '-fixture', 'configurationSha256': name + '-config'}
+            for name in deployment.ALL_SERVICES}
+        configured = {name: row for name, row in running['liveServices'].items() if name != 'auto-recharge'}
+        reduced = {name: {key: item for key, item in row.items() if key != 'configurationSha256'} for name, row in configured.items()}
+        profile = {'nativeBaseline': {'configuredPreservedStatesSha256': deployment.historical_fingerprint(configured),
+            'preservedStatesSha256': deployment.historical_fingerprint(reduced)}}
+        adapter = SimpleNamespace(running=MagicMock(return_value=running))
+        with patch.object(deployment, 'RECHARGE_PRICING_E7_READBACK_CONTRACT', contract):
+            running['liveServices']['auto-recharge']['containerId'] = 'new-reviewed-fixture'
+            running['workerHealth'].update(registrationBusy=True, registrationWindowRetained=True)
+            self.assertIs(deployment.recharge_pricing_e7_running(adapter, self.module, Path('/fixture'), profile), running)
+            for service in set(deployment.ALL_SERVICES) - {'auto-recharge'}:
+                bad = copy.deepcopy(running); bad['liveServices'][service]['configurationSha256'] = 'changed'
+                adapter.running.return_value = bad
+                with self.subTest(service=service), self.assertRaises(RuntimeError): deployment.recharge_pricing_e7_running(adapter, self.module, Path('/fixture'), profile)
+            for key in ('actualRegistrationWorkerSourceSha256', 'actualApiCompiledSourceSha256', 'apiAdminContentProof'):
+                bad = copy.deepcopy(running); bad[key] = {'localFixture': 'changed'}; adapter.running.return_value = bad
+                with self.subTest(source=key), self.assertRaises(RuntimeError): deployment.recharge_pricing_e7_running(adapter, self.module, Path('/fixture'), profile)
+
+    def test_audit_calls_original49_primitive_and_rereads_current_e7_afterwards(self):
+        previous, directory = Path('/local-e7'), Path('/local-new-candidate')
+        old = ({}, {}, {'previousRelease': '/local-6f5'}, previous, previous, {})
+        stored = ({}, {}, SimpleNamespace(), {}, previous, old, {})
+        audit = MagicMock(return_value={'checkCount': 49, 'violationCount': 0})
+        with patch.object(deployment, 'recharge_pricing_e7_stored_origin', return_value=stored) as reader, \
+                patch.object(deployment, 'recharge_pricing_e7_baseline') as baseline, \
+                patch.object(deployment, 'recharge_6f5_origin4c', return_value=Path('/local-4c')), \
+                patch.object(deployment, 'recharge_d3fb_native_producer', return_value={'registration_recovery_finance_audit': audit}), \
+                patch.object(deployment, 'recharge_d3fb_audit_control', return_value=Path('/local-2f')), \
+                patch.object(deployment, 'recharge_pricing_stored_origin') as forbidden, \
+                patch.object(deployment, 'recharge_6f5_baseline') as idle_snapshot:
+            result = deployment.recharge_pricing_e7_audit(directory, directory / 'before-audit.json', stage='before',
+                source=previous, auditor_source=Path('/local-fixed-finance'), profile={}, previous=previous)
+            self.assertEqual(result['checkCount'], 49)
+            self.assertEqual(reader.call_count, 2); self.assertEqual(reader.call_args_list[1].kwargs, {'_historical': old})
+            self.assertEqual(baseline.call_count, 2)
+            forbidden.assert_not_called(); idle_snapshot.assert_not_called()
+            audit.assert_called_once_with(directory, directory / 'before-audit.json', stage='before',
+                source=Path('/local-fixed-finance'), before_receipt=None, control_source=Path('/local-2f'), profile_id=deployment.REGISTRATION_RECOVERY_ID)
+            baseline.reset_mock(); baseline.side_effect=[None, RuntimeError('fresh e7 tail changed')]
+            with self.assertRaisesRegex(RuntimeError, 'fresh e7 tail changed'):
+                deployment.recharge_pricing_e7_audit(directory, directory / 'after-audit.json', stage='after', source=previous,
+                    auditor_source=Path('/local-fixed-finance'), profile={}, previous=previous, before_receipt=directory / 'before-audit.json')
+
+    def test_new_helpers_never_call_original_idle_or_old_live_baseline(self):
+        tree = ast.parse(Path(deployment.__file__).read_bytes())
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        forbidden = {'recharge_pricing_stored_origin', 'recharge_pricing_observe_native', 'recharge_6f5_baseline',
+            'assert_no_active_registration', 'task_snapshot', 'audit49', 'baseline_observation', 'recharge_6f5_api_receipt'}
+        for name, node in functions.items():
+            if name.startswith('recharge_pricing_e7_'):
+                calls = {n.func.id for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+                calls |= {n.func.attr for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+                self.assertFalse(calls & forbidden, name)
+        main_raw = subprocess.check_output(['git', 'show', 'HEAD:scripts/production-release/remote-deploy.py'], cwd=self.project)
+        main = ast.parse(main_raw)
+        candidate = functions['load_registration96']
+        frozen = next(n for n in main.body if isinstance(n, ast.FunctionDef) and n.name == 'load_registration96')
+        self.assertEqual(ast.dump(candidate), ast.dump(frozen))
+        self.assertEqual(deployment.REGISTRATION96_MODULE_SHA256, deployment.RECHARGE_PRICING_E7_NATIVE_PINS['registration96ModuleSha256'])
 
 
 if __name__ == '__main__':

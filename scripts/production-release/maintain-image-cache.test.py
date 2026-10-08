@@ -936,6 +936,17 @@ class DependencyRetentionTests(unittest.TestCase):
                     '--deployment-run', 'github-actions-123-1'])
             audit.assert_not_called()
 
+    def test_pricing_045_skipped_cache_rejects_automatic_maintenance_before_docker_or_finance_reads(self):
+        retention = RetentionTests(); retention.setUp()
+        retention.manifest['fixedRechargeRelease'] = {
+            'id': 'recharge-pro-pricing-045-20261008', 'cacheStatus': 'SKIPPED'}
+        retention.manifest['dataAuditAfter'] = {'checkCount': 49, 'violationCount': 0}
+        with patch.object(cache, 'verify_deployment') as audit, patch.object(cache.subprocess, 'run') as command:
+            with self.assertRaisesRegex(RuntimeError, 'separately approved exact plan'):
+                retention.invoke(['--apply', '--approved-policy', cache.POLICY,
+                    '--deployment-run', 'github-actions-123-1'])
+            audit.assert_not_called();command.assert_not_called()
+
     def test_2f_recharge_changed_profile_seal_or_unknown_id_blocks_before_docker(self):
         for location in ('profile', 'seal', 'id'):
             with self.subTest(location=location):

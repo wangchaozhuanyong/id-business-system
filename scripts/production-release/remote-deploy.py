@@ -2354,10 +2354,13 @@ def validate_main80_recharge_readback_projection(value, expected_current, source
 
 
 def fixed_recharge_binding(profile_id=RECHARGE_SCOPE_ID):
+    if type(profile_id) is str and profile_id == RECHARGE_PRICING_ID:
+        return {'id': RECHARGE_PRICING_ID, 'current': RECHARGE_PRICING_E7_CURRENT, 'tree': RECHARGE_PRICING_E7_TREE,
+            'file': RECHARGE_PRICING_FILE, 'previous': RECHARGE_PRICING_CURRENT, 'carried': frozenset(RECHARGE_PRICING_CARRIED)}
     if type(profile_id) is str and profile_id == RECHARGE_6F5_ID:
         return {'id': RECHARGE_6F5_ID, 'current': RECHARGE_6F5_CURRENT, 'tree': RECHARGE_6F5_TREE,
             'file': RECHARGE_6F5_FILE, 'previous': RECHARGE_D3FB_CURRENT, 'carried': frozenset()}
-    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID),
+    require(type(profile_id) is str and profile_id in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID),
             'Fixed recharge runtime scope unavailable')
     if profile_id == RECHARGE_D3FB_ID:
         return {'id': RECHARGE_D3FB_ID, 'current': RECHARGE_D3FB_CURRENT, 'tree': RECHARGE_D3FB_TREE,
@@ -2398,6 +2401,8 @@ def fixed_recharge_json(raw):
 
 def fixed_recharge_scope(value, *, require_approved=True):
     try:
+        if isinstance(value, dict) and value.get('id') == RECHARGE_PRICING_ID:
+            return recharge_pricing_scope(value, require_approved=require_approved)
         if isinstance(value, dict) and value.get('id') == RECHARGE_6F5_ID:
             return recharge_6f5_scope(value, require_approved=require_approved)
         if isinstance(value, dict) and value.get('id') == RECHARGE_D3FB_ID:
@@ -2582,6 +2587,8 @@ def verify_fixed_recharge_archive(release, source, profile, *, checkout=False, n
 
 
 def check_fixed_recharge_scope(*, require_approved=True, profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_PRICING_ID:
+        return check_recharge_pricing_scope(require_approved=require_approved)
     if profile_id == RECHARGE_6F5_ID:
         return check_recharge_6f5_scope(require_approved=require_approved)
     if profile_id == RECHARGE_D3FB_ID:
@@ -2891,6 +2898,8 @@ def fixed_recharge_preserved_states(states):
 
 def validate_fixed_recharge_readback_projection(value, expected_current, source_tree, profile_sha256,
         profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_PRICING_ID:
+        return validate_recharge_pricing_readback_projection(value, expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_6F5_ID:
         return validate_recharge_6f5_readback_projection(value, expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_D3FB_ID:
@@ -2923,6 +2932,8 @@ def validate_fixed_recharge_readback_projection(value, expected_current, source_
 
 
 def check_fixed_recharge_deployment(expected_current, source_tree, profile_sha256, profile_id=RECHARGE_SCOPE_ID):
+    if profile_id == RECHARGE_PRICING_ID:
+        return check_recharge_pricing_deployment(expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_6F5_ID:
         return check_recharge_6f5_deployment(expected_current, source_tree, profile_sha256)
     if profile_id == RECHARGE_D3FB_ID:
@@ -10557,9 +10568,9 @@ def recharge_974_pull_image(repository, commit, run_id, run_attempt):
 
 
 def recharge_974_release(args, *, profile_id=RECHARGE_974_ID):
-    require(profile_id in (RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID), 'Fixed recharge release selection changed')
-    successor = profile_id in (RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID)
-    d3fb = profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID)
+    require(profile_id in (RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID), 'Fixed recharge release selection changed')
+    successor = profile_id in (RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID)
+    d3fb = profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID)
     current = RECHARGE_D3FB_CURRENT if d3fb else RECHARGE_2F_CURRENT if successor else RECHARGE_974_CURRENT
     profile_file = RECHARGE_D3FB_FILE if d3fb else RECHARGE_2F_FILE if successor else RECHARGE_974_FILE
     baseline_check = recharge_d3fb_baseline if d3fb else recharge_2f_baseline if successor else recharge_974_baseline
@@ -10569,14 +10580,19 @@ def recharge_974_release(args, *, profile_id=RECHARGE_974_ID):
     message = 'Fixed 974 recharge release unavailable'
     flag = 'recharge_pro_d3fb' if d3fb else 'recharge_pro_2f' if successor else 'recharge_pro_974'
     api_receipt = recharge_d3fb_api_receipt
-    if profile_id == RECHARGE_6F5_ID:
+    if profile_id == RECHARGE_PRICING_ID:
+        require(not getattr(args, 'registration_worker_96', False), 'Fixed release selection is ambiguous')
+        current, profile_file, flag = RECHARGE_PRICING_E7_CURRENT, RECHARGE_PRICING_FILE, 'recharge_pro_pricing'
+        baseline_check, audit, context = recharge_pricing_e7_baseline, recharge_pricing_e7_audit, recharge_pricing_context
+        deployment_check, api_receipt = check_recharge_pricing_deployment, recharge_pricing_e7_api_receipt
+    elif profile_id == RECHARGE_6F5_ID:
         current, profile_file, flag = RECHARGE_6F5_CURRENT, RECHARGE_6F5_FILE, 'recharge_pro_6f5'
         baseline_check, audit, context = recharge_6f5_baseline, recharge_6f5_audit, recharge_6f5_context
         deployment_check, api_receipt = check_recharge_6f5_deployment, recharge_6f5_api_receipt
     else:
         require(not getattr(args, 'recharge_pro_6f5', False), message)
     require(getattr(args, flag, False) is True
-        and all(not getattr(args, other, False) for other in ('recharge_pro_974', 'recharge_pro_2f', 'recharge_pro_d3fb', 'recharge_pro_6f5') if other != flag) and not args.admin_only
+        and all(not getattr(args, other, False) for other in ('recharge_pro_974', 'recharge_pro_2f', 'recharge_pro_d3fb', 'recharge_pro_6f5', 'recharge_pro_pricing') if other != flag) and not args.admin_only
         and all(not getattr(args, key, False) for key in ('historical_finance_exception', 'historical_finance_continuation',
             'historical_finance_recharge_diagnostics', 'historical_finance_maintenance_continuation',
             'historical_finance_mailbox_batch', 'historical_finance_post_cleanup', 'historical_finance_order_archive',
@@ -10801,6 +10817,12 @@ RECHARGE_D3FB_WORKER_BASIS = {**REGISTRATION_RECOVERY_WORKER_BASIS, **
 
 
 def recharge_projected_binding(profile_id):
+    if profile_id == RECHARGE_PRICING_ID:
+        return {**fixed_recharge_binding(profile_id), 'sourceBasis': RECHARGE_PRICING_SOURCE_BASIS,
+            'candidates': RECHARGE_D3FB_CANDIDATES, 'worker': RECHARGE_D3FB_WORKER,
+            'producer': RECHARGE_PRICING_E7_PRODUCER, 'profileRaw': RECHARGE_PRICING_PROFILE_RAW,
+            'profileRawKey': 'rechargeProfileRawSha256', 'nativeKeys': RECHARGE_PRICING_E7_NATIVE_KEYS,
+            'run': 'github-actions-37715981512-1', 'extraBaselineKeys': {'sourceArchiveSha256', 'buildInputSha256'}}
     if profile_id == RECHARGE_6F5_ID:
         return {**fixed_recharge_binding(profile_id), 'sourceBasis': RECHARGE_6F5_SOURCE_BASIS,
             'candidates': RECHARGE_D3FB_CANDIDATES, 'worker': RECHARGE_D3FB_WORKER,
@@ -10871,7 +10893,7 @@ def recharge_2f_running_hashes(directory, profile):
 
 def recharge_projected_generated(profile_id):
     recharge_projected_binding(profile_id)
-    return RECHARGE_2F_GENERATED + tuple(RECHARGE_D3FB_PRIVATE) if profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID) else RECHARGE_2F_GENERATED
+    return RECHARGE_2F_GENERATED + tuple(RECHARGE_D3FB_PRIVATE) if profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID) else RECHARGE_2F_GENERATED
 
 
 def recharge_d3fb_private_copies(directory, previous, profile, *, copy_files=False):
@@ -10897,7 +10919,7 @@ def recharge_2f_carried_modes(directory, previous, profile):
 
 def recharge_d3fb_carried_modes(directory, previous, profile):
     binding = recharge_projected_binding(profile['id'])
-    approved = set(profile['candidateSourceSha256']) | set(profile['controlSourceSha256']) | {binding['file']}
+    approved = set(profile['candidateSourceSha256']) | set(profile['carriedSourceOnlySha256']) | set(profile['controlSourceSha256']) | {binding['file']}
     for name, (digest, mode) in fixed_recharge_file_map(previous, omitted=recharge_projected_generated(profile['id'])).items():
         if name in approved: continue
         path = directory / name
@@ -10984,8 +11006,9 @@ def recharge_projected_scope(value, *, require_approved=True, _profile_id=RECHAR
         and all(evidence(native[k]) for k in set(native) - {'nativeFileCount', 'nativeDirectoryCount'})
         and all((type(native[k]) is int and 0 < native[k] <= 100000) or (not value['enabled'] and native[k] is None)
             for k in ('nativeFileCount', 'nativeDirectoryCount')), message)
-    names = binding['candidates'] | RECHARGE_2F_CONTROLS
-    require(value['carriedSourceOnlySha256'] == {}
+    carried = RECHARGE_PRICING_CARRIED if _profile_id == RECHARGE_PRICING_ID else {}
+    names = binding['candidates'] | RECHARGE_2F_CONTROLS | set(carried)
+    require(value['carriedSourceOnlySha256'] == carried
         and historical_fingerprint(value['financeValidator']) == historical_fingerprint(REGISTRATION_FINANCE)
         and historical_fingerprint(value['financeClearance']) == historical_fingerprint(REGISTRATION_CLEARANCE)
         and historical_fingerprint(value['scope']) == historical_fingerprint(RECHARGE_SCOPE_EXPECTED)
@@ -11000,6 +11023,19 @@ def recharge_projected_scope(value, *, require_approved=True, _profile_id=RECHAR
             and row['mode'] == REGISTRATION_RECOVERY_WORKER_BASIS[name]['mode'] and digest(row['sha256'])
             for name, row in projection.items())
         and all(projection[name]['sha256'] == value['candidateSourceSha256'][name] for name in binding['worker']), message)
+    if _profile_id == RECHARGE_PRICING_ID:
+        require(baseline['manifestSha256'] == RECHARGE_PRICING_E7_MANIFEST, message)
+        expected_native = {'apiScopeProducerSha256': RECHARGE_D3FB_API_SCOPE,
+            'registrationProfileRawSha256': RECHARGE_6F5_REGISTRATION_RAW,
+            'registrationProfileCanonicalSha256': RECHARGE_6F5_REGISTRATION_CANONICAL,
+            'predecessorProfileCanonicalSha256': RECHARGE_PRICING_PROFILE_CANONICAL,
+            **RECHARGE_PRICING_E7_NATIVE_PINS}
+        require(all(native[key] == digest or (not value['enabled'] and native[key] is None)
+            for key, digest in expected_native.items()), message)
+        expected = dict(RECHARGE_PRICING_WORKER_BASIS)
+        expected.update({name: {'mode': '100644', 'sha256': value['candidateSourceSha256'][name]} for name in RECHARGE_D3FB_WORKER})
+        expected.update({name: {'mode': '100644', 'sha256': digest} for name, digest in RECHARGE_PRICING_CARRIED_WORKER.items()})
+        require(projection == expected, message)
     if _profile_id == RECHARGE_6F5_ID:
         expected_native = {'apiScopeProducerSha256': RECHARGE_D3FB_API_SCOPE,
             'registrationProfileRawSha256': RECHARGE_6F5_REGISTRATION_RAW,
@@ -11083,7 +11119,7 @@ def recharge_2f_baseline(previous, profile, manifest, *, verify_native=False):
 def check_recharge_2f_scope(*, require_approved=True):
     root = Path(__file__).resolve().parents[2]
     profile = recharge_2f_scope(fixed_recharge_json(fixed_recharge_bytes(root / RECHARGE_2F_FILE, modes=(0o644,), limit=128 * 1024)), require_approved=require_approved)
-    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
     require(all(hashlib.sha256(fixed_recharge_bytes(root / name, modes=(0o644,))).hexdigest() == digest
         for name, digest in approved.items()), 'Fixed 2f reviewed source changed')
     require(run('git', '-C', str(root), 'rev-parse', RECHARGE_2F_SOURCE_BASIS['commit'] + '^{tree}')
@@ -11138,7 +11174,7 @@ def recharge_d3fb_source_files(previous, profile, candidate):
     files = fixed_recharge_file_map(previous, omitted=recharge_projected_generated(profile['id']))
     result = {name: (fixed_recharge_bytes(previous / name, modes=(mode,)), '100755' if mode & 0o111 else '100644')
         for name, (_digest, mode) in files.items()}
-    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
     require(all(name in candidate and candidate[name][1] == '100644'
         and hashlib.sha256(candidate[name][0]).hexdigest() == digest for name, digest in approved.items()), 'Fixed 2f candidate source changed')
     result.update({name: candidate[name] for name in approved})
@@ -11151,11 +11187,11 @@ def recharge_d3fb_source_files(previous, profile, candidate):
 def verify_recharge_2f_candidate_source(directory, previous, profile):
     binding = recharge_projected_binding(profile['id'])
     expected = fixed_recharge_file_map(previous, omitted=recharge_projected_generated(profile['id']))
-    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
     expected.update({name: (digest, 0o644) for name, digest in approved.items()})
     expected[binding['file']] = (hashlib.sha256(fixed_recharge_bytes(directory / binding['file'], modes=(0o644,))).hexdigest(), 0o644)
     files = fixed_recharge_file_map(directory, omitted=recharge_projected_generated(profile['id']))
-    if profile['id'] in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID): recharge_d3fb_private_copies(directory, previous, profile)
+    if profile['id'] in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID): recharge_d3fb_private_copies(directory, previous, profile)
     require(files == expected and parse_fixed_recharge_scope(fixed_recharge_bytes(directory / binding['file'], modes=(0o644,), limit=128 * 1024)) == profile,
         'Fixed 2f candidate projection changed')
     return main80_recharge_public_snapshot(directory, files)
@@ -11216,10 +11252,13 @@ def validate_recharge_2f_readback_projection(value, expected_current, source_tre
 
 def check_recharge_2f_deployment(expected_current, source_tree, profile_sha256, *, _profile_id=RECHARGE_2F_ID):
     binding = recharge_projected_binding(_profile_id)
-    d3_family = _profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID)
+    d3_family = _profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID)
     baseline_check = recharge_6f5_baseline if _profile_id == RECHARGE_6F5_ID else recharge_d3fb_baseline if d3_family else recharge_2f_baseline
+    if _profile_id == RECHARGE_PRICING_ID: baseline_check = recharge_pricing_e7_baseline
     api_receipt = recharge_6f5_api_receipt if _profile_id == RECHARGE_6F5_ID else recharge_d3fb_api_receipt
+    if _profile_id == RECHARGE_PRICING_ID: api_receipt = recharge_pricing_e7_api_receipt
     context = recharge_6f5_context if _profile_id == RECHARGE_6F5_ID else recharge_d3fb_context if d3_family else recharge_2f_context
+    if _profile_id == RECHARGE_PRICING_ID: context = recharge_pricing_context
     projection = recharge_projected_readback_receipt(expected_current, source_tree, profile_sha256, _profile_id=_profile_id)
     current = (BASE / 'current').resolve()
     profile = fixed_recharge_scope(fixed_recharge_json(fixed_recharge_bytes(current / binding['file'], modes=(0o644,), limit=128 * 1024)))
@@ -11256,6 +11295,7 @@ def check_recharge_2f_deployment(expected_current, source_tree, profile_sha256, 
         api_receipt(previous, current, profile)
         recharge_d3fb_private_copies(current, previous, profile)
     validator = validate_recharge_6f5_readback_projection if _profile_id == RECHARGE_6F5_ID else validate_recharge_d3fb_readback_projection if d3_family else validate_recharge_2f_readback_projection
+    if _profile_id == RECHARGE_PRICING_ID: validator = validate_recharge_pricing_readback_projection
     return validator(projection, expected_current, source_tree, profile_sha256)
 
 
@@ -11422,7 +11462,9 @@ def recharge_d3fb_historical_api(profile):
 
 
 def recharge_d3fb_context(args, profile, before_gate, after_gate):
-    if profile.get('id') == RECHARGE_6F5_ID:
+    if profile.get('id') == RECHARGE_PRICING_ID:
+        recharge_pricing_scope(profile)
+    elif profile.get('id') == RECHARGE_6F5_ID:
         recharge_6f5_scope(profile)
     else:
         recharge_d3fb_scope(profile)
@@ -11577,7 +11619,7 @@ def check_recharge_d3fb_scope(*, require_approved=True):
     root = Path(__file__).resolve().parents[2]
     profile = recharge_d3fb_scope(fixed_recharge_json(fixed_recharge_bytes(root / RECHARGE_D3FB_FILE,
         modes=(0o644,), limit=128 * 1024)), require_approved=require_approved)
-    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
     require(all(hashlib.sha256(fixed_recharge_bytes(root / name, modes=(0o644,))).hexdigest() == digest
         for name, digest in approved.items()), 'Fixed d3fb reviewed source changed')
     require(run('git', '-C', str(root), 'rev-parse', RECHARGE_D3FB_SOURCE_BASIS['commit'] + '^{tree}')
@@ -11617,8 +11659,9 @@ def recharge_d3fb_build_projection(profile, source, basis):
 
 
 def prepare_recharge_d3fb_build(*, _profile_id=RECHARGE_D3FB_ID):
-    require(_profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID), 'Fixed projected build selection changed')
-    root, profile = check_recharge_6f5_scope() if _profile_id == RECHARGE_6F5_ID else check_recharge_d3fb_scope()
+    require(_profile_id in (RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID), 'Fixed projected build selection changed')
+    check_scope = check_recharge_pricing_scope if _profile_id == RECHARGE_PRICING_ID else check_recharge_6f5_scope if _profile_id == RECHARGE_6F5_ID else check_recharge_d3fb_scope
+    root, profile = check_scope()
     require_recharge_d3fb_no_browser_cache()
     raw = registration_download(RECHARGE_D3FB_ORIGIN)
     require(hashlib.sha256(raw).hexdigest() == RECHARGE_D3FB_ORIGIN_ARCHIVE, 'Fixed d3fb source archive changed')
@@ -11626,6 +11669,8 @@ def prepare_recharge_d3fb_build(*, _profile_id=RECHARGE_D3FB_ID):
     basis = registration_archive(registration_download(RECHARGE_SCOPE_CURRENT), RECHARGE_SCOPE_CURRENT)
     worker = recharge_d3fb_build_projection(profile, source, basis)
     worker.update({name: (fixed_recharge_bytes(root / name, modes=(0o644,)), '100644') for name in RECHARGE_D3FB_WORKER})
+    if _profile_id == RECHARGE_PRICING_ID:
+        worker.update({name: (fixed_recharge_bytes(root / name, modes=(0o644,)), '100644') for name in RECHARGE_PRICING_CARRIED_WORKER})
     measured = {name: {'mode': mode, 'sha256': hashlib.sha256(data).hexdigest()}
         for name, (data, mode) in worker.items() if name.startswith(REGISTRATION_WORKER_PREFIX)}
     require(measured == profile['workerProjection'], 'Fixed d3fb complete60 two-overlay build changed')
@@ -11635,7 +11680,7 @@ def prepare_recharge_d3fb_build(*, _profile_id=RECHARGE_D3FB_ID):
     context = output / 'fixed-recharge-context'; target = output / 'fixed-recharge-build-projection.json'
     require(not target.exists() and not target.is_symlink(), 'Fixed recharge output already exists')
     write_registration_files(context, worker)
-    require((check_recharge_6f5_scope() if _profile_id == RECHARGE_6F5_ID else check_recharge_d3fb_scope())[1] == profile,
+    require(check_scope()[1] == profile,
         'Fixed d3fb build input changed')
     target.write_text(json.dumps({'version': 1, 'id': _profile_id, 'contextPath': str(context),
         'workerProjectionSha256': historical_fingerprint(measured)}, sort_keys=True) + '\n'); target.chmod(0o600)
@@ -11710,7 +11755,7 @@ def check_recharge_6f5_scope(*, require_approved=True):
     root = Path(__file__).resolve().parents[2]
     profile = recharge_6f5_scope(fixed_recharge_json(fixed_recharge_bytes(root / RECHARGE_6F5_FILE,
         modes=(0o644,), limit=128 * 1024)), require_approved=require_approved)
-    approved = {**profile['candidateSourceSha256'], **profile['controlSourceSha256']}
+    approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
     require(all(hashlib.sha256(fixed_recharge_bytes(root / name, modes=(0o644,))).hexdigest() == digest
         for name, digest in approved.items()), 'Fixed6f5 reviewed source changed')
     require(run('git', '-C', str(root), 'rev-parse', RECHARGE_6F5_CURRENT + '^{tree}') == RECHARGE_6F5_TREE,
@@ -11928,6 +11973,623 @@ def recharge_6f5_release(args):
     return recharge_974_release(args, profile_id=RECHARGE_6F5_ID)
 
 
+# One finite continuation of the already closed045 release. Old6f5/4c/2f remain fixed.
+RECHARGE_PRICING_ID = 'recharge-pro-pricing-045-20261008'
+RECHARGE_PRICING_FILE = 'deploy/aws/' + RECHARGE_PRICING_ID + '.json'
+RECHARGE_PRICING_CURRENT = '04570d75c779fd91a0933ef9416f6d62698b6b91'
+RECHARGE_PRICING_TREE = 'ef923b2152b85ee8395f3bb4b93eac711bdbe3d7'
+RECHARGE_PRICING_PRODUCER = '9b2e976829f325935190a7926853236784e9076969864d97793a6b24a69f773b'
+RECHARGE_PRICING_PROFILE_RAW = '233870eaa3d794fa0cbbc1fa2d826a062744db4410a13643c2d6b79ed0643d0b'
+RECHARGE_PRICING_PROFILE_CANONICAL = '44f2689046f718bace2cc757cf9c4332c91fd608006eaf28c55dcf092f4ff0d8'
+RECHARGE_PRICING_MANIFEST = '0aacc82fc257bc2c4837a4b513223a01ec4f608fbacc0b009c1551b5ceb18b97'
+RECHARGE_PRICING_SOURCE_BASIS = {'commit': 'e7c9862d58599995954883f1c1f6038283afffab',
+    'tree': '1141040aa57661695aeb599ad698997ea09337ba'}
+RECHARGE_PRICING_CARRIED_WORKER = {
+    REGISTRATION_WORKER_PREFIX + 'registration_browser.py': '6beec99bb17be46890e2e105c935b59ec1dff066a21f164b266fcf4c5b914c40',
+    REGISTRATION_WORKER_PREFIX + 'test_registration_browser.py': '6ceff54be34e6271acc2c4d3428d5c5871ae0ac6f4efcb9e4492c0858ad9e5a0'}
+RECHARGE_PRICING_CARRIED = {**RECHARGE_PRICING_CARRIED_WORKER,
+    'deploy/aws/registration-baseline-96-20261008.json': '356abcd30abe69980ed134292c4c44d9765ea0521dfef5472d088c74d6acf749',
+    'deploy/aws/registration-worker-96-20261008.json': '642440292a6a1f25a73cb155398c03eb396453e59f9bd229d617b5f60b079299',
+    'scripts/ci-recharge-check.mjs': '432863e05a4f32348338e2dd1d794f389b730876711060447855a9baf0bf7f2c',
+    'scripts/production-release/registration-onboarding-96.py': '7dd54407c7069538d1b5d63d1632780ec5af5fa52006ce4cad4c717f937da88c',
+    'scripts/production-release/registration-onboarding-96.test.py': '0685922f18d57a3af72677da64004420338b5420695436d66b969363e1c73b0b',
+    'scripts/production-release/registration-only-transport.test.py': '466c2b47dc4bf87f9fa29df54d09fef021116ca62148a91e01eaaffd7669903a',
+}
+RECHARGE_PRICING_WORKER_BASIS = {**RECHARGE_D3FB_WORKER_BASIS,
+    REGISTRATION_WORKER_PREFIX + 'plan_selection.py': {'mode': '100644',
+        'sha256': '5b4142daaf8155c6fdd90df900c123d483fba2f6d2b1cb1856ae501828ad332a'},
+    REGISTRATION_WORKER_PREFIX + 'test_pro.py': {'mode': '100644',
+        'sha256': '3fa26a49bc1b481c3b367aa169d00ddbbfed50407ecdb3ee0a1f20196ecfdacd'}}
+RECHARGE_PRICING_NATIVE_KEYS = RECHARGE_D3FB_NATIVE_KEYS | {
+    'predecessorProfileCanonicalSha256', 'predecessorStoredContextSha256'}
+RECHARGE_PRICING_CHAIN = ((RECHARGE_PRICING_CURRENT, RECHARGE_PRICING_TREE),) + RECHARGE_6F5_CHAIN
+
+
+def recharge_pricing_scope(value, *, require_approved=True):
+    return recharge_projected_scope(value, require_approved=require_approved, _profile_id=RECHARGE_PRICING_ID)
+
+
+def check_recharge_pricing_scope(*, require_approved=True):
+    root = Path(__file__).resolve().parents[2]
+    profile = recharge_pricing_scope(fixed_recharge_json(fixed_recharge_bytes(root / RECHARGE_PRICING_FILE,
+        modes=(0o644,), limit=128 * 1024)), require_approved=require_approved)
+    approved = {**profile['candidateSourceSha256'], **profile['carriedSourceOnlySha256'], **profile['controlSourceSha256']}
+    require(all(hashlib.sha256(fixed_recharge_bytes(root / name, modes=(0o644,))).hexdigest() == digest
+        for name, digest in approved.items()), 'Fixed pricing reviewed source changed')
+    require(run('git', '-C', str(root), 'rev-parse', RECHARGE_PRICING_SOURCE_BASIS['commit'] + '^{tree}')
+        == RECHARGE_PRICING_SOURCE_BASIS['tree'], 'Fixed pricing source basis changed')
+    delta = set(filter(None, run('git', '-C', str(root), 'diff', '--name-only', RECHARGE_PRICING_SOURCE_BASIS['commit'], '--').splitlines()))
+    untracked = set(filter(None, run('git', '-C', str(root), 'ls-files', '--others', '--exclude-standard').splitlines()))
+    require(delta <= set(approved) | {RECHARGE_PRICING_FILE} and untracked <= {RECHARGE_PRICING_FILE},
+        'Fixed pricing source scope changed')
+    return root, profile
+
+
+def recharge_pricing_native_producer(previous):
+    require(previous.is_absolute() and previous.resolve() == previous and previous.parent == BASE / 'releases'
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + RECHARGE_PRICING_CURRENT[:12], previous.name),
+        'Fixed pricing predecessor location changed')
+    path = previous / 'scripts/production-release/remote-deploy.py'
+    raw = fixed_recharge_bytes(path, modes=(0o644, 0o664))
+    require(hashlib.sha256(raw).hexdigest() == RECHARGE_PRICING_PRODUCER, 'Fixed pricing predecessor producer changed')
+    namespace = {'__name__': 'fixed_pricing_predecessor', '__file__': str(path)}
+    exec(compile(raw, str(path), 'exec'), namespace)
+    require(namespace['BASE'] == Path('/opt/id-business-v2') and namespace['REGISTRATION_FINANCE'] == REGISTRATION_FINANCE
+        and namespace['REGISTRATION_CLEARANCE'] == REGISTRATION_CLEARANCE, 'Fixed pricing predecessor contract changed')
+    namespace['BASE'] = BASE
+    profile_raw = fixed_recharge_bytes(previous / RECHARGE_6F5_FILE, modes=(0o644, 0o664), limit=128 * 1024)
+    require(hashlib.sha256(profile_raw).hexdigest() == RECHARGE_PRICING_PROFILE_RAW,
+        'Fixed pricing predecessor profile changed')
+    profile = namespace['recharge_6f5_scope'](fixed_recharge_json(profile_raw))
+    require(historical_fingerprint(profile) == RECHARGE_PRICING_PROFILE_CANONICAL,
+        'Fixed pricing predecessor canonical profile changed')
+    return namespace, profile
+
+
+def recharge_pricing_stored_origin(previous, *, verify_native=False):
+    namespace, old_profile = recharge_pricing_native_producer(previous)
+    raw = fixed_recharge_bytes(previous / 'release-manifest.json', modes=(0o600,))
+    manifest = fixed_recharge_json(raw); origin = Path(manifest['previousRelease'])
+    require(hashlib.sha256(raw).hexdigest() == RECHARGE_PRICING_MANIFEST
+        and manifest['commit'] == RECHARGE_PRICING_CURRENT and manifest['sourceTree'] == RECHARGE_PRICING_TREE
+        and manifest['previousCommit'] == RECHARGE_6F5_CURRENT
+        and manifest['deploymentRun'] == 'github-actions-37694009463-1'
+        and manifest['servicesUpdated'] == ['auto-recharge'] and manifest['migrationApplied'] is False
+        and manifest['newMigrations'] == [] and manifest['databaseGrants'] == {
+            'status': 'SKIPPED', 'reason': 'FIXED_RECHARGE_NO_MIGRATIONS'}
+        and 'apiAdminPublication' not in manifest, 'Fixed pricing predecessor manifest changed')
+    frozen_origin, _ = namespace['recharge_6f5_baseline'](origin, old_profile,
+        fixed_recharge_json(fixed_recharge_bytes(origin / 'release-manifest.json', modes=(0o600,))))
+    public = namespace['verify_recharge_2f_candidate_source'](previous, origin, old_profile)
+    namespace['require_main80_recharge_public_snapshot'](public)
+    frozen = fixed_recharge_json(fixed_recharge_bytes(frozen_origin / 'before-audit.json'))['gate']
+    gates, facts = {}, []
+    for stage in ('before', 'after'):
+        report = fixed_recharge_json(fixed_recharge_bytes(previous / (stage + '-audit.json')))
+        gates[stage] = require_registration_zero_report(report, stage, frozen)
+        require(gates[stage] == manifest['dataAudit' + stage.title()], 'Fixed pricing predecessor audit changed')
+        facts.append((report['checks'], report['identity']))
+    require(facts[0] == facts[1] and manifest['fixedRechargeRelease'] == namespace['recharge_6f5_context'](
+        argparse.Namespace(commit=RECHARGE_PRICING_CURRENT, source_tree=RECHARGE_PRICING_TREE,
+            expected_current=RECHARGE_6F5_CURRENT), old_profile, gates['before'], gates['after']),
+        'Fixed pricing predecessor stored context changed')
+    receipt = namespace['recharge_6f5_readback_receipt'](RECHARGE_PRICING_CURRENT,
+        RECHARGE_PRICING_TREE, RECHARGE_PRICING_PROFILE_CANONICAL)
+    namespace['validate_recharge_6f5_readback_projection'](receipt, RECHARGE_PRICING_CURRENT,
+        RECHARGE_PRICING_TREE, RECHARGE_PRICING_PROFILE_CANONICAL)
+    if verify_native:
+        require((BASE / 'current').resolve() == previous and namespace['check_recharge_6f5_deployment'](
+            RECHARGE_PRICING_CURRENT, RECHARGE_PRICING_TREE, RECHARGE_PRICING_PROFILE_CANONICAL) == receipt,
+            'Fixed pricing predecessor native proof changed')
+    return namespace, old_profile, manifest, origin, frozen_origin, receipt
+
+
+def recharge_pricing_baseline_fields(previous, *, _stored_origin=None):
+    namespace, _profile, manifest, origin, _frozen, _receipt = (
+        recharge_pricing_stored_origin(previous) if _stored_origin is None else _stored_origin)
+    result = {key: manifest[key] for key in ('commit', 'sourceTree', 'previousCommit', 'deploymentRun', 'sourceArchiveSha256')}
+    for name, key, modes in (('release-manifest.json', 'manifestSha256', (0o600,)),
+            ('before-audit.json', 'beforeAuditSha256', (0o400, 0o600)), ('after-audit.json', 'afterAuditSha256', (0o400, 0o600)),
+            ('docker-compose.aws-mysql.yml', 'composeSha256', (0o644, 0o664)),
+            ('compose.release.json', 'overrideRawSha256', (0o400, 0o600, 0o644))):
+        result[key] = hashlib.sha256(fixed_recharge_bytes(previous / name, modes=modes)).hexdigest()
+    result['overrideCanonicalSha256'] = historical_fingerprint(fixed_recharge_json(fixed_recharge_bytes(
+        previous / 'compose.release.json', modes=(0o400, 0o600, 0o644))))
+    origin4c = namespace['recharge_6f5_origin4c'](origin)
+    require(all(fixed_recharge_bytes(previous / name, modes=(0o644, 0o664))
+        == fixed_recharge_bytes(origin4c / name, modes=(0o644, 0o664))
+        for name in ('.dockerignore', 'scripts/audit-python-dependencies.py')), 'Fixed pricing build input changed')
+    result['buildInputSha256'] = namespace['recharge_d3fb_build_input_hash'](origin4c)
+    return result
+
+
+def recharge_pricing_api_receipt(previous, directory=None, profile=None, *, verify_native=False, _stored_origin=None):
+    namespace, old_profile, _manifest, origin, _frozen, _receipt = (
+        recharge_pricing_stored_origin(previous) if _stored_origin is None else _stored_origin)
+    directory = directory or previous
+    if verify_native: require((BASE / 'current').resolve() == previous and directory == previous,
+        'Fixed pricing API before pointer changed')
+    result = namespace['recharge_6f5_api_receipt'](origin, directory, old_profile)
+    if profile is not None: recharge_d3fb_private_copies(directory, previous, profile)
+    return result
+
+
+def recharge_pricing_observe_native(previous=None, *, _stored_origin=None):
+    previous = previous or (BASE / 'current').resolve()
+    require((BASE / 'current').resolve() == previous, 'Fixed pricing native current changed')
+    stored = recharge_pricing_stored_origin(previous, verify_native=True) if _stored_origin is None else _stored_origin
+    namespace, old_profile, manifest, origin, _frozen, receipt = stored
+    if _stored_origin is not None:
+        require(namespace['check_recharge_6f5_deployment'](RECHARGE_PRICING_CURRENT,
+            RECHARGE_PRICING_TREE, RECHARGE_PRICING_PROFILE_CANONICAL) == receipt,
+            'Fixed pricing predecessor native proof changed')
+    baseline = recharge_pricing_baseline_fields(previous, _stored_origin=stored)
+    chain = recharge_pricing_native_chain(previous)
+    states = {name: service_state(previous, name, include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES}
+    api = namespace['recharge_6f5_api_receipt'](origin, previous, old_profile)
+    registration = namespace['recharge_6f5_registration_receipt'](origin)
+    retained = recharge_2f_retained_migrate(previous)
+    require(retained == old_profile['nativeBaseline']['retainedMigrateSha256'],
+        'Fixed pricing retained migration baseline changed')
+    native = {**old_profile['nativeBaseline'], **api, **registration,
+        'producerSha256': RECHARGE_PRICING_PRODUCER, 'rechargeProfileRawSha256': RECHARGE_PRICING_PROFILE_RAW,
+        'rechargeReadbackSha256': historical_fingerprint(receipt),
+        'predecessorProfileCanonicalSha256': RECHARGE_PRICING_PROFILE_CANONICAL,
+        'predecessorStoredContextSha256': historical_fingerprint(manifest['fixedRechargeRelease']),
+        'nativeChainSha256': chain['sha256'], 'nativeFileCount': chain['fileCount'], 'nativeDirectoryCount': chain['directoryCount'],
+        'runtimeStatesSha256': historical_fingerprint(states),
+        'preservedStatesSha256': historical_fingerprint(main80_recharge_preserved_states(states)),
+        'retainedMigrateSha256': retained}
+    require(recharge_pricing_baseline_fields(previous) == baseline and recharge_pricing_native_chain(previous) == chain
+        and recharge_2f_retained_migrate(previous) == retained
+        and (BASE / 'current').resolve() == previous and {name: service_state(previous, name,
+            include_container_id=True, include_environment_hash=True) for name in ALL_SERVICES} == states,
+        'Fixed pricing native observation changed')
+    return {'baselineRelease': baseline, 'nativeBaseline': native}
+
+
+def recharge_pricing_baseline(previous, profile, manifest, *, verify_native=False, _stored_origin=None):
+    recharge_pricing_scope(profile)
+    origin_proof = recharge_pricing_stored_origin(previous) if _stored_origin is None else _stored_origin
+    namespace, old_profile, stored, origin, frozen_origin, receipt = origin_proof
+    require(stored == manifest and recharge_pricing_baseline_fields(previous, _stored_origin=origin_proof) == profile['baselineRelease'],
+        'Fixed pricing baseline changed')
+    expected = dict(old_profile['workerProjection'])
+    expected.update({name: {'mode': '100644', 'sha256': profile['candidateSourceSha256'][name]} for name in RECHARGE_D3FB_WORKER})
+    expected.update({name: {'mode': '100644', 'sha256': digest} for name, digest in RECHARGE_PRICING_CARRIED_WORKER.items()})
+    require(profile['workerProjection'] == expected, 'Fixed pricing four-file Worker delta changed')
+    native = profile['nativeBaseline']; chain = recharge_pricing_native_chain(previous)
+    immutable = set(RECHARGE_D3FB_NATIVE_KEYS) - {'producerSha256', 'rechargeProfileRawSha256', 'rechargeReadbackSha256',
+        'nativeChainSha256', 'nativeFileCount', 'nativeDirectoryCount', 'runtimeStatesSha256', 'preservedStatesSha256'}
+    require(all(native[key] == old_profile['nativeBaseline'][key] for key in immutable)
+        and native['predecessorProfileCanonicalSha256'] == RECHARGE_PRICING_PROFILE_CANONICAL
+        and native['predecessorStoredContextSha256'] == historical_fingerprint(stored['fixedRechargeRelease'])
+        and native['rechargeReadbackSha256'] == historical_fingerprint(receipt)
+        and chain['sha256'] == native['nativeChainSha256'] and chain['fileCount'] == native['nativeFileCount']
+        and chain['directoryCount'] == native['nativeDirectoryCount'], 'Fixed pricing predecessor chain changed')
+    require(recharge_2f_retained_migrate(previous) == native['retainedMigrateSha256'], 'Fixed pricing retained migration changed')
+    if verify_native:
+        require(recharge_pricing_observe_native(previous, _stored_origin=origin_proof) == {'baselineRelease': profile['baselineRelease'], 'nativeBaseline': native},
+            'Fixed pricing native proof changed')
+    else:
+        recharge_pricing_api_receipt(previous, profile=profile, _stored_origin=origin_proof)
+    return frozen_origin, old_profile
+
+
+def recharge_pricing_context(args, profile, before_gate, after_gate):
+    recharge_pricing_scope(profile)
+    result = recharge_d3fb_context(args, profile, before_gate, after_gate)
+    result['historicalRecharge045'] = {'sourceCommit': RECHARGE_PRICING_CURRENT, 'sourceTree': RECHARGE_PRICING_TREE,
+        'producerSha256': RECHARGE_PRICING_PRODUCER, 'originalManifestSha256': RECHARGE_PRICING_MANIFEST,
+        'profileRawSha256': RECHARGE_PRICING_PROFILE_RAW, 'profileCanonicalSha256': RECHARGE_PRICING_PROFILE_CANONICAL,
+        'readbackSha256': profile['nativeBaseline']['rechargeReadbackSha256'],
+        'storedContextSha256': profile['nativeBaseline']['predecessorStoredContextSha256']}
+    result['sourceOnlyCarrySha256'] = historical_fingerprint(RECHARGE_PRICING_CARRIED)
+    result['historicalRegistration96'] = {'sourceCommit': RECHARGE_PRICING_E7_CURRENT, 'sourceTree': RECHARGE_PRICING_E7_TREE,
+        'originalManifestSha256': RECHARGE_PRICING_E7_MANIFEST, **RECHARGE_PRICING_E7_NATIVE_PINS}
+    return result
+
+
+def recharge_pricing_audit(directory, receipt, *, stage, source, auditor_source, profile, previous, before_receipt=None):
+    origin_proof = recharge_pricing_stored_origin(previous)
+    namespace, old_profile, _manifest, origin, _frozen, _old_receipt = origin_proof
+    recharge_pricing_baseline(previous, profile, fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json')),
+        _stored_origin=origin_proof)
+    result = namespace['recharge_6f5_audit'](directory, receipt, stage=stage, source=source,
+        auditor_source=auditor_source, profile=old_profile, previous=origin, before_receipt=before_receipt)
+    recharge_pricing_baseline(previous, profile, fixed_recharge_json(fixed_recharge_bytes(previous / 'release-manifest.json')))
+    return result
+
+
+def recharge_pricing_readback_receipt(expected_current, source_tree, profile_sha256):
+    return recharge_projected_readback_receipt(expected_current, source_tree, profile_sha256, _profile_id=RECHARGE_PRICING_ID)
+
+
+def validate_recharge_pricing_readback_projection(value, expected_current, source_tree, profile_sha256):
+    expected = recharge_pricing_readback_receipt(expected_current, source_tree, profile_sha256)
+    require(isinstance(value, dict) and set(value) == set(expected) and historical_fingerprint(value) == historical_fingerprint(expected),
+        'Fixed pricing deployment verification unavailable')
+    return value
+
+
+def check_recharge_pricing_deployment(expected_current, source_tree, profile_sha256):
+    return check_recharge_2f_deployment(expected_current, source_tree, profile_sha256, _profile_id=RECHARGE_PRICING_ID)
+
+
+def recharge_pricing_release(args):
+    require(not getattr(args, 'registration_worker_94', False) and not getattr(args, 'registration_worker_95', False)
+        and not getattr(args, 'registration_worker_96', False)
+        and not getattr(args, 'api_admin_only', False) and not getattr(args, 'api_admin_build_proof', None),
+        'Fixed release selection is ambiguous')
+    return recharge_974_release(args, profile_id=RECHARGE_PRICING_ID)
+
+
+def recharge_pricing_native_chain(previous, *, chain=None):
+    """Snapshot all eleven fixed immutable releases; no private content escapes."""
+    message = 'Fixed 974 native chain changed'
+    (rows, directories, files) = ([], 0, 0)
+    identity = lambda x: (x.st_dev, x.st_ino, x.st_mode, x.st_uid, x.st_gid, x.st_nlink, x.st_size, x.st_mtime_ns, x.st_ctime_ns)
+    directory = previous
+    chain = RECHARGE_PRICING_CHAIN if chain is None else chain
+    require(chain in (RECHARGE_PRICING_CHAIN,), message)
+    for (index, (commit, tree)) in enumerate(chain):
+        require(directory.is_absolute() and directory.resolve() == directory and (not directory.is_symlink()) and (directory.parent == BASE / 'releases') and re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + commit[:12], directory.name), message)
+        manifest = fixed_recharge_json(fixed_recharge_bytes(directory / 'release-manifest.json'))
+        require(manifest.get('commit') == commit and manifest.get('sourceTree') == tree, message)
+        (entries, folders, before) = ({}, {}, {})
+        for path in (directory, *sorted(directory.rglob('*'))):
+            info = path.lstat()
+            before[path] = identity(info)
+            name = '.' if path == directory else str(path.relative_to(directory))
+            require(not path.is_symlink() and (not any((parent.is_symlink() for parent in path.parents if parent == directory or directory in parent.parents))), message)
+            mode = stat.S_IMODE(info.st_mode)
+            if stat.S_ISDIR(info.st_mode):
+                require(mode in (448, 488, 493, 509), message)
+                folders[name] = [mode, info.st_uid, info.st_gid]
+                directories += 1
+            else:
+                raw = fixed_recharge_bytes(path, modes=(256, 384, 420, 436, 493, 509))
+                entries[name] = [hashlib.sha256(raw).hexdigest(), mode, info.st_uid, info.st_gid]
+                files += 1
+            require(identity(path.lstat()) == before[path], message)
+        require(all((identity(path.lstat()) == original for (path, original) in before.items())), message)
+        rows.append({'commit': commit, 'tree': tree, 'release': str(directory), 'files': entries, 'directories': folders})
+        if index + 1 < len(chain):
+            require(manifest.get('previousCommit') == chain[index + 1][0], message)
+            directory = Path(manifest['previousRelease'])
+    external = {}
+    for path in (ORDER_ARCHIVE_SEAL, POST_CLEANUP_RECEIPT):
+        info = path.lstat()
+        raw = fixed_recharge_bytes(path, modes=(384,))
+        external[str(path)] = [hashlib.sha256(raw).hexdigest(), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid]
+        require(identity(info) == identity(path.lstat()), message)
+    return {'sha256': historical_fingerprint({'releases': rows, 'external': external}), 'fileCount': files, 'directoryCount': directories, 'origin': directory}
+
+# One measured e7 predecessor, distinct from the immutable045 historical helpers.
+RECHARGE_PRICING_E7_CURRENT = 'e7c9862d58599995954883f1c1f6038283afffab'
+RECHARGE_PRICING_E7_TREE = '1141040aa57661695aeb599ad698997ea09337ba'
+RECHARGE_PRICING_E7_PRODUCER = '58c7705ee8ad91458a478a397e7c66202738280737f07ae12927c5d2e712a920'
+RECHARGE_PRICING_E7_MANIFEST = '52f2582e5edeb9e1c9af63c70fff4ca5a5bdad11c0fd7fb8f090fd1670b4c2eb'
+RECHARGE_PRICING_E7_CHAIN = ((RECHARGE_PRICING_E7_CURRENT, RECHARGE_PRICING_E7_TREE),) + RECHARGE_PRICING_CHAIN
+RECHARGE_PRICING_E7_NATIVE_PINS = {
+    'registration96ProfileRawSha256': '642440292a6a1f25a73cb155398c03eb396453e59f9bd229d617b5f60b079299',
+    'registration96ProfileCanonicalSha256': 'aaa330f599b9e5bebe059b39e4705af1d9511805e38bbfc9ffc2b655f4ca87b7',
+    'registration96ModuleSha256': '7dd54407c7069538d1b5d63d1632780ec5af5fa52006ce4cad4c717f937da88c',
+    'registration96BaselineCarrierSha256': '356abcd30abe69980ed134292c4c44d9765ea0521dfef5472d088c74d6acf749',
+    'registration96ReadbackSha256': 'e70f3c4d05e6977419c8270a24fb2737ca4f0e34283ae0bb3c3d10979652f2ce',
+    'registration96StoredContextSha256': 'e9b0b16810b163ca219982cccc4cfff67f0b30b3245d4168424a249eef212976',
+}
+RECHARGE_PRICING_E7_NATIVE_KEYS = RECHARGE_PRICING_NATIVE_KEYS | set(RECHARGE_PRICING_E7_NATIVE_PINS)
+RECHARGE_PRICING_E7_READBACK_CONTRACT = {'metadata': {'archiveSha256': '79a2f4de23f9274955fabc3b18ad4ddbc80ef4ed157ba5b446ddadc931aac11b', 'ciRunId': 37715888391, 'commit': 'e7c9862d58599995954883f1c1f6038283afffab', 'run': 'github-actions-37715981512-1', 'tree': '1141040aa57661695aeb599ad698997ea09337ba'}, 'fieldCanonicalSha256': {'actualApiCompiledSourceSha256': '6a99c9c3d5f85f2e8af4c9cf195d84542d5c8fb1c9531a718e1b9f7c0d48ec22', 'actualRechargeWorkerSourceSha256': '3170c7bbe2ca6ff374ea77941e0c497e8967879dd7d68229e0fe64d3402c64fe', 'actualRegistrationWorkerSourceSha256': '8ab2a9302ab9e020f24bf3babdca68a1eeb4a5cc94b5a3e6911ee38b2ef3072c', 'apiAdminContentProof': '67e4138972148ac032d0c599ea9c011196315f96eef5e8222ac0694d536d6375', 'auditReports': '01ffa3f265487b7a83fdf9903052d9cf5b03aba24c1eaddee269b91f9cc2d91f', 'backup': 'c888f5cd39848160db1ab57321986fb0b521e261f9a54643e3535b115bdaa1a3', 'businessAcceptanceConfirmed': 'fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa', 'commit': '5a441cd3f3d5a8e44652260a3c88b799ff1a7374aa538c5f6e92b079766683c2', 'configurationProof': '6e45cf660bb36f08ed89b5a2c6231ebefe29b36d821a4588f2614cdacdec3341', 'current': '518087ea99029f94bb83c1ca74aada5224ad613f2ff26c7e8399215c40435c02', 'deploymentRun': 'f82e31666739f4dd153462f1dad734cc1ad2f324768ddda59ea73931628658f0', 'fileSha256': '964593892b43d2bd6c57108a50171cc532730effa4caa269f627f502da5e1eca', 'imageMetadata': '1715a81edff2e3baa88a629d7bcb0aa1702feb6eb930a5c467699c78f148c3d1', 'liveServices': 'ff4e380eff0b5ae323bb6faf62649d0b1be47ba39b7dcd75dd66701fd86f5e21', 'manifest': '98352c182b51254cdf37ab021db3ce9b3c51c3483d830db923d85672f2b7cb8e', 'manifestCanonicalSha256': '80bdb3d06cbc533f99d62d353fd5b1f103e0aff566e9877de198a0d7b1581053', 'manifestRawSha256': '0f26fcb6a4d185b90f63cce16bcd6c4adda2b2fc9bce582833deabe1c4a45482', 'moduleSha256': '79f0495c8578e0811864af6528d630c1dc84da0c56486877375208a04dde3a5e', 'officialOtpAccepted': '1eccb1f2411f8ef9434b9aed9a922fc68a155981567a9653c424ecb733ed4415', 'previous': 'fe9a43fd663777a9e9e3f4a4c50fe0ab320e60a0b5910b8fadf5132c1eaadbd1', 'profileRawSha256': '513f1cd117438506c110d7cf7b06545da2e89a923dd23948fd071b66fdb87736', 'publicSourceMap': 'a5b806385a59ef8ff7ce1275d293fe58b98536cdc2edace7d907d7b844e93ac0', 'readOnly': 'b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b', 'runtimeStable': 'b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b', 'sourceTree': 'd4f5b753bc8cc1f916f48566995b4b57ea19ab3d03dfc7f834541e8e755dc06a', 'status': 'c3e45913a31a0a16d2380331f4801950453d13b6b9deca8a8b846ae88ad43252', 'version': '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b', 'workerHealth': '33b04c051b3445301b017596c01107c044e9eae11222ffeaa569914ea46ccdaa'}, 'workerHealthStableKeys': ['engine', 'mailDeliveryVersion', 'ready', 'workerRole'], 'workerHealthStableCanonicalSha256': '4ecdbe419476d536f22aba2159552b8efb7ff643f704b389c5b76d67a04d00b4'}
+RECHARGE_PRICING_HISTORICAL_NATIVE = {'apiBuildProofCanonicalSha256': 'b690cb62f0a5602107458a45d8706a8d9d74e2c523741441186e9b339ecc787a', 'apiBuildProofRawSha256': '681609e18f8964b07b7df9f8f328639a2b68f7ecd7d4b44af7400ce503f3600f', 'apiReadbackSha256': '9512931c6fa85ed7abad39f1e1e7961ad96eba0075e1c49419b2016402d303ab', 'apiScopeProducerSha256': '04426d66bcdf51a52b63966d27b49e7a7f79469839258678773465fb34939b40', 'apiStateRawSha256': '29b3ea692aa59ad2de24443969ec55e2b8bb8931e288721e501010ec62f1c56f', 'configuredPreservedStatesSha256': '58920cbde58accff747b11e4280e9e66899873e518304c46c73345fdc72ee7bc', 'nativeChainSha256': '407d6637e05d44a141190e272251aa047a2848cb3ecd120614e4ae5b98524f08', 'nativeDirectoryCount': 5066, 'nativeFileCount': 37123, 'origin815StoredProofSha256': '223ecf9bbc152c5f77a1e15f0a9db558a87014e32f7ce4cebbc4bd7ca540197b', 'originD3StoredProofSha256': 'd1b61e0e064dca608f239cd882e82f67062c095496a55206961673a6e39e09e1', 'predecessorProfileCanonicalSha256': '44f2689046f718bace2cc757cf9c4332c91fd608006eaf28c55dcf092f4ff0d8', 'predecessorStoredContextSha256': '2851b770a198580c7356097631828cd6f0a5f0b7b6a5ccbe9be218bef433a3bf', 'preservedStatesSha256': '425b366730ec441b0b5b5ef63f9d87c73364b96aac230d1b4fbd5a79d0cb1710', 'producerSha256': '9b2e976829f325935190a7926853236784e9076969864d97793a6b24a69f773b', 'rechargeProfileRawSha256': '233870eaa3d794fa0cbbc1fa2d826a062744db4410a13643c2d6b79ed0643d0b', 'rechargeReadbackSha256': 'a0b14f2e84d94b958f217b53d0222705950c5c1049b72a8bce5f12465347f7b3', 'registrationProfileCanonicalSha256': '781d2df59f571ef5fc822ee6a87da0cdfdf10797e60b21ba9659d807065ab241', 'registrationProfileRawSha256': '34557de4908655ebab2811e3ea77614e749e6041500aad1be80a301b6f13d5b6', 'registrationReadbackSha256': 'd424131166aa394d6086f0d99e3037b102d7e4b013e6e6a9029f2fcaf5a5e399', 'retainedMigrateSha256': '5783636d595b38e9d83c558582920362438064c0d6e0322e463c77a06f8f31d5', 'runtimeStatesSha256': '86c60b17c086f315ae1622faa951cc7836ff7befa2349b63290ae121bda7bd5b'}
+RECHARGE_PRICING_E7_RUNNING_KEYS = frozenset(('liveServices', 'actualRegistrationWorkerSourceSha256',
+    'actualRechargeWorkerSourceSha256', 'actualApiCompiledSourceSha256', 'apiAdminContentProof', 'workerHealth'))
+
+
+def validate_recharge_pricing_e7_readback(value, historical_contract, module):
+    """Pure current observation: full historical archive proven separately; two health bools may change."""
+    message = 'Fixed pricing e7 observation changed'
+    require(historical_contract == RECHARGE_PRICING_E7_READBACK_CONTRACT
+        and type(value) is dict and set(value) == set(module['READBACK_KEYS'])
+        == set(historical_contract['fieldCanonicalSha256']) and len(value) == 28, message)
+    for key in set(value) - {'workerHealth'}:
+        require(module['canonical_sha256'](value[key]) == historical_contract['fieldCanonicalSha256'][key], message)
+    health = module['validate_health'](value['workerHealth'], idle=False)
+    stable = {key: health[key] for key in historical_contract['workerHealthStableKeys']}
+    require(module['canonical_sha256'](stable) == historical_contract['workerHealthStableCanonicalSha256'], message)
+    return value
+
+
+def recharge_pricing_e7_native_producer(previous):
+    message = 'Fixed pricing e7 producer changed'
+    require(previous.is_absolute() and previous.resolve() == previous and previous.parent == BASE / 'releases'
+        and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + RECHARGE_PRICING_E7_CURRENT[:12], previous.name), message)
+    path = previous / 'scripts/production-release/remote-deploy.py'
+    raw = fixed_recharge_bytes(path, modes=(0o644, 0o664), limit=1024 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == RECHARGE_PRICING_E7_PRODUCER, message)
+    namespace = {'__name__': 'fixed_pricing_e7_predecessor', '__file__': str(path)}
+    exec(compile(raw, str(path), 'exec'), namespace)
+    require(namespace['BASE'] == BASE == Path('/opt/id-business-v2')
+        and namespace['REGISTRATION_FINANCE'] == REGISTRATION_FINANCE
+        and namespace['REGISTRATION_CLEARANCE'] == REGISTRATION_CLEARANCE, message)
+    module = namespace['load_registration96']()
+    require(namespace['REGISTRATION96_MODULE_SHA256'] == RECHARGE_PRICING_E7_NATIVE_PINS['registration96ModuleSha256'], message)
+    return namespace, module
+
+
+def recharge_pricing_e7_io(previous, *, fresh=False):
+    namespace, module = recharge_pricing_e7_native_producer(previous)
+    io96 = module['Registration96IO'](namespace, production=True, budget=900)
+    options = {'expected-current': RECHARGE_PRICING_E7_CURRENT, 'source-tree': RECHARGE_PRICING_E7_TREE,
+        'registration-profile-sha256': RECHARGE_PRICING_E7_NATIVE_PINS['registration96ProfileRawSha256'],
+        'registration96-baseline-sha256': RECHARGE_PRICING_E7_NATIVE_PINS['registration96BaselineCarrierSha256']}
+    if fresh:
+        require((BASE / 'current').resolve() == previous, 'Fixed pricing e7 current changed')
+        io96.prepare('readback', options)
+    else:
+        # The original readback prepare follows global-current, so it cannot be replayed after the recharge switch.
+        carrier, profile = io96.read_bindings(options)
+        require(module['sha256'](profile) == options['registration-profile-sha256'], 'Fixed pricing e7 profile changed')
+        metadata = dict(RECHARGE_PRICING_E7_READBACK_CONTRACT['metadata'])
+        archive = namespace['registration_download'](RECHARGE_PRICING_E7_CURRENT)
+        require(module['sha256'](module['checked_bytes'](archive, 64 * 1024 * 1024)) == metadata['archiveSha256'],
+            'Fixed pricing e7 source archive changed')
+        candidate = io96.parse_archive(archive, RECHARGE_PRICING_E7_CURRENT)
+        require(module['archive_tree'](candidate) == RECHARGE_PRICING_E7_TREE, 'Fixed pricing e7 source tree changed')
+        frozen, baseline_raw, baseline, projection = module['carrier_context'](carrier, profile, metadata, candidate)
+        module['assert_enabled'](frozen)
+        for name in module['CONTROL_FILES']:
+            require(module['sha256'](io96.read(io96.bound_path(name))) == frozen['controlSourceSha256'][name],
+                'Fixed pricing e7 transported control changed')
+        io96.frozen, io96.baseline, io96.projection = frozen, baseline, projection
+        io96.carrier_raw, io96.profile_raw, io96.baseline_raw, io96.candidate, io96.candidate_archive = carrier, profile, baseline_raw, candidate, archive
+    require(module['canonical_sha256'](module['closed_json'](io96.profile_raw))
+        == RECHARGE_PRICING_E7_NATIVE_PINS['registration96ProfileCanonicalSha256'], 'Fixed pricing e7 canonical profile changed')
+    return namespace, module, io96
+
+
+def recharge_pricing_e7_static_receipt(previous, io96, module):
+    """Recheck real public/private e7 bytes and stored proofs without assuming e7 is global-current."""
+    raw = io96.read(previous / 'release-manifest.json', private=True)
+    manifest = module['closed_json'](raw)
+    require(module['sha256'](raw) == RECHARGE_PRICING_E7_MANIFEST
+        and module['canonical_sha256'](manifest['fixedRegistrationRelease'])
+        == RECHARGE_PRICING_E7_NATIVE_PINS['registration96StoredContextSha256'], 'Fixed pricing e7 stored context changed')
+    reports, _summaries = io96.stored_audits(previous)
+    public = module['source_map'](io96.public(previous))
+    files = io96.file_rows((previous,), module['readback_public_files'](io96.frozen) | module['PRIVATE_FILES'])
+    profile = io96.read(previous / module['PROFILE_FILE'], limit=module['PROFILE_MAX_BYTES'])
+    module_raw = io96.read(previous / 'scripts/production-release/registration-onboarding-96.py', limit=module['MODULE_MAX_BYTES'])
+    override = module['closed_json'](io96.read(previous / 'compose.release.json', private=True))
+    backup = module['validate_backup'](module['closed_json'](io96.read(previous / 'backup-verification.json', private=True)))
+    value = {'version': 1, 'status': 'VERIFIED_REGISTRATION96_RUNTIME', 'readOnly': True, 'runtimeStable': True,
+        'current': str(previous), 'previous': manifest['previousRelease'], 'commit': manifest['commit'], 'sourceTree': manifest['sourceTree'],
+        'deploymentRun': manifest['deploymentRun'], 'profileRawSha256': module['sha256'](profile), 'moduleSha256': module['sha256'](module_raw),
+        'manifest': manifest, 'manifestRawSha256': module['sha256'](raw), 'manifestCanonicalSha256': module['canonical_sha256'](manifest),
+        'publicSourceMap': {'fileCount': len(public), 'sha256': module['canonical_sha256'](public, ascii=False)}, 'fileSha256': files,
+        'auditReports': reports, 'imageMetadata': io96.image_metadata(manifest['images']['auto-registration']['reference']),
+        'configurationProof': {'environmentFileSha256': files[str(previous / '.env.aws.production')],
+            'composeFileSha256': files[str(previous / 'docker-compose.aws-mysql.yml')], 'overrideCanonicalSha256': module['canonical_sha256'](override)},
+        'backup': backup, 'officialOtpAccepted': 'NOT_MEASURED', 'businessAcceptanceConfirmed': False}
+    require(set(value) == set(module['READBACK_KEYS']) - RECHARGE_PRICING_E7_RUNNING_KEYS, 'Fixed pricing e7 stored fields changed')
+    for key, item in value.items():
+        require(module['canonical_sha256'](item) == RECHARGE_PRICING_E7_READBACK_CONTRACT['fieldCanonicalSha256'][key],
+            'Fixed pricing e7 stored proof changed')
+    io96.unchanged()
+    return value
+
+
+def recharge_pricing_e7_stored_origin(previous, *, _historical=None, fresh=False):
+    namespace, module, io96 = recharge_pricing_e7_io(previous, fresh=fresh)
+    stored = recharge_pricing_e7_static_receipt(previous, io96, module)
+    historical = Path(stored['previous'])
+    # Original96 carrier_context already validates its finite045/95/API815 history. Re-reading that history
+    # must not call the old95 live-snapshot validator while the real registration96 window is retained.
+    if _historical is None:
+        historical_namespace, old_profile = recharge_pricing_native_producer(historical)
+        old_manifest_raw = io96.read(historical / 'release-manifest.json', private=True)
+        old_manifest = module['closed_json'](old_manifest_raw)
+        require(module['sha256'](old_manifest_raw) == RECHARGE_PRICING_MANIFEST
+            and old_manifest == io96.baseline['manifest']
+            and module['canonical_sha256'](old_profile) == RECHARGE_PRICING_PROFILE_CANONICAL
+            and module['canonical_sha256'](io96.frozen['proProfile']) == RECHARGE_PRICING_PROFILE_CANONICAL,
+            'Fixed pricing e7 historical045 changed')
+        readback = historical_namespace['recharge_6f5_readback_receipt'](RECHARGE_PRICING_CURRENT,
+            RECHARGE_PRICING_TREE, RECHARGE_PRICING_PROFILE_CANONICAL)
+        historical_namespace['validate_recharge_6f5_readback_projection'](readback, RECHARGE_PRICING_CURRENT,
+            RECHARGE_PRICING_TREE, RECHARGE_PRICING_PROFILE_CANONICAL)
+        require(module['canonical_sha256'](readback) == RECHARGE_PRICING_HISTORICAL_NATIVE['rechargeReadbackSha256']
+            and module['canonical_sha256'](old_manifest['fixedRechargeRelease'])
+            == RECHARGE_PRICING_HISTORICAL_NATIVE['predecessorStoredContextSha256'], 'Fixed pricing e7 historical projection changed')
+        inherited = set(RECHARGE_PRICING_HISTORICAL_NATIVE) - {'producerSha256', 'rechargeProfileRawSha256',
+            'rechargeReadbackSha256', 'predecessorProfileCanonicalSha256', 'predecessorStoredContextSha256',
+            'nativeChainSha256', 'nativeFileCount', 'nativeDirectoryCount', 'runtimeStatesSha256',
+            'preservedStatesSha256', 'configuredPreservedStatesSha256'}
+        require(all(RECHARGE_PRICING_HISTORICAL_NATIVE[key] == old_profile['nativeBaseline'][key] for key in inherited),
+            'Fixed pricing e7 sealed historical fields changed')
+        io96.stored_audits(historical)
+        original = (historical_namespace, old_profile, old_manifest, historical, historical, readback)
+    else:
+        original = _historical
+        require(original[2] == module['closed_json'](io96.read(historical / 'release-manifest.json', private=True))
+            and module['canonical_sha256'](original[1]) == RECHARGE_PRICING_PROFILE_CANONICAL,
+            'Fixed pricing e7 historical tail changed')
+    return namespace, module, io96, stored['manifest'], historical, original, stored
+
+
+def recharge_pricing_e7_baseline_fields(previous, *, _stored_origin=None):
+    stored = recharge_pricing_e7_stored_origin(previous) if _stored_origin is None else _stored_origin
+    _namespace, module, io96, manifest, _historical, _original, _receipt = stored
+    result = {key: manifest[key] for key in ('commit', 'sourceTree', 'previousCommit', 'deploymentRun', 'sourceArchiveSha256')}
+    for name, key, modes in (('release-manifest.json', 'manifestSha256', (0o600,)),
+            ('before-audit.json', 'beforeAuditSha256', (0o400, 0o600)), ('after-audit.json', 'afterAuditSha256', (0o400, 0o600)),
+            ('docker-compose.aws-mysql.yml', 'composeSha256', (0o644, 0o664)),
+            ('compose.release.json', 'overrideRawSha256', (0o400, 0o600, 0o644))):
+        result[key] = module['sha256'](io96.read(previous / name, private=True, modes=modes))
+    result['overrideCanonicalSha256'] = module['canonical_sha256'](module['closed_json'](io96.read(previous / 'compose.release.json', private=True)))
+    measured_inputs = {name: module['sha256'](io96.read(previous / name))
+        for name in ('.dockerignore', 'scripts/audit-python-dependencies.py')}
+    require(measured_inputs == io96.frozen['buildInputSha256'], 'Fixed pricing e7 build input changed')
+    result['buildInputSha256'] = module['canonical_sha256'](measured_inputs)
+    return result
+
+
+def recharge_pricing_e7_running(io96, module, directory, profile=None):
+    running = io96.running(directory)
+    for key in ('actualRegistrationWorkerSourceSha256', 'actualApiCompiledSourceSha256', 'apiAdminContentProof'):
+        require(module['canonical_sha256'](running[key]) == RECHARGE_PRICING_E7_READBACK_CONTRACT['fieldCanonicalSha256'][key],
+            'Fixed pricing e7 preserved running source changed')
+    health = module['validate_health'](running['workerHealth'], idle=False)
+    stable = {key: health[key] for key in RECHARGE_PRICING_E7_READBACK_CONTRACT['workerHealthStableKeys']}
+    require(module['canonical_sha256'](stable) == RECHARGE_PRICING_E7_READBACK_CONTRACT['workerHealthStableCanonicalSha256'],
+        'Fixed pricing e7 preserved health changed')
+    if profile is not None:
+        configured = {name: row for name, row in running['liveServices'].items() if name != 'auto-recharge'}
+        reduced = {name: {key: item for key, item in row.items() if key != 'configurationSha256'} for name, row in configured.items()}
+        require(historical_fingerprint(configured) == profile['nativeBaseline']['configuredPreservedStatesSha256']
+            and historical_fingerprint(reduced) == profile['nativeBaseline']['preservedStatesSha256'], 'Fixed pricing e7 preserved services changed')
+    return running
+
+
+def recharge_pricing_e7_observe_native(previous=None, *, _stored_origin=None):
+    previous = previous or (BASE / 'current').resolve()
+    require((BASE / 'current').resolve() == previous, 'Fixed pricing e7 native current changed')
+    stored = recharge_pricing_e7_stored_origin(previous, fresh=True) if _stored_origin is None else _stored_origin
+    _namespace, module, io96, manifest, historical, original, _static = stored
+    receipt = validate_recharge_pricing_e7_readback(io96.readback(previous), RECHARGE_PRICING_E7_READBACK_CONTRACT, module)
+    baseline = recharge_pricing_e7_baseline_fields(previous, _stored_origin=stored)
+    chain = recharge_pricing_e7_native_chain(previous)
+    states = {name: {key: item for key, item in row.items() if key != 'configurationSha256'} for name, row in receipt['liveServices'].items()}
+    old_namespace, old_profile, old_manifest, origin, _frozen, old_receipt = original
+    # Original95/API815 proofs are immutable history; current96 and all service facts come from this native observation.
+    api_names = {'apiScopeProducerSha256', 'apiBuildProofRawSha256', 'apiBuildProofCanonicalSha256',
+        'apiStateRawSha256', 'apiReadbackSha256'}
+    api = {key: old_profile['nativeBaseline'][key] for key in api_names}
+    registration = {key: old_profile['nativeBaseline'][key] for key in
+        ('registrationProfileRawSha256', 'registrationProfileCanonicalSha256', 'registrationReadbackSha256')}
+    retained = recharge_2f_retained_migrate(previous)
+    require(retained == old_profile['nativeBaseline']['retainedMigrateSha256'], 'Fixed pricing e7 retained migration changed')
+    configured = {name: row for name, row in receipt['liveServices'].items() if name != 'auto-recharge'}
+    native = {**RECHARGE_PRICING_HISTORICAL_NATIVE, **api, **registration, **RECHARGE_PRICING_E7_NATIVE_PINS,
+        'producerSha256': RECHARGE_PRICING_E7_PRODUCER, 'rechargeProfileRawSha256': RECHARGE_PRICING_PROFILE_RAW,
+        'rechargeReadbackSha256': historical_fingerprint(old_receipt), 'predecessorProfileCanonicalSha256': RECHARGE_PRICING_PROFILE_CANONICAL,
+        'predecessorStoredContextSha256': historical_fingerprint(old_manifest['fixedRechargeRelease']),
+        'nativeChainSha256': chain['sha256'], 'nativeFileCount': chain['fileCount'], 'nativeDirectoryCount': chain['directoryCount'],
+        'runtimeStatesSha256': historical_fingerprint(states), 'preservedStatesSha256': historical_fingerprint(main80_recharge_preserved_states(states)),
+        'configuredPreservedStatesSha256': historical_fingerprint(configured), 'retainedMigrateSha256': retained}
+    require(recharge_pricing_e7_baseline_fields(previous, _stored_origin=stored) == baseline
+        and recharge_pricing_e7_native_chain(previous) == chain and recharge_2f_retained_migrate(previous) == retained
+        and io96.running(previous) == {key: receipt[key] for key in RECHARGE_PRICING_E7_RUNNING_KEYS}
+        and (BASE / 'current').resolve() == previous, 'Fixed pricing e7 native tail changed')
+    io96.unchanged()
+    return {'baselineRelease': baseline, 'nativeBaseline': native}
+
+
+def recharge_pricing_e7_baseline(previous, profile, manifest, *, verify_native=False, _stored_origin=None):
+    recharge_pricing_scope(profile)
+    stored = recharge_pricing_e7_stored_origin(previous, fresh=verify_native) if _stored_origin is None else _stored_origin
+    _namespace, module, io96, measured, historical, original, _static = stored
+    require(measured == manifest and recharge_pricing_e7_baseline_fields(previous, _stored_origin=stored) == profile['baselineRelease'],
+        'Fixed pricing e7 baseline changed')
+    old_profile = original[1]
+    expected = dict(old_profile['workerProjection'])
+    expected.update({name: {'mode': '100644', 'sha256': profile['candidateSourceSha256'][name]} for name in RECHARGE_D3FB_WORKER})
+    expected.update({name: {'mode': '100644', 'sha256': digest} for name, digest in RECHARGE_PRICING_CARRIED_WORKER.items()})
+    require(profile['workerProjection'] == expected, 'Fixed pricing e7 four-file Worker delta changed')
+    native = profile['nativeBaseline']
+    changing = {'producerSha256', 'rechargeProfileRawSha256', 'rechargeReadbackSha256', 'nativeChainSha256',
+        'nativeFileCount', 'nativeDirectoryCount', 'runtimeStatesSha256', 'preservedStatesSha256', 'configuredPreservedStatesSha256'}
+    require(all(native[key] == old_profile['nativeBaseline'][key] for key in set(RECHARGE_D3FB_NATIVE_KEYS) - changing)
+        and native['predecessorProfileCanonicalSha256'] == RECHARGE_PRICING_PROFILE_CANONICAL
+        and native['predecessorStoredContextSha256'] == historical_fingerprint(original[2]['fixedRechargeRelease'])
+        and native['rechargeReadbackSha256'] == historical_fingerprint(original[5]), 'Fixed pricing e7 historical closure changed')
+    chain = recharge_pricing_e7_native_chain(previous)
+    require(chain['sha256'] == native['nativeChainSha256'] and chain['fileCount'] == native['nativeFileCount']
+        and chain['directoryCount'] == native['nativeDirectoryCount']
+        and recharge_2f_retained_migrate(previous) == native['retainedMigrateSha256'], 'Fixed pricing e7 immutable chain changed')
+    if verify_native:
+        require(recharge_pricing_e7_observe_native(previous, _stored_origin=stored)
+            == {'baselineRelease': profile['baselineRelease'], 'nativeBaseline': native}, 'Fixed pricing e7 native proof changed')
+    else:
+        running = recharge_pricing_e7_running(io96, module, previous, profile)
+        require(io96.running(previous) == running, 'Fixed pricing e7 preserved runtime tail changed')
+        io96.unchanged()
+    return original[4], old_profile
+
+
+def recharge_pricing_e7_api_receipt(previous, directory=None, profile=None, *, verify_native=False, _stored_origin=None):
+    directory = directory or previous
+    stored = recharge_pricing_e7_stored_origin(previous) if _stored_origin is None else _stored_origin
+    _namespace, module, io96, _manifest, historical, original, _static = stored
+    if verify_native: require((BASE / 'current').resolve() == previous and directory == previous, 'Fixed pricing e7 API before changed')
+    names = {'apiScopeProducerSha256', 'apiBuildProofRawSha256', 'apiBuildProofCanonicalSha256',
+        'apiStateRawSha256', 'apiReadbackSha256'}
+    result = {key: original[1]['nativeBaseline'][key] for key in names}
+    running = recharge_pricing_e7_running(io96, module, directory, profile)
+    configured = {name: row for name, row in running['liveServices'].items() if name != 'auto-recharge'}
+    result['configuredPreservedStatesSha256'] = historical_fingerprint(configured)
+    if profile is not None: recharge_d3fb_private_copies(directory, previous, profile)
+    require(io96.running(directory) == running, 'Fixed pricing e7 API runtime tail changed')
+    io96.unchanged()
+    return result
+
+
+def recharge_pricing_e7_audit(directory, receipt, *, stage, source, auditor_source, profile, previous, before_receipt=None):
+    stored = recharge_pricing_e7_stored_origin(previous)
+    original = stored[5]
+    recharge_pricing_e7_baseline(previous, profile, stored[3], _stored_origin=stored)
+    origin4c = recharge_6f5_origin4c(Path(original[2]['previousRelease']))
+    namespace = recharge_d3fb_native_producer(origin4c)
+    # Exact original49 primitive and2f audit control; no old95 live-baseline entry is invoked.
+    result = namespace['registration_recovery_finance_audit'](directory, receipt, stage=stage, source=auditor_source,
+        before_receipt=before_receipt, control_source=recharge_d3fb_audit_control(origin4c), profile_id=REGISTRATION_RECOVERY_ID)
+    tail = recharge_pricing_e7_stored_origin(previous, _historical=original)
+    recharge_pricing_e7_baseline(previous, profile, tail[3], _stored_origin=tail)
+    return result
+
+
+def recharge_pricing_e7_native_chain(previous, *, chain=None):
+    """Snapshot all eighteen fixed immutable releases; no private content escapes."""
+    message = 'Fixed 974 native chain changed'
+    (rows, directories, files) = ([], 0, 0)
+    identity = lambda x: (x.st_dev, x.st_ino, x.st_mode, x.st_uid, x.st_gid, x.st_nlink, x.st_size, x.st_mtime_ns, x.st_ctime_ns)
+    directory = previous
+    chain = RECHARGE_PRICING_E7_CHAIN if chain is None else chain
+    require(chain in (RECHARGE_PRICING_E7_CHAIN,), message)
+    for (index, (commit, tree)) in enumerate(chain):
+        require(directory.is_absolute() and directory.resolve() == directory and (not directory.is_symlink()) and (directory.parent == BASE / 'releases') and re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + commit[:12], directory.name), message)
+        manifest = fixed_recharge_json(fixed_recharge_bytes(directory / 'release-manifest.json'))
+        require(manifest.get('commit') == commit and manifest.get('sourceTree') == tree, message)
+        (entries, folders, before) = ({}, {}, {})
+        for path in (directory, *sorted(directory.rglob('*'))):
+            info = path.lstat()
+            before[path] = identity(info)
+            name = '.' if path == directory else str(path.relative_to(directory))
+            require(not path.is_symlink() and (not any((parent.is_symlink() for parent in path.parents if parent == directory or directory in parent.parents))), message)
+            mode = stat.S_IMODE(info.st_mode)
+            if stat.S_ISDIR(info.st_mode):
+                require(mode in (448, 488, 493, 509), message)
+                folders[name] = [mode, info.st_uid, info.st_gid]
+                directories += 1
+            else:
+                raw = fixed_recharge_bytes(path, modes=(256, 384, 420, 436, 493, 509))
+                entries[name] = [hashlib.sha256(raw).hexdigest(), mode, info.st_uid, info.st_gid]
+                files += 1
+            require(identity(path.lstat()) == before[path], message)
+        require(all((identity(path.lstat()) == original for (path, original) in before.items())), message)
+        rows.append({'commit': commit, 'tree': tree, 'release': str(directory), 'files': entries, 'directories': folders})
+        if index + 1 < len(chain):
+            require(manifest.get('previousCommit') == chain[index + 1][0], message)
+            directory = Path(manifest['previousRelease'])
+    external = {}
+    for path in (ORDER_ARCHIVE_SEAL, POST_CLEANUP_RECEIPT):
+        info = path.lstat()
+        raw = fixed_recharge_bytes(path, modes=(384,))
+        external[str(path)] = [hashlib.sha256(raw).hexdigest(), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid]
+        require(identity(info) == identity(path.lstat()), message)
+    return {'sha256': historical_fingerprint({'releases': rows, 'external': external}), 'fileCount': files, 'directoryCount': directories, 'origin': directory}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--commit', required=True)
@@ -11961,6 +12623,7 @@ def main():
     parser.add_argument('--recharge-pro-2f', action='store_true')
     parser.add_argument('--recharge-pro-d3fb', action='store_true')
     parser.add_argument('--recharge-pro-6f5', action='store_true')
+    parser.add_argument('--recharge-pro-pricing', action='store_true')
     parser.add_argument('--registration-worker-b8-80', action='store_true')
     parser.add_argument('--registration-worker-956', action='store_true')
     parser.add_argument('--registration-worker-85', action='store_true')
@@ -11977,6 +12640,8 @@ def main():
     if args.api_registration_only:
         scope, controller = api_admin_scope('API_REGISTRATION')
         return scope.release(controller, args)
+    if args.recharge_pro_pricing:
+        return recharge_pricing_release(args)
     if args.recharge_pro_6f5:
         return recharge_6f5_release(args)
     require(not (args.registration_worker_94 and (args.registration_worker_93 or args.recharge_pro_2f
@@ -12595,6 +13260,11 @@ def load_registration96():
 
 
 if __name__ == '__main__':
+    if (RECHARGE_PRICING_ID in sys.argv or '--recharge-pro-pricing' in sys.argv) and any(
+            (token.startswith(('--registration-worker', '--recharge-pro-')) and token != '--recharge-pro-pricing')
+            or token.startswith('registration-worker-')
+            or token in ('--api-admin-only', '--api-admin-build-proof', '--admin-only') for token in sys.argv[1:]):
+        raise SystemExit('Fixed pricing selection is ambiguous; raw output suppressed')
     if 'registration-worker-96-20261008' in sys.argv or '--registration-worker-96' in sys.argv:
         try:
             require(not any(t.startswith(('--recharge-pro', 'recharge-pro-', '--api-admin', '--historical-finance'))
@@ -12676,6 +13346,12 @@ if __name__ == '__main__':
         except Exception:
             raise SystemExit('Fixed registration readback unavailable; raw output suppressed') from None
         print('FIXED_REGISTRATION_RELEASE_VERIFIED ' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+    elif sys.argv[1:] == ['--prepare-fixed-recharge-build', '--fixed-recharge-profile', RECHARGE_PRICING_ID]:
+        try:
+            prepare_recharge_d3fb_build(_profile_id=RECHARGE_PRICING_ID)
+        except Exception:
+            raise SystemExit('Fixed pricing build unavailable; raw output suppressed') from None
+        print('FIXED_RECHARGE_BUILD_PREPARED')
     elif sys.argv[1:] == ['--prepare-fixed-recharge-build', '--fixed-recharge-profile', RECHARGE_6F5_ID]:
         try:
             prepare_recharge_d3fb_build(_profile_id=RECHARGE_6F5_ID)
@@ -12699,7 +13375,7 @@ if __name__ == '__main__':
             tokens = sys.argv[2:]
             if tokens:
                 require(len(tokens) == 2 and tokens[0] == '--fixed-recharge-profile'
-                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID),
+                    and tokens[1] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID),
                     'Fixed recharge runtime scope unavailable')
                 check_fixed_recharge_scope(profile_id=tokens[1])
             else:
@@ -12716,7 +13392,7 @@ if __name__ == '__main__':
                     'Fixed recharge deployment verification unavailable')
             values = dict(zip(tokens[::2], tokens[1::2]))
             if '--fixed-recharge-profile' in values:
-                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID),
+                require(values['--fixed-recharge-profile'] in (RECHARGE_SCOPE_ID, RECHARGE_7F_ID, RECHARGE_MAIN80_ID, RECHARGE_974_ID, RECHARGE_2F_ID, RECHARGE_D3FB_ID, RECHARGE_6F5_ID, RECHARGE_PRICING_ID),
                         'Fixed recharge deployment verification unavailable')
                 result = check_fixed_recharge_deployment(values['--expected-current'], values['--source-tree'],
                     values['--profile-sha256'], profile_id=values['--fixed-recharge-profile'])

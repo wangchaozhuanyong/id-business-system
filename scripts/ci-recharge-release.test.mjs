@@ -479,6 +479,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
   assert.equal(selected('release', 'recharge-pro-2f-20261007'), false);
   assert.equal(selected('release', 'recharge-pro-4c-20261008'), false);
   assert.equal(selected('release', 'recharge-pro-6f5-20261008'), false);
+  assert.equal(selected('release', 'recharge-pro-pricing-045-20261008'), false);
   assert.equal(selected('release', 'registration-worker-b8-80-20261006'), false);
   assert.equal(selected('release', 'registration-worker-956-20261006'), false);
   assert.equal(selected('release', 'registration-worker-85-20261006'), false);
@@ -505,6 +506,7 @@ test('workflow skips legacy automatic cache mutation for the new release policy'
         'recharge-pro-2f-20261007',
         'recharge-pro-4c-20261008',
         'recharge-pro-6f5-20261008',
+        'recharge-pro-pricing-045-20261008',
         'registration-worker-b8-80-20261006',
         'registration-worker-956-20261006',
         'registration-worker-85-20261006',
@@ -1769,19 +1771,21 @@ function approvedRuntimeTransport(
     ...env,
     HISTORICAL_EXCEPTION: identity,
     EXPECTED_CURRENT:
-      identity === 'recharge-pro-menu-b8-20261005'
-        ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
-        : identity === 'recharge-pro-main80-20261006'
-          ? 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
-          : identity === 'recharge-pro-974-20261007'
-            ? '974c62cc1681012ecff897aefc90d2cd9900004a'
-            : identity === 'recharge-pro-2f-20261007'
-              ? '2f24cf81007429ea474da404a30bc74da9d43ce1'
-              : identity === 'recharge-pro-6f5-20261008'
-                ? '6f5e5cc252886d5f86592e307147b40c13577585'
-                : identity === 'recharge-pro-4c-20261008'
-                  ? '4c170e661c871dc14dccc98a8d6e5cf983141341'
-                  : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
+      identity === 'recharge-pro-pricing-045-20261008'
+        ? 'e7c9862d58599995954883f1c1f6038283afffab'
+        : identity === 'recharge-pro-menu-b8-20261005'
+          ? 'b8d643450ffa9012ccc09ead15e4681e3dee98d0'
+          : identity === 'recharge-pro-main80-20261006'
+            ? 'b91b626a71ed2c7c2473d080551b3b10b693b0cb'
+            : identity === 'recharge-pro-974-20261007'
+              ? '974c62cc1681012ecff897aefc90d2cd9900004a'
+              : identity === 'recharge-pro-2f-20261007'
+                ? '2f24cf81007429ea474da404a30bc74da9d43ce1'
+                : identity === 'recharge-pro-6f5-20261008'
+                  ? '6f5e5cc252886d5f86592e307147b40c13577585'
+                  : identity === 'recharge-pro-4c-20261008'
+                    ? '4c170e661c871dc14dccc98a8d6e5cf983141341'
+                    : '7f70688b9bf53a071a0a324ca558aeabc4ced2e3',
     TASK_EXPECTED_FIXED_PROFILE: identity,
     TASK_REAL_PYTHON: interpreter,
     TASK_PROFILE_CHECK_LOG: join(root, 'profile-check.log')
@@ -2043,6 +2047,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
         identity !== 'recharge-pro-2f-20261007' &&
         identity !== 'recharge-pro-4c-20261008' &&
         identity !== 'recharge-pro-6f5-20261008' &&
+        identity !== 'recharge-pro-pricing-045-20261008' &&
         (key !== 'composeSha256' || identity !== 'recharge-pro-menu-b8-20261005')
       )
         profile.baselineRelease[key] = 'd'.repeat(64);
@@ -2052,6 +2057,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
           identity !== 'recharge-pro-2f-20261007' &&
           identity !== 'recharge-pro-4c-20261008' &&
           identity !== 'recharge-pro-6f5-20261008' &&
+          identity !== 'recharge-pro-pricing-045-20261008' &&
           (identity !== 'recharge-pro-main80-20261006' ||
             (key !== 'carriedSourceOnlySha256' &&
               ![
@@ -2066,11 +2072,14 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
       [
         'recharge-pro-2f-20261007',
         'recharge-pro-4c-20261008',
-        'recharge-pro-6f5-20261008'
+        'recharge-pro-6f5-20261008',
+        'recharge-pro-pricing-045-20261008'
       ].includes(identity)
     ) {
       // Exercise the actual parser with private native evidence represented only by hashes.
-      for (const key of ['overrideCanonicalSha256'])
+      for (const key of identity === 'recharge-pro-pricing-045-20261008'
+        ? Object.keys(profile.baselineRelease)
+        : ['overrideCanonicalSha256'])
         if (profile.baselineRelease[key] === null) profile.baselineRelease[key] = 'd'.repeat(64);
       for (const key of Object.keys(profile.nativeBaseline))
         if (profile.nativeBaseline[key] === null)
@@ -2101,7 +2110,8 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
         'recharge-pro-main80-20261006',
         'recharge-pro-2f-20261007',
         'recharge-pro-4c-20261008',
-        'recharge-pro-6f5-20261008'
+        'recharge-pro-6f5-20261008',
+        'recharge-pro-pricing-045-20261008'
       ].includes(identity)
         ? 49
         : 48,
@@ -2109,7 +2119,8 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
         'recharge-pro-main80-20261006',
         'recharge-pro-2f-20261007',
         'recharge-pro-4c-20261008',
-        'recharge-pro-6f5-20261008'
+        'recharge-pro-6f5-20261008',
+        'recharge-pro-pricing-045-20261008'
       ].includes(identity)
         ? 49
         : 48,
@@ -2118,7 +2129,8 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
         'recharge-pro-main80-20261006',
         'recharge-pro-2f-20261007',
         'recharge-pro-4c-20261008',
-        'recharge-pro-6f5-20261008'
+        'recharge-pro-6f5-20261008',
+        'recharge-pro-pricing-045-20261008'
       ].includes(identity)
         ? 0
         : 6,
@@ -2136,7 +2148,7 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
     writeFileSync(awsLog, '');
     writeFileSync(
       join(root, 'bin/aws'),
-      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_READBACK_AWS_LOG"\ncase "$2" in\nsend-command) if [ "$TASK_READBACK_PROFILE_ID" = recharge-pro-6f5-20261008 ]; then printf "11111111-1111-4111-8111-111111111111\\n"; else printf "synthetic-command\\n"; fi ;;\nwait) exit "${TASK_READBACK_WAIT_STATUS:-0}" ;;\nget-command-invocation) case "$*" in *"--query Status "*) printf "Success\\n" ;; *) cat "$TASK_READBACK_OUTPUT" ;; esac ;;\n*) exit 91 ;;\nesac\n',
+      '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TASK_READBACK_AWS_LOG"\ncase "$2" in\nsend-command) if [ "$TASK_READBACK_PROFILE_ID" = recharge-pro-6f5-20261008 ] || [ "$TASK_READBACK_PROFILE_ID" = recharge-pro-pricing-045-20261008 ]; then printf "11111111-1111-4111-8111-111111111111\\n"; else printf "synthetic-command\\n"; fi ;;\nwait) exit "${TASK_READBACK_WAIT_STATUS:-0}" ;;\nget-command-invocation) case "$*" in *"--query Status "*) printf "Success\\n" ;; *) cat "$TASK_READBACK_OUTPUT" ;; esac ;;\n*) exit 91 ;;\nesac\n',
       { mode: 0o755 }
     );
     const execute = (
@@ -2152,10 +2164,12 @@ function fixedRechargeReadbackFixture(run, identity = 'recharge-pro-menu-b8-2026
           RELEASE_OPERATION: 'verify_recharge_release',
           FIXED_RECHARGE_PROFILE: identity,
           EXPECTED_CURRENT: receipt.currentCommit,
-          PRODUCTION_INSTANCE_ID:
-            identity === 'recharge-pro-6f5-20261008'
-              ? 'i-0123456789abcdef0'
-              : 'i-test-fixture-only',
+          PRODUCTION_INSTANCE_ID: [
+            'recharge-pro-6f5-20261008',
+            'recharge-pro-pricing-045-20261008'
+          ].includes(identity)
+            ? 'i-0123456789abcdef0'
+            : 'i-test-fixture-only',
           TASK_READBACK_PROFILE_ID: identity,
           TASK_READBACK_AWS_LOG: awsLog,
           TASK_READBACK_OUTPUT: outputFile,
@@ -4172,6 +4186,8 @@ test('fixed95 preserves94 and815 API Admin and D3 Pro while rebuilding the revie
   );
 });
 
+const rechargePricingIdentity = 'recharge-pro-pricing-045-20261008';
+const rechargePricingBaseline = 'e7c9862d58599995954883f1c1f6038283afffab';
 const recharge4cIdentity = 'recharge-pro-4c-20261008';
 const recharge6f5Identity = 'recharge-pro-6f5-20261008';
 const recharge6f5Baseline = '6f5e5cc252886d5f86592e307147b40c13577585';
@@ -4181,8 +4197,13 @@ const rechargePreviousSourceBasis = 'f51850a9f3466b9884745863e9a5f0fd7e73e356';
 const recharge4cRuntimeBasis = 'd3fb510a40d6ee1f0a84c66b95d31f92b730cf7d';
 function recharge4cTransport(root, env, overrides = {}) {
   const identity = overrides.identity ?? recharge4cIdentity;
-  assert.ok([recharge4cIdentity, recharge6f5Identity].includes(identity));
-  const baseline = identity === recharge6f5Identity ? recharge6f5Baseline : recharge4cBaseline;
+  assert.ok([recharge4cIdentity, recharge6f5Identity, rechargePricingIdentity].includes(identity));
+  const baseline =
+    identity === rechargePricingIdentity
+      ? rechargePricingBaseline
+      : identity === recharge6f5Identity
+        ? recharge6f5Baseline
+        : recharge4cBaseline;
   const transport = approved2fTransport(root, env, {
     ...overrides,
     identity
@@ -4190,7 +4211,14 @@ function recharge4cTransport(root, env, overrides = {}) {
   const workerProjection = structuredClone(
     JSON.parse(readFileSync('deploy/aws/recharge-pro-2f-20261007.json', 'utf8')).workerProjection
   );
-  for (const name of ['plan_selection.py', 'test_pro.py']) {
+  for (const name of identity === rechargePricingIdentity
+    ? [
+        'plan_selection.py',
+        'test_pro.py',
+        'registration_browser.py',
+        'test_registration_browser.py'
+      ]
+    : ['plan_selection.py', 'test_pro.py']) {
     const path = 'apps/api/src/id-business-v2/auto-recharge/worker/' + name;
     workerProjection[path].sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
   }
@@ -4237,7 +4265,8 @@ function recharge4cTransport(root, env, overrides = {}) {
 
 for (const [label, identity, baseline, releaseFlag] of [
   ['4c', recharge4cIdentity, recharge4cBaseline, '--recharge-pro-d3fb'],
-  ['6f5', recharge6f5Identity, recharge6f5Baseline, '--recharge-pro-6f5']
+  ['6f5', recharge6f5Identity, recharge6f5Baseline, '--recharge-pro-6f5'],
+  ['pricing e7', rechargePricingIdentity, rechargePricingBaseline, '--recharge-pro-pricing']
 ]) {
   const projectionTransport = (root, env, overrides = {}) =>
     recharge4cTransport(root, env, { ...overrides, identity });
@@ -4715,6 +4744,122 @@ function recharge6f5ReadbackPoller() {
   return source[1];
 }
 
+test('fixed pricing 045 profile runs native rejection proof and its independent 49 zero readback', () => {
+  execFileSync(
+    'python3',
+    [
+      '-B',
+      'scripts/production-release/remote-deploy.test.py',
+      'FixedRechargePricingNativeTests',
+      'FixedRechargePricingE7ContractTests'
+    ],
+    { stdio: 'pipe', timeout: 180000 }
+  );
+  fixedRechargeReadbackFixture(({ execute, receipt }) => {
+    execute();
+    for (const fields of [
+      { previousCommit: recharge6f5Baseline },
+      { id: recharge6f5Identity },
+      { checkCount: 48, executedCheckCount: 48 },
+      { violationCount: 1 },
+      { preservedServiceCount: 5 },
+      { unchangedServiceContainersPreserved: false },
+      { environmentUnchanged: false },
+      { migrationStatus: 'APPLIED' },
+      { databaseGrantSyncStatus: 'APPLIED' },
+      { cacheStatus: 'APPLIED' },
+      { rechargeImageMatched: false },
+      { rawOutput: 'unreviewed-extra' }
+    ])
+      assert.throws(() =>
+        execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify({ ...receipt, ...fields })}\n`)
+      );
+    const incomplete = { ...receipt };
+    delete incomplete.storedGatesMatched;
+    assert.throws(() => execute(`FIXED_RECHARGE_RELEASE_VERIFIED ${JSON.stringify(incomplete)}\n`));
+  }, rechargePricingIdentity);
+});
+
+test('fixed pricing 045 preserves the approved 900 second provider and 960 second local readback bounds', () => {
+  const step = workflowSteps.find(
+    (row) => row.name === 'Verify fixed recharge deployment independently'
+  );
+  const builder = step.run.match(
+    /python3 - <<'PY_BUILD_RECHARGE_READBACK'\n([\s\S]+?)\nPY_BUILD_RECHARGE_READBACK/
+  )[1];
+  const actual = JSON.parse(
+    execFileSync(
+      'python3',
+      [
+        '-c',
+        'import ast,json,sys; t=ast.parse(sys.argv[1]); v=next(n.value for n in t.body if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=="parameters" for x in n.targets)); e=next(y for x,y in zip(v.keys,v.values) if isinstance(x,ast.Constant) and x.value=="executionTimeout"); print(json.dumps(eval(compile(ast.Expression(e),"pricing-timeout","eval"),{"identity":sys.argv[2]})))',
+        builder,
+        rechargePricingIdentity
+      ],
+      { encoding: 'utf8' }
+    )
+  );
+  assert.deepEqual(actual, ['900']);
+  const poller = step.run.match(
+    /<<'PY_WAIT_RECHARGE_PRICING' \|\| wait_status=\$\?\n([\s\S]+?)\nPY_WAIT_RECHARGE_PRICING/
+  )[1];
+  assert.ok(poller.includes('time.monotonic() + 960'));
+  assert.ok(poller.includes('timeout=min(30, remaining)'));
+  assert.ok(recharge6f5ReadbackPoller().includes('time.monotonic() + 960'));
+});
+
+test('actual pricing readback verifier accepts its frozen controller above 1 MiB while legacy and oversize sources fail', () => {
+  for (const identity of [rechargePricingIdentity, recharge6f5Identity])
+    fixedRechargeReadbackFixture(({ root, execute, remoteSource }) => {
+      execute();
+      assert.ok(remoteSource.length > 1024 * 1024);
+      const parameters = join(root, '.deploy/production-release/fixed-recharge-readback.json');
+      const candidate = join(root, 'local-verifier-controller.py');
+      writeFileSync(candidate, remoteSource);
+      const probe = `
+import ast,hashlib,json,shlex,sys
+from pathlib import Path
+raw=json.loads(Path(sys.argv[1]).read_bytes())['commands'][0]
+command=shlex.split(raw);assert command[:2]==['python3','-c']
+tree=ast.parse(command[2]);path=Path(sys.argv[2])
+# Redirect only the fixed staging path into this owned local fixture.
+p=next(n for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='p'for t in n.targets))
+p.value.args[0]=ast.Constant(str(path));ast.fix_missing_locations(tree)
+guard=next(n for n in tree.body if isinstance(n,ast.If))
+cap=guard.test.values[0].comparators[0].value
+assert cap==(2*1024*1024 if sys.argv[3]=='${rechargePricingIdentity}'else 1024*1024)
+calls=[]
+def fake_exec(code,ns):calls.append(code)
+def run(program):
+ try:exec(compile(program,'actual-readback-verifier','exec'),{'exec':fake_exec});return True
+ except RuntimeError:return False
+accepted=run(tree)
+assert accepted==(sys.argv[3]=='${rechargePricingIdentity}')
+if accepted:
+ assert len(calls)==1
+ original=path.read_bytes();path.write_bytes(original+b'\\n')
+ assert run(tree)is False # exact frozen hash remains mandatory.
+ path.write_bytes(original+b' '*(cap+1-len(original)))
+ # Calibrate only the local negative fixture hash to isolate the size guard.
+ guard.test.values[1].comparators[0]=ast.Constant(hashlib.sha256(path.read_bytes()).hexdigest())
+ ast.fix_missing_locations(tree);assert run(tree)is False
+print(json.dumps({'identity':sys.argv[3],'sourceCap':cap,'accepted':accepted,'productionExecuted':False}))
+`;
+      const observed = JSON.parse(
+        execFileSync('python3', ['-B', '-c', probe, parameters, candidate, identity], {
+          encoding: 'utf8'
+        })
+      );
+      assert.equal(observed.accepted, identity === rechargePricingIdentity);
+      assert.equal(observed.productionExecuted, false);
+    }, identity);
+  const old95 = workflowSteps.find(
+    (step) => step.name === 'Verify fixed 95 registration deployment independently'
+  );
+  assert.ok(old95.run.includes('if len(source)>1024*1024'));
+  assert.ok(old95.run.includes('b=read95(p,1024*1024,'));
+});
+
 test('fixed 6f5 readback budgets apply only to its exact identity and preserve the legacy waiter', () => {
   const step = workflowSteps.find(
     (step) => step.name === 'Verify fixed recharge deployment independently'
@@ -4871,6 +5016,36 @@ test('fixed 6f5 actual readback poller distinguishes a bounded CLI timeout from 
       (error) =>
         error.status === status && error.stdout === '' && String(error.stderr).includes(message)
     );
+});
+
+test('exact pricing main5b carry keeps transport and finance guards without pretending to be the frozen96 carrier', () => {
+  const profile = JSON.parse(
+    readFileSync('deploy/aws/recharge-pro-pricing-045-20261008.json', 'utf8')
+  );
+  const paths = [
+    ...Object.keys(profile.sourceModes),
+    'deploy/aws/recharge-pro-pricing-045-20261008.json'
+  ];
+  assert.equal(checkMode(paths, '', ''), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+  for (const part of ['guards', 'release-controls']) {
+    const commands = guardCommands(paths, { part });
+    assert.ok(
+      commands.includes('python3 -B scripts/production-release/registration-only-transport.test.py')
+    );
+    assert.ok(commands.includes('node --test scripts/v2-registration-finance-audit.test.mjs'));
+    assert.equal(
+      commands.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py'),
+      false
+    );
+    const invalid = guardCommands(
+      [...paths, 'scripts/production-release/service-image-retention.py'],
+      { part }
+    );
+    assert.ok(
+      invalid.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py')
+    );
+  }
 });
 
 test('registration96 control-only CI executes actual finite and transport guards without connector or database suites', () => {

@@ -28,6 +28,12 @@ STATE_FILE = PREFIX + '-preservation.json'
 FAILURE_FILE = PREFIX + '-failure.json'
 WORKER_PREFIX = 'apps/api/src/id-business-v2/auto-recharge/worker/'
 WORKER_PAIR = frozenset(WORKER_PREFIX + n for n in ('registration_browser.py', 'test_registration_browser.py'))
+# These reviewed main-only Python changes are absent from the API runtime.
+# Registration still uses its sealed 60-file projection; Pro is preserved.
+UNPUBLISHED_PRICING = {WORKER_PREFIX + 'plan_selection.py':
+    '123f6f30d4b01db6efef213100f4b5b90f211064d2eacfc7ffb3bcf28ecf8604',
+    WORKER_PREFIX + 'test_pro.py':
+    '3898ba5a47a9911eca8c05bdec4c48768d4ad2499f1bba6b39c4d6039c53a5f6'}
 API_CHANGES = frozenset('apps/api/src/id-business-v2/auto-registration/' + n for n in (
     'registration-events.service.ts', 'registration-events.service.spec.ts',
     'registration-mail-delivery.service.ts', 'registration-mail-delivery.service.spec.ts'))
@@ -77,8 +83,12 @@ def registration_candidate_scope(d, commit):
     old = d.run('git', 'diff', '--name-only', '815fae391b172d6c368ea2ad25225f52a1272808',
                 REGISTRATION_CURRENT, '--', *API_INPUTS).splitlines()
     changed = d.run('git', 'diff', '--name-only', REGISTRATION_CURRENT, commit, '--', *API_INPUTS).splitlines()
-    d.require(set(old) == known and set(changed) == API_CHANGES | WORKER_PAIR,
+    carried = set(changed) & set(UNPUBLISHED_PRICING)
+    d.require(set(old) == known and carried in (set(), set(UNPUBLISHED_PRICING))
+              and set(changed) == API_CHANGES | WORKER_PAIR | carried,
               'API_ADMIN_REGISTRATION_API_SCOPE_CHANGED')
+    d.require(all(hashlib.sha256(subprocess.check_output(['git', 'show', commit + ':' + name])).hexdigest()
+                  == UNPUBLISHED_PRICING[name] for name in carried), 'API_ADMIN_REGISTRATION_API_SCOPE_CHANGED')
 
 
 def prepare_registration_build(d):

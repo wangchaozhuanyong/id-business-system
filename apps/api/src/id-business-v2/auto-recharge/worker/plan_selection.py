@@ -2,6 +2,7 @@
 import asyncio
 import re
 import time
+from urllib.parse import urlsplit
 
 from playwright.async_api import expect
 from checkout_core import Stop
@@ -303,10 +304,19 @@ class Selection:
         # 异步挂载期间可能出现第二个弹窗，重新核验唯一作用域后才返回档位组。
         return await pro_card(await plan_scope(self.page), details=True)
 
+    def require_pricing_origin(self):
+        location = urlsplit(self.page.url)
+        if location.scheme != 'https' or location.netloc != 'chatgpt.com':
+            raise Stop('official_plan_browser_error')
+
     async def open_pricing_card(self, target_plan):
         """通过官网定价卡进入套餐弹窗；该链接本身不得作为建单按钮返回。"""
         self.step('pricing_page', 'link')
-        await self.page.goto(PRICING_URL, wait_until='domcontentloaded', timeout=self.timeout())
+        # 页面控件可能先就绪，defer 脚本仍阻塞 DOMContentLoaded；沿用后续语义等待和原预算。
+        response = await self.page.goto(PRICING_URL, wait_until='commit', timeout=self.timeout())
+        self.require_pricing_origin()
+        if response is None or response.status >= 400:
+            raise Stop('official_pricing_plan_entry_not_found')
         pro = selection_spec(target_plan)['price_usd'] is not None
         heading = self.page.get_by_role(
             'heading', name=GO_HEADING if target_plan == 'go' else PRO_HEADING if pro else PLUS_HEADING
@@ -320,9 +330,11 @@ class Selection:
             except Exception as exc:
                 self.diagnostics['error_type'] = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
                 raise Stop('official_pricing_plan_entry_not_found') from None
+            self.require_pricing_origin()
             scope = await plan_scope(self.page)
             if await pro_cards(scope).count():
                 await self.wait_native_pro_details(scope)
+                self.require_pricing_origin()
                 # 等待期间可能出现另一个真实弹窗；返回前重新核验唯一作用域与所属组。
                 scope = await plan_scope(self.page)
                 await pro_card(scope, details=True)
@@ -351,11 +363,14 @@ class Selection:
             self.diagnostics['matched_count'] = 0
             raise Stop('official_pricing_plan_entry_not_found')
         await self.ready(action, 'official_pricing_plan_entry_not_found')
+        self.require_pricing_origin()
         await action.click(timeout=self.timeout())
 
         # 真实官网定价卡仅负责导航并打开弹窗，最终建单仍由弹窗按钮触发。
         self.step('open_menu')
-        return await self.wait_for_plan_scope()
+        scope = await self.wait_for_plan_scope()
+        self.require_pricing_origin()
+        return scope
 
     async def open_menu(self, target_plan):
         self.step('open_menu')

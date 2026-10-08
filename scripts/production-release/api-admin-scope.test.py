@@ -655,6 +655,42 @@ class RegistrationScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'API_SCOPE_CHANGED'):
             registration.registration_candidate_scope(controller, COMMIT)
 
+    def test_reviewed_main_pricing_pair_is_pinned_and_stays_outside_registration_projection(self):
+        commit = 'a1c99dd7f97855850067be970896e14abb504ec9'
+        known = [registration.WORKER_PREFIX + n for n in ('plan_selection.py', 'registration_browser.py',
+                                                        'test_pro.py', 'test_registration_browser.py')]
+        allowed = registration.API_CHANGES | registration.WORKER_PAIR
+        carried = set(registration.UNPUBLISHED_PRICING)
+        self.assertTrue(carried.isdisjoint(registration.WORKER_PAIR))
+        raw = {name: subprocess.check_output(['git', 'show', commit + ':' + name], cwd=ROOT) for name in carried}
+        def controller(names):
+            return SimpleNamespace(require=d.require, run=MagicMock(side_effect=['\n'.join(known), '\n'.join(names)]))
+        registration.registration_candidate_scope(controller(allowed | carried), commit)
+        with patch.object(registration.subprocess, 'check_output', side_effect=lambda args: raw[args[-1].split(':', 1)[1]] + b'\n'):
+            with self.assertRaisesRegex(RuntimeError, 'API_SCOPE_CHANGED'):
+                registration.registration_candidate_scope(controller(allowed | carried), commit)
+        for changed in (allowed | {next(iter(carried))}, allowed | carried | {registration.WORKER_PREFIX + 'server.py'}):
+            with self.subTest(changed=sorted(changed)), patch.object(registration.subprocess, 'check_output') as reader:
+                with self.assertRaisesRegex(RuntimeError, 'API_SCOPE_CHANGED'):
+                    registration.registration_candidate_scope(controller(changed), commit)
+                reader.assert_not_called()
+
+    def test_registration_and_pricing_merge_keeps_both_entries_and_rejects_mixed_selection(self):
+        arguments = ['remote-deploy.py', '--commit', COMMIT, '--source-tree', TREE,
+            '--repository', REPOSITORY, '--expected-current', OLD, '--run-id', '123',
+            '--run-attempt', '1', '--ci-run-id', '456', '--api-registration-only', '--recharge-pro-pricing']
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.object(d, 'BASE', Path(temporary)), \
+             patch.object(sys, 'argv', arguments), patch.object(d, 'recharge_pricing_release') as pricing:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(d.main(), 1)
+            self.assertEqual(json.loads(output.getvalue())['code'], 'API_ADMIN_SCOPE_CONFLICT')
+            pricing.assert_not_called()
+        arguments.remove('--api-registration-only')
+        with patch.object(sys, 'argv', arguments), patch.object(d, 'recharge_pricing_release', return_value=0) as pricing:
+            self.assertEqual(d.main(), 0)
+            pricing.assert_called_once()
+
     def execute_private(self, *, close, mode='success'):
         calls = []
         def read(request, timeout):

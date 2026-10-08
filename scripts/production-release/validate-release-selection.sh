@@ -380,6 +380,18 @@ validate_release_selection() {
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;
+    recharge-pro-pricing-045-20261008)
+      [[ "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
+      case "${RELEASE_OPERATION:-release}" in
+        release)
+          [[ "${EXPECTED_CURRENT:-}" == e7c9862d58599995954883f1c1f6038283afffab ]] || return 1 ;;
+        verify_recharge_release)
+          [[ "${RELEASE_COMMIT:-}" =~ ^[0-9a-f]{40}$ && "${EXPECTED_CURRENT:-}" == "$RELEASE_COMMIT" && "$RELEASE_COMMIT" != e7c9862d58599995954883f1c1f6038283afffab ]] || return 1 ;;
+        *) return 1 ;;
+      esac
+      return 0 ;;
     recharge-pro-6f5-20261008)
       [[ "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || return 1
