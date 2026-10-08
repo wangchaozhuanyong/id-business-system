@@ -357,7 +357,7 @@ elif args[1]=='get-command-invocation':
   rows=json.loads(Path(os.environ['TASK_STORAGE_STATUSES']).read_text());print(rows[min(n,len(rows)-1)])
  else:
   assert query=='StandardOutputContent'
-  sys.stdout.write(Path(os.environ['TASK_STORAGE_PRODUCER_OUTPUT']).read_text())
+  sys.stdout.write(Path(os.environ['TASK_STORAGE_PRODUCER_OUTPUT']).read_bytes().decode()+'\\n')
 else:raise RuntimeError('Unreviewed fake AWS operation')
 `,
       { mode: 0o755 }
@@ -676,6 +676,43 @@ test('release archive cache rejects wrong baseline or missing malformed and misp
       },
       options
     );
+});
+
+test('release archive cache accepts only trailing CRLF normalization and rejects extra lines or duplicate records', () => {
+  for (const applied of [false, true]) {
+    const receipt = releaseArchiveReceipt(applied);
+    const operation = applied ? 'archive_release_cache' : 'verify_release_archive_cache';
+    const options = { operation, cachePlanSha256: applied ? receipt.planSha256 : '' };
+    for (const ending of ['\n', '\r\n\r\n'])
+      storageDiagnosticStepFixture(
+        ['Success'],
+        ({ execute, receiptFile }) => {
+          assert.ok(execute().endsWith('\n\n'));
+          assert.deepEqual(JSON.parse(readFileSync(receiptFile, 'utf8')), receipt);
+        },
+        { ...options, producerOutput: archiveEnvelope(receipt).replace(/\n$/, ending) }
+      );
+    for (const producerOutput of [
+      '\n' + archiveEnvelope(receipt),
+      ' ' + archiveEnvelope(receipt),
+      archiveEnvelope(receipt) + 'EXTRA_NONEMPTY_LINE\n',
+      archiveEnvelope(receipt) + archiveEnvelope(receipt)
+    ])
+      storageDiagnosticStepFixture(
+        ['Success'],
+        ({ execute, receiptFile }) => {
+          assert.throws(
+            execute,
+            (error) =>
+              error.status === 1 &&
+              String(error.stderr).includes('RELEASE_ARCHIVE_CACHE_RESULT_UNAVAILABLE') &&
+              !String(error.stdout).includes('STORAGE_MAINTENANCE')
+          );
+          assert.equal(existsSync(receiptFile), false);
+        },
+        { ...options, producerOutput }
+      );
+  }
 });
 
 test('release archive cache rejects altered JSON proof without saving or publishing its payload', () => {
