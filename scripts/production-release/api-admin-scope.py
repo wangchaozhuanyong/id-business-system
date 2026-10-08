@@ -55,10 +55,20 @@ REGISTRATION_PRIVATE = frozenset(('.env.aws.production', 'compose.release.json',
     'order-archive-cleanup.reader.json', 'registration-recovery-audit.compose.json',
     'api-admin-build-proof.json', 'api-admin-preservation.json'))
 TASK_ID = '252ab243-d96b-4928-8116-b83dedc1d240'
-TASK_ATTEMPT = 10
+TASK_ATTEMPT = 12 if MIGRATION_MODE else 10
 TASK_BINDING = {'accountSha256': '4764c0440ec5bde3d20c74064096b3720a3d7d6ac637361452b9f544b9287ba5',
     'profileSha256': '052ad861dc0da2f8611d422bd384e328e1d856a126bc86434846861f90728f00',
     'ownerSha256': 'ed198d0daf9ef5910f54dc16b3a7a6f4db0cf55c1935309f838071365ab7196d'}
+# Captured by the read-only 18e task inspection; these are keyed digests, not credentials.
+MIGRATION_TASK = {'taskId': TASK_ID, 'attempt': 12, 'state': 'partial', 'step': 'password',
+    'reason': 'session_load_timeout', 'updatedAt': '2026-10-08T14:18:32.726Z',
+    'registered': True, 'passwordVerified': False, 'mfaVerified': False, 'leaseActive': False,
+    'noncePresent': False, 'passwordCandidatePresent': True, 'binding': TASK_BINDING,
+    'emailHashHmac': '99e7d0edf61acf0d0228c67fa52bdf3065e86dda2356d06b8dc6f44125a3429b',
+    'jobHmac': '78bc1a85e9857512b534e8b23d6beae677f15cd45bbc76253812bc65396003f9',
+    'accountHmac': '763310b009d8c2c099ac94d2265570d9ca9d2886dcd6eb31d3133556571f3e9a',
+    'auditHmac': '500789997c0d6f006b7c70a07f21be06b1785b355eba2c36e10f3eb37d75edac',
+    'auditCount': 5}
 HANDOFF_FAILURE = {'confirmed': False, 'privatePostAttempted': True, 'failurePhase': 'close',
     'privatePostHttpStatus': 409, 'controlledReason': 'fingerprint_cleanup_failed', 'rawOutputSuppressed': True}
 MIGRATION_NAME = '20261008180000_quick_action_user_order'
@@ -247,7 +257,8 @@ def migration_database_state(d, directory):
 
 
 def migration_task_guard(d, directory, task, guards):
-    d.require(jobs_idle(d, directory) == guards and registration_task(d, directory) == task,
+    d.require(guards.get('registrationWindowRetained') is True
+              and jobs_idle(d, directory) == guards and registration_task(d, directory) == task,
               'API_ADMIN_REGISTRATION_TASK_CHANGED')
     registration_private(d, directory, retained=guards['registrationWindowRetained'])
 
@@ -455,6 +466,7 @@ def jobs_idle(d, directory, *, allow_retained=False):
 
 TASK_SOURCE = r'''const {PrismaClient}=require('@prisma/client'),c=require('node:crypto');
 const p=new PrismaClient({log:[]}),id=__TASK__,attempt=__ATTEMPT__,binding=__BINDING__;
+const migration=__MIGRATION__,observed=__OBSERVED__;
 const need=x=>{if(!x)throw Error();},bit=x=>x===true||x===1||x===1n;
 const sha=x=>c.createHash('sha256').update(x||'').digest('hex');
 const canon=x=>typeof x==='bigint'?x.toString():x instanceof Date?x.toISOString():Array.isArray(x)?x.map(canon):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canon(x[k])])):x;
@@ -463,9 +475,9 @@ const mac=x=>c.createHmac('sha256',key).update('api-registration-handoff:').upda
 async function read(tx){
  const rows=await tx.$queryRaw`SELECT * FROM id_business_v2_registration_jobs WHERE id=${id}`;
  need(rows.length===1);const j=rows[0];
- need(j.id===id&&j.attempt===attempt&&j.state==='partial'&&j.step==='password'&&j.reason==='session_network_error'
+ need(j.id===id&&j.attempt===attempt&&j.state==='partial'&&j.step==='password'&&j.reason===(migration?observed.reason:'session_network_error')
   &&bit(j.registered)&&!bit(j.password_verified)&&!bit(j.mfa_verified)&&j.nonce_hash===null&&j.lease_until===null
-  &&j.updated_at.toISOString()==='2026-10-08T02:15:59.029Z'&&typeof j.password_encrypted==='string'&&j.password_encrypted.length>0
+  &&j.updated_at.toISOString()===(migration?observed.updatedAt:'2026-10-08T02:15:59.029Z')&&typeof j.password_encrypted==='string'&&j.password_encrypted.length>0
   &&sha(j.account_id)===binding.accountSha256&&sha(j.browser_profile_id)===binding.profileSha256&&sha(j.owner_id)===binding.ownerSha256);
  const accounts=await tx.$queryRaw`SELECT * FROM id_business_v2_chatgpt_accounts WHERE email_hash=${j.email_hash} ORDER BY id`;
  need(accounts.length===1&&accounts[0].id===j.account_id&&bit(accounts[0].registered)&&accounts[0].deleted_at===null
@@ -474,12 +486,16 @@ async function read(tx){
   action:{in:['id_business_v2.auto_registration.launch','id_business_v2.auto_registration.profile_rebound','id_business_v2.auto_registration.cancel']},
   createdAt:{gte:new Date('2026-10-08T02:14:14.768Z')}},orderBy:[{createdAt:'asc'},{id:'asc'}],take:1001});
  need(audits.length<1001);
+ if(migration)need(audits.length===observed.auditCount);
+ else{
  const launch=audits.filter(x=>x.action.endsWith('.launch')),rebound=audits.filter(x=>x.action.endsWith('.profile_rebound'));
  need(launch.length===1&&launch[0].afterData?.attempt===attempt&&launch[0].createdAt.toISOString()==='2026-10-08T02:14:16.979Z'
   &&rebound.length===1&&rebound[0].afterData?.attempt===attempt&&sha(rebound[0].afterData.browserProfileId)===binding.profileSha256
   &&sha(rebound[0].afterData.accountId)===binding.accountSha256&&rebound[0].createdAt.toISOString()==='2026-10-08T02:14:39.680Z');
- return {taskId:id,attempt,registered:true,passwordVerified:false,mfaVerified:false,leaseActive:false,noncePresent:false,
+ }
+ const value={taskId:id,attempt,registered:true,passwordVerified:false,mfaVerified:false,leaseActive:false,noncePresent:false,
   passwordCandidatePresent:true,binding,emailHashHmac:mac('email:'+j.email_hash),jobHmac:mac(rows),accountHmac:mac(accounts),auditHmac:mac(audits)};
+ return migration?{...value,state:j.state,step:j.step,reason:j.reason,updatedAt:j.updated_at.toISOString(),auditCount:audits.length}:value;
 }
 (async()=>{need(typeof key==='string'&&key.length>=32);const value=await p.$transaction(async tx=>{
  const a=await read(tx),b=await read(tx);need(JSON.stringify(a)===JSON.stringify(b));return b;
@@ -545,19 +561,26 @@ except BaseException:
 
 def registration_task(d, directory):
     code = TASK_SOURCE.replace('__TASK__', json.dumps(TASK_ID)).replace('__ATTEMPT__', str(TASK_ATTEMPT)).replace('__BINDING__', json.dumps(TASK_BINDING))
+    code = code.replace('__MIGRATION__', json.dumps(MIGRATION_MODE)).replace('__OBSERVED__', json.dumps(MIGRATION_TASK if MIGRATION_MODE else None))
     value = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', code, timeout=40))
     fields = {'taskId', 'attempt', 'registered', 'passwordVerified', 'mfaVerified', 'leaseActive',
               'noncePresent', 'passwordCandidatePresent', 'binding', 'emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'}
+    if MIGRATION_MODE:
+        fields = set(MIGRATION_TASK)
     d.require(isinstance(value, dict) and set(value) == fields and value['taskId'] == TASK_ID
               and type(value['attempt']) is int and value['attempt'] == TASK_ATTEMPT and value['binding'] == TASK_BINDING
               and all(value[n] is True for n in ('registered', 'passwordCandidatePresent'))
               and all(value[n] is False for n in ('passwordVerified', 'mfaVerified', 'leaseActive', 'noncePresent'))
               and all(re.fullmatch(r'[a-f0-9]{64}', value[n]) for n in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac')),
               'API_ADMIN_REGISTRATION_TASK_UNAVAILABLE')
+    if MIGRATION_MODE:
+        d.require(value == MIGRATION_TASK and type(value['auditCount']) is int,
+                  'API_ADMIN_REGISTRATION_TASK_CHANGED')
     return value
 
 
 def registration_private(d, directory, *, close=False, retained=True):
+    d.require(not MIGRATION_MODE or (close is False and retained is True), 'API_ADMIN_SCOPE_CONFLICT')
     code = PRIVATE_SOURCE.replace('__TASK__', TASK_ID).replace('__ATTEMPT__', str(TASK_ATTEMPT))
     code = code.replace('__CANCELLED__', repr(not retained)).replace('__RETAINED__', repr(retained)).replace('__CLOSE__', repr(close))
     value = json.loads(d.compose(directory, 'exec', '-T', 'auto-registration', 'python', '-B', '-c', code, timeout=45))
@@ -1250,13 +1273,18 @@ def baseline(d, expected, *, check_jobs=True):
             verify_migration_image(d, previous, proof)
             source['kind'] = 'API_ADMIN_MIGRATION_BUILD_PROVEN'
         elif manifest.get('apiRegistrationPublication'):
-            d.require(REGISTRATION and manifest['apiRegistrationPublication']['scope'] == SCOPE,
-                      'API_ADMIN_SCOPE_CONFLICT')
-            proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
-            d.require(manifest['apiRegistrationPublication'] == {'version': 1, 'scope': SCOPE,
+            d.require(REGISTRATION or MIGRATION_MODE, 'API_ADMIN_SCOPE_CONFLICT')
+            origin, _ = d.api_admin_scope('API_REGISTRATION')
+            proof = origin.validate_proof(d, json.loads((previous / origin.PROOF_FILE).read_text()),
+                                          expected, manifest['sourceTree'])
+            d.require(manifest['apiRegistrationPublication'] == {'version': 1, 'scope': 'API_REGISTRATION',
                 'buildProofSha256': fingerprint(proof), 'workersPublished': True,
                 'cacheStatus': 'SKIPPED', 'configurationChanged': False}, 'API_ADMIN_REGISTRATION_PROVENANCE_CHANGED')
-            verify_running(d, previous, proof)
+            if MIGRATION_MODE:
+                d.require(manifest.get('servicesUpdated') == ['api', 'auto-registration']
+                          and manifest.get('migrationApplied') is False and manifest.get('newMigrations') == [],
+                          'API_ADMIN_REGISTRATION_PROVENANCE_CHANGED')
+            origin.verify_running(d, previous, proof)
             source['kind'] = 'API_REGISTRATION_BUILD_PROVEN'
         elif REGISTRATION or MIGRATION_MODE:
             source.update(registration_native_baseline(d, previous, manifest, states, raw))

@@ -5470,6 +5470,7 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         flow.job.prepare_mail.assert_not_called();flow.page.goto.assert_not_awaited()
 
     async def test_prepare_and_callback_context_failures_are_closed_and_keep_first_reason(self):
+        from browser_session import SessionBudget
         class Error(Exception):
             pass
         for method in ['email_submit_control', 'email_submit_unchanged']:
@@ -5477,15 +5478,32 @@ class PauseDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 for retained in [False, True]:
                     with self.subTest(method=method, marker=marker, retained=retained):
                         flow, field, submit = await self.email_flow()
+                        clock = [0.0]
+                        async def settle(seconds):
+                            clock[0] += seconds
+                            await asyncio.sleep(0)
+                        flow.settle = settle
+                        def budget(seconds, **kwargs):
+                            return SessionBudget(seconds, clock=lambda: clock[0], **kwargs)
                         expected = {'reason':'registration_page_changing', 'error_type':'Error'}
                         if retained:
                             expected = {'reason':'session_network_error', 'error_type':'Error'}
                             flow.job.registration_observation_error = expected
                         getattr(flow, method).side_effect = Error(marker + ' private-token')
-                        with patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', .1), self.assertLogs('registration', level='WARNING') as logs:
-                            with self.assertRaises(Stop):
+                        # Keep real cancellable budget execution; only fixture settling advances its clock.
+                        with patch('registration_browser.time', SimpleNamespace(monotonic=lambda: clock[0])), \
+                                patch('registration_browser.SessionBudget', side_effect=budget), \
+                                patch('registration_browser.REGISTRATION_OBSERVE_SECONDS', .1), \
+                                self.assertLogs('registration', level='WARNING') as logs:
+                            with self.assertRaises(Stop) as stopped:
                                 await flow.register()
                         self.assertEqual(flow.job.registration_observation_error, expected)
+                        self.assertEqual(stopped.exception.report['reason'], 'fixture_paused')
+                        getattr(flow, method).assert_awaited_once()
+                        flow.job.manual.assert_awaited_once_with('form_unrecognized')
+                        self.assertIsNone(flow.observation_budget)
+                        self.assertIsNone(flow.email_request_page)
+                        self.assertEqual(flow.email_request_handlers, [])
                         submit.click.assert_not_awaited()
                         if method == 'email_submit_control':
                             field.fill.assert_not_awaited()

@@ -88,8 +88,10 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                 or type(receipt.get('freeBytes')) is not int or receipt['freeBytes'] <= 6 * 1024**3
                 or guards.get('rechargeIdle') is not True or guards.get('registrationBusy') is not False
                 or guards.get('registrationLeaseActive') is not False or type(guards.get('registrationWindowRetained')) is not bool
+                or guards.get('registrationWindowRetained') is not True
                 or task.get('taskId') != namespace['TASK_ID'] or type(task.get('attempt')) is not int or task.get('attempt') != namespace['TASK_ATTEMPT']
                 or task.get('binding') != namespace['TASK_BINDING']
+                or task != namespace['MIGRATION_TASK'] or type(task.get('auditCount')) is not int
                 or any(task.get(n) is not True for n in ('registered', 'passwordCandidatePresent'))
                 or any(task.get(n) is not False for n in ('passwordVerified', 'mfaVerified', 'leaseActive', 'noncePresent'))
                 or any(not re.fullmatch(r'[a-f0-9]{64}', task.get(n, '')) for n in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'))

@@ -67,6 +67,10 @@ def registration_task():
             'emailHashHmac': '4' * 64, 'jobHmac': '1' * 64, 'accountHmac': '2' * 64, 'auditHmac': '3' * 64}
 
 
+def migration_task():
+    return copy.deepcopy(migration.MIGRATION_TASK)
+
+
 def states():
     return {name: {'image': 'sha256:' + 'c' * 64, 'reference': 'old-' + name, 'status': 'running',
                    'health': 'healthy', 'containerId': name, 'startedAtSha256': 'start',
@@ -590,7 +594,9 @@ class RegistrationScopeTests(unittest.TestCase):
             root = Path(temporary)
             names = registration.WORKER_PAIR | set(profile['buildInputSha256']) | {registration.REGISTRATION_PROFILE}
             for name in names:
-                path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes((ROOT / name).read_bytes())
+                raw = (subprocess.check_output(['git', 'show', commit + ':' + name], cwd=ROOT)
+                       if name in registration.WORKER_PAIR else (ROOT / name).read_bytes())
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
             with patch.object(Path, 'cwd', return_value=root), patch.dict(os.environ, {'RELEASE_COMMIT': commit, 'SOURCE_TREE': tree}):
                 record = registration.prepare_registration_build(controller)
             rows = record['workerProjection']
@@ -700,7 +706,7 @@ class RegistrationScopeTests(unittest.TestCase):
             self.assertEqual(d.main(), 0)
             pricing.assert_called_once()
 
-    def execute_private(self, *, close, mode='success'):
+    def execute_private(self, *, close, mode='success', attempt=10):
         calls = []
         def read(request, timeout):
             method = request.get_method(); calls.append((method, request.full_url, request.data))
@@ -710,8 +716,8 @@ class RegistrationScopeTests(unittest.TestCase):
                                 io.BytesIO(b'{"ok":false,"reason":"fingerprint_cleanup_failed"}'))
             posted = any(row[0] == 'POST' for row in calls)
             if request.full_url.endswith('/status'):
-                value = {'accepted': True, 'attempt': 10, 'cancelled': posted, 'done': True}
-                if mode == 'wrong-attempt': value['attempt'] = 11
+                value = {'accepted': True, 'attempt': attempt, 'cancelled': posted, 'done': True}
+                if mode == 'wrong-attempt': value['attempt'] = attempt + 1
                 if mode == 'after-unconfirmed' and posted: value['cancelled'] = False
             elif method == 'POST': value = {'ok': True}
             else: value = {'ready': True, 'workerRole': 'registration', 'engine': 'camoufox',
@@ -942,7 +948,7 @@ class ReleaseFailureTests(unittest.TestCase):
             before = states()
             controller = SimpleNamespace(**vars(d)); controller.BASE = base
             controller.compose = MagicMock(); controller.wait_healthy = MagicMock()
-            guards, task = migration_guards(), registration_task()
+            guards, task = migration_guards(), migration_task() if scope.MIGRATION_MODE else registration_task()
             migration_state = {'name': migration.MIGRATION_NAME, 'sha256': migration.MIGRATION_IDENTITY['sha256'],
                 'status': 'APPLIED' if migration_preapplied else 'PENDING', 'schemaVerified': True, 'appliedMigrationsSha256': '7' * 64}
             if scope.MIGRATION_MODE:
@@ -1663,6 +1669,151 @@ def migration_guards():
 
 
 class MigrationScopeTests(unittest.TestCase):
+    def test_migration_task_matches_only_captured_attempt12_and_old_namespaces_keep_attempt10(self):
+        self.assertEqual(migration.TASK_ATTEMPT, 12)
+        self.assertEqual((registration.TASK_ATTEMPT, scope.TASK_ATTEMPT), (10, 10))
+        value = migration_task()
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value=json.dumps(value)))
+        self.assertEqual(migration.registration_task(controller, ROOT), value)
+        code = controller.compose.call_args.args[-1]
+        self.assertIn('attempt=12', code)
+        self.assertIn('const migration=true', code)
+        self.assertIn('2026-10-08T14:18:32.726Z', code)
+        self.assertIn('api-registration-handoff:', code)
+        self.assertIn("createdAt:{gte:new Date('2026-10-08T02:14:14.768Z')}", code)
+        for key, changed in (('attempt', 10), ('attempt', 13), ('attempt', 12.0), ('state', 'running'),
+                ('step', 'mfa'), ('reason', 'session_network_error'), ('updatedAt', '2026-10-08T14:18:32.727Z'),
+                ('auditCount', 6), ('auditCount', 5.0), ('auditCount', True),
+                *((name, '0' * 64) for name in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'))):
+            controller.compose.return_value = json.dumps({**value, key: changed})
+            with self.subTest(key=key, changed=changed), self.assertRaises(RuntimeError):
+                migration.registration_task(controller, ROOT)
+        for key in value['binding']:
+            changed = copy.deepcopy(value); changed['binding'][key] = '0' * 64
+            controller.compose.return_value = json.dumps(changed)
+            with self.subTest(binding=key), self.assertRaises(RuntimeError):
+                migration.registration_task(controller, ROOT)
+        controller.compose.return_value = json.dumps(registration_task())
+        with self.assertRaises(RuntimeError): migration.registration_task(controller, ROOT)
+        controller.compose.return_value = json.dumps(value)
+        with self.assertRaises(RuntimeError): registration.registration_task(controller, ROOT)
+
+    def generated_task_controller(self, selected_scope, changes=None):
+        captured = migration_task()
+        cfg = {'migration': selected_scope.MIGRATION_MODE, 'taskId': selected_scope.TASK_ID,
+            'attempt': selected_scope.TASK_ATTEMPT, 'state': 'partial', 'step': 'password',
+            'reason': 'session_load_timeout' if selected_scope.MIGRATION_MODE else 'session_network_error',
+            'updatedAt': '2026-10-08T14:18:32.726Z' if selected_scope.MIGRATION_MODE else '2026-10-08T02:15:59.029Z',
+            'auditCount': 5 if selected_scope.MIGRATION_MODE else 2, 'binding': selected_scope.TASK_BINDING,
+            'accountId': 'fixture-account', 'profileId': 'fixture-profile', 'ownerId': 'fixture-owner',
+            'hmac': {name: captured[name] for name in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac')}}
+        cfg.update(changes or {})
+        # Run the real generated query against a deterministic in-memory Prisma substitute.
+        prelude = r'''const cfg=__CONFIG__;
+const need=x=>{if(!x)throw Error('fixture query contract');};let macCount=0,reads=0;
+const job={id:cfg.taskId,attempt:cfg.attempt,state:cfg.state,step:cfg.step,reason:cfg.reason,
+ registered:1,password_verified:0,mfa_verified:0,nonce_hash:null,lease_until:null,
+ updated_at:new Date(cfg.updatedAt),password_encrypted:'SYNTHETIC_CANDIDATE',email_hash:'fixture-email-hash',
+ account_id:cfg.accountId,browser_profile_id:cfg.profileId,owner_id:cfg.ownerId};
+const account={id:'fixture-account',registered:1,deleted_at:null,password_encrypted:null,totp_secret_encrypted:null};
+const audits=Array.from({length:cfg.auditCount},(_,i)=>({id:'fixture-audit-'+i,
+ action:i===0?'id_business_v2.auto_registration.launch':'id_business_v2.auto_registration.profile_rebound',
+ afterData:{attempt:cfg.attempt,browserProfileId:'fixture-profile',accountId:'fixture-account'},
+ createdAt:new Date(i===0?'2026-10-08T02:14:16.979Z':'2026-10-08T02:14:39.680Z')}));
+class PrismaClient{
+ constructor(){this.auditLog={findMany:async options=>{
+  need(options.where.module==='id_business_v2'&&options.where.objectType==='registration_job'
+   &&options.where.objectId===cfg.taskId&&options.where.createdAt.gte.toISOString()==='2026-10-08T02:14:14.768Z'
+   &&JSON.stringify(options.where.action.in)===JSON.stringify(['id_business_v2.auto_registration.launch','id_business_v2.auto_registration.profile_rebound','id_business_v2.auto_registration.cancel'])
+   &&JSON.stringify(options.orderBy)===JSON.stringify([{createdAt:'asc'},{id:'asc'}])&&options.take===1001);
+  return audits;}};}
+ async $queryRaw(parts,...values){const sql=parts.join('?');need(sql.startsWith('SELECT * FROM '));reads++;
+  if(sql.includes('id_business_v2_registration_jobs')){need(values[0]===cfg.taskId);return [job];}
+  need(sql.includes('id_business_v2_chatgpt_accounts')&&values[0]===job.email_hash);return [account];}
+ async $transaction(callback,options){need(options.isolationLevel==='RepeatableRead'&&options.timeout===25000);return callback(this);}
+ async $disconnect(){need(reads===4||reads<4);}
+}
+const crypto={createHash:()=>({update(value){this.value=value;return this;},digest(){return {
+ 'fixture-account':cfg.binding.accountSha256,'fixture-profile':cfg.binding.profileSha256,
+ 'fixture-owner':cfg.binding.ownerSha256}[this.value]||'0'.repeat(64);}}),
+ createHmac:()=>({parts:[],update(value){this.parts.push(value);return this;},digest(){
+  need(this.parts[0]==='api-registration-handoff:'&&this.parts.length===2);
+  return cfg.hmac[['emailHashHmac','jobHmac','accountHmac','auditHmac'][macCount++%4]];}})};
+const fakeRequire=name=>{need(name==='@prisma/client'||name==='node:crypto');return name==='@prisma/client'?{PrismaClient}:crypto;};
+new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WORKER_TOKEN:'LOCAL_TEST_VALUE_'.repeat(4)}});
+'''
+        def compose(*args, **kwargs):
+            script = prelude.replace('__CONFIG__', json.dumps(cfg)).replace('__SOURCE__', json.dumps(args[-1]))
+            result = subprocess.run(['node'], input=script, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+        return SimpleNamespace(require=d.require, compose=compose)
+
+    def test_generated_attempt12_query_rejects_state_reason_date_audit_count_and_binding_drift(self):
+        self.assertEqual(migration.registration_task(self.generated_task_controller(migration), ROOT), migration_task())
+        for changes in ({'attempt': 10}, {'attempt': 13}, {'state': 'completed'}, {'step': 'mfa'},
+                        {'reason': 'session_network_error'}, {'updatedAt': '2026-10-08T14:18:32.727Z'},
+                        {'auditCount': 4}, {'accountId': 'changed'}, {'profileId': 'changed'}, {'ownerId': 'changed'}):
+            with self.subTest(changes=changes), self.assertRaises(RuntimeError):
+                migration.registration_task(self.generated_task_controller(migration, changes), ROOT)
+
+    def test_generated_registration_attempt10_keeps_old_dates_reason_and_launch_rebound_checks(self):
+        value = registration.registration_task(self.generated_task_controller(registration), ROOT)
+        self.assertEqual(value['attempt'], 10)
+        self.assertEqual(set(value), set(registration_task()))
+        for changes in ({'attempt': 12}, {'reason': 'session_load_timeout'},
+                        {'updatedAt': '2026-10-08T14:18:32.726Z'}, {'auditCount': 5}):
+            with self.subTest(changes=changes), self.assertRaises(RuntimeError):
+                registration.registration_task(self.generated_task_controller(registration, changes), ROOT)
+
+    def test_migration_private_attempt12_is_get_only_and_cannot_close_or_accept_another_attempt(self):
+        controller, calls = RegistrationScopeTests().execute_private(close=False, attempt=12)
+        value = migration.registration_private(controller, ROOT)
+        self.assertEqual(value['attempt'], 12)
+        self.assertFalse(value['privatePostAttempted'])
+        self.assertTrue(value['retained'])
+        self.assertEqual([row[0] for row in calls], ['GET', 'GET'])
+        for attempt in (10, 13):
+            controller, calls = RegistrationScopeTests().execute_private(close=False, attempt=attempt)
+            with self.subTest(attempt=attempt), self.assertRaises(migration.RegistrationHandoffError):
+                migration.registration_private(controller, ROOT)
+            self.assertEqual([row[0] for row in calls], ['GET'])
+        controller = SimpleNamespace(require=d.require, compose=MagicMock())
+        for kwargs in ({'close': True}, {'retained': False}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_SCOPE_CONFLICT$'):
+                migration.registration_private(controller, ROOT, **kwargs)
+        controller.compose.assert_not_called()
+
+    def test_migration_task_guard_requires_the_observed_retained_window_even_when_new_snapshot_is_quiet(self):
+        with patch.object(migration, 'jobs_idle', return_value={**migration_guards(), 'registrationWindowRetained': False}), \
+             patch.object(migration, 'registration_task', return_value=migration_task()), \
+             patch.object(migration, 'registration_private') as private:
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_REGISTRATION_TASK_CHANGED$'):
+                migration.migration_task_guard(d, ROOT, migration_task(), {**migration_guards(), 'registrationWindowRetained': False})
+            private.assert_not_called()
+
+    def test_independent_migration_preflight_requires_the_complete_captured_task_not_only_attempt12(self):
+        with self.registration_baseline_fixture() as (controller, current, before, native, idle, stack, *_):
+            stack.enter_context(patch.object(migration, 'registration_private'))
+            stack.enter_context(patch.object(migration, 'strict_audit', return_value={
+                'mode': 'STRICT_ZERO_49', 'checkCount': 49, 'violationCount': 0, 'checksSha256': '5' * 64}))
+            result = migration.migration_preflight(controller, COMMIT)
+            transport.validate_receipt(result, COMMIT, 'preflight', 'API_ADMIN_MIGRATION')
+            for field in migration.MIGRATION_TASK:
+                changed = copy.deepcopy(result)
+                changed['task'].pop(field)
+                with self.subTest(missing=field), self.assertRaisesRegex(RuntimeError, 'MIGRATION_PREFLIGHT_CHANGED'):
+                    transport.validate_receipt(changed, COMMIT, 'preflight', 'API_ADMIN_MIGRATION')
+            for field, value in (('attempt', 10), ('attempt', 13), ('state', 'running'), ('step', 'mfa'),
+                    ('reason', 'session_network_error'), ('updatedAt', '2026-10-08T14:18:32.727Z'), ('auditCount', 6), ('auditCount', 5.0),
+                    *((name, '0' * 64) for name in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'))):
+                changed = copy.deepcopy(result); changed['task'][field] = value
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(RuntimeError, 'MIGRATION_PREFLIGHT_CHANGED'):
+                    transport.validate_receipt(changed, COMMIT, 'preflight', 'API_ADMIN_MIGRATION')
+            changed = copy.deepcopy(result); changed['guards']['registrationWindowRetained'] = False
+            with self.assertRaisesRegex(RuntimeError, 'MIGRATION_PREFLIGHT_CHANGED'):
+                transport.validate_receipt(changed, COMMIT, 'preflight', 'API_ADMIN_MIGRATION')
+
     def test_images_are_three_but_only_api_admin_are_switched(self):
         self.assertEqual(migration.UPDATED, ('api', 'admin'))
         self.assertEqual(migration.IMAGE_SERVICES, ('api', 'admin', 'migrate'))
@@ -1838,6 +1989,168 @@ class MigrationScopeTests(unittest.TestCase):
             idle = stack.enter_context(patch.object(migration, 'jobs_idle', return_value=migration_guards()))
             yield controller, current, before, native, idle, stack
 
+    @contextmanager
+    def registration_baseline_fixture(self):
+        with self.baseline_fixture() as (controller, current, before, native, idle, stack):
+            candidate = registration_proof()
+            content = {'api': '1' * 64 + '  /app/apps/api/dist/main.js',
+                'auto-registration': '\n'.join(sorted(row['sha256'] + '  /app/' + name[len(registration.WORKER_PREFIX):]
+                    for name, row in candidate['workerProjection'].items()))}
+            candidate['images']['api'].update(registration.content_summary(d, 'api', content['api']))
+            images = {}
+            for name, row in candidate['images'].items():
+                before[name].update(image=row['imageId'], reference=row['reference'])
+                images[name] = {'Id': row['imageId'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                    'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE,
+                    'id-business-v2.worker-projection-sha256': candidate['workerProjectionSha256']}}}
+            manifest = {'commit': COMMIT, 'sourceTree': TREE, 'servicesUpdated': ['api', 'auto-registration'],
+                'migrationApplied': False, 'newMigrations': [],
+                'images': {name: {'reference': before[name]['reference'], 'digest': before[name]['image'],
+                    'sourceCommit': COMMIT if name in candidate['images'] else OLD} for name in d.SERVICES},
+                'apiRegistrationPublication': {'version': 1, 'scope': 'API_REGISTRATION',
+                    'buildProofSha256': registration.fingerprint(candidate), 'workersPublished': True,
+                    'cacheStatus': 'SKIPPED', 'configurationChanged': False}}
+            (current / 'release-manifest.json').write_text(json.dumps(manifest))
+            (current / registration.PROOF_FILE).write_text(json.dumps(candidate))
+            controller.api_admin_scope = MagicMock(return_value=(registration, controller))
+            controller.service_state = MagicMock(side_effect=lambda _directory, name: before[name])
+            image_ids = {image['Id']: image for image in images.values()}
+            controller.run.side_effect = lambda *args: json.dumps([image_ids[args[-1]]])
+            runtime_rows = {name[len(registration.WORKER_PREFIX):]: row['sha256']
+                for name, row in candidate['workerProjection'].items()}
+            task = migration_task()
+            def compose(_directory, *args, **kwargs):
+                if 'mysql' in args:
+                    return json.dumps(migration_database_fixture())
+                if args[3] == 'python':
+                    return json.dumps(runtime_rows)
+                if args[3] == 'node':
+                    return json.dumps(task)
+                return content[args[2]]
+            controller.compose.side_effect = compose
+            yield controller, current, before, native, idle, stack, candidate, manifest, images, content, runtime_rows, task
+
+    def test_proven_registration_publication_uses_isolated_namespace_without_changing_migration_scope(self):
+        with self.registration_baseline_fixture() as (controller, current, before, native, idle, stack, candidate, *_):
+            handoff = stack.enter_context(patch.object(migration, 'require_registration_handoff'))
+            validate = stack.enter_context(patch.object(registration, 'validate_proof', wraps=registration.validate_proof))
+            running = stack.enter_context(patch.object(registration, 'verify_running', wraps=registration.verify_running))
+            result = migration.baseline(controller, COMMIT)
+            controller.api_admin_scope.assert_called_once_with('API_REGISTRATION')
+            validate.assert_called_once_with(controller, candidate, COMMIT, TREE)
+            running.assert_called_once_with(controller, current, candidate)
+            self.assertEqual(result[2], before)
+            self.assertEqual(result[3]['apiSource']['kind'], 'API_REGISTRATION_BUILD_PROVEN')
+            self.assertEqual(result[3]['migrationState']['status'], 'PENDING')
+            self.assertTrue(result[3]['guards']['registrationWindowRetained'])
+            self.assertEqual(migration.UPDATED, ('api', 'admin'))
+            self.assertEqual(migration.IMAGE_SERVICES, ('api', 'admin', 'migrate'))
+            self.assertEqual(migration.PROOF_FILE, 'api-admin-migration-build-proof.json')
+            self.assertFalse(migration.REGISTRATION)
+            native.assert_not_called()
+            handoff.assert_not_called()
+
+    def test_registration_origin_still_supports_its_own_namespace_and_default_mode_cannot_use_it(self):
+        with self.registration_baseline_fixture() as (controller, current, before, native, idle, stack, *_):
+            stack.enter_context(patch.object(registration, 'snapshot', return_value=before))
+            result = registration.baseline(controller, COMMIT, check_jobs=False)
+            self.assertEqual(result[3]['apiSource']['kind'], 'API_REGISTRATION_BUILD_PROVEN')
+            stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_SCOPE_CONFLICT$'):
+                scope.baseline(controller, COMMIT, check_jobs=False)
+
+    def test_registration_origin_rejects_unproven_publication_or_old_migration_and_configuration_changes(self):
+        for change in ('scope', 'proof-hash', 'workers', 'configuration', 'cache', 'extra-field',
+                       'services', 'migration-applied', 'new-migration'):
+            with self.subTest(change=change), self.registration_baseline_fixture() as (
+                    controller, current, before, native, idle, stack, candidate, manifest, *_):
+                publication = manifest['apiRegistrationPublication']
+                if change == 'scope': publication['scope'] = 'API_ADMIN_MIGRATION'
+                elif change == 'proof-hash': publication['buildProofSha256'] = '0' * 64
+                elif change == 'workers': publication['workersPublished'] = False
+                elif change == 'configuration': publication['configurationChanged'] = True
+                elif change == 'cache': publication['cacheStatus'] = 'CLEANED'
+                elif change == 'extra-field': publication['unchecked'] = True
+                elif change == 'services': manifest['servicesUpdated'] = ['api', 'admin']
+                elif change == 'migration-applied': manifest['migrationApplied'] = True
+                else: manifest['newMigrations'] = [migration.MIGRATION_FILE]
+                (current / 'release-manifest.json').write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_REGISTRATION_PROVENANCE_CHANGED$'):
+                    migration.baseline(controller, COMMIT)
+
+    def test_registration_origin_rejects_wrong_proof_scope_tree_images_and_worker_projection(self):
+        for change in ('scope', 'tree', 'commit', 'image-services', 'projection'):
+            with self.subTest(change=change), self.registration_baseline_fixture() as (
+                    controller, current, before, native, idle, stack, candidate, manifest, *_):
+                if change == 'scope': candidate['scope'] = 'API_ADMIN_MIGRATION'
+                elif change == 'tree': candidate['sourceTree'] = OLD
+                elif change == 'commit': candidate['commit'] = OLD
+                elif change == 'image-services': candidate['images']['admin'] = proof()['images']['admin']
+                else:
+                    name = next(name for name in candidate['workerProjection'] if name not in registration.WORKER_PAIR)
+                    candidate['workerProjection'][name]['sha256'] = '0' * 64
+                    candidate['workerProjectionSha256'] = registration.fingerprint(candidate['workerProjection'])
+                (current / registration.PROOF_FILE).write_text(json.dumps(candidate))
+                manifest['apiRegistrationPublication']['buildProofSha256'] = registration.fingerprint(candidate)
+                (current / 'release-manifest.json').write_text(json.dumps(manifest))
+                with self.assertRaises(RuntimeError): migration.baseline(controller, COMMIT)
+
+    def test_registration_origin_requires_its_own_proof_file_without_migration_proof_fallback(self):
+        with self.registration_baseline_fixture() as (controller, current, *_):
+            (current / registration.PROOF_FILE).unlink()
+            (current / migration.PROOF_FILE).write_text(json.dumps(migration_proof()))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BASELINE_PROJECTION_FAILED$'):
+                migration.baseline(controller, COMMIT)
+
+    def test_registration_origin_verifies_actual_images_content_projection_and_worker_source(self):
+        for change in ('api-tree', 'worker-image', 'api-content', 'worker-content', 'worker-label', 'worker-source'):
+            with self.subTest(change=change), self.registration_baseline_fixture() as (
+                    controller, current, before, native, idle, stack, candidate, manifest, images, content, runtime_rows, task):
+                if change == 'api-tree': images['api']['Config']['Labels']['id-business-v2.source-tree'] = OLD
+                elif change == 'worker-image': images['auto-registration']['Id'] = 'sha256:' + '8' * 64
+                elif change == 'api-content': content['api'] = '2' * 64 + '  /app/apps/api/dist/main.js'
+                elif change == 'worker-content': content['auto-registration'] += '\n' + '2' * 64 + '  /app/unexpected.py'
+                elif change == 'worker-label': images['auto-registration']['Config']['Labels']['id-business-v2.worker-projection-sha256'] = '0' * 64
+                else: runtime_rows[next(iter(runtime_rows))] = '0' * 64
+                with self.assertRaises(RuntimeError): migration.baseline(controller, COMMIT)
+
+    def test_registration_origin_still_rejects_schema_sql_and_extra_history_after_image_proof(self):
+        for change in ('schema', 'old-sql', 'extra-migration'):
+            with self.subTest(change=change), self.registration_baseline_fixture() as (controller, current, *_):
+                if change == 'schema': (current / migration.MIGRATION_SCHEMA).write_text('changed schema')
+                elif change == 'old-sql': next((current / migration.MIGRATION_ROOT).rglob('migration.sql')).write_text('changed old SQL')
+                else:
+                    path = current / migration.MIGRATION_ROOT / '20261009000000_other/migration.sql'
+                    path.parent.mkdir(); path.write_text('ALTER TABLE other ADD COLUMN x INT;')
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_SCOPE_CHANGED$'):
+                    migration.baseline(controller, COMMIT)
+
+    def test_registration_origin_preflight_keeps_strict_audit_task_hmac_and_window_guards(self):
+        for change in (None, 'audit', 'hmac', 'window', 'attempt', 'task-state'):
+            with self.subTest(change=change), self.registration_baseline_fixture() as (
+                    controller, current, before, native, idle, stack, candidate, manifest, images, content, runtime_rows, task):
+                private = stack.enter_context(patch.object(migration, 'registration_private'))
+                handoff = stack.enter_context(patch.object(migration, 'registration_handoff'))
+                audit = stack.enter_context(patch.object(migration, 'strict_audit', return_value={
+                    'mode': 'STRICT_ZERO_49', 'checkCount': 49, 'violationCount': 0, 'checksSha256': '5' * 64}))
+                if change == 'audit': audit.side_effect = RuntimeError('API_ADMIN_STRICT_49_FAILED')
+                elif change == 'hmac': audit.side_effect = lambda *_args: task.update(jobHmac='9' * 64)
+                elif change == 'window': idle.side_effect = [migration_guards(), migration_guards(), {**migration_guards(), 'registrationWindowRetained': False}]
+                elif change == 'attempt': task['attempt'] = 10
+                elif change == 'task-state': task['passwordVerified'] = True
+                if change is None:
+                    result = migration.migration_preflight(controller, COMMIT)
+                    transport.validate_receipt(result, COMMIT, 'preflight', 'API_ADMIN_MIGRATION')
+                    self.assertTrue(result['windowPreserved'])
+                    self.assertFalse(result['requiresWindowHandoff'])
+                    self.assertEqual(result['task']['attempt'], 12)
+                    audit.assert_called_once()
+                    self.assertTrue(all(call.kwargs == {'retained': True} for call in private.call_args_list))
+                else:
+                    with self.assertRaises(RuntimeError): migration.migration_preflight(controller, COMMIT)
+                handoff.assert_not_called()
+                native.assert_not_called()
+
     def test_existing_e7_source_uses_explicit_native_proof_and_never_handoff(self):
         with self.baseline_fixture() as (controller, directory, before, native, idle, stack):
             handoff = stack.enter_context(patch.object(migration, 'require_registration_handoff'))
@@ -1856,7 +2169,7 @@ class MigrationScopeTests(unittest.TestCase):
 
     def test_preflight_audits_49_and_preserves_task_and_retained_window_without_close(self):
         with self.baseline_fixture() as (controller, directory, before, native, idle, stack):
-            stack.enter_context(patch.object(migration, 'registration_task', return_value=registration_task()))
+            stack.enter_context(patch.object(migration, 'registration_task', return_value=migration_task()))
             private = stack.enter_context(patch.object(migration, 'registration_private'))
             handoff = stack.enter_context(patch.object(migration, 'registration_handoff'))
             audit = stack.enter_context(patch.object(migration, 'strict_audit', return_value={
@@ -1876,7 +2189,7 @@ class MigrationScopeTests(unittest.TestCase):
     def test_preflight_hmac_or_window_changes_fail(self):
         for field in ('jobHmac', 'window'):
             with self.subTest(field=field), self.baseline_fixture() as (controller, directory, before, native, idle, stack):
-                task = registration_task()
+                task = migration_task()
                 stack.enter_context(patch.object(migration, 'registration_task', side_effect=[task, task, {**task, 'jobHmac': '9' * 64}] if field == 'jobHmac' else lambda *args: task))
                 stack.enter_context(patch.object(migration, 'registration_private'))
                 stack.enter_context(patch.object(migration, 'strict_audit', return_value={}))
@@ -1943,7 +2256,7 @@ class MigrationReadbackTests(unittest.TestCase):
             environment_sha = hashlib.sha256(b'fixture-preserved').hexdigest()
             record = {'before': before, 'buildProofSha256': migration.fingerprint(candidate), 'environmentSha256': environment_sha,
                 'configurationBefore': migration.configuration_hashes(origin), 'configurationAfter': migration.configuration_hashes(current),
-                'registrationTask': registration_task(), 'registrationGuards': migration_guards(), 'migration': {**state, 'performed': True}}
+                'registrationTask': migration_task(), 'registrationGuards': migration_guards(), 'migration': {**state, 'performed': True}}
             (current / migration.STATE_FILE).write_text(json.dumps(record))
             (current / migration.PROOF_FILE).write_text(json.dumps(candidate))
             manifest = {'sourceTree': TREE, 'servicesUpdated': list(migration.UPDATED), 'migrationApplied': True,
@@ -1954,7 +2267,7 @@ class MigrationReadbackTests(unittest.TestCase):
             stack.enter_context(patch.object(migration, 'snapshot', return_value=after))
             stack.enter_context(patch.object(migration, 'verify_running'))
             stack.enter_context(patch.object(migration, 'jobs_idle', return_value=migration_guards()))
-            task = stack.enter_context(patch.object(migration, 'registration_task', return_value=registration_task()))
+            task = stack.enter_context(patch.object(migration, 'registration_task', return_value=migration_task()))
             private = stack.enter_context(patch.object(migration, 'registration_private'))
             handoff = stack.enter_context(patch.object(migration, 'require_registration_handoff'))
             yield controller, current, manifest, candidate, image, task, private, handoff
@@ -1982,7 +2295,7 @@ class MigrationReadbackTests(unittest.TestCase):
     def test_readback_rejects_changed_task_backup_and_actual_index(self):
         for change in ('task', 'backup', 'index'):
             with self.subTest(change=change), self.fixture() as (controller, current, manifest, candidate, image, task, private, handoff):
-                if change == 'task': task.return_value = {**registration_task(), 'jobHmac': '8' * 64}
+                if change == 'task': task.return_value = {**migration_task(), 'jobHmac': '8' * 64}
                 elif change == 'backup': (current / 'backup-verification.json').write_text(json.dumps({'name': 'wrong'}))
                 else:
                     value = migration_database_fixture(applied=True); value['indexes'][2]['column'] = 'id'
