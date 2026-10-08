@@ -146,6 +146,24 @@ test('CI-only control edits do not execute backend or business guards', () => {
   for (const gate of gates) assert.ok(calls.every((call) => !call.includes(gate)));
 });
 
+test('native media startup changes dispatch the standard-library regression once', () => {
+  const media = 'apps/api/src/id-business-v2/workspace/media-resolver';
+  const command = ['python3', '-B', `${media}/test_native_startup.py`];
+  for (const mode of ['full', 'recharge', 'ci-only']) {
+    for (const paths of [
+      [`${media}/server.py`],
+      [`${media}/test_native_startup.py`],
+      [`${media}/server.py`, `${media}/test_native_startup.py`]
+    ]) {
+      const calls = recordGuardCommands(mode, paths);
+      assert.equal(calls.filter((call) => call.join(' ') === command.join(' ')).length, 1);
+      assert.ok(calls.every((call) => !call.includes('test:native-runtime')));
+    }
+  }
+  const unrelated = recordGuardCommands('ci-only', ['scripts/ci-recharge-scope.mjs']);
+  assert.ok(unrelated.every((call) => call.join(' ') !== command.join(' ')));
+});
+
 test('native entry and backup transport edits run their bounded native tests without a database suite', () => {
   for (const path of [
     'scripts/native-services.mjs',

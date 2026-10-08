@@ -141,6 +141,18 @@ if (part === 'guards') {
     )
   )
     npm('run', 'test:native-runtime');
+  if (
+    changed.some((path) =>
+      [
+        'apps/api/src/id-business-v2/workspace/media-resolver/server.py',
+        'apps/api/src/id-business-v2/workspace/media-resolver/test_native_startup.py'
+      ].includes(path)
+    )
+  )
+    run('python3', [
+      '-B',
+      'apps/api/src/id-business-v2/workspace/media-resolver/test_native_startup.py'
+    ]);
   if (changed.some((path) => historicalReleaseControlPaths.includes(path))) {
     run('node', ['--test', 'scripts/v2-release-history-policy.test.mjs']);
     run('node', ['--test', 'scripts/v2-release-maintenance-policy.test.mjs']);
