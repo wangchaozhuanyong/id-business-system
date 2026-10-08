@@ -48,7 +48,7 @@ value = json.loads(raw, object_pairs_hook=unique)
 digest = value.get('workerProjectionSha256') if isinstance(value, dict) else None
 if (not isinstance(value, dict) or set(value) != {'version', 'id', 'contextPath', 'workerProjectionSha256'}
         or type(value['version']) is not int or value['version'] != 1
-        or os.environ.get('HISTORICAL_EXCEPTION') not in ('recharge-pro-2f-20261007', 'recharge-pro-4c-20261008', 'recharge-pro-6f5-20261008')
+        or os.environ.get('HISTORICAL_EXCEPTION') not in ('recharge-pro-2f-20261007', 'recharge-pro-4c-20261008', 'recharge-pro-6f5-20261008', 'recharge-pro-pricing-045-20261008')
         or value['id'] != os.environ['HISTORICAL_EXCEPTION']
         or not isinstance(value['contextPath'], str)
         or Path(value['contextPath']).resolve() != Path('.deploy/production-release/fixed-recharge-context').resolve()
@@ -66,7 +66,7 @@ build_image() {
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
-  if [[ ( "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-6f5-20261008 ) && "$service" == auto-recharge ]]; then
+  if [[ ( "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-6f5-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-pricing-045-20261008 ) && "$service" == auto-recharge ]]; then
     [[ "${recharge_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
     options+=(--label "id-business-v2.worker-projection-sha256=$recharge_worker_projection")
   fi
@@ -325,6 +325,21 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-b8-80-20261006 ]]; 
   registration_context=.deploy/production-release/registration-build-context
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  exit 0
+fi
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-pricing-045-20261008 ]]; then
+  test "${RELEASE_OPERATION:-release}" = release
+  test "$EXPECTED_CURRENT" = e7c9862d58599995954883f1c1f6038283afffab
+  test "${RELEASE_ADMIN_ONLY:-false}" = false
+  test -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}"
+  test -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}"
+  python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+  python3 scripts/production-release/remote-deploy.py --prepare-fixed-recharge-build --fixed-recharge-profile "$HISTORICAL_EXCEPTION"
+  recharge_context=.deploy/production-release/fixed-recharge-context
+  recharge_worker_projection="$(read_recharge_worker_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$recharge_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$recharge_context"
   exit 0
 fi
 
