@@ -273,6 +273,253 @@ const fixtureSeal = 'e'.repeat(64);
 const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
 const workflowInputs = workflow.on.workflow_dispatch.inputs;
 const workflowSteps = workflow.jobs.release.steps;
+
+function storageDiagnosticStepFixture(
+  statuses,
+  run,
+  {
+    operation = 'diagnose_storage',
+    sleepAdvance = 102,
+    waiterExit = 0,
+    commandId = '11111111-1111-4111-8111-111111111111'
+  } = {}
+) {
+  fixture(({ root, env }) => {
+    const step = workflowSteps.find(
+      (row) => row.name === 'Diagnose storage or clean approved routine audit records'
+    );
+    const interpreter = execFileSync('python3', ['-c', 'import sys;print(sys.executable)'], {
+      encoding: 'utf8'
+    }).trim();
+    const awsLog = join(root, 'storage-aws.log');
+    const countFile = join(root, 'storage-poll-count');
+    const statusesFile = join(root, 'storage-statuses.json');
+    const timingFile = join(root, 'storage-call-timing.jsonl');
+    writeFileSync(awsLog, '');
+    writeFileSync(countFile, '0');
+    writeFileSync(statusesFile, JSON.stringify(statuses));
+    writeFileSync(timingFile, '');
+    for (const path of [
+      'scripts/production-release/storage-maintenance.py',
+      'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql',
+      'deploy/aws/cache-cleanup-legacy-20261002.json'
+    ]) {
+      const destination = join(root, path);
+      mkdirSync(join(destination, '..'), { recursive: true });
+      writeFileSync(destination, readFileSync(path));
+    }
+    writeFileSync(
+      join(root, 'bin/python3'),
+      `#!${interpreter}
+import json,os,subprocess,sys,time
+from pathlib import Path
+args=sys.argv[1:];assert args[0]=='-'
+if len(args)==3:
+ clock=[0.0];time.monotonic=lambda:clock[0]
+ time.sleep=lambda value:clock.__setitem__(0,clock[0]+float(os.environ['TASK_STORAGE_SLEEP_ADVANCE']))
+ original_run=subprocess.run
+ def bounded_run(*args,**kwargs):
+  limit=kwargs['timeout'];assert 0<limit<=min(30,660-clock[0])
+  with Path(os.environ['TASK_STORAGE_TIMING_LOG']).open('a')as target:target.write(json.dumps({'at':clock[0],'timeout':limit})+'\\n')
+  return original_run(*args,**kwargs)
+ subprocess.run=bounded_run
+sys.argv=args
+exec(compile(sys.stdin.read(),'actual-storage-workflow-step','exec'),{'__name__':'__main__'})
+`,
+      { mode: 0o755 }
+    );
+    writeFileSync(
+      join(root, 'bin/aws'),
+      `#!${interpreter}
+import json,os,sys
+from pathlib import Path
+args=sys.argv[1:];assert args[0]=='ssm'
+with Path(os.environ['TASK_STORAGE_AWS_LOG']).open('a')as target:target.write(' '.join(args)+'\\n')
+if args[1]=='send-command':
+ assert args[args.index('--document-name')+1]=='AWS-RunShellScript'
+ assert args[args.index('--instance-ids')+1]=='i-local-fixture-only'
+ print(os.environ['TASK_STORAGE_COMMAND_ID'])
+elif args[1]=='wait':
+ assert args[2]=='command-executed'
+ sys.exit(int(os.environ['TASK_STORAGE_WAITER_EXIT']))
+elif args[1]=='get-command-invocation':
+ assert args[args.index('--command-id')+1]==os.environ['TASK_STORAGE_COMMAND_ID']
+ assert args[args.index('--instance-id')+1]=='i-local-fixture-only'
+ query=args[args.index('--query')+1]
+ if query=='Status':
+  p=Path(os.environ['TASK_STORAGE_POLL_COUNT']);n=int(p.read_text());p.write_text(str(n+1))
+  rows=json.loads(Path(os.environ['TASK_STORAGE_STATUSES']).read_text());print(rows[min(n,len(rows)-1)])
+ else:
+  assert query=='StandardOutputContent'
+  print('STORAGE_MAINTENANCE fixture-readonly-receipt')
+else:raise RuntimeError('Unreviewed fake AWS operation')
+`,
+      { mode: 0o755 }
+    );
+    const execute = () =>
+      execFileSync('bash', ['-c', step.run], {
+        cwd: root,
+        env: {
+          ...env,
+          EXPECTED_CURRENT: 'e7c9862d58599995954883f1c1f6038283afffab',
+          STORAGE_OPERATION: operation,
+          PRODUCTION_INSTANCE_ID: 'i-local-fixture-only',
+          TASK_STORAGE_AWS_LOG: awsLog,
+          TASK_STORAGE_POLL_COUNT: countFile,
+          TASK_STORAGE_STATUSES: statusesFile,
+          TASK_STORAGE_SLEEP_ADVANCE: String(sleepAdvance),
+          TASK_STORAGE_WAITER_EXIT: String(waiterExit),
+          TASK_STORAGE_COMMAND_ID: commandId,
+          TASK_STORAGE_TIMING_LOG: timingFile
+        },
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 10000
+      });
+    run({
+      execute,
+      awsLog,
+      countFile,
+      timingFile,
+      parametersFile: join(root, '.deploy/production-release/storage-maintenance.json')
+    });
+  });
+}
+
+test('storage diagnosis actual shell waits for slow Success across every pending state with its command UUID', () => {
+  storageDiagnosticStepFixture(
+    ['Pending', 'InProgress', 'Delayed', 'Cancelling', 'Success'],
+    ({ execute, awsLog, countFile, parametersFile }) => {
+      const output = execute();
+      assert.match(output, /STORAGE_DIAGNOSTIC_COMMAND_ID 11111111-1111-4111-8111-111111111111/);
+      assert.match(output, /STORAGE_MAINTENANCE fixture-readonly-receipt/);
+      assert.equal(readFileSync(countFile, 'utf8'), '5');
+      const calls = readFileSync(awsLog, 'utf8').trim().split('\n');
+      assert.equal(calls.filter((line) => line.startsWith('ssm send-command ')).length, 1);
+      assert.ok(calls.every((line) => !line.startsWith('ssm wait ')));
+      assert.equal(
+        calls.filter((line) => line.includes('--query StandardOutputContent')).length,
+        1
+      );
+      assert.ok(calls.at(-1).includes('--query StandardOutputContent'));
+      const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+      assert.deepEqual(parameters.executionTimeout, ['600']);
+      assert.equal(parameters.commands.length, 1);
+      assert.ok(
+        parameters.commands[0].endsWith(
+          '--operation diagnose --expected-current e7c9862d58599995954883f1c1f6038283afffab'
+        )
+      );
+      assert.equal('command' in workflowInputs, false);
+      assert.equal('script' in workflowInputs, false);
+    }
+  );
+});
+
+test('storage diagnosis actual shell preserves producer output on Failed Cancelled and TimedOut but returns nonzero', () => {
+  for (const status of ['Failed', 'Cancelled', 'TimedOut'])
+    storageDiagnosticStepFixture([status], ({ execute, awsLog, countFile }) => {
+      assert.throws(
+        execute,
+        (error) =>
+          error.status === 1 &&
+          String(error.stdout).includes('STORAGE_DIAGNOSTIC_COMMAND_ID') &&
+          String(error.stdout).includes('STORAGE_MAINTENANCE fixture-readonly-receipt') &&
+          String(error.stderr).includes('STORAGE_DIAGNOSTIC_REMOTE_' + status)
+      );
+      assert.equal(readFileSync(countFile, 'utf8'), '1');
+      assert.equal(readFileSync(awsLog, 'utf8').includes('StandardOutputContent'), true);
+    });
+});
+
+test('storage diagnosis actual output read consumes the same 660 second deadline and 30 second per-call cap', () => {
+  storageDiagnosticStepFixture(
+    ['Pending', 'InProgress', 'Delayed', 'Cancelling', 'Success'],
+    ({ execute, timingFile }) => {
+      assert.match(execute(), /STORAGE_MAINTENANCE fixture-readonly-receipt/);
+      const calls = readFileSync(timingFile, 'utf8').trim().split('\n').map(JSON.parse);
+      assert.equal(calls.length, 6);
+      assert.deepEqual(calls.at(-1), { at: 640, timeout: 20 });
+      assert.ok(
+        calls.every((call) => call.timeout > 0 && call.timeout <= Math.min(30, 660 - call.at))
+      );
+    },
+    { sleepAdvance: 160 }
+  );
+});
+
+test('storage diagnosis actual shell stops within its finite polling budget without cancelling the remote command', () => {
+  storageDiagnosticStepFixture(
+    ['InProgress'],
+    ({ execute, awsLog, countFile }) => {
+      assert.throws(
+        execute,
+        (error) =>
+          error.status === 1 &&
+          String(error.stderr).includes('STORAGE_DIAGNOSTIC_WAIT_BUDGET_EXHAUSTED')
+      );
+      assert.equal(readFileSync(countFile, 'utf8'), '6');
+      assert.equal(readFileSync(awsLog, 'utf8').includes('StandardOutputContent'), false);
+      assert.equal(readFileSync(awsLog, 'utf8').includes('cancel-command'), false);
+    },
+    { sleepAdvance: 120 }
+  );
+});
+
+test('storage diagnosis actual shell rejects unknown state and malformed command UUID before any further read', () => {
+  storageDiagnosticStepFixture(['UNREVIEWED_PRIVATE_STATE'], ({ execute, awsLog, countFile }) => {
+    assert.throws(
+      execute,
+      (error) =>
+        error.status === 1 &&
+        String(error.stderr).includes('STORAGE_DIAGNOSTIC_UNKNOWN_STATUS') &&
+        !String(error.stderr).includes('UNREVIEWED_PRIVATE_STATE')
+    );
+    assert.equal(readFileSync(countFile, 'utf8'), '1');
+    assert.equal(readFileSync(awsLog, 'utf8').includes('StandardOutputContent'), false);
+  });
+  storageDiagnosticStepFixture(
+    ['Success'],
+    ({ execute, awsLog, countFile }) => {
+      assert.throws(
+        execute,
+        (error) =>
+          error.status === 1 &&
+          String(error.stderr).includes('STORAGE_DIAGNOSTIC_COMMAND_ID_INVALID')
+      );
+      assert.equal(readFileSync(countFile, 'utf8'), '0');
+      assert.equal(readFileSync(awsLog, 'utf8').includes('get-command-invocation'), false);
+    },
+    { commandId: 'unreviewed-command' }
+  );
+});
+
+test('storage diagnosis polling leaves all other storage operations on their original waiter and output semantics', () => {
+  for (const operation of ['cleanup_audit', 'verify_legacy_cache', 'cleanup_legacy_cache'])
+    for (const waiterExit of [0, 37])
+      storageDiagnosticStepFixture(
+        ['Success'],
+        ({ execute, awsLog, countFile }) => {
+          if (waiterExit)
+            assert.throws(
+              execute,
+              (error) =>
+                error.status === waiterExit &&
+                String(error.stdout).includes('STORAGE_MAINTENANCE fixture-readonly-receipt')
+            );
+          else assert.match(execute(), /STORAGE_MAINTENANCE fixture-readonly-receipt/);
+          assert.equal(readFileSync(countFile, 'utf8'), '0');
+          const calls = readFileSync(awsLog, 'utf8').trim().split('\n');
+          assert.equal(
+            calls.filter((line) => line.startsWith('ssm wait command-executed ')).length,
+            1
+          );
+          assert.ok(calls.at(-1).includes('--query StandardOutputContent'));
+        },
+        { operation, waiterExit }
+      );
+});
+
 const postCleanupEnv = {
   HISTORICAL_EXCEPTION: postCleanupPolicy,
   EXPECTED_CURRENT: postCleanupBaseline,
