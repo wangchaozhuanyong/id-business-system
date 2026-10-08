@@ -13278,7 +13278,8 @@ if __name__ == '__main__':
             elif sys.argv[1:] == ['--write-api-admin-migration-build-proof']:
                 scope.build_proof(controller)
             else:
-                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                require(sys.argv[1] in ('--api-admin-migration-preflight', '--api-admin-migration-readback')
+                        and len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
                         and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'API_ADMIN_INPUT_INVALID')
                 result = (scope.readback(controller, sys.argv[3]) if sys.argv[1] == '--api-admin-migration-readback'
                           else scope.migration_preflight(controller, sys.argv[3]))

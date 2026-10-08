@@ -6168,6 +6168,14 @@ test('API Admin migration readonly commands reject malformed or extra inputs bef
   for (const args of [
     ['--check-api-admin-migration-source', '--admin-only'],
     ['--write-api-admin-migration-build-proof', '--admin-only'],
+    ...['--check-api-admin-migration-source', '--write-api-admin-migration-build-proof'].flatMap(
+      (command) => [
+        [command, '--expected-current', 'a'.repeat(40)],
+        [command, '--expected-current', 'a'.repeat(40), '--unexpected-extra'],
+        [command, 'unexpected-extra'],
+        [command, '--unexpected-option', 'a'.repeat(40)]
+      ]
+    ),
     ['--api-admin-migration-preflight'],
     ['--api-admin-migration-preflight', '--expected-current', 'A'.repeat(40)],
     ['--api-admin-migration-preflight', '--expected-current', 'a'.repeat(40), '--admin-only'],
