@@ -681,8 +681,13 @@ class RegistrationScopeTests(unittest.TestCase):
             scope.validate_proof(d, value, COMMIT, TREE)
 
     def test_build_proof_rejects_pair_hash_that_is_not_the_actual_git_commit(self):
-        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
+        for name in registration.WORKER_PAIR:
+            result = subprocess.run(['git', 'cat-file', '-e', 'HEAD:' + name], cwd=ROOT, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, 'Retired registration source must stay absent from current HEAD')
+        # This negative proof belongs to the frozen historical registration build,
+        # whose files are deliberately absent from the current retirement candidate.
+        commit = REGISTRATION_FIXTURE_COMMIT
+        tree = subprocess.check_output(['git', 'rev-parse', commit + '^{tree}'], cwd=ROOT, text=True).strip()
         value = registration_proof()
         projection = {n: value[n] for n in ('workerProjection', 'workerProjectionSha256')}
         controller = SimpleNamespace(require=d.require, run=MagicMock(side_effect=[commit, tree]))
@@ -2509,7 +2514,7 @@ class MigrationReleaseTests(unittest.TestCase):
 
 class MigrationSuccessorReceiptTests(unittest.TestCase):
     def context(self):
-        return {'version': 1, 'release': '/opt/id-business-v2/releases/20261008T162950Z-fd16cc2cbbec',
+        return {'version': 1, 'release': '/opt/id-business-v2/releases/20261008T175148Z-23c5841b9b7e',
             'commit': scope.MIGRATION_SUCCESSOR_COMMIT, 'manifestSha256': scope.MIGRATION_SUCCESSOR_MANIFEST_SHA,
             'buildProofSha256': scope.MIGRATION_SUCCESSOR_PROOF_SHA, 'migration': dict(scope.MIGRATION_IDENTITY),
             'migrationState': {'name': scope.MIGRATION_NAME, 'sha256': scope.MIGRATION_IDENTITY['sha256'],
@@ -2519,6 +2524,34 @@ class MigrationSuccessorReceiptTests(unittest.TestCase):
     def preflight(self):
         return {'status': 'API_ADMIN_BASELINE_VERIFIED', 'commit': scope.MIGRATION_SUCCESSOR_COMMIT,
             'freeBytes': 10 * 1024**3, 'services': states(), 'guards': migration_guards(), 'migrationOrigin': self.context()}
+
+    def test_current_23c_seal_does_not_admit_old_fd16_or_replace_individual_proofs(self):
+        self.assertEqual(scope.MIGRATION_SUCCESSOR_COMMIT, '23c5841b9b7e60be715250cbb985fc0966c0bce3')
+        self.assertEqual(scope.MIGRATION_SUCCESSOR_MANIFEST_SHA, '117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639')
+        self.assertEqual(scope.MIGRATION_SUCCESSOR_PROOF_SHA, '6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c')
+        old = {'commit': 'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a',
+            'release': '/opt/id-business-v2/releases/20261008T162950Z-fd16cc2cbbec',
+            'manifestSha256': '73952f1c7807d7bf6e4f78d4c5c2eed20602a234c2fe0506538fbd1757f9bed0',
+            'buildProofSha256': 'b9d1a28a2a4251e777285da187db51d0989f8ae80e82d5925c172fee18b17ded'}
+        controller = SimpleNamespace(require=d.require, api_admin_scope=MagicMock())
+        for changed in (old, {'manifestSha256': old['manifestSha256']},
+                        {'buildProofSha256': old['buildProofSha256']}, {'manifestSha256': '0' * 64}):
+            context = {**self.context(), **changed}
+            receipt = {**self.preflight(), 'migrationOrigin': context}
+            with self.subTest(changed=changed):
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED$'):
+                    transport.validate_receipt(receipt, scope.MIGRATION_SUCCESSOR_COMMIT, 'preflight')
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_CHANGED$'):
+                    scope.migration_successor_guard(controller, RUNTIME, context)
+            controller.api_admin_scope.assert_not_called()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            controller.BASE = Path(temporary)
+            origin = controller.BASE / 'releases/20261008T162950Z-fd16cc2cbbec'
+            origin.mkdir(parents=True)
+            (origin / 'release-manifest.json').write_text(json.dumps({'commit': old['commit']}))
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_ORIGIN_CHANGED$'):
+                scope.migration_successor_origin(controller, origin)
+            controller.api_admin_scope.assert_not_called()
 
     def test_first_preflight_requires_complete_original_migration_task_window_and_seven_services(self):
         receipt = self.preflight()
@@ -2713,7 +2746,7 @@ class MigrationSuccessorTests(unittest.TestCase):
             self.assertEqual(manifest['newMigrations'], [])
             apply.assert_not_called()
 
-    def test_second_api_admin_successor_keeps_original_fd16_context_and_rechecks_it(self):
+    def test_second_api_admin_successor_keeps_original_sealed_context_and_rechecks_it(self):
         with self.successor_fixture() as (controller, previous, origin, prior_manifest, prior_record, context, stack):
             commit = '9' * 40
             current = controller.BASE / 'releases/second-successor'; shutil.copytree(previous, current)

@@ -83,12 +83,12 @@ MIGRATION_IDENTITY = {
     'schemaBeforeSha256': 'c70cbcb110bb48c395b7e7284dedc0486a9afc125d940c455c0bafc1cffc701d',
     'schemaAfterSha256': '8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197',
     'baselineFilesSha256': 'c2179090dd600b3b33a56fe8384e8a7020a4e0cb6eb9a97f509352ee22f4df0a'}
-# One verified migration publication may become the origin of an API/Admin-only
-# successor. Its original three-image proof and task/window remain authoritative;
+# The independently verified 23c migration publication is the finite origin of
+# an API/Admin-only successor. Its three-image proof and task/window remain authoritative;
 # this is not a new migration mode or an admission of arbitrary old manifests.
-MIGRATION_SUCCESSOR_COMMIT = 'fd16cc2cbbec84c212f315d4b735ea0ce8a6cd6a'
-MIGRATION_SUCCESSOR_MANIFEST_SHA = '73952f1c7807d7bf6e4f78d4c5c2eed20602a234c2fe0506538fbd1757f9bed0'
-MIGRATION_SUCCESSOR_PROOF_SHA = 'b9d1a28a2a4251e777285da187db51d0989f8ae80e82d5925c172fee18b17ded'
+MIGRATION_SUCCESSOR_COMMIT = '23c5841b9b7e60be715250cbb985fc0966c0bce3'
+MIGRATION_SUCCESSOR_MANIFEST_SHA = '117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639'
+MIGRATION_SUCCESSOR_PROOF_SHA = '6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c'
 
 
 def image_service(service):
