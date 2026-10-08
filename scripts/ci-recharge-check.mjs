@@ -300,10 +300,10 @@ if (part === 'guards') {
     env: {
       ...process.env,
       PYTHONDONTWRITEBYTECODE: '1',
-      ...(fullPro ? { PLAYWRIGHT_BROWSERS_PATH: resolve(workerDirectory, '.browsers') } : {})
+      PLAYWRIGHT_BROWSERS_PATH: resolve(workerDirectory, '.browsers')
     }
   };
-  if (fullPro) execFileSync('python3', ['-m', 'playwright', 'install', 'chromium'], workerOptions);
+  execFileSync('python3', ['-m', 'playwright', 'install', 'chromium'], workerOptions);
   execFileSync(
     'python3',
     [
