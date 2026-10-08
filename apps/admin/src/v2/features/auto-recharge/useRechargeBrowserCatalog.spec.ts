@@ -71,9 +71,11 @@ describe('比特浏览器真实分组和标签选择', () => {
       return catalog;
     });
     expect(await readBrowserCatalog(form(), signal)).toEqual(catalog);
+    expect(mocks.health).toHaveBeenCalledWith('http://127.0.0.1:55322', signal);
     expect(observed).toMatchObject({
       localApiToken: 'b'.repeat(32),
-      connectorToken: 'c'.repeat(32)
+      connectorToken: 'c'.repeat(32),
+      connectorUrl: 'http://127.0.0.1:55322'
     });
     expect(mocks.catalog.mock.calls[0][0].localApiToken).toBe('');
     expect(mocks.catalog.mock.calls[0][0].connectorToken).toBe('');

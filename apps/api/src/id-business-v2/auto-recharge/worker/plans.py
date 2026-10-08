@@ -79,10 +79,12 @@ def checkout_option_plan(label):
 
 
 def subscription_transition(current_plan, target_plan):
-    """只允许首次开通或已核实 Plus 升级 Pro；其他已有套餐保持禁重付。"""
+    """只选择潜在的开通/升级路径；升级必须继续核实官网入口与报价。"""
     spec = plan_spec(target_plan)
     if current_plan == "free":
         return "new_subscription"
+    if current_plan == "go" and target_plan == "plus":
+        return "subscription_upgrade"
     if current_plan == "plus" and spec["family"] in {"pro", "promax"}:
         return "subscription_upgrade"
     raise Stop("incompatible_existing_subscription", current_plan=current_plan)

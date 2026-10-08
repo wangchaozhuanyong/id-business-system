@@ -11,6 +11,7 @@
       <el-input
         v-if="field.key === 'expiry'"
         :model-value="details.expiry"
+        :validate-event="validateEvent !== false"
         :placeholder="field.placeholder"
         inputmode="numeric"
         autocomplete="off"
@@ -19,6 +20,7 @@
       <el-input
         v-else
         v-model="details[field.key]"
+        :validate-event="validateEvent !== false"
         :type="field.secret ? 'password' : 'text'"
         :show-password="field.secret"
         :maxlength="field.max"
@@ -44,6 +46,7 @@ import type { V2RechargeDetails } from './contracts';
 import { formatRechargeExpiry, rechargePaymentFields } from './recharge-form';
 
 const props = defineProps<{
+  validateEvent?: boolean;
   nameMatch?: {
     loading: Ref<boolean>;
     error: Ref<string>;

@@ -49,9 +49,11 @@ function fixture() {
     createJob: vi.fn(async (_tx, data) => data)
   };
   const settings = {
-    runtime: vi
-      .fn()
-      .mockResolvedValue({ connectorUrl: 'http://localhost:55321', connectorToken: 'c'.repeat(64) })
+    runtime: vi.fn().mockResolvedValue({
+      connectorUrl: 'http://localhost:55321',
+      connectorToken: 'c'.repeat(64),
+      proxyType: 'http'
+    })
   };
   const service = new RechargeLocalService(
     repository as never,
@@ -88,6 +90,27 @@ describe('本机升级原单复查派发', () => {
       expect(launch).not.toHaveProperty(key);
   });
 
+  it('同账号 Go 升级 Plus 的只读复查保留原来源套餐，不发新付款', async () => {
+    const { service, repository, source } = fixture();
+    source.plan = 'plus';
+    source.result = {
+      ...source.result,
+      current_plan_before: 'go',
+      target_plan: 'plus',
+      quote: { ...quote, plan: 'plus' }
+    };
+    const launch = await service.recheck(
+      { id, sourceJobId: sourceId, plan: 'plus', windowName: 'Go 升级原单复查' },
+      operator as never
+    );
+    expect(launch).toMatchObject({ mode: 'recheck', upgradeIdentifier: upgradeId });
+    expect(repository.createJob.mock.calls[0]![1].result).toMatchObject({
+      current_plan_before: 'go',
+      target_plan: 'plus',
+      payment_requests_sent: 0,
+      recheck_only: true
+    });
+  });
   it('硬中断零次数摘要由同原升级持久标记恢复，其他操作不被误取', async () => {
     const { service, repository, source } = fixture();
     source.result.payment_requests_sent = 0;

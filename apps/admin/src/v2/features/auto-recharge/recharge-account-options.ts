@@ -1,17 +1,12 @@
 import type { BankChatgptAccount } from './bank-recharge-api';
+import { statusLabel } from './recharge-presentation';
 
-export function canSelectRechargeAccount(account: BankChatgptAccount, targetPlan: string) {
-  if (account.status !== 'active') return false;
-  if (['never_subscribed', 'expired'].includes(account.subscriptionState)) return true;
-  return (
-    ['pro-5x', 'pro-20x', 'pro-500'].includes(targetPlan) &&
-    account.currentPlan === 'plus' &&
-    ['active', 'due_soon'].includes(account.subscriptionState)
-  );
+export function canSelectRechargeAccount(account: BankChatgptAccount) {
+  // 资料库套餐仅用于提示；实际开通、升级或无需付款由所属官网窗口重新核实。
+  return account.status === 'active';
 }
 
 export function rechargeAccountOptionLabel(account: BankChatgptAccount) {
-  const upgrade =
-    account.currentPlan === 'plus' && ['active', 'due_soon'].includes(account.subscriptionState);
-  return `${account.emailMasked}${upgrade ? ' · Plus 升级' : ''}${account.hasPassword ? '' : ' · 未保存密码'}`;
+  const current = account.currentPlan ? ` · ${statusLabel(account.currentPlan)}（历史记录）` : '';
+  return `${account.emailMasked}${current}${account.hasPassword ? '' : ' · 请先补充登录密码'}`;
 }

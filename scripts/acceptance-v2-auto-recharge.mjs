@@ -1,19 +1,20 @@
-/* global document, window */
+/* global document, window, getComputedStyle */
+// Synthetic fixtures only. Every business/connector/BitBrowser request is intercepted.
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 
-const origin = 'http://127.0.0.1:5397';
-const proxySettingsOnly = process.argv.includes('--proxy-settings-only');
-const connectorOrigin = 'http://127.0.0.1:55321';
-const updatedProxyId = '77777777-7777-4777-8777-777777777777';
-const fixedProxyId = '66666666-6666-4666-8666-666666666666';
+const origin = 'http://127.0.0.1:5397',
+  connector = 'http://127.0.0.1:55322';
+const evidence = resolve('.runtime/bitbrowser-recharge-rebuild-20261009/browser');
+mkdirSync(evidence, { recursive: true });
 const server = spawn(
   process.execPath,
   [
     resolve('node_modules/vite/bin/vite.js'),
+    ...(process.argv.includes('--built') ? ['preview'] : []),
     '--host',
     '127.0.0.1',
     '--port',
@@ -22,21 +23,20 @@ const server = spawn(
   ],
   { cwd: resolve('apps/admin'), stdio: 'ignore' }
 );
-let browser;
-const evidence = resolve(
-  proxySettingsOnly
-    ? '.runtime/proxy-settings-unification-20261001'
-    : '.deploy/auto-recharge-browser'
-);
-mkdirSync(evidence, { recursive: true });
-const waitFor = async (predicate, ms = 20000) => {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (await predicate()) return;
+const waitFor = async (check) => {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (await check()) return;
     await new Promise((done) => setTimeout(done, 100));
   }
   throw new Error('验收条件超时');
 };
+const id = {
+  account: '11111111-1111-4111-8111-111111111111',
+  address: '22222222-2222-4222-8222-222222222222',
+  proxy: '88888888-8888-4888-8888-888888888888'
+};
+const timestamp = new Date().toISOString();
 const user = {
   id: 'browser-fixture',
   username: 'test-admin',
@@ -46,397 +46,288 @@ const user = {
   mustResetPassword: false
 };
 const address = {
-  id: '22222222-2222-4222-8222-222222222222',
-  line1: '1221 SW Fourth Avenue',
+  id: id.address,
+  line1: 'Fixture Billing Street',
   country: 'US',
-  city: 'Portland',
-  state: 'OR',
-  postalCode: '97204',
-  status: 'unused',
-  usedAt: null,
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString()
+  city: 'Seattle',
+  state: 'WA',
+  postalCode: '98101',
+  status: 'used',
+  usedAt: timestamp,
+  createdAt: timestamp,
+  updatedAt: timestamp
 };
 const settings = {
-  connectorUrl: connectorOrigin,
+  connectorUrl: connector,
   localApiUrl: 'http://127.0.0.1:54345',
   localApiTokenConfigured: true,
-  localApiTokenMask: '已保存 ···1234',
+  localApiTokenMask: '已配置',
   connectorTokenConfigured: true,
-  connectorTokenMask: '已保存 ···5678',
-  groupName: 'gpt账号注册',
-  tagName: '申请gpt',
+  connectorTokenMask: '已配置',
+  groupName: '充值验收',
+  tagName: '充值',
   proxyType: 'http',
+  proxyId: id.proxy,
   dynamicProxyUrlConfigured: true,
-  dynamicProxyUrlMask: 'https://proxy.example/…（已加密）',
-  updatedAt: null
+  dynamicProxyUrlMask: '合成配置',
+  updatedAt: timestamp
 };
-
+const account = {
+  id: id.account,
+  emailMasked: 'fixture@example.test',
+  registrationCountryCode: 'PH',
+  status: 'active',
+  subscriptionState: 'never_subscribed',
+  currentPlan: null,
+  dueAt: null,
+  hasPassword: true,
+  hasTotp: false,
+  remark: null,
+  firstLoginNetwork: null,
+  lastLoginNetwork: null,
+  createdAt: timestamp,
+  updatedAt: timestamp
+};
+const quoted = (plan) => ({
+  plan,
+  today: { amount: '20.00', amount_minor: 2000, currency: 'PHP' },
+  tax: { amount: '0.00', amount_minor: 0, currency: 'PHP' },
+  renewal: { amount: '25.00', amount_minor: 2500, currency: 'PHP' },
+  renewal_interval: 'monthly'
+});
+const report = {
+  scope: 'OFFLINE_SYNTHETIC_ONLY',
+  builtPreview: process.argv.includes('--built'),
+  realPayment: 'NOT_MEASURED',
+  cases: []
+};
+let browser;
+let lastPage;
 try {
   await waitFor(async () => (await fetch(origin).catch(() => null))?.ok);
   browser = await chromium.launch({ headless: true });
   for (const width of [1440, 768, 390]) {
-    const context = await browser.newContext({ viewport: { width, height: 1000 } });
-    await context.addInitScript((currentUser) => {
+    const context = await browser.newContext({ viewport: { width, height: 1100 } });
+    await context.addInitScript((fixture) => {
       localStorage.setItem('apple_business_access_token', 'browser-fixture');
-      localStorage.setItem('apple_business_current_user', JSON.stringify(currentUser));
+      localStorage.setItem('apple_business_current_user', JSON.stringify(fixture));
     }, user);
     const page = await context.newPage();
-    page.setDefaultTimeout(10000);
-    const errors = [];
-    const jobs = [];
-    let apiStarts = 0;
-    let connectorStarts = 0;
-    let connectorResumes = 0;
-    let loginCodeSubmissions = 0;
-    let addressUsed = false;
-    let serverStartBody;
-    let connectorStartBody;
-    let currentSettings = { ...settings };
-    let settingsSaves = 0;
-    let catalogReads = 0;
-    let blockHealth = false;
-    let savedDynamicProxyUrl = 'https://proxy.example/secret';
-    let paymentCap = '1500.00';
-    let savedStaticCredentials;
-    let catalogStaticCredentials = {
-      username: 'fixture-proxy-user',
-      password: 'fixture-proxy-password'
-    };
-    const catalogConnection = (id) =>
-      id === fixedProxyId
-        ? {
-            mode: 'static',
-            host: '203.0.113.10',
-            port: 1080,
-            credentials: catalogStaticCredentials
-          }
-        : {
-            mode: 'dynamic',
-            extractionUrl:
-              id === updatedProxyId
-                ? 'https://new-proxy.example/extract'
-                : 'https://proxy.example/secret'
-          };
-    let defaultProxyId = '99999999-9999-4999-8999-999999999999';
-    let defaultSaves = 0;
-    const serverProxySettings = () => ({
-      proxyId: defaultProxyId,
-      legacyConfigured: true,
-      proxy: defaultProxyId
-        ? {
-            id: defaultProxyId,
-            countryCode: defaultProxyId.startsWith('8888') ? 'PH' : 'US',
-            kind: defaultProxyId === fixedProxyId ? 'static_residential' : 'dynamic_residential',
-            connectionMode: defaultProxyId === fixedProxyId ? 'direct' : 'extraction',
-            protocol: 'http',
-            status: 'active',
-            remark1:
-              defaultProxyId === fixedProxyId
-                ? '固定目录验收代理'
-                : defaultProxyId === updatedProxyId
-                  ? '更新动态验收代理'
-                  : defaultProxyId.startsWith('9999')
-                    ? '美国验收代理'
-                    : '菲律宾验收代理'
-          }
-        : null
-    });
+    lastPage = page;
+    page.setDefaultTimeout(12_000);
+    const errors = [],
+      forbidden = [],
+      jobs = [],
+      local = new Map();
+    let version = 4,
+      apiStarts = 0,
+      starts = 0,
+      confirmations = 0,
+      slowRefresh = false,
+      refreshSeen = false;
     page.on('pageerror', (error) => errors.push(error.message));
-
-    const success = (route, data, headers = {}) =>
+    const success = (route, data) =>
       route.fulfill({
         contentType: 'application/json',
-        headers,
         body: JSON.stringify({ success: true, data })
       });
-    await page.route(origin + '/api/**', async (route) => {
-      const request = route.request();
-      const path = new URL(request.url()).pathname;
-      if (path === '/api/auth/me') return success(route, user);
-      if (path === '/api/auth/session')
-        return route.fulfill({
-          status: 401,
-          contentType: 'application/json',
-          body: JSON.stringify({ success: false, message: '请登录' })
-        });
-      if (path.endsWith('/workspace-totp-accounts') && request.method() === 'GET')
-        return success(route, {
-          items: [
-            {
-              id: '88888888-8888-4888-8888-888888888888',
-              name: 'ChatGPT 验收',
-              issuer: 'OpenAI',
-              algorithm: 'SHA1',
-              digits: 6,
-              period: 30,
-              token: '654321',
-              expiresAt: new Date(Date.now() + 20_000).toISOString(),
-              createdAt: '',
-              updatedAt: ''
-            }
-          ]
-        });
-      if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
-        return success(route, { items: jobs, configured: true });
-      if (path.endsWith('/auto-recharge/server-proxy-settings')) {
-        if (request.method() === 'PUT') {
-          defaultSaves++;
-          if (defaultSaves === 1)
-            return route.fulfill({
-              status: 503,
-              contentType: 'application/json',
-              body: JSON.stringify({ success: false, message: '模拟默认代理保存失败，请重试' })
-            });
-          const input = request.postDataJSON();
-          assert.deepEqual(Object.keys(input), ['proxyId']);
-          defaultProxyId = input.proxyId;
-        }
-        return success(route, serverProxySettings());
-      }
-      if (
-        /\/auto-recharge\/proxies\/[^/]+$/.test(path) &&
-        !path.endsWith('/countries') &&
-        request.method() === 'GET'
-      )
-        return success(route, {
-          ...serverProxySettings().proxy,
-          id: path.split('/').at(-1),
-          url: 'https://proxy.example.invalid/extract?fixture=visible-link',
-          remark2: ''
-        });
-      if (path.endsWith('/auto-recharge/payment-caps') && request.method() === 'GET')
-        return success(route, {
-          items: [{ plan: 'plus', currencyCode: 'PHP', maxAmount: paymentCap }]
-        });
-      if (path.endsWith('/auto-recharge/payment-caps/plus/PHP') && request.method() === 'PUT') {
-        paymentCap = request.postDataJSON().maxAmount;
-        return success(route, { plan: 'plus', currencyCode: 'PHP', maxAmount: paymentCap });
-      }
-      if (path.endsWith('/auto-recharge/proxies/countries') && request.method() === 'GET')
-        return success(route, { items: ['US', 'PH'] });
-      if (path.endsWith('/auto-recharge/proxies') && request.method() === 'GET') {
-        const country = new URL(request.url()).searchParams.get('countryCode');
-        const items = (country ? [country] : ['US', 'PH']).map((code) => ({
-          id:
-            code === 'US'
-              ? '99999999-9999-4999-8999-999999999999'
-              : '88888888-8888-4888-8888-888888888888',
-          countryCode: code,
-          kind: code === 'US' ? 'dynamic_residential' : 'mobile',
-          status: 'active',
-          linkMask: code === 'US' ? '已保存 ···000001' : '已保存 ···000002',
-          remark1: code === 'US' ? '美国验收代理' : '菲律宾验收代理',
-          remark2: '',
-          connectionMode: 'extraction',
-          protocol: 'http',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }));
-        if (!country || country === 'US')
-          items.push(
-            {
-              ...items.find((item) => item.countryCode === 'US'),
-              id: updatedProxyId,
-              remark1: '更新动态验收代理',
-              linkMask: 'https://new-proxy.example/…（已加密）'
-            },
-            {
-              ...items.find((item) => item.countryCode === 'US'),
-              id: fixedProxyId,
-              remark1: '固定目录验收代理',
-              kind: 'static_residential',
-              connectionMode: 'direct',
-              linkMask: 'http://203.0.113.10:1080/…（已加密）'
-            }
-          );
-        return success(route, { items, total: items.length, page: 1, pageSize: 100 });
-      }
-      if (path.endsWith('/bank-recharge/accounts') && request.method() === 'GET')
-        return success(route, { items: [] });
-      if (path.endsWith('/bank-recharge/currencies') && request.method() === 'GET')
-        return success(route, {
-          items: [{ code: 'PHP', name: '菲律宾比索', minorUnits: 2, active: true }]
-        });
-      if (path.endsWith('/auto-recharge/bitbrowser-settings') && request.method() === 'GET')
-        return success(route, { ...currentSettings, proxyId: defaultProxyId });
-      if (path.endsWith('/auto-recharge/bitbrowser-catalog-access'))
-        return success(route, {
-          connectorUrl: connectorOrigin,
-          connectorToken: 'c'.repeat(64),
-          localApiUrl: settings.localApiUrl,
-          localApiToken: 'b'.repeat(32)
-        });
-      if (path.endsWith('/auto-recharge/bitbrowser-settings') && request.method() === 'PUT') {
-        settingsSaves += 1;
-        const input = request.postDataJSON();
-        assert.equal(input.localApiToken, undefined);
-        assert.equal(input.connectorToken, undefined);
-        if (settingsSaves === 1)
+    await context.route('**/*', async (route) => {
+      const request = route.request(),
+        url = new URL(request.url()),
+        path = url.pathname;
+      if (url.origin === origin && !path.startsWith('/api/')) return route.continue();
+      if (url.origin === origin) {
+        if (path === '/api/auth/me') return success(route, user);
+        if (path === '/api/auth/session')
           return route.fulfill({
-            status: 503,
+            status: 401,
             contentType: 'application/json',
-            body: JSON.stringify({ success: false, message: '模拟设置保存失败，请重试' })
+            body: JSON.stringify({ success: false, message: '请登录' })
           });
-        assert.ok([updatedProxyId, fixedProxyId].includes(input.proxyId));
-        assert.equal(input.dynamicProxyUrl, undefined, '窗口设置只引用目录，不复制提取链接');
-        assert.equal(input.staticProxyCredentials, undefined, '窗口设置不复制目录凭据');
-        assert.equal(input.clearStaticProxyCredentials, false);
-        defaultProxyId = input.proxyId;
-        const connection = catalogConnection(input.proxyId);
-        assert.equal(input.browserOptions.proxyMode, connection.mode);
-        savedDynamicProxyUrl = connection.mode === 'dynamic' ? connection.extractionUrl : '';
-        savedStaticCredentials = connection.mode === 'static' ? connection.credentials : undefined;
-        currentSettings = {
-          ...currentSettings,
-          groupName: input.groupName,
-          tagName: input.tagName,
-          proxyType: input.proxyType,
-          proxyId: input.proxyId,
-          browserOptions: {
-            ...input.browserOptions,
-            staticHost: connection.mode === 'static' ? connection.host : '',
-            staticPort: connection.mode === 'static' ? connection.port : 8080
-          },
-          staticProxyCredentialsConfigured: false,
-          dynamicProxyUrlMask: settings.dynamicProxyUrlMask
-        };
-        return success(route, currentSettings);
-      }
-      if (path.endsWith('/auto-recharge/addresses') && request.method() === 'GET') {
-        const items = addressUsed ? [] : [address];
-        return success(route, {
-          items,
-          total: items.length,
-          page: 1,
-          pageSize: 2000,
-          totals: { unused: items.length, used: addressUsed ? 1 : 0, disabled: 0 }
-        });
-      }
-      if (path.endsWith('/auto-recharge/jobs/bitbrowser') && request.method() === 'POST') {
-        apiStarts += 1;
-        serverStartBody = request.postDataJSON();
-        assert.equal(serverStartBody.plan, 'plus');
-        assert.equal(serverStartBody.proxyId, width === 1440 ? updatedProxyId : fixedProxyId);
-        const executionProxy = catalogConnection(serverStartBody.proxyId);
-        savedStaticCredentials =
-          executionProxy.mode === 'static' ? executionProxy.credentials : undefined;
-        assert.equal(serverStartBody.addressId, address.id);
-        assert.equal(serverStartBody.lockedCurrency, 'PHP');
-        assert.equal(serverStartBody.maxAmount, '30.00');
-        assert.equal(serverStartBody.authorizeSinglePayment, true);
-        assert.equal(JSON.stringify(serverStartBody).includes('5555555555554444'), false);
-        assert.equal(serverStartBody.expectedEmail, 'fixture@example.test');
-        jobs.unshift({
-          id: serverStartBody.id,
-          plan: serverStartBody.plan,
-          action: 'bitbrowser',
-          state: 'running',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          result: {
-            status: 'waiting_local_connector',
-            stage: 'connector_dispatch',
-            addressId: address.id,
-            window_name: serverStartBody.windowName,
-            locked_currency: 'PHP',
-            max_amount: '30.00',
-            payment_requests_sent: 0
+        if (path.endsWith('/change-events')) return route.abort();
+        if (path.endsWith('/change-versions'))
+          return success(route, { generatedAt: timestamp, versions: {} });
+        if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET') {
+          if (slowRefresh) {
+            refreshSeen = true;
+            await new Promise((done) => setTimeout(done, 700));
           }
-        });
-        return success(route, {
-          id: serverStartBody.id,
-          mode: 'payment',
-          connectorUrl: connectorOrigin,
-          connectorToken: 'c'.repeat(64),
-          agentToken: 'a'.repeat(64),
-          bitBrowser: {
+          return success(route, { items: jobs, configured: true });
+        }
+        if (/\/auto-recharge\/jobs\/[^/]+$/.test(path) && request.method() === 'GET')
+          return success(
+            route,
+            jobs.find((job) => job.id === path.split('/').at(-1))
+          );
+        if (path.endsWith('/bank-recharge/accounts'))
+          return success(route, { items: [account], total: 1 });
+        if (path.endsWith('/bank-recharge/currencies'))
+          return success(route, {
+            items: [{ code: 'PHP', name: '菲律宾比索', minorUnits: 2, active: true }]
+          });
+        if (path.endsWith('/bank-recharge/cards') || path.endsWith('/workspace-totp-accounts'))
+          return success(route, { items: [] });
+        if (path.endsWith('/login-credential'))
+          return success(route, {
+            email: 'fixture@example.test',
+            password: 'synthetic-password-only'
+          });
+        if (path.endsWith('/auto-recharge/names/match'))
+          return success(route, {
+            name: 'Fixture Person',
+            confirmed: false,
+            cardId: null,
+            billingAddressId: null
+          });
+        if (path.endsWith('/cards/management/availability'))
+          return success(route, { available: true });
+        if (path.endsWith('/auto-recharge/names/payment-card'))
+          return success(route, { cardId: '44444444-4444-4444-8444-444444444444' });
+        if (path.endsWith('/auto-recharge/payment-caps'))
+          return success(route, {
+            items: ['go', 'plus', 'pro-500'].map((plan) => ({
+              plan,
+              currencyCode: 'PHP',
+              maxAmount: '50000.00'
+            }))
+          });
+        if (path.endsWith('/auto-recharge/proxies/countries'))
+          return success(route, { items: ['PH'] });
+        if (path.endsWith('/auto-recharge/proxies'))
+          return success(route, {
+            items: [
+              {
+                id: id.proxy,
+                countryCode: 'PH',
+                kind: 'mobile',
+                status: 'active',
+                linkMask: '合成代理',
+                remark1: '离线验收',
+                remark2: '',
+                connectionMode: 'extraction',
+                protocol: 'http',
+                createdAt: timestamp,
+                updatedAt: timestamp
+              }
+            ],
+            total: 1
+          });
+        if (path.endsWith('/auto-recharge/addresses'))
+          return success(route, {
+            items: [address],
+            total: 1,
+            page: 1,
+            pageSize: 2000,
+            totals: { unused: 0, used: 1, disabled: 0 }
+          });
+        if (path.endsWith('/auto-recharge/bitbrowser-settings')) return success(route, settings);
+        if (path.endsWith('/auto-recharge/bitbrowser-catalog-access'))
+          return success(route, {
+            connectorUrl: connector,
+            connectorToken: 'c'.repeat(64),
             localApiUrl: settings.localApiUrl,
-            localApiToken: 'b'.repeat(32),
-            groupName: currentSettings.groupName,
-            tagName: currentSettings.tagName,
-            proxyType: currentSettings.proxyType,
-            dynamicProxyUrl:
-              currentSettings.browserOptions.proxyMode === 'dynamic' ? savedDynamicProxyUrl : '',
-            browserOptions: currentSettings.browserOptions,
-            staticProxyCredentials:
-              currentSettings.browserOptions.proxyMode === 'static'
-                ? savedStaticCredentials
-                : undefined
-          },
-          address,
-          safety: {
-            lockedCurrency: 'PHP',
-            maxAmount: '30.00',
-            maxAmountMinor: 3000,
-            authorizeSinglePayment: true
-          }
-        });
+            localApiToken: 'b'.repeat(32)
+          });
+        if (path.endsWith('/bitbrowser-access'))
+          return success(route, {
+            connectorUrl: connector,
+            connectorToken: 'c'.repeat(64)
+          });
+        if (path.endsWith('/auto-recharge/jobs/bitbrowser') && request.method() === 'POST') {
+          const input = request.postDataJSON();
+          assert.equal(JSON.stringify(input).includes('5555555555554444'), false);
+          assert.equal(input.manualPaymentConfirmation, true);
+          assert.equal(input.authorizeSinglePayment, true);
+          assert.equal(input.addressId, id.address);
+          const upgrading = ++apiStarts > 1;
+          const job = {
+            id: input.id,
+            chatgptAccountId: id.account,
+            plan: input.plan,
+            action: 'bitbrowser',
+            state: 'running',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            result: {
+              status: 'waiting_local_connector',
+              locked_currency: 'PHP',
+              max_amount: input.maxAmount
+            }
+          };
+          jobs.unshift(job);
+          local.set(job.id, {
+            job,
+            nonce: 'n'.repeat(64),
+            digest: 'd'.repeat(64),
+            used: false,
+            upgrading
+          });
+          return success(route, {
+            id: input.id,
+            mode: 'payment',
+            connectorUrl: connector,
+            connectorToken: 'c'.repeat(64),
+            agentToken: 'a'.repeat(64),
+            ...(input.useSavedCredentials
+              ? {
+                  savedLogin: {
+                    email: 'fixture@example.test',
+                    password: 'synthetic-password-only'
+                  }
+                }
+              : {}),
+            bitBrowser: {
+              localApiUrl: settings.localApiUrl,
+              localApiToken: 'b'.repeat(32),
+              groupName: settings.groupName,
+              tagName: settings.tagName,
+              proxyType: 'http',
+              dynamicProxyUrl: 'https://proxy.example.invalid/never-called'
+            },
+            address,
+            safety: {
+              lockedCurrency: 'PHP',
+              maxAmount: input.maxAmount,
+              maxAmountMinor: 5000000,
+              authorizeSinglePayment: true,
+              manualPaymentConfirmation: true
+            }
+          });
+        }
+        if (request.method() !== 'GET') {
+          forbidden.push(path);
+          return route.abort();
+        }
+        return success(route, {});
       }
-      if (path.endsWith('/auto-recharge/jobs/bitbrowser-open') && request.method() === 'POST') {
-        const input = request.postDataJSON();
-        assert.equal(JSON.stringify(input).includes('local-password'), false);
-        jobs.unshift({
-          id: input.id,
-          plan: 'plus',
-          action: 'bitbrowser',
-          state: 'running',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          result: {
-            status: 'waiting_local_connector',
-            stage: 'connector_dispatch',
-            mode: 'open_browser',
-            payment_requests_sent: 0
-          }
-        });
-        return success(route, {
-          id: input.id,
-          mode: 'open_browser',
-          connectorUrl: connectorOrigin,
-          connectorToken: 'c'.repeat(64),
-          agentToken: 'a'.repeat(64),
-          bitBrowser: { ...connectorStartBody.bitBrowser }
-        });
-      }
-      if (path.endsWith('/bitbrowser-access') && request.method() === 'POST')
-        return success(route, {
-          connectorUrl: connectorOrigin,
-          connectorToken: 'c'.repeat(64)
-        });
-      if (path.endsWith('/change-versions'))
-        return success(route, { generatedAt: new Date().toISOString(), versions: {} });
-      if (path.endsWith('/change-events')) return route.abort();
-      return success(route, {});
-    });
-
-    await page.route(connectorOrigin + '/**', async (route) => {
-      const request = route.request();
-      const url = new URL(request.url());
-      const headers = {
-        'Access-Control-Allow-Origin': origin,
-        'Access-Control-Allow-Private-Network': 'true'
-      };
-      if (request.method() === 'OPTIONS')
-        return route.fulfill({
-          status: 204,
-          headers: {
-            ...headers,
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, X-Auto-Recharge-Connector'
-          }
-        });
-      if (url.pathname === '/health' && blockHealth) return route.abort('blockedbyclient');
-      if (url.pathname === '/health')
-        return route.fulfill({
-          contentType: 'application/json',
-          headers,
-          body: JSON.stringify({
-            ok: true,
-            version: 3,
-            busy: false,
-            originAllowed: true,
+      if (url.origin === connector) {
+        const headers = {
+          'Access-Control-Allow-Origin': origin,
+          'Access-Control-Allow-Private-Network': 'true'
+        };
+        const reply = (data, status = 200) =>
+          route.fulfill({
+            status,
+            headers,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: true, ...data })
+          });
+        if (request.method() === 'OPTIONS')
+          return route.fulfill({
+            status: 204,
+            headers: {
+              ...headers,
+              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type, X-Auto-Recharge-Connector'
+            }
+          });
+        if (path === '/health')
+          return reply({
             service: 'id-business-v2-auto-recharge-connector',
+            version,
+            role: 'recharge',
+            originAllowed: true,
+            busy: false,
             capabilities: [
               'browser-catalog',
               'browser-options',
@@ -447,589 +338,314 @@ try {
               'prepayment-page-recovery',
               'stale-owned-profile-cleanup',
               'password-login',
-              'login-code'
+              'login-code',
+              'manual-payment-confirmation',
+              'recharge-process-isolation'
             ]
-          })
-        });
-      if (url.pathname === '/browser/catalog') {
-        catalogReads += 1;
-        assert.equal(request.headers()['x-auto-recharge-connector'], 'c'.repeat(64));
-        assert.deepEqual(request.postDataJSON(), {
-          localApiUrl: settings.localApiUrl,
-          localApiToken: 'b'.repeat(32)
-        });
-        return route.fulfill({
-          status: catalogReads === 1 ? 409 : 200,
-          contentType: 'application/json',
-          headers,
-          body: JSON.stringify(
-            catalogReads === 1
-              ? { ok: false }
-              : {
-                  ok: true,
-                  groups:
-                    catalogReads === 2
-                      ? []
-                      : [
-                          { id: '1'.repeat(32), name: 'gpt账号注册' },
-                          { id: '2'.repeat(32), name: '测试代理分组' }
-                        ],
-                  tags:
-                    catalogReads === 2
-                      ? []
-                      : [
-                          { id: '3'.repeat(32), name: '申请gpt' },
-                          { id: '4'.repeat(32), name: '续费账号' }
-                        ]
+          });
+        if (path === '/browser/catalog')
+          return reply({
+            groups: [{ id: '1', name: settings.groupName }],
+            tags: [{ id: '2', name: settings.tagName }],
+            coreVersions: ['124']
+          });
+        if (path === '/jobs' && request.method() === 'POST') {
+          const input = request.postDataJSON(),
+            entry = local.get(input.id);
+          assert.equal(input.details.number, '5555555555554444');
+          assert.equal(input.details.cvc, '123');
+          assert.equal(input.safety.manualPaymentConfirmation, true);
+          starts++;
+          entry.job.state = 'awaiting_confirmation';
+          entry.job.result = {
+            status: 'awaiting_confirmation',
+            stage: 'payment_confirmation',
+            account_matched: true,
+            current_plan: entry.upgrading ? 'go' : 'free',
+            quote: quoted(input.plan),
+            quote_digest: entry.digest,
+            quote_authority: entry.upgrading
+              ? 'official_upgrade_preview'
+              : 'official_checkout_response',
+            ...(entry.upgrading
+              ? {
+                  operation: 'subscription_upgrade',
+                  current_plan_before: 'go',
+                  target_plan: 'plus',
+                  upgrade_identifier: 'upg_' + 'e'.repeat(32)
                 }
-          )
-        });
-      }
-      if (url.pathname === '/jobs') {
-        connectorStarts += 1;
-        connectorStartBody = request.postDataJSON();
-        assert.equal(request.headers()['x-auto-recharge-connector'], 'c'.repeat(64));
-        if (connectorStartBody.mode === 'open_browser') {
-          assert.deepEqual(connectorStartBody.login, {
-            email: 'fixture@example.test',
-            password: 'local-password'
-          });
-          assert.equal(connectorStartBody.sessionJson, undefined);
-          assert.equal(connectorStartBody.details, undefined);
-          assert.equal(JSON.stringify(connectorStartBody).includes('JBSWY3DPEHPK3PXP'), false);
-          jobs[0].state = 'awaiting_human_verification';
-          jobs[0].result = {
-            ...jobs[0].result,
-            status: 'awaiting_human_verification',
-            stage: 'login_code_required',
+              : {}),
+            confirmation_expires_at: new Date(Date.now() + 300000).toISOString(),
+            manual_payment_confirmation: true,
+            payment_requests_sent: 0,
             payment_attempted: false,
-            payment_requests_sent: 0
+            locked_currency: 'PHP',
+            max_amount: '50000.00',
+            window_name: input.windowName
           };
-          return route.fulfill({
-            status: 202,
-            contentType: 'application/json',
-            headers,
-            body: JSON.stringify({ ok: true, id: jobs[0].id, accepted: true })
-          });
+          return reply({ id: input.id, accepted: true }, 202);
         }
-        assert.equal(connectorStartBody.details.number, '5555555555554444');
-        assert.equal(connectorStartBody.details.expiry, '12/30');
-        assert.equal(connectorStartBody.details.cvc, '123');
-        assert.equal(connectorStartBody.details.email, 'fixture@example.test');
-        assert.equal(connectorStartBody.sessionJson.includes('fixture@example.test'), true);
-        assert.equal(connectorStartBody.bitBrowser.groupName, '测试代理分组');
-        assert.equal(connectorStartBody.bitBrowser.tagName, '续费账号');
-        assert.equal(
-          connectorStartBody.bitBrowser.dynamicProxyUrl,
-          width === 1440 ? 'https://new-proxy.example/extract' : ''
-        );
-        assert.deepEqual(
-          connectorStartBody.bitBrowser.browserOptions,
-          currentSettings.browserOptions
-        );
-        assert.equal(connectorStartBody.bitBrowser.staticProxyCredentials, undefined);
-        assert.equal(connectorStartBody.address.city, 'Portland');
-        assert.equal(connectorStartBody.address.state, 'OR');
-        assert.equal(connectorStartBody.address.postalCode, '97204');
-        jobs[0].state = 'awaiting_human_verification';
-        jobs[0].result = {
-          ...jobs[0].result,
-          status: 'awaiting_human_verification',
-          stage: 'verification_required',
-          browser_profile_id: 'profile_fixture',
-          user_action_required: true,
-          payment_attempted: false,
-          payment_requests_sent: 0
-        };
-        return route.fulfill({
-          status: 202,
-          contentType: 'application/json',
-          headers,
-          body: JSON.stringify({ ok: true, id: jobs[0].id, accepted: true })
-        });
+        const match = path.match(/^\/jobs\/([^/]+)(?:\/(confirm))?$/);
+        if (match) {
+          const entry = local.get(match[1]);
+          assert.ok(entry);
+          if (!match[2])
+            return reply({
+              done: entry.used,
+              waitingForUser: false,
+              status: entry.used ? 'finished' : 'awaiting_confirmation',
+              waitingForConfirmation: !entry.used,
+              result: {
+                ...entry.job.result,
+                nonce: entry.used ? undefined : entry.nonce
+              }
+            });
+          const input = request.postDataJSON();
+          assert.equal(input.nonce, entry.nonce);
+          assert.equal(input.quoteDigest, entry.digest);
+          assert.equal(entry.used, false, '同一报价只能确认一次');
+          entry.used = true;
+          confirmations++;
+          entry.job.state = 'finished';
+          entry.job.result = {
+            ...entry.job.result,
+            status: 'subscription_activated',
+            payment_status: 'paid',
+            payment_outcome: 'subscription_activated',
+            subscription_status: 'active',
+            current_plan: entry.job.plan,
+            payment_requests_sent: 1,
+            payment_attempted: true
+          };
+          return reply({ accepted: true });
+        }
       }
-      if (url.pathname.endsWith('/code')) {
-        loginCodeSubmissions += 1;
-        assert.match(request.postDataJSON().code, /^[0-9]{6}$/);
-        if (loginCodeSubmissions === 2) assert.equal(request.postDataJSON().code, '654321');
-        jobs[0].state = 'finished';
-        jobs[0].result = {
-          ...jobs[0].result,
-          status: 'session_ready',
-          stage: 'session_ready',
-          account_matched: true,
-          payment_attempted: false,
-          payment_requests_sent: 0
-        };
-        return route.fulfill({
-          contentType: 'application/json',
-          headers,
-          body: JSON.stringify({ ok: true })
-        });
-      }
-      if (url.pathname.endsWith('/resume')) {
-        connectorResumes += 1;
-        const money = { currency: 'PHP', amount: '20.00', amount_minor: 2000 };
-        jobs[0].state = 'finished';
-        jobs[0].result = {
-          ...jobs[0].result,
-          status: 'subscription_activated',
-          stage: 'subscription_activated',
-          account_matched: true,
-          current_plan: 'free',
-          quote: {
-            plan: 'plus',
-            today: money,
-            tax: { currency: 'PHP', amount: '0.00', amount_minor: 0 },
-            renewal: money,
-            renewal_interval: 'monthly'
-          },
-          quote_authority: 'official_checkout_response',
-          checkout_identifier: 'cs_fixture',
-          network: { ip: '203.0.113.10', country: 'US', observedAt: new Date().toISOString() },
-          payment_status: 'paid',
-          payment_attempted: true,
-          payment_requests_sent: 1,
-          subscription_status: 'plus'
-        };
-        addressUsed = true;
-        return route.fulfill({
-          contentType: 'application/json',
-          headers,
-          body: JSON.stringify({ ok: true })
-        });
-      }
-      return route.fulfill({
-        status: 404,
-        contentType: 'application/json',
-        headers,
-        body: JSON.stringify({ ok: false })
-      });
+      forbidden.push(url.origin + path);
+      return route.abort();
     });
-
     await page.goto(origin + '/v2/auto-recharge');
-    await page.getByText('一键开通资料', { exact: true }).waitFor();
-    assert.equal(await page.getByRole('radio', { name: '服务器充值' }).isChecked(), true);
-    await waitFor(async () =>
-      (
-        await page
-          .locator('.el-select')
-          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
-          .innerText()
-      ).includes('美国验收代理')
-    );
-    await page.getByRole('combobox', { name: '选择代理国家' }).click();
-    await page.getByRole('option', { name: '菲律宾', exact: true }).click();
-    await page.getByRole('combobox', { name: '选择代理 IP' }).click();
-    await page.getByRole('option', { name: /菲律宾验收代理/ }).waitFor();
-    assert.equal(await page.getByRole('option', { name: /美国验收代理/ }).count(), 0);
-    await page.keyboard.press('Escape');
-    await page.getByRole('combobox', { name: '选择代理国家' }).click();
-    await page.getByRole('option', { name: '美国', exact: true }).click();
-    await page.getByRole('combobox', { name: '选择代理 IP' }).click();
-    await page.getByRole('option', { name: /美国验收代理/ }).click();
-    assert.equal(await page.getByRole('button', { name: '在服务器执行本次充值' }).count(), 1);
-    assert.equal(await page.getByRole('textbox', { name: '窗口名称' }).count(), 0);
-    await page.getByText('1500.00 PHP', { exact: true }).waitFor();
-    assert.equal(await page.getByRole('textbox', { name: '最高付款' }).count(), 0);
-    await page.getByRole('button', { name: '设置上限' }).click();
-    await page.getByRole('textbox', { name: '付款安全上限' }).fill('1600.00');
-    await page.getByRole('button', { name: '保存上限' }).click();
-    await page.getByText('1600.00 PHP', { exact: true }).waitFor();
-    await page.screenshot({ path: resolve(evidence, `server-mode-${width}.png`) });
-    await page.getByRole('button', { name: '服务器默认代理' }).click();
-    const serverSettingsDrawer = page.locator('.v2-form-drawer').filter({
-      has: page.getByRole('heading', { name: '服务器默认代理', exact: true })
-    });
-    await serverSettingsDrawer.getByText('所选代理资料', { exact: true }).waitFor();
-    assert.equal(await serverSettingsDrawer.getByLabel('本机连接密钥').count(), 0);
-    await serverSettingsDrawer.getByRole('combobox', { name: '选择服务器默认代理' }).click();
-    await page.getByRole('option', { name: /菲律宾验收代理/ }).click();
-    await serverSettingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
-    await serverSettingsDrawer.waitFor({ state: 'hidden' });
-    assert.equal(await page.locator('.el-message-box').count(), 0);
-    await page.getByRole('button', { name: '服务器默认代理' }).click();
-    await waitFor(async () =>
-      (await serverSettingsDrawer.locator('.el-select').innerText()).includes('菲律宾验收代理')
-    );
-    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
-    await serverSettingsDrawer.getByText('模拟默认代理保存失败，请重试').waitFor();
-    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
-    await serverSettingsDrawer.waitFor({ state: 'hidden' });
-    assert.ok(
-      (
-        await page
-          .locator('.el-select')
-          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
-          .innerText()
-      ).includes('美国验收代理'),
-      '保存默认值不覆盖本次手动选择'
-    );
-    await page.reload();
-    await waitFor(async () =>
-      (
-        await page
-          .locator('.el-select')
-          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
-          .innerText()
-      ).includes('菲律宾验收代理')
-    );
-    assert.equal(await page.getByText('当前账单国家是', { exact: false }).count(), 0);
-    await page.getByRole('button', { name: '服务器默认代理' }).click();
-    await serverSettingsDrawer.getByRole('button', { name: '查看完整链接' }).click();
+    const form = page.locator('.recharge-entry-panel');
+    await form.waitFor();
+    assert.equal(await page.getByRole('radio', { name: '服务器充值', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('radio', { name: '已保存账号', exact: true }).count(), 0);
+    await page.getByText('账号密码', { exact: true }).click();
     await page
-      .getByText('https://proxy.example.invalid/extract?fixture=visible-link', { exact: true })
-      .waitFor();
-    await waitFor(async () =>
-      page.getByLabel('代理 IP 详细').evaluate((drawer) => {
-        const rect = drawer.getBoundingClientRect();
-        return rect.left >= 0 && Math.abs(rect.right - window.innerWidth) <= 1;
-      })
-    );
-    await page.screenshot({
-      path: resolve(evidence, `server-default-link-${width}.png`),
-      fullPage: true
-    });
-    await page
-      .getByLabel('代理 IP 详细')
-      .getByRole('button', { name: /关闭|Close/ })
+      .getByRole('combobox', { name: /ChatGPT 账号/ })
+      .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
       .click();
-    await serverSettingsDrawer.locator('.el-select').hover();
-    await serverSettingsDrawer.locator('.el-select__clear').click();
-    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
-    await serverSettingsDrawer.waitFor({ state: 'hidden' });
-    assert.equal(defaultProxyId, null);
-    await page.reload();
-    await page.getByRole('button', { name: '服务器默认代理' }).click();
-    await serverSettingsDrawer.getByText('未设置默认值时，需要在充值页手动选择代理。').waitFor();
-    await serverSettingsDrawer.getByRole('combobox', { name: '选择服务器默认代理' }).click();
-    await page.getByRole('option', { name: /美国验收代理/ }).click();
-    await page.locator('.el-select-dropdown:visible').waitFor({ state: 'hidden' });
-    await page.screenshot({
-      path: resolve(evidence, `server-default-selector-${width}.png`),
-      fullPage: true
-    });
-    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
-    await serverSettingsDrawer.waitFor({ state: 'hidden' });
-    await waitFor(async () =>
-      (
-        await page
-          .locator('.el-select')
-          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
-          .innerText()
-      ).includes('美国验收代理')
+    await page.getByRole('option', { name: /fixture@example.test/ }).click();
+    assert.equal(await page.getByLabel('登录密码', { exact: true }).count(), 0);
+    const loadJson = async () => {
+      await page
+        .getByRole('radio', { name: '授权 JSON', exact: true })
+        .locator('xpath=ancestor::label')
+        .click();
+      await page
+        .getByPlaceholder('粘贴完整授权 JSON，将自动载入')
+        .fill('{"sessionToken":"synthetic-only","user":{"email":"fixture@example.test"}}');
+      await page.getByText('授权已自动载入', { exact: false }).waitFor();
+    };
+    await loadJson();
+    await form.getByLabel('窗口名称', { exact: true }).fill('充值离线验收');
+    await form.getByLabel('最高付款', { exact: true }).fill('50000');
+    await page
+      .getByRole('combobox', { name: '选择真实账单地址' })
+      .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+      .click();
+    await page.getByRole('option', { name: address.line1, exact: true }).click();
+    await page
+      .getByRole('combobox', { name: '选择代理国家', exact: true })
+      .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+      .click();
+    await page.getByRole('option', { name: '菲律宾', exact: true }).click();
+    await page
+      .getByRole('combobox', { name: '选择代理 IP', exact: true })
+      .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+      .click();
+    await page.getByRole('option', { name: /离线验收/ }).click();
+    const fillPayment = async () => {
+      await form.getByLabel('银行卡号', { exact: true }).fill('5555555555554444');
+      await form.getByLabel('持卡人姓名', { exact: true }).fill('Fixture Person');
+      await form.getByLabel('有效期', { exact: true }).fill('1230');
+      await form.getByLabel('安全码', { exact: true }).fill('123');
+      const authorization = form.getByRole('checkbox', { name: /我已核对银行卡/ });
+      if (!(await authorization.isChecked()))
+        await authorization.locator('xpath=ancestor::label').click();
+    };
+    const choosePlan = async (label) => {
+      await form
+        .getByRole('combobox', { name: /开通套餐|目标套餐/ })
+        .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+        .click();
+      await page.getByRole('option', { name: label, exact: true }).click();
+    };
+    await choosePlan('ChatGPT Go');
+    await fillPayment();
+    const start = page.getByRole('button', { name: '在比特浏览器执行', exact: true });
+    assert.equal(await start.isEnabled(), true);
+    version = 3;
+    await start.click();
+    await page
+      .getByText(/版本过旧/)
+      .first()
+      .waitFor();
+    assert.equal(apiStarts, 0);
+    assert.equal(starts, 0);
+    version = 4;
+    await start.click();
+    const confirm = page.getByRole('button', { name: /确认.*付款|确认.*扣款/ });
+    await confirm.waitFor();
+    assert.equal(confirmations, 0);
+    assert.equal(jobs[0].result.nonce, undefined, '后端不得持久化付款授权');
+    await confirm.click();
+    await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
+    assert.equal(confirmations, 1);
+    assert.equal(await form.getByLabel('安全码', { exact: true }).inputValue(), '');
+    await page.getByRole('button', { name: /继续.*账号.*升级/ }).click();
+    await loadJson();
+    await choosePlan('ChatGPT Plus');
+    await fillPayment();
+    await start.click();
+    await confirm.waitFor();
+    await page
+      .getByText(/Go.*Plus|Go → Plus/)
+      .first()
+      .waitFor();
+    assert.equal(confirmations, 1);
+    await confirm.click();
+    await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
+    assert.equal(confirmations, 2);
+    await page.waitForFunction(
+      () => document.querySelectorAll('.recharge-entry-panel .el-form-item__error').length === 0
     );
-    if (proxySettingsOnly) {
-      assert.equal(apiStarts + connectorStarts, 0);
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
-      );
-      assert.equal(overflow, false, `${width}px 页面横向溢出`);
-      assert.deepEqual(errors, []);
+    assert.equal(jobs.length, 2);
+    assert.notEqual(jobs[0].id, jobs[1].id);
+    assert.ok(jobs.every((job) => job.chatgptAccountId === id.account));
+    slowRefresh = true;
+    await page.getByRole('button', { name: '刷新原任务状态', exact: true }).click();
+    await waitFor(() => refreshSeen);
+    assert.equal(
+      await page.locator('.recharge-status').filter({ hasText: '开通成功' }).isVisible(),
+      true
+    );
+    assert.equal(await page.locator('.el-loading-mask').count(), 0);
+    assert.equal(
+      await page.locator('.recharge-page > .v2-async-region').getAttribute('data-v2-query-phase'),
+      'refreshing'
+    );
+    slowRefresh = false;
+    await page.getByRole('button', { name: '刷新原任务状态', exact: true }).waitFor();
+    await waitFor(() =>
+      page.getByRole('button', { name: '刷新原任务状态', exact: true }).isEnabled()
+    );
+    for (const theme of ['light', 'dark']) {
+      // Theme controls are desktop shell controls; keep narrow acceptance on the same live page.
+      if (width < 900) await page.setViewportSize({ width: 1440, height: 1100 });
+      await page.getByTitle(theme === 'dark' ? '切换为深色主题' : '切换为浅色主题').click();
+      if (width < 900) await page.setViewportSize({ width, height: 1100 });
+      // Wait for the existing navigation transition before measuring the narrow page.
+      if (width < 900) {
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(
+          () => document.querySelector('.v2-sidebar').getBoundingClientRect().right <= 0
+        );
+      }
+      // Element Plus controls animate theme changes; verify the settled shared surface.
+      await page.waitForFunction(() => {
+        const element = document.querySelector('.recharge-entry-panel .el-select__wrapper');
+        const style = getComputedStyle(element);
+        const normalized = document.createElement('span');
+        normalized.style.backgroundColor = style.getPropertyValue('--v3-surface').trim();
+        return style.backgroundColor === normalized.style.backgroundColor;
+      });
       await page.screenshot({
-        path: resolve(evidence, `server-default-page-${width}.png`),
+        path: resolve(evidence, theme + '-' + width + '.png'),
         fullPage: true
       });
-      await context.close();
-      continue;
-    }
-    await page.getByRole('button', { name: '服务器默认代理' }).click();
-    await serverSettingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
-    await serverSettingsDrawer.waitFor({ state: 'hidden' });
-    await page.getByText('本机充值', { exact: true }).click();
-    assert.equal(
-      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).count(),
-      1
-    );
-    assert.equal(await page.locator('.recharge-panel .recharge-settings-summary').count(), 0);
-    await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-    const settingsDrawer = page
-      .locator('.v2-form-drawer')
-      .filter({ has: page.locator('.recharge-settings-form') });
-    await settingsDrawer.getByText('当前代理 IP 与窗口配置', { exact: true }).waitFor();
-    await settingsDrawer.getByText('本机连接器拒绝了请求', { exact: false }).waitFor();
-    await settingsDrawer.getByRole('button', { name: '刷新分组与标签', exact: true }).click();
-    await settingsDrawer.getByText('比特浏览器中暂无可选分组或标签，请添加后刷新。').waitFor();
-    await settingsDrawer.getByRole('button', { name: '刷新分组与标签', exact: true }).click();
-    const groupSelect = settingsDrawer.getByRole('combobox', { name: '选择窗口分组', exact: true });
-    const tagSelect = settingsDrawer.getByRole('combobox', { name: '选择窗口标签', exact: true });
-    await groupSelect.click();
-    await page.getByRole('option', { name: '测试代理分组', exact: true }).click();
-    await tagSelect.click();
-    await page.getByRole('option', { name: '续费账号', exact: true }).click();
-    await settingsDrawer.getByRole('combobox', { name: '选择代理 IP', exact: true }).click();
-    await page.getByRole('option', { name: /更新动态验收代理/ }).click();
-    assert.equal(await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).count(), 0);
-    await settingsDrawer
-      .locator('.el-select')
-      .filter({ has: page.getByRole('combobox', { name: '选择操作系统', exact: true }) })
-      .click();
-    await page.getByRole('option', { name: 'Windows 电脑', exact: true }).click();
-    await settingsDrawer
-      .locator('.el-select')
-      .filter({ has: page.getByRole('combobox', { name: '选择浏览器语言', exact: true }) })
-      .click();
-    await page.getByRole('option', { name: '英语（美国）', exact: true }).click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '界面语言跟随 IP', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '时区跟随 IP', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '定位跟随 IP', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer.getByRole('spinbutton', { name: '定位纬度', exact: true }).fill('3.1');
-    await settingsDrawer.getByRole('spinbutton', { name: '定位经度', exact: true }).fill('101.7');
-    for (const name of ['标签页同步', 'Cookie 同步', '本地存储同步']) {
-      const toggle = settingsDrawer.getByRole('switch', { name, exact: true });
-      assert.equal(await toggle.isDisabled(), true);
-      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
-    }
-    await settingsDrawer.screenshot({ path: resolve(evidence, `window-options-${width}.png`) });
-    await settingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
-    await settingsDrawer.waitFor({ state: 'hidden' });
-    assert.equal(await page.locator('.el-message-box').count(), 0);
-    await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-    await settingsDrawer.getByText('测试代理分组', { exact: true }).waitFor();
-    await settingsDrawer.getByText('续费账号', { exact: true }).waitFor();
-    await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
-    await settingsDrawer.getByRole('alert').filter({ hasText: '模拟设置保存失败' }).waitFor();
-    assert.ok(
-      (
-        await settingsDrawer
-          .locator('.el-select')
-          .filter({
-            has: page.getByRole('combobox', { name: '选择代理 IP', exact: true })
-          })
-          .innerText()
-      ).includes('更新动态验收代理')
-    );
-    await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
-    await settingsDrawer.waitFor({ state: 'hidden' });
-    assert.equal(settingsSaves, 2);
-    assert.equal(currentSettings.browserOptions.os, 'Win32');
-    assert.equal(currentSettings.browserOptions.language, 'en-US');
-    assert.equal(currentSettings.browserOptions.displayLanguageFromIp, true);
-    assert.equal(currentSettings.browserOptions.timezoneFromIp, false);
-    assert.equal(currentSettings.browserOptions.positionFromIp, false);
-    assert.equal(currentSettings.browserOptions.latitude, 3.1);
-    assert.equal(currentSettings.browserOptions.longitude, 101.7);
-    assert.equal(currentSettings.browserOptions.syncCookies, false);
-    await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-    await settingsDrawer.getByText('测试代理分组', { exact: true }).waitFor();
-    assert.equal(await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).count(), 0);
-    assert.equal(currentSettings.proxyId, updatedProxyId);
-    assert.equal(await settingsDrawer.getByText('Windows 电脑', { exact: true }).isVisible(), true);
-    if (width !== 1440) {
-      await settingsDrawer
-        .locator('.el-select')
-        .filter({ has: page.getByRole('combobox', { name: '选择代理模式', exact: true }) })
-        .click();
-      await page.getByRole('option', { name: '固定代理', exact: true }).click();
-      await settingsDrawer.getByRole('combobox', { name: '选择代理 IP', exact: true }).click();
-      await page.getByRole('option', { name: /固定目录验收代理/ }).click();
-      for (const label of ['固定代理主机', '代理账号', '代理密码'])
-        assert.equal(await settingsDrawer.getByLabel(label, { exact: true }).count(), 0);
-      await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
-      await settingsDrawer.waitFor({ state: 'hidden' });
-      assert.deepEqual(savedStaticCredentials, {
-        username: 'fixture-proxy-user',
-        password: 'fixture-proxy-password'
-      });
       assert.equal(
-        currentSettings.staticProxyCredentialsConfigured,
-        false,
-        '目录秘密没有复制到窗口设置'
+        await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1),
+        false
       );
-      assert.equal(currentSettings.browserOptions.staticHost, '203.0.113.10');
-      assert.equal(currentSettings.browserOptions.staticPort, 1080);
-      // 模拟在代理目录清除凭据：新任务必须实时读目录，不使用窗口设置中旧秘密。
-      catalogStaticCredentials = undefined;
-      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-      await settingsDrawer.getByRole('button', { name: '刷新代理列表', exact: true }).click();
-      await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
-      await settingsDrawer.waitFor({ state: 'hidden' });
-      assert.equal(savedStaticCredentials, undefined);
-      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
-      await settingsDrawer.getByRole('combobox', { name: '选择代理 IP', exact: true }).waitFor();
+      const alignment = await form.locator('.el-form-item:visible').evaluateAll((elements) =>
+        elements.every((element) => {
+          const label = element.querySelector('.el-form-item__label');
+          const content = element.querySelector('.el-form-item__content');
+          if (!label || !content) return true;
+          const a = label.getBoundingClientRect(),
+            b = content.getBoundingClientRect();
+          return a.left <= b.left && Math.abs(a.top - b.top) < 8;
+        })
+      );
+      assert.equal(alignment, true, '标签须在控件左侧并对齐首行');
+      report.skin ??= [];
+      report.skin.push(
+        await form
+          .locator('.el-select__wrapper')
+          .first()
+          .evaluate((element, theme) => {
+            const style = getComputedStyle(element);
+            const root = getComputedStyle(document.documentElement);
+            return {
+              theme,
+              background: style.backgroundColor,
+              fill: style.getPropertyValue('--el-fill-color-blank'),
+              rootFill: root.getPropertyValue('--el-fill-color-blank'),
+              surface: style.getPropertyValue('--v3-surface'),
+              color: style.color
+            };
+          }, theme)
+      );
+      if (width < 900) {
+        await page.locator('.recharge-status-panel').scrollIntoViewIfNeeded();
+        await page.screenshot({ path: resolve(evidence, theme + '-' + width + '-result.png') });
+        await form.scrollIntoViewIfNeeded();
+      }
     }
-    await settingsDrawer
-      .getByRole('combobox', { name: '选择代理模式', exact: true })
-      .scrollIntoViewIfNeeded();
-    assert.equal(await settingsDrawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false);
-    await settingsDrawer.screenshot({ path: resolve(evidence, `settings-${width}.png`) });
-    await settingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
-    await settingsDrawer.waitFor({ state: 'hidden' });
-    await page.getByRole('combobox', { name: '选择代理 IP', exact: true }).click();
+    // A real route transition must retain the non-sensitive draft but clear one-time secrets.
+    await page.getByRole('button', { name: /继续.*账号.*升级/ }).click();
     await page
-      .getByRole('option', { name: width === 1440 ? /更新动态验收代理/ : /固定目录验收代理/ })
+      .getByRole('radio', { name: '账号密码', exact: true })
+      .locator('xpath=ancestor::label')
       .click();
-    const billingEmail = page.locator('.el-form-item').filter({
-      has: page.locator('.el-form-item__label', { hasText: '账单邮箱' })
-    });
-    assert.equal(await billingEmail.locator('input').count(), 0);
+    await form.getByLabel('窗口名称', { exact: true }).fill('升级草稿保留验收');
+    await fillPayment();
+    await form.getByRole('link', { name: 'ChatGPT 账号', exact: true }).click();
+    await page.waitForURL('**/v2/auto-recharge/chatgpt-accounts');
+    await page.goBack();
+    await form.waitFor();
     assert.equal(
-      await billingEmail.evaluate((element) => element.classList.contains('is-required')),
-      false
+      await form.getByLabel('窗口名称', { exact: true }).inputValue(),
+      '升级草稿保留验收'
     );
-    assert.equal(
-      (await billingEmail.locator('.recharge-account-email').innerText()).trim(),
-      '载入授权 JSON 后自动使用账号邮箱'
-    );
-    await page
-      .getByPlaceholder('粘贴完整授权 JSON，将自动载入')
-      .fill('{"sessionToken":"synthetic-only","user":{"email":"fixture@example.test"}}');
-    await page.getByText('授权已自动载入', { exact: false }).waitFor();
-    assert.equal(apiStarts, 0);
-    assert.equal(connectorStarts, 0);
-
-    await page.getByRole('textbox', { name: '窗口名称' }).fill('申请gpt-验收');
-    await page.locator('.recharge-billing').getByLabel('银行卡号').fill('5555555555554444');
-    await page.locator('.recharge-entry-panel').getByLabel('持卡人姓名').fill('Fixture Person');
-    await page.locator('.recharge-entry-panel').getByLabel('有效期').fill('1230');
-    await page.locator('.recharge-entry-panel').getByLabel('安全码').fill('123');
-    assert.equal(
-      await page.locator('.recharge-entry-panel').getByLabel('有效期').inputValue(),
-      '12/30'
-    );
-    assert.equal(
-      (await billingEmail.locator('.recharge-account-email').innerText()).trim(),
-      'fixture@example.test'
-    );
-    await page.getByRole('combobox', { name: '选择真实账单地址' }).click();
-    await page.getByRole('option', { name: address.line1, exact: true }).click();
-    await page.getByText('我已核对银行卡真实姓名、账单地址和币种', { exact: false }).click();
-    const startButton = page.getByRole('button', { name: '连接比特浏览器并执行本次充值' });
-    assert.equal(await startButton.isEnabled(), true);
-    blockHealth = true;
-    await startButton.click();
-    await page.locator('.recharge-error').filter({ hasText: '网页无法访问本机连接器' }).waitFor();
-    assert.equal(apiStarts, 0);
-    assert.equal(connectorStarts, 0);
-    assert.equal(
-      await page.locator('.recharge-billing').getByLabel('银行卡号').inputValue(),
-      '5555555555554444'
-    );
-    blockHealth = false;
-    await startButton.click();
-
-    await page.getByRole('button', { name: '我已完成验证，继续原任务' }).waitFor();
-    assert.equal(apiStarts, 1);
-    assert.equal(connectorStarts, 1);
-    assert.equal(
-      await page.locator('.recharge-billing').getByLabel('银行卡号').inputValue(),
-      '5555555555554444'
-    );
-    await page.getByRole('button', { name: '我已完成验证，继续原任务' }).click();
-    await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
-    assert.equal(connectorResumes, 1);
-    assert.equal(await page.locator('.recharge-billing').getByLabel('银行卡号').inputValue(), '');
-    assert.equal(serverStartBody.id, connectorStartBody.id);
-    assert.equal(connectorStartBody.authorizeSinglePayment, true);
-
-    await page.getByText('仅登录窗口', { exact: true }).click();
-    await page.getByText('账号密码', { exact: true }).click();
-    assert.equal(await page.getByRole('radio', { name: '仅登录窗口' }).isChecked(), true);
-    assert.equal(await page.getByRole('radio', { name: '账号密码' }).isChecked(), true);
-    assert.equal(await page.getByRole('radio', { name: '本机充值' }).isChecked(), false);
-    assert.equal(await page.getByRole('radio', { name: '授权 JSON' }).isChecked(), false);
-    await page
-      .locator('.recharge-entry-panel')
-      .getByLabel('ChatGPT 账号')
-      .fill('fixture@example.test');
-    await page.locator('.recharge-entry-panel').getByLabel('登录密码').fill('local-password');
-    await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').fill('JBSWY3DPEHPK3PXP');
-    // The direct protocol suite below exercises login and 2FA against isolated Chromium.
-    // This fixture keeps the payment connector regression and prevents real Local API access.
-    await page.route(settings.localApiUrl + '/**', (route) => route.abort('blockedbyclient'));
-    await page.getByRole('button', { name: '打开比特浏览器并登录' }).click();
-    await page.locator('.recharge-error').filter({ hasText: '网页无法访问比特浏览器' }).waitFor();
-    assert.equal(apiStarts, 1);
-    assert.equal(connectorStarts, 1);
-    assert.equal(loginCodeSubmissions, 0);
-    assert.equal(
-      await page.locator('.recharge-entry-panel').getByLabel('登录密码').inputValue(),
-      'local-password'
-    );
-    assert.equal(
-      await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').inputValue(),
-      'JBSWY3DPEHPK3PXP'
-    );
-
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
-    );
-    assert.equal(overflow, false, `${width}px 页面横向溢出`);
+    assert.equal(await form.getByLabel('安全码', { exact: true }).inputValue(), '');
+    assert.equal(await form.getByRole('checkbox', { name: /我已核对银行卡/ }).isChecked(), false);
+    assert.equal(await form.getByRole('combobox', { name: /ChatGPT 账号/ }).inputValue(), '');
+    assert.match(await form.locator('.el-select').first().innerText(), /fixture@example.test/);
+    assert.ok(await form.getByText(address.line1, { exact: true }).count());
     assert.deepEqual(errors, []);
-    await page.waitForTimeout(400);
-    await page.screenshot({ path: resolve(evidence, `${width}.png`), fullPage: true });
+    assert.deepEqual(forbidden, []);
+    report.cases.push({
+      width,
+      apiStarts,
+      starts,
+      confirmations,
+      themes: ['light', 'dark'],
+      draftRouteRetention: 'PASS',
+      oneTimeSecretsClearedOnRoute: 'PASS',
+      refreshRetainsSuccess: 'PASS',
+      result: 'PASS'
+    });
     await context.close();
   }
-  console.log(
-    JSON.stringify({
-      ok: true,
-      scope: proxySettingsOnly ? 'proxy-settings-only' : 'full',
-      evidence,
-      viewports: [1440, 768, 390],
-      flow: proxySettingsOnly
-        ? [
-            'default-autofill',
-            'catalog-selection',
-            'save-retry',
-            'unsaved-close-guard',
-            'manual-selection-preserved',
-            'reload-default',
-            'full-link-view',
-            'clear-default',
-            'independent-proxy-and-billing-countries',
-            'responsive-no-overflow'
-          ]
-        : [
-            'server-default-and-proxy-settings',
-            'automatic-local-json',
-            'registered-email',
-            'proxy-settings-save-retry',
-            'settings-close-and-reopen-retains-draft',
-            'saved-proxy-used-by-next-job',
-            'existing-group-and-tag-dropdowns',
-            'window-options-save-readback-and-launch',
-            'managed-static-proxy-readback-no-secret-copy-and-live-credential-clear',
-            'catalog-failure-empty-retry',
-            'blocked-connection-does-not-create-job',
-            'default-plus',
-            'unused-fixed-address',
-            'currency-and-amount-lock',
-            'server-metadata-only',
-            'local-secrets-only',
-            'human-verification-resume',
-            'single-payment-attempt',
-            'clear-card-after-paid-and-activated',
-            'direct-login-preflight-does-not-create-job',
-            'failed-direct-preflight-retains-login-input'
-          ],
-      realPaymentRequests: 0
-    })
-  );
+  writeFileSync(resolve(evidence, 'result.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log(JSON.stringify(report));
+} catch (error) {
+  if (lastPage && !lastPage.isClosed()) {
+    await lastPage.screenshot({ path: resolve(evidence, 'failure.png'), fullPage: true });
+    writeFileSync(resolve(evidence, 'failure.txt'), await lastPage.locator('body').innerText());
+  }
+  throw error;
 } finally {
   await browser?.close();
   server.kill('SIGTERM');
-}
-
-if (!proxySettingsOnly) {
-  const direct = spawnSync(
-    process.execPath,
-    [resolve('scripts/acceptance-v2-bitbrowser-direct.mjs')],
-    {
-      cwd: resolve('.'),
-      stdio: 'inherit'
-    }
-  );
-  assert.equal(direct.status, 0, '网页直连登录和验证码验收失败');
 }

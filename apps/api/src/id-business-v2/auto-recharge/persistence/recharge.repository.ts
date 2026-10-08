@@ -272,6 +272,7 @@ export class RechargeRepository {
           'operation',
           'upgrade_identifier',
           'target_plan',
+          'current_plan_before',
           'upgrade_invoice_identifier',
           'upgrade_payment_intent_identifier'
         ].some((key) => before[key] !== undefined && before[key] !== next[key])

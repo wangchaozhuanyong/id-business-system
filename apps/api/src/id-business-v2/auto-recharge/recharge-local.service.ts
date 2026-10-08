@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Optional } from '@nestjs/common';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
@@ -15,6 +16,7 @@ import {
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
+import { localBitBrowserLaunchOptions } from './recharge-browser-options';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeNameService } from './recharge-name.service';
@@ -22,6 +24,7 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
 import { hash, object, uuidPattern } from './recharge-validation';
+import { findOwnedRechargeBrowserProfile } from './recharge-job-helpers';
 import { rechargeUpgradeRecheckBinding } from './recharge-upgrade-protocol';
 import {
   persistLocalPaymentFacts,
@@ -69,7 +72,7 @@ export class RechargeLocalService {
         if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
         const active = await this.repository.findRunningJob(tx);
         if (active) throw new ConflictException('已有一笔充值任务执行中');
-        const address = await this.addressRepository.requireUnused(
+        const address = await this.addressRepository.requireAvailable(
           tx,
           operator.id,
           input.addressId
@@ -86,7 +89,7 @@ export class RechargeLocalService {
           throw new BadRequestException('锁定币种精度与自动充值设置不一致');
         }
         const account = input.chatgptAccountId
-          ? await this.bankAccounts?.requireActive(tx, input.chatgptAccountId)
+          ? await this.bankAccounts?.requireRechargeInspection(tx, input.chatgptAccountId)
           : null;
         if (input.chatgptAccountId && !account) {
           throw new BadRequestException('所选 ChatGPT 账号不可用');
@@ -127,6 +130,8 @@ export class RechargeLocalService {
             window_name: input.windowName,
             locked_currency: input.lockedCurrency,
             max_amount: input.maxAmount,
+            max_amount_minor: input.maxAmountMinor,
+            manual_payment_confirmation: true,
             payment_requests_sent: 0
           })
         });
@@ -144,11 +149,24 @@ export class RechargeLocalService {
             maxAmount: input.maxAmount,
             authorizeSinglePayment: true,
             chatgptAccountId: account?.id ?? null,
-            useSavedCredentials: input.useSavedCredentials
+            useSavedCredentials: input.useSavedCredentials,
+            manualPaymentConfirmation: true
           },
           remark: '创建本机比特浏览器单次充值任务'
         });
-        return { job, address, account };
+        const ownedProfile = account?.officialAccountKey
+          ? findOwnedRechargeBrowserProfile(
+              await this.repository.finishedJobsForAccount(
+                tx,
+                operator.id,
+                account.officialAccountKey,
+                input.id
+              ),
+              operator.id,
+              account.officialAccountKey
+            )
+          : undefined;
+        return { job, address, account, ownedProfile };
       },
       {
         changedScopes: ['auto-recharge'],
@@ -161,17 +179,15 @@ export class RechargeLocalService {
     return {
       id: result.job.id,
       mode: 'payment' as const,
-      connectorUrl: runtime.connectorUrl,
+      ...(result.ownedProfile ? { ownedProfile: result.ownedProfile } : {}),
+      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
       connectorToken: runtime.connectorToken,
       agentToken,
       ...(input.useSavedCredentials && result.account
         ? { savedLogin: this.bankAccounts!.savedLogin(result.account) }
         : {}),
       bitBrowser: {
-        localApiUrl: runtime.localApiUrl,
-        localApiToken: runtime.localApiToken,
-        groupName: runtime.groupName,
-        tagName: runtime.tagName,
+        ...localBitBrowserLaunchOptions(runtime),
         proxyType: selectedProxy?.type ?? runtime.proxyType,
         dynamicProxyUrl:
           selectedProxy?.mode === 'dynamic'
@@ -199,6 +215,7 @@ export class RechargeLocalService {
       address: {
         id: result.address.id,
         line1: result.address.line1,
+        line2: result.address.line2 ?? '',
         country: result.address.country,
         city: result.address.city,
         state: result.address.state,
@@ -208,7 +225,8 @@ export class RechargeLocalService {
         lockedCurrency: input.lockedCurrency,
         maxAmount: input.maxAmount,
         maxAmountMinor: input.maxAmountMinor,
-        authorizeSinglePayment: true
+        authorizeSinglePayment: true,
+        manualPaymentConfirmation: true
       }
     };
   }
@@ -265,19 +283,10 @@ export class RechargeLocalService {
     return {
       id: input.id,
       mode: 'open_browser' as const,
-      connectorUrl: runtime.connectorUrl,
+      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
       connectorToken: runtime.connectorToken,
       agentToken,
-      bitBrowser: {
-        localApiUrl: runtime.localApiUrl,
-        localApiToken: runtime.localApiToken,
-        groupName: runtime.groupName,
-        tagName: runtime.tagName,
-        proxyType: runtime.proxyType,
-        dynamicProxyUrl: runtime.dynamicProxyUrl,
-        browserOptions: runtime.browserOptions,
-        staticProxyCredentials: runtime.staticProxyCredentials
-      }
+      bitBrowser: localBitBrowserLaunchOptions(runtime)
     };
   }
 
@@ -305,7 +314,7 @@ export class RechargeLocalService {
           source.ownerId !== operator.id ||
           !source.accountKey ||
           source.plan !== input.plan ||
-          !['prepare', 'flow', 'bitbrowser'].includes(source.action) ||
+          !['prepare', 'flow', 'bitbrowser', 'server'].includes(source.action) ||
           !paymentAttempted ||
           sourceResult.recheck_only === true ||
           sourceResult.payment_status === 'declined' ||
@@ -366,19 +375,10 @@ export class RechargeLocalService {
       id: job.id,
       mode: 'recheck' as const,
       ...(job.upgradeIdentifier ? { upgradeIdentifier: job.upgradeIdentifier } : {}),
-      connectorUrl: runtime.connectorUrl,
+      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
       connectorToken: runtime.connectorToken,
       agentToken,
-      bitBrowser: {
-        localApiUrl: runtime.localApiUrl,
-        localApiToken: runtime.localApiToken,
-        groupName: runtime.groupName,
-        tagName: runtime.tagName,
-        proxyType: runtime.proxyType,
-        dynamicProxyUrl: runtime.dynamicProxyUrl,
-        browserOptions: runtime.browserOptions,
-        staticProxyCredentials: runtime.staticProxyCredentials
-      }
+      bitBrowser: localBitBrowserLaunchOptions(runtime)
     };
   }
 
@@ -470,7 +470,7 @@ export class RechargeLocalService {
       sourceJobId: prepared.sourceJobId,
       verificationJobId: prepared.verificationJobId,
       mode: 'resolve_unknown_payment' as const,
-      connectorUrl: runtime.connectorUrl,
+      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
       connectorToken: runtime.connectorToken,
       agentToken
     };
@@ -499,7 +499,10 @@ export class RechargeLocalService {
       throw new ConflictException('本次本机任务已结束');
     }
     const runtime = await this.settings.runtime(operator.id);
-    return { connectorUrl: runtime.connectorUrl, connectorToken: runtime.connectorToken };
+    return {
+      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
+      connectorToken: runtime.connectorToken
+    };
   }
 
   async abandonUnreceived(id: string, operator: AuthenticatedUser) {

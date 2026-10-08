@@ -219,7 +219,7 @@ describe('本机任务持久化边界', () => {
       createJob: vi.fn().mockImplementation((_tx, data) => ({ id: data.id }))
     };
     const addressRepository = {
-      requireUnused: vi.fn().mockResolvedValue({
+      requireAvailable: vi.fn().mockResolvedValue({
         id: addressId,
         line1: '1221 SW Fourth Avenue',
         country: 'US',
@@ -600,7 +600,7 @@ describe('本机任务持久化边界', () => {
     expect(launch).toMatchObject({
       id,
       mode: 'open_browser',
-      connectorUrl: runtime.connectorUrl,
+      connectorUrl: 'http://127.0.0.1:55322',
       connectorToken: runtime.connectorToken,
       bitBrowser: expect.objectContaining({ localApiUrl: runtime.localApiUrl })
     });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   browserFailureLabel,
   accountVerificationLabel,
+  officialCurrentPlanLabel,
   executionStageLabel,
   sessionPhaseLabel,
   currencyOptions,
@@ -27,6 +28,23 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('升级前 Go 与官网最终 Plus 分开，不把历史套餐当作当前套餐', () => {
+    expect(
+      officialCurrentPlanLabel(
+        job({
+          result: {
+            current_plan_before: 'go',
+            current_plan: 'plus',
+            operation: 'subscription_upgrade'
+          }
+        })
+      )
+    ).toBe('Plus');
+    expect(
+      officialCurrentPlanLabel(job({ result: { current_plan_before: 'go', target_plan: 'plus' } }))
+    ).toBe('尚未核实');
+    expect(officialCurrentPlanLabel(job({ result: { current_plan: 'free' } }))).toBe('免费版');
+  });
   it('原窗口接管失败区分绑定、验证区、敏感字段和超时，内部错误码不直接展示', () => {
     expect(failureReasonLabel('handoff_binding_changed')).toContain('绑定已变化');
     expect(failureReasonLabel('handoff_frame_unavailable')).toContain('验证区域不可用');

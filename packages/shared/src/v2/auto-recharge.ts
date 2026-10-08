@@ -32,6 +32,8 @@ export interface V2RechargeMoney {
 export interface V2RechargeQuote {
   plan: V2RechargePlan;
   today: V2RechargeMoney | null;
+  /** 仅展示官网明确返回的订阅折抵。 */
+  credit?: V2RechargeMoney | null;
   tax: V2RechargeMoney | null;
   tax_status?: string;
   renewal: V2RechargeMoney | null;
@@ -126,7 +128,10 @@ export interface V2RechargeResult {
   subscription_status?: string;
   recheck_plan?: V2RechargePlan;
   checkout_identifier?: string;
+  /** 仅本机助手当前状态中可读取，禁止持久化单次确认凭据。 */
   nonce?: string;
+  quote_digest?: string;
+  confirmation_expires_at?: string;
   card_last4?: string;
   browser_profile_id?: string;
   window_name?: string;
@@ -391,6 +396,7 @@ export interface V2RechargeBitBrowserStart {
   chatgptAccountId?: string;
   useSavedCredentials?: boolean;
   expectedEmail?: string;
+  manualPaymentConfirmation?: true;
 }
 
 export interface V2RechargeBitBrowserRecheckStart {
@@ -400,9 +406,17 @@ export interface V2RechargeBitBrowserRecheckStart {
   windowName: string;
 }
 
+/** 已有成功充值窗口的归属证明；复用前仍须在官网核对当前账号。 */
+export interface V2RechargeOwnedBrowserProfile {
+  sourceJobId: string;
+  profileId: string;
+  accountKey: string;
+}
+
 export interface V2RechargeBitBrowserLaunch {
   id: string;
   mode: 'payment';
+  ownedProfile?: V2RechargeOwnedBrowserProfile;
   connectorUrl: string;
   connectorToken: string;
   agentToken: string;
@@ -417,13 +431,24 @@ export interface V2RechargeBitBrowserLaunch {
     browserOptions?: V2RechargeBrowserOptions;
     staticProxyCredentials?: V2RechargeStaticProxyCredentials;
   };
-  address: Pick<V2RechargeAddress, 'id' | 'line1' | 'country' | 'city' | 'state' | 'postalCode'>;
+  address: Pick<
+    V2RechargeAddress,
+    'id' | 'line1' | 'line2' | 'country' | 'city' | 'state' | 'postalCode'
+  >;
   safety: {
     lockedCurrency: string;
     maxAmount: string;
     maxAmountMinor: number;
     authorizeSinglePayment: true;
+    manualPaymentConfirmation: true;
   };
+}
+
+/** 注册仍使用旧端口；充值助手使用独立进程，兼容已有默认连接设置。 */
+export function normalizeV2RechargeConnectorUrl(value: string) {
+  const url = new URL(value);
+  if (url.port === '55321') url.port = '55322';
+  return url.toString().replace(/\/$/, '');
 }
 
 export interface V2RechargeBitBrowserOpenStart {

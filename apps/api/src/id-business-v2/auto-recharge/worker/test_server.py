@@ -17,6 +17,23 @@ from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_server_recharge_new_job_endpoint_is_retired_without_browser_side_effects(self):
+        handler = object.__new__(server.Handler)
+        handler.path = '/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        handler.headers = {'X-Recharge-Worker': 'fixture-worker-auth'}
+        body = {'action': 'server', 'plan': 'plus'}
+        encoded = json.dumps(body).encode()
+        handler.headers['Content-Length'] = str(len(encoded))
+        handler.rfile = io.BytesIO(encoded)
+        handler.reply = unittest.mock.Mock()
+        with (patch.object(server, 'TOKEN', 'fixture-worker-auth'),
+              patch.object(server, 'Job') as create_job,
+              patch.object(server, 'WORKER_ROLE', 'recharge')):
+            handler.do_POST()
+        self.assertEqual(handler.reply.call_args.args, (410, {
+            'ok': False, 'reason': 'server_recharge_retired'}))
+        create_job.assert_not_called()
+
     def test_registration_dispatch_refusal_returns_only_controlled_reason(self):
         handler = object.__new__(server.Handler)
         handler.path = '/registration/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'

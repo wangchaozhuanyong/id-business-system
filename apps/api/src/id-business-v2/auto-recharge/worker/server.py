@@ -1092,13 +1092,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with self.lock:
                 if len(parts) == 2:
-                    if self.job and not self.job.done:
-                        self.reply(409, {"ok": False})
-                        return
-                    if body.get("plan") not in PLANS or body.get("action") not in {"check", "quote", "prepare", "recheck", "flow", "server"}:
-                        raise ValueError()
-                    Handler.job = Job(parts[1], body)
-                    threading.Thread(target=Handler.job.run, daemon=True).start()
+                    # New recharge browser work is local BitBrowser only. Existing
+                    # tasks may still be cancelled; registration remains separate.
+                    self.reply(410, {"ok": False, "reason": "server_recharge_retired"})
+                    return
                 elif len(parts) == 3 and parts[2] in {"details", "confirm", "cancel"}:
                     if (not self.job or self.job.id != parts[1] or self.job.done
                             or isinstance(self.job, registration_builtin.RegistrationServerJob)):

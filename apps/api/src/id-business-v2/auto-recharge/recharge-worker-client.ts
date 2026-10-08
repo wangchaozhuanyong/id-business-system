@@ -33,6 +33,8 @@ export async function sendRechargeWorkerRequest(
   id: string,
   receipt: WorkerReceipt
 ): Promise<RechargeWorkerDelivery> {
+  if (receipt !== 'cancelled')
+    throw new ServiceUnavailableException('服务器充值已停用，请使用比特浏览器充值');
   if (!isRechargeWorkerConfigured()) {
     throw new ServiceUnavailableException('服务器执行器尚未配置');
   }

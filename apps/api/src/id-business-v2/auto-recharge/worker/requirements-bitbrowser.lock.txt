@@ -1,0 +1,6 @@
+# Control the existing BitBrowser Chromium over CDP. No browser download or server browser runtime.
+# Versions are identical to the existing worker lock.
+greenlet==3.5.5
+playwright==1.62.0
+pyee==13.0.1
+typing_extensions==4.16.0

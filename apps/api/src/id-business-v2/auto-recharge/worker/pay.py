@@ -293,14 +293,13 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
     if session_budget:
         session_budget.phase = ("subscription_check" if target_plan in {"pro-5x", "pro-20x", "pro-500"}
                                 else "checkout_check")
-    if target_plan not in {"pro-5x", "pro-20x", "pro-500"}:
-        return await run_checkout_flow(target, state_dir, target_plan, details_reader=details_reader,
-            confirmer=confirmer, wait_seconds=wait_seconds, poll_count=poll_count,
-            poll_interval=poll_interval, browser=browser, browser_context=browser_context,
-            session_budget=session_budget, allow_checkout_replacement=allow_checkout_replacement,
-            expected_country=expected_country)
 
     async def dispatch(page, guard, identity):
+        if subscription_match(target_plan, identity["current_plan"], identity.get("current_tier")) == "matched":
+            return {"status": "already_subscribed", "reason": "target_subscription_already_active",
+                    "stage": "subscription_check", "account_matched": True,
+                    "target_plan": target_plan, "payment_attempted": False,
+                    "payment_requests_sent": 0, **identity}
         operation = subscription_transition(identity["current_plan"], target_plan)
         # 选择实际订阅路径后，移除仅供前置只读核验的拦截器。
         await page.context.unroute("**/*", guard.route)

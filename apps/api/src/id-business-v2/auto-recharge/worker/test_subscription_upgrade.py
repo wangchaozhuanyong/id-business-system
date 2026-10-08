@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlencode, urlsplit
 
 from playwright.async_api import async_playwright
@@ -55,9 +55,10 @@ class UpgradeStateTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_only_free_or_plus_to_pro_transition_allowed(self):
+    def test_only_free_go_to_plus_or_plus_to_pro_transition_allowed(self):
         for plan in ('plus', 'go', 'pro-5x', 'pro-20x', 'pro-500'):
             self.assertEqual(subscription_transition('free', plan), 'new_subscription')
+        self.assertEqual(subscription_transition('go', 'plus'), 'subscription_upgrade')
         for plan in ('pro-5x', 'pro-20x', 'pro-500'):
             self.assertEqual(subscription_transition('plus', plan), 'subscription_upgrade')
         for current, target in (('plus', 'plus'), ('plus', 'go'), ('go', 'pro-20x'),
@@ -79,6 +80,10 @@ class UpgradeStateTests(unittest.TestCase):
         self.assertEqual(quote['today']['amount_minor'], 40000)
         self.assertEqual(quote['renewal']['amount_minor'], 42000)
         self.assertEqual(quote['today']['amount'], '400.00')
+        self.assertEqual(quote['credit'], minor_money('MYR', 2000))
+        no_credit = {**preview(), 'negative_line_item_total': 0,
+                     'amount_due': {'amount': 42000, 'amount_excluding_tax': 42000, 'tax_amount': 0}}
+        self.assertNotIn('credit', preview_quote(no_credit, 'pro-20x', minor_money('MYR', 42000)))
         for bad in ({'amount_due': {'amount': 40000, 'amount_excluding_tax': 40000, 'tax_amount': 1}},
                     {'negative_line_item_total': 2000}, {'positive_line_item_total': 42000.0},
                     {'applied_balance': -100}, {'discount_amount': 10}):
@@ -107,6 +112,25 @@ class UpgradeStateTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 ledger.begin(record['quote'], '4242')
         self.assertEqual(path.read_bytes(), before)
+
+    def test_same_account_go_then_plus_then_pro_preserves_successful_upgrade_history(self):
+        go_quote = {**preview_quote(preview(), 'plus', minor_money('MYR', 42000)),
+                    'operation': 'subscription_upgrade', 'current_plan_before': 'go'}
+        with UpgradeLedger(self.root, self.target.account_id, 'plus') as ledger:
+            ledger.begin(go_quote, '4242')
+            ledger.update(confirmation_requests_sent=1, upgrade_invoice_identifier='in_SyntheticGo',
+                          payment_status='paid', payment_evidence={
+                              'kind': 'invoice', 'identifier': 'in_SyntheticGo',
+                              'currency': 'MYR', 'amount_minor': 40000},
+                          status='subscription_activated', current_plan='plus', subscription_status='plus')
+            previous_path, before = ledger.path, ledger.path.read_bytes()
+        with UpgradeLedger(self.root, self.target.account_id, 'pro-20x') as ledger:
+            ledger.begin(preview_quote(preview(), 'pro-20x', minor_money('MYR', 42000)), '4242')
+            self.assertEqual(ledger.record['current_plan_before'], 'plus')
+        self.assertEqual(previous_path.read_bytes(), before)
+        with self.assertRaises(Stop):
+            with UpgradeLedger(self.root, self.target.account_id, 'plus'):
+                pass
 
     def test_unknown_original_payment_is_never_ignored_for_upgrade(self):
         folder = self.root / 'payments'
@@ -511,6 +535,80 @@ class UpgradeThreeDSGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.record['confirmation_requests_sent'], 0)
 
 
+class GoToPlusLocalContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_go_to_plus_uses_official_upgrade_without_new_checkout(self):
+        import subscription_upgrade as upgrade
+        OUTPUT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as folder:
+            target = parse_browser_credential(fixture())
+            root = Path(folder) / 'go-to-plus'
+            guard_holder = {}
+            context = SimpleNamespace(route=AsyncMock(), unroute=AsyncMock())
+            frame = Frame('https://chatgpt.com/')
+            page = SimpleNamespace(context=context, main_frame=frame)
+            async def bind(pattern, handler):
+                guard_holder['guard'] = handler.__self__
+            context.route.side_effect = bind
+            subscription = {'account_id': target.account_id, 'plan_type': 'go',
+                            'is_processor_stripe': True, 'is_delinquent': False,
+                            'will_renew': True, 'scheduled_billing_period': None}
+            async def read(*args):
+                plan = 'plus' if guard_holder['guard'].sent else 'go'
+                return target, {'account_matched': True, 'current_plan': plan}, {**subscription, 'plan_type': plan}
+            events = []
+            async def click():
+                guard = guard_holder['guard']
+                if not guard.approved:
+                    return
+                request = SimpleNamespace(method='POST', url='https://chatgpt.com' + upgrade.UPGRADE_PATH,
+                    post_data_json={'account_id': target.account_id, 'updated_plan': 'chatgptplusplan',
+                                    'payment_method_id': 'pm_Synthetic'}, frame=frame,
+                    headers={'authorization': 'Bearer ' + target.old_token,
+                             'chatgpt-account-id': target.account_id})
+                route = SimpleNamespace(request=request, fallback=AsyncMock(), abort=AsyncMock())
+                await guard.route(route)
+                self.assertEqual(route.fallback.await_count, 1)
+                events.append('upgrade_update')
+                guard.upgrade_ledger.update(upgrade_invoice_identifier='in_SyntheticGo')
+                guard.observe({'object': 'invoice', 'id': 'in_SyntheticGo', 'status': 'paid', 'paid': True,
+                               'amount_paid': 40000, 'currency': 'myr'})
+                guard.upgrade_ledger.update(status='subscription_activated', current_plan='plus',
+                                           subscription_status='plus')
+            button = SimpleNamespace(click=AsyncMock(side_effect=click))
+            def confirm(quote, last4):
+                self.assertEqual(quote['current_plan_before'], 'go')
+                self.assertEqual(quote['plan'], 'plus')
+                self.assertEqual(quote['quote_authority'], 'official_upgrade_preview')
+                self.assertEqual(quote['credit']['amount_minor'], 2000)
+                self.assertEqual(guard_holder['guard'].sent, 0)
+                events.append('human_confirmed')
+                return True
+            async def inspect(page, target, ledger, guard, **kwargs):
+                return {**ledger.record, 'status': 'subscription_activated', 'payment_requests_sent': guard.sent}
+            with (patch.object(upgrade, 'read_subscription', AsyncMock(side_effect=read)),
+                  patch.object(upgrade, 'browser_read', AsyncMock(return_value=preview())),
+                  patch.object(upgrade, 'select_plan', AsyncMock(return_value=button)) as select,
+                  patch.object(upgrade, 'verify_selected_plan', AsyncMock()),
+                  patch.object(upgrade, 'visible_renewal', AsyncMock(return_value=minor_money('MYR', 42000))),
+                  patch.object(upgrade, 'verify_preview_dom', AsyncMock(return_value=button)),
+                  patch.object(upgrade, 'prepare_upgrade_card', AsyncMock(return_value='pm_Synthetic')),
+                  patch.object(upgrade, 'verify_selected_upgrade_card', AsyncMock(return_value='pm_Synthetic')),
+                  patch.object(upgrade, 'wait_upgrade_authentication', AsyncMock()),
+                  patch.object(upgrade, 'UpgradeResponseObservers', return_value=SimpleNamespace(finish=AsyncMock())),
+                  patch.object(upgrade, 'inspect_upgrade', AsyncMock(side_effect=inspect)),
+                  patch.object(upgrade, 'progress', MagicMock())):
+                result = await run_upgrade_in_context(page, target, root, 'plus',
+                    details_reader=lambda _: details(), confirmer=confirm, poll_count=1)
+            self.assertEqual(result['status'], 'subscription_activated')
+            self.assertEqual(result['current_plan_before'], 'go')
+            self.assertEqual(result['confirmation_requests_sent'], 1)
+            self.assertEqual(result['payment_requests_sent'], 1)
+            self.assertEqual(events, ['human_confirmed', 'upgrade_update'])
+            self.assertEqual(select.call_args.args[:2], (page, 'plus'))
+            self.assertTrue(select.call_args.kwargs['require_upgrade'])
+            # Receipt is synthetic; no browser or real website was contacted.
+
+
 @unittest.skipUnless(os.environ.get('V2_PAYMENT_3DS_BROWSER_TEST') == '1', '本地浏览器夹具需显式启用')
 class UpgradeBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -839,15 +937,22 @@ class UpgradeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recheck['payment_evidence']['kind'], 'invoice')
         self.assertEqual(recheck['payment_requests_sent'], 0)
         self.assertEqual(self.updates, 1)
+        original_path = next((self.root / 'payments').glob('*.json'))
+        before = original_path.read_bytes()
         repeated = await self.flow()
-        self.assertEqual(repeated['reason'], 'incompatible_existing_subscription')
+        self.assertEqual(repeated['status'], 'already_subscribed')
+        self.assertEqual(repeated['reason'], 'target_subscription_already_active')
+        self.assertFalse(repeated['payment_attempted'])
+        self.assertEqual(original_path.read_bytes(), before)
         self.assertEqual(self.updates, 1)
 
     async def test_active_same_plan_or_unknown_account_never_upgrade(self):
         for plan in ('pro', 'go', 'team'):
             self.plan = plan
             result = await self.flow()
-            self.assertEqual(result['reason'], 'incompatible_existing_subscription', result)
+            self.assertEqual(result['reason'], 'target_subscription_already_active' if plan == 'pro'
+                             else 'incompatible_existing_subscription', result)
+            self.assertFalse(result.get('payment_attempted', False))
             self.assertEqual(self.updates, 0)
             self.assertEqual(self.creates, 0)
 

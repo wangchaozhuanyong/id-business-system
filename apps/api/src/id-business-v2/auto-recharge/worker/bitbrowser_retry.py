@@ -1,5 +1,6 @@
 """Retry read-only and pre-payment failures in windows explicitly owned by the job."""
 import asyncio
+import hashlib
 import re
 import time
 
@@ -87,7 +88,7 @@ async def execute_profiles(job, client, target, playwright):
     if job.cancelled and job.payload["mode"] == "payment" and not job.payment_request_sent:
         cleanup = "not_needed"
         try:
-            if job.profile_id:
+            if job.profile_id and job.profile_id in owned:
                 await cleanup_profile(job, client, owned, cancelling=True)
                 cleanup = "completed"
         except Stop:
@@ -134,11 +135,81 @@ async def cancellable_flow(job, target, **kwargs):
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def attach_profile(job, client, playwright, profile_id, options):
+    job.profile_id = profile_id
+    endpoint = await asyncio.to_thread(client.open_profile, profile_id)
+    browser = await playwright.chromium.connect_over_cdp(endpoint)
+    bitbrowser_options.verify_runtime_version(getattr(browser, "version", None), options["coreVersion"])
+    if not browser.contexts:
+        raise Stop("bitbrowser_context_missing")
+    job.context = browser.contexts[0]
+    return browser
+
+
+async def reuse_owned_profile(job, client, playwright, target, options, expected_email=None):
+    """An API-proven recharge profile is still untrusted until its live identity matches.
+
+    Never inject JSON cookies before this check: the user may have switched the
+    window to another account since the previous successful payment.
+    """
+    from checkout_core import BrowserCredential
+    from browser_checkout import check_session
+    from urllib.parse import urlsplit
+    owned_profile = dict(job.owned_profile)
+    profile_id = owned_profile["profileId"]
+    detail = await asyncio.to_thread(client.post, "/browser/detail", {"id": profile_id})
+    if not isinstance(detail, dict) or detail.get("id") != profile_id:
+        raise Stop("owned_recharge_window_unavailable", user_action_required=True)
+    await attach_profile(job, client, playwright, profile_id, options)
+    async def read_guard(route):
+        request = route.request
+        if browser_password_login.login_payment_write(request.method, request.url):
+            await route.abort("blockedbyclient")
+        else:
+            await route.fallback()
+    await job.context.route("**/*", read_guard)
+    page = next((p for p in job.context.pages if urlsplit(p.url).hostname == "chatgpt.com"), None)
+    page = page or await job.context.new_page()
+    page.set_default_timeout(20000)
+    try:
+        if urlsplit(page.url).hostname != "chatgpt.com":
+            await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=20000)
+        # check_session only reads the existing session/account; it does not add cookies.
+        if target is None:
+            observed = await browser_password_login.official_identity(page, expected_email, strict=True)
+            if observed is None:
+                raise Stop("owned_recharge_window_login_required", user_action_required=True)
+            target, identity = observed
+            if hashlib.sha256(target.account_id.encode()).hexdigest() != owned_profile["accountKey"]:
+                raise Stop("official_account_mismatch", account_matched=False)
+            # The launch profile is only a hint until the current API job's
+            # authoritative restore confirms this exact owner/account/source.
+            job.restore_account(target)
+            if job.owned_profile != owned_profile:
+                raise Stop("owned_recharge_window_unverified", account_matched=False)
+        refreshed, identity = await check_session(page, target)
+        if identity.get("account_matched") is not True or hashlib.sha256(target.account_id.encode()).hexdigest() != job.account_key:
+            raise Stop("official_account_mismatch", account_matched=False)
+    except Stop as exc:
+        if exc.report.get("reason") in {"official_user_mismatch", "official_account_mismatch", "official_login_email_mismatch",
+                                      "owned_recharge_window_unverified", "durable_state_unavailable",
+                                      "invalid_owned_recharge_profile"}:
+            raise
+        raise Stop("owned_recharge_window_login_required", user_action_required=True,
+                   browser_profile_id=profile_id) from None
+    finally:
+        await job.context.unroute("**/*", read_guard)
+    job.progress("owned_recharge_window_verified", account_matched=True,
+                 current_plan=identity["current_plan"], browser_profile_reused=True)
+    # Preserve the verified live session; never replace it with the older JSON cookie.
+    return BrowserCredential("", target.account_id, target.user_id, refreshed.token)
+
+
 async def _execute_profiles(job, client, target, playwright, owned):
     bit = job.payload["bitBrowser"]
     options = bitbrowser_options.validate_options(bit.get("browserOptions"))
     attempts = (options["sessionRetryLimit"] + 1 if job.payload["mode"] == "payment"
-                and target is not None else 1)
+                and target is not None and job.owned_profile is None else 1)
     for attempt in range(1, attempts + 1):
         job.check_cancelled()
         job.session_info = {"session_attempt": attempt, "session_attempt_limit": attempts,
@@ -146,18 +217,25 @@ async def _execute_profiles(job, client, target, playwright, owned):
                             "session_wait_seconds": options["sessionWaitMinutes"] * 60,
                             "session_step": "page_load", "session_refresh_count": 0}
         job.initial_session_verified = False
-        job.progress("bitbrowser_group")
-        profile_id = await asyncio.to_thread(client.create_profile, bit, job.payload["windowName"].strip())
-        job.profile_id = profile_id
-        owned.add(profile_id)
-        job.progress("bitbrowser_profile_created")
-        endpoint = await asyncio.to_thread(client.open_profile, profile_id)
-        job.progress("bitbrowser_profile_opened")
-        browser = await playwright.chromium.connect_over_cdp(endpoint)
-        bitbrowser_options.verify_runtime_version(getattr(browser, "version", None), options["coreVersion"])
-        if not browser.contexts:
-            raise Stop("bitbrowser_context_missing")
-        job.context = browser.contexts[0]
+        if job.owned_profile is not None:
+            if target is None:
+                login = job.payload.pop("login")
+                try:
+                    target = await reuse_owned_profile(job, client, playwright, None, options, login["email"])
+                finally:
+                    login.clear()
+                await cleanup_stale_profiles(job, client)
+            else:
+                target = await reuse_owned_profile(job, client, playwright, target, options)
+            profile_id = job.profile_id
+        else:
+            job.progress("bitbrowser_group")
+            profile_id = await asyncio.to_thread(client.create_profile, bit, job.payload["windowName"].strip())
+            owned.add(profile_id)
+            job.profile_id = profile_id
+            job.progress("bitbrowser_profile_created")
+            await attach_profile(job, client, playwright, profile_id, options)
+            job.progress("bitbrowser_profile_opened")
         job.check_cancelled()
         if target is None:
             async def login_guard(route):
@@ -185,6 +263,11 @@ async def _execute_profiles(job, client, target, playwright, owned):
             job.check_cancelled()
             job.restore_account(target)
             await cleanup_stale_profiles(job, client)
+            if job.owned_profile is not None:
+                await cleanup_profile(job, client, owned)
+                target = await reuse_owned_profile(job, client, playwright, target, options)
+                profile_id = job.profile_id
+                attempts = attempt
             job.progress("login_verified", account_matched=True,
                          current_plan=identity["current_plan"])
         if job.payload["mode"] == "recheck":
@@ -235,7 +318,7 @@ async def _execute_profiles(job, client, target, playwright, owned):
             confirmer=job.confirm, wait_seconds=1800, poll_count=6, poll_interval=20,
             browser_context=job.context, session_budget=budget)
         result.update(job.session_info)
-        if not retryable_session_result(result):
+        if job.owned_profile is not None or not retryable_session_result(result):
             return result
         job.check_cancelled()
         result.update(session_elapsed_seconds=min(int(budget.elapsed), budget.seconds),

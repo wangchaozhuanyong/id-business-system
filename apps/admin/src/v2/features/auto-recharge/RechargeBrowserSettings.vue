@@ -183,6 +183,9 @@
           <legend>{{ directMode ? '网页直连' : '本机连接' }}</legend>
           <el-form-item v-if="!directMode" label="本机连接器地址" prop="connectorUrl" required>
             <el-input v-model="settingsForm.connectorUrl" />
+            <p class="recharge-settings-note">
+              充值使用独立的本机助手；标准服务地址会连接充值端口，注册沿用原连接。
+            </p>
           </el-form-item>
           <el-form-item label="比特接口地址" prop="localApiUrl" required>
             <el-input v-model="settingsForm.localApiUrl" />

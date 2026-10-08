@@ -1,4 +1,4 @@
-"""官网 Plus→Pro 原订阅变更：只读预览、持久化后唯一 update、原单只读复查。"""
+"""官网 Go→Plus / Plus→Pro 原订阅变更：只读预览、持久化后唯一 update、原单只读复查。"""
 from __future__ import annotations
 
 import asyncio
@@ -72,6 +72,8 @@ def preview_quote(data, target_plan, renewal=None):
     quote = {'plan': target_plan, 'today': minor_money(currency, amount),
              'tax': minor_money(currency, tax), 'renewal': renewal,
              'renewal_interval': 'monthly'}
+    if negative < 0:
+        quote['credit'] = minor_money(currency, -negative)
     quote_digest(quote)
     return quote
 
@@ -102,13 +104,29 @@ def paid_evidence(data, record):
     return None
 
 
+def valid_upgrade_source(source_plan, target_plan):
+    return ((source_plan == 'go' and target_plan == 'plus')
+            or (source_plan == 'plus' and target_plan in {'pro-5x', 'pro-20x', 'pro-500'}))
+
+
+def completed_prior_upgrade(record, target_plan):
+    # A previous unknown or incomplete payment always blocks a new operation.
+    # Only a fully closed Go→Plus result can precede Plus→Pro.
+    return (record.get('target_plan') == 'plus' and target_plan in {'pro-5x', 'pro-20x', 'pro-500'}
+            and record.get('current_plan_before') == 'go'
+            and record.get('payment_status') == 'paid' and record.get('payment_evidence') is not None
+            and record.get('status') == 'subscription_activated'
+            and record.get('subscription_status') == 'plus' and record.get('current_plan') == 'plus'
+            and record.get('confirmation_requests_sent') == 1)
+
+
 def validate_upgrade_record(record, account_key, target_plan, upgrade_id=None):
     if (not isinstance(record, dict) or record.get('schema_version') != 1
             or record.get('operation') != 'subscription_upgrade'
             or record.get('account_key') != account_key or record.get('target_plan') != target_plan
             or not UPGRADE_ID.fullmatch(str(record.get('upgrade_identifier', '')))
             or upgrade_id and record['upgrade_identifier'] != upgrade_id
-            or record.get('current_plan_before') != 'plus' or record.get('payment_attempted') is not True
+            or not valid_upgrade_source(record.get('current_plan_before'), target_plan) or record.get('payment_attempted') is not True
             or type(record.get('confirmation_requests_sent')) is not int
             or record['confirmation_requests_sent'] not in (0, 1)
             or record.get('payment_status') not in {'unknown', 'paid', 'declined', 'requires_action'}
@@ -137,7 +155,7 @@ def validate_upgrade_record(record, account_key, target_plan, upgrade_id=None):
 class UpgradeLedger:
     def __init__(self, root, account_id, target_plan, upgrade_id=None):
         self.root, self.account_id, self.target_plan = Path(root), account_id, target_plan
-        subscription_transition('plus', target_plan)
+        subscription_transition('go' if target_plan == 'plus' else 'plus', target_plan)
         if upgrade_id is not None and not UPGRADE_ID.fullmatch(upgrade_id):
             raise Stop('invalid_upgrade_identifier')
         self.account_key = hashlib.sha256(account_id.encode()).hexdigest()
@@ -170,14 +188,18 @@ class UpgradeLedger:
                             raise Stop('invalid_upgrade_record')
                         self.path, self.record = path, data
                         continue
+                    if completed_prior_upgrade(data, self.target_plan):
+                        continue
                     raise Stop('previous_upgrade_attempt_exists', upgrade_identifier=data['upgrade_identifier'],
                                recheck_plan=data['target_plan'], action='recheck_original_order_only')
-                # 只有同账户、明确已付款且已核实 Plus 的旧记录可作为升级历史。
+                # 同账户明确实付且官网核实的 Go/Plus 历史不会被覆盖。
                 if data.get('payment_attempted') is not True:
                     raise Stop('invalid_payment_record')
-                if (data.get('target_plan', 'plus') != 'plus' or data.get('payment_status') != 'paid'
-                        or data.get('status') != 'subscription_activated' or data.get('subscription_status') != 'plus'
-                        or data.get('current_plan') != 'plus' or data.get('confirmation_requests_sent') != 1):
+                prior_plan = data.get('target_plan', 'plus')
+                if (prior_plan not in {'go', 'plus'} or data.get('payment_status') != 'paid'
+                        or data.get('status') != 'subscription_activated' or data.get('subscription_status') != prior_plan
+                        or data.get('current_plan') != prior_plan or data.get('confirmation_requests_sent') != 1
+                        or prior_plan == self.target_plan or data.get('quote', {}).get('plan') != prior_plan):
                     raise Stop('account_has_other_payment_attempt', action='recheck_original_order_only',
                                recheck_plan=data.get('target_plan', 'plus'), checkout_identifier=data.get('checkout_identifier'))
                 validate_evidence(data.get('payment_evidence'), data.get('checkout_identifier'), data.get('quote'))
@@ -201,11 +223,14 @@ class UpgradeLedger:
             raise Stop('upgrade_marker_conflict')
         record = {'schema_version': 1, 'operation': 'subscription_upgrade',
                   'upgrade_identifier': self.upgrade_id, 'account_key': self.account_key,
-                  'target_plan': self.target_plan, 'current_plan_before': 'plus', 'quote': quote,
+                  'target_plan': self.target_plan,
+                  'current_plan_before': quote.get('current_plan_before', 'go' if self.target_plan == 'plus' else 'plus'),
+                  'quote': quote,
                   'quote_digest': quote_digest(quote), 'quote_authority': 'official_upgrade_preview',
                   'payment_attempted': True, 'confirmation_requests_sent': 0, 'payment_status': 'unknown',
                   'payment_evidence': None, 'card_last4': last4, 'created_at': int(time.time()),
                   'subscription_status': 'not_verified', 'status': 'payment_result_unknown'}
+        validate_upgrade_record(record, self.account_key, self.target_plan, self.upgrade_id)
         atomic_json(self.path, record)
         self.record = record
 
@@ -436,7 +461,7 @@ async def inspect_upgrade(page, target, ledger, guard, *, poll_count=1, poll_int
                 guard.observe(invoice)
         match = subscription_match(ledger.target_plan, identity['current_plan'], identity.get('current_tier'))
         # 本次官网 subscription 对象必须与核实的目标套餐一致，不能附旧Plus账期。
-        raw_plan = {'pro-5x': 'prolite', 'pro-20x': 'pro', 'pro-500': 'promax'}[ledger.target_plan]
+        raw_plan = {'plus': 'plus', 'pro-5x': 'prolite', 'pro-20x': 'pro', 'pro-500': 'promax'}[ledger.target_plan]
         period = safe_period(subscription, ledger) if (match == 'matched' and subscription.get('plan_type') == raw_plan
                  and ledger.record.get('payment_evidence')) else None
         record = ledger.record
@@ -453,7 +478,7 @@ async def inspect_upgrade(page, target, ledger, guard, *, poll_count=1, poll_int
         await asyncio.sleep(poll_interval)
 
 
-async def visible_renewal(page, currency):
+async def visible_renewal(page, currency, target_plan="pro-20x"):
     scope = await plan_scope(page)
     lines = [line.strip() for line in (await scope.inner_text()).splitlines() if line.strip()]
     candidates = []
@@ -461,7 +486,7 @@ async def visible_renewal(page, currency):
         if not PERIOD.search(line):
             continue
         # 官网 Kwt 目标套餐价格行紧邻 Billed monthly；年度或不明条款不推断。
-        if YEARLY.search(line) or i < 2 or not re.search(r'\bPro\b', lines[i - 2], re.I):
+        if YEARLY.search(line) or i < 2 or not re.fullmatch(r'\s*(?:ChatGPT\s+)?' + ('Plus' if target_plan == 'plus' else r'Pro(?:\s+(?:100|200|500))?') + r'\s*', lines[i - 2], re.I):
             raise Stop('upgrade_renewal_unverified')
         amount = money(lines[i - 1], currency)
         if not amount:
@@ -482,7 +507,7 @@ async def verify_preview_dom(page, quote, *, check_button=True):
     cadence = [line for line in text.splitlines() if PERIOD.search(line)]
     if len(cadence) != 1 or YEARLY.search(cadence[0]):
         raise Stop('upgrade_quote_unverified')
-    if not re.search(r'\bPro\b', text, re.I):
+    if not re.search(r'\b' + ('Plus' if quote['plan'] == 'plus' else 'Pro') + r'\b', text, re.I):
         raise Stop('upgrade_quote_plan_mismatch')
     if not check_button:
         return None
@@ -515,7 +540,8 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
                 return await inspect_upgrade(page, target, ledger, guard, poll_count=poll_count, poll_interval=poll_interval)
             refreshed, identity, subscription = await read_subscription(page, target)
             subscription_transition(identity['current_plan'], target_plan)
-            if (identity['current_plan'] != 'plus' or subscription.get('plan_type') != 'plus'
+            source_plan = identity['current_plan']
+            if (not valid_upgrade_source(source_plan, target_plan) or subscription.get('plan_type') != source_plan
                     or subscription.get('is_processor_stripe') is not True
                     or subscription.get('is_delinquent') is True
                     or subscription.get('will_renew') is not True
@@ -528,20 +554,20 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
             preview_path = PREVIEW_PATH + '?' + urlencode({'account_id': target.account_id,
                                                            'updated_plan': plan_spec(target_plan)['official_name']})
             preview = await browser_read(page, preview_path, refreshed)
-            renewal = await visible_renewal(page, str(preview.get('currency', '')).upper())
+            renewal = await visible_renewal(page, str(preview.get('currency', '')).upper(), target_plan)
             quote = {**preview_quote(preview, target_plan, renewal), 'operation': 'subscription_upgrade',
                      'upgrade_identifier': 'upg_' + uuid.uuid4().hex,
-                     'quote_authority': 'official_upgrade_preview'}
+                     'quote_authority': 'official_upgrade_preview', 'current_plan_before': source_plan}
             button = await verify_preview_dom(page, quote)
             progress('upgrade_quote_ready', operation='subscription_upgrade', quote=quote,
                      quote_authority='official_upgrade_preview', upgrade_identifier=quote['upgrade_identifier'],
-                     current_plan='plus', current_plan_before='plus', target_plan=target_plan, account_matched=True)
+                     current_plan=source_plan, current_plan_before=source_plan, target_plan=target_plan, account_matched=True)
             details = await asyncio.to_thread(details_reader, quote)
             method_id = await prepare_upgrade_card(page, target, details, guard.card_change,
                 credential=refreshed, wait_seconds=wait_seconds, cancelled=cancelled, progress=progress)
             # 换卡后重新读取官方差额、税费和月度续费，再授权本次唯一升级。
             preview = await browser_read(page, preview_path, refreshed)
-            renewal = await visible_renewal(page, str(preview.get('currency', '')).upper())
+            renewal = await visible_renewal(page, str(preview.get('currency', '')).upper(), target_plan)
             quote = {**quote, **preview_quote(preview, target_plan, renewal)}
             button = await verify_preview_dom(page, quote)
             network_before = await observe_page_network(page) if expected_country else None
@@ -554,12 +580,12 @@ async def run_upgrade_in_context(page, target, state_dir, target_plan, *, detail
             async def preflight(*, network_request=False):
                 cancelled()
                 latest, current, subscription_now = await read_subscription(page, target)
-                if current['current_plan'] != 'plus' or subscription_now.get('plan_type') != 'plus':
+                if current['current_plan'] != source_plan or subscription_now.get('plan_type') != source_plan:
                     raise Stop('incompatible_existing_subscription')
                 if expected_country and await observe_page_network(page) != network_before:
                     raise Stop('proxy_ip_changed_during_login')
                 current_preview = await browser_read(page, preview_path, latest)
-                renewal_now = await visible_renewal(page, quote['today']['currency'])
+                renewal_now = await visible_renewal(page, quote['today']['currency'], target_plan)
                 if quote_digest(preview_quote(current_preview, target_plan, renewal_now)) != quote_digest(quote):
                     raise Stop('upgrade_quote_changed')
                 if await verify_selected_upgrade_card(page, guard.card_change, details, credential=latest) != method_id:

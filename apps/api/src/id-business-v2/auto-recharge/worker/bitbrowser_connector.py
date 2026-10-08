@@ -7,8 +7,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
+import time
 import os
 from pathlib import Path
 import re
@@ -53,10 +56,11 @@ SAFE_PUBLIC_KEYS = set(
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
     "session_elapsed_seconds session_wait_seconds session_step session_phase session_refresh_count cancellation_confirmed browser_cleanup_status "
     "quote_elapsed_seconds quote_wait_seconds quote_refresh_count page_state stale_profiles_cleaned "
-    "checkout_replacement_performed "
+    "checkout_replacement_performed browser_profile_reused "
     "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
 )
-SAFE_PUBLIC_KEYS.update("operation current_plan_before upgrade_identifier upgrade_invoice_identifier "
+SAFE_PUBLIC_KEYS.update("quote_digest confirmation_expires_at manual_confirmation_accepted "
+                        "operation current_plan_before upgrade_identifier upgrade_invoice_identifier "
                         "upgrade_payment_intent_identifier subscription_period three_ds_status".split())
 
 
@@ -245,8 +249,11 @@ def validate_payload(value):
         allowed.add("upgradeIdentifier")
         if (not isinstance(value["upgradeIdentifier"], str)
                 or not subscription_upgrade.UPGRADE_ID.fullmatch(value["upgradeIdentifier"])
-                or value.get("plan") not in {"pro-5x", "pro-20x", "pro-500"}):
+                or value.get("plan") not in {"plus", "pro-5x", "pro-20x", "pro-500"}):
             raise Stop("invalid_connector_payload")
+    if "ownedProfile" in value:
+        allowed.add("ownedProfile")
+        validate_owned_profile(value["ownedProfile"], value.get("id"))
     if set(value) != allowed:
         raise Stop("invalid_connector_payload")
     job_id = value.get("id")
@@ -300,17 +307,17 @@ def validate_payload(value):
         raise Stop("invalid_payment_details")
     if "login" in value and details.get("email", "").casefold() != value["login"]["email"].casefold():
         raise Stop("billing_email_invalid")
-    if set(address) != {"id", "line1", "country", "city", "state", "postalCode"}:
+    if (set(address) - {"line2"} != {"id", "line1", "country", "city", "state", "postalCode"}
+            or "line2" in address and (not isinstance(address["line2"], str) or len(address["line2"]) > 180)):
         raise Stop("invalid_connector_payload")
     if set(safety) != {
-            "lockedCurrency", "maxAmount", "maxAmountMinor", "authorizeSinglePayment"}:
+            "lockedCurrency", "maxAmount", "maxAmountMinor", "authorizeSinglePayment", "manualPaymentConfirmation"}:
         raise Stop("invalid_payment_authorization")
-    if address.get("country") != "US" or address.get("city") != "Portland" \
-            or address.get("state") != "OR" or address.get("postalCode") != "97204":
-        raise Stop("billing_address_location_mismatch")
+    if safety.get("manualPaymentConfirmation") is not True:
+        raise Stop("local_payment_confirmation_required")
     if safety.get("authorizeSinglePayment") is not True:
         raise Stop("invalid_payment_authorization")
-    if not isinstance(safety.get("maxAmountMinor"), int) or safety["maxAmountMinor"] <= 0:
+    if type(safety.get("maxAmountMinor")) is not int or safety["maxAmountMinor"] <= 0:
         raise Stop("invalid_payment_limit")
     currency = safety.get("lockedCurrency")
     if not isinstance(currency, str) or currency not in SUPPORTED_CURRENCIES:
@@ -326,7 +333,7 @@ def validate_payload(value):
         **details,
         "country": address["country"],
         "line1": address["line1"],
-        "line2": "",
+        "line2": address.get("line2") or "",
         "city": address["city"],
         "state": address["state"],
         "postal_code": address["postalCode"],
@@ -338,6 +345,16 @@ def validate_payload(value):
     finally:
         for key in candidate:
             candidate[key] = ""
+    return value
+
+
+def validate_owned_profile(value, job_id):
+    if (not isinstance(value, dict) or set(value) != {"sourceJobId", "profileId", "accountKey"}
+            or not isinstance(value.get("sourceJobId"), str) or not JOB_ID.fullmatch(value["sourceJobId"])
+            or value["sourceJobId"] == job_id
+            or not isinstance(value.get("profileId"), str) or not re.fullmatch(r"[a-fA-F0-9]{32}", value["profileId"])
+            or not isinstance(value.get("accountKey"), str) or not re.fullmatch(r"[a-f0-9]{64}", value["accountKey"])):
+        raise Stop("invalid_owned_recharge_profile")
     return value
 
 
@@ -363,9 +380,16 @@ class LocalJob:
         self.initial_session_verified = False
         self.session_info = {}
         self.resolution_committed = False
+        self.owned_profile = self.payload.get("ownedProfile")
         self.stale_profiles = []
         self.stale_profiles_cleaned = 0
         self.checkout_replacement_performed = False
+        self.confirmation_lock = threading.Lock()
+        self.confirmation_event = threading.Event()
+        self.pending_confirmation = None
+        self.confirmation_approved = None
+        self.confirmation_consumed = False
+        self.result = {}
 
     def check_cancelled(self):
         if self.cancelled:
@@ -380,6 +404,7 @@ class LocalJob:
         self.cancelled = True
         self.resume_event.set()
         self.code_event.set()
+        self.confirmation_event.set()
 
     def signal_code(self, code):
         if (not self.waiting_for_code or self.done or self.login_code is not None
@@ -417,7 +442,7 @@ class LocalJob:
         self.session_info.update({key: value for key, value in details.items() if key in self.session_info})
         if stage in {"payment_request_sending", "upgrade_request_sending"}:
             self.payment_request_sent = True
-        self.callback.send({"type": "progress", "result": public_result({
+        report = public_result({
             "status": "cancelling" if _during_cancel else "running",
             "stage": stage,
             "reason": None,
@@ -427,7 +452,9 @@ class LocalJob:
             "payment_attempted": self.payment_request_sent,
             "payment_requests_sent": 1 if self.payment_request_sent else 0,
             **details,
-        })})
+        })
+        self.result = report
+        self.callback.send({"type": "progress", "result": report})
 
     async def wait_for_user(self, reason, seconds):
         if self.context and self.context.pages:
@@ -477,7 +504,7 @@ class LocalJob:
             **data,
             "country": address["country"],
             "line1": address["line1"],
-            "line2": "",
+            "line2": address.get("line2") or "",
             "city": address["city"],
             "state": address["state"],
             "postal_code": address["postalCode"],
@@ -521,14 +548,96 @@ class LocalJob:
         binding = {}
         if upgrade:
             if (not subscription_upgrade.UPGRADE_ID.fullmatch(str(quote.get("upgrade_identifier", "")))
-                    or quote.get("plan") not in {"pro-5x", "pro-20x", "pro-500"}):
+                    or quote.get("plan") not in {"plus", "pro-5x", "pro-20x", "pro-500"}):
                 raise Stop("invalid_upgrade_identifier")
-            binding = {"operation": "subscription_upgrade", "current_plan_before": "plus",
+            source_plan = quote.get("current_plan_before")
+            if subscription_upgrade.subscription_transition(source_plan, quote["plan"]) != "subscription_upgrade":
+                raise Stop("incompatible_existing_subscription")
+            binding = {"operation": "subscription_upgrade", "current_plan_before": source_plan,
                        "upgrade_identifier": quote["upgrade_identifier"], "target_plan": quote["plan"]}
-        self.progress("payment_guard_passed", quote=quote,
-                      quote_authority="official_upgrade_preview" if upgrade else "official_checkout_response",
-                      **binding)
-        return True
+        # Confirmation is an in-memory, job/account/plan/quote-bound capability.
+        # The API callback records progress only; this nonce is exposed solely by
+        # the authenticated loopback job endpoint and is never persisted.
+        if not self.account_key or not re.fullmatch(r"[a-f0-9]{64}", self.account_key):
+            raise Stop("official_account_mismatch")
+        digest = payment_state.quote_digest(quote)
+        binding_digest = hashlib.sha256(json.dumps(
+            [self.id, self.account_key, self.payload["plan"], digest, binding],
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with self.confirmation_lock:
+            if self.confirmation_consumed or self.pending_confirmation is not None:
+                raise Stop("duplicate_payment_blocked")
+            nonce = secrets.token_urlsafe(32)
+            expires = int(time.time()) + 300
+            self.confirmation_event.clear()
+            self.pending_confirmation = {
+                "nonce": nonce, "quote_digest": digest, "binding_digest": binding_digest,
+                "expires_at": expires,
+                "confirmation_expires_at": datetime.fromtimestamp(expires, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), "quote": json.loads(json.dumps(quote)),
+                "operation": "subscription_upgrade" if upgrade else "new_subscription",
+                **binding,
+            }
+        report = public_result({
+            "status": "awaiting_confirmation", "stage": "payment_confirmation",
+            "account_matched": True, "quote_digest": digest,
+            "confirmation_expires_at": self.pending_confirmation["confirmation_expires_at"],
+            "quote": quote,
+            "quote_authority": "official_upgrade_preview" if upgrade else "official_checkout_response",
+            "payment_attempted": False, "payment_requests_sent": 0,
+            "user_action_required": True, "browser_profile_id": self.profile_id,
+            **binding,
+        })
+        self.result = report
+        try:
+            self.callback.send({"type": "progress", "result": report})
+            while not self.confirmation_event.wait(.25):
+                self.check_cancelled()
+                if time.time() >= expires:
+                    raise Stop("payment_confirmation_expired", user_action_required=True)
+            self.check_cancelled()
+            with self.confirmation_lock:
+                approved = self.confirmation_approved
+                current_binding = hashlib.sha256(json.dumps(
+                    [self.id, self.account_key, self.payload["plan"], digest, binding],
+                    sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                if (not approved or approved["binding_digest"] != current_binding
+                        or approved["quote_digest"] != payment_state.quote_digest(quote)):
+                    raise Stop("payment_confirmation_invalid")
+                self.confirmation_approved = None
+            self.progress("payment_guard_passed", quote=quote, manual_confirmation_accepted=True,
+                          quote_authority=report["quote_authority"], **binding)
+            return True
+        finally:
+            with self.confirmation_lock:
+                self.pending_confirmation = None
+                self.confirmation_approved = None
+
+    def signal_confirm(self, nonce, digest):
+        self.check_cancelled()
+        with self.confirmation_lock:
+            pending = self.pending_confirmation
+            if (self.done or self.payment_request_sent or self.confirmation_consumed or not pending
+                    or not isinstance(nonce, str) or not isinstance(digest, str)
+                    or not secrets.compare_digest(pending["nonce"], nonce)
+                    or not secrets.compare_digest(pending["quote_digest"], digest)
+                    or time.time() >= pending["expires_at"]):
+                raise Stop("payment_confirmation_invalid")
+            self.confirmation_approved = dict(pending)
+            self.pending_confirmation = None
+            self.confirmation_consumed = True
+            self.confirmation_event.set()
+
+    def state(self):
+        with self.confirmation_lock:
+            pending = self.pending_confirmation
+            result = dict(self.result)
+            if pending:
+                result.update({key: pending[key] for key in (
+                    "nonce", "quote_digest", "confirmation_expires_at", "quote", "operation")})
+            elif result.get("status") == "awaiting_confirmation":
+                result["status"] = "running"
+            return {"ok": True, "done": self.done, "waitingForUser": self.waiting_for_user,
+                    "status": result.get("status", "running"), "result": result}
 
     def restore_account(self, target):
         import hashlib
@@ -551,6 +660,15 @@ class LocalJob:
             seen_sources.add(value["sourceJobId"])
             seen_profiles.add(value["profileId"])
             self.stale_profiles.append(value)
+        owned_profile = initial.get("ownedProfile")
+        self.owned_profile = None
+        if owned_profile is not None:
+            validate_owned_profile(owned_profile, self.id)
+            if (owned_profile["accountKey"] != self.account_key
+                    or owned_profile["sourceJobId"] in seen_sources
+                    or owned_profile["profileId"] in seen_profiles):
+                raise Stop("durable_state_unavailable")
+            self.owned_profile = dict(owned_profile)
         for record in records:
             path = self.root / record["fileKey"]
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -601,7 +719,11 @@ class LocalJob:
         try:
             # 启用原有 Worker 的严格出口检测与网络白名单；不向该值发送请求。
             os.environ["AUTO_RECHARGE_CALLBACK_URL"] = "local-bitbrowser"
-            with tempfile.TemporaryDirectory(prefix="bitbrowser-recharge-") as folder:
+            runtime_root = Path(__file__).resolve().parents[6] / ".runtime" / "bitbrowser-recharge-assistant" / "state"
+            runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if runtime_root.is_symlink():
+                raise Stop("unsafe_state_directory")
+            with tempfile.TemporaryDirectory(prefix="job-", dir=runtime_root) as folder:
                 self.root = Path(folder)
 
                 def durable(path, document):
@@ -654,6 +776,10 @@ class LocalJob:
                 bit.pop("localApiToken", None)
                 bit.pop("dynamicProxyUrl", None)
                 bit.pop("staticProxyCredentials", None)
+            with self.confirmation_lock:
+                self.pending_confirmation = None
+                self.confirmation_approved = None
+            self.confirmation_event.set()
             self.done = True
         result.setdefault("payment_attempted", self.payment_request_sent)
         result.setdefault("payment_requests_sent", 1 if self.payment_request_sent else 0)
@@ -666,6 +792,7 @@ class LocalJob:
             "locked_currency": self.payload.get("safety", {}).get("lockedCurrency"),
             "max_amount": self.payload.get("safety", {}).get("maxAmount"),
         }
+        self.result = public_result(result)
         if not self.resolution_committed:
             try:
                 self.callback.send({"type": "finished", "result": public_result(result)})
@@ -675,12 +802,18 @@ class LocalJob:
 
 
 class Registry:
-    def __init__(self):
+    def __init__(self, role="registration"):
+        if role not in {"recharge", "registration"}:
+            raise ValueError("unsupported connector role")
+        self.role = role
         self.lock = threading.Lock()
         self.jobs = {}
 
     def start(self, payload, origin=None):
         with self.lock:
+            registration = isinstance(payload, dict) and payload.get("mode") == "registration"
+            if registration != (self.role == "registration"):
+                raise Stop("connector_role_mismatch")
             job_id = payload.get("id") if isinstance(payload, dict) else None
             if job_id in self.jobs:
                 previous = self.jobs[job_id]
@@ -759,23 +892,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            return self.reply(200, {"ok": True, "version": 3,
+            capabilities = ["browser-catalog", "browser-options", "browser-profile-v2", "session-load-retry",
+                            "same-window-page-refresh", "password-login", "login-code"]
+            capabilities += (["manual-payment-confirmation", "recharge-process-isolation",
+                              "payment-unknown-resolution", "prepayment-page-recovery",
+                              "stale-owned-profile-cleanup"] if REGISTRY.role == "recharge"
+                             else ["account-registration"])
+            return self.reply(200, {"ok": True, "version": 4,
                                     "service": "id-business-v2-auto-recharge-connector",
-                                    "capabilities": ["browser-catalog", "browser-options", "browser-profile-v2", "session-load-retry",
-                                                     "same-window-page-refresh", "payment-unknown-resolution",
-                                                     "prepayment-page-recovery", "stale-owned-profile-cleanup",
-                                                     "password-login", "login-code", "account-registration"],
+                                    "role": REGISTRY.role, "capabilities": capabilities,
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
         if not match or not self.authorized():
             return self.reply(404, {"ok": False})
         job = REGISTRY.get(match.group(1))
-        return self.reply(200 if job else 404, {
-            "ok": bool(job),
-            "done": job.done if job else None,
-            "waitingForUser": job.waiting_for_user if job else None,
-        })
+        if not job:
+            return self.reply(404, {"ok": False})
+        if isinstance(job, LocalJob):
+            return self.reply(200, job.state())
+        return self.reply(200, {"ok": True, "done": job.done,
+                                "waitingForUser": job.waiting_for_user})
 
     def do_POST(self):
         if not self.allowed_origin():
@@ -799,15 +936,20 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/jobs":
                 job = REGISTRY.start(body, self.allowed_origin())
                 return self.reply(202, {"ok": True, "id": job.id, "accepted": True})
-            match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")/(resume|cancel|code)", self.path)
+            match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")/(resume|cancel|code|confirm)", self.path)
             if not match:
                 return self.reply(404, {"ok": False})
             job = REGISTRY.get(match.group(1))
             if not job:
                 return self.reply(404, {"ok": False})
-            if match.group(2) == "code":
-                from registration_job import RegistrationJob
-                if isinstance(job, RegistrationJob):
+            if match.group(2) == "confirm":
+                if (not isinstance(job, LocalJob) or not isinstance(body, dict)
+                        or set(body) != {"nonce", "quoteDigest"}):
+                    raise Stop("payment_confirmation_invalid")
+                job.signal_confirm(body["nonce"], body["quoteDigest"])
+                body.clear()
+            elif match.group(2) == "code":
+                if not isinstance(job, LocalJob):
                     if not isinstance(body, dict) or set(body) - {'code', 'attempt', 'step', 'mailId'} or 'code' not in body:
                         raise Stop('invalid_login_code')
                     job.signal_code(body['code'], body.get('attempt'), body.get('step'), body.get('mailId'))
@@ -817,8 +959,7 @@ class Handler(BaseHTTPRequestHandler):
                     job.signal_code(body["code"])
                 body.clear()
             elif match.group(2) == "resume":
-                from registration_job import RegistrationJob
-                if isinstance(job, RegistrationJob):
+                if not isinstance(job, LocalJob):
                     job.signal_resume(body)
                 else:
                     job.signal_resume()
@@ -847,10 +988,14 @@ def load_connector_token(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="ID 业务管理系统本机比特浏览器连接器")
-    parser.add_argument("--port", type=int, default=55321)
+    parser.add_argument("--role", choices=("recharge", "registration"), default="registration")
+    parser.add_argument("--port", type=int)
     parser.add_argument("--allowed-origin", action="append", required=True)
-    parser.add_argument("--token-file", default=".runtime/auto-recharge-connector/connector.token")
+    parser.add_argument("--token-file")
     args = parser.parse_args(argv)
+    args.port = args.port or (55322 if args.role == "recharge" else 55321)
+    args.token_file = args.token_file or (".runtime/bitbrowser-recharge-assistant/connector.token"
+        if args.role == "recharge" else ".runtime/auto-recharge-connector/connector.token")
     if args.port < 1024 or args.port > 65535:
         parser.error("端口必须介于 1024 与 65535")
     origins = set()
@@ -861,6 +1006,8 @@ def main(argv=None):
                 or parsed.query or parsed.fragment):
             parser.error("允许来源必须是网站 origin")
         origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    global REGISTRY
+    REGISTRY = Registry(args.role)
     Handler.allowed_origins = origins
     Handler.connector_token = load_connector_token(Path(args.token_file).resolve())
     print("本机连接器已启动：http://127.0.0.1:%d" % args.port, flush=True)

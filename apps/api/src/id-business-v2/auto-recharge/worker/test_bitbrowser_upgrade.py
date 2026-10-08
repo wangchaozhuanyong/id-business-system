@@ -14,7 +14,7 @@ import browser_checkout
 import payment_state
 import subscription_upgrade as upgrade
 from checkout_core import BrowserCredential, Stop, parse_browser_credential
-from test_bitbrowser_connector import payload
+from test_bitbrowser_connector import payload, confirmed
 from test_subscribe import fixture
 
 
@@ -32,7 +32,7 @@ def quote():
     return {"plan": "pro-5x", "today": amount,
             "tax": {"currency": "USD", "amount_minor": 0, "amount": "0.00"},
             "renewal": amount, "renewal_interval": "monthly", "operation": "subscription_upgrade",
-            "upgrade_identifier": UPGRADE_ID, "quote_authority": "official_upgrade_preview"}
+            "upgrade_identifier": UPGRADE_ID, "current_plan_before": "plus", "quote_authority": "official_upgrade_preview"}
 
 
 def recheck_payload():
@@ -47,7 +47,7 @@ class BitBrowserUpgradeTests(unittest.TestCase):
         value = recheck_payload()
         self.assertIs(connector.validate_payload(value), value)
         for change in ({"upgradeIdentifier": None}, {"upgradeIdentifier": "cs_wrong"},
-                       {"upgradeIdentifier": "upg_" + "b" * 31}, {"plan": "go"}, {"plan": "plus"},
+                       {"upgradeIdentifier": "upg_" + "b" * 31}, {"plan": "go"},
                        {"mode": "open_browser"}):
             with self.subTest(change=change), self.assertRaises(Stop):
                 connector.validate_payload({**value, **change})
@@ -57,7 +57,7 @@ class BitBrowserUpgradeTests(unittest.TestCase):
     def test_real_local_confirmation_emits_complete_upgrade_binding(self):
         job = connector.LocalJob(payment_payload())
         job.callback.send = MagicMock(return_value={})
-        self.assertTrue(job.confirm(quote(), "4444"))
+        self.assertTrue(confirmed(job, quote(), "4444"))
         result = job.callback.send.call_args.args[0]["result"]
         self.assertEqual(result["quote_authority"], "official_upgrade_preview")
         self.assertEqual(result["operation"], "subscription_upgrade")
@@ -70,7 +70,7 @@ class BitBrowserUpgradeTests(unittest.TestCase):
                 job.confirm({**quote(), **changed}, "4444")
         job.payment_request_sent = True
         with self.assertRaises(Stop):
-            job.confirm(quote(), "4444")
+            confirmed(job, quote(), "4444")
 
     def test_upgrade_receipt_keeps_safe_binding_and_drops_secrets(self):
         safe = {"operation": "subscription_upgrade", "current_plan_before": "plus",
@@ -93,7 +93,7 @@ class BitBrowserUpgradeTests(unittest.TestCase):
         original_progress = upgrade.progress
         async def execute():
             self.assertIs(upgrade.progress.__self__, job)
-            job.confirm(quote(), "4444")
+            confirmed(job, quote(), "4444")
             with upgrade.UpgradeLedger(job.root, target.account_id, "pro-5x") as ledger:
                 ledger.begin(quote(), "4444")
                 guard = upgrade.UpgradeGuard(target, ledger)

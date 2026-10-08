@@ -4,10 +4,13 @@ import { connectorRequest, requireConnectorHealth } from './connector-transport'
 const health = {
   ok: true,
   service: 'id-business-v2-auto-recharge-connector',
-  version: 3,
+  version: 4,
+  role: 'recharge',
   originAllowed: true,
   busy: false,
   capabilities: [
+    'manual-payment-confirmation',
+    'recharge-process-isolation',
     'browser-catalog',
     'browser-options',
     'browser-profile-v2',
@@ -59,6 +62,8 @@ describe('本机连接错误识别', () => {
   });
   it('区分旧连接器、来源未允许和占用状态', () => {
     expect(requireConnectorHealth(health)).toBe(health);
+    expect(() => requireConnectorHealth({ ...health, version: 3 })).toThrow('版本过旧');
+    expect(() => requireConnectorHealth({ ...health, role: 'registration' })).toThrow('版本过旧');
     expect(() => requireConnectorHealth({ ok: true, version: 1 })).toThrow('版本过旧');
     expect(() => requireConnectorHealth({ ...health, originAllowed: false })).toThrow('网站来源');
     expect(() => requireConnectorHealth({ ...health, busy: true })).toThrow('任务未结束');
