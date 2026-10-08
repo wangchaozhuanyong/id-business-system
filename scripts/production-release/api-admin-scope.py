@@ -423,7 +423,7 @@ class RegistrationHandoffError(RuntimeError):
         self.diagnostic = diagnostic
 
 
-NATIVE_HANDOFF_SOURCE = r'''import ast,hashlib,json,os,signal,stat,time
+NATIVE_HANDOFF_SOURCE = r'''import ast,hashlib,json,os,select,signal,stat,sys,time
 from pathlib import Path
 recover=__RECOVER__;expected_module=__MODULE_SHA__
 proc=Path('/proc');engine=Path('/opt/camoufox');module=Path('/app/fingerprint_runtime.py')
@@ -437,7 +437,16 @@ def process(pid):
 def inactive(pid,observed):
  path=proc/str(pid)
  need(observed[1] in ('Z','X') and os.readlink(path/'ns/pid')==namespace,'PROC_READ')
- need(not list((path/'fd').iterdir()) and process(pid)==observed,'PROC_READ');return True
+ need(hasattr(os,'pidfd_open') and hasattr(select,'poll'),'SIGNAL_UNAVAILABLE')
+ fd=os.pidfd_open(pid,0)
+ try:
+  need(process(pid)==observed,'PID_REUSED')
+  poll=select.poll();poll.register(fd,select.POLLIN)
+  events=[flags for n,flags in poll.poll(0) if n==fd]
+  need(len(events)==1 and events[0]&select.POLLIN and not events[0]&(select.POLLERR|select.POLLNVAL),'PROC_READ')
+  need(process(pid)==observed,'PID_REUSED')
+  need(os.readlink(path/'ns/pid')==namespace,'PID_NAMESPACE');return True
+ finally:os.close(fd)
 def row(pid):
  path=proc/str(pid)
  try:
@@ -448,6 +457,7 @@ def row(pid):
  except (FileNotFoundError,ProcessLookupError):
   need(not path.exists(),'PROC_READ');return None
  need(not exe.endswith(' (deleted)'),'DELETED_EXECUTABLE')
+ need(exe!='/run/rosetta/rosetta','EXECUTION_EMULATED')
  if not exe.startswith(str(engine)+'/'):return None
  actual=Path(exe).resolve(strict=True)
  need(actual==kernel and actual.is_file() and (actual.stat().st_dev,actual.stat().st_ino)==kernel_identity,'EXECUTABLE_CHANGED')
@@ -465,7 +475,8 @@ def inventory():
  need(len(rows)<=128,'PROC_BOUND');return sorted(rows)
 fds=[]
 try:
- need(os.geteuid()==0,'OWNER_CHANGED')
+ need(os.geteuid()==10001 and os.getegid()==10001,'OWNER_CHANGED')
+ need(Path(os.readlink(proc/'self/exe')).resolve(strict=True)==Path(sys.executable).resolve(strict=True),'EXECUTION_EMULATED')
  raw=module.read_bytes();need(hashlib.sha256(raw).hexdigest()==expected_module,'MODULE_CHANGED')
  tree=ast.parse(raw);paths=[n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='ENGINE_PATH' for t in n.targets)]
  need(len(paths)==1 and isinstance(paths[0],ast.Call) and isinstance(paths[0].func,ast.Name) and paths[0].func.id=='Path'
@@ -510,7 +521,7 @@ try:
   result.update(status='OBSERVED',zeroObservations=2 if not rows else 0,resourceClosed=not rows,code='none')
 except Exception as error:
  code=str(error);allowed={'OWNER_CHANGED','PROC_READ','DELETED_EXECUTABLE','EXECUTABLE_CHANGED','PID_NAMESPACE',
-  'PID_REUSED','PROC_BOUND','MODULE_CHANGED','ENGINE_CHANGED','PID_OWNER','SIGNAL_UNAVAILABLE','BUDGET_EXHAUSTED','REMAINS','OBSERVATION_CHANGED'}
+  'PID_REUSED','PROC_BOUND','MODULE_CHANGED','ENGINE_CHANGED','PID_OWNER','SIGNAL_UNAVAILABLE','BUDGET_EXHAUSTED','REMAINS','OBSERVATION_CHANGED','EXECUTION_EMULATED'}
  if code in {'API_ADMIN_REGISTRATION_NATIVE_'+n for n in allowed}:result['code']=code
 finally:
  for fd,_ in fds:
@@ -554,7 +565,7 @@ def native_handoff(d, directory, container_id, *, recover=False):
     module_sha = registration_profile(d, Path(REGISTRATION_DIRECTORY))['workerProjection'][WORKER_PREFIX + 'fingerprint_runtime.py']['sha256']
     source = NATIVE_HANDOFF_SOURCE.replace('__RECOVER__', repr(recover)).replace('__MODULE_SHA__', repr(module_sha))
     try:
-        value = json.loads(d.run('docker', 'exec', '--user', '0:0', '-i', container_id, 'python', '-B', '-c', source, timeout=20))
+        value = json.loads(d.run('docker', 'exec', '--user', '10001:10001', '-i', container_id, 'python', '-B', '-c', source, timeout=20))
     except Exception:
         raise RegistrationRecoveryError('API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE', {
             'confirmed': False, 'signalsAttempted': None if recover else 0, 'nativeCount': 0,
@@ -570,7 +581,7 @@ def native_handoff(d, directory, container_id, *, recover=False):
     if value['status'] == 'FAILED':
         allowed = {'OWNER_CHANGED', 'PROC_READ', 'DELETED_EXECUTABLE', 'EXECUTABLE_CHANGED', 'PID_NAMESPACE',
                    'PID_REUSED', 'PROC_BOUND', 'MODULE_CHANGED', 'ENGINE_CHANGED', 'PID_OWNER', 'SIGNAL_UNAVAILABLE',
-                   'BUDGET_EXHAUSTED', 'REMAINS', 'OBSERVATION_CHANGED', 'UNAVAILABLE'}
+                   'BUDGET_EXHAUSTED', 'REMAINS', 'OBSERVATION_CHANGED', 'EXECUTION_EMULATED', 'UNAVAILABLE'}
         d.require(value['code'] in {'API_ADMIN_REGISTRATION_NATIVE_' + name for name in allowed},
                   'API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE')
         raise RegistrationRecoveryError(value['code'], {'confirmed': False, 'signalsAttempted': value['signalsAttempted'],

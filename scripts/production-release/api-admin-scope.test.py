@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import select
 import signal
 import sys
 import tarfile
@@ -1139,7 +1140,7 @@ class ReleaseFailureTests(unittest.TestCase):
 
 
 class NativeHandoffGeneratedTests(unittest.TestCase):
-    def test_native_handoff_exec_uses_explicit_root_and_fixed_container_id(self):
+    def test_native_handoff_exec_uses_explicit_worker_uid_and_fixed_container_id(self):
         cid, module_sha = 'a' * 64, 'b' * 64
         result = {'status': 'OBSERVED', 'nativeCount': 0, 'nativeCountObserved': True,
                   'signalsAttempted': 0, 'zeroObservations': 2, 'resourceClosed': True,
@@ -1149,17 +1150,18 @@ class NativeHandoffGeneratedTests(unittest.TestCase):
         with patch.object(registration, 'registration_profile', return_value=profile):
             self.assertEqual(registration.native_handoff(controller, ROOT, cid), result)
         source = registration.NATIVE_HANDOFF_SOURCE.replace('__RECOVER__', 'False').replace('__MODULE_SHA__', repr(module_sha))
-        controller.run.assert_called_once_with('docker', 'exec', '--user', '0:0', '-i', cid,
+        controller.run.assert_called_once_with('docker', 'exec', '--user', '10001:10001', '-i', cid,
                                                'python', '-B', '-c', source, timeout=20)
 
     @contextmanager
-    def fixture(self, rows=None, outcome='exit', changed_on_open=False, inaccessible=False, unknown_exe=False):
+    def fixture(self, rows=None, outcome='exit', changed_on_open=False, inaccessible=False, unknown_exe=False,
+                uid=10001, gid=10001, exit_ready=True, exit_mask=select.POLLIN, exit_fd_delta=0):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             base = Path(temporary); proc = base / 'proc'; engine = base / 'engine'
             proc.mkdir(); engine.mkdir(); (engine / 'camoufox').write_bytes(b'synthetic engine')
             module = base / 'fingerprint_runtime.py'
             module.write_bytes((ROOT / (registration.WORKER_PREFIX + 'fingerprint_runtime.py')).read_bytes())
-            starts = {}; links = {}; fd_to_pid = {}; signals = []
+            starts = {}; links = {str(proc / 'self' / 'exe'): sys.executable}; fd_to_pid = {}; signals = []
             def state(pid, kind, stamp=123):
                 folder = proc / str(pid); folder.mkdir(exist_ok=True); (folder / 'fd').mkdir(exist_ok=True)
                 (folder / 'stat').write_text(f'{pid} (synthetic process) {kind} ' + '0 ' * 18 + f'{stamp} 0\n')
@@ -1170,14 +1172,22 @@ class NativeHandoffGeneratedTests(unittest.TestCase):
             def readlink(path):
                 name = str(path)
                 if name.endswith('/ns/pid'): return 'pid:[42]'
-                if inaccessible and name.startswith(str(proc) + '/'): raise PermissionError('PRIVATE RAW ERROR')
+                if inaccessible and name.startswith(str(proc) + '/') and '/self/' not in name: raise PermissionError('PRIVATE RAW ERROR')
                 if name in links: return links[name]
                 return original_readlink(path)
             def pidfd_open(pid, flags):
                 self.assertEqual(flags, 0)
                 if changed_on_open: state(pid, 'S', starts[pid] + 1)
-                fd_to_pid[pid + 1000] = pid
-                return pid + 1000
+                fd = 1000 + len(fd_to_pid); fd_to_pid[fd] = pid
+                return fd
+            def poller():
+                observed = []
+                def register(fd, events):
+                    self.assertEqual(events, select.POLLIN); observed.append(fd)
+                def poll(timeout):
+                    self.assertEqual(timeout, 0)
+                    return [(fd + exit_fd_delta, exit_mask) for fd in observed] if exit_ready else []
+                return SimpleNamespace(register=register, poll=poll)
             def send(fd, sig, info, flags):
                 self.assertEqual((sig, info, flags), (signal.SIGTERM, None, 0))
                 pid = fd_to_pid[fd]; signals.append(pid)
@@ -1191,9 +1201,11 @@ class NativeHandoffGeneratedTests(unittest.TestCase):
                 return SimpleNamespace(**values)
             stack.enter_context(patch.object(Path, 'stat', autospec=True, side_effect=owned_stat))
             stack.enter_context(patch.object(os, 'readlink', side_effect=readlink))
-            stack.enter_context(patch.object(os, 'geteuid', return_value=0))
+            stack.enter_context(patch.object(os, 'geteuid', return_value=uid))
+            stack.enter_context(patch.object(os, 'getegid', return_value=gid))
             stack.enter_context(patch.object(os, 'getpid', return_value=900))
             stack.enter_context(patch.object(os, 'pidfd_open', side_effect=pidfd_open, create=True))
+            stack.enter_context(patch.object(select, 'poll', side_effect=poller, create=True))
             stack.enter_context(patch.object(signal, 'pidfd_send_signal', side_effect=send, create=True))
             stack.enter_context(patch.object(os, 'close'))
             stack.enter_context(patch('time.sleep'))
@@ -1217,6 +1229,32 @@ class NativeHandoffGeneratedTests(unittest.TestCase):
             result = f.execute(False)
             self.assertEqual((result['status'], result['nativeCount'], result['signalsAttempted']), ('OBSERVED', 1, 0))
             self.assertEqual(f.signals, [])
+
+    def test_wrong_uid_or_gid_is_rejected_before_proc_observation_or_signals(self):
+        for uid, gid in ((0, 0), (10001, 0), (0, 10001)):
+            with self.subTest(uid=uid, gid=gid), self.fixture([(7, 'S')], uid=uid, gid=gid) as f:
+                result = f.execute(True)
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_OWNER_CHANGED')
+                self.assertFalse(result['nativeCountObserved']); self.assertEqual(f.signals, [])
+
+    def test_emulated_self_executable_is_rejected_before_inventory_or_signals(self):
+        for recover in (False, True):
+            with self.subTest(recover=recover), self.fixture([(7, 'S')]) as f:
+                emulator = f.proc / 'rosetta'; emulator.write_bytes(b'synthetic emulator')
+                f.links[str(f.proc / 'self' / 'exe')] = str(emulator)
+                result = f.execute(recover)
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_EXECUTION_EMULATED')
+                self.assertFalse(result['nativeCountObserved']); self.assertFalse(result['resourceClosed'])
+                self.assertEqual(result['zeroObservations'], 0); self.assertEqual(f.signals, [])
+
+    def test_matching_self_executable_does_not_hide_rosetta_browser_process(self):
+        for recover in (False, True):
+            with self.subTest(recover=recover), self.fixture([(7, 'S')]) as f:
+                f.links[str(f.proc / '7' / 'exe')] = '/run/rosetta/rosetta'
+                result = f.execute(recover)
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_EXECUTION_EMULATED')
+                self.assertFalse(result['nativeCountObserved']); self.assertFalse(result['resourceClosed'])
+                self.assertEqual(f.signals, [])
 
     def test_actual_generated_recovery_uses_pidfd_single_term_and_two_zero_observations(self):
         with self.fixture([(7, 'S'), (8, 'R')]) as f:
@@ -1248,7 +1286,7 @@ class NativeHandoffGeneratedTests(unittest.TestCase):
             self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_REMAINS')
             self.assertEqual(result['signalsAttempted'], 1); self.assertFalse(result['resourceClosed'])
 
-    def test_zombie_or_dead_with_empty_fds_and_stable_namespace_is_inactive(self):
+    def test_zombie_or_dead_with_pidfd_exit_and_stable_namespace_is_inactive(self):
         for kind in ('Z', 'X'):
             with self.subTest(kind=kind), self.fixture([(7, kind)], inaccessible=True) as f:
                 result = f.execute(True)
@@ -1272,12 +1310,44 @@ class NativeHandoffGeneratedTests(unittest.TestCase):
                 result = f.execute(True)
                 self.assertEqual(result['status'], 'FAILED'); self.assertEqual(f.signals, [])
 
-    def test_inactive_process_with_open_fd_is_not_accepted(self):
+    def test_exited_zombie_with_unreadable_fd_directory_uses_pidfd_proof(self):
         with self.fixture([(7, 'Z')]) as f:
-            (f.proc / '7' / 'fd' / '3').write_text('synthetic fd')
+            original_iterdir = Path.iterdir
+            def iterdir(path):
+                if path.name == 'fd': raise PermissionError('PRIVATE RAW ERROR')
+                return original_iterdir(path)
+            with patch.object(Path, 'iterdir', iterdir): result = f.execute(True)
+            self.assertEqual(result['status'], 'RECOVERED'); self.assertTrue(result['resourceClosed'])
+            self.assertEqual(f.signals, [])
+
+    def test_zombie_pidfd_not_ready_is_not_a_zero_observation(self):
+        with self.fixture([(7, 'Z')], exit_ready=False) as f:
             result = f.execute(True)
             self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_PROC_READ')
-            self.assertEqual(f.signals, [])
+            self.assertFalse(result['nativeCountObserved']); self.assertEqual(f.signals, [])
+
+    def test_zombie_pid_reuse_after_pidfd_open_refuses_exit_proof(self):
+        with self.fixture([(7, 'Z')], changed_on_open=True) as f:
+            result = f.execute(True)
+            self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_PID_REUSED')
+            self.assertFalse(result['nativeCountObserved']); self.assertEqual(f.signals, [])
+
+    def test_unavailable_pidfd_support_cannot_prove_zombie_exit(self):
+        for error in (OSError(38, 'PRIVATE RAW ERROR'), PermissionError(1, 'PRIVATE RAW ERROR'), AttributeError('PRIVATE RAW ERROR')):
+            with self.subTest(error=type(error).__name__), self.fixture([(7, 'Z')]) as f:
+                with patch.object(os, 'pidfd_open', side_effect=error, create=True): result = f.execute(True)
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE')
+                self.assertFalse(result['nativeCountObserved']); self.assertFalse(result['resourceClosed'])
+                self.assertEqual(f.signals, [])
+
+    def test_pidfd_exit_requires_pollin_without_error_or_invalid_fd(self):
+        for mask, fd_delta in ((0, 0), (select.POLLHUP, 0), (select.POLLIN | select.POLLERR, 0),
+                               (select.POLLIN | select.POLLNVAL, 0), (select.POLLIN, 1)):
+            with self.subTest(mask=mask, fd_delta=fd_delta), self.fixture([(7, 'Z')], exit_mask=mask, exit_fd_delta=fd_delta) as f:
+                result = f.execute(True)
+                self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_NATIVE_PROC_READ')
+                self.assertFalse(result['nativeCountObserved']); self.assertFalse(result['resourceClosed'])
+                self.assertEqual(f.signals, [])
 
 
 class RegistrationRecoveryTests(unittest.TestCase):
