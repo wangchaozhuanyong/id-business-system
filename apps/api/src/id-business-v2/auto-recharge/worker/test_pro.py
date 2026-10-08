@@ -1538,6 +1538,120 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
               fetch('https://chatgpt.com/backend-api/payments/checkout',{method:'POST',body:'synthetic'});};
         }""")
 
+    async def pricing_document_fixture(self, *, controls=True, pending_script=False,
+                                       status=200, redirect_host=None):
+        """真实 Chromium 导航夹具；外部 defer 由本机挂起，所有写请求本机拦截。"""
+        await self.page.evaluate("""controls => {
+            document.querySelector('#cards').hidden=true;
+            const details=document.querySelector('#pro-details');
+            details.hidden=false;
+            details.querySelector('h3').textContent='ChatGPT Pro';
+            if(!controls)details.remove();
+        }""", controls)
+        html=await self.page.content()
+        html=html.replace('</body>', '''<button id="payment" onclick="window.paymentClicks++;
+            fetch('https://api.stripe.com/v1/payment_pages/cs_synthetic/confirm',
+              {method:'POST',body:'synthetic'})">Pay</button><script>
+            window.domContentLoadedObserved=false;window.paymentClicks=0;window.nonTierClicks=0;
+            document.addEventListener('DOMContentLoaded',()=>window.domContentLoadedObserved=true);
+            document.addEventListener('click',event=>{
+                const button=event.target.closest('button');
+                if(button && button.getAttribute('role')!=='radio')window.nonTierClicks++;
+            },true);
+            </script></body>''')
+        if pending_script:
+            html=html.replace('</body>', '<script defer src="https://synthetic-assets.invalid/nonessential-pricing.js"></script></body>')
+        paths=[]
+        release=asyncio.Event()
+        requested=asyncio.Event()
+        async def local_route(route):
+            request=route.request
+            parts=urlsplit(request.url)
+            if request.method=='GET' and parts.hostname=='chatgpt.com' and parts.path=='/pricing':
+                paths.append('/pricing')
+                if redirect_host:
+                    # 路由重定向是第二次独立导航，仍由本机 handler 返回，不发实际域名请求。
+                    await route.fulfill(content_type='text/html; charset=utf-8',body=
+                        '<html><body><script>location.replace(' +
+                        json.dumps(f'https://{redirect_host}/pricing') + ')</script></body></html>')
+                else:
+                    await route.fulfill(status=status,content_type='text/html; charset=utf-8',body=html)
+            elif request.method=='GET' and parts.hostname==redirect_host and parts.path=='/pricing':
+                paths.append('untrusted/pricing')
+                await route.fulfill(content_type='text/html; charset=utf-8',body=html)
+            elif request.method=='GET' and parts.hostname=='synthetic-assets.invalid' and parts.path=='/nonessential-pricing.js':
+                paths.append('nonessential-pricing.js')
+                requested.set()
+                await release.wait()
+                await route.fulfill(content_type='application/javascript',body='')
+            else:
+                self.requests.append(request.method)
+                await route.abort()
+        await self.context.route('**/*',local_route)
+        # 初始页没有档位；选择器必须走真实 pricing 导航，而非直接复用旧 DOM。
+        await self.page.set_content('''<main><article data-testid="pro-pricing-modal-column-top-half">
+            <h3>Pro</h3><button onclick="fetch('/backend-api/payments/checkout',
+              {method:'POST',body:'synthetic'})">Get Pro</button></article></main>''')
+        return paths,release,requested
+
+    async def assert_pricing_writes_unsubmitted(self):
+        self.assertEqual(await self.page.evaluate('window.entryClicks'),0)
+        self.assertEqual(await self.page.evaluate('window.finalClicks'),0)
+        self.assertEqual(await self.page.evaluate('window.paymentClicks'),0)
+        self.assertEqual(await self.page.evaluate('window.nonTierClicks'),0)
+        self.assertEqual(self.requests,[])
+
+    async def test_pricing_pending_defer_selects_500_before_domcontentloaded_without_any_cta(self):
+        paths,release,requested=await self.pricing_document_fixture(pending_script=True)
+        try:
+            with patch('plan_selection.STEP_SECONDS',1),patch('plan_selection.SELECTION_SECONDS',3):
+                button=await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
+            self.assertTrue(requested.is_set())
+            self.assertEqual(paths,['/pricing','nonessential-pricing.js'])
+            self.assertEqual(await self.page.evaluate('document.readyState'),'interactive')
+            self.assertFalse(await self.page.evaluate('window.domContentLoadedObserved'))
+            self.assertEqual(await button.get_attribute('id'),'final')
+            self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'true')
+            self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'),'false')
+            await verify_selected_plan(self.page,'pro-500')
+        finally:
+            await self.assert_pricing_writes_unsubmitted()
+            release.set()
+            await self.page.wait_for_load_state('domcontentloaded',timeout=3000)
+
+    async def test_pricing_pending_defer_without_pro_controls_stops_without_any_cta(self):
+        paths,release,requested=await self.pricing_document_fixture(controls=False,pending_script=True)
+        try:
+            with patch('plan_selection.STEP_SECONDS',.3),patch('plan_selection.SELECTION_SECONDS',2),self.assertRaises(Stop) as stopped:
+                await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
+            self.assertEqual(stopped.exception.report['reason'],'official_pricing_plan_entry_not_found')
+            self.assertEqual(stopped.exception.report['diagnostics']['step'],'pricing_page')
+            self.assertTrue(requested.is_set())
+            self.assertEqual(paths,['/pricing','nonessential-pricing.js'])
+            self.assertFalse(await self.page.evaluate('window.domContentLoadedObserved'))
+        finally:
+            await self.assert_pricing_writes_unsubmitted()
+            release.set()
+            await self.page.wait_for_load_state('domcontentloaded',timeout=3000)
+
+    async def test_pricing_http_failure_cannot_supply_fake_ready_pro_controls(self):
+        paths,_release,_requested=await self.pricing_document_fixture(status=403)
+        with patch('plan_selection.STEP_SECONDS',1),patch('plan_selection.SELECTION_SECONDS',3),self.assertRaises(Stop) as stopped:
+            await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
+        self.assertEqual(stopped.exception.report['reason'],'official_pricing_plan_entry_not_found')
+        self.assertEqual(paths,['/pricing'])
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'false')
+        await self.assert_pricing_writes_unsubmitted()
+
+    async def test_pricing_untrusted_https_redirect_cannot_supply_fake_ready_pro_controls(self):
+        paths,_release,_requested=await self.pricing_document_fixture(redirect_host='synthetic-untrusted.invalid')
+        with patch('plan_selection.STEP_SECONDS',1),patch('plan_selection.SELECTION_SECONDS',3),self.assertRaises(Stop) as stopped:
+            await select_plan(self.page,'pro-500',lambda *_args,**_kwargs:None)
+        self.assertEqual(stopped.exception.report['reason'],'official_plan_browser_error')
+        self.assertEqual(paths,['/pricing','untrusted/pricing'])
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'),'false')
+        await self.assert_pricing_writes_unsubmitted()
+
     async def test_home_overview_reads_native_pricing_once_then_selects_ready_500(self):
         paths=await self.native_pricing_redirect()
         await self.home_overview()
