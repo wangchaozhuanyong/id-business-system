@@ -38,7 +38,14 @@ export async function runDirectLogin(
   let sessionId = '';
   let guardError: unknown;
   let removeGuard: (() => void) | undefined;
-  let pendingSubmission: { kind: 'email' | 'password' | 'code'; value: string } | undefined;
+  let pendingSubmission:
+    | {
+        kind: 'email' | 'password' | 'code';
+        value: string;
+        waitingForCode: boolean;
+        failure?: { cause: unknown };
+      }
+    | undefined;
   try {
     const catalog = await directBrowserCatalog(
       settings.localApiUrl,
@@ -210,6 +217,7 @@ export async function runDirectLogin(
           (state?.kind === 'loading' && Date.now() >= automaticDeadline && !manualReported))
       )
         throw new DirectBrowserError('official_login_not_verified');
+      if (pendingSubmission?.failure) throw pendingSubmission.failure.cause;
       if (
         manualReported &&
         credential.login &&
@@ -249,41 +257,62 @@ export async function runDirectLogin(
         const kind = state.kind as 'email' | 'password' | 'code';
         if (!pendingSubmission || pendingSubmission.kind !== kind) {
           if (pendingSubmission) pendingSubmission.value = '';
-          const requestedCode = kind === 'code' ? hooks.code() : undefined;
-          void requestedCode?.catch(() => undefined);
-          await hooks.progress(kind === 'code' ? 'login_code_required' : `login_${kind}`, {
-            user_action_required: kind === 'code'
-          });
-          pendingSubmission = {
+          const submission: NonNullable<typeof pendingSubmission> = {
             kind,
             value:
               kind === 'email'
                 ? credential.login.email
                 : kind === 'password'
                   ? credential.login.password
-                  : await requestedCode!
+                  : '',
+            waitingForCode: kind === 'code'
           };
+          pendingSubmission = submission;
+          if (kind === 'code') {
+            // Keep observing the official window while the task waits for a code.
+            void hooks.code().then(
+              (value) => {
+                if (pendingSubmission !== submission || signal.aborted) return;
+                submission.value = value;
+                submission.waitingForCode = false;
+              },
+              (cause: unknown) => {
+                if (pendingSubmission !== submission || signal.aborted) return;
+                submission.failure = { cause };
+                submission.waitingForCode = false;
+              }
+            );
+          }
+          await hooks.progress(kind === 'code' ? 'login_code_required' : `login_${kind}`, {
+            user_action_required: kind === 'code'
+          });
         }
-        const filled = await cdp.evaluate<LoginPageState>(
-          sessionId,
-          loginPageExpression(kind, pendingSubmission.value, { email: expected.email })
-        );
-        if (filled.kind === 'filled') {
-          const confirmed = await cdp.evaluate<LoginPageState>(
+        signal.throwIfAborted();
+        if (Date.now() >= deadline) throw new DirectBrowserError('official_login_not_verified');
+        if (pendingSubmission.failure) throw pendingSubmission.failure.cause;
+        if (!pendingSubmission.waitingForCode && Date.now() < automaticDeadline) {
+          const filled = await cdp.evaluate<LoginPageState>(
             sessionId,
-            loginPageExpression('submit', pendingSubmission.value, {
-              stage: kind,
-              email: expected.email
-            })
+            loginPageExpression(kind, pendingSubmission.value, { email: expected.email })
           );
-          if (confirmed.kind === 'submitted') {
-            submitted.add(kind);
-            pendingSubmission.value = '';
-            pendingSubmission = undefined;
-            if (kind === 'password') credential.login.password = '';
-            if (kind === 'code') await hooks.progress('login_code_submitted');
-          } else state = confirmed;
-        } else state = filled;
+          if (filled.kind === 'filled' && Date.now() < automaticDeadline) {
+            signal.throwIfAborted();
+            const confirmed = await cdp.evaluate<LoginPageState>(
+              sessionId,
+              loginPageExpression('submit', pendingSubmission.value, {
+                stage: kind,
+                email: expected.email
+              })
+            );
+            if (confirmed.kind === 'submitted') {
+              submitted.add(kind);
+              pendingSubmission.value = '';
+              pendingSubmission = undefined;
+              if (kind === 'password') credential.login.password = '';
+              if (kind === 'code') await hooks.progress('login_code_submitted');
+            } else state = confirmed;
+          } else state = filled;
+        }
       }
       if (!manualReported && (state?.kind === 'manual' || Date.now() >= automaticDeadline)) {
         manualReported = true;
@@ -312,6 +341,7 @@ export async function runDirectLogin(
     throw new DirectBrowserError('official_login_not_verified');
   } finally {
     if (pendingSubmission) pendingSubmission.value = '';
+    pendingSubmission = undefined;
     expected.token = '';
     if (credential.login) credential.login.password = '';
     if ('sessionJson' in credential) credential.sessionJson = '';
