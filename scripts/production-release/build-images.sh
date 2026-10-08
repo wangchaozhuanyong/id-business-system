@@ -62,7 +62,7 @@ build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
-  if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
+  if [[ "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
@@ -97,6 +97,10 @@ build_image() {
     options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
   fi
   if [[ "$service" == auto-recharge ]]; then
+    if [[ "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
+      [[ -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" && "${registration_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+      options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
+    fi
     if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-96-20261008 ]]; then
       [[ -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" && "${registration_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
       options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
@@ -132,6 +136,18 @@ if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
   build_image api apps/api/Dockerfile.mysql runtime
   build_image admin apps/admin/Dockerfile runtime
   python3 -B scripts/production-release/remote-deploy.py --write-api-admin-build-proof
+  exit 0
+fi
+
+if [[ "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
+  python3 -B scripts/production-release/remote-deploy.py --prepare-api-registration-build
+  registration_context=.deploy/production-release/api-registration-build-context
+  registration_api_context=.deploy/production-release/api-registration-api-build-context
+  registration_worker_projection="$(python3 -c 'import json; from pathlib import Path; print(json.loads(Path(".deploy/production-release/api-registration-build-projection.json").read_text())["workerProjectionSha256"])')"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api "$registration_api_context/apps/api/Dockerfile.mysql" runtime "$registration_api_context"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
+  python3 -B scripts/production-release/remote-deploy.py --write-api-registration-build-proof
   exit 0
 fi
 

@@ -12,6 +12,10 @@ on:
           - verify_access
           - verify_api_admin
           - release_api_admin
+          - verify_api_registration
+          - handoff_api_registration
+          - release_api_registration
+          - verify_registration_business
           - verify_recharge_release
           - verify_mailbox
           - verify_cache
@@ -403,8 +407,16 @@ jobs:
           role-duration-seconds: 3600
 
       - name: Verify API Admin baseline and idle workers before building
-        if: inputs.operation == 'verify_api_admin' || inputs.operation == 'release_api_admin'
+        if: inputs.operation == 'verify_api_admin' || inputs.operation == 'release_api_admin' || inputs.operation == 'verify_api_registration' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py preflight
+
+      - name: Hand off the bound completed registration window once
+        if: inputs.operation == 'handoff_api_registration'
+        run: python3 -B scripts/production-release/api-admin-readonly.py handoff
+
+      - name: Observe the original registration task latest attempt without writes
+        if: inputs.operation == 'verify_registration_business'
+        run: python3 -B scripts/production-release/api-admin-readonly.py business
 
       - name: Resolve reviewed immutable browser dependency cache
         if: inputs.operation == 'release' && inputs.reuse_image_run == '' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && (inputs.historical_exception == 'none' || startsWith(inputs.historical_exception, 'recharge-pro-'))
@@ -425,7 +437,7 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release_api_admin' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
 
       - name: Verify reusable build and unchanged application source
@@ -462,7 +474,7 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Push immutable images
-        if: inputs.operation == 'release_api_admin' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
 
       - name: Save fixed registration Worker build projection
@@ -2031,11 +2043,11 @@ jobs:
           PY
 
       - name: Deploy through the production instance
-        if: inputs.operation == 'release' || inputs.operation == 'release_api_admin'
+        if: inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_registration'
         run: bash scripts/production-release/dispatch.sh
 
       - name: Independently read back API Admin running images and preserved services
-        if: inputs.operation == 'release_api_admin'
+        if: inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py readback
 
       - name: Save API Admin build and independent runtime evidence
@@ -2044,6 +2056,16 @@ jobs:
         with:
           name: api-admin-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/api-admin-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save API Registration independent scope evidence
+        if: always() && (inputs.operation == 'verify_api_registration' || inputs.operation == 'handoff_api_registration' || inputs.operation == 'release_api_registration' || inputs.operation == 'verify_registration_business')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: api-registration-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/api-registration-*.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

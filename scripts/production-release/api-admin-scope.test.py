@@ -19,9 +19,11 @@ RUNTIME = ROOT / '.deploy'
 RUNTIME.mkdir(exist_ok=True)
 
 
-def load(name, filename):
+def load(name, filename, selected_scope=None):
     spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
     value = importlib.util.module_from_spec(spec)
+    if selected_scope is not None:
+        value.SCOPE = selected_scope
     spec.loader.exec_module(value)
     return value
 
@@ -31,6 +33,7 @@ d = load('remote_deployment', 'remote-deploy.py')
 transport = load('api_admin_transport', 'api-admin-readonly.py')
 COMMIT, TREE, OLD = 'a' * 40, 'b' * 40, 'c' * 40
 REPOSITORY = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+registration = load('api_registration_scope', 'api-admin-scope.py', 'API_REGISTRATION')
 
 
 def proof():
@@ -38,6 +41,24 @@ def proof():
         name: {'reference': f'{REPOSITORY}:{COMMIT}-123-1-{name}', 'imageId': 'sha256:' + str(index) * 64,
                'fileCount': 1, 'sha256': str(index) * 64}
         for index, name in enumerate(scope.UPDATED, 1)}}
+
+
+def registration_proof():
+    rows = copy.deepcopy(registration.registration_profile(d, ROOT)['workerProjection'])
+    for name in registration.WORKER_PAIR:
+        rows[name]['sha256'] = '1' * 64
+    images = {'api': proof()['images']['api'], 'auto-registration': {
+        'reference': f'{REPOSITORY}:{COMMIT}-123-1-auto-recharge', 'imageId': 'sha256:' + '2' * 64,
+        **registration.worker_content(rows)}}
+    return {'version': 1, 'scope': 'API_REGISTRATION', 'commit': COMMIT, 'sourceTree': TREE,
+            'images': images, 'workerProjection': rows, 'workerProjectionSha256': registration.fingerprint(rows)}
+
+
+def registration_task():
+    return {'taskId': registration.TASK_ID, 'attempt': 10, 'registered': True,
+            'passwordVerified': False, 'mfaVerified': False, 'leaseActive': False, 'noncePresent': False,
+            'passwordCandidatePresent': True, 'binding': registration.TASK_BINDING,
+            'emailHashHmac': '4' * 64, 'jobHmac': '1' * 64, 'accountHmac': '2' * 64, 'auditHmac': '3' * 64}
 
 
 def states():
@@ -551,8 +572,305 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(result.returncode == 0, passes, changes)
 
 
+class RegistrationScopeTests(unittest.TestCase):
+    def test_actual_projected_context_carries58_immutable_files_and_exact_pair(self):
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
+        profile = registration.registration_profile(d, ROOT)
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            root = Path(temporary)
+            names = registration.WORKER_PAIR | set(profile['buildInputSha256']) | {registration.REGISTRATION_PROFILE}
+            for name in names:
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes((ROOT / name).read_bytes())
+            with patch.object(Path, 'cwd', return_value=root), patch.dict(os.environ, {'RELEASE_COMMIT': commit, 'SOURCE_TREE': tree}):
+                record = registration.prepare_registration_build(d)
+            rows = record['workerProjection']
+            self.assertEqual(len(rows), 60)
+            self.assertEqual({n for n in rows if rows[n] != profile['workerProjection'][n]}, registration.WORKER_PAIR)
+            context = root / '.deploy/production-release/api-registration-build-context'
+            for name, row in rows.items():
+                self.assertEqual(registration.hashlib.sha256((context / name).read_bytes()).hexdigest(), row['sha256'])
+            self.assertEqual(record['workerProjectionSha256'], registration.fingerprint(rows))
+            self.assertEqual((context / 'scripts/audit-python-dependencies.py').read_bytes(), (ROOT / 'scripts/audit-python-dependencies.py').read_bytes())
+    def test_scope_selection_keeps_default_and_service_names_isolated(self):
+        self.assertEqual(scope.UPDATED, ('api', 'admin'))
+        self.assertEqual(registration.UPDATED, ('api', 'auto-registration'))
+        self.assertEqual(registration.SWITCH_ORDER, ('api', 'auto-registration'))
+        self.assertEqual(registration.image_service('auto-registration'), 'auto-recharge')
+        selected, _ = d.api_admin_scope('API_REGISTRATION')
+        default, _ = d.api_admin_scope()
+        self.assertEqual(selected.UPDATED, registration.UPDATED)
+        self.assertEqual(default.UPDATED, scope.UPDATED)
+        with self.assertRaisesRegex(ValueError, 'SCOPE_CONFLICT'):
+            d.api_admin_scope('ALL_SERVICES')
+
+    def test_registration_requires_closed_window_while_readonly_can_observe_it(self):
+        controller = JobGuardTests().controller()
+        with self.assertRaisesRegex(RuntimeError, 'WINDOW_RETAINED'):
+            registration.jobs_idle(controller, ROOT)
+        self.assertTrue(registration.jobs_idle(controller, ROOT, allow_retained=True)['registrationWindowRetained'])
+        self.assertTrue(scope.jobs_idle(controller, ROOT)['registrationWindowRetained'])
+        controller.registration_runtime_state.return_value['registrationWindowRetained'] = False
+        self.assertFalse(registration.jobs_idle(controller, ROOT)['registrationWindowRetained'])
+
+    def test_proof_binds_complete60_two_file_delta_and_worker_tag_alias(self):
+        value = registration_proof()
+        registration.validate_proof(d, value, COMMIT, TREE, REPOSITORY, '123', '1')
+        for mutate in ('preserved-source', 'pair-missing', 'projection-hash', 'wrong-tag', 'content', 'wrong-scope'):
+            changed = copy.deepcopy(value)
+            if mutate == 'preserved-source':
+                changed['workerProjection'][registration.WORKER_PREFIX + 'server.py']['sha256'] = '9' * 64
+            elif mutate == 'pair-missing':
+                original = registration.registration_profile(d, ROOT)['workerProjection']
+                name = next(iter(registration.WORKER_PAIR))
+                changed['workerProjection'][name] = original[name]
+            elif mutate == 'projection-hash': changed['workerProjectionSha256'] = '9' * 64
+            elif mutate == 'wrong-tag': changed['images']['auto-registration']['reference'] += '-registration'
+            elif mutate == 'content': changed['images']['auto-registration']['sha256'] = '9' * 64
+            else: changed['scope'] = 'API_ADMIN'
+            with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
+                registration.validate_proof(d, changed, COMMIT, TREE)
+        with self.assertRaises(RuntimeError):
+            scope.validate_proof(d, value, COMMIT, TREE)
+
+    def test_build_proof_rejects_pair_hash_that_is_not_the_actual_git_commit(self):
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
+        value = registration_proof()
+        projection = {n: value[n] for n in ('workerProjection', 'workerProjectionSha256')}
+        controller = SimpleNamespace(require=d.require, run=MagicMock(side_effect=[commit, tree]))
+        with patch.dict(os.environ, {'RELEASE_COMMIT': commit, 'SOURCE_TREE': tree}), \
+             patch.object(Path, 'read_text', return_value=json.dumps(projection)), self.assertRaisesRegex(RuntimeError, 'PAIR_CHANGED'):
+            registration.build_proof(controller)
+        self.assertEqual(controller.run.call_count, 2)
+
+    def test_candidate_scope_uses_actual_git_diff_and_forbids_api_dependency_or_schema_drift(self):
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        registration.registration_candidate_scope(d, commit)
+        allowed = list(registration.API_CHANGES | registration.WORKER_PAIR)
+        known = [registration.WORKER_PREFIX + n for n in ('plan_selection.py', 'registration_browser.py',
+                                                        'test_pro.py', 'test_registration_browser.py')]
+        controller = SimpleNamespace(require=d.require, run=MagicMock(side_effect=['\n'.join(known),
+            '\n'.join(allowed + ['apps/api/prisma-mysql/schema.prisma'])]))
+        with self.assertRaisesRegex(RuntimeError, 'API_SCOPE_CHANGED'):
+            registration.registration_candidate_scope(controller, COMMIT)
+
+    def execute_private(self, *, close, mode='success'):
+        calls = []
+        def read(request, timeout):
+            method = request.get_method(); calls.append((method, request.full_url, request.data))
+            if method == 'POST' and mode == '409':
+                from urllib.error import HTTPError
+                raise HTTPError(request.full_url, 409, 'PRIVATE RAW', {'PRIVATE': 'SECRET'},
+                                io.BytesIO(b'{"ok":false,"reason":"fingerprint_cleanup_failed"}'))
+            posted = any(row[0] == 'POST' for row in calls)
+            if request.full_url.endswith('/status'):
+                value = {'accepted': True, 'attempt': 10, 'cancelled': posted, 'done': True}
+                if mode == 'wrong-attempt': value['attempt'] = 11
+                if mode == 'after-unconfirmed' and posted: value['cancelled'] = False
+            elif method == 'POST': value = {'ok': True}
+            else: value = {'ready': True, 'workerRole': 'registration', 'engine': 'camoufox',
+                'mailDeliveryVersion': 1, 'registrationBusy': False, 'registrationWindowRetained': not posted}
+            result = io.BytesIO(json.dumps(value).encode()); result.status = 202 if method == 'POST' else 200
+            return result
+        controller = SimpleNamespace(require=d.require)
+        def compose(*args, **kwargs):
+            code = args[-1]
+            output = io.StringIO()
+            with patch.dict(os.environ, {'AUTO_RECHARGE_WORKER_TOKEN': 'LOCAL_TEST_VALUE_' * 4}), \
+                 patch('urllib.request.build_opener', return_value=SimpleNamespace(open=read)), redirect_stdout(output):
+                exec(compile(code, '<actual-private-generated-source>', 'exec'), {})
+            return output.getvalue()
+        controller.compose = compose
+        return controller, calls
+
+    def test_private_generated_source_reads_only_without_explicit_close(self):
+        controller, calls = self.execute_private(close=False)
+        result = registration.registration_private(controller, ROOT)
+        self.assertFalse(result['privatePostAttempted'])
+        self.assertEqual([x[0] for x in calls], ['GET', 'GET'])
+
+    def test_private_generated_source_posts_once_and_requires_after_confirmation(self):
+        controller, calls = self.execute_private(close=True)
+        result = registration.registration_private(controller, ROOT, close=True)
+        self.assertTrue(result['privatePostAttempted'])
+        self.assertEqual([x[0] for x in calls], ['GET', 'GET', 'POST', 'GET', 'GET'])
+        self.assertEqual(next(x[2] for x in calls if x[0] == 'POST'), b'{"attempt":10}')
+        for mode, attempted in (('wrong-attempt', False), ('after-unconfirmed', True), ('409', True)):
+            controller, calls = self.execute_private(close=True, mode=mode)
+            with self.subTest(mode=mode), self.assertRaises(registration.RegistrationHandoffError) as caught:
+                registration.registration_private(controller, ROOT, close=True)
+            self.assertEqual(caught.exception.diagnostic['privatePostAttempted'], attempted)
+            self.assertEqual(sum(x[0] == 'POST' for x in calls), int(attempted))
+            self.assertNotIn('PRIVATE', json.dumps(caught.exception.diagnostic))
+            if mode == '409':
+                self.assertEqual(caught.exception.diagnostic['controlledReason'], 'fingerprint_cleanup_failed')
+                self.assertEqual(caught.exception.diagnostic['privatePostHttpStatus'], 409)
+
+    def test_task_receipt_cannot_replace_attempt_binding_or_candidate_preservation(self):
+        value = registration_task()
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value=json.dumps(value)))
+        self.assertEqual(registration.registration_task(controller, ROOT), value)
+        for key, changed in (('attempt', 11), ('registered', False), ('passwordCandidatePresent', False),
+                             ('binding', {}), ('jobHmac', 'raw-secret')):
+            controller.compose.return_value = json.dumps({**value, key: changed})
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                registration.registration_task(controller, ROOT)
+
+    def test_private_failure_transport_retains_only_fixed_diagnostic(self):
+        diagnostic = {'confirmed': False, 'privatePostAttempted': True, 'failurePhase': 'close',
+                      'privatePostHttpStatus': 409, 'controlledReason': 'fingerprint_cleanup_failed', 'rawOutputSuppressed': True}
+        receipt = {'status': 'API_REGISTRATION_VERIFICATION_FAILED', 'code': 'API_ADMIN_REGISTRATION_PRIVATE_UNCONFIRMED',
+                   'errorType': 'RegistrationHandoffError', 'privateDiagnostic': diagnostic, 'rawError': 'SECRET RAW'}
+        result = transport.safe_failure(receipt, 'API_REGISTRATION')
+        self.assertEqual(result['privateDiagnostic'], diagnostic)
+        self.assertNotIn('rawError', result)
+        receipt['privateDiagnostic'] = {**diagnostic, 'rawError': 'SECRET RAW'}
+        self.assertNotIn('privateDiagnostic', transport.safe_failure(receipt, 'API_REGISTRATION'))
+
+    def test_readonly_handoff_selection_does_not_add_general_command_input(self):
+        for mode, closed, flag in (('preflight', False, 'verify'), ('preflight', True, 'preflight'),
+                                   ('handoff', True, 'handoff'), ('readback', True, 'readback'), ('business', True, 'business')):
+            commands = '\n'.join(transport.parameters(COMMIT, OLD, mode, 'API_REGISTRATION', require_closed=closed)['commands'])
+            self.assertIn('--api-registration-' + flag + ' --expected-current ' + OLD, commands)
+            self.assertEqual(commands.count('sha256sum -c -'), 2)
+            self.assertNotIn('/cancel', commands)
+        with self.assertRaises(ValueError):
+            transport.parameters(COMMIT, OLD, 'handoff')
+        for operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration', 'verify_registration_business'):
+            for changed, ok in (({}, True), ({'HISTORICAL_EXCEPTION': 'historical-finance-20261005'}, False),
+                                ({'REUSE_IMAGE_RUN': '1'}, False), ({'RELEASE_BROWSER_CACHE_IMAGE': 'cache'}, False)):
+                result = subprocess.run(['bash', 'scripts/production-release/validate-release-selection.sh'],
+                    cwd=ROOT, env={**os.environ, 'RELEASE_OPERATION': operation, 'HISTORICAL_EXCEPTION': 'none', **changed}, capture_output=True)
+                self.assertEqual(result.returncode == 0, ok)
+
+    def test_workflow_separates_handoff_from_build_push_and_deploy(self):
+        text = (ROOT / '.github/workflows/production-release.yml').read_text()
+        self.assertIn("if: inputs.operation == 'handoff_api_registration'", text)
+        for name in ('Build images on the GitHub runner', 'Push immutable images', 'Deploy through the production instance'):
+            block = text.split('- name: ' + name + '\n', 1)[1].split('\n      - name:', 1)[0]
+            self.assertIn("inputs.operation == 'release_api_registration'", block)
+            self.assertNotIn('handoff_api_registration', block)
+
+    def test_business_logs_filter_latest_attempt_and_preserve_first_failure_without_raw_text(self):
+        task = {'attempt': 11, 'launchAt': '2026-10-08T03:00:00.000Z'}
+        prefix = 'Registration verification '
+        target = 'job=' + registration.TASK_ID + ' attempt=11 '
+        raw = '\n'.join([
+            'PRIVATE RAW EMAIL OTP TOKEN',
+            prefix + 'checkpoint ' + target + 'checkpoint=email_code_returned owned_context=True after_email_code_returned=True',
+            prefix + 'checkpoint ' + target.replace('attempt=11', 'attempt=10') + 'checkpoint=same_email_identity_confirmed owned_context=True after_email_code_returned=True',
+            prefix + 'failed ' + target + 'phase=identity_read error_type=Stop browser_code=none cleanup=False reason=verification_required subphase=identity_after_get form_state=absent',
+            prefix + 'failed ' + target + 'phase=cleanup error_type=Error browser_code=NS_ERROR_NET_RESET cleanup=True reason=session_network_error subphase=context_cleanup form_state=absent',
+            prefix + 'failed ' + target + 'phase=navigation error_type=TimeoutError browser_code=net::ERR_TIMED_OUT cleanup=False reason=session_load_timeout subphase=get_retry form_state=absent',
+        ])
+        controller = SimpleNamespace(require=d.require, service_state=MagicMock(return_value={'containerId': 'a' * 64}))
+        with patch.object(registration.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='', stderr=raw)) as docker:
+            result = registration.business_logs(controller, ROOT, task)
+        self.assertEqual(result['checkpoints'], {'email_code_returned': 1, 'same_email_identity_confirmed': 0})
+        self.assertEqual(result['failureCount'], 3)
+        self.assertEqual(result['cleanupFailureCount'], 1)
+        self.assertEqual(result['firstFailure']['subphase'], 'identity_after_get')
+        self.assertEqual(result['lastFailure']['browserCode'], 'net::ERR_TIMED_OUT')
+        self.assertFalse(result['provesOfficialOtpAcceptance'])
+        self.assertNotIn('PRIVATE', json.dumps(result))
+        self.assertEqual(docker.call_args.args[0][3:7], [task['launchAt'], '--tail', '1000', 'a' * 64])
+
+    def test_business_read_keeps_runtime_proof_but_accepts_latest_attempt_and_rejects_stale_flags(self):
+        task = {'taskId': registration.TASK_ID, 'attempt': 11, 'state': 'completed', 'step': 'completed', 'reason': 'none',
+            'registered': True, 'passwordVerified': True, 'mfaVerified': True, 'accountRegistered': True,
+            'encryptedPasswordPresent': True, 'encryptedMfaPresent': True, 'leaseActive': False, 'profileBindingConfirmed': True,
+            'launchAt': '2026-10-08T03:00:00.000Z', 'updatedAt': '2026-10-08T03:01:00.000Z',
+            'progressCount': 6, 'progressTruncated': False, 'codeReadCount': 1, 'codeReadTruncated': False,
+            'officialThisAttempt': True, 'passwordThisAttempt': True, 'mfaThisAttempt': True,
+            'officialAt': '2026-10-08T03:00:01.000Z', 'passwordAt': '2026-10-08T03:00:01.000Z', 'mfaAt': '2026-10-08T03:00:02.000Z'}
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); current = base / 'releases' / 'candidate'; current.mkdir(parents=True)
+            (base / 'current').symlink_to(current)
+            (current / registration.STATE_FILE).write_text(json.dumps({'registrationTask': registration_task()}))
+            controller = SimpleNamespace(require=d.require, BASE=base, compose=MagicMock(return_value=json.dumps(task)))
+            readback = stack.enter_context(patch.object(registration, 'readback', return_value={'services': states()}))
+            stack.enter_context(patch.object(registration, 'snapshot', return_value=states()))
+            stack.enter_context(patch.object(registration, 'business_logs', return_value={'rawOutputSuppressed': True}))
+            result = registration.registration_business(controller, COMMIT)
+            self.assertTrue(result['businessAcceptanceConfirmed'])
+            self.assertTrue(result['readOnly'])
+            readback.assert_called_once_with(controller, COMMIT, check_task=False)
+            self.assertTrue(all('node' in call.args and 'POST' not in call.args for call in controller.compose.call_args_list))
+            inherited = {**task, 'officialThisAttempt': False, 'passwordThisAttempt': False, 'mfaThisAttempt': False,
+                         'officialAt': None, 'passwordAt': None, 'mfaAt': None}
+            controller.compose.return_value = json.dumps(inherited)
+            self.assertFalse(registration.registration_business(controller, COMMIT)['businessAcceptanceConfirmed'])
+            controller.compose.return_value = json.dumps({**task, 'reason': 'RAW PRIVATE VALUE'})
+            with self.assertRaisesRegex(RuntimeError, 'BUSINESS_UNAVAILABLE'):
+                registration.registration_business(controller, COMMIT)
+
+
+class RegistrationHandoffTests(unittest.TestCase):
+    def exercise(self, failure=None):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary); directory = base / 'releases' / 'original'; directory.mkdir(parents=True)
+            controller = SimpleNamespace(**vars(d)); controller.BASE = base
+            # The macOS fixture is user-owned; only this host-owner precondition is
+            # supplied by the fixture. File modes, exclusive writes and locks are real.
+            controller.require = lambda ok, message: d.require(ok or message == 'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED', message)
+            stack.enter_context(patch.object(registration, 'REGISTRATION_DIRECTORY', str(directory)))
+            proof = {'requiresWindowHandoff': True, 'task': registration_task(), 'services': states()}
+            preflight = stack.enter_context(patch.object(registration, 'registration_preflight', return_value=proof))
+            stack.enter_context(patch.object(registration, 'snapshot', return_value=states()))
+            task = stack.enter_context(patch.object(registration, 'registration_task', return_value=registration_task()))
+            stack.enter_context(patch.object(registration, 'jobs_idle'))
+            calls = []
+            diagnostic = {'confirmed': False, 'privatePostAttempted': True, 'failurePhase': 'close',
+                          'privatePostHttpStatus': 409, 'controlledReason': 'fingerprint_cleanup_failed', 'rawOutputSuppressed': True}
+            def private(*args, **kwargs):
+                calls.append(kwargs)
+                if kwargs.get('close') and failure == '409':
+                    raise registration.RegistrationHandoffError(diagnostic)
+                return {'confirmed': True}
+            stack.enter_context(patch.object(registration, 'registration_private', side_effect=private))
+            if failure == 'task-changed': task.return_value = {**registration_task(), 'jobHmac': '9' * 64}
+            if failure:
+                with self.assertRaises(RuntimeError):
+                    registration.registration_handoff(controller, registration.REGISTRATION_CURRENT)
+                with self.assertRaisesRegex(RuntimeError, 'ALREADY_ATTEMPTED'):
+                    registration.registration_handoff(controller, registration.REGISTRATION_CURRENT)
+            else:
+                result = registration.registration_handoff(controller, registration.REGISTRATION_CURRENT)
+                self.assertTrue(result['privateCancelPerformed'])
+                self.assertEqual(result['databaseWrites'], 0)
+                preflight.return_value = {**proof, 'requiresWindowHandoff': False}
+                second = registration.registration_handoff(controller, registration.REGISTRATION_CURRENT)
+                self.assertFalse(second['privateCancelPerformed'])
+            folder = registration.handoff_directory(controller)
+            self.assertEqual(sum(row.get('close') is True for row in calls), 1)
+            self.assertEqual((folder / 'attempt.json').stat().st_mode & 0o777, 0o400)
+            if failure == '409':
+                self.assertEqual(json.loads((folder / 'failure.json').read_text()), diagnostic)
+                self.assertFalse((folder / 'confirmed.json').exists())
+            elif failure == 'task-changed':
+                self.assertFalse((folder / 'confirmed.json').exists())
+            else:
+                record = json.loads((folder / 'confirmed.json').read_text())
+                self.assertEqual(record['task'], registration_task())
+                self.assertTrue(record['accountPreserved'])
+                self.assertTrue(record['passwordCandidatePreserved'])
+                self.assertEqual((folder / 'confirmed.json').stat().st_mode & 0o777, 0o400)
+
+    def test_same_registered_job_cleanup_is_independent_once_and_preserves_candidate(self):
+        self.exercise()
+
+    def test_controlled_failure_is_persisted_and_cannot_send_second_post(self):
+        self.exercise('409')
+
+    def test_changed_db_snapshot_cannot_be_written_as_confirmed(self):
+        self.exercise('task-changed')
+
+
 class ReleaseFailureTests(unittest.TestCase):
-    def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False):
+    def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False,
+                    selected_scope=scope):
+        scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
                 original_write = Path.write_text
@@ -568,7 +886,7 @@ class ReleaseFailureTests(unittest.TestCase):
             for name in scope.CONFIG_FILES:
                 path = previous / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('config')
             (previous / 'compose.release.json').write_text(json.dumps({'services': {name: {'image': 'old'} for name in d.SERVICES}}))
-            candidate = proof()
+            candidate = registration_proof() if scope.REGISTRATION else proof()
             args = SimpleNamespace(admin_only=False, image_commit=None, image_run_id=None, image_run_attempt=None,
                 post_cleanup_seal_sha256=None, order_archive_seal_sha256=None, order_archive_prepared_images_sha256=None,
                 api_admin_build_proof=base64.b64encode(json.dumps(candidate).encode()).decode(),
@@ -593,6 +911,19 @@ class ReleaseFailureTests(unittest.TestCase):
                     path = Path(__file__).with_name(name)
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
+                if scope.REGISTRATION:
+                    for name in scope.WORKER_PAIR:
+                        raw = b'candidate-pair'; candidate['workerProjection'][name]['sha256'] = scope.hashlib.sha256(raw).hexdigest()
+                        info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name); info.size = len(raw); info.mode = 0o644
+                        archive.addfile(info, io.BytesIO(raw))
+                    candidate['workerProjectionSha256'] = scope.fingerprint(candidate['workerProjection'])
+                    candidate['images']['auto-registration'].update(scope.worker_content(candidate['workerProjection']))
+                    args.api_admin_build_proof = base64.b64encode(json.dumps(candidate).encode()).decode()
+            if scope.REGISTRATION and fail_at == 'pair-source':
+                candidate['workerProjection'][next(iter(scope.WORKER_PAIR))]['sha256'] = '0' * 64
+                candidate['workerProjectionSha256'] = scope.fingerprint(candidate['workerProjection'])
+                candidate['images']['auto-registration'].update(scope.worker_content(candidate['workerProjection']))
+                args.api_admin_build_proof = base64.b64encode(json.dumps(candidate).encode()).decode()
             def response(url, **kw):
                 value = io.BytesIO(archive_data.getvalue() if 'archive/' in url else b'')
                 value.status = 200; return value
@@ -605,6 +936,7 @@ class ReleaseFailureTests(unittest.TestCase):
             old = {'images': {name: {'sourceCommit': OLD} for name in d.SERVICES},
                    'fixedRegistrationRelease': {'id': 'old'}, 'fixedRegistrationPreservedStates': {}}
             stack.enter_context(patch.object(scope, 'baseline', return_value=(previous, old, before, evidence)))
+            stack.enter_context(patch.object(scope, 'registration_task', return_value=registration_task()))
             stack.enter_context(patch.object(scope, 'require_preserved', return_value=before))
             stack.enter_context(patch.object(scope, 'strict_audit', return_value={'checksSha256': 'rules'}))
             idle = stack.enter_context(patch.object(scope, 'jobs_idle'))
@@ -642,6 +974,41 @@ class ReleaseFailureTests(unittest.TestCase):
         self.assertNotIn('fixedRegistrationPreservedStates', manifest)
         self.assertEqual(manifest['images']['auto-registration']['sourceCommit'], OLD)
         self.assertEqual(manifest['newMigrations'], [])
+        controller.rollback_service.assert_not_called()
+
+    def test_registration_success_switches_only_api_and_registration_with_fresh_proof(self):
+        code, result, controller, manifest, _ = self.run_release(selected_scope=registration)
+        self.assertEqual(code, 0)
+        self.assertEqual([call.args[-1] for call in controller.compose.call_args_list], ['api', 'auto-registration'])
+        self.assertEqual(manifest['servicesUpdated'], ['api', 'auto-registration'])
+        self.assertEqual(manifest['images']['auto-recharge']['sourceCommit'], OLD)
+        self.assertEqual(manifest['images']['admin']['sourceCommit'], OLD)
+        self.assertEqual(manifest['apiRegistrationPublication']['scope'], 'API_REGISTRATION')
+        self.assertTrue(manifest['apiRegistrationPublication']['workersPublished'])
+        self.assertNotIn('apiAdminPublication', manifest)
+        self.assertEqual(manifest['newMigrations'], [])
+        self.assertFalse(manifest['migrationApplied'])
+        controller.rollback_service.assert_not_called()
+
+    def test_registration_pair_proof_must_match_actual_verified_candidate_archive(self):
+        code, result, controller, _, _ = self.run_release(selected_scope=registration, fail_at='pair-source')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'API_REGISTRATION_FAILED_BEFORE_SWITCH')
+        self.assertEqual(result['code'], 'API_ADMIN_REGISTRATION_PAIR_CHANGED')
+        controller.compose.assert_not_called()
+        controller.rollback_service.assert_not_called()
+
+    def test_registration_failed_health_rolls_back_without_touching_other_five(self):
+        code, result, controller, _, _ = self.run_release(selected_scope=registration, fail_at='api-health')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'API_REGISTRATION_FAILED_RESTORED')
+        self.assertEqual([c.args[2] for c in controller.rollback_service.call_args_list], ['auto-registration', 'api'])
+
+    def test_registration_new_job_blocks_all_resource_rollback(self):
+        code, result, controller, _, _ = self.run_release(selected_scope=registration, busy_after_switch=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'API_REGISTRATION_PARTIAL_RECOVERY_REQUIRED')
+        self.assertFalse(result['rollbackOk'])
         controller.rollback_service.assert_not_called()
 
     def test_new_active_job_blocks_rollback_and_reports_partial_state(self):

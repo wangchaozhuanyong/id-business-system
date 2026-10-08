@@ -335,7 +335,14 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
           }),
         (error) =>
           error.status === 1 &&
-          (['verify_api_admin', 'release_api_admin'].includes(operation)
+          ([
+            'verify_api_admin',
+            'release_api_admin',
+            'verify_api_registration',
+            'handoff_api_registration',
+            'release_api_registration',
+            'verify_registration_business'
+          ].includes(operation)
             ? String(error.stderr) === ''
             : String(error.stderr).includes('supports preparation or release only'))
       );
