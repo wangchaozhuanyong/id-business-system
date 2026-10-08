@@ -834,23 +834,77 @@ class RegistrationBrowser:
 
     async def guard_registered_onboarding(self):
         # Older checkpoints may have saved a session before onboarding was complete.
-        async def pending():
+        async def observe():
+            self.job.check()
+            if await self.challenge():
+                self.job.registration_last_observed_view = 'verification'
+                return 'verification_required'
             try:
                 if (REGISTERED_AUTH_RECOVERY in self.registration_state
                         and re.search(r'/(?:signup|sign-up|register|registration)(?:/|$)', urlsplit(self.page.url).path, re.I)):
-                    return True
+                    self.job.registration_last_observed_view = 'signup'
+                    return 'form_unrecognized'
                 if REGISTERED_AUTH_RECOVERY in self.registration_state and await unique_visible(self.page, CODE_INPUT):
-                    return True
-                return bool(await self.profile_fields()) or self.registration_loading
+                    self.job.registration_last_observed_view = 'code'
+                    return 'form_unrecognized'
+                if await self.profile_fields():
+                    self.job.registration_last_observed_view = 'profile'
+                    return 'form_unrecognized'
+                self.job.check()
+                self.job.registration_last_observed_view = 'unknown'
+                return 'form_unrecognized' if self.registration_loading else None
             except Stop as exc:
                 if exc.report.get('reason') not in {'form_unrecognized', 'login_form_ambiguous'}:
                     raise
-                return True
-        if await self.challenge():
-            await self.manual_registration('verification_required')
-        if await pending():
-            await self.manual_registration('form_unrecognized')
-        if await self.challenge() or await pending():
+                self.job.registration_last_observed_view = 'unknown'
+                return 'form_unrecognized'
+
+        previous_budget = self.observation_budget
+        budget = previous_budget or self.recovery_budget()
+        deadline_budget = None
+        deadline = getattr(self.job, 'deadline', None)
+        if previous_budget is not None and type(deadline) in {int, float}:
+            # A caller's existing budget still governs the whole observation;
+            # a shorter task deadline also bounds a suspended DOM read.
+            deadline_budget = SessionBudget(max(0, deadline - time.monotonic()),
+                cancelled=self.job.cancelled.is_set)
+        async def bounded(operation, step):
+            if deadline_budget is not None:
+                return await budget.run(lambda: deadline_budget.run(operation, step), step)
+            return await budget.run(operation, step)
+        self.observation_budget = budget
+        self.job.registration_last_observed_view = 'unknown'
+        reason = 'form_unrecognized'
+        clear = False
+        try:
+            while True:
+                reason = await bounded(observe, 'registered_onboarding_observe')
+                if reason == 'verification_required':
+                    break
+                if reason is None and clear:
+                    self.job.check()
+                    return
+                clear = reason is None
+                # Only passive reads of the retained Page; never repeat a write
+                # or navigate after an already verified owned authentication.
+                await bounded(lambda: self.settle(.1), 'registered_onboarding_reobserve')
+        except Stop as exc:
+            if exc.report.get('reason') != 'session_load_timeout':
+                raise
+            reason = 'form_unrecognized'
+        finally:
+            self.observation_budget = previous_budget
+        self.job.check()
+        await self.manual_registration(reason)
+        # A real owner resume is a new stage. Recheck once, without starting
+        # another automatic observation loop or replaying onboarding.
+        resumed_budget = self.recovery_budget()
+        try:
+            self.observation_budget = resumed_budget
+            pending = await resumed_budget.run(observe, 'registered_onboarding_resume')
+        finally:
+            self.observation_budget = previous_budget
+        if pending:
             raise Stop('form_unrecognized')
 
     async def end_recovery(self):
@@ -1405,6 +1459,7 @@ class RegistrationBrowser:
         navigation_readonly = None
         challenge_loading = False
         email_submit_returned = False
+        email_code_returned = False
         phases = {'context_create', 'context_route', 'page_create', 'navigation', 'navigation_guard',
                   'body_read', 'field_read', 'email_code_wait', 'email_code_fill', 'email_code_submit',
                   'identity_read', 'email_fill', 'mail_prepare', 'email_submit', 'password_choice',
@@ -1439,6 +1494,25 @@ class RegistrationBrowser:
                 note('none')
             phase = name
             self.operation('verification_' + name)
+
+        def checkpoint(name):
+            # Submission return and same-email identity are diagnostic facts,
+            # never password/MFA proof or a claim that an OTP was accepted.
+            job_id = getattr(self.job, 'id', None)
+            attempt = getattr(self.job, 'attempt', None)
+            if (type(name) is not str or name not in {'email_code_returned', 'same_email_identity_confirmed'}
+                    or type(_owned_context) is not bool
+                    or type(job_id) is not str or not JOB_ID.fullmatch(job_id)
+                    or type(attempt) is not int or not 0 < attempt <= 2147483647):
+                return
+            try:
+                logging.getLogger('registration').warning(
+                    'Registration verification checkpoint job=%s attempt=%s checkpoint=%s owned_context=%s after_email_code_returned=%s',
+                    job_id, attempt, name, _owned_context, email_code_returned)
+            except Exception:
+                # A logger failure cannot change the existing identity or write
+                # result. Business errors are handled outside this small block.
+                pass
 
         def failure(error, *, cleanup=False):
             name = type(error).__name__
@@ -1530,7 +1604,7 @@ class RegistrationBrowser:
                 await asyncio.sleep(min(.1, remaining / 1000))
 
         async def email_code():
-            nonlocal submitted_email
+            nonlocal submitted_email, email_code_returned
             if submitted_email:
                 note('email_code_already_submitted')
                 raise Stop('verification_required')
@@ -1574,6 +1648,8 @@ class RegistrationBrowser:
                 mark('email_code_submit')
                 if _owned_context:authentication['submitted'] = True
                 await field.press('Enter')
+                email_code_returned = True
+                checkpoint('email_code_returned')
             finally:
                 value = ''
             await self.settle(3)
@@ -1589,8 +1665,11 @@ class RegistrationBrowser:
                 limited = SessionBudget(min(seconds, budget.remaining_ms() / 1000),
                     cancelled=self.job.cancelled.is_set, clock=budget.clock)
                 self.observation_budget = limited
-                return await budget.run(lambda: limited.run(lambda: self.identity(page),
+                identity = await budget.run(lambda: limited.run(lambda: self.identity(page),
                     'verification_identity_read'), 'verification_identity_read')
+                if type(identity) is tuple and len(identity) == 2:
+                    checkpoint('same_email_identity_confirmed')
+                return identity
 
             try:
                 mark('identity_read')
@@ -1714,7 +1793,7 @@ class RegistrationBrowser:
                 note('get_retry' if navigation else 'get_first')
                 try:
                     response = await budget.run(lambda: page.goto(
-                        'https://chatgpt.com/auth/login', wait_until='domcontentloaded', timeout=0),
+                        'https://chatgpt.com/auth/login', wait_until='commit', timeout=0),
                         'verification_page_load')
                     note('url_guard')
                     self.official(page)
