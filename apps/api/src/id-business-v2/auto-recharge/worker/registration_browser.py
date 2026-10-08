@@ -1460,6 +1460,7 @@ class RegistrationBrowser:
         challenge_loading = False
         email_submit_returned = False
         email_code_returned = False
+        pending_email_challenge = object()
         phases = {'context_create', 'context_route', 'page_create', 'navigation', 'navigation_guard',
                   'body_read', 'field_read', 'email_code_wait', 'email_code_fill', 'email_code_submit',
                   'identity_read', 'email_fill', 'mail_prepare', 'email_submit', 'password_choice',
@@ -1482,7 +1483,7 @@ class RegistrationBrowser:
                      'identity_first', 'identity_retry', 'identity_guard_install', 'identity_code_guard',
                      'identity_get', 'identity_after_get', 'identity_guard_remove', 'owned_onboarding'}
         subphases.update({'email_form_readiness', 'email_form_changed',
-                         'challenge_loading', 'challenge_loading_exhausted'})
+                         'challenge_loading', 'challenge_loading_exhausted', 'email_code_catchup'})
 
         def note(name):
             nonlocal subphase
@@ -1546,6 +1547,7 @@ class RegistrationBrowser:
                 code if type(code) is str and code in RETRYABLE_NETWORK_CODES else 'none', cleanup,
                 details['reason'], details['subphase'], details['form_state'], email_submit_returned, _owned_context)
         submitted_email = False
+        submitted_password = False
         submitted_totp = False
 
         async def scan_page():
@@ -1610,14 +1612,50 @@ class RegistrationBrowser:
                 raise Stop('verification_required')
             submitted_email = True
             value = ''
+            missing_deadline = object()
+            previous_deadline = getattr(self.job, '_profile_prepare_deadline', missing_deadline)
+            mail_deadline = time.monotonic() + 120
+            for deadline in (getattr(self.job, 'deadline', None), previous_deadline):
+                if type(deadline) in {int, float} and -float('inf') < deadline < float('inf'):
+                    mail_deadline = min(mail_deadline, deadline)
             try:
+                self.job.check()
+                if time.monotonic() >= mail_deadline:
+                    raise Stop('verification_required')
+                await safe_page()
+                note('email_code_field_read')
+                field = await self.field(page, CODE_INPUT)
+                if not field:
+                    note('email_code_field_missing')
+                    raise Stop('verification_required')
+                if await login_code_type(page, field) != 'email':
+                    note('email_code_type_unconfirmed')
+                    raise Stop('verification_required')
+                self.official(page)
+                self.job.check()
+                if time.monotonic() >= mail_deadline:
+                    raise Stop('verification_required')
+                self.job._profile_prepare_deadline = mail_deadline
+                if getattr(self.job, 'awaiting_code', False) is True:
+                    # Catch up once when the actual email challenge is visible.
+                    # Reusing prepare_mail would discard an already delivered code.
+                    mark('mail_prepare')
+                    note('email_code_catchup')
+                    self.job.event('waiting_email', step=self.job.step, newMailRequest=False)
+                self.job.check()
+                remaining = mail_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Stop('verification_required')
                 try:
                     mark('email_code_wait')
                     note('email_code_wait')
-                    value = await asyncio.wait_for(self.job.wait_code(), timeout=120)
+                    value = await asyncio.wait_for(self.job.wait_code(), timeout=remaining)
                 except asyncio.TimeoutError:
                     note('email_code_wait_timeout')
                     raise Stop('verification_required') from None
+                self.job.check()
+                if time.monotonic() >= mail_deadline:
+                    raise Stop('verification_required')
                 await safe_page()
                 note('email_code_field_read')
                 field = await self.field(page, CODE_INPUT)
@@ -1652,6 +1690,11 @@ class RegistrationBrowser:
                 checkpoint('email_code_returned')
             finally:
                 value = ''
+                if previous_deadline is missing_deadline:
+                    if hasattr(self.job, '_profile_prepare_deadline'):
+                        del self.job._profile_prepare_deadline
+                else:
+                    self.job._profile_prepare_deadline = previous_deadline
             await self.settle(3)
 
         async def verification_identity():
@@ -1681,6 +1724,44 @@ class RegistrationBrowser:
                         raise
                     identity_recovery_used = True
                     failure(first_error)
+                    if email_submit_returned and not submitted_email and not submitted_password and not submitted_totp:
+                        # The submitted email may still be navigating to its
+                        # challenge. An unknown identity must not interrupt that
+                        # request with a write guard or an unrelated homepage GET.
+                        # Only a recognized email challenge or an actual anonymous
+                        # read may return to the existing single-code handler.
+                        for _ in range(60):
+                            try:
+                                budget.remaining_ms()
+                                await budget.run(safe_page, 'verification_identity_page')
+                                mark('field_read')
+                                note('identity_code_guard')
+                                code = await budget.run(lambda: unique_visible(page, CODE_INPUT),
+                                                        'verification_identity_code')
+                                if code:
+                                    kind = await budget.run(lambda: login_code_type(page, code),
+                                                            'verification_identity_code_type')
+                                    if kind == 'email':
+                                        return pending_email_challenge
+                                    raise Stop('verification_required')
+                                mark('identity_read')
+                                note('identity_retry')
+                                try:
+                                    identity = await read(min(1, budget.remaining_ms() / 1000))
+                                    if identity and await budget.run(lambda: unique_visible(page, CODE_INPUT),
+                                                                   'verification_identity_code'):
+                                        raise Stop('verification_required')
+                                    return identity
+                                except Exception as retry_error:
+                                    if not self.retryable_observation(retry_error):
+                                        raise
+                                    await budget.run(lambda: self.settle(.1),
+                                                     'verification_identity_reobserve')
+                            except Exception as recovery_error:
+                                if self.retryable_observation(recovery_error):
+                                    raise first_error
+                                raise
+                        raise first_error
 
                     async def readonly(route):
                         if route.request.method != 'GET':
@@ -1904,7 +1985,12 @@ class RegistrationBrowser:
                 password_form_state = 'not_observed'
                 await safe_page()
                 mark('identity_read')
-                if await verification_identity():
+                identity = await verification_identity()
+                if identity is pending_email_challenge:
+                    password_form_state = 'code'
+                    await email_code()
+                    continue
+                if identity:
                     password_form_state = 'identity'
                     # Inspect identity before any settings password control can
                     # be mistaken for an unauthenticated login form.
@@ -1956,11 +2042,16 @@ class RegistrationBrowser:
             self.official(page)
             mark('password_submit')
             if _owned_context:authentication['submitted'] = True
+            submitted_password = True
             await password.press('Enter')
             for _ in range(60):
                 await safe_page()
                 mark('identity_read')
-                if await verification_identity():
+                identity = await verification_identity()
+                if identity is pending_email_challenge:
+                    await email_code()
+                    continue
+                if identity:
                     if mfa and not submitted_totp and not _owned_context:
                         # Password and identity are proved; settings must still show
                         # an unconfigured authenticator before enrollment can resume.

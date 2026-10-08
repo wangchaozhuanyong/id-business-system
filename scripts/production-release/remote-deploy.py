@@ -10731,10 +10731,10 @@ def recharge_974_release(args, *, profile_id=RECHARGE_974_ID):
             return 1
 
 
-def api_admin_scope():
+def api_admin_scope(scope='API_ADMIN'):
     # Only the explicitly selected scope loads its separate controller.
     import types
-    namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')))
+    namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
     return types.SimpleNamespace(**namespace), types.SimpleNamespace(**globals())
 
 # A finite successor of the native92 release. No generic or all-service fallback.
@@ -12604,6 +12604,7 @@ def main():
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
     parser.add_argument('--api-admin-only', action='store_true')
+    parser.add_argument('--api-registration-only', action='store_true')
     parser.add_argument('--api-admin-build-proof')
     parser.add_argument('--historical-finance-exception', action='store_true')
     parser.add_argument('--historical-finance-continuation', action='store_true')
@@ -12636,6 +12637,9 @@ def main():
     parser.add_argument('--registration-worker-94', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
+    if args.api_registration_only:
+        scope, controller = api_admin_scope('API_REGISTRATION')
+        return scope.release(controller, args)
     if args.recharge_pro_pricing:
         return recharge_pricing_release(args)
     if args.recharge_pro_6f5:
@@ -13280,6 +13284,10 @@ if __name__ == '__main__':
             load_registration_interstitial95()
             raise SystemExit(registration_interstitial_cli(sys.argv[1:]))
         except Exception:raise SystemExit('Fixed registration interstitial unavailable; raw output suppressed') from None
+    if sys.argv[1:2] and sys.argv[1] in ('--prepare-api-registration-build', '--write-api-registration-build-proof',
+        '--api-registration-verify', '--api-registration-preflight', '--api-registration-readback', '--api-registration-handoff', '--api-registration-business'):
+        scope, controller = api_admin_scope('API_REGISTRATION')
+        raise SystemExit(scope.registration_cli(controller, sys.argv[1:]))
     if sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):
         try:
             scope, controller = api_admin_scope()

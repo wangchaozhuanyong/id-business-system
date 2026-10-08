@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -42,6 +43,79 @@ function recordGuardCommands(mode, paths, part = 'guards') {
     })
   );
 }
+
+function recordConnectorCommands(paths, failInstall = false) {
+  const script = `
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const paths = JSON.parse(process.env.CONNECTOR_TEST_PATHS);
+    const calls = [];
+    childProcess.execFileSync = (file, args, options = {}) => {
+      if (file === 'git') return paths.join('\\n');
+      calls.push({file, args, cwd: options.cwd ?? null,
+        browsersPath: options.env?.PLAYWRIGHT_BROWSERS_PATH ?? null,
+        bytecodeDisabled: options.env?.PYTHONDONTWRITEBYTECODE ?? null});
+      if (process.env.CONNECTOR_TEST_FAIL_INSTALL === '1' && file === 'python3' && args[1] === 'playwright')
+        throw new Error('simulated browser install failure');
+      return '';
+    };
+    syncBuiltinESMExports();
+    process.argv = ['node', 'scripts/ci-recharge-check.mjs', 'connector', 'a'.repeat(40)];
+    let failed = false;
+    try { await import('./scripts/ci-recharge-check.mjs'); } catch { failed = true; }
+    process.stdout.write(JSON.stringify({calls, failed}));
+  `;
+  return JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CONNECTOR_TEST_PATHS: JSON.stringify(paths),
+        CONNECTOR_TEST_FAIL_INSTALL: failInstall ? '1' : '0'
+      }
+    })
+  );
+}
+
+test('connector installs its Python browser before testing with the same cache and working directory', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
+  for (const [changed, fullPro] of [
+    ['registration_browser.py', false],
+    ['server.py', false],
+    ['plan_selection.py', true]
+  ]) {
+    const { calls, failed } = recordConnectorCommands([`${worker}/${changed}`]);
+    assert.equal(failed, false);
+    const install = calls.findIndex(
+      (call) => call.file === 'python3' && call.args[1] === 'playwright'
+    );
+    const testing = calls.findIndex(
+      (call) => call.file === 'python3' && call.args[1] === 'unittest'
+    );
+    assert.ok(install >= 0 && testing > install);
+    assert.deepEqual(calls[install].args, ['-m', 'playwright', 'install', 'chromium']);
+    for (const call of [calls[install], calls[testing]]) {
+      assert.equal(call.cwd, worker);
+      assert.equal(call.browsersPath, resolve(root, worker, '.browsers'));
+      assert.equal(call.bytecodeDisabled, '1');
+    }
+    assert.ok(calls[testing].args.includes('test_registration_browser'));
+    assert.ok(
+      calls[testing].args.includes(fullPro ? 'test_pro' : 'test_pro.ProMenuDiagnosticsTests')
+    );
+  }
+});
+
+test('connector stops before worker tests when its browser installation fails', () => {
+  const { calls, failed } = recordConnectorCommands(
+    ['apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py'],
+    true
+  );
+  assert.equal(failed, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['-m', 'playwright', 'install', 'chromium']);
+});
 
 test('real scoped dispatcher executes backend guards once without frontend edits, including deletion', () => {
   for (const [mode, paths] of [

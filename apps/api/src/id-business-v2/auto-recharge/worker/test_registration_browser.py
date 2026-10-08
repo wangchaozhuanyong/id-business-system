@@ -1619,10 +1619,12 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         flow.field = AsyncMock(side_effect=lambda _page,selector:{
             EMAIL_INPUT:email,PASSWORD_INPUT:password,CODE_INPUT:code}.get(selector))
         flow.identity = AsyncMock(side_effect=[None,None,None,identity])
-        code_type = AsyncMock(side_effect=['email','email','email','unknown'])
+        # The catch-up fence observes the same explicit email form once more
+        # before waiting; the later unknown form still follows the sole Enter.
+        code_type = AsyncMock(side_effect=['email','email','email','email','unknown'])
         if challenge:
             async def body():
-                return 'Verify you are human' if code_type.await_count == 4 else 'Continue'
+                return 'Verify you are human' if code_type.await_count == 5 else 'Continue'
             page.locator('body').inner_text = body
         with patch('registration_browser.login_code_type',code_type), patch(
                 'registration_browser.unique_visible',AsyncMock(return_value=code if still_code else None)):
@@ -1685,6 +1687,104 @@ class VerificationFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow.job.registration_operation, 'verification_cleanup')
         self.assertEqual(field.press.await_count, 2)
         self.assertFalse(hasattr(flow.job, 'registration_verification_error'))
+
+
+class VerificationCodeCatchupBudgetTests(unittest.IsolatedAsyncioTestCase):
+    """Exact deadline arithmetic; native queued-mail behavior is covered below."""
+    def fixture(self, *, elapsed=40, job_deadline=1000, profile_deadline=None, mode='normal'):
+        from browser_session import SessionBudget
+        flow,context,page=VerificationFailureDiagnosticsTests.flow(self)
+        email,password,code=VerificationFailureDiagnosticsTests.login_fields(self,flow,password=True)
+        clock=[0.0];timeouts=[];callback_deadlines=[]
+        job=flow.job;job.step='password';job.deadline=job_deadline;job.awaiting_code=False
+        if profile_deadline is not None:job._profile_prepare_deadline=profile_deadline
+        flow.recovery_budget=lambda:SessionBudget(15,clock=lambda:clock[0],cancelled=job.cancelled.is_set)
+        flow.identity=AsyncMock(side_effect=[None,None,('same','identity')])
+        def check():
+            if job.cancelled.is_set():raise Stop('operation_cancelled')
+            if clock[0]>=job.deadline:raise Stop('mailbox_timeout')
+        job.check=check
+        def prepare(step, *, new_request=False):
+            self.assertTrue(new_request);job.step=step;job.awaiting_code=True
+        job.prepare_mail=MagicMock(side_effect=prepare)
+        def event(name, **data):
+            self.assertEqual((name,data),('waiting_email',{'step':'password','newMailRequest':False}))
+            callback_deadlines.append(job._profile_prepare_deadline)
+            clock[0]+=elapsed
+            if mode=='cancel_callback':job.cancelled.set()
+        job.event=MagicMock(side_effect=event)
+        async def mail():
+            if mode=='late_code':clock[0]=job._profile_prepare_deadline+1
+            if mode=='wait_timeout':raise asyncio.TimeoutError()
+            return '123456'
+        job.wait_code=AsyncMock(side_effect=mail)
+        calls=[0]
+        async def code_type(_page,_field):
+            calls[0]+=1
+            if calls[0]==2 and mode=='cancel_before':job.cancelled.set()
+            if calls[0]==2 and mode=='expire_before':clock[0]=121
+            return 'email'
+        original_wait_for=asyncio.wait_for
+        async def wait_for(awaitable, timeout):
+            timeouts.append(timeout)
+            return await original_wait_for(awaitable,timeout)
+        return flow,context,code,clock,timeouts,callback_deadlines,code_type,wait_for
+
+    async def execute(self, values):
+        flow,_context,_code,clock,_timeouts,_deadlines,code_type,wait_for=values
+        with patch('registration_browser.time',SimpleNamespace(monotonic=lambda:clock[0])), patch(
+                'registration_browser.login_code_type',side_effect=code_type), patch(
+                'registration_browser.asyncio.wait_for',side_effect=wait_for):
+            return await flow.verify_login()
+
+    async def test_callback_time_is_deducted_from_single_original_120_seconds(self):
+        values=self.fixture();flow,context,code,_clock,timeouts,deadlines,*_=values
+        self.assertIs(await self.execute(values),True)
+        self.assertEqual(deadlines,[120]);self.assertEqual(timeouts,[80])
+        flow.job.event.assert_called_once();flow.job.prepare_mail.assert_called_once()
+        flow.job.wait_code.assert_awaited_once();code.press.assert_awaited_once_with('Enter')
+        self.assertFalse(hasattr(flow.job,'_profile_prepare_deadline'));context.close.assert_awaited_once()
+
+    async def test_earlier_job_or_profile_deadline_wins_and_old_attribute_is_restored(self):
+        for profile,deadline in [(None,100),(95,95)]:
+            with self.subTest(profile=profile):
+                values=self.fixture(job_deadline=100,profile_deadline=profile)
+                flow,_context,code,_clock,timeouts,deadlines,*_=values
+                self.assertIs(await self.execute(values),True)
+                self.assertEqual(deadlines,[deadline]);self.assertEqual(timeouts,[deadline-40])
+                code.press.assert_awaited_once_with('Enter')
+                if profile is None:self.assertFalse(hasattr(flow.job,'_profile_prepare_deadline'))
+                else:self.assertEqual(flow.job._profile_prepare_deadline,profile)
+
+    async def test_cancel_or_expiry_before_callback_never_waits_fills_or_submits_otp(self):
+        for mode,reason in [('cancel_before','operation_cancelled'),('expire_before','verification_required')]:
+            with self.subTest(mode=mode):
+                values=self.fixture(mode=mode);flow,_context,code,*_=values
+                with self.assertRaises(Stop) as stopped:await self.execute(values)
+                self.assertEqual(stopped.exception.report['reason'],reason)
+                flow.job.event.assert_not_called();flow.job.wait_code.assert_not_awaited()
+                code.fill.assert_not_awaited();code.press.assert_not_awaited()
+                self.assertFalse(hasattr(flow.job,'_profile_prepare_deadline'))
+
+    async def test_callback_cancel_or_overrun_does_not_start_a_new_wait_budget(self):
+        for mode,elapsed,reason in [('cancel_callback',40,'operation_cancelled'),('normal',121,'verification_required')]:
+            with self.subTest(mode=mode):
+                values=self.fixture(mode=mode,elapsed=elapsed);flow,_context,code,_clock,timeouts,*_=values
+                with self.assertRaises(Stop) as stopped:await self.execute(values)
+                self.assertEqual(stopped.exception.report['reason'],reason)
+                flow.job.event.assert_called_once();flow.job.wait_code.assert_not_awaited();self.assertEqual(timeouts,[])
+                code.fill.assert_not_awaited();code.press.assert_not_awaited()
+                self.assertFalse(hasattr(flow.job,'_profile_prepare_deadline'))
+
+    async def test_timeout_or_late_code_keeps_zero_otp_submission_and_original_profile_deadline(self):
+        for mode in ['late_code','wait_timeout']:
+            with self.subTest(mode=mode):
+                values=self.fixture(mode=mode,profile_deadline=95);flow,_context,code,_clock,timeouts,*_=values
+                with self.assertRaises(Stop) as stopped:await self.execute(values)
+                self.assertEqual(stopped.exception.report['reason'],'verification_required')
+                self.assertEqual(timeouts,[55]);flow.job.wait_code.assert_awaited_once()
+                code.fill.assert_not_awaited();code.press.assert_not_awaited()
+                self.assertEqual(flow.job._profile_prepare_deadline,95)
 
 
 class VerificationCheckpointTests(unittest.IsolatedAsyncioTestCase):
@@ -5598,6 +5698,297 @@ class EmailRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class PendingEmailIdentityBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Native pending login POST and real anonymous session fetch failures."""
+    async def asyncSetUp(self):await VerificationIdentityBrowserTests.asyncSetUp(self)
+    async def asyncTearDown(self):await ProfileBrowserTests.asyncTearDown(self)
+
+    async def fixture(self, *, owned=False, failure='network', stage='email'):
+        from registration_browser import REGISTERED_AUTH_RECOVERY
+        self.requests = []; self.blocked = []; self.session_reads = 0; self.account_reads = 0
+        self.authenticated = False; self.email_returned = False
+        self.first_session = asyncio.Event(); self.email_rendered = asyncio.Event(); self.login_errors = []
+        self.job.step = 'password'; self.job.deadline = None
+        self.job.wait_code = AsyncMock(return_value='123456')
+        self.job.prepare_mail = MagicMock()
+        original = self.context, self.page
+        self.flow.context, self.flow.page = original
+        self.flow.registration_state.clear()
+        label = {'sms':'SMS text message code', 'unknown':'Verification code'}.get(
+            stage, 'Check your email. Email verification code')
+        code = ('<form id="challenge"><p>'+label+'</p><input name="code" '
+                'autocomplete="one-time-code"><button>Continue</button></form>')
+        if stage == 'mixed':
+            code += ('<form id="settings"><input type="password" '
+                     'autocomplete="current-password"><button>Save password</button></form>')
+        html = '''<!doctype html><html><title>Login fixture</title><body>
+        <form><input type="email" required><button>Continue</button></form><script>
+        function challenge(){document.body.innerHTML=__CODE__;
+          document.querySelector('#challenge').onsubmit=async event=>{event.preventDefault();
+            await fetch('/fixture/code',{method:'POST'});document.body.innerHTML='<main>Welcome</main>';};
+          const settings=document.querySelector('#settings');if(settings){
+            settings.querySelector('input').oninput=()=>fetch('/fixture/settings-input',{method:'POST'});
+            settings.onsubmit=async event=>{event.preventDefault();await fetch('/fixture/settings',{method:'POST'});};}}
+        function password(){document.body.innerHTML='<form><input type="password" autocomplete="current-password"><button>Continue</button></form>';
+          document.querySelector('form').onsubmit=async event=>{event.preventDefault();
+            await fetch('/fixture/password',{method:'POST'});document.body.innerHTML='<main>Welcome</main>';};}
+        document.querySelector('form').onsubmit=async event=>{event.preventDefault();
+          await fetch('/fixture/email',{method:'POST'});
+          if('__STAGE__'==='password')password();
+          else if('__STAGE__'==='never')document.body.innerHTML='<main>Waiting</main>';
+          else challenge();};
+        </script></body></html>'''.replace('__CODE__',json.dumps(code)).replace('__STAGE__',stage)
+        def session():
+            def part(value):return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+            token='.'.join((part({'alg':'RS256'}),part({'exp':int(time.time())+3600,
+                'https://api.openai.com/auth':{'chatgpt_account_id':'pending-fixture-account'},
+                'https://api.openai.com/profile':{'email':self.job.payload['email']}}),'c3ludGhldGlj'))
+            return {'accessToken':token,'user':{'id':'pending-fixture-user','email':self.job.payload['email']},
+                    'account':{'id':'pending-fixture-account'}}
+        async def local(route):
+            request=route.request; parsed=urlsplit(request.url); path=parsed.path
+            self.assertEqual(parsed.hostname,'chatgpt.com')
+            self.requests.append((request.method,path))
+            if path == '/auth/login':
+                self.assertEqual(request.method,'GET')
+                await route.fulfill(content_type='text/html',body=html)
+            elif path == '/':
+                # The old recovery GET replaces this still-pending login page.
+                await route.fulfill(content_type='text/html',body='<html><title>Home</title><body>Home</body></html>')
+            elif path == '/fixture/email':
+                self.assertEqual(request.method,'POST')
+                await asyncio.wait_for(self.first_session.wait(),3)
+                await asyncio.sleep(.2)
+                self.email_returned=True
+                try:
+                    await route.fulfill(content_type='application/json',body='{}')
+                    if stage == 'positive':
+                        # Let the native email callback render its challenge
+                        # before returning a positive session to the in-flight
+                        # identity retry. No page-global callback is replayed.
+                        await self.verify_page.wait_for_function("!!document.querySelector('#challenge')",timeout=2000)
+                        self.email_rendered.set()
+                except Exception:
+                    if self.verify_page and not self.verify_page.is_closed() and urlsplit(self.verify_page.url).path != '/':raise
+            elif path in {'/fixture/password','/fixture/code','/fixture/settings-input','/fixture/settings'}:
+                self.assertEqual(request.method,'POST')
+                if path in {'/fixture/password','/fixture/code'}:self.authenticated=True
+                await route.fulfill(content_type='application/json',body='{}')
+            elif path == '/api/auth/session':
+                self.assertEqual(request.method,'GET');self.session_reads+=1
+                self.first_session.set()
+                if stage == 'positive' and self.session_reads == 2:
+                    await asyncio.wait_for(self.email_rendered.wait(),3)
+                    self.authenticated=True
+                if not self.authenticated and not (stage == 'password' and self.email_returned):
+                    if failure == 'redirect':
+                        # browser_read uses redirect:error, so this is a real
+                        # fetch failure rather than an identity test double.
+                        await route.fulfill(status=302,headers={'Location':'https://chatgpt.com/fixture/session-redirect'},body='')
+                    else:await route.abort('failed')
+                    return
+                await route.fulfill(content_type='application/json',body=json.dumps(session() if self.authenticated else {}))
+            elif path == '/backend-api/accounts/check/v4-2023-04-27':
+                self.account_reads+=1
+                await route.fulfill(content_type='application/json',body=json.dumps({
+                    'accounts':{'pending-fixture-account':{'account':{'plan_type':'free'}}}}))
+            else:raise AssertionError('Unexpected pending-login fixture request')
+        context=await self.browser.new_context(service_workers='block',accept_downloads=False)
+        await context.route('**/*',local)
+        def page_created(page):
+            self.verify_page=page
+            page.on('pageerror',lambda _error:self.login_errors.append('page_error'))
+            page.on('requestfailed',lambda request:self.blocked.append((request.method,urlsplit(request.url).path)))
+        context.on('page',page_created)
+        self.job.new_verification_context=AsyncMock(return_value=context)
+        if owned:
+            self.flow.context=context;self.flow.page=await context.new_page()
+            self.flow.registration_state[REGISTERED_AUTH_RECOVERY]={
+                'context':context,'page':self.flow.page,'submitted':False,'guard':None}
+        return context, original
+
+    def no_homepage_get_or_proof(self):
+        self.assertEqual([path for method,path in self.requests if path in {'/','/auth/login'}],['/auth/login'])
+        self.assertFalse(self.job.payload['passwordVerified']);self.assertFalse(self.job.payload['mfaVerified'])
+        self.assertEqual(self.job.registration_verification_error['subphase'],'identity_first')
+        self.assertEqual(self.job.registration_verification_error['reason'],'session_network_error')
+        self.assertNotIn(('POST','/fixture/settings-input'),self.requests)
+        self.assertNotIn(('POST','/fixture/settings'),self.requests)
+
+    async def test_pending_email_network_failure_waits_for_code_without_get_in_clean_and_owned_contexts(self):
+        for owned in [False,True]:
+            with self.subTest(owned=owned):
+                context,original=await self.fixture(owned=owned)
+                self.assertIs(await self.flow.verify_login(_owned_context=owned,allow_email_identity=True),False)
+                self.no_homepage_get_or_proof()
+                self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email','/fixture/code'])
+                self.job.wait_code.assert_awaited_once();self.job.prepare_mail.assert_called_once_with('password',new_request=True)
+                self.assertEqual(self.login_errors,[])
+                if owned:await context.close()
+                else:self.assertIs(self.flow.page,original[1])
+
+    async def test_pending_email_session_redirect_uses_real_fetch_error_then_one_email_code(self):
+        await self.fixture(failure='redirect')
+        self.assertIs(await self.flow.verify_login(allow_email_identity=True),False)
+        self.no_homepage_get_or_proof()
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email','/fixture/code'])
+        self.assertFalse(any(path=='/fixture/session-redirect' for _method,path in self.requests))
+        self.job.wait_code.assert_awaited_once()
+
+    async def test_actual_anonymous_read_after_pending_email_allows_single_password_login(self):
+        await self.fixture(stage='password')
+        self.assertIs(await self.flow.verify_login(),True)
+        self.no_homepage_get_or_proof()
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email','/fixture/password'])
+        self.job.wait_code.assert_not_awaited()
+
+    async def test_unknown_identity_email_challenge_skips_adjacent_settings_password(self):
+        await self.fixture(stage='mixed')
+        self.assertIs(await self.flow.verify_login(allow_email_identity=True),False)
+        self.no_homepage_get_or_proof()
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email','/fixture/code'])
+        self.job.wait_code.assert_awaited_once()
+
+    async def test_pending_email_unknown_and_sms_challenges_never_query_mail(self):
+        for stage in ['unknown','sms']:
+            with self.subTest(stage=stage):
+                await self.fixture(stage=stage)
+                with self.assertRaises(Stop) as stopped:await self.flow.verify_login()
+                self.assertEqual(stopped.exception.report['reason'],'verification_required')
+                self.no_homepage_get_or_proof()
+                self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email'])
+                self.job.wait_code.assert_not_awaited()
+
+    async def test_pending_email_recovery_exhaustion_keeps_first_failure_and_zero_otp(self):
+        from browser_session import SessionBudget
+        from registration_browser import REGISTERED_AUTH_RECOVERY
+        context,_original=await self.fixture(owned=True,stage='never')
+        self.flow.recovery_budget=lambda:SessionBudget(2,cancelled=self.job.cancelled.is_set)
+        with self.assertRaises(Stop) as stopped:await self.flow.verify_login(_owned_context=True)
+        self.assertEqual(stopped.exception.report['reason'],'session_network_error')
+        self.no_homepage_get_or_proof()
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email'])
+        self.job.wait_code.assert_not_awaited()
+        self.assertTrue(self.flow.registration_state[REGISTERED_AUTH_RECOVERY]['submitted'])
+        self.assertFalse(self.verify_page.is_closed());await context.close()
+
+    async def test_positive_identity_appearing_during_retry_with_challenge_still_pauses(self):
+        await self.fixture(stage='positive')
+        with self.assertRaises(Stop) as stopped:await self.flow.verify_login(allow_email_identity=True)
+        self.assertEqual(stopped.exception.report['reason'],'verification_required')
+        self.no_homepage_get_or_proof()
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email'])
+        self.job.wait_code.assert_not_awaited()
+        self.assertTrue(self.email_rendered.is_set());self.assertEqual(self.account_reads,1)
+
+
+@unittest.skipUnless(os.environ.get('V2_REGISTRATION_BROWSER_TEST') == '1', 'explicit local fixture')
+class VerificationCodeCatchupBrowserTests(unittest.IsolatedAsyncioTestCase):
+    """Real server job queue and callback receipts, with native login/session DOM."""
+    async def asyncSetUp(self):await VerificationIdentityBrowserTests.asyncSetUp(self)
+    async def asyncTearDown(self):await ProfileBrowserTests.asyncTearDown(self)
+
+    async def fixture(self, *, arrival='queued', step='password', stage='email'):
+        from registration_builtin import RegistrationServerJob
+        from test_registration_builtin import server_payload
+        value=server_payload();value.update(browserProfileId='reg_'+'a'*64,registered=True,
+            passwordVerified=step=='mfa',mfaVerified=False,step=step)
+        previous=self.flow
+        self.job=RegistrationServerJob(value['id'],value,
+            'http://api:3000/api/id-business-v2/auto-registration/local',MagicMock())
+        prepare_mail,wait_code=self.job.prepare_mail,self.job.wait_code
+        self.flow=RegistrationBrowser(self.job,self.context)
+        self.flow.page=self.page;self.flow.guard=previous.guard;self.flow.settle=previous.settle
+        context,_original=await PendingEmailIdentityBrowserTests.fixture(self,owned=True,stage=stage)
+        self.job.step=step;self.job.deadline=time.monotonic()+240
+        self.job.prepare_mail=MagicMock(wraps=prepare_mail)
+        self.job.wait_code=AsyncMock(wraps=wait_code)
+        self.callbacks=[];self.queued_snapshots=[];self.mail_request_count=0;self.accepted_count=0
+        self.api_state='running';self.requested_at=None
+        test=self
+        class Response:
+            def __init__(self,body):self.body=body
+            def __enter__(self):return self
+            def __exit__(self,*_args):return False
+            def read(self,_limit):return self.body
+        class Opener:
+            def open(self,request, *, timeout):
+                self_body=json.loads(request.data)
+                name=self_body['type'];new=self_body.get('newMailRequest')
+                test.callbacks.append((name,self_body['step'],new))
+                if name=='waiting_email':
+                    test.api_state='awaiting_email'
+                    if new is True:
+                        test.mail_request_count+=1;test.requested_at=time.monotonic()
+                        if arrival=='queued':test.job.signal_code('123456',test.job.attempt,test.job.step,'fixture-mail')
+                    elif new is False:
+                        snapshot=(test.job.pending_code,test.job.code_event.is_set(),test.job.awaiting_code)
+                        if arrival=='queued':test.assertEqual(snapshot,(('123456','fixture-mail'),True,True))
+                        test.queued_snapshots.append(snapshot)
+                        if arrival=='catchup':test.job.signal_code('123456',test.job.attempt,test.job.step,'fixture-mail')
+                        if arrival=='cancel_callback':test.job.cancelled.set()
+                elif name=='mail_accepted':
+                    test.assertEqual(test.api_state,'awaiting_email');test.accepted_count+=1
+                return Response(json.dumps({'success':True,'data':{'step':self_body['step']}}).encode())
+        return context,Opener()
+
+    def accepted_once(self,step):
+        self.assertEqual([row for row in self.callbacks if row[0]=='waiting_email'],
+                         [('waiting_email',step,True),('waiting_email',step,False)])
+        self.assertEqual(self.mail_request_count,1);self.assertIsNotNone(self.requested_at)
+        self.assertEqual(self.accepted_count,1)
+        self.job.prepare_mail.assert_called_once_with(step,new_request=True)
+        self.job.wait_code.assert_awaited_once()
+        self.assertIsNone(self.job.pending_code);self.assertFalse(self.job.awaiting_code)
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email','/fixture/code'])
+        self.assertFalse(any(path=='/' for _method,path in self.requests))
+        self.assertFalse(self.job.payload['mfaVerified'])
+        self.assertFalse(hasattr(self.job,'_profile_prepare_deadline'))
+
+    async def test_queued_code_is_not_cleared_and_catchup_preserves_current_password_or_mfa_step(self):
+        for step in ['password','mfa']:
+            with self.subTest(step=step):
+                context,opener=await self.fixture(step=step)
+                with patch('registration_job.build_opener',return_value=opener):
+                    self.assertIs(await self.flow.verify_login(_owned_context=True),False)
+                self.accepted_once(step)
+                self.assertEqual(self.queued_snapshots,[(('123456','fixture-mail'),True,True)])
+                self.assertIs(self.job.payload['passwordVerified'],step=='mfa')
+                await context.close()
+
+    async def test_mail_arriving_after_initial_callback_is_delivered_by_one_catchup(self):
+        context,opener=await self.fixture(arrival='catchup')
+        with patch('registration_job.build_opener',return_value=opener):
+            self.assertIs(await self.flow.verify_login(_owned_context=True),False)
+        self.accepted_once('password')
+        self.assertEqual(self.queued_snapshots,[(None,False,True)])
+        self.assertFalse(self.job.payload['passwordVerified']);await context.close()
+
+    async def test_native_unknown_and_sms_pages_never_rearm_or_consume_queued_mail(self):
+        for stage in ['unknown','sms']:
+            with self.subTest(stage=stage):
+                context,opener=await self.fixture(stage=stage)
+                with patch('registration_job.build_opener',return_value=opener):
+                    with self.assertRaises(Stop) as stopped:await self.flow.verify_login(_owned_context=True)
+                self.assertEqual(stopped.exception.report['reason'],'verification_required')
+                self.assertEqual(self.callbacks,[('waiting_email','password',True)])
+                self.job.wait_code.assert_not_awaited();self.assertEqual(self.accepted_count,0)
+                self.assertEqual(self.job.pending_code,('123456','fixture-mail'))
+                self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email'])
+                await context.close()
+
+    async def test_cancel_during_catchup_does_not_consume_or_submit_code(self):
+        context,opener=await self.fixture(arrival='cancel_callback')
+        with patch('registration_job.build_opener',return_value=opener):
+            with self.assertRaises(Stop) as stopped:await self.flow.verify_login(_owned_context=True)
+        self.assertEqual(stopped.exception.report['reason'],'operation_cancelled')
+        self.assertEqual(self.callbacks,[('waiting_email','password',True),('waiting_email','password',False)])
+        self.job.wait_code.assert_not_awaited();self.assertEqual(self.accepted_count,0)
+        self.assertEqual([path for method,path in self.requests if method=='POST'],['/fixture/email'])
+        self.assertFalse(hasattr(self.job,'_profile_prepare_deadline'));await context.close()
+
+
 class VerificationEmailHydrationBrowserTests(unittest.IsolatedAsyncioTestCase):
     """Exact clean/owned login forms, served in memory with no external traffic."""
     async def asyncSetUp(self):await VerificationIdentityBrowserTests.asyncSetUp(self)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -364,11 +364,12 @@ if history_policy == 'historical-finance-20261005-mailbox-batch':
 image_flags = f' --image-commit {image_commit} --image-run-id {image_run} --image-run-attempt {image_attempt}'
 script_path = f'/opt/id-business-v2/.staging/oidc-{sha}/remote-deploy.py'
 url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/remote-deploy.py'
-api_admin = os.environ.get('RELEASE_OPERATION') == 'release_api_admin'
+api_admin = os.environ.get('RELEASE_OPERATION') in ('release_api_admin', 'release_api_registration')
 if api_admin:
     import base64
     from pathlib import Path
-    scope_flag = ' --api-admin-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/api-admin-build-proof.json').read_bytes()).decode()
+    scope_name = 'api-registration' if os.environ['RELEASE_OPERATION'] == 'release_api_registration' else 'api-admin'
+    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()).decode()
     image_flags = ''
 commands = [
     'set -eu',

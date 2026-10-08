@@ -4,6 +4,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 
 if [[ "${RELEASE_OPERATION:-release}" == release_api_admin ]]; then
   services=(api admin)
+elif [[ "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
+  services=(api auto-recharge)
 elif [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-92-20261007 ]]; then
   test "${RELEASE_OPERATION:-release}" = release
   test "$EXPECTED_CURRENT" = 974c62cc1681012ecff897aefc90d2cd9900004a

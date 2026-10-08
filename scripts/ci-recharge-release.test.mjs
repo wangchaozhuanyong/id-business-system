@@ -335,7 +335,14 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
           }),
         (error) =>
           error.status === 1 &&
-          (['verify_api_admin', 'release_api_admin'].includes(operation)
+          ([
+            'verify_api_admin',
+            'release_api_admin',
+            'verify_api_registration',
+            'handoff_api_registration',
+            'release_api_registration',
+            'verify_registration_business'
+          ].includes(operation)
             ? String(error.stderr) === ''
             : String(error.stderr).includes('supports preparation or release only'))
       );
@@ -2510,11 +2517,12 @@ test('Pro business CI prepares the locked Python Chromium before the full Pro mo
     });
 });
 
-test('control-only and other worker CI changes keep the existing Pro subset without installing Chromium', () => {
+test('control-only and other worker CI changes install Chromium in one cache while retaining the Pro subset', () => {
   const worker = 'apps/api/src/id-business-v2/auto-recharge/worker';
   for (const changed of [
     'deploy/aws/recharge-pro-main80-20261006.json',
     `${worker}/pay.py`,
+    `${worker}/registration_browser.py`,
     `${worker}/plan_selection.py.backup`,
     `${worker}/test_pro.py/extra`
   ])
@@ -2535,11 +2543,15 @@ test('control-only and other worker CI changes keep the existing Pro subset with
         }
       );
       const commands = readFileSync(log, 'utf8').trim().split('\n');
-      assert.equal(commands.length, 2);
-      const tests = commands[0].split(' ');
+      assert.equal(commands.length, 4);
+      assert.equal(commands[0], '-m playwright install chromium');
+      assert.equal(commands[1], join(process.cwd(), worker, '.browsers'));
+      const tests = commands[2].split(' ');
+      assert.deepEqual(tests.slice(0, 2), ['-m', 'unittest']);
       assert.equal(tests.filter((name) => name === 'test_pro.ProMenuDiagnosticsTests').length, 1);
       assert.equal(tests.includes('test_pro'), false);
-      assert.equal(commands[1], 'existing-cache');
+      assert.ok(tests.includes('test_registration_browser'));
+      assert.equal(commands[3], commands[1]);
     });
 });
 
