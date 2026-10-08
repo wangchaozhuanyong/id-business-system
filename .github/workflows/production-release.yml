@@ -836,7 +836,7 @@ jobs:
               def digest(value):
                   return isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value)
               try:
-                  lines = output.splitlines()
+                  lines = output.rstrip('\r\n').splitlines()
                   if len(lines) != 1 or not lines[0].startswith('STORAGE_MAINTENANCE ') or len(output) > 128 * 1024:
                       raise ValueError('Envelope changed')
                   envelope = json.loads(lines[0][len('STORAGE_MAINTENANCE '):], object_pairs_hook=unique)
