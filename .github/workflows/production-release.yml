@@ -31,6 +31,8 @@ on:
           - verify_backups
           - cleanup_backups
           - diagnose_storage
+          - verify_release_archive_cache
+          - archive_release_cache
           - cleanup_audit
           - verify_legacy_cache
           - cleanup_legacy_cache
@@ -122,7 +124,7 @@ on:
         type: string
 
       cache_plan_sha256:
-        description: Exact verified unused image cache plan digest (cleanup_unused_cache only)
+        description: Exact verified image or release archive cache plan digest (cleanup operations only)
         required: false
         default: ''
         type: string
@@ -256,6 +258,8 @@ jobs:
           test -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}"
           python3 scripts/production-release/remote-deploy.py --check-fixed-recharge-scope --fixed-recharge-profile recharge-pro-6f5-20261008
       - name: Validate release policy and reviewed seal selection
+        env:
+          CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
         run: bash scripts/production-release/validate-release-selection.sh
 
       - name: Verify fixed registration runtime approval
@@ -741,9 +745,10 @@ jobs:
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
 
       - name: Diagnose storage or clean approved routine audit records
-        if: inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit' || inputs.operation == 'verify_legacy_cache' || inputs.operation == 'cleanup_legacy_cache'
+        if: inputs.operation == 'diagnose_storage' || inputs.operation == 'cleanup_audit' || inputs.operation == 'verify_legacy_cache' || inputs.operation == 'cleanup_legacy_cache' || inputs.operation == 'verify_release_archive_cache' || inputs.operation == 'archive_release_cache'
         env:
           STORAGE_OPERATION: ${{ inputs.operation }}
+          CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
         run: |
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
@@ -751,12 +756,24 @@ jobs:
           import json
           import os
           from pathlib import Path
+          import re
           import shlex
           operation = {'diagnose_storage': 'diagnose', 'cleanup_audit': 'cleanup-audit',
-              'verify_legacy_cache': 'verify-legacy-cache', 'cleanup_legacy_cache': 'cleanup-legacy-cache'}[os.environ['STORAGE_OPERATION']]
+              'verify_legacy_cache': 'verify-legacy-cache', 'cleanup_legacy_cache': 'cleanup-legacy-cache',
+              'verify_release_archive_cache': 'verify-release-archive-cache',
+              'archive_release_cache': 'archive-release-cache'}[os.environ['STORAGE_OPERATION']]
+          if operation in ('verify-release-archive-cache', 'archive-release-cache'):
+              if os.environ['EXPECTED_CURRENT'] != 'e7c9862d58599995954883f1c1f6038283afffab':
+                  raise SystemExit('Release archive baseline changed')
+              digest = os.environ['CACHE_PLAN_SHA256']
+              if (operation == 'archive-release-cache' and not re.fullmatch(r'[a-f0-9]{64}', digest)
+                      or operation == 'verify-release-archive-cache' and digest):
+                  raise SystemExit('Exact verified release archive plan digest required only for execution')
           program = Path('scripts/production-release/storage-maintenance.py').read_text()
           command = 'python3 -c ' + shlex.quote(program) + ' --operation ' + operation
           command += ' --expected-current ' + shlex.quote(os.environ['EXPECTED_CURRENT'])
+          if operation == 'archive-release-cache':
+              command += ' --plan-sha256 ' + digest
           if operation == 'cleanup-audit':
               command += ' --approved-scope audit-routine-20261002T110000Z'
               command += ' --retention-migration-sql ' + shlex.quote(Path('apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql').read_text())
@@ -769,13 +786,25 @@ jobs:
             --parameters file://.deploy/production-release/storage-maintenance.json \
             --query 'Command.CommandId' --output text)"
           wait_status=0
-          if [[ "$STORAGE_OPERATION" = diagnose_storage ]]; then
+          if [[ "$STORAGE_OPERATION" = diagnose_storage || "$STORAGE_OPERATION" = verify_release_archive_cache || "$STORAGE_OPERATION" = archive_release_cache ]]; then
             if [[ ! "$command_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
               echo 'STORAGE_DIAGNOSTIC_COMMAND_ID_INVALID' >&2
               exit 1
             fi
             printf 'STORAGE_DIAGNOSTIC_COMMAND_ID %s\n' "$command_id"
+            if [[ "$STORAGE_OPERATION" != diagnose_storage ]]; then
+              (umask 077; printf '%s\n' "$command_id" > .deploy/production-release/release-archive-cache-command-id.txt)
+            fi
             python3 - "$command_id" "$PRODUCTION_INSTANCE_ID" <<'PY_WAIT_STORAGE' || wait_status=$?
+          import base64
+          import datetime
+          import gzip
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import re
           import subprocess
           import sys
           import time
@@ -797,10 +826,77 @@ jobs:
               if result.returncode:
                   fail('STORAGE_DIAGNOSTIC_READ_UNAVAILABLE')
               return result.stdout
+          def archive_result(output):
+              def unique(items):
+                  result = {}
+                  for key, value in items:
+                      if key in result: raise ValueError('Duplicate field')
+                      result[key] = value
+                  return result
+              def digest(value):
+                  return isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value)
+              try:
+                  lines = output.splitlines()
+                  if len(lines) != 1 or not lines[0].startswith('STORAGE_MAINTENANCE ') or len(output) > 128 * 1024:
+                      raise ValueError('Envelope changed')
+                  envelope = json.loads(lines[0][len('STORAGE_MAINTENANCE '):], object_pairs_hook=unique)
+                  if set(envelope) != {'encoding', 'payload'} or envelope['encoding'] != 'gzip+base64':
+                      raise ValueError('Encoding changed')
+                  compressed = base64.b64decode(envelope['payload'], validate=True)
+                  with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source:
+                      decoded = source.read(128 * 1024 + 1)
+                  if len(decoded) > 128 * 1024: raise ValueError('Result oversized')
+                  result = json.loads(decoded, object_pairs_hook=unique)
+                  applied = os.environ['STORAGE_OPERATION'] == 'archive_release_cache'
+                  keys = {'mode', 'status', 'currentCommit', 'planSha256', 'plan', 'freeBytesBefore',
+                      'freeBytesAfter', 'existingBackupStorage', 'retentionPolicyExisting', 'remoteExpiration'}
+                  if applied: keys |= {'cloudRecoveryVerified', 'removedRelativePath'}
+                  if (set(result) != keys or result['mode'] != ('APPLIED' if applied else 'PLAN_ONLY')
+                          or result['status'] != 'COMPLETE' or result['currentCommit'] != os.environ['EXPECTED_CURRENT']
+                          or result['existingBackupStorage'] is not True or result['retentionPolicyExisting'] is not True
+                          or not digest(result['planSha256'])
+                          or any(type(result[key]) is not int or result[key] < 0 for key in ('freeBytesBefore', 'freeBytesAfter'))):
+                      raise ValueError('Receipt changed')
+                  plan = result['plan']
+                  path = 'artifacts/v2-production-20260907T085408Z-f35785f0b90ff750c55fb33ed06ae8d0f7af5feb/id-business-v2-v2-production-20260907T085408Z-f35785f0b90ff750c55fb33ed06ae8d0f7af5feb.tar.gz'
+                  if (set(plan) != {'version', 'policy', 'currentCommit', 'currentManifestSha256', 'previousCommit',
+                          'previousManifestSha256', 'archive', 'neighborSha256', 's3TargetSha256'}
+                          or type(plan['version']) is not int or plan['version'] != 1
+                          or plan['policy'] != 'fixed-release-archive-cache-f35785-20261008'
+                          or plan['currentCommit'] != os.environ['EXPECTED_CURRENT']
+                          or plan['currentManifestSha256'] != '52f2582e5edeb9e1c9af63c70fff4ca5a5bdad11c0fd7fb8f090fd1670b4c2eb'
+                          or plan['previousCommit'] != '04570d75c779fd91a0933ef9416f6d62698b6b91'
+                          or plan['previousManifestSha256'] != '0aacc82fc257bc2c4837a4b513223a01ec4f608fbacc0b009c1551b5ceb18b97'
+                          or set(plan['archive']) != {'relativePath', 'sha256', 'identity'}
+                          or plan['archive']['relativePath'] != path or not digest(plan['archive']['sha256'])
+                          or set(plan['archive']['identity']) != {'dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtimeNs', 'ctimeNs'}
+                          or any(type(value) is not int or value < 0 for value in plan['archive']['identity'].values())
+                          or plan['archive']['identity']['size'] != 1953925922
+                          or set(plan['neighborSha256']) != {'ci-release-manifest.json', 'SHA256SUMS'}
+                          or any(not digest(value) for value in plan['neighborSha256'].values())
+                          or not digest(plan['s3TargetSha256'])
+                          or hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest() != result['planSha256']):
+                      raise ValueError('Plan changed')
+                  if applied and (result['planSha256'] != os.environ['CACHE_PLAN_SHA256']
+                          or result['cloudRecoveryVerified'] is not True or result['removedRelativePath'] != path):
+                      raise ValueError('Execution proof changed')
+                  expiration = result['remoteExpiration']
+                  if expiration is not None:
+                      parsed = datetime.datetime.fromisoformat(expiration.replace('Z', '+00:00'))
+                      if not applied or parsed.utcoffset() != datetime.timedelta(0):
+                          raise ValueError('Expiration changed')
+                  destination = Path('.deploy/production-release/release-archive-cache-result.json')
+                  destination.write_text(json.dumps(result, sort_keys=True) + '\n')
+                  destination.chmod(0o600)
+              except Exception:
+                  fail('RELEASE_ARCHIVE_CACHE_RESULT_UNAVAILABLE')
           while True:
               status = invocation('Status').strip()
               if status == 'Success':
-                  sys.stdout.write(invocation('StandardOutputContent'))
+                  output = invocation('StandardOutputContent')
+                  if os.environ['STORAGE_OPERATION'] in ('verify_release_archive_cache', 'archive_release_cache'):
+                      archive_result(output)
+                  sys.stdout.write(output)
                   break
               if status in ('Failed', 'Cancelled', 'TimedOut'):
                   print('STORAGE_DIAGNOSTIC_REMOTE_' + status, file=sys.stderr)
@@ -819,6 +915,17 @@ jobs:
               --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text
           fi
           exit "$wait_status"
+
+      - name: Save release archive cache verification and execution evidence
+        if: always() && (inputs.operation == 'verify_release_archive_cache' || inputs.operation == 'archive_release_cache')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-archive-cache-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/production-release/release-archive-cache-command-id.txt
+            .deploy/production-release/release-archive-cache-result.json
+          include-hidden-files: true
+          retention-days: 14
 
       - name: Read requested release failure
         if: inputs.operation == 'verify_access' && inputs.diagnostic_command_id != ''

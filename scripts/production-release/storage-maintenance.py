@@ -6,12 +6,17 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import os
 import time
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
+import sys
 import tarfile
+import tempfile
+from email.utils import parsedate_to_datetime
 
 BASE = Path('/opt/id-business-v2')
 EXPECTED = '63e7c3b9fdb462517373b48f338626dafaf856ca'
@@ -29,6 +34,12 @@ READ_ONLY_BASELINES = {
         'previousManifestSha256': '0aacc82fc257bc2c4837a4b513223a01ec4f608fbacc0b009c1551b5ceb18b97',
     },
 }
+ARCHIVE_CACHE_CURRENT = 'e7c9862d58599995954883f1c1f6038283afffab'
+ARCHIVE_CACHE_FOLDER = 'v2-production-20260907T085408Z-f35785f0b90ff750c55fb33ed06ae8d0f7af5feb'
+ARCHIVE_CACHE_FILE = 'id-business-v2-' + ARCHIVE_CACHE_FOLDER + '.tar.gz'
+ARCHIVE_CACHE_RELATIVE = 'artifacts/' + ARCHIVE_CACHE_FOLDER + '/' + ARCHIVE_CACHE_FILE
+ARCHIVE_CACHE_SIZE = 1953925922
+ARCHIVE_CACHE_POLICY = 'fixed-release-archive-cache-f35785-20261008'
 APPROVED_SCOPE = 'audit-routine-20261002T110000Z'
 CUTOFF = '2026-10-02 11:00:00'
 MAX_APPROVED_COUNT = 19848
@@ -252,6 +263,221 @@ def readonly_baseline(expected):
         require(previous_sha == reviewed['previousManifestSha256'], 'Production manifest bytes changed')
     require((BASE / 'current').resolve() == directory, 'Production release pointer changed')
     return directory, manifest_sha, previous, previous_sha
+
+
+def archive_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                    ensure_ascii=True).encode()).hexdigest()
+
+
+def archive_identity(info):
+    return dict(zip(('dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtimeNs', 'ctimeNs'),
+        (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink,
+         info.st_size, info.st_mtime_ns, info.st_ctime_ns)))
+
+
+def archive_file(path, deadline, *, limit, exact_size=None, keep_raw=False):
+    require(path.resolve() == path and not path.is_symlink(), 'Archive cache path changed')
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as source:
+        before = os.fstat(source.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and 0 < before.st_size <= limit
+                and (exact_size is None or before.st_size == exact_size), 'Archive cache file identity changed')
+        digest, chunks, length = hashlib.sha256(), [], 0
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            require(time.monotonic() < deadline and length + len(block) <= limit,
+                    'Archive cache read budget exceeded')
+            digest.update(block); length += len(block)
+            if keep_raw:
+                chunks.append(block)
+        require(length == before.st_size and archive_identity(before)
+                == archive_identity(os.fstat(source.fileno())) == archive_identity(path.lstat()),
+                'Archive cache file changed during read')
+    return {'identity': archive_identity(before), 'sha256': digest.hexdigest()}, b''.join(chunks)
+
+
+def archive_command(arguments, deadline, *, phase, timeout=45):
+    remaining = deadline - time.monotonic()
+    require(remaining > 0, 'Archive cache operation budget exceeded')
+    environment = os.environ.copy()
+    environment.update(AWS_MAX_ATTEMPTS='1', AWS_RETRY_MODE='standard')
+    try:
+        result = subprocess.run(arguments, capture_output=True, text=True,
+                                env=environment, timeout=min(timeout, remaining))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('Archive cache command timed out: ' + phase) from None
+    require(result.returncode == 0 and len(result.stdout.encode()) <= 256 * 1024,
+            'Archive cache command failed: ' + phase)
+    return result.stdout.strip()
+
+
+def archive_unused(path, deadline):
+    ids = archive_command(['docker', 'ps', '-a', '-q'], deadline, phase='CONTAINERS').splitlines()
+    require(len(ids) <= 128 and all(re.fullmatch(r'[a-f0-9]{12,64}', value) for value in ids),
+            'Archive cache container inventory unavailable')
+    if ids:
+        mounts = archive_command(['docker', 'inspect', '--format', '{{json .Mounts}}', *ids],
+                                 deadline, phase='MOUNTS').splitlines()
+        require(len(mounts) == len(ids), 'Archive cache mount inventory unavailable')
+        for line in mounts:
+            for mount in json.loads(line):
+                require(isinstance(mount, dict), 'Archive cache mount inventory unavailable')
+                source = mount.get('Source')
+                if mount.get('Type') == 'tmpfs':
+                    destination = mount.get('Destination')
+                    require(source in (None, '') and isinstance(destination, str)
+                            and destination.startswith('/'), 'Archive cache mount inventory unavailable')
+                    continue
+                require(mount.get('Type') in ('bind', 'volume')
+                        and isinstance(source, str) and source.startswith('/'),
+                        'Archive cache mount inventory unavailable')
+                require(not path.is_relative_to(Path(source).resolve()), 'Archive cache is mounted by a container')
+    require(archive_command(['docker', 'ps', '-a', '-q'], deadline, phase='CONTAINERS').splitlines() == ids,
+            'Archive cache container inventory changed')
+    identity, examined = path.stat(), 0
+    for process in Path('/proc').iterdir():
+        if not process.name.isdigit() or process.name == str(os.getpid()):
+            continue
+        try:
+            for descriptor in (process / 'fd').iterdir():
+                examined += 1
+                require(examined <= 65536 and time.monotonic() < deadline,
+                        'Archive cache open-file inventory budget exceeded')
+                try:
+                    actual = descriptor.stat()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                require((actual.st_dev, actual.st_ino) != (identity.st_dev, identity.st_ino),
+                        'Archive cache is open by another process')
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+
+
+def archive_configuration():
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        return helper('cleanup-verified-backups').configuration()
+    finally:
+        sys.dont_write_bytecode = previous
+
+
+def archive_sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def archive_plan(expected, deadline):
+    require(expected == ARCHIVE_CACHE_CURRENT, 'Archive cache production baseline differs')
+    _, current_sha, _, previous_sha = readonly_baseline(expected)
+    path = BASE / ARCHIVE_CACHE_RELATIVE
+    archive, _ = archive_file(path, deadline, limit=ARCHIVE_CACHE_SIZE, exact_size=ARCHIVE_CACHE_SIZE)
+    neighbors, payloads = {}, {}
+    for name in ('ci-release-manifest.json', 'SHA256SUMS'):
+        info, payloads[name] = archive_file(path.parent / name, deadline, limit=128 * 1024, keep_raw=True)
+        neighbors[name] = info['sha256']
+    manifest = json.loads(payloads['ci-release-manifest.json'])
+    sums = {}
+    for line in payloads['SHA256SUMS'].decode().splitlines():
+        match = re.fullmatch(r'([a-f0-9]{64})  (.+)', line)
+        require(match is not None and match[2] not in sums, 'Archive cache checksum metadata changed')
+        sums[match[2]] = match[1]
+    require(manifest.get('commit') == 'f35785f0b90ff750c55fb33ed06ae8d0f7af5feb'
+            and manifest.get('releaseTag') == 'v2-production-20260907T085408Z'
+            and manifest.get('artifact', {}).get('file') == ARCHIVE_CACHE_FILE
+            and manifest['artifact'].get('sha256') == archive['sha256']
+            and sums == {ARCHIVE_CACHE_FILE: archive['sha256'],
+                         'release-manifest.json': neighbors['ci-release-manifest.json']},
+            'Archive cache checksum metadata changed')
+    config = archive_configuration()
+    bucket, prefix, region = config
+    key = prefix + '/release-artifact-cache/' + ARCHIVE_CACHE_FOLDER + '/' + ARCHIVE_CACHE_FILE
+    plan = {'version': 1, 'policy': ARCHIVE_CACHE_POLICY, 'currentCommit': expected,
+        'currentManifestSha256': current_sha,
+        'previousCommit': READ_ONLY_BASELINES[expected]['previousCommit'],
+        'previousManifestSha256': previous_sha,
+        'archive': {'relativePath': ARCHIVE_CACHE_RELATIVE, **archive}, 'neighborSha256': neighbors,
+        's3TargetSha256': archive_digest({'bucket': bucket, 'key': key, 'region': region})}
+    archive_unused(path, deadline)
+    require(readonly_baseline(expected)[1::2] == (current_sha, previous_sha),
+            'Archive cache baseline changed during plan')
+    return plan, (bucket, key, region)
+
+
+def release_archive_cache(expected, plan_sha256=None, *, apply=False):
+    require((not apply and plan_sha256 is None) or (apply and isinstance(plan_sha256, str)
+            and re.fullmatch(r'[a-f0-9]{64}', plan_sha256)), 'Exact archive cache plan approval required')
+    deadline = time.monotonic() + 540
+    with (BASE / '.deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        plan, target = archive_plan(expected, deadline)
+        digest = archive_digest(plan)
+        result = {'mode': 'APPLIED' if apply else 'PLAN_ONLY', 'status': 'COMPLETE',
+            'currentCommit': expected, 'planSha256': digest, 'plan': plan,
+            'freeBytesBefore': shutil.disk_usage(BASE).free, 'freeBytesAfter': shutil.disk_usage(BASE).free,
+            'existingBackupStorage': True, 'retentionPolicyExisting': True, 'remoteExpiration': None}
+        if not apply:
+            return result
+        require(digest == plan_sha256, 'Archive cache reviewed plan changed')
+        bucket, key, region = target
+        path = BASE / ARCHIVE_CACHE_RELATIVE
+        checksum = base64.b64encode(bytes.fromhex(plan['archive']['sha256'])).decode()
+        arguments = ['aws', 's3api', '--region', region]
+        try:
+            archive_command([*arguments, 'put-object', '--bucket', bucket, '--key', key,
+                '--body', str(path), '--server-side-encryption', 'AES256', '--checksum-algorithm', 'SHA256',
+                '--checksum-sha256', checksum, '--if-none-match', '*', '--output', 'json'],
+                deadline, phase='UPLOAD', timeout=300)
+        except RuntimeError:
+            # A prior upload can have completed before its caller timed out.
+            # Never overwrite it; prove recovery independently before removal.
+            pass
+        remote = json.loads(archive_command([*arguments, 'head-object', '--bucket', bucket, '--key', key,
+            '--checksum-mode', 'ENABLED', '--output', 'json'], deadline, phase='HEAD'))
+        require(type(remote.get('ContentLength')) is int and remote['ContentLength'] == ARCHIVE_CACHE_SIZE
+                and remote.get('ChecksumSHA256') == checksum and remote.get('ServerSideEncryption') == 'AES256'
+                and remote.get('ChecksumType', 'FULL_OBJECT') == 'FULL_OBJECT',
+                'Archive cache cloud recovery identity differs')
+        directory = BASE / 'maintenance/release-artifact-cache'
+        require(directory.resolve() == directory, 'Archive cache receipt path changed')
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=directory) as temporary:
+            for index, start in enumerate((0, max(0, ARCHIVE_CACHE_SIZE - 65536))):
+                end = min(start + 65536, ARCHIVE_CACHE_SIZE) - 1
+                local = Path(temporary) / ('range-' + str(index))
+                archive_command([*arguments, 'get-object', '--bucket', bucket, '--key', key,
+                    '--range', 'bytes=' + str(start) + '-' + str(end), str(local), '--output', 'json'],
+                    deadline, phase='RANGE')
+                _, actual = archive_file(local, deadline, limit=65536, exact_size=end-start+1, keep_raw=True)
+                with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as source:
+                    source.seek(start)
+                    require(actual == source.read(end-start+1), 'Archive cache cloud range differs')
+        fresh, fresh_target = archive_plan(expected, deadline)
+        require(fresh == plan and fresh_target == target, 'Archive cache reviewed plan changed')
+        expiration = remote.get('Expiration')
+        if isinstance(expiration, str):
+            match = re.match(r'^expiry-date="([^"\n]{1,64})",', expiration)
+            if match:
+                result['remoteExpiration'] = parsedate_to_datetime(match[1]).isoformat()
+        result.update(cloudRecoveryVerified=True, removedRelativePath=ARCHIVE_CACHE_RELATIVE)
+        receipt = directory / (str(time.time_ns()) + '.json')
+        with receipt.open('x') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump({**result, 'status': 'VERIFIED_NOT_REMOVED'}, stream)
+            stream.flush(); os.fsync(stream.fileno())
+        archive_sync_directory(directory)
+        require(archive_identity(path.lstat()) == plan['archive']['identity'], 'Archive cache file identity changed')
+        path.unlink()
+        archive_sync_directory(path.parent)
+        result['freeBytesAfter'] = shutil.disk_usage(BASE).free
+        with os.fdopen(os.open(receipt, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW), 'w') as stream:
+            json.dump(result, stream)
+            stream.flush(); os.fsync(stream.fileno())
+        archive_sync_directory(directory)
+        return result
 
 
 def project_mysql():
@@ -511,15 +737,23 @@ def cleanup_legacy_cache(expected, plan_json, apply=False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--operation', choices=('diagnose', 'cleanup-audit', 'verify-legacy-cache',
-                                               'cleanup-legacy-cache'), required=True)
+        'cleanup-legacy-cache', 'verify-release-archive-cache', 'archive-release-cache'), required=True)
     parser.add_argument('--expected-current', required=True)
     parser.add_argument('--approved-scope')
     parser.add_argument('--legacy-plan-json')
     parser.add_argument('--retention-migration-sql')
+    parser.add_argument('--plan-sha256')
     args = parser.parse_args()
-    if args.operation == 'diagnose':
+    if args.operation in ('verify-release-archive-cache', 'archive-release-cache'):
+        require(not any((args.approved_scope, args.legacy_plan_json, args.retention_migration_sql)),
+                'Archive cache operation scope conflicts')
+        result = release_archive_cache(args.expected_current, args.plan_sha256,
+                                       apply=args.operation == 'archive-release-cache')
+    elif args.operation == 'diagnose':
+        require(args.plan_sha256 is None, 'Archive cache operation scope conflicts')
         result = diagnose(args.expected_current)
     else:
+        require(args.plan_sha256 is None, 'Archive cache operation scope conflicts')
         baseline(args.expected_current)
         if args.operation == 'cleanup-audit':
             result = cleanup_audit(args.expected_current, args.approved_scope, args.retention_migration_sql)
