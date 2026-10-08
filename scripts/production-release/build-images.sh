@@ -97,6 +97,10 @@ build_image() {
     options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
   fi
   if [[ "$service" == auto-recharge ]]; then
+    if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-96-20261008 ]]; then
+      [[ -z "${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" && "${registration_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
+      options+=(--label "id-business-v2.worker-projection-sha256=$registration_worker_projection")
+    fi
     local cache_reference="${RELEASE_BROWSER_CACHE_IMAGE:-}" cache_tag cache_revision cache_metadata
     # Carry the cache inside this run's existing immutable image; no mutable cache tag.
     options+=(--build-arg BUILDKIT_INLINE_CACHE=1)
@@ -162,6 +166,17 @@ if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-90-20261007 ]]; the
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
   build_image admin "$registration_admin_context/apps/admin/Dockerfile" runtime "$registration_admin_context"
+  exit 0
+fi
+
+if [[ "${HISTORICAL_EXCEPTION:-none}" == registration-worker-96-20261008 ]]; then
+  registration96_baseline="$(registration96_baseline_sha256)"
+  CI_RUN_ID="${QUALITY_RUN_ID:-${CI_RUN_ID:-${QUALITY_GATE_RUN_ID:-}}}" python3 -B scripts/production-release/remote-deploy.py --prepare-fixed-registration-build \
+    --registration-profile registration-worker-96-20261008 --registration96-baseline-sha256 "$registration96_baseline"
+  registration_context=.deploy/production-release/registration-build-context
+  registration_worker_projection="$(read_registration_onboarding_projection)"
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image auto-recharge "$registration_context/apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile" '' "$registration_context"
   exit 0
 fi
 

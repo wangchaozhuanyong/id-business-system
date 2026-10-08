@@ -20,6 +20,10 @@ export const historicalReleaseControlPaths = Object.freeze([
   'deploy/aws/registration-worker-93-20261007.json',
   'deploy/aws/registration-worker-94-20261007.json',
   'deploy/aws/registration-worker-95-20261008.json',
+  'deploy/aws/registration-worker-96-20261008.json',
+  'deploy/aws/registration-baseline-96-20261008.json',
+  'scripts/production-release/registration-onboarding-96.py',
+  'scripts/production-release/registration-onboarding-96.test.py',
   'scripts/v2-registration-finance-audit.mjs',
   'scripts/v2-registration-finance-audit.test.mjs',
   'scripts/production-release/registration-only-transport.test.py',
@@ -176,6 +180,45 @@ const isRegistrationLoginControl = (path) =>
 const registrationFollowupProfile = 'deploy/aws/registration-worker-94-20261007.json';
 const registrationInterstitialProfile = 'deploy/aws/registration-worker-95-20261008.json';
 const registrationInterstitialModule = 'scripts/production-release/registration-interstitial-95.py';
+export const registrationOnboardingProfile = 'deploy/aws/registration-worker-96-20261008.json';
+export const registrationOnboardingControls = new Set([
+  registrationOnboardingProfile,
+  'deploy/aws/registration-baseline-96-20261008.json',
+  'scripts/production-release/registration-onboarding-96.py',
+  'scripts/production-release/registration-onboarding-96.test.py',
+  '.github/workflows/production-release.yml',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/registration-only-transport.test.py',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-release.test.mjs'
+]);
+const registrationOnboardingSources = new Set([
+  'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+  'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
+]);
+export const hasRegistrationOnboardingScope = (paths) =>
+  paths.some((path) =>
+    [
+      registrationOnboardingProfile,
+      'deploy/aws/registration-baseline-96-20261008.json',
+      'scripts/production-release/registration-onboarding-96.py',
+      'scripts/production-release/registration-onboarding-96.test.py'
+    ].includes(path)
+  );
+const isRegistrationOnboardingControl = (path) =>
+  registrationOnboardingControls.has(path) ||
+  ['docs/V2_TASKS.md', 'docs/AUTO_REGISTRATION.md'].includes(path);
+const isRegistrationOnboardingOnly = (paths) =>
+  hasRegistrationOnboardingScope(paths) &&
+  paths.every(
+    (path) => registrationOnboardingSources.has(path) || isRegistrationOnboardingControl(path)
+  );
 const isRegistrationInterstitialControl = (path) =>
   path === registrationInterstitialModule || isRegistrationFollowupControl(path);
 const isRegistrationFollowupControl = (path) =>
@@ -235,6 +278,8 @@ function isRegistrationRecoveryOnly(paths) {
   );
 }
 export function isCiOnly(paths) {
+  if (hasRegistrationOnboardingScope(paths))
+    return isRegistrationOnboardingOnly(paths) && paths.every(isRegistrationOnboardingControl);
   if (paths.includes(recharge6f5Profile))
     return paths.every((path) => recharge6f5Controls.has(path));
   if (paths.includes(registrationInterstitialProfile))
@@ -317,6 +362,10 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema) {
+  if (hasRegistrationOnboardingScope(paths)) {
+    if (!isRegistrationOnboardingOnly(paths)) return 'full';
+    return paths.some((path) => registrationOnboardingSources.has(path)) ? 'recharge' : 'ci-only';
+  }
   if (paths.includes(recharge6f5Profile)) {
     if (!isRecharge6f5Only(paths)) return 'full';
     return paths.some((path) => recharge6f5Sources.has(path)) ? 'recharge' : 'ci-only';
@@ -483,6 +532,11 @@ const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (hasRegistrationOnboardingScope(paths))
+    return (
+      isRegistrationOnboardingOnly(paths) &&
+      paths.some((path) => registrationOnboardingSources.has(path))
+    );
   if (paths.includes(registrationInterstitialProfile))
     return (
       isRegistrationInterstitialOnly(paths) &&
@@ -533,6 +587,7 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
 const securityPaths =
   /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
 export function isTargetedOnly(paths, oldSchema, newSchema) {
+  if (hasRegistrationOnboardingScope(paths)) return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationInterstitialProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(recharge6f5Profile)) return isRechargeOnly(paths, oldSchema, newSchema);
@@ -552,6 +607,11 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths) {
+  if (isRegistrationOnboardingOnly(paths))
+    return [
+      'guards',
+      ...(paths.some((path) => registrationOnboardingSources.has(path)) ? ['connector'] : [])
+    ];
   if (isRecharge6f5Only(paths))
     return paths.some((path) => recharge6f5Sources.has(path))
       ? ['guards', 'connector']

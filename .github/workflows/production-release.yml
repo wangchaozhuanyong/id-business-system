@@ -91,6 +91,7 @@ on:
           - registration-worker-93-20261007
           - registration-worker-94-20261007
           - registration-worker-95-20261008
+          - registration-worker-96-20261008
 
           - historical-finance-20261005-post-cleanup
           - historical-finance-20261005-order-archive
@@ -316,6 +317,17 @@ jobs:
           test -z "$REQUESTED_REUSE_IMAGE_RUN"
           python3 scripts/production-release/remote-deploy.py --check-fixed-registration-scope --registration-profile registration-worker-92-20261007
 
+      - name: Verify fixed 96 registration runtime approval
+        if: inputs.historical_exception == 'registration-worker-96-20261008'
+        env:
+          REQUESTED_REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
+        run: |
+          set -Eeuo pipefail
+          test "$RELEASE_OPERATION" = release
+          test "$EXPECTED_CURRENT" = 04570d75c779fd91a0933ef9416f6d62698b6b91
+          test -z "$REQUESTED_REUSE_IMAGE_RUN"
+          source scripts/production-release/validate-release-selection.sh
+
       - name: Verify fixed 95 registration runtime approval
         if: inputs.historical_exception == 'registration-worker-95-20261008'
         env:
@@ -518,6 +530,16 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: registration-worker-92-build-projection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/registration-build-projection.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save fixed 96 registration Worker build projection
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-96-20261008'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: registration-worker-96-build-projection-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/registration-build-projection.json
           if-no-files-found: error
           include-hidden-files: true
@@ -2027,7 +2049,7 @@ jobs:
           retention-days: 14
 
       - name: Verify or maintain recoverable unused project image cache
-        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'registration-worker-93-20261007' && inputs.historical_exception != 'registration-worker-94-20261007' && inputs.historical_exception != 'registration-worker-95-20261008' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
+        if: inputs.operation == 'verify_unused_cache' || inputs.operation == 'cleanup_unused_cache' || inputs.operation == 'verify_unused_legacy_cache' || inputs.operation == 'cleanup_unused_legacy_cache' || inputs.operation == 'verify_unused_builder_cache' || inputs.operation == 'cleanup_unused_builder_cache' || (inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-menu-b8-20261005' && inputs.historical_exception != 'recharge-pro-menu-7f-20261005' && inputs.historical_exception != 'recharge-pro-main80-20261006' && inputs.historical_exception != 'recharge-pro-974-20261007' && inputs.historical_exception != 'recharge-pro-2f-20261007' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'registration-worker-b8-80-20261006' && inputs.historical_exception != 'registration-worker-956-20261006' && inputs.historical_exception != 'registration-worker-85-20261006' && inputs.historical_exception != 'registration-worker-86-20261006' && inputs.historical_exception != 'registration-worker-87-20261006' && inputs.historical_exception != 'registration-worker-88-20261006' && inputs.historical_exception != 'registration-worker-89-20261006' && inputs.historical_exception != 'registration-worker-90-20261007' && inputs.historical_exception != 'registration-worker-91-20261007' && inputs.historical_exception != 'registration-worker-92-20261007' && inputs.historical_exception != 'registration-worker-93-20261007' && inputs.historical_exception != 'registration-worker-94-20261007' && inputs.historical_exception != 'registration-worker-95-20261008' && inputs.historical_exception != 'registration-worker-96-20261008' && inputs.historical_exception != 'historical-finance-20261005-mailbox-batch' && inputs.historical_exception != 'historical-finance-20261005-post-cleanup' && inputs.historical_exception != 'historical-finance-20261005-order-archive')
         env:
           CACHE_OPERATION: ${{ inputs.operation }}
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
@@ -2792,6 +2814,152 @@ jobs:
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
             | python3 .deploy/production-release/fixed-registration-92-readback-filter.py
 
+      - name: Verify fixed 96 registration deployment independently
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-96-20261008'
+        run: |
+          set -Eeuo pipefail
+          source scripts/production-release/validate-release-selection.sh
+          mkdir -p .deploy/production-release
+          python3 - <<'PY_BUILD_REGISTRATION96_READBACK'
+          import hashlib, json, os, re, shlex, stat
+          from pathlib import Path
+          commit, tree = os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE']
+          if not re.fullmatch(r'[a-f0-9]{40}', commit) or not re.fullmatch(r'[a-f0-9]{40}', tree):
+              raise SystemExit('Fixed96 readback binding unavailable')
+          selected = (
+              ('scripts/production-release/remote-deploy.py', 1024 * 1024),
+              ('scripts/production-release/registration-onboarding-96.py', 128 * 1024),
+              ('deploy/aws/registration-worker-96-20261008.json', 128 * 1024),
+              ('deploy/aws/registration-baseline-96-20261008.json', 4 * 1024 * 1024),
+          )
+          bindings = []
+          for name, cap in selected:
+              path = Path(name).absolute()
+              if path.resolve() != path or path.parent.resolve() != path.parent:
+                  raise SystemExit('Fixed96 local carrier unavailable')
+              identity = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+              initial = path.lstat()
+              with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+                  before = os.fstat(stream.fileno())
+                  if (identity(initial) != identity(before) or not stat.S_ISREG(before.st_mode)
+                          or stat.S_IMODE(before.st_mode) not in (0o644,0o664)
+                          or before.st_nlink != 1 or before.st_uid != os.geteuid() or not 0 < before.st_size <= cap):
+                      raise SystemExit('Fixed96 local carrier unavailable')
+                  raw = stream.read(cap + 1)
+                  if len(raw) != before.st_size or identity(before) != identity(os.fstat(stream.fileno())) or identity(before) != identity(path.lstat()):
+                      raise SystemExit('Fixed96 local carrier changed')
+              bindings.append((name, cap, hashlib.sha256(raw).hexdigest()))
+          profile_sha, baseline_sha = bindings[2][2], bindings[3][2]
+          verifier = '''import hashlib,os,pathlib,re,stat,sys
+          base=pathlib.Path('/opt/id-business-v2');link=base/'current';current=link.resolve(strict=True)
+          commit=COMMIT
+          if not link.is_symlink() or current.parent!=base/'releases' or not re.fullmatch('[0-9]{8}T[0-9]{6}Z-'+commit[:12],current.name):raise RuntimeError('Fixed96 current changed')
+          for p in [current,current.parent,base]:
+              if p.resolve()!=p or p.is_symlink():raise RuntimeError('Fixed96 release path changed')
+          def read96(name,cap,expected):
+              p=current/name
+              if p.resolve()!=p or p.parent.resolve()!=p.parent:raise RuntimeError('Fixed96 carrier path changed')
+              identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+              initial=p.lstat()
+              with os.fdopen(os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as f:
+                  before=os.fstat(f.fileno())
+                  if identity(initial)!=identity(before) or not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode)!=0o644 or before.st_nlink!=1 or before.st_uid!=0 or not 0<before.st_size<=cap:raise RuntimeError('Fixed96 carrier stat changed')
+                  raw=f.read(cap+1)
+                  if len(raw)!=before.st_size or identity(before)!=identity(os.fstat(f.fileno())) or identity(before)!=identity(p.lstat()):raise RuntimeError('Fixed96 carrier read changed')
+              if hashlib.sha256(raw).hexdigest()!=expected:raise RuntimeError('Fixed96 carrier hash changed')
+              return raw
+          rows=BINDINGS
+          raw=[read96(*row)for row in rows]
+          if link.resolve(strict=True)!=current:raise RuntimeError('Fixed96 current changed')
+          source=current/rows[0][0]
+          sys.argv=[str(source),'--check-fixed-registration-deployment','--registration-profile','registration-worker-96-20261008','--expected-current',commit,'--source-tree',TREE,'--registration-profile-sha256',PROFILE,'--registration96-baseline-sha256',BASELINE,'--registration96-budget-seconds','300']
+          exec(compile(raw[0],str(source),'exec'),{'__name__':'__main__','__file__':str(source)})
+          '''
+          for marker, value in [('COMMIT', commit), ('TREE', tree), ('PROFILE', profile_sha), ('BASELINE', baseline_sha), ('BINDINGS', bindings)]:
+              verifier = re.sub(r'\b' + marker + r'\b', lambda _match: repr(value), verifier)
+          compile(verifier, '<fixed96-current-readback>', 'exec')
+          parameters = {'commands': ['python3 -B -c ' + shlex.quote(verifier)], 'executionTimeout': ['360']}
+          encoded = json.dumps(parameters)
+          if len(encoded.encode()) > 20000:
+              raise SystemExit('Fixed96 readback parameters exceed limit')
+          Path('.deploy/production-release/fixed-registration-96-readback.json').write_text(encoded)
+          PY_BUILD_REGISTRATION96_READBACK
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/fixed-registration-96-readback.json \
+            --query 'Command.CommandId' --output text)"
+          terminal_status=''
+          for observation in $(seq 1 90); do
+            terminal_status="$(aws ssm get-command-invocation --command-id "$command_id" \
+              --instance-id "$PRODUCTION_INSTANCE_ID" --query Status --output text 2>/dev/null || true)"
+            case "$terminal_status" in
+              Success) break ;;
+              Failed|TimedOut|Cancelled|Cancelling)
+                echo 'Fixed96 readback failed; raw output suppressed' >&2
+                exit 1 ;;
+            esac
+            sleep 5
+          done
+          test "$terminal_status" = Success
+          cat > .deploy/production-release/fixed-registration-96-readback-filter.py <<'PY_FILTER_REGISTRATION96_READBACK'
+          import hashlib, json, os, re, sys
+          from pathlib import Path
+          try:
+              source = Path('scripts/production-release/remote-deploy.py')
+              parent = {'__name__': 'fixed96_readback_filter', '__file__': str(source.absolute())}
+              exec(compile(source.read_bytes(), str(source), 'exec'), parent)
+              module = parent['load_registration96']()
+              invocation_raw = sys.stdin.buffer.read(65537)
+              if len(invocation_raw) > 65536:
+                  raise ValueError()
+              invocation = module['closed_json'](invocation_raw)
+              if (set(invocation) != {'CommandId','Status','ResponseCode','Stdout','Stderr'}
+                      or invocation['CommandId'] != os.environ['REGISTRATION96_READBACK_COMMAND_ID']
+                      or invocation['Status'] != 'Success' or type(invocation['ResponseCode']) is not int
+                      or invocation['ResponseCode'] != 0 or invocation['Stderr'] != ''):
+                  raise ValueError()
+              output = invocation['Stdout']
+              prefix = 'FIXED_REGISTRATION_RELEASE_VERIFIED '
+              if type(output) is not str or len(output.encode()) > 24000 or not output.startswith(prefix) or len(output.strip().splitlines()) != 1:
+                  raise ValueError()
+              receipt = module['decode96_readback'](module['closed_json'](output[len(prefix):].encode()))
+              commit, tree = os.environ['RELEASE_COMMIT'], os.environ['SOURCE_TREE']
+              run, attempt, ci = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'], os.environ['QUALITY_RUN_ID']
+              if not all(re.fullmatch(r'[1-9][0-9]*', n) for n in [run, attempt, ci]):
+                  raise ValueError()
+              archive = parent['registration_download'](commit)
+              metadata = {'commit': commit, 'tree': tree, 'run': 'github-actions-' + run + '-' + attempt,
+                  'ciRunId': int(ci), 'archiveSha256': hashlib.sha256(archive).hexdigest()}
+              profile = Path('deploy/aws/registration-worker-96-20261008.json').read_bytes()
+              carrier = Path('deploy/aws/registration-baseline-96-20261008.json').read_bytes()
+              module['validate96_readback_archive'](receipt, carrier, profile, archive, parent['registration_archive'], metadata)
+              target = Path('.deploy/production-release/fixed-registration-96.actual.readback.json')
+              descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+              with os.fdopen(descriptor, 'wb') as stream:
+                  stream.write(module['private_json_bytes'](receipt))
+          except BaseException:
+              raise SystemExit('Fixed96 independent readback unavailable; raw output suppressed') from None
+          print(json.dumps({'status': receipt['status'], 'commit': commit, 'sourceTree': tree,
+              'deploymentRun': metadata['run'], 'executedCheckCount': 49, 'violationCount': 0,
+              'preservedServiceCount': 6, 'officialOtpAccepted': 'NOT_MEASURED',
+              'businessAcceptanceConfirmed': False, 'readbackSha256': module['canonical_sha256'](receipt)}, separators=(',', ':')))
+          PY_FILTER_REGISTRATION96_READBACK
+          export REGISTRATION96_READBACK_COMMAND_ID="$command_id"
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" \
+            --query '{CommandId:CommandId,Status:Status,ResponseCode:ResponseCode,Stdout:StandardOutputContent,Stderr:StandardErrorContent}' --output json \
+            | python3 .deploy/production-release/fixed-registration-96-readback-filter.py
+
+      - name: Save fixed 96 registration independent readback
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-96-20261008'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: registration-worker-96-independent-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/fixed-registration-96.actual.readback.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Verify fixed 95 registration deployment independently
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-95-20261008'
         run: |
@@ -3319,6 +3487,10 @@ jobs:
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-92-20261007'
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
 
+      - name: Record skipped cache maintenance for fixed 96 registration release
+        if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-96-20261008'
+        run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
+
       - name: Record skipped cache maintenance for fixed 95 registration release
         if: inputs.operation == 'release' && inputs.historical_exception == 'registration-worker-95-20261008'
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
@@ -3344,7 +3516,7 @@ jobs:
         run: printf '%s\n' REGISTRATION_ONLY_CACHE_SKIPPED
 
       - name: Maintain service rollback image cache independently after fixed release
-        if: inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && (startsWith(inputs.historical_exception, 'registration-worker-') || startsWith(inputs.historical_exception, 'recharge-pro-'))
+        if: inputs.operation == 'release' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'registration-worker-96-20261008' && (startsWith(inputs.historical_exception, 'registration-worker-') || startsWith(inputs.historical_exception, 'recharge-pro-'))
         env:
           RELEASE_OPERATION: ${{ inputs.operation }}
         run: python3 -B scripts/production-release/service-image-retention.py

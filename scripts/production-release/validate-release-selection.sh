@@ -155,6 +155,110 @@ print(v['workerProjectionSha256'])
 PY_LOGIN_PROJECTION
 }
 
+registration96_baseline_sha256() {
+  python3 - <<'PY_REGISTRATION96_BASELINE'
+import hashlib, json, os, stat, sys
+from pathlib import Path
+
+def unique(items):
+    result = {}
+    for key, value in items:
+        if key in result: raise ValueError('DUPLICATE_FIELD')
+        result[key] = value
+    return result
+
+def read(path, cap):
+    path = path.absolute()
+    if path.resolve() != path: raise ValueError('PATH_CHANGED')
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_uid, s.st_gid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    initial = path.lstat()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if (identity(initial) != identity(before) or not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) not in (0o644, 0o664)
+                or not 0 < before.st_size <= cap): raise ValueError('STAT_CHANGED')
+        raw = stream.read(cap + 1)
+        if (len(raw) != before.st_size or identity(before) != identity(os.fstat(stream.fileno()))
+                or identity(before) != identity(path.lstat())): raise ValueError('READ_CHANGED')
+    return raw
+
+try:
+    profile = json.loads(read(Path('deploy/aws/registration-worker-96-20261008.json'), 128 * 1024), object_pairs_hook=unique)
+    if profile.get('id') != 'registration-worker-96-20261008' or profile.get('enabled') is not True:
+        raise ValueError('PROFILE_DISABLED')
+    raw = read(Path('deploy/aws/registration-baseline-96-20261008.json'), 4 * 1024 * 1024)
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != profile.get('baselineCarrierSha256'): raise ValueError('BASELINE_CHANGED')
+    print(digest)
+except Exception:
+    print('Fixed96 baseline unavailable; raw output suppressed', file=sys.stderr)
+    raise SystemExit(2) from None
+PY_REGISTRATION96_BASELINE
+}
+
+registration96_preflight() {
+  local baseline_sha
+  baseline_sha="$(registration96_baseline_sha256)" || return
+  CI_RUN_ID="${QUALITY_RUN_ID:-${CI_RUN_ID:-${QUALITY_GATE_RUN_ID:-}}}" python3 -B "$(dirname "${BASH_SOURCE[0]}")/remote-deploy.py" \
+    --check-fixed-registration-scope --registration-profile registration-worker-96-20261008 \
+    --registration96-baseline-sha256 "$baseline_sha"
+}
+
+read_registration_onboarding_projection() {
+  python3 - <<'PY_REGISTRATION96_PROJECTION'
+import hashlib, json, os, re, stat, sys
+from pathlib import Path
+
+def unique(items):
+    result = {}
+    for key, value in items:
+        if key in result: raise ValueError('DUPLICATE_FIELD')
+        result[key] = value
+    return result
+
+try:
+    inputs = []
+    for path in ('deploy/aws/registration-worker-96-20261008.json', '.deploy/production-release/registration-build-projection.json'):
+        p = Path(path).absolute()
+        modes = (0o600, 0o644, 0o664) if path == '.deploy/production-release/registration-build-projection.json' else (0o644, 0o664)
+        if p.resolve() != p: raise ValueError('PATH_CHANGED')
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_uid, s.st_gid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        initial = p.lstat()
+        with os.fdopen(os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if (identity(initial) != identity(before) or not stat.S_ISREG(before.st_mode)
+                    or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) not in modes
+                    or not 0 < before.st_size <= 128 * 1024): raise ValueError('STAT_CHANGED')
+            raw = stream.read(128 * 1024 + 1)
+            if (len(raw) != before.st_size or identity(before) != identity(os.fstat(stream.fileno()))
+                    or identity(before) != identity(p.lstat())): raise ValueError('READ_CHANGED')
+        inputs.append(json.loads(raw, object_pairs_hook=unique))
+    profile, value = inputs
+    fields = {'version', 'id', 'sourceCommit', 'sourceTree', 'registrationSourceCommit', 'workerBasisCommit',
+        'workerProjectionSha256', 'registrationSourceSha256', 'carriedSourceCommits', 'carriedSourceSha256',
+        'baselineReceiptSha256', 'contextPath'}
+    if (type(value) is not dict or set(value) != fields or type(value['version']) is not int or value['version'] != 1
+            or value['id'] != 'registration-worker-96-20261008' or profile.get('enabled') is not True
+            or os.environ.get('HISTORICAL_EXCEPTION') != value['id']
+            or value['sourceCommit'] != os.environ['RELEASE_COMMIT'] or value['sourceTree'] != os.environ['SOURCE_TREE']
+            or not re.fullmatch(r'[a-f0-9]{40}', value['sourceCommit']) or not re.fullmatch(r'[a-f0-9]{40}', value['sourceTree'])
+            or value['contextPath'] != '.deploy/production-release/registration-build-context'
+            or value['registrationSourceCommit'] != '3d71a44b30a798110d43c8b943d3f2cbac99efa9'
+            or value['workerBasisCommit'] != '2f24cf81007429ea474da404a30bc74da9d43ce1'
+            or any(value[key] != profile[key] for key in ('registrationSourceCommit', 'workerBasisCommit',
+                'workerProjectionSha256', 'registrationSourceSha256', 'carriedSourceCommits', 'carriedSourceSha256', 'baselineReceiptSha256'))
+            or not re.fullmatch(r'[a-f0-9]{64}', value['workerProjectionSha256'])
+            or len(profile['workerProjection']) != 60
+            or hashlib.sha256(json.dumps(profile['workerProjection'], sort_keys=True, separators=(',', ':')).encode()).hexdigest() != value['workerProjectionSha256']):
+        raise ValueError('PROJECTION_CHANGED')
+    print(value['workerProjectionSha256'])
+except Exception:
+    print('Fixed96 projection unavailable; raw output suppressed', file=sys.stderr)
+    raise SystemExit(2) from None
+PY_REGISTRATION96_PROJECTION
+}
+
 # Selection only; the remote policy still verifies the reviewed source proof.
 validate_release_selection() {
   local policy="${HISTORICAL_EXCEPTION:-none}"
@@ -204,6 +308,12 @@ validate_release_selection() {
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
       [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}" ]] || return 1
       return 0 ;;
+    registration-worker-96-20261008)
+      [[ "${EXPECTED_CURRENT:-}" == 04570d75c779fd91a0933ef9416f6d62698b6b91 ]] || return 1
+      [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+      [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" ]] || return 1
+      registration96_preflight
+      return $? ;;
     registration-worker-95-20261008)
       [[ "${EXPECTED_CURRENT:-}" == 4c170e661c871dc14dccc98a8d6e5cf983141341 ]] || return 1
       [[ "${RELEASE_OPERATION:-release}" == release && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1

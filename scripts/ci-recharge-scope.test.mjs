@@ -14,7 +14,9 @@ import {
   checkMode,
   adminCheckCommands,
   adminUiGuardChecks,
-  backendArchitectureGuardChecks
+  backendArchitectureGuardChecks,
+  registrationOnboardingControls,
+  hasRegistrationOnboardingScope
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -24,6 +26,61 @@ const files = [
   'apps/admin/src/v2/features/auto-recharge/example.vue',
   'apps/api/prisma-mysql/schema.prisma'
 ];
+test('registration96 uses its fifteen exact release controls and only the reviewed browser pair', () => {
+  const controls = [...registrationOnboardingControls];
+  const pair = [
+    'apps/api/src/id-business-v2/auto-recharge/worker/registration_browser.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/test_registration_browser.py'
+  ];
+  assert.equal(controls.length, 15);
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const identity of [controls[0], controls[1], controls[2], controls[3]]) {
+    assert.equal(hasRegistrationOnboardingScope([identity]), true);
+    assert.equal(checkMode([identity], schema, schema), 'ci-only');
+    assert.deepEqual(selectedParts([identity]), ['guards']);
+  }
+  for (const sources of [pair, ...pair.map((path) => [path])]) {
+    const paths = [...controls, ...sources];
+    assert.equal(isCiOnly(paths), false);
+    assert.equal(isRechargeOnly(paths, schema, schema), true);
+    assert.equal(isTargetedOnly(paths, schema, schema), true);
+    assert.equal(checkMode(paths, schema, schema), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+    assert.deepEqual(adminUiGuardChecks('recharge', paths), []);
+    assert.deepEqual(backendArchitectureGuardChecks('recharge', paths), []);
+  }
+  for (const outside of [
+    'deploy/aws/registration-worker-96-20261009.json',
+    'deploy/aws/registration-worker-96-20261008.json.backup',
+    'deploy/aws/registration-baseline-96-unreviewed.json',
+    'deploy/aws/registration-worker-95-20261008.json',
+    'scripts/production-release/registration-interstitial-95.py',
+    'deploy/aws/recharge-pro-6f5-20261008.json',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/registration-onboarding-96-other.py',
+    'scripts/production-release/api-admin-scope.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/server.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/plan_selection.py',
+    'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile',
+    'apps/api/src/id-business-v2/auto-registration/registration-worker.ts',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/v2/features/auto-registration/AutoRegistrationPage.vue',
+    '.env.example',
+    'package-lock.json'
+  ]) {
+    for (const paths of [
+      [...controls, outside],
+      [...controls, ...pair, outside]
+    ]) {
+      assert.equal(checkMode(paths, schema, schema), 'full', outside);
+      assert.equal(isCiOnly(paths), false, outside);
+      assert.equal(isRechargeOnly(paths, schema, schema), false, outside);
+      assert.equal(isTargetedOnly(paths, schema, schema), false, outside);
+    }
+  }
+});
 test('documentation and CI selectors do not start business or database checks', () => {
   for (const path of ['docs/V2_TASKS.md', 'AGENTS.md', 'README.md', 'scripts/ci-change-scope.mjs'])
     assert.equal(checkMode([path], schema, schema), 'ci-only');

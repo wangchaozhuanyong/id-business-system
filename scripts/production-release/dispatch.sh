@@ -186,7 +186,7 @@ assert history_policy in ('none', 'historical-finance-20261005',
                          'registration-worker-89-20261006',
                          'registration-worker-90-20261007',
                          'registration-worker-91-20261007',
-                         'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008',
+                         'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008', 'registration-worker-96-20261008',
                          'historical-finance-20261005-order-archive',
                          'historical-finance-20261005-post-cleanup')
 if history_policy == 'historical-finance-20261005':
@@ -277,6 +277,12 @@ elif history_policy == 'registration-worker-92-20261007':
     assert not any(os.environ.get(key) for key in (
         'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'))
     scope_flag += ' --registration-worker-92'
+elif history_policy == 'registration-worker-96-20261008':
+    assert previous == '04570d75c779fd91a0933ef9416f6d62698b6b91' and admin_only == 'false'
+    assert not any(os.environ.get(key) for key in (
+        'REUSE_IMAGE_RUN', 'REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT',
+        'RELEASE_BROWSER_CACHE_IMAGE', 'RELEASE_BROWSER_CACHE_IMAGE_ID'))
+    scope_flag += ' --registration-worker-96'
 elif history_policy == 'registration-worker-95-20261008':
     assert previous == '4c170e661c871dc14dccc98a8d6e5cf983141341' and admin_only == 'false'
     assert not any(os.environ.get(key) for key in (
@@ -324,7 +330,7 @@ elif history_policy == 'historical-finance-20261005-order-archive':
     scope_flag += (' --historical-finance-order-archive --order-archive-seal-sha256 '
                    + os.environ['ORDER_ARCHIVE_SEAL_SHA256']
                    + ' --order-archive-prepared-images-sha256 ' + os.environ['ORDER_ARCHIVE_PREPARED_IMAGES_SHA256'])
-if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006', 'registration-worker-87-20261006', 'registration-worker-88-20261006', 'registration-worker-89-20261006', 'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008'):
+if history_policy in ('registration-worker-b8-80-20261006', 'registration-worker-956-20261006', 'registration-worker-85-20261006', 'registration-worker-86-20261006', 'registration-worker-87-20261006', 'registration-worker-88-20261006', 'registration-worker-89-20261006', 'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008', 'registration-worker-96-20261008'):
     image_commit, image_run, image_attempt = sha, run_id, attempt
 else:
     image_commit = os.environ.get('REUSE_IMAGE_COMMIT', sha)
@@ -353,6 +359,65 @@ commands = [
     f'curl -fsSL --retry 3 --max-time 30 {url} -o {script_path}',
     f'python3 {script_path} --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --run-attempt {attempt} --ci-run-id {quality_run}{scope_flag}{image_flags}',
 ]
+if history_policy == 'registration-worker-96-20261008':
+    import hashlib, shlex, stat
+    from pathlib import Path
+    profile_name = 'registration-worker-96-20261008.json'
+    module_name = 'registration-onboarding-96.py'
+    baseline_name = 'registration-baseline-96-20261008.json'
+    carriers = (
+        (Path('scripts/production-release/remote-deploy.py'), Path(script_path), 1024 * 1024),
+        (Path('deploy/aws') / profile_name, Path(script_path).with_name(profile_name), 128 * 1024),
+        (Path('scripts/production-release') / module_name, Path(script_path).with_name(module_name), 128 * 1024),
+        (Path('deploy/aws') / baseline_name, Path(script_path).with_name(baseline_name), 4 * 1024 * 1024),
+    )
+    def local_carrier(path, cap):
+        path = path.absolute()
+        assert path.resolve() == path
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_uid, s.st_gid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        initial = path.lstat()
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            assert identity(initial) == identity(before) and stat.S_ISREG(before.st_mode)
+            assert before.st_nlink == 1 and stat.S_IMODE(before.st_mode) in (0o644, 0o664) and 0 < before.st_size <= cap
+            raw = stream.read(cap + 1)
+            assert len(raw) == before.st_size and identity(before) == identity(os.fstat(stream.fileno())) == identity(path.lstat())
+        return raw
+    raw_carriers = [local_carrier(path, cap) for path, _, cap in carriers]
+    baseline_hash = hashlib.sha256(raw_carriers[3]).hexdigest()
+    def unique96(items):
+        result = {}
+        for key, value in items:
+            if key in result: raise ValueError('Fixed96 duplicate field')
+            result[key] = value
+        return result
+    profile = json.loads(raw_carriers[1], object_pairs_hook=unique96)
+    assert profile['enabled'] is True and profile['id'] == history_policy and profile['baselineCarrierSha256'] == baseline_hash
+    commands[-1] += ' --registration96-baseline-sha256 ' + baseline_hash
+    targets = [str(target) for _, target, _ in carriers]
+    guard = ('import pathlib,stat;d=pathlib.Path(' + repr(str(Path(script_path).parent)) + ');'
+        + '\nfor p in [d,d.parent,d.parent.parent]:\n if p.resolve()!=p or p.is_symlink():raise RuntimeError("Fixed96 staging changed")\n'
+        + 'for p in [pathlib.Path(n) for n in ' + repr(targets) + ']:\n if p.is_symlink() or (p.exists() and (not p.is_file() or p.stat().st_nlink!=1)):raise RuntimeError("Fixed96 carrier changed")')
+    verify = '''import hashlib,os,pathlib,stat
+def read96(name,cap,expected):
+    p=pathlib.Path(name)
+    if p.resolve()!=p or p.parent.resolve()!=p.parent:raise RuntimeError('Fixed96 carrier path changed')
+    identity=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+    initial=p.lstat()
+    with os.fdopen(os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as f:
+        before=os.fstat(f.fileno())
+        if identity(initial)!=identity(before) or not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode)!=0o644 or before.st_nlink!=1 or before.st_uid!=0 or not 0<before.st_size<=cap:raise RuntimeError('Fixed96 carrier stat changed')
+        raw=f.read(cap+1)
+        if len(raw)!=before.st_size or identity(before)!=identity(os.fstat(f.fileno())) or identity(before)!=identity(p.lstat()):raise RuntimeError('Fixed96 carrier read changed')
+    if hashlib.sha256(raw).hexdigest()!=expected:raise RuntimeError('Fixed96 carrier hash changed')
+'''
+    verify += '\n'.join('read96(' + repr(str(target)) + ',' + str(cap) + ',' + repr(hashlib.sha256(raw).hexdigest()) + ')'
+        for (_, target, cap), raw in zip(carriers, raw_carriers))
+    downloads = []
+    for path, target, _ in carriers:
+        downloads.append(f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/{path.as_posix()} -o {target}')
+    commands[1:3] = ['python3 -c ' + shlex.quote(guard), commands[1], *downloads,
+        'chmod 0644 ' + ' '.join(targets), 'python3 -c ' + shlex.quote(verify)]
 if history_policy == 'registration-worker-95-20261008':
     import hashlib, shlex
     from pathlib import Path
@@ -388,6 +453,8 @@ if api_admin:
         pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',
                        f'echo "{digest}  {target_path}" | sha256sum -c - >/dev/null'])
     commands[2:3] = pinned
+if history_policy == 'registration-worker-96-20261008':
+    assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}).encode('utf-8')) < 48 * 1024
 with open(sys.argv[1], 'w', encoding='utf-8') as target:
     json.dump({'commands': commands, 'executionTimeout': ['3600']}, target)
 PY

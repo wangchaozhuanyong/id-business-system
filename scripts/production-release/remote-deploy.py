@@ -12571,7 +12571,35 @@ def load_registration_interstitial95():
     return globals()
 
 
+REGISTRATION96_MODULE_SHA256 = 'f17c8ca3ba5d7532ce86c6e8069624da2e9c8868783ab797f9f2a4b08c2fea21'
+
+
+def load_registration96():
+    source = Path(__file__).absolute()
+    require(source.name == 'remote-deploy.py' and source.resolve() == source
+        and not source.is_symlink() and source.parent.resolve() == source.parent, 'Fixed96 carrier changed')
+    staged = source.parent.parent == BASE / '.staging'
+    require((staged and re.fullmatch(r'oidc-[a-f0-9]{40}', source.parent.name))
+        or (not staged and source.parent.name == 'production-release' and source.parent.parent.name == 'scripts'), 'Fixed96 carrier changed')
+    path = source.with_name('registration-onboarding-96.py')
+    require(not staged or path.lstat().st_uid == 0, 'Fixed96 carrier changed')
+    raw = fixed_recharge_bytes(path, modes=(0o644,) if staged else (0o644, 0o664), limit=128 * 1024)
+    require(hashlib.sha256(raw).hexdigest() == REGISTRATION96_MODULE_SHA256, 'Fixed96 module changed')
+    namespace = {'__name__': 'registration96', '__file__': str(path)}
+    exec(compile(raw, str(path), 'exec'), namespace)
+    return namespace
+
+
 if __name__ == '__main__':
+    if 'registration-worker-96-20261008' in sys.argv or '--registration-worker-96' in sys.argv:
+        try:
+            require(not any(t.startswith(('--recharge-pro', 'recharge-pro-', '--api-admin', '--historical-finance'))
+                or t in ('--admin-only',) or (t.startswith('--registration-worker') and t != '--registration-worker-96')
+                or (t.startswith('registration-worker-') and t != 'registration-worker-96-20261008') for t in sys.argv[1:]), 'Fixed96 selection changed')
+            result = load_registration96()['registration96_cli'](sys.argv[1:], globals())
+            require(type(result) is int and result in (0, 1, 2), 'Fixed96 result changed')
+            raise SystemExit(result)
+        except Exception:raise SystemExit('Fixed96 unavailable; raw output suppressed') from None
     if (RECHARGE_6F5_ID in sys.argv or '--recharge-pro-6f5' in sys.argv) and any(
             (token.startswith(('--registration-worker', '--recharge-pro-')) and token != '--recharge-pro-6f5')
             or token.startswith('registration-worker-')
