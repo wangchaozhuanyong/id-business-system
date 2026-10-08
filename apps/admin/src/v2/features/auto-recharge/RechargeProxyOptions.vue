@@ -42,7 +42,7 @@
         </el-select>
       </el-form-item>
       <p class="recharge-settings-note">
-        代理资料与自动注册、自动充值共用，链接和账号密码统一在代理 IP 管理维护。
+        自动充值使用的代理资料，链接和账号密码统一在代理 IP 管理维护。
         <AppButton size="small" variant="ghost" @click="catalog.query.refresh"
           >刷新代理列表</AppButton
         >
