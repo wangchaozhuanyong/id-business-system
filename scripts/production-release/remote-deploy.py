@@ -13285,7 +13285,8 @@ if __name__ == '__main__':
             raise SystemExit(registration_interstitial_cli(sys.argv[1:]))
         except Exception:raise SystemExit('Fixed registration interstitial unavailable; raw output suppressed') from None
     if sys.argv[1:2] and sys.argv[1] in ('--prepare-api-registration-build', '--write-api-registration-build-proof',
-        '--api-registration-verify', '--api-registration-preflight', '--api-registration-readback', '--api-registration-handoff', '--api-registration-business'):
+        '--api-registration-verify', '--api-registration-preflight', '--api-registration-readback', '--api-registration-handoff', '--api-registration-business',
+        '--api-registration-handoff-observe', '--api-registration-handoff-recover'):
         scope, controller = api_admin_scope('API_REGISTRATION')
         raise SystemExit(scope.registration_cli(controller, sys.argv[1:]))
     if sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):

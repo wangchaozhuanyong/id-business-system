@@ -16,6 +16,8 @@ on:
           - handoff_api_registration
           - release_api_registration
           - verify_registration_business
+          - verify_registration_handoff
+          - recover_registration_handoff
           - verify_recharge_release
           - verify_mailbox
           - verify_cache
@@ -429,6 +431,14 @@ jobs:
       - name: Observe the original registration task latest attempt without writes
         if: inputs.operation == 'verify_registration_business'
         run: python3 -B scripts/production-release/api-admin-readonly.py business
+
+      - name: Observe the bound failed registration resource handoff without writes
+        if: inputs.operation == 'verify_registration_handoff'
+        run: python3 -B scripts/production-release/api-admin-readonly.py handoff-observe
+
+      - name: Recover only the bound failed registration browser resource handoff
+        if: inputs.operation == 'recover_registration_handoff'
+        run: python3 -B scripts/production-release/api-admin-readonly.py handoff-recover
 
       - name: Resolve reviewed immutable browser dependency cache
         if: inputs.operation == 'release' && inputs.reuse_image_run == '' && inputs.historical_exception != 'recharge-pro-4c-20261008' && inputs.historical_exception != 'recharge-pro-6f5-20261008' && inputs.historical_exception != 'recharge-pro-pricing-045-20261008' && (inputs.historical_exception == 'none' || startsWith(inputs.historical_exception, 'recharge-pro-'))
@@ -2073,7 +2083,7 @@ jobs:
           retention-days: 14
 
       - name: Save API Registration independent scope evidence
-        if: always() && (inputs.operation == 'verify_api_registration' || inputs.operation == 'handoff_api_registration' || inputs.operation == 'release_api_registration' || inputs.operation == 'verify_registration_business')
+        if: always() && (inputs.operation == 'verify_api_registration' || inputs.operation == 'handoff_api_registration' || inputs.operation == 'release_api_registration' || inputs.operation == 'verify_registration_business' || inputs.operation == 'verify_registration_handoff' || inputs.operation == 'recover_registration_handoff')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: api-registration-evidence-${{ github.run_id }}-${{ github.run_attempt }}

@@ -20,6 +20,7 @@ FIXED_REGISTRATION_IDS = frozenset({
     'registration-worker-956-20261006', 'registration-worker-b8-80-20261006',
     *('registration-worker-' + str(number) + '-20261006' for number in range(85, 90)),
     'registration-worker-90-20261007', 'registration-worker-91-20261007', 'registration-worker-92-20261007', 'registration-worker-93-20261007', 'registration-worker-94-20261007', 'registration-worker-95-20261008',
+    'registration-worker-96-20261008',
 })
 FIXED_RECHARGE_IDS = frozenset({'recharge-pro-main80-20261006', 'recharge-pro-974-20261007',
     'recharge-pro-2f-20261007', 'recharge-pro-4c-20261008', 'recharge-pro-6f5-20261008', 'recharge-pro-pricing-045-20261008'})

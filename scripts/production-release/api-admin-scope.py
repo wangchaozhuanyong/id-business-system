@@ -57,6 +57,8 @@ TASK_ATTEMPT = 10
 TASK_BINDING = {'accountSha256': '4764c0440ec5bde3d20c74064096b3720a3d7d6ac637361452b9f544b9287ba5',
     'profileSha256': '052ad861dc0da2f8611d422bd384e328e1d856a126bc86434846861f90728f00',
     'ownerSha256': 'ed198d0daf9ef5910f54dc16b3a7a6f4db0cf55c1935309f838071365ab7196d'}
+HANDOFF_FAILURE = {'confirmed': False, 'privatePostAttempted': True, 'failurePhase': 'close',
+    'privatePostHttpStatus': 409, 'controlledReason': 'fingerprint_cleanup_failed', 'rawOutputSuppressed': True}
 
 
 def image_service(service):
@@ -276,10 +278,16 @@ def jobs_idle(d, directory, *, allow_retained=False):
         'WHERE state IN (0x72756e6e696e67, 0x6177616974696e675f656d61696c, '
         '0x6177616974696e675f75736572) AND lease_until > UTC_TIMESTAMP(6)"')
     d.require(count == '0', 'API_ADMIN_REGISTRATION_LEASE_ACTIVE')
-    if REGISTRATION and not allow_retained:
-        d.require(runtime['registrationWindowRetained'] is False, 'API_ADMIN_REGISTRATION_WINDOW_RETAINED')
-    return {'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
-            'registrationWindowRetained': runtime['registrationWindowRetained']}
+    result = {'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
+              'registrationWindowRetained': runtime['registrationWindowRetained']}
+    if REGISTRATION and not allow_retained and runtime['registrationWindowRetained']:
+        path = handoff_directory(d) / 'confirmed.json'
+        d.require(path.exists(), 'API_ADMIN_REGISTRATION_WINDOW_RETAINED')
+        record = handoff_json(d, handoff_directory(d), 'confirmed.json')
+        d.require(record.get('version') == 2, 'API_ADMIN_REGISTRATION_WINDOW_RETAINED')
+        require_native_handoff(d, directory, record)
+        result['registrationResourceClosed'] = True
+    return result
 
 
 TASK_SOURCE = r'''const {PrismaClient}=require('@prisma/client'),c=require('node:crypto');
@@ -413,6 +421,178 @@ class RegistrationHandoffError(RuntimeError):
     def __init__(self, diagnostic):
         super().__init__('API_ADMIN_REGISTRATION_PRIVATE_UNCONFIRMED')
         self.diagnostic = diagnostic
+
+
+NATIVE_HANDOFF_SOURCE = r'''import ast,hashlib,json,os,select,signal,stat,sys,time
+from pathlib import Path
+recover=__RECOVER__;expected_module=__MODULE_SHA__
+proc=Path('/proc');engine=Path('/opt/camoufox');module=Path('/app/fingerprint_runtime.py')
+result={'status':'FAILED','nativeCount':0,'nativeCountObserved':False,'signalsAttempted':0,
+ 'zeroObservations':0,'resourceClosed':False,'readOnly':not recover,'code':'API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE'}
+def need(value,code):
+ if not value:raise RuntimeError('API_ADMIN_REGISTRATION_NATIVE_'+code)
+def process(pid):
+ raw=(proc/str(pid)/'stat').read_text();parts=raw.rsplit(')',1)[1].split()
+ need(len(parts)>19 and parts[19].isdigit(),'PROC_READ');return (int(parts[19]),parts[0])
+def inactive(pid,observed):
+ path=proc/str(pid)
+ need(observed[1] in ('Z','X') and os.readlink(path/'ns/pid')==namespace,'PROC_READ')
+ need(hasattr(os,'pidfd_open') and hasattr(select,'poll'),'SIGNAL_UNAVAILABLE')
+ fd=os.pidfd_open(pid,0)
+ try:
+  need(process(pid)==observed,'PID_REUSED')
+  poll=select.poll();poll.register(fd,select.POLLIN)
+  events=[flags for n,flags in poll.poll(0) if n==fd]
+  need(len(events)==1 and events[0]&select.POLLIN and not events[0]&(select.POLLERR|select.POLLNVAL),'PROC_READ')
+  need(process(pid)==observed,'PID_REUSED')
+  need(os.readlink(path/'ns/pid')==namespace,'PID_NAMESPACE');return True
+ finally:os.close(fd)
+def row(pid):
+ path=proc/str(pid)
+ try:
+  observed=process(pid)
+  if observed[1] in ('Z','X'):
+   inactive(pid,observed);return None
+  first=observed[0];exe=os.readlink(path/'exe')
+ except (FileNotFoundError,ProcessLookupError):
+  need(not path.exists(),'PROC_READ');return None
+ need(not exe.endswith(' (deleted)'),'DELETED_EXECUTABLE')
+ need(exe!='/run/rosetta/rosetta','EXECUTION_EMULATED')
+ if not exe.startswith(str(engine)+'/'):return None
+ actual=Path(exe).resolve(strict=True)
+ need(actual==kernel and actual.is_file() and (actual.stat().st_dev,actual.stat().st_ino)==kernel_identity,'EXECUTABLE_CHANGED')
+ need(os.readlink(path/'ns/pid')==namespace,'PID_NAMESPACE')
+ need(process(pid)[0]==first,'PID_REUSED')
+ return (pid,first,exe)
+def inventory():
+ names=[p for p in proc.iterdir() if p.name.isdigit()]
+ need(len(names)<=2048,'PROC_BOUND');rows=[]
+ for path in names:
+  try:value=row(int(path.name))
+  except (FileNotFoundError,ProcessLookupError):
+   need(not path.exists(),'PROC_READ');continue
+  if value is not None:rows.append(value)
+ need(len(rows)<=128,'PROC_BOUND');return sorted(rows)
+fds=[]
+try:
+ need(os.geteuid()==10001 and os.getegid()==10001,'OWNER_CHANGED')
+ need(Path(os.readlink(proc/'self/exe')).resolve(strict=True)==Path(sys.executable).resolve(strict=True),'EXECUTION_EMULATED')
+ raw=module.read_bytes();need(hashlib.sha256(raw).hexdigest()==expected_module,'MODULE_CHANGED')
+ tree=ast.parse(raw);paths=[n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='ENGINE_PATH' for t in n.targets)]
+ need(len(paths)==1 and isinstance(paths[0],ast.Call) and isinstance(paths[0].func,ast.Name) and paths[0].func.id=='Path'
+  and len(paths[0].args)==1 and isinstance(paths[0].args[0],ast.Constant) and paths[0].args[0].value=='/opt/camoufox/camoufox','MODULE_CHANGED')
+ need(engine.resolve(strict=True)==engine and engine.is_dir() and engine.stat().st_uid==0,'ENGINE_CHANGED')
+ kernel=(engine/'camoufox').resolve(strict=True);need(kernel.parent==engine and kernel.is_file() and kernel.stat().st_uid==0,'ENGINE_CHANGED')
+ kernel_identity=(kernel.stat().st_dev,kernel.stat().st_ino);namespace=os.readlink(proc/'self/ns/pid');need(namespace.startswith('pid:['),'PID_NAMESPACE')
+ deadline=time.monotonic()+10;rows=inventory();result.update(nativeCount=len(rows),nativeCountObserved=True)
+ if recover:
+  need(all(pid>1 and pid!=os.getpid() for pid,_,_ in rows),'PID_OWNER')
+  need(not rows or hasattr(os,'pidfd_open') and hasattr(signal,'pidfd_send_signal'),'SIGNAL_UNAVAILABLE')
+  for owned in rows:
+   pid=owned[0]
+   try:fd=os.pidfd_open(pid,0)
+   except ProcessLookupError:
+    need(not (proc/str(pid)).exists(),'PID_REUSED');continue
+   fds.append((fd,owned));current=row(pid);need(current is None or current==owned,'PID_REUSED')
+  for fd,owned in fds:
+   need(time.monotonic()<deadline,'BUDGET_EXHAUSTED');current=row(owned[0])
+   need(current is None or current==owned,'PID_REUSED')
+   if current is None:continue
+   result['signalsAttempted']+=1
+   try:signal.pidfd_send_signal(fd,signal.SIGTERM,None,0)
+   except ProcessLookupError:pass
+  zero=0
+  while time.monotonic()<deadline:
+   remaining=inventory();alive=False
+   for pid,original,_ in rows:
+    try:
+     observed=process(pid);need(observed[0]==original,'PID_REUSED')
+     if observed[1] in ('Z','X'):inactive(pid,observed)
+     else:alive=True
+    except (FileNotFoundError,ProcessLookupError):need(not (proc/str(pid)).exists(),'PROC_READ')
+   result['nativeCount']=len(remaining)
+   zero=zero+1 if not remaining and not alive else 0;result['zeroObservations']=zero
+   if zero==2:break
+   time.sleep(.1)
+  need(result['zeroObservations']==2,'REMAINS')
+  result.update(status='RECOVERED',resourceClosed=True,code='none')
+ else:
+  time.sleep(.1);need(inventory()==rows,'OBSERVATION_CHANGED')
+  result.update(status='OBSERVED',zeroObservations=2 if not rows else 0,resourceClosed=not rows,code='none')
+except Exception as error:
+ code=str(error);allowed={'OWNER_CHANGED','PROC_READ','DELETED_EXECUTABLE','EXECUTABLE_CHANGED','PID_NAMESPACE',
+  'PID_REUSED','PROC_BOUND','MODULE_CHANGED','ENGINE_CHANGED','PID_OWNER','SIGNAL_UNAVAILABLE','BUDGET_EXHAUSTED','REMAINS','OBSERVATION_CHANGED','EXECUTION_EMULATED'}
+ if code in {'API_ADMIN_REGISTRATION_NATIVE_'+n for n in allowed}:result['code']=code
+finally:
+ for fd,_ in fds:
+  try:os.close(fd)
+  except OSError:pass
+print(json.dumps(result,separators=(',',':')))
+'''
+
+
+class RegistrationRecoveryError(RuntimeError):
+    def __init__(self, code, diagnostic):
+        super().__init__(code)
+        self.diagnostic = diagnostic
+
+
+def handoff_json(d, folder, name):
+    d.require(folder.resolve() == folder and stat.S_ISDIR(folder.lstat().st_mode)
+              and stat.S_IMODE(folder.lstat().st_mode) == 0o700 and folder.lstat().st_uid == 0,
+              'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED')
+    path = folder / name
+    d.require(path.lstat().st_uid == 0, 'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED')
+    raw = d.fixed_recharge_bytes(path, modes=(0o400,), limit=16384)
+    d.require(path.lstat().st_uid == 0, 'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED')
+    return d.fixed_recharge_json(raw)
+
+
+def handoff_failed_attempt(d, *, require_unconfirmed=True):
+    folder = handoff_directory(d)
+    attempt = handoff_json(d, folder, 'attempt.json')
+    failure = handoff_json(d, folder, 'failure.json')
+    d.require(fingerprint(attempt) == fingerprint({'taskId': TASK_ID, 'attempt': TASK_ATTEMPT, 'privatePostBudget': 1})
+              and fingerprint(failure) == fingerprint(HANDOFF_FAILURE), 'API_ADMIN_REGISTRATION_RECOVERY_FAILURE_CHANGED')
+    if require_unconfirmed:
+        d.require(not (folder / 'confirmed.json').exists() and not (folder / 'confirmed.json').is_symlink(),
+                  'API_ADMIN_REGISTRATION_RECOVERY_ALREADY_CONFIRMED')
+    return folder
+
+
+def native_handoff(d, directory, container_id, *, recover=False):
+    d.require(re.fullmatch(r'[a-f0-9]{64}', container_id), 'API_ADMIN_REGISTRATION_NATIVE_CONTAINER_CHANGED')
+    module_sha = registration_profile(d, Path(REGISTRATION_DIRECTORY))['workerProjection'][WORKER_PREFIX + 'fingerprint_runtime.py']['sha256']
+    source = NATIVE_HANDOFF_SOURCE.replace('__RECOVER__', repr(recover)).replace('__MODULE_SHA__', repr(module_sha))
+    try:
+        value = json.loads(d.run('docker', 'exec', '--user', '10001:10001', '-i', container_id, 'python', '-B', '-c', source, timeout=20))
+    except Exception:
+        raise RegistrationRecoveryError('API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE', {
+            'confirmed': False, 'signalsAttempted': None if recover else 0, 'nativeCount': 0,
+            'nativeCountObserved': False, 'rawOutputSuppressed': True}) from None
+    fields = {'status', 'nativeCount', 'nativeCountObserved', 'signalsAttempted', 'zeroObservations',
+              'resourceClosed', 'readOnly', 'code'}
+    d.require(isinstance(value, dict) and set(value) == fields
+              and all(type(value[n]) is int and 0 <= value[n] <= 128 for n in ('nativeCount', 'signalsAttempted'))
+              and type(value['zeroObservations']) is int and 0 <= value['zeroObservations'] <= 2
+              and all(type(value[n]) is bool for n in ('nativeCountObserved', 'resourceClosed', 'readOnly'))
+              and value['readOnly'] is (not recover) and value['status'] in ('OBSERVED', 'RECOVERED', 'FAILED')
+              and isinstance(value['code'], str), 'API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE')
+    if value['status'] == 'FAILED':
+        allowed = {'OWNER_CHANGED', 'PROC_READ', 'DELETED_EXECUTABLE', 'EXECUTABLE_CHANGED', 'PID_NAMESPACE',
+                   'PID_REUSED', 'PROC_BOUND', 'MODULE_CHANGED', 'ENGINE_CHANGED', 'PID_OWNER', 'SIGNAL_UNAVAILABLE',
+                   'BUDGET_EXHAUSTED', 'REMAINS', 'OBSERVATION_CHANGED', 'EXECUTION_EMULATED', 'UNAVAILABLE'}
+        d.require(value['code'] in {'API_ADMIN_REGISTRATION_NATIVE_' + name for name in allowed},
+                  'API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE')
+        raise RegistrationRecoveryError(value['code'], {'confirmed': False, 'signalsAttempted': value['signalsAttempted'],
+            'nativeCount': value['nativeCount'], 'nativeCountObserved': value['nativeCountObserved'], 'rawOutputSuppressed': True})
+    d.require(value['status'] == ('RECOVERED' if recover else 'OBSERVED') and value['code'] == 'none'
+              and value['nativeCountObserved'] is True and value['resourceClosed'] is (value['nativeCount'] == 0)
+              and (recover and value['resourceClosed'] is True and value['zeroObservations'] == 2
+                   or not recover and value['signalsAttempted'] == 0
+                   and value['zeroObservations'] == (2 if value['resourceClosed'] else 0)),
+              'API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE')
+    return value
 
 
 BUSINESS_SOURCE = r'''const {PrismaClient}=require('@prisma/client'),c=require('node:crypto');
@@ -576,26 +756,174 @@ def handoff_directory(d):
     return d.BASE / '.staging' / ('api-registration-handoff-' + REGISTRATION_CURRENT)
 
 
+def ordinary_handoff_record(task):
+    return {'version': 1, 'scope': SCOPE, 'commit': REGISTRATION_CURRENT,
+            'task': task, 'privateCancelConfirmed': True, 'databaseWrites': 0,
+            'accountPreserved': True, 'taskPreserved': True, 'passwordCandidatePreserved': True,
+            'windowRetained': False}
+
+
+def recovery_marker(task, states):
+    return {'version': 1, 'scope': SCOPE, 'taskId': TASK_ID, 'attempt': TASK_ATTEMPT,
+            'privatePostBudget': 0, 'signalPassBudget': 1, 'signal': 'SIGTERM',
+            'containerId': states['auto-registration']['containerId'], 'taskSha256': fingerprint(task),
+            'servicesSha256': fingerprint(states), 'firstFailureSha256': fingerprint(HANDOFF_FAILURE),
+            'nativeProbeSourceSha256': hashlib.sha256(NATIVE_HANDOFF_SOURCE.encode()).hexdigest()}
+
+
+def require_native_handoff(d, directory, record):
+    folder = handoff_failed_attempt(d, require_unconfirmed=False)
+    d.require(not (folder / 'recovery-failure.json').exists() and not (folder / 'recovery-failure.json').is_symlink(),
+              'API_ADMIN_REGISTRATION_RECOVERY_FAILED')
+    marker = handoff_json(d, folder, 'recovery-attempt.json')
+    task = registration_task(d, directory)
+    fields = {'version', 'scope', 'commit', 'task', 'privateCancelConfirmed', 'windowClosure',
+              'privateMemoryRetained', 'resourceClosed', 'databaseWrites', 'accountPreserved', 'taskPreserved',
+              'passwordCandidatePreserved', 'servicesSha256', 'audit', 'auditFile', 'auditRawSha256', 'recoveryAttemptSha256'}
+    d.require(isinstance(record, dict) and set(record) == fields and type(record['version']) is int and record['version'] == 2
+              and record['scope'] == SCOPE and record['commit'] == REGISTRATION_CURRENT and fingerprint(record['task']) == fingerprint(task)
+              and record['privateCancelConfirmed'] is False and record['windowClosure'] == 'owned_native_process_exit'
+              and all(record[n] is True for n in ('privateMemoryRetained', 'resourceClosed', 'accountPreserved',
+                  'taskPreserved', 'passwordCandidatePreserved')) and type(record['databaseWrites']) is int
+              and record['databaseWrites'] == 0 and record['servicesSha256'] == REGISTRATION_STATES_SHA
+              and re.fullmatch(r'handoff-recover-[0-9]+-[0-9]+-after-audit\.json', record['auditFile'])
+              and re.fullmatch(r'[a-f0-9]{64}', record['auditRawSha256']),
+              'API_ADMIN_REGISTRATION_NATIVE_RECORD_CHANGED')
+    wanted = {'version': 1, 'scope': SCOPE, 'taskId': TASK_ID, 'attempt': TASK_ATTEMPT,
+              'privatePostBudget': 0, 'signalPassBudget': 1, 'signal': 'SIGTERM', 'containerId': marker.get('containerId'),
+              'taskSha256': fingerprint(task), 'servicesSha256': REGISTRATION_STATES_SHA,
+              'firstFailureSha256': fingerprint(HANDOFF_FAILURE),
+              'nativeProbeSourceSha256': hashlib.sha256(NATIVE_HANDOFF_SOURCE.encode()).hexdigest()}
+    d.require(fingerprint(marker) == fingerprint(wanted) and fingerprint(marker) == record['recoveryAttemptSha256'],
+              'API_ADMIN_REGISTRATION_RECOVERY_MARKER_CHANGED')
+    audit_path = folder / record['auditFile']
+    d.require(audit_path.lstat().st_uid == 0 and hashlib.sha256(d.fixed_recharge_bytes(
+        audit_path, modes=(0o400,), limit=128 * 1024)).hexdigest() == record['auditRawSha256']
+        and audit_receipt(d, audit_path) == record['audit'], 'API_ADMIN_REGISTRATION_RECOVERY_AUDIT_CHANGED')
+    state = d.service_state(directory, 'auto-registration', include_container_id=True, include_environment_hash=True)
+    d.require(state['containerId'] == marker['containerId'], 'API_ADMIN_REGISTRATION_NATIVE_CONTAINER_CHANGED')
+    registration_private(d, directory, retained=True)
+    observed = native_handoff(d, directory, marker['containerId'])
+    d.require(observed['resourceClosed'] is True and observed['zeroObservations'] == 2,
+              'API_ADMIN_REGISTRATION_NATIVE_REMAINS')
+    d.require(registration_task(d, directory) == task and d.service_state(directory, 'auto-registration',
+        include_container_id=True, include_environment_hash=True) == state,
+        'API_ADMIN_REGISTRATION_RECOVERY_MOVED')
+    registration_private(d, directory, retained=True)
+    return record
+
+
+def registration_handoff_recovery(d, expected, *, recover=False):
+    d.require(REGISTRATION and expected == REGISTRATION_CURRENT, 'API_ADMIN_SCOPE_CONFLICT')
+    os.umask(0o077)
+    with (d.BASE / '.deploy.lock').open('a') as lock:
+        d.fcntl.flock(lock, d.fcntl.LOCK_EX | d.fcntl.LOCK_NB)
+        folder = handoff_failed_attempt(d)
+        marker_path = folder / 'recovery-attempt.json'
+        if recover:
+            d.require(not marker_path.exists() and not marker_path.is_symlink(),
+                      'API_ADMIN_REGISTRATION_RECOVERY_ALREADY_ATTEMPTED')
+        directory, manifest, states, evidence = baseline(d, expected, check_jobs=False)
+        configuration = configuration_hashes(directory)
+        task = registration_task(d, directory)
+        guards = jobs_idle(d, directory, allow_retained=True)
+        private = registration_private(d, directory, retained=guards['registrationWindowRetained'])
+        stem = f'handoff-{"recover" if recover else "observe"}-{time.time_ns()}-{os.getpid()}'
+        before_audit = strict_audit(d, directory, folder / (stem + '-before-audit.json'))
+        first = native_handoff(d, directory, states['auto-registration']['containerId'])
+        if recover and not guards['registrationWindowRetained']:
+            d.require(first['resourceClosed'] is True, 'API_ADMIN_REGISTRATION_NATIVE_REMAINS')
+        marker = recovery_marker(task, states)
+        if recover:
+            with marker_path.open('x') as stream:
+                json.dump(marker, stream, sort_keys=True)
+            marker_path.chmod(0o400)
+        native, signal_started = None, False
+        try:
+            if recover and guards['registrationWindowRetained']:
+                signal_started = True
+                native = native_handoff(d, directory, marker['containerId'], recover=True)
+            else:
+                native = first
+            after_directory, after_manifest, after_states, after_evidence = baseline(d, expected, check_jobs=False)
+            after_task = registration_task(d, directory)
+            after_guards = jobs_idle(d, directory, allow_retained=True)
+            after_private = registration_private(d, directory, retained=after_guards['registrationWindowRetained'])
+            after_audit_path = folder / (stem + '-after-audit.json')
+            after_audit = strict_audit(d, directory, after_audit_path)
+            last = native_handoff(d, directory, marker['containerId'])
+            d.require(after_directory == directory and after_manifest == manifest and after_states == states
+                      and configuration_hashes(directory) == configuration and after_task == task
+                      and after_guards == guards and after_private == private and after_audit == before_audit
+                      and all(after_evidence[k] == evidence[k] for k in ('manifestSha256', 'environmentSha256', 'apiSource'))
+                      and (last['resourceClosed'] is True if recover else last == first),
+                      'API_ADMIN_REGISTRATION_RECOVERY_MOVED')
+            handoff_failed_attempt(d)
+            if not recover:
+                return {'status': 'API_REGISTRATION_HANDOFF_OBSERVED', 'commit': expected, 'readOnly': True,
+                        'services': states, 'task': task, 'guards': guards, 'audit': after_audit,
+                        'private': private, 'native': last, 'firstFailure': HANDOFF_FAILURE,
+                        'recoveryAlreadyAttempted': marker_path.exists()}
+            d.require(fingerprint(handoff_json(d, folder, 'recovery-attempt.json')) == fingerprint(marker),
+                      'API_ADMIN_REGISTRATION_RECOVERY_MARKER_CHANGED')
+            if not guards['registrationWindowRetained']:
+                record = ordinary_handoff_record(task)
+            else:
+                after_audit_path.chmod(0o400)
+                record = {'version': 2, 'scope': SCOPE, 'commit': expected, 'task': task,
+                    'privateCancelConfirmed': False, 'windowClosure': 'owned_native_process_exit',
+                    'privateMemoryRetained': True, 'resourceClosed': True, 'databaseWrites': 0,
+                    'accountPreserved': True, 'taskPreserved': True, 'passwordCandidatePreserved': True,
+                    'servicesSha256': fingerprint(states), 'audit': after_audit, 'auditFile': after_audit_path.name,
+                    'auditRawSha256': hashlib.sha256(after_audit_path.read_bytes()).hexdigest(),
+                    'recoveryAttemptSha256': fingerprint(marker)}
+            with (folder / 'confirmed.json').open('x') as stream:
+                json.dump(record, stream, sort_keys=True)
+            (folder / 'confirmed.json').chmod(0o400)
+            require_registration_handoff(d, directory, manifest)
+            return {'status': 'API_REGISTRATION_HANDOFF_VERIFIED', 'commit': expected,
+                    'privateCancelPerformed': False, 'signalsAttempted': native['signalsAttempted'],
+                    'resourceClosed': True, 'privateMemoryRetained': guards['registrationWindowRetained'],
+                    'accountPreserved': True, 'taskPreserved': True, 'passwordCandidatePreserved': True,
+                    'databaseWrites': 0, 'businessAcceptanceConfirmed': False}
+        except Exception as error:
+            if recover:
+                diagnostic = dict(error.diagnostic) if isinstance(error, RegistrationRecoveryError) else {
+                    'confirmed': False, 'signalsAttempted': native['signalsAttempted'] if native is not None else
+                        None if signal_started else 0, 'nativeCount': 0, 'nativeCountObserved': False,
+                    'rawOutputSuppressed': True}
+                if native is not None:
+                    diagnostic['signalsAttempted'] = native['signalsAttempted']
+                path = folder / 'recovery-failure.json'
+                with path.open('x') as stream:
+                    json.dump(diagnostic, stream, sort_keys=True)
+                path.chmod(0o400)
+                code = str(error)
+                if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
+                    code = 'API_ADMIN_REGISTRATION_RECOVERY_UNAVAILABLE'
+                raise RegistrationRecoveryError(code, diagnostic) from None
+            raise
+
+
 def require_registration_handoff(d, directory, manifest):
     if manifest.get('apiRegistrationPublication'):
         return
-    path = handoff_directory(d) / 'confirmed.json'
-    d.require(path.lstat().st_uid == 0, 'API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED')
-    record = json.loads(d.fixed_recharge_bytes(path, modes=(0o400,), limit=16384))
+    record = handoff_json(d, handoff_directory(d), 'confirmed.json')
+    if record.get('version') == 2:
+        return require_native_handoff(d, directory, record)
     current = registration_task(d, directory)
-    d.require(record == {'version': 1, 'scope': SCOPE, 'commit': REGISTRATION_CURRENT,
-                        'task': current, 'privateCancelConfirmed': True, 'databaseWrites': 0,
-                        'accountPreserved': True, 'taskPreserved': True, 'passwordCandidatePreserved': True,
-                        'windowRetained': False}, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
+    d.require(fingerprint(record) == fingerprint(ordinary_handoff_record(current)), 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
     registration_private(d, directory, retained=False)
+    return record
 
 
 def registration_preflight(d, expected, *, require_closed=False):
     directory, manifest, states, evidence = baseline(d, expected, check_jobs=False)
-    guards = jobs_idle(d, directory, allow_retained=not require_closed)
+    guards = jobs_idle(d, directory, allow_retained=True)
     task = registration_task(d, directory)
     registration_private(d, directory, retained=guards['registrationWindowRetained'])
-    if require_closed:
+    closed = require_closed or (handoff_directory(d) / 'confirmed.json').exists()
+    if closed:
         require_registration_handoff(d, directory, manifest)
     folder = Path(__file__).parent
     audit_path = folder / 'api-registration-preflight-audit.json'
@@ -604,7 +932,7 @@ def registration_preflight(d, expected, *, require_closed=False):
               'API_ADMIN_REGISTRATION_PREFLIGHT_CHANGED')
     return {'status': 'API_REGISTRATION_BASELINE_VERIFIED', 'commit': expected, 'services': states,
             **evidence, 'guards': guards, 'task': task, 'audit': audit,
-            'requiresWindowHandoff': guards['registrationWindowRetained']}
+            'requiresWindowHandoff': guards['registrationWindowRetained'] and not closed}
 
 
 def registration_handoff(d, expected):
@@ -1045,6 +1373,7 @@ def _release_locked(d, args):
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
                 if REGISTRATION:
+                    require_registration_handoff(d, previous, old)
                     d.require(registration_task(d, previous) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
             changed.append(name)
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name, timeout=300)
@@ -1166,6 +1495,8 @@ def registration_cli(d, tokens):
             result = registration_business(d, tokens[2])
         elif operation == '--api-registration-handoff':
             result = registration_handoff(d, tokens[2])
+        elif operation in ('--api-registration-handoff-observe', '--api-registration-handoff-recover'):
+            result = registration_handoff_recovery(d, tokens[2], recover=operation.endswith('-recover'))
         else:
             d.require(operation in ('--api-registration-preflight', '--api-registration-verify'), 'API_ADMIN_INPUT_INVALID')
             result = registration_preflight(d, tokens[2], require_closed=operation.endswith('-preflight'))
@@ -1178,5 +1509,7 @@ def registration_cli(d, tokens):
         result = {'status': 'API_REGISTRATION_VERIFICATION_FAILED', 'code': code, 'errorType': type(error).__name__}
         if isinstance(error, RegistrationHandoffError):
             result['privateDiagnostic'] = error.diagnostic
+        if isinstance(error, RegistrationRecoveryError):
+            result['recoveryDiagnostic'] = error.diagnostic
         print(json.dumps(result))
         return 1

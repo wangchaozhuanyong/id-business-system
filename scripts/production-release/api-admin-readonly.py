@@ -18,8 +18,8 @@ def command(*args):
 
 def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True):
     if (not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (commit, expected))
-            or scope not in ('API_ADMIN', 'API_REGISTRATION') or mode not in ('preflight', 'readback', 'handoff', 'business')
-            or mode in ('handoff', 'business') and scope != 'API_REGISTRATION' or type(require_closed) is not bool):
+            or scope not in ('API_ADMIN', 'API_REGISTRATION') or mode not in ('preflight', 'readback', 'handoff', 'business', 'handoff-observe', 'handoff-recover')
+            or mode in ('handoff', 'business', 'handoff-observe', 'handoff-recover') and scope != 'API_REGISTRATION' or type(require_closed) is not bool):
         raise ValueError('API_ADMIN_INPUT_INVALID')
     prefix = scope.lower().replace('_', '-')
     directory = f'/opt/id-business-v2/.staging/{prefix}-verify-{commit}'
@@ -50,12 +50,21 @@ def safe_failure(receipt, scope='API_ADMIN'):
                 and (diagnostic['privatePostHttpStatus'] is None or type(diagnostic['privatePostHttpStatus']) is int
                      and 100 <= diagnostic['privatePostHttpStatus'] <= 599)):
             result['privateDiagnostic'] = diagnostic
+        recovery = receipt.get('recoveryDiagnostic')
+        if (scope == 'API_REGISTRATION' and isinstance(recovery, dict)
+                and set(recovery) == {'confirmed', 'signalsAttempted', 'nativeCount', 'nativeCountObserved', 'rawOutputSuppressed'}
+                and recovery['confirmed'] is False and recovery['rawOutputSuppressed'] is True
+                and type(recovery['nativeCountObserved']) is bool
+                and type(recovery['nativeCount']) is int and 0 <= recovery['nativeCount'] <= 128
+                and (recovery['signalsAttempted'] is None or type(recovery['signalsAttempted']) is int
+                     and 0 <= recovery['signalsAttempted'] <= 128)):
+            result['recoveryDiagnostic'] = recovery
         return result
     return {'status': scope + '_VERIFICATION_FAILED', 'code': 'API_ADMIN_REMOTE_VERIFICATION_FAILED'}
 
 
 def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
-    wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_VERIFIED' if mode == 'handoff'
+    wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_OBSERVED' if mode == 'handoff-observe' else '_HANDOFF_VERIFIED' if mode in ('handoff', 'handoff-recover')
                       else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
     if not isinstance(receipt, dict) or receipt.get('status') != wanted or receipt.get('commit') != expected:
         raise RuntimeError('API_ADMIN_RECEIPT_CHANGED')
@@ -80,10 +89,12 @@ def main():
     os.umask(0o077)
     mode = sys.argv[1] if len(sys.argv) == 2 else ''
     operation = os.environ.get('RELEASE_OPERATION', '')
-    scope = 'API_REGISTRATION' if operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration', 'verify_registration_business') else 'API_ADMIN'
+    scope = 'API_REGISTRATION' if operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration', 'verify_registration_business', 'verify_registration_handoff', 'recover_registration_handoff') else 'API_ADMIN'
     if mode == 'handoff' and operation != 'handoff_api_registration':
         raise ValueError('API_ADMIN_SCOPE_CONFLICT')
     if mode == 'business' and operation != 'verify_registration_business':
+        raise ValueError('API_ADMIN_SCOPE_CONFLICT')
+    if mode in ('handoff-observe', 'handoff-recover') and operation != {'handoff-observe': 'verify_registration_handoff', 'handoff-recover': 'recover_registration_handoff'}[mode]:
         raise ValueError('API_ADMIN_SCOPE_CONFLICT')
     expected = os.environ['RELEASE_COMMIT'] if mode == 'readback' else os.environ['EXPECTED_CURRENT']
     data = parameters(os.environ['RELEASE_COMMIT'], expected, mode, scope,
@@ -112,7 +123,7 @@ def main():
             receipt = json.loads(output) if len(output) < 24000 else {}
         except (ValueError, TypeError):
             receipt = {}
-        wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_VERIFIED' if mode == 'handoff'
+        wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_OBSERVED' if mode == 'handoff-observe' else '_HANDOFF_VERIFIED' if mode in ('handoff', 'handoff-recover')
                           else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
         if result.get('Status') != 'Success' or result.get('ResponseCode') != 0 or receipt.get('status') != wanted:
             failure = safe_failure(receipt, scope)
