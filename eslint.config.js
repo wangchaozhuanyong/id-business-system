@@ -16,6 +16,7 @@ export default [
       'coverage/**',
       'backups/**',
       'apps/*/dist/**',
+      'apps/api/src/id-business-v2/auto-recharge/worker/.browsers/**',
       'packages/*/dist/**',
       'design-prototypes/**',
       'qa-artifacts/**',

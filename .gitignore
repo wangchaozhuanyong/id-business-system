@@ -5,6 +5,7 @@ node_modules
 .venv/
 __pycache__/
 *.py[cod]
+apps/api/src/id-business-v2/auto-recharge/worker/.browsers/
 
 # Build output
 dist/
