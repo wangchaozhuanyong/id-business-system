@@ -22,6 +22,19 @@ from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / '.deploy'
+
+# Historical release cases must keep their original source, including after an
+# additive current-system migration. Read immutable Git blobs, never weaken the
+# production controller's migration seal to match this checkout.
+RUNTIME.mkdir(parents=True, exist_ok=True)
+_LEGACY_SOURCE = tempfile.TemporaryDirectory(prefix='legacy-prisma-', dir=RUNTIME)
+LEGACY_PRISMA_ROOT = Path(_LEGACY_SOURCE.name)
+_LEGACY_COMMIT = '554eaff77d67cce4b760d24a5c358ccabf2b3a4c'
+for _name in subprocess.check_output(['git', 'ls-tree', '-r', '--name-only',
+        _LEGACY_COMMIT, 'apps/api/prisma-mysql'], cwd=ROOT).decode().splitlines():
+    _target = LEGACY_PRISMA_ROOT / _name
+    _target.parent.mkdir(parents=True, exist_ok=True)
+    _target.write_bytes(subprocess.check_output(['git', 'show', _LEGACY_COMMIT + ':' + _name], cwd=ROOT))
 RUNTIME.mkdir(exist_ok=True)
 
 
@@ -44,6 +57,20 @@ migration = load('api_admin_migration_scope', 'api-admin-scope.py', 'API_ADMIN_M
 workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPACE')
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
+# Workspace publication has its own reviewed historical Compose and edge seal.
+# New checkout services must not redefine that scope. Keep only its configuration
+# and auto-registration source structure, never a second copy of this repository.
+_WORKSPACE_COMMIT = '2b54aad43dafc2e8ea9cebb46fc72aa8af003ac6'
+_WORKSPACE_SOURCE = tempfile.TemporaryDirectory(prefix='legacy-workspace-', dir=RUNTIME)
+WORKSPACE_SOURCE_ROOT = Path(_WORKSPACE_SOURCE.name)
+_workspace_files = set(workspace.CONFIG_FILES)
+_workspace_files.update(subprocess.check_output(['git', 'ls-tree', '-r', '--name-only',
+    _WORKSPACE_COMMIT, 'apps/api/src/id-business-v2/auto-registration'], cwd=ROOT).decode().splitlines())
+for _name in sorted(_workspace_files):
+    _target = WORKSPACE_SOURCE_ROOT / _name
+    _target.parent.mkdir(parents=True, exist_ok=True)
+    _target.write_bytes(subprocess.check_output(['git', 'show', _WORKSPACE_COMMIT + ':' + _name], cwd=ROOT))
+
 
 def proof():
     return {'version': 1, 'commit': COMMIT, 'sourceTree': TREE, 'images': {
@@ -54,7 +81,7 @@ def proof():
 
 def workspace_proof():
     return {**proof(), 'scope': 'API_ADMIN_WORKSPACE',
-            'configuration': workspace.workspace_configuration(d, ROOT, ROOT),
+            'configuration': workspace.workspace_configuration(d, WORKSPACE_SOURCE_ROOT, WORKSPACE_SOURCE_ROOT),
             'acceptance': {'status': 'PASS', 'checks': ['private-health', 'packaged-resources', 'private-sqlite',
                 'encrypted-storage', 'restart-persistence', 'wrong-key-rejected'],
                 'businessActions': 0, 'temporaryVolumeRemoved': True}}
@@ -991,7 +1018,7 @@ class ReleaseFailureTests(unittest.TestCase):
             (previous / 'release-manifest.json').write_text('{}')
             for name in scope.CONFIG_FILES:
                 path = previous / name; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=ROOT) if scope.WORKSPACE else b'config')
+                path.write_bytes((WORKSPACE_SOURCE_ROOT / name).read_bytes() if scope.WORKSPACE else b'config')
             (previous / 'compose.release.json').write_text(json.dumps({'services': {name: {'image': 'old'} for name in d.SERVICES}}))
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
@@ -1046,12 +1073,13 @@ class ReleaseFailureTests(unittest.TestCase):
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
                 if scope.MIGRATION_MODE:
-                    for name in [scope.MIGRATION_SCHEMA, scope.MIGRATION_SEED, *(scope.MIGRATION_ROOT + '/' + name for name in scope.migration_files(d, ROOT))]:
-                        raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
+                    for name in [scope.MIGRATION_SCHEMA, scope.MIGRATION_SEED, *(scope.MIGRATION_ROOT + '/' + name for name in scope.migration_files(d, LEGACY_PRISMA_ROOT))]:
+                        raw = (LEGACY_PRISMA_ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
                         info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
                 if scope.WORKSPACE or candidate_workspace:
                     for name in scope.CONFIG_FILES:
-                        raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
+                        source = WORKSPACE_SOURCE_ROOT if scope.WORKSPACE else ROOT
+                        raw = (source / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
                         info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
                 if scope.REGISTRATION:
                     for name in scope.WORKER_PAIR:
@@ -1070,7 +1098,7 @@ class ReleaseFailureTests(unittest.TestCase):
                 value = io.BytesIO(archive_data.getvalue() if 'archive/' in url else b'')
                 value.status = 200
                 if scope.WORKSPACE:
-                    value.headers = {'Content-Security-Policy': re.search(r'Content-Security-Policy "([^"]+)"', (ROOT / scope.CONFIG_FILES[1]).read_text()).group(1)}
+                    value.headers = {'Content-Security-Policy': re.search(r'Content-Security-Policy "([^"]+)"', (WORKSPACE_SOURCE_ROOT / scope.CONFIG_FILES[1]).read_text()).group(1)}
                 return value
             stack.enter_context(patch.object(scope.urllib.request, 'urlopen', side_effect=response))
             stack.enter_context(patch.object(scope.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
@@ -1708,18 +1736,18 @@ class RegistrationRecoveryTests(unittest.TestCase):
 
 
 def migration_fixture(directory, *, old=False):
-    for name, digest in migration.migration_files(d, ROOT).items():
+    for name, digest in migration.migration_files(d, LEGACY_PRISMA_ROOT).items():
         if old and name == migration.MIGRATION_FILE:
             continue
         target = directory / migration.MIGRATION_ROOT / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((ROOT / migration.MIGRATION_ROOT / name).read_bytes())
+        target.write_bytes((LEGACY_PRISMA_ROOT / migration.MIGRATION_ROOT / name).read_bytes())
     schema = directory / migration.MIGRATION_SCHEMA
     schema.parent.mkdir(parents=True, exist_ok=True)
     raw = (subprocess.check_output(['git', 'show', migration.REGISTRATION_CURRENT + ':' + migration.MIGRATION_SCHEMA], cwd=ROOT)
-           if old else (ROOT / migration.MIGRATION_SCHEMA).read_bytes())
+           if old else (LEGACY_PRISMA_ROOT / migration.MIGRATION_SCHEMA).read_bytes())
     schema.write_bytes(raw)
-    (directory / migration.MIGRATION_SEED).write_bytes((ROOT / migration.MIGRATION_SEED).read_bytes())
+    (directory / migration.MIGRATION_SEED).write_bytes((LEGACY_PRISMA_ROOT / migration.MIGRATION_SEED).read_bytes())
 
 
 def docker_prisma_content(directory):
@@ -1731,7 +1759,7 @@ def docker_prisma_content(directory):
 
 def migration_database_fixture(*, applied=False):
     rows = [{'name': name.split('/')[0], 'checksum': digest, 'finished': 1, 'rolledBack': 0}
-            for name, digest in migration.migration_files(d, ROOT).items()
+            for name, digest in migration.migration_files(d, LEGACY_PRISMA_ROOT).items()
             if name.endswith('/migration.sql') and (applied or name != migration.MIGRATION_FILE)]
     return {'rows': rows,
         'columns': [{'type': 'int', 'columnType': 'int', 'nullable': 'YES', 'default': None, 'extra': ''}] if applied else None,
@@ -1743,7 +1771,7 @@ def migration_proof():
     value = proof()
     value.update(scope='API_ADMIN_MIGRATION', migration=dict(migration.MIGRATION_IDENTITY))
     value['images']['migrate'] = {'reference': f'{REPOSITORY}:{COMMIT}-123-1-migrate',
-        'imageId': 'sha256:' + '3' * 64, **migration.migration_content(d, ROOT)}
+        'imageId': 'sha256:' + '3' * 64, **migration.migration_content(d, LEGACY_PRISMA_ROOT)}
     return value
 
 
@@ -1758,7 +1786,7 @@ class MigrationScopeTests(unittest.TestCase):
         self.assertEqual((registration.TASK_ATTEMPT, scope.TASK_ATTEMPT), (10, 10))
         value = migration_task()
         controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value=json.dumps(value)))
-        self.assertEqual(migration.registration_task(controller, ROOT), value)
+        self.assertEqual(migration.registration_task(controller, LEGACY_PRISMA_ROOT), value)
         code = controller.compose.call_args.args[-1]
         self.assertIn('attempt=12', code)
         self.assertIn('const migration=true', code)
@@ -1771,14 +1799,14 @@ class MigrationScopeTests(unittest.TestCase):
                 *((name, '0' * 64) for name in ('emailHashHmac', 'jobHmac', 'accountHmac', 'auditHmac'))):
             controller.compose.return_value = json.dumps({**value, key: changed})
             with self.subTest(key=key, changed=changed), self.assertRaises(RuntimeError):
-                migration.registration_task(controller, ROOT)
+                migration.registration_task(controller, LEGACY_PRISMA_ROOT)
         for key in value['binding']:
             changed = copy.deepcopy(value); changed['binding'][key] = '0' * 64
             controller.compose.return_value = json.dumps(changed)
             with self.subTest(binding=key), self.assertRaises(RuntimeError):
-                migration.registration_task(controller, ROOT)
+                migration.registration_task(controller, LEGACY_PRISMA_ROOT)
         controller.compose.return_value = json.dumps(registration_task())
-        with self.assertRaises(RuntimeError): migration.registration_task(controller, ROOT)
+        with self.assertRaises(RuntimeError): migration.registration_task(controller, LEGACY_PRISMA_ROOT)
         controller.compose.return_value = json.dumps(value)
         with self.assertRaises(RuntimeError): registration.registration_task(controller, ROOT)
 
@@ -1834,12 +1862,12 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
         return SimpleNamespace(require=d.require, compose=compose)
 
     def test_generated_attempt12_query_rejects_state_reason_date_audit_count_and_binding_drift(self):
-        self.assertEqual(migration.registration_task(self.generated_task_controller(migration), ROOT), migration_task())
+        self.assertEqual(migration.registration_task(self.generated_task_controller(migration), LEGACY_PRISMA_ROOT), migration_task())
         for changes in ({'attempt': 10}, {'attempt': 13}, {'state': 'completed'}, {'step': 'mfa'},
                         {'reason': 'session_network_error'}, {'updatedAt': '2026-10-08T14:18:32.727Z'},
                         {'auditCount': 4}, {'accountId': 'changed'}, {'profileId': 'changed'}, {'ownerId': 'changed'}):
             with self.subTest(changes=changes), self.assertRaises(RuntimeError):
-                migration.registration_task(self.generated_task_controller(migration, changes), ROOT)
+                migration.registration_task(self.generated_task_controller(migration, changes), LEGACY_PRISMA_ROOT)
 
     def test_generated_registration_attempt10_keeps_old_dates_reason_and_launch_rebound_checks(self):
         value = registration.registration_task(self.generated_task_controller(registration), ROOT)
@@ -1852,7 +1880,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
 
     def test_migration_private_attempt12_is_get_only_and_cannot_close_or_accept_another_attempt(self):
         controller, calls = RegistrationScopeTests().execute_private(close=False, attempt=12)
-        value = migration.registration_private(controller, ROOT)
+        value = migration.registration_private(controller, LEGACY_PRISMA_ROOT)
         self.assertEqual(value['attempt'], 12)
         self.assertFalse(value['privatePostAttempted'])
         self.assertTrue(value['retained'])
@@ -1860,12 +1888,12 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
         for attempt in (10, 13):
             controller, calls = RegistrationScopeTests().execute_private(close=False, attempt=attempt)
             with self.subTest(attempt=attempt), self.assertRaises(migration.RegistrationHandoffError):
-                migration.registration_private(controller, ROOT)
+                migration.registration_private(controller, LEGACY_PRISMA_ROOT)
             self.assertEqual([row[0] for row in calls], ['GET'])
         controller = SimpleNamespace(require=d.require, compose=MagicMock())
         for kwargs in ({'close': True}, {'retained': False}):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_SCOPE_CONFLICT$'):
-                migration.registration_private(controller, ROOT, **kwargs)
+                migration.registration_private(controller, LEGACY_PRISMA_ROOT, **kwargs)
         controller.compose.assert_not_called()
 
     def test_migration_task_guard_requires_the_observed_retained_window_even_when_new_snapshot_is_quiet(self):
@@ -1873,7 +1901,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
              patch.object(migration, 'registration_task', return_value=migration_task()), \
              patch.object(migration, 'registration_private') as private:
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_REGISTRATION_TASK_CHANGED$'):
-                migration.migration_task_guard(d, ROOT, migration_task(), {**migration_guards(), 'registrationWindowRetained': False})
+                migration.migration_task_guard(d, LEGACY_PRISMA_ROOT, migration_task(), {**migration_guards(), 'registrationWindowRetained': False})
             private.assert_not_called()
 
     def test_independent_migration_preflight_requires_the_complete_captured_task_not_only_attempt12(self):
@@ -1909,7 +1937,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
         self.assertEqual(selected.IMAGE_SERVICES, migration.IMAGE_SERVICES)
 
     def test_exact_source_checks_real_old_schema_and_all_46_original_files(self):
-        self.assertEqual(migration.migration_source_check(d, ROOT), migration.MIGRATION_IDENTITY)
+        self.assertEqual(migration.migration_source_check(d, LEGACY_PRISMA_ROOT), migration.MIGRATION_IDENTITY)
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
             directory = Path(temporary); migration_fixture(directory, old=True)
             self.assertEqual(migration.migration_source_check(d, directory, candidate=False), migration.MIGRATION_IDENTITY)
@@ -1956,10 +1984,10 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
         with self.assertRaises(RuntimeError): migration.validate_proof(d, proof(), COMMIT, TREE)
 
     def test_migrate_content_is_prisma_only_not_an_admin_or_worker_root(self):
-        measured = migration.content_summary(d, 'migrate', docker_prisma_content(ROOT))
+        measured = migration.content_summary(d, 'migrate', docker_prisma_content(LEGACY_PRISMA_ROOT))
         self.assertEqual(measured['fileCount'], 49)
         self.assertEqual(measured['sha256'], '829ffff40a412bf2dd8dd46b22dcc02278f8323158fd8fdf104b1a5c307b974e')
-        self.assertEqual(migration.migration_content(d, ROOT), measured)
+        self.assertEqual(migration.migration_content(d, LEGACY_PRISMA_ROOT), measured)
         self.assertIn('/app/apps/api/prisma-mysql', migration.content_command('migrate'))
         for path in ('/app/apps/api/dist/main.js', '/app/server.py', '/usr/share/nginx/html/index.html'):
             with self.assertRaisesRegex(RuntimeError, 'CONTENT_INVALID'):
@@ -1977,7 +2005,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
                     migration.migration_content(d, directory)
 
     def test_build_proof_uses_complete_docker_copy_and_rejects_image_drift(self):
-        content = docker_prisma_content(ROOT)
+        content = docker_prisma_content(LEGACY_PRISMA_ROOT)
         variants = {'complete': content,
             'missing-seed': '\n'.join(line for line in content.splitlines() if not line.endswith('/seed.ts')),
             'changed-seed': '\n'.join('0' * 64 + line[64:] if line.endswith('/seed.ts') else line for line in content.splitlines()),
@@ -1986,7 +2014,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
             with self.subTest(change=change), tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
                 stack.enter_context(patch.dict(os.environ, RELEASE_COMMIT=COMMIT, SOURCE_TREE=TREE,
                     RELEASE_REPOSITORY=REPOSITORY, GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1'))
-                stack.enter_context(patch.object(Path, 'cwd', return_value=ROOT))
+                stack.enter_context(patch.object(Path, 'cwd', return_value=LEGACY_PRISMA_ROOT))
                 original = os.getcwd(); os.chdir(temporary)
                 try:
                     def run(*args):
@@ -2017,7 +2045,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
     def test_database_verifies_pending_and_applied_checksum_column_and_index(self):
         for applied in (False, True):
             controller = self.database_controller(migration_database_fixture(applied=applied))
-            state = migration.migration_database_state(controller, ROOT)
+            state = migration.migration_database_state(controller, LEGACY_PRISMA_ROOT)
             self.assertEqual(state['status'], 'APPLIED' if applied else 'PENDING')
             self.assertTrue(state['schemaVerified'])
             self.assertEqual(state['sha256'], migration.MIGRATION_IDENTITY['sha256'])
@@ -2032,7 +2060,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
                 value = migration_database_fixture(applied=applied)
                 for row in value['rows']:
                     row['finished'], row['rolledBack'] = True, False
-                state = migration.migration_database_state(self.database_controller(value), ROOT)
+                state = migration.migration_database_state(self.database_controller(value), LEGACY_PRISMA_ROOT)
                 self.assertEqual(state['status'], 'APPLIED' if applied else 'PENDING')
                 self.assertTrue(state['schemaVerified'])
 
@@ -2043,7 +2071,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
                     value = migration_database_fixture()
                     value['rows'][0][field] = bad
                     with self.assertRaisesRegex(RuntimeError, 'MIGRATION_HISTORY_CHANGED'):
-                        migration.migration_database_state(self.database_controller(value), ROOT)
+                        migration.migration_database_state(self.database_controller(value), LEGACY_PRISMA_ROOT)
 
     def test_database_status_requires_exactly_one_finished_or_rolled_back(self):
         for finished, rolled_back in ((False, False), (True, True), (0, 0), (1, 1)):
@@ -2051,18 +2079,18 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
                 value = migration_database_fixture()
                 value['rows'][0].update(finished=finished, rolledBack=rolled_back)
                 with self.assertRaisesRegex(RuntimeError, 'MIGRATION_HISTORY_CHANGED'):
-                    migration.migration_database_state(self.database_controller(value), ROOT)
+                    migration.migration_database_state(self.database_controller(value), LEGACY_PRISMA_ROOT)
 
     def test_rolled_back_boolean_history_keeps_required_successful_names_and_checksums(self):
         value = migration_database_fixture()
         for row in value['rows']:
             row['finished'], row['rolledBack'] = True, False
         value['rows'].append({**value['rows'][0], 'finished': False, 'rolledBack': True})
-        state = migration.migration_database_state(self.database_controller(value), ROOT)
+        state = migration.migration_database_state(self.database_controller(value), LEGACY_PRISMA_ROOT)
         self.assertEqual(state['status'], 'PENDING')
         value['rows'][-1]['checksum'] = '0' * 64
         with self.assertRaisesRegex(RuntimeError, 'MIGRATION_HISTORY_CHANGED'):
-            migration.migration_database_state(self.database_controller(value), ROOT)
+            migration.migration_database_state(self.database_controller(value), LEGACY_PRISMA_ROOT)
 
     def test_database_partial_ddl_unresolved_or_foreign_history_and_index_drift_fail_closed(self):
         for change in ('checksum', 'missing-old', 'extra', 'duplicate', 'unresolved', 'partial-column', 'column-default', 'unsigned', 'index-column', 'index-unique'):
@@ -2078,14 +2106,14 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
             elif change == 'index-column': value['indexes'][2]['column'] = 'id'
             else: value['indexes'][0]['nonUnique'] = 0
             with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'MIGRATION_(HISTORY|SCHEMA)_CHANGED'):
-                migration.migration_database_state(self.database_controller(value), ROOT)
+                migration.migration_database_state(self.database_controller(value), LEGACY_PRISMA_ROOT)
 
     def test_completed_migration_retry_is_skipped_and_pending_executes_once(self):
         for applied in (False, True):
             controller = self.database_controller(migration_database_fixture(applied=applied))
             controller.compose.side_effect = ([json.dumps(migration_database_fixture()), 'applied', json.dumps(migration_database_fixture(applied=True))]
                                               if not applied else [json.dumps(migration_database_fixture(applied=True))])
-            result = migration.apply_migration(controller, ROOT)
+            result = migration.apply_migration(controller, LEGACY_PRISMA_ROOT)
             self.assertEqual(result['status'], 'APPLIED')
             self.assertIs(result['performed'], not applied)
             runs = [call for call in controller.compose.call_args_list if call.args[1] == 'run']
@@ -2097,7 +2125,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
         controller = self.database_controller(migration_database_fixture())
         controller.compose.side_effect = [json.dumps(migration_database_fixture()), RuntimeError('PRIVATE_SENTINEL')]
         with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_MIGRATION_EXECUTION_FAILED$'):
-            migration.apply_migration(controller, ROOT)
+            migration.apply_migration(controller, LEGACY_PRISMA_ROOT)
         self.assertNotIn('resolve', repr(controller.compose.call_args_list))
 
     @contextmanager
@@ -3094,8 +3122,7 @@ class WorkspaceScopeTests(unittest.TestCase):
                 directory.mkdir()
                 for name in scope.CONFIG_FILES:
                     path = directory / name; path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=ROOT)
-                        if directory == previous else (ROOT / name).read_bytes())
+                    path.write_bytes((WORKSPACE_SOURCE_ROOT / name).read_bytes())
             yield previous, candidate
 
     def test_configuration_allows_only_exact_api_mount_and_reviewed_caddy_bytes(self):

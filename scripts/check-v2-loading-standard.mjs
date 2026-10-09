@@ -44,7 +44,15 @@ validateStartupArchitecture();
 
 const featureManifests = readdirSync(path.join(rootDir, featuresPath), { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
-  .map((entry) => `${featuresPath}/${entry.name}/manifest.ts`)
+  .flatMap((entry) => {
+    const directory = `${featuresPath}/${entry.name}`;
+    // 新增的完整线上代充模块逐页登记，不能只验证概览而漏掉其余十四页。
+    return entry.name === 'online-recharge'
+      ? readdirSync(path.join(rootDir, directory))
+          .filter((file) => file === 'manifest.ts' || file.endsWith('-manifest.ts'))
+          .map((file) => `${directory}/${file}`)
+      : [`${directory}/manifest.ts`];
+  })
   .filter((projectPath) => existsSync(path.join(rootDir, projectPath)))
   .map((projectPath) => ({ projectPath, source: read(projectPath) }));
 const routedViewEntries = featureManifests

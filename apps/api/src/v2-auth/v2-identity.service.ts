@@ -71,6 +71,23 @@ export class V2IdentityService {
           .map((assignment) => assignment.role.code)
           .filter((code) => code !== SYSTEM_SUPER_ADMIN_ROLE);
         if (superAdminId === user.id) roles.push('admin', SYSTEM_SUPER_ADMIN_ROLE);
+        const grants = user.userRoles.flatMap((assignment) => assignment.role.rolePermissions);
+        const directPermissionCodes = new Set(
+          grants
+            .filter((grant) => !grant.sensitiveApprovalRequired)
+            .map((grant) => grant.permission.code)
+        );
+        const sensitiveApprovalPermissionCodes = [
+          ...new Set(
+            grants
+              .filter(
+                (grant) =>
+                  grant.sensitiveApprovalRequired &&
+                  !directPermissionCodes.has(grant.permission.code)
+              )
+              .map((grant) => grant.permission.code)
+          )
+        ];
         return {
           id: user.id,
           username: user.username,
@@ -83,6 +100,7 @@ export class V2IdentityService {
               )
             )
           ],
+          ...(sensitiveApprovalPermissionCodes.length ? { sensitiveApprovalPermissionCodes } : {}),
           mustResetPassword: user.v2AuthIdentity?.mustResetPassword ?? false
         };
       }

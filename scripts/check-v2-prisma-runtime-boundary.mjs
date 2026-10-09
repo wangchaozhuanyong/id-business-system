@@ -412,6 +412,7 @@ function fail(relativePath, sourceFile, node, message) {
 function listSourceFiles(relativeRoot) {
   const absoluteRoot = path.join(rootDir, relativeRoot);
   return readdirSync(absoluteRoot, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === 'node_modules') return [];
     const relativePath = path.posix.join(relativeRoot.replaceAll('\\', '/'), entry.name);
     if (entry.isDirectory()) return listSourceFiles(relativePath);
     return entry.name.endsWith('.ts') ? [relativePath] : [];

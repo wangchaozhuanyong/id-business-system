@@ -7,6 +7,218 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum OnlineRechargePlan {
+  plus
+  pro_5x
+  pro_20x
+}
+
+enum OnlineRechargeStatus {
+  queued
+  running
+  awaiting_credentials
+  awaiting_review
+  succeeded
+  failed
+}
+
+enum OnlineRechargeOperation {
+  recharge
+  debug
+  subscription
+  renewal
+  proxy_test
+  config_test
+  browser_manage
+  notification
+}
+
+enum OnlineRechargeAssetStatus {
+  active
+  disabled
+  exhausted
+  retired
+}
+
+enum OnlineRechargeCodeStatus {
+  available
+  reserved
+  used
+  disabled
+}
+
+enum OnlineRechargeProvider {
+  local
+  third_party
+}
+
+model OnlineRechargeConfig {
+  id               String   @id @db.VarChar(32)
+  settings         Json
+  secretsEncrypted String?  @map("secrets_encrypted") @db.LongText
+  version          Int      @default(1)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+  @@map("online_recharge_config")
+}
+
+model OnlineRechargeCard {
+  id              String                    @id @default(uuid()) @db.Char(36)
+  numberEncrypted String                    @map("number_encrypted") @db.Text
+  numberHash      String                    @unique @map("number_hash") @db.Char(64)
+  last4           String                    @db.Char(4)
+  expiryMonth     Int                       @map("expiry_month")
+  expiryYear      Int                       @map("expiry_year")
+  holderName      String                     @default("") @map("holder_name") @db.VarChar(120)
+  paymentName     String?                    @map("payment_name") @db.VarChar(120)
+  addressId       String?                    @map("address_id") @db.Char(36)
+  status          OnlineRechargeAssetStatus  @default(active)
+  successCount    Int                       @default(0) @map("success_count")
+  declineCount    Int                       @default(0) @map("decline_count")
+  leaseOwner      String?                    @map("lease_owner") @db.Char(36)
+  leaseId         String?                    @map("lease_id") @db.Char(36)
+  leaseVersion    Int                       @default(0) @map("lease_version")
+  leaseExpiresAt  DateTime?                 @map("lease_expires_at") @db.DateTime(6)
+  lastUsedAt      DateTime?                 @map("last_used_at") @db.DateTime(6)
+  createdAt       DateTime                  @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt       DateTime                  @updatedAt @map("updated_at") @db.DateTime(6)
+  @@index([status, successCount, lastUsedAt])
+  @@index([leaseOwner])
+  @@map("online_recharge_cards")
+}
+
+model OnlineRechargeProxy {
+  id                  String                   @id @default(uuid()) @db.Char(36)
+  connectionEncrypted String                   @map("connection_encrypted") @db.Text
+  connectionHash      String                   @unique @map("connection_hash") @db.Char(64)
+  displayHost         String                   @map("display_host") @db.VarChar(255)
+  protocol            String                   @db.VarChar(16)
+  status              OnlineRechargeAssetStatus @default(active)
+  exitIp              String?                  @map("exit_ip") @db.VarChar(100)
+  latencyMs           Int?                     @map("latency_ms")
+  testMessage         String?                  @map("test_message") @db.Text
+  testedAt            DateTime?                @map("tested_at") @db.DateTime(6)
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt           DateTime                 @updatedAt @map("updated_at") @db.DateTime(6)
+  @@index([status])
+  @@map("online_recharge_proxies")
+}
+
+model OnlineRechargeAddress {
+  id           String   @id @default(uuid()) @db.Char(36)
+  firstName    String   @default("") @map("first_name") @db.VarChar(80)
+  lastName     String   @default("") @map("last_name") @db.VarChar(80)
+  region       String   @default("US") @db.Char(2)
+  country      String   @default("US") @db.Char(2)
+  street       String   @db.VarChar(255)
+  city         String   @db.VarChar(120)
+  state        String   @db.VarChar(100)
+  postalCode   String   @map("postal_code") @db.VarChar(20)
+  successCount Int      @default(0) @map("success_count")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+  @@index([successCount])
+  @@index([region, active, successCount])
+  @@map("online_recharge_addresses")
+}
+
+model OnlineRechargeCode {
+  id            String                   @id @default(uuid()) @db.Char(36)
+  codeEncrypted String                   @map("code_encrypted") @db.Text
+  codeHash      String                   @unique @map("code_hash") @db.Char(64)
+  codeLast4     String                   @map("code_last4") @db.VarChar(4)
+  plan          OnlineRechargePlan
+  status        OnlineRechargeCodeStatus @default(available)
+  dispatched    Boolean                  @default(false)
+  taskId        String?                  @map("task_id") @db.Char(36)
+  createdAt     DateTime                 @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt     DateTime                 @updatedAt @map("updated_at") @db.DateTime(6)
+  deletedAt     DateTime?                @map("deleted_at") @db.DateTime(6)
+  @@index([status, plan, dispatched])
+  @@map("online_recharge_codes")
+}
+
+model OnlineRechargeTask {
+  id                  String                  @id @default(uuid()) @db.Char(36)
+  operation           OnlineRechargeOperation @default(recharge)
+  status              OnlineRechargeStatus    @default(queued)
+  plan                OnlineRechargePlan      @default(plus)
+  provider            OnlineRechargeProvider  @default(local)
+  codeId              String?                 @map("code_id") @db.Char(36)
+  operatorId          String?                 @map("operator_id") @db.Char(36)
+  sessionEncrypted    String?                 @map("session_encrypted") @db.LongText
+  sessionIdentityHash String?                 @map("session_identity_hash") @db.Char(64)
+  emailEncrypted      String?                 @map("email_encrypted") @db.Text
+  publicTokenHash     String?                 @map("public_token_hash") @db.Char(64)
+  publicTokenEncrypted String?                @map("public_token_encrypted") @db.Text
+  payload             Json?
+  result              Json?
+  progress            Int                     @default(0)
+  stage               String                  @default("queued") @db.VarChar(100)
+  message             String                  @db.Text
+  cardId              String?                 @map("card_id") @db.Char(36)
+  cardLast4           String?                 @map("card_last4") @db.Char(4)
+  providerOrderId     String?                 @map("provider_order_id") @db.VarChar(128)
+  providerTaskId      String?                 @map("provider_task_id") @db.VarChar(128)
+  paymentStarted      Boolean                 @default(false) @map("payment_started")
+  confirmedPaid       Boolean                 @default(false) @map("confirmed_paid")
+  leaseOwner          String?                 @map("lease_owner") @db.VarChar(100)
+  leaseId             String?                 @map("lease_id") @db.Char(36)
+  leaseVersion        Int                     @default(0) @map("lease_version")
+  leaseExpiresAt      DateTime?               @map("lease_expires_at") @db.DateTime(6)
+  createdAt           DateTime                @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt           DateTime                @updatedAt @map("updated_at") @db.DateTime(6)
+  deletedAt           DateTime?               @map("deleted_at") @db.DateTime(6)
+  @@index([status, createdAt])
+  @@index([codeId])
+  @@index([sessionIdentityHash])
+  @@map("online_recharge_tasks")
+}
+
+model OnlineRechargeEvent {
+  id        String   @id @default(uuid()) @db.Char(36)
+  taskId    String?  @map("task_id") @db.Char(36)
+  level     String   @default("info") @db.VarChar(12)
+  stage     String?  @db.VarChar(100)
+  message   String   @db.Text
+  metadata  Json?
+  dedupeKey String?  @unique @map("dedupe_key") @db.VarChar(190)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  @@index([taskId, createdAt])
+  @@index([createdAt])
+  @@map("online_recharge_events")
+}
+
+model OnlineRechargeBill {
+  id             String              @id @default(uuid()) @db.Char(36)
+  taskId         String              @map("task_id") @db.Char(36)
+  cardId         String?             @map("card_id") @db.Char(36)
+  cardLast4      String?             @map("card_last4") @db.Char(4)
+  plan           OnlineRechargePlan
+  status         String              @db.VarChar(16)
+  amount         Decimal?            @db.Decimal(18, 4)
+  estimatedAmount Decimal?           @map("estimated_amount") @db.Decimal(18, 4)
+  currency       String              @db.VarChar(8)
+  checkoutId     String?             @map("checkout_id") @db.VarChar(255)
+  idempotencyKey String              @unique @map("idempotency_key") @db.VarChar(190)
+  errorCode      String?             @map("error_code") @db.VarChar(100)
+  message        String              @db.Text
+  createdAt      DateTime            @default(now()) @map("created_at") @db.DateTime(6)
+  @@index([taskId])
+  @@index([cardLast4, createdAt])
+  @@index([status, createdAt])
+  @@map("online_recharge_bills")
+}
+
+model OnlineRechargeWebhookReceipt {
+  id          String   @id @default(uuid()) @db.Char(36)
+  eventId     String   @unique @map("event_id") @db.VarChar(190)
+  payloadHash String   @unique @map("payload_hash") @db.Char(64)
+  cardCount   Int      @default(0) @map("card_count")
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  @@map("online_recharge_webhook_receipts")
+}
+
 // MySQL 没有 PostgreSQL 的事务级 advisory lock。业务层通过对本表执行
 // INSERT ... ON DUPLICATE KEY UPDATE，在事务结束前持有行锁。
 model MysqlTransactionLock {

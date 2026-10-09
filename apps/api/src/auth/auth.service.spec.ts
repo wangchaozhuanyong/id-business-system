@@ -7,6 +7,7 @@ import type { SecurityService } from '../security/security.service';
 import type { V2IdentityService } from '../v2-auth/v2-identity.service';
 import { AuthService } from './auth.service';
 import { hashPassword } from './password-hasher';
+import { AuthLoginEvents, type AuthLoginEvent } from './login-events';
 
 describe('AuthService', () => {
   const userId = '33333333-3333-4333-8333-333333333333';
@@ -110,6 +111,11 @@ describe('AuthService', () => {
       assertPasswordMeetsPolicy: jest.fn().mockResolvedValue(undefined),
       invalidateActiveSessionCache: jest.fn()
     } as unknown as SecurityService;
+    const loginEvents = new AuthLoginEvents();
+    const receivedLoginEvents: Readonly<AuthLoginEvent>[] = [];
+    loginEvents.subscribe(async (event) => {
+      receivedLoginEvents.push(event);
+    });
 
     return {
       accessToken,
@@ -118,16 +124,43 @@ describe('AuthService', () => {
       jwtService,
       prisma,
       securityService,
+      receivedLoginEvents,
       service: new AuthService(
         prisma,
         jwtService,
         identityService,
         auditLogsService,
-        securityService
+        securityService,
+        loginEvents
       ),
       transaction
     };
   }
+
+  it('现有密码和MFA校验完成后才发匿名安全事件，不包含凭据', async () => {
+    const success = await createFixture();
+    await success.service.login({ username: 'admin', password }, { ip: '192.0.2.23' });
+    expect(success.receivedLoginEvents).toEqual([
+      { event: 'admin_login_success', loginAttemptId: reservationId, userId, maskedIp: '192.0.2.*' }
+    ]);
+    const failed = await createFixture();
+    await expect(
+      failed.service.login({ username: 'admin', password: 'WrongSyntheticPassword!' })
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(failed.receivedLoginEvents).toEqual([
+      { event: 'admin_login_failed', loginAttemptId: reservationId, userId, maskedIp: undefined }
+    ]);
+    const mfa = await createFixture({ mfaRequired: true });
+    (mfa.securityService.verifyUserMfaCode as jest.Mock).mockRejectedValueOnce(
+      new Error('synthetic invalid code')
+    );
+    await expect(
+      mfa.service.login({ username: 'admin', password, mfaCode: '000000' })
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(mfa.receivedLoginEvents).toEqual([
+      { event: 'admin_2fa_failed', loginAttemptId: reservationId, userId, maskedIp: undefined }
+    ]);
+  });
 
   it('upgrades old hashes after MFA and audits without credential values', async () => {
     const fixture = await createFixture({ legacyPassword: true, mfaRequired: true });

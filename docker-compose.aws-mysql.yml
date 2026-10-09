@@ -134,6 +134,38 @@ services:
       - registration-control
       - registration-egress
 
+  online-recharge:
+    build:
+      context: apps/api/src/id-business-v2/online-recharge/engine
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=384m,mode=1777
+    shm_size: 256m
+    stop_grace_period: 45s
+    logging: *default-logging
+    network_mode: service:api
+    volumes:
+      - online_recharge_data:/workspace/engine/runtime
+    environment:
+      NODE_ENV: production
+      ONLINE_RECHARGE_ENGINE_ENABLED: ${ONLINE_RECHARGE_ENGINE_ENABLED:-1}
+      ONLINE_RECHARGE_WORKER_KEY: ${ONLINE_RECHARGE_WORKER_KEY:?set ONLINE_RECHARGE_WORKER_KEY}
+      ONLINE_RECHARGE_RPC_URL: http://127.0.0.1:3000/api/id-business-v2/online-recharge/worker/rpc
+      ONLINE_RECHARGE_CREDENTIALS_URL: http://127.0.0.1:8053
+      ONLINE_RECHARGE_RUNTIME_DIR: /workspace/engine/runtime
+      ONLINE_RECHARGE_MEDIA_DIR: /workspace/engine/runtime/media
+      ONLINE_RECHARGE_FFMPEG_PATH: /usr/bin/ffmpeg
+    depends_on:
+      api:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -150,10 +182,14 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     volumes:
       - auto_registration_data:/app/.runtime/auto-registration
+      - online_recharge_data:/app/.runtime/online-recharge
     logging: *default-logging
     environment:
       NODE_ENV: production
       APP_PORT: 3000
+      ONLINE_RECHARGE_WORKER_KEY: ${ONLINE_RECHARGE_WORKER_KEY:?set ONLINE_RECHARGE_WORKER_KEY}
+      ONLINE_RECHARGE_CREDENTIALS_URL: http://127.0.0.1:8053
+      ONLINE_RECHARGE_ARTIFACT_DIR: /app/.runtime/online-recharge/artifacts
       AUTO_RECHARGE_WORKER_TOKEN: ${AUTO_RECHARGE_WORKER_TOKEN:?set AUTO_RECHARGE_WORKER_TOKEN}
       AUTO_RECHARGE_WORKER_URL: http://auto-recharge:8051
       AUTO_REGISTRATION_WORKER_URL: http://auto-registration:8051
@@ -240,6 +276,7 @@ services:
 
 volumes:
   mysql_data:
+  online_recharge_data:
   auto_registration_data:
   caddy_data:
   caddy_config:

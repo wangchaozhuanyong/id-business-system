@@ -1,4 +1,5 @@
 export const V2_DATA_SCOPES = [
+  'online-recharge',
   'auto-registration',
   'auto-recharge',
   'vendure-mailbox',
@@ -42,6 +43,7 @@ export const V2_DATA_SCOPES = [
 export type V2DataScope = (typeof V2_DATA_SCOPES)[number];
 
 export const V2_SCOPE_DEPENDENCIES = {
+  'online-recharge': ['online-recharge'],
   'auto-registration': ['auto-registration'],
   'vendure-mailbox': ['vendure-mailbox'],
   'auto-recharge': [

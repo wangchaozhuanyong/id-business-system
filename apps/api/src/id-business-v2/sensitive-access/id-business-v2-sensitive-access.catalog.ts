@@ -173,9 +173,10 @@ export const ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG = [
   }
 ] as const satisfies readonly IdBusinessV2SensitiveAccessDescriptor[];
 
-export const ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES = new Set<string>(
-  ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((item) => item.permissionCode)
-);
+export const ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES = new Set<string>([
+  ...ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((item) => item.permissionCode),
+  'id_business_v2.online_recharge.sensitive'
+]);
 
 export function getIdBusinessV2SensitiveDescriptorByKey(fieldKey: string) {
   return ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.find((item) => item.key === fieldKey) ?? null;

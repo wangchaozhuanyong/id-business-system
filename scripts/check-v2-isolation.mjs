@@ -173,7 +173,7 @@ function listSourceFiles(projectPath) {
   for (const entry of readdirSync(absolutePath, { withFileTypes: true })) {
     const childPath = path.posix.join(projectPath, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === 'generated') continue;
+      if (entry.name === 'generated' || entry.name === 'node_modules') continue;
       results.push(...listSourceFiles(childPath));
     } else if (/\.(?:ts|vue|mjs)$/.test(entry.name)) {
       results.push(childPath);

@@ -5,10 +5,16 @@ import { configureProductionTrustedProxy } from './common/http/trusted-client-ip
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { AppModule } from './app.module';
 import { apiListenerHost } from './common/http/listener-options';
+import {
+  createOnlineRechargeWorkerBodyParser,
+  createOnlineRechargeBodyParser
+} from './id-business-v2/online-recharge/public-api';
 
 async function bootstrap() {
   const host = apiListenerHost(process.argv.slice(2));
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  app.use('/api/id-business-v2/online-recharge/worker/rpc', createOnlineRechargeWorkerBodyParser());
+  app.use('/api/id-business-v2/online-recharge', createOnlineRechargeBodyParser());
   app.enableShutdownHooks();
   configureProductionTrustedProxy(app);
   const allowedOrigins = process.env.CORS_ORIGIN?.split(',')

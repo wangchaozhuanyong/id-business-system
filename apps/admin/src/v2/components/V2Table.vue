@@ -60,6 +60,22 @@ export default defineComponent({
   setup(props, { attrs, expose, slots }) {
     const authStore = useAuthStore();
     const tableRef = ref<ElementTableExpose>();
+    const shellRef = ref<HTMLElement>();
+    const toolbarHeight = ref(0);
+    let toolbarObserver: ResizeObserver | undefined;
+    onMounted(() => {
+      const toolbar = shellRef.value?.querySelector<HTMLElement>(
+        ':scope > .v2-table-preference-toolbar'
+      );
+      if (!toolbar) return;
+      const measure = () => {
+        toolbarHeight.value = Math.ceil(toolbar.getBoundingClientRect().height);
+      };
+      measure();
+      toolbarObserver = new ResizeObserver(measure);
+      toolbarObserver.observe(toolbar);
+    });
+    onBeforeUnmount(() => toolbarObserver?.disconnect());
     const mobileColumns = window.matchMedia('(max-width: 900px)');
     const isMobile = ref(mobileColumns.matches);
     const syncViewport = () => {
@@ -121,25 +137,33 @@ export default defineComponent({
         tableAttrs.rowKey = props.schema.rowKey.value;
       }
 
-      return h('div', { class: 'v2-unified-table-shell' }, [
-        props.showColumnSettings ? h(V2TableColumnSettings, { schema: props.schema }) : null,
-        h(
-          ElTable,
-          {
-            ...tableAttrs,
-            ref: tableRef,
-            fit: true,
-            flexible: true,
-            tableLayout: 'fixed',
-            scrollbarAlwaysOn: true,
-            showOverflowTooltip: true,
-            class: ['v2-unified-table', inheritedClass],
-            'data-table-schema': props.schema.id,
-            'data-mobile-mode': props.schema.mobileMode
-          },
-          slots
-        )
-      ]);
+      return h(
+        'div',
+        {
+          class: 'v2-unified-table-shell',
+          ref: shellRef,
+          style: { '--v2-table-toolbar-height': `${toolbarHeight.value}px` }
+        },
+        [
+          props.showColumnSettings ? h(V2TableColumnSettings, { schema: props.schema }) : null,
+          h(
+            ElTable,
+            {
+              ...tableAttrs,
+              ref: tableRef,
+              fit: true,
+              flexible: true,
+              tableLayout: 'fixed',
+              scrollbarAlwaysOn: true,
+              showOverflowTooltip: true,
+              class: ['v2-unified-table', inheritedClass],
+              'data-table-schema': props.schema.id,
+              'data-mobile-mode': props.schema.mobileMode
+            },
+            slots
+          )
+        ]
+      );
     };
   }
 });

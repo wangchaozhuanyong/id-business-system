@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import type { ChangePasswordDto } from './dto/change-password.dto';
 import { hashPassword, passwordNeedsRehash, verifyPassword } from './password-hasher';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 import type { LoginDto } from './dto/login.dto';
+import { AuthLoginEvents, maskLoginEventIp } from './login-events';
 
 interface LoginRequestMeta {
   ip?: string | null;
@@ -35,7 +37,8 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly identityService: V2IdentityService,
     private readonly auditLogsService: AuditLogsService,
-    private readonly securityService: SecurityService
+    private readonly securityService: SecurityService,
+    @Optional() private readonly loginEvents?: AuthLoginEvents
   ) {}
 
   async login(dto: LoginDto, requestMeta?: LoginRequestMeta) {
@@ -73,6 +76,18 @@ export class AuthService {
       );
     }
 
+    const publishLoginEvent = (
+      event: 'admin_login_success' | 'admin_login_failed' | 'admin_2fa_failed',
+      userId?: string
+    ) => {
+      void this.loginEvents?.publish({
+        event,
+        loginAttemptId: reservation.reservationId,
+        userId,
+        maskedIp: maskLoginEventIp(requestMeta?.ip)
+      });
+    };
+
     try {
       const user = await this.prisma.user.findFirst({
         where: {
@@ -87,6 +102,7 @@ export class AuthService {
           status: user ? 'blocked' : 'failed',
           failureReason: user ? `user_status_${user.status}` : 'user_not_found'
         });
+        publishLoginEvent('admin_login_failed', user?.id);
         throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
       }
 
@@ -97,6 +113,7 @@ export class AuthService {
           status: 'failed',
           failureReason: 'password_invalid'
         });
+        publishLoginEvent('admin_login_failed', user.id);
         throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
       }
 
@@ -133,6 +150,7 @@ export class AuthService {
             status: 'blocked',
             failureReason: 'mfa_invalid'
           });
+          publishLoginEvent('admin_2fa_failed', user.id);
           throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
         }
       }
@@ -186,6 +204,8 @@ export class AuthService {
           .catch(() => undefined);
         throw new ServiceUnavailableException('登录安全记录写入失败，请重新登录。');
       }
+      if (authenticatedUser.roles.includes('admin'))
+        publishLoginEvent('admin_login_success', user.id);
 
       await Promise.all([
         this.prisma.user.update({

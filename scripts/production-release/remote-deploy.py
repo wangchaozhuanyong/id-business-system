@@ -10731,6 +10731,12 @@ def recharge_974_release(args, *, profile_id=RECHARGE_974_ID):
             return 1
 
 
+def online_recharge_scope():
+    import types
+    namespace = runpy.run_path(str(Path(__file__).with_name('online-recharge-scope.py')))
+    return types.SimpleNamespace(**namespace), types.SimpleNamespace(**globals())
+
+
 def api_admin_scope(scope='API_ADMIN'):
     # Only the explicitly selected scope loads its separate controller.
     import types
@@ -12624,6 +12630,8 @@ def main():
     parser.add_argument('--image-run-id')
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
+    parser.add_argument('--online-recharge-only', action='store_true')
+    parser.add_argument('--online-recharge-build-proof')
     parser.add_argument('--api-admin-only', action='store_true')
     parser.add_argument('--api-workspace-only', action='store_true')
     parser.add_argument('--api-admin-migration-only', action='store_true')
@@ -12660,6 +12668,10 @@ def main():
     parser.add_argument('--registration-worker-94', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
+    if args.online_recharge_only:
+        scope, controller = online_recharge_scope()
+        return scope.release(controller, args)
+    require(not args.online_recharge_build_proof, 'ONLINE_RECHARGE_SCOPE_REQUIRED')
     if args.api_workspace_only:
         scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
         return scope.release(controller, args)
@@ -13379,7 +13391,27 @@ if __name__ == '__main__':
         '--api-registration-handoff-observe', '--api-registration-handoff-recover'):
         scope, controller = api_admin_scope('API_REGISTRATION')
         raise SystemExit(scope.registration_cli(controller, sys.argv[1:]))
-    if sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):
+    if sys.argv[1:2] in (['--write-online-recharge-build-proof'], ['--online-recharge-preflight'], ['--online-recharge-readback'], ['--online-recharge-diagnostic']):
+        try:
+            scope, controller = online_recharge_scope()
+            if sys.argv[1:] == ['--write-online-recharge-build-proof']:
+                scope.build_proof(controller)
+            else:
+                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                        and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'ONLINE_RECHARGE_INPUT_INVALID')
+                if sys.argv[1] == '--online-recharge-diagnostic':
+                    result = scope.projection_diagnostic(controller, sys.argv[3])
+                else:
+                    result = scope.readback(controller, sys.argv[3]) if sys.argv[1] == '--online-recharge-readback' else scope.preflight(controller, sys.argv[3])
+                print(json.dumps(result))
+        except Exception as error:
+            code = str(error)
+            if not re.fullmatch(r'(?:ONLINE_RECHARGE|API_ADMIN)_[A-Z0-9_]+', code):
+                code = 'ONLINE_RECHARGE_READ_UNAVAILABLE'
+            print(json.dumps({'status': 'ONLINE_RECHARGE_VERIFICATION_FAILED', 'code': code,
+                              'errorType': type(error).__name__}))
+            raise SystemExit(1) from None
+    elif sys.argv[1:2] in (['--write-api-admin-build-proof'], ['--api-admin-preflight'], ['--api-admin-readback']):
         try:
             scope, controller = api_admin_scope()
             if sys.argv[1:] == ['--write-api-admin-build-proof']:

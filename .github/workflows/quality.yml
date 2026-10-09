@@ -112,6 +112,11 @@ jobs:
             node scripts/ci-recharge-check.mjs connector "$CHECK_BASE"
           fi
 
+      - name: Verify frozen online recharge engine
+        env:
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+        run: node scripts/ci-recharge-check.mjs online-engine "$CHECK_BASE"
+
       - name: Install Chromium for layout acceptance
         run: npx playwright install chromium
 
@@ -219,6 +224,15 @@ jobs:
         env:
           NPM_AUDIT_INFRASTRUCTURE_POLICY: ${{ github.event_name == 'pull_request' && 'warn' || 'fail' }}
         run: npm run audit:high
+
+      - name: Verify online recharge pages
+        env:
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -n "$(git diff --name-only "$CHECK_BASE" HEAD -- apps/admin/src/v2/features/online-recharge/ scripts/acceptance-v2-online-recharge-ui.mjs)" ]]; then
+            npm run acceptance:v2-online-recharge-ui
+          fi
 
       - name: Check Git readiness
         run: npm run git:readiness

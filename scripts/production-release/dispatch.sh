@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -364,12 +364,18 @@ if history_policy == 'historical-finance-20261005-mailbox-batch':
 image_flags = f' --image-commit {image_commit} --image-run-id {image_run} --image-run-attempt {image_attempt}'
 script_path = f'/opt/id-business-v2/.staging/oidc-{sha}/remote-deploy.py'
 url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/remote-deploy.py'
+online_recharge = os.environ.get('RELEASE_OPERATION') == 'release_online_recharge'
 api_admin = os.environ.get('RELEASE_OPERATION') in ('release_api_workspace', 'release_api_admin', 'release_api_admin_migration', 'release_api_registration')
 if api_admin:
     import base64
     from pathlib import Path
     scope_name = {'release_api_workspace': 'api-workspace', 'release_api_registration': 'api-registration', 'release_api_admin_migration': 'api-admin-migration'}.get(os.environ['RELEASE_OPERATION'], 'api-admin')
     scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()).decode()
+    image_flags = ''
+if online_recharge:
+    import base64
+    from pathlib import Path
+    scope_flag = ' --online-recharge-only --online-recharge-build-proof ' + base64.b64encode(Path('.deploy/production-release/online-recharge-build-proof.json').read_bytes()).decode()
     image_flags = ''
 commands = [
     'set -eu',
@@ -462,16 +468,16 @@ if history_policy == 'registration-worker-95-20261008':
         f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/deploy/aws/{profile_name} -o {profile_target}',
         f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{module_name} -o {module_target}',
         f'chmod 0644 {script_path} {profile_target} {module_target}','python3 -c '+shlex.quote(verify)]
-if api_admin:
+if api_admin or online_recharge:
     import hashlib
     pinned = []
-    for name in ('remote-deploy.py', 'api-admin-scope.py'):
+    for name in (('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py') if online_recharge else ('remote-deploy.py', 'api-admin-scope.py')):
         digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
         target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
         pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',
                        f'echo "{digest}  {target_path}" | sha256sum -c - >/dev/null'])
     commands[2:3] = pinned
-if history_policy == 'registration-worker-96-20261008':
+if online_recharge or history_policy == 'registration-worker-96-20261008':
     assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}).encode('utf-8')) < 48 * 1024
 with open(sys.argv[1], 'w', encoding='utf-8') as target:
     json.dump({'commands': commands, 'executionTimeout': ['3600']}, target)
@@ -490,11 +496,21 @@ for attempt in $(seq 1 360); do
     --query Status --output text 2>/dev/null || true)"
   case "$status" in
     Success)
+      if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+        aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
+          | python3 -B scripts/production-release/online-recharge-readonly.py filter-deploy
+        exit 0
+      fi
       aws ssm get-command-invocation --region "$AWS_REGION" \
         --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" \
         --query StandardOutputContent --output text
       exit 0 ;;
     Failed|Cancelled|TimedOut|Cancelling)
+      if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+        aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" --output json \
+          | python3 -B scripts/production-release/online-recharge-readonly.py filter-deploy
+        exit 1
+      fi
       aws ssm get-command-invocation --region "$AWS_REGION" \
         --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID" \
         --query StandardOutputContent --output text

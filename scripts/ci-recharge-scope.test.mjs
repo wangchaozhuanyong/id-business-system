@@ -26,6 +26,18 @@ const files = [
   'apps/admin/src/v2/features/auto-recharge/example.vue',
   'apps/api/prisma-mysql/schema.prisma'
 ];
+test('线上代充界面改动会保留所有公共检查并执行专项浏览器验收', () => {
+  const paths = ['apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue'];
+  const commands = adminCheckCommands('admin', paths);
+  assert.ok(commands.some((args) => args.includes('acceptance:v2-online-recharge-ui')));
+  assert.ok(adminUiGuardChecks('admin', paths).includes('check:v2-table-standard'));
+  assert.ok(adminUiGuardChecks('admin', paths).includes('check:v2-loading-standard'));
+  assert.ok(
+    !adminCheckCommands('admin', ['docs/V2_TASKS.md']).some((args) =>
+      args.includes('acceptance:v2-online-recharge-ui')
+    )
+  );
+});
 test('fixed pricing 045 carries only the exact main5b sources and metadata without expanding services or database suites', () => {
   const profile = 'deploy/aws/recharge-pro-pricing-045-20261008.json';
   const sources = [

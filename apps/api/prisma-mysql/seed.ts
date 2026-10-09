@@ -45,7 +45,10 @@ const permissions = [
   ['财务记账', 'finance.post'],
   ['财务调整', 'finance.adjust'],
   ['管理财务', 'finance.manage'],
-  ['财务关账', 'finance.close']
+  ['财务关账', 'finance.close'],
+  ['查看线上代充', 'id_business_v2.online_recharge.read'],
+  ['管理线上代充', 'id_business_v2.online_recharge.manage'],
+  ['查看线上代充敏感资料', 'id_business_v2.online_recharge.sensitive']
 ] as const;
 
 async function main() {

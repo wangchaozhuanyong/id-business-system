@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(33);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(48);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,7 +58,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(33);
+    expect(v2FeatureRegistry).toHaveLength(48);
   });
 
   it('keeps the removed registration names module retired', () => {
@@ -81,6 +81,35 @@ describe('V2 feature registry', () => {
     expect(tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))).toEqual(
       []
     );
+  });
+
+  it('registers all fifteen online recharge pages immediately after automatic recharge', () => {
+    const sectionIndex = v2NavigationSections.findIndex(
+      (section) => section.key === 'auto-recharge'
+    );
+    const online = v2NavigationSections[sectionIndex + 1];
+    expect(online?.key).toBe('online-recharge');
+    expect(online?.title).toBe('线上代充');
+    expect(online?.items.map((item) => item.key)).toEqual([
+      'online-recharge-overview',
+      'online-recharge-jobs',
+      'online-recharge-automation',
+      'online-recharge-runtime-logs',
+      'online-recharge-billing',
+      'online-recharge-cards',
+      'online-recharge-proxies',
+      'online-recharge-addresses',
+      'online-recharge-browser-pool',
+      'online-recharge-cdks',
+      'online-recharge-sessions',
+      'online-recharge-renewal',
+      'online-recharge-checkout-debug',
+      'online-recharge-config',
+      'online-recharge-login-logs'
+    ]);
+    expect(
+      online?.items.every((item) => item.permission === 'id_business_v2.online_recharge.read')
+    ).toBe(true);
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {

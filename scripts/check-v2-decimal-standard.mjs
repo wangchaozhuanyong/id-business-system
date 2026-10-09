@@ -23,7 +23,7 @@ const forbiddenPatterns = [
     message: '输入组件精度必须使用全局四位精度常量'
   },
   {
-    pattern: /\\d\{1,(?:[5-9]|\d{2,})\}/g,
+    pattern: /\\\.\\d\{1,(?:[5-9]|\d{2,})\}/g,
     message: '业务数值校验不允许接受超过 4 位小数'
   },
   {
@@ -79,6 +79,7 @@ function isAllowedExchangeRatePrecision(source, matchIndex, matchedText) {
 function listSourceFiles(relativeRoot) {
   const absoluteRoot = path.join(rootDir, relativeRoot);
   return readdirSync(absoluteRoot, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === 'node_modules') return [];
     const relativePath = path.join(relativeRoot, entry.name);
     if (entry.isDirectory()) return listSourceFiles(relativePath);
     return /\.(?:ts|tsx|vue|mjs)$/.test(entry.name) ? [relativePath] : [];

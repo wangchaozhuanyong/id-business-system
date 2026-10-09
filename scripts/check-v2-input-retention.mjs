@@ -98,6 +98,22 @@ for (const { file, script } of sources) {
         // The order-entry route is the only permitted KeepAlive draft owner.
         if (file.includes('/order-entry/') && !file.endsWith('/useOrderEntryOptionsQuery.ts'))
           return;
+        // 本模块公开客户的完整会话及配置密钥只允许临时提交，绝不能成为页面草稿。
+        const publicOnlineSession =
+          name === 'session' &&
+          /\/online-recharge\/PublicOnline(?:Recharge|Subscription)View\.vue$/.test(file);
+        const onlineConfigSecrets =
+          name === 'secrets' && file.endsWith('/online-recharge/V2OnlineConfigView.vue');
+        if (publicOnlineSession || onlineConfigSecrets) {
+          const cleared = publicOnlineSession
+            ? /onBeforeUnmount\(\(\) => \{[^{}]*\bsession\.value = '';/s.test(script)
+            : /onBeforeUnmount\(clearSecrets\)/.test(script) &&
+              /delete secrets\[key\]/.test(script);
+          if (!cleared) issues.push(`${file}: 临时敏感输入必须在离页时清除`);
+          if (/localStorage|sessionStorage/.test(script))
+            issues.push(`${file}: 临时敏感输入不得进入浏览器存储`);
+          return;
+        }
         // These reactive wrappers unwrap controller/query results rather than declare input state.
         if (factory === 'reactive' && !ts.isObjectLiteralExpression(node.initializer.arguments[0]))
           return;

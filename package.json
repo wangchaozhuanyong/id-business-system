@@ -9,6 +9,11 @@
     "apps/*"
   ],
   "scripts": {
+    "online-recharge:engine": "npm --prefix apps/api/src/id-business-v2/online-recharge/engine start",
+    "test:online-recharge:engine": "npm --prefix apps/api/src/id-business-v2/online-recharge/engine test && npm --prefix apps/api/src/id-business-v2/online-recharge/engine run test:upstream",
+    "test:online-recharge:controls": "node --test scripts/check-v2-online-recharge-controls.test.mjs",
+    "acceptance:v2-online-recharge-ui": "node scripts/acceptance-v2-online-recharge-ui.mjs",
+    "acceptance:v2-online-recharge-mysql": "node scripts/acceptance-v2-online-recharge-mysql.mjs",
     "auto-registration:setup": "node scripts/setup-auto-registration.mjs",
     "auto-registration:local": "node scripts/start-auto-registration-local.mjs",
     "auto-recharge:connector": "sh scripts/start-auto-recharge-connector.sh",
@@ -103,7 +108,9 @@
     "acceptance:v2-rollback-integrity:native": "node scripts/acceptance-v2-rollback-integrity.mjs --runtime=native",
     "acceptance:v2-data-governance:native": "node scripts/acceptance-v2-data-governance.mjs --runtime=native",
     "check:recharge-migration:native": "python3 -B scripts/ci-recharge-migration.py --runtime=native",
-    "check:audit-retention:native": "python3 -B scripts/production-release/audit-retention-mysql.test.py --runtime=native"
+    "check:audit-retention:native": "python3 -B scripts/production-release/audit-retention-mysql.test.py --runtime=native",
+    "acceptance:v2-online-recharge-gateway": "node scripts/acceptance-v2-online-recharge-gateway.mjs",
+    "acceptance:v2-online-recharge-container": "node scripts/acceptance-v2-online-recharge-container.mjs"
   },
   "engines": {
     "node": ">=22.0.0",

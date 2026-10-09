@@ -44,6 +44,63 @@ function recordGuardCommands(mode, paths, part = 'guards') {
   );
 }
 
+function recordOnlineEngineCommands(failBrowser = false) {
+  const script = `
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const calls = [];
+    childProcess.execFileSync = (file, args) => {
+      if (file === 'git') return 'apps/api/src/id-business-v2/online-recharge/engine/safe-media.cjs';
+      calls.push([file, ...args]);
+      if (process.env.ONLINE_TEST_FAIL_BROWSER === '1' && file === 'node' && args[0].endsWith('/playwright/cli.js'))
+        throw new Error('synthetic missing browser');
+      return '';
+    };
+    syncBuiltinESMExports();
+    process.argv = ['node', 'scripts/ci-recharge-check.mjs', 'online-engine', 'a'.repeat(40)];
+    let failed = false;
+    try { await import('./scripts/ci-recharge-check.mjs'); } catch { failed = true; }
+    process.stdout.write(JSON.stringify({calls, failed}));
+  `;
+  return JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, ONLINE_TEST_FAIL_BROWSER: failBrowser ? '1' : '0' }
+    })
+  );
+}
+
+test('online engine installs its own pinned browser before real media tests', () => {
+  const { calls, failed } = recordOnlineEngineCommands();
+  assert.equal(failed, false);
+  const install = calls.findIndex((row) => row[0] === 'node');
+  const tests = calls.findIndex((row) => row.includes('test:online-recharge:engine'));
+  assert.ok(install >= 0 && tests > install);
+  assert.deepEqual(calls[install], [
+    'node',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js',
+    'install',
+    '--with-deps',
+    'chromium'
+  ]);
+  assert.equal(
+    calls.some((row) => row[0] === 'npx'),
+    false
+  );
+  const yaml = readFileSync(resolve(root, '.github/workflows/quality.yml'), 'utf8');
+  assert.match(yaml, /run: node scripts\/ci-recharge-check\.mjs online-engine "\$CHECK_BASE"/);
+});
+
+test('failed online browser installation blocks media tests and payment engine tests', () => {
+  const { calls, failed } = recordOnlineEngineCommands(true);
+  assert.equal(failed, true);
+  assert.equal(
+    calls.some((row) => row.includes('test:online-recharge:engine')),
+    false
+  );
+});
+
 function recordConnectorCommands(paths, failInstall = false) {
   const script = `
     import childProcess from 'node:child_process';

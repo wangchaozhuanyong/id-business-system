@@ -20,9 +20,11 @@ import { V2ProfileService } from './profile/v2-profile.service';
 import { V2RolesController } from './roles/v2-roles.controller';
 import { V2RolesService } from './roles/v2-roles.service';
 import { V2SecurityController } from './security/v2-security.controller';
+import { AuthLoginEventsModule } from '../auth/login-events';
 
 @Module({
   imports: [
+    AuthLoginEventsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
