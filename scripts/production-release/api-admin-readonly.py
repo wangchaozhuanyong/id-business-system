@@ -35,7 +35,8 @@ def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True
     prefix = 'api-workspace' if scope == 'API_ADMIN_WORKSPACE' else scope.lower().replace('_', '-')
     directory = f'/opt/id-business-v2/.staging/{prefix}-verify-{commit}'
     commands = ['set -eu', f'mkdir -p {directory}']
-    for name in (('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py')
+    for name in (('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
+                  'online-recharge-recovery.json')
                  if scope == 'API_ADMIN_WORKSPACE' else ('remote-deploy.py', 'api-admin-scope.py')):
         digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',

@@ -563,6 +563,24 @@ class TransportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 transport.parameters(bad, OLD, 'preflight')
 
+    def test_non_workspace_transport_keeps_only_its_two_pinned_scripts(self):
+        names = ('remote-deploy.py', 'api-admin-scope.py')
+        for selected in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION'):
+            for mode in ('preflight', 'readback'):
+                with self.subTest(scope=selected, mode=mode):
+                    commands = transport.parameters(COMMIT, OLD, mode, selected)['commands']
+                    downloads = [line for line in commands if line.startswith('curl ')]
+                    checksums = [line for line in commands if 'sha256sum -c -' in line]
+                    self.assertEqual(len(downloads), len(names))
+                    self.assertEqual(len(checksums), len(names))
+                    self.assertEqual([line.rsplit('/', 1)[-1] for line in downloads], list(names))
+                    for name, download, checksum in zip(names, downloads, checksums):
+                        digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                        self.assertIn('/' + COMMIT + '/scripts/production-release/' + name, download)
+                        self.assertIn(digest + '  ', checksum)
+                        self.assertNotIn('/' + OLD + '/', download)
+                    self.assertFalse(any('online-recharge' in line for line in commands))
+
     def test_independent_receipt_binds_this_build_not_another_attempt_of_same_sha(self):
         candidate = proof()
         receipt = {'status': 'API_ADMIN_VERIFIED', 'commit': COMMIT, 'sourceTree': TREE,
@@ -3343,9 +3361,22 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertFalse(result['volumeDeletionPerformed'])
 
     def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
-        commands = '\n'.join(transport.parameters(COMMIT, OLD, 'preflight', 'API_ADMIN_WORKSPACE')['commands'])
-        self.assertEqual(commands.count('sha256sum -c -'), 3)
-        self.assertIn('--api-workspace-preflight', commands)
+        names = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
+                 'online-recharge-recovery.json')
+        for mode in ('preflight', 'readback'):
+            with self.subTest(mode=mode):
+                commands = transport.parameters(COMMIT, OLD, mode, 'API_ADMIN_WORKSPACE')['commands']
+                downloads = [line for line in commands if line.startswith('curl ')]
+                checksums = [line for line in commands if 'sha256sum -c -' in line]
+                self.assertEqual(len(downloads), len(names))
+                self.assertEqual(len(checksums), len(names))
+                self.assertEqual([line.rsplit('/', 1)[-1] for line in downloads], list(names))
+                for name, download, checksum in zip(names, downloads, checksums):
+                    digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                    self.assertIn('/' + COMMIT + '/scripts/production-release/' + name, download)
+                    self.assertIn(digest + '  ', checksum)
+                    self.assertNotIn('/' + OLD + '/', download)
+                self.assertIn('--api-workspace-' + mode, commands[-1])
         script = ROOT / 'scripts/production-release/validate-release-selection.sh'
         for operation in ('verify_api_workspace', 'release_api_workspace'):
             base = {'RELEASE_OPERATION': operation, 'HISTORICAL_EXCEPTION': 'none'}
@@ -3386,15 +3417,30 @@ class WorkspaceScopeTests(unittest.TestCase):
         environment = {'RELEASE_COMMIT': COMMIT, 'SOURCE_TREE': TREE, 'EXPECTED_CURRENT': OLD,
             'RELEASE_REPOSITORY': REPOSITORY, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
             'QUALITY_RUN_ID': '456', 'RELEASE_OPERATION': 'release_api_workspace', 'HISTORICAL_EXCEPTION': 'none'}
+        original_read = Path.read_bytes
+        def read_candidate(path):
+            return json.dumps(workspace_proof()).encode() if str(path).startswith('.deploy/production-release/') else original_read(path)
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.dict(os.environ, environment, clear=True), \
              patch.object(sys, 'argv', ['generate', str(Path(temporary) / 'parameters.json')]), \
-             patch.object(Path, 'read_bytes', return_value=json.dumps(workspace_proof()).encode()):
+             patch.object(Path, 'read_bytes', side_effect=read_candidate, autospec=True):
             exec(compile(program, 'workspace-dispatch', 'exec'), {'__name__': '__test__'})
-            commands = '\n'.join(json.loads((Path(temporary) / 'parameters.json').read_text())['commands'])
-        self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
-        self.assertNotIn('--image-commit', commands)
-        self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 3)
+            commands = json.loads((Path(temporary) / 'parameters.json').read_text())['commands']
+        joined = '\n'.join(commands)
+        self.assertIn('--api-workspace-only --api-admin-build-proof ', joined)
+        self.assertNotIn('--image-commit', joined)
+        self.assertNotIn('--historical-', joined)
+        downloads = [line for line in commands if line.startswith('curl ')]
+        checksums = [line for line in commands if 'sha256sum -c -' in line]
+        names = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
+                 'online-recharge-recovery.json')
+        self.assertEqual(len(downloads), len(names))
+        self.assertEqual(len(checksums), len(names))
+        self.assertEqual([line.rsplit('/', 1)[-1] for line in downloads], list(names))
+        for name, download, checksum in zip(names, downloads, checksums):
+            digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            self.assertIn('/' + COMMIT + '/scripts/production-release/' + name, download)
+            self.assertIn(digest + '  ', checksum)
+            self.assertNotIn('/' + OLD + '/', download)
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):

@@ -123,8 +123,11 @@ media-resolver、auto-recharge、auto-registration、MySQL 的容器 ID、启动
 由 Docker/Compose 生成的 API 短主机名、网络目标、固定项目路径、服务 hash、重建及依赖标签
 逐项验证后规范化；其余 Config、HostConfig、挂载和标签原样纳入指纹。
 独立读回必须与本次预检的来源封印一致，不能省略八服务或重绑证明后退回七服务检查。
-控制脚本同时从本次候选 SHA 下载并校验所依赖的 ONLINE reader；该兼容不发布代充新镜像，
-不授权真实付款、注册、邮件读取、业务清理或再次迁移。
+WORKSPACE 发布与独立读回入口从同一候选 SHA 下载四份固定资产：`remote-deploy.py`、
+`api-admin-scope.py`、`online-recharge-scope.py` 和 `online-recharge-recovery.json`，
+逐份校验本地源码对应的 SHA-256。恢复来源的固定策略随 ONLINE reader 一起传送，
+其他 API scope 保持原两份控制脚本范围。该兼容不发布代充新镜像，不授权真实付款、注册、
+邮件读取、业务清理或再次迁移。
 
 ## 回执位置
 

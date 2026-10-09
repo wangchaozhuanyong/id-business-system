@@ -2,7 +2,7 @@
 
 用户已确认使用系统现有苹果隐藏邮箱注册 ChatGPT／Codex。
 本地改造基线为 `0a03fa28e6b844a18833d5c63f1de700f091fc64`。
-发布候选随后接入已合并线上代充的主线 `28a3ba4ffd17d36001b1104c97394f5ae871d73d`，
+发布候选已接入线上代充恢复后的主线 `296c096af7c4c79a8ffc2f57d9a15ea75684f431`，
 保留其代码、配置及迁移；本功能不代为执行该模块的迁移或真实业务。
 本文记录已完成的代码和本地验收；用户于 2026-10-09 随后明确授权发布本次新增功能。
 正式发布结果以独立运行回执为准，不以本地测试代替线上证明。
@@ -33,12 +33,13 @@
 前端位于 `apps/admin/src/v2/features/auto-registration/`：
 `V2AutoRegistrationView.vue`、`V2AppleMailboxes.vue`、`api.ts`、`contracts.ts`、
 `useAppleMailboxes.ts`、`apple-mailbox-presentation.ts` 与相关测试；
-`apps/admin/src/v2/features/tableSchemas.ts` 仅追加新表登记。
+`apps/admin/src/v2/features/tableSchemas.ts` 仅追加新表登记，`registry.spec.ts` 验证该表唯一登记并保留管理员主导航约束。
 
 后端位于 `apps/api/src/id-business-v2/auto-registration/`：
 `apple-mailboxes.controller.ts`、`apple-mailboxes.service.ts`、`apple-mailboxes.types.ts`、
 相关测试及既有 `auto-registration.module.ts`、`auto-registration.service.ts`；
-Python 仅自有 `worker/apple_mailboxes.py`、`worker/workspace.py` 及测试变化。
+Python 功能改动仅涉及自有 `worker/apple_mailboxes.py`、`worker/workspace.py` 及测试；
+续发保护另增加 `worker/release_safety.py` 及其测试，用于离线备份和恢复验证。
 既有邮箱服务的公开边界已可供模块调用，无需新增环境变量、依赖或改认证/schema。
 本地启动脚本在内存中加入 5378 的可信来源，未修改 `.env`。
 
@@ -62,6 +63,7 @@ worker 的 `/internal/apple-mailboxes` 仅内部令牌可访问，支持登记�
 功能开发阶段通过 Python 51 项、API 39 项、前端 53 项定向测试及类型、lint、build；
 界面统一七项规则检查通过，共 143 项定向测试。发布准备新增 24 项工作区维护与恢复保护测试，
 Python 合计 75 项通过，功能与适配定向测试合计 167 项；发布控制测试另行登记。
+另通过注册表 23 项定向测试，精确核验隐藏邮箱表格、管理员角色与主导航登记；该文件 lint、格式检查通过。
 浏览器实际验收通过单个／批量标记、IP 校验与错误聚焦、失败重试、草稿及搜索恢复、
 任务进度／取消、刷新失败保留内容和空状态恢复后翻页。最终冻结源码下，第一页、最后一页
 与空状态的列表外框同为 1149px；实际文字节点与控件对齐已测量。
