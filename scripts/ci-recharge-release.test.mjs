@@ -198,6 +198,7 @@ test('actual source entry rejects failed evidence on Bash before emitting reusab
   assert.deepEqual(guardCommands([path], { part: 'release-controls' }), [
     'node --test scripts/ci-recharge-release.test.mjs',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
+    'python3 -B scripts/production-release/api-admin-readonly.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
   ]);
   for (const changed of [
@@ -1438,6 +1439,7 @@ test('actual full-mode release controls select each missing suite once without r
     'node --test scripts/v2-registration-finance-audit.test.mjs',
     'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
+    'python3 -B scripts/production-release/api-admin-readonly.test.py',
     ...onlineReleaseRegressionCommands,
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
@@ -1476,7 +1478,10 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'node --test scripts/ci-recharge-release.test.mjs',
       ...(path === '.github/workflows/quality.yml'
         ? []
-        : ['python3 -B scripts/production-release/api-admin-scope.test.py']),
+        : [
+            'python3 -B scripts/production-release/api-admin-scope.test.py',
+            'python3 -B scripts/production-release/api-admin-readonly.test.py'
+          ]),
       ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]);
@@ -1488,6 +1493,7 @@ test('actual full-mode release controls preserve exact maintenance selection and
     [
       'node --test scripts/ci-recharge-release.test.mjs',
       'python3 -B scripts/production-release/api-admin-scope.test.py',
+      'python3 -B scripts/production-release/api-admin-readonly.test.py',
       'python3 -B scripts/production-release/retire-orphan-retention.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]
@@ -1497,6 +1503,7 @@ test('actual full-mode release controls preserve exact maintenance selection and
     [
       'node --test scripts/ci-recharge-release.test.mjs',
       'python3 -B scripts/production-release/api-admin-scope.test.py',
+      'python3 -B scripts/production-release/api-admin-readonly.test.py',
       'python3 -B scripts/production-release/prepared-images.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]
