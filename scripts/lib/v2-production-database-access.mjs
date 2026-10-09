@@ -15,6 +15,9 @@ export const V2_RUNTIME_DELETE_TABLES = Object.freeze([
   'id_business_v2_website_visits',
   'id_business_v2_workspace_shortcuts',
   'ip_whitelists',
+  'online_recharge_bills',
+  'online_recharge_cards',
+  'online_recharge_proxies',
   'role_permissions',
   'user_roles'
 ]);

@@ -471,7 +471,7 @@ if history_policy == 'registration-worker-95-20261008':
 if api_admin or online_recharge:
     import hashlib
     pinned = []
-    for name in (('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py') if online_recharge or os.environ.get('RELEASE_OPERATION') == 'release_api_workspace' else ('remote-deploy.py', 'api-admin-scope.py')):
+    for name in (('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py', 'online-recharge-recovery.json') if online_recharge or os.environ.get('RELEASE_OPERATION') == 'release_api_workspace' else ('remote-deploy.py', 'api-admin-scope.py')):
         digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
         target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
         pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',

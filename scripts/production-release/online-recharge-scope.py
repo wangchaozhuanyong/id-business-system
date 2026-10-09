@@ -17,6 +17,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tarfile
 import time
@@ -69,6 +70,37 @@ ENV_KEYS = frozenset((*ENV_DEFAULTS, 'ONLINE_RECHARGE_WORKER_KEY'))
 CONTROL_FILES = ('scripts/production-release/online-recharge-scope.py',
                  'scripts/production-release/api-admin-scope.py',
                  'scripts/production-release/remote-deploy.py')
+RECOVERY_FILE = 'online-recharge-recovery.json'
+RECOVERY_POLICY_SHA256 = '7600c0ed6173896824a9def8857eccbc9f99b41b62290fde6a061e2ab63b756c'
+RECOVERY_COMMIT = '28a3ba4ffd17d36001b1104c97394f5ae871d73d'
+RECOVERY_TREE = '014959a59519da585928adaa7f76f7236e1786d1'
+RECOVERY_RUN = '37933246605'
+RECOVERY_ATTEMPT = '1'
+RECOVERY_COMMAND = 'ab33d2e0-6135-47ed-8f20-e2defd7c82cd'
+RECOVERY_FAILURE_SHA256 = '1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a'
+RECOVERY_PROOF_SHA256 = 'ae6a32418e0a0d4ff3d799e3416cf27a150fd1bd925dd91cfa09b56c30e0ffff'
+RECOVERY_PREFLIGHT_SHA256 = '212b6c36d98e003d551284342ddd1c4e468018ff0febc85caff4aee6481e83d4'
+GRANT_SOURCE = 'scripts/lib/v2-production-database-access.mjs'
+RECOVERY_DELETE_TABLES = ('online_recharge_bills', 'online_recharge_cards', 'online_recharge_proxies')
+RECOVERY_ALLOWED_FILES = frozenset((
+    'scripts/production-release/online-recharge-scope.py',
+    'scripts/production-release/online-recharge-scope.test.py',
+    'scripts/production-release/online-recharge-readonly.py',
+    'scripts/production-release/online-recharge-readonly.test.py',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/online-recharge-recovery.json',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/online-recharge-entry.test.mjs',
+    GRANT_SOURCE, 'scripts/production-database-access.test.mjs',
+    'scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs', 'scripts/ci-recharge-check.test.mjs',
+    'docs/ONLINE_RECHARGE.md', 'docs/ONLINE_RECHARGE_RELEASE_20261009.md',
+))
+RECOVERY_GENERATED_FILES = frozenset(('.env.aws.production', 'compose.release.json', 'before-audit.json',
+    'backup-verification.json', WORKSPACE_BACKUP_FILE, FAILURE_FILE))
+SERVICE_IDENTITY_KEYS = ('status', 'health', 'image', 'reference', 'containerId', 'startedAtSha256',
+                         'environmentSha256', 'configurationSha256')
 
 
 def fingerprint(value):
@@ -140,10 +172,12 @@ def schema_expectation(d, directory):
 
 
 def database_read(d, directory, query):
+    d.require(isinstance(query, str) and 0 < len(query.encode()) <= 128 * 1024,
+              'ONLINE_RECHARGE_DATABASE_RESPONSE_INVALID')
     database = d.current_job_database(directory)
     raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
-        'mysql --batch --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
-        '"$MYSQL_DATABASE" -e "' + ' '.join(query.split()) + '"', timeout=60)
+        'exec mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+        '"$MYSQL_DATABASE"', input_data=query + '\n', timeout=60)
     d.require(len(raw) < 1024 * 1024, 'ONLINE_RECHARGE_DATABASE_RESPONSE_INVALID')
     return json.loads(raw)
 
@@ -234,6 +268,244 @@ def historical_guard(d, previous, evidence, source):
     origin = evidence.get('migrationOrigin')
     if origin is not None:
         legacy(d).migration_successor_guard(historical_controller(d, previous, source), previous, origin)
+
+
+def closed_recovery_json(d, raw):
+    d.require(isinstance(raw, bytes) and 0 < len(raw) <= 256 * 1024, 'ONLINE_RECHARGE_INPUT_INVALID')
+    def unique(items):
+        value = {}
+        for key, item in items:
+            d.require(key not in value, 'ONLINE_RECHARGE_INPUT_INVALID')
+            value[key] = item
+        return value
+    try:
+        return json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('ONLINE_RECHARGE_INPUT_INVALID') from None
+
+
+def recovery_policy(d):
+    path = Path(__file__).with_name(RECOVERY_FILE)
+    d.require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 256 * 1024,
+              'ONLINE_RECHARGE_INPUT_INVALID')
+    value = closed_recovery_json(d, path.read_bytes())
+    fields = {'version', 'scope', 'previousCommit', 'failedCommit', 'failedSourceTree', 'failedWorkflowRunId',
+              'failedWorkflowRunAttempt', 'failedCommandId', 'failureReceiptSha256', 'buildProof', 'preflight',
+              'sharedGrant', 'candidateAllowedFiles'}
+    d.require(isinstance(value, dict) and set(value) == fields and type(value['version']) is int
+              and value['version'] == 1 and value['scope'] == 'ONLINE_RECHARGE_RECOVERY'
+              and fingerprint(value) == RECOVERY_POLICY_SHA256
+              and value['previousCommit'] == BASELINE_COMMIT and value['failedCommit'] == RECOVERY_COMMIT
+              and value['failedSourceTree'] == RECOVERY_TREE and value['failedWorkflowRunId'] == RECOVERY_RUN
+              and value['failedWorkflowRunAttempt'] == RECOVERY_ATTEMPT and value['failedCommandId'] == RECOVERY_COMMAND
+              and value['failureReceiptSha256'] == RECOVERY_FAILURE_SHA256,
+              'ONLINE_RECHARGE_INPUT_INVALID')
+    allowed = value['candidateAllowedFiles']
+    grant = value['sharedGrant']
+    d.require(isinstance(allowed, list) and all(isinstance(n, str) for n in allowed)
+              and len(allowed) == len(set(allowed)) and set(allowed) <= RECOVERY_ALLOWED_FILES
+              and isinstance(grant, dict) and set(grant) == {'path', 'beforeSha256', 'afterSha256', 'addedDeleteTables'}
+              and grant['path'] == GRANT_SOURCE and grant['addedDeleteTables'] == list(RECOVERY_DELETE_TABLES)
+              and all(re.fullmatch(r'[a-f0-9]{64}', grant[n] or '') for n in ('beforeSha256', 'afterSha256')),
+              'ONLINE_RECHARGE_INPUT_INVALID')
+    proof = validate_proof(d, value['buildProof'], RECOVERY_COMMIT, RECOVERY_TREE,
+                          '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
+                          RECOVERY_RUN, RECOVERY_ATTEMPT)
+    before = value['preflight']
+    d.require(fingerprint(proof) == RECOVERY_PROOF_SHA256 and isinstance(before, dict)
+              and fingerprint(before) == RECOVERY_PREFLIGHT_SHA256
+              and before.get('status') == 'ONLINE_RECHARGE_BASELINE_VERIFIED'
+              and before.get('commit') == BASELINE_COMMIT and before.get('releaseCandidateCommit') == RECOVERY_COMMIT
+              and before.get('workflowRunId') == RECOVERY_RUN and before.get('workflowRunAttempt') == RECOVERY_ATTEMPT
+              and before.get('checkCount') == 49 and before.get('violationCount') == 0
+              and before.get('migration') == MIGRATION_IDENTITY and before.get('workspaceIdle') is True
+              and before.get('workspaceVolumePreserved') is True and before.get('legacyWorkersPreserved') is True,
+              'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+    return value
+
+
+def recovery_marker(policy):
+    return {'version': 1, 'failedCommit': RECOVERY_COMMIT, 'failedSourceTree': RECOVERY_TREE,
+            'failedWorkflowRunId': RECOVERY_RUN, 'failedWorkflowRunAttempt': RECOVERY_ATTEMPT,
+            'failedCommandId': RECOVERY_COMMAND, 'failureReceiptSha256': RECOVERY_FAILURE_SHA256,
+            'buildProofSha256': RECOVERY_PROOF_SHA256, 'preflightSha256': RECOVERY_PREFLIGHT_SHA256,
+            'policySha256': fingerprint(policy)}
+
+
+def archive_inventory(d, data, commit, tree):
+    """Verify the immutable Git tree before trusting any failed-release source file."""
+    d.require(isinstance(data, bytes) and len(data) <= 128 * 1024 * 1024, 'ONLINE_RECHARGE_SOURCE_TOO_LARGE')
+    inventory, entries = {}, {}
+    prefix = 'id-business-system-' + commit + '/'
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+            members = archive.getmembers()
+            d.require(len(members) < 100000 and sum(m.size for m in members) < 512 * 1024 * 1024,
+                      'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+            for member in members:
+                d.require((member.name == prefix[:-1] or member.name.startswith(prefix))
+                          and '..' not in Path(member.name).parts and (member.isfile() or member.isdir()),
+                          'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+                if member.isdir():
+                    continue
+                name = member.name[len(prefix):]
+                d.require(name and name not in inventory and member.size <= 16 * 1024 * 1024,
+                          'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+                raw = archive.extractfile(member).read()
+                mode = '100755' if member.mode & 0o111 else '100644'
+                inventory[name] = {'sha256': hashlib.sha256(raw).hexdigest(), 'mode': mode}
+                parent = entries
+                for part in Path(name).parts[:-1]:
+                    d.require(part not in parent or isinstance(parent[part], dict), 'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+                    parent = parent.setdefault(part, {})
+                d.require(Path(name).name not in parent, 'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID')
+                parent[Path(name).name] = (mode, hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).digest())
+    except (tarfile.TarError, OSError):
+        raise RuntimeError('ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID') from None
+    def encode(items):
+        raw = b''
+        for name, value in sorted(items.items(), key=lambda item: (item[0] + '/' if isinstance(item[1], dict) else item[0]).encode()):
+            mode, oid = ('40000', encode(value)) if isinstance(value, dict) else value
+            raw += mode.encode() + b' ' + name.encode() + b'\0' + oid
+        return hashlib.sha1(b'tree ' + str(len(raw)).encode() + b'\0' + raw).digest()
+    d.require(inventory and encode(entries).hex() == tree, 'ONLINE_RECHARGE_SOURCE_TREE_CHANGED')
+    return inventory
+
+
+def fixed_recovery_inventory(d):
+    cached = getattr(d, '_onlineRechargeRecoveryInventory', None)
+    if cached is not None:
+        return cached
+    with urllib.request.urlopen('https://github.com/wangchaozhuanyong/id-business-system/archive/'
+                                + RECOVERY_COMMIT + '.tar.gz', timeout=60) as response:
+        data = response.read(128 * 1024 * 1024 + 1)
+    result = archive_inventory(d, data, RECOVERY_COMMIT, RECOVERY_TREE)
+    d._onlineRechargeRecoveryInventory = result
+    return result
+
+
+def release_source_inventory(d, directory, *, published=False):
+    d.require(directory.is_dir() and not directory.is_symlink() and directory.resolve() == directory,
+              'ONLINE_RECHARGE_SOURCE_INVALID')
+    result = {}
+    paths = list(directory.rglob('*'))
+    d.require(len(paths) < 100000, 'ONLINE_RECHARGE_SOURCE_INVALID')
+    for path in paths:
+        d.require(not path.is_symlink(), 'ONLINE_RECHARGE_SOURCE_INVALID')
+        if path.is_dir():
+            continue
+        name = path.relative_to(directory).as_posix()
+        d.require(path.is_file() and path.stat().st_size <= 16 * 1024 * 1024, 'ONLINE_RECHARGE_SOURCE_INVALID')
+        generated = RECOVERY_GENERATED_FILES | (frozenset(('after-audit.json', 'release-manifest.json', STATE_FILE, PROOF_FILE))
+                                               if published else frozenset())
+        if name in generated:
+            d.require(path.stat().st_size <= 256 * 1024, 'ONLINE_RECHARGE_SOURCE_INVALID')
+            continue
+        result[name] = {'sha256': file_digest(path), 'mode': '100755' if path.stat().st_mode & 0o111 else '100644'}
+    return result
+
+
+def recovery_origin(d, previous):
+    """Only the sealed, ended first attempt may explain a pre-existing additive migration."""
+    root = d.BASE / 'releases'
+    d.require(root.is_dir() and not root.is_symlink() and root.resolve() == root, 'ONLINE_RECHARGE_SOURCE_INVALID')
+    folders = list(root.glob('*-' + RECOVERY_COMMIT[:12]))
+    if not folders:
+        state = migration_database_state(d, previous)
+        d.require(state['status'] == 'PENDING', 'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT')
+        return None
+    d.require(len(folders) == 1, 'ONLINE_RECHARGE_SOURCE_INVALID')
+    source = folders[0]
+    d.require(re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + RECOVERY_COMMIT[:12], source.name)
+              and source.is_dir() and not source.is_symlink() and source.resolve() == source
+              and source.stat().st_uid == os.geteuid() and stat.S_IMODE(source.stat().st_mode) & 0o077 == 0,
+              'ONLINE_RECHARGE_SOURCE_INVALID')
+    policy = recovery_policy(d)
+    failure = source / FAILURE_FILE
+    d.require(failure.is_file() and not failure.is_symlink() and failure.stat().st_size <= 256 * 1024,
+              'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+    receipt = closed_recovery_json(d, failure.read_bytes())
+    d.require(isinstance(receipt, dict) and fingerprint(receipt) == RECOVERY_FAILURE_SHA256
+              and receipt.get('status') == 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH' and receipt.get('step') == 'migration'
+              and receipt.get('rollbackOk') is True and receipt.get('servicesAttempted') == []
+              and receipt.get('candidateCommit') == RECOVERY_COMMIT and receipt.get('previousCommit') == BASELINE_COMMIT
+              and receipt.get('migrationAttempted') is True and receipt.get('inverseMigrationPerformed') is False
+              and receipt.get('mediaVolumeDeleted') is False and receipt.get('currentPointsToCandidate') is False
+              and receipt.get('receiptPersisted') is True,
+              'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+    inventory = release_source_inventory(d, source)
+    d.require(inventory == fixed_recovery_inventory(d), 'ONLINE_RECHARGE_SOURCE_TREE_CHANGED')
+    migration_source_check(d, source)
+    state = migration_database_state(d, previous, source=source)
+    d.require(state['status'] == 'APPLIED' and receipt.get('migration') == {**state, 'performed': True},
+              'ONLINE_RECHARGE_READBACK_MIGRATION_CHANGED')
+    d.require(fingerprint(file_inventory(d, source / ENGINE_ROOT)) == policy['buildProof']['engineSourceSha256']
+              and file_digest(source / 'docker-compose.aws-mysql.yml') == policy['buildProof']['composeSourceSha256'],
+              'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED')
+    key = fingerprint({'source': source.name, 'policy': fingerprint(policy), 'failure': fingerprint(receipt),
+        'inventory': fingerprint(inventory), 'files': {n: file_digest(source / n)
+        for n in ('before-audit.json', 'backup-verification.json', WORKSPACE_BACKUP_FILE)}})
+    if getattr(d, '_onlineRechargeVerifiedOrigin', None) != key:
+        for service in IMAGE_SERVICES:
+            verify_image_content(d, source, policy['buildProof'], service)
+        recovery_backups(d, source, previous)
+        d._onlineRechargeVerifiedOrigin = key
+    else:
+        # Content-addressed images cannot acquire new bytes under the same ID.
+        # Current database, source and failure evidence were measured again above.
+        for row in policy['buildProof']['images'].values():
+            inspect_image(d, row, RECOVERY_COMMIT, RECOVERY_TREE)
+    return {'source': source, 'policy': policy, 'state': state, 'marker': recovery_marker(policy)}
+
+
+def recovery_backups(d, source, previous):
+    audit = legacy(d).audit_receipt(d, source / 'before-audit.json')
+    original = legacy(d).audit_receipt(d, previous / 'after-audit.json')
+    d.require(audit['checksSha256'] == original['checksSha256'], 'ONLINE_RECHARGE_AUDIT_RULES_CHANGED')
+    backup = closed_recovery_json(d, (source / 'backup-verification.json').read_bytes())
+    d.require(isinstance(backup, dict) and set(backup) == {'name', 'sha256', 'size', 's3Verified'}
+              and re.fullmatch(r'id-business-v2-[0-9]{8}T[0-9]{6}Z\.sql\.gz', backup.get('name', ''))
+              and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')) and type(backup.get('size')) is int
+              and backup['size'] > 0 and backup.get('s3Verified') is True, 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+    path = d.BASE / 'backups/mysql' / backup['name']
+    d.require(path.is_file() and not path.is_symlink() and path.resolve() == path
+              and path.stat().st_size == backup['size'] and file_digest(path) == backup['sha256'],
+              'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+    values = d.environment_values(previous / '.env.aws.production')
+    key = values.get('MYSQL_BACKUP_S3_PREFIX', 'mysql/daily').rstrip('/') + '/' + backup['name']
+    head = json.loads(d.run('aws', 's3api', 'head-object', '--bucket', values['MYSQL_BACKUP_S3_BUCKET'], '--key', key,
+                           '--checksum-mode', 'ENABLED', '--region', values.get('MYSQL_BACKUP_S3_REGION') or 'ap-northeast-1'))
+    d.require(head.get('ContentLength') == backup['size'] and head.get('ServerSideEncryption') == 'AES256'
+              and head.get('ChecksumSHA256') == base64.b64encode(bytes.fromhex(backup['sha256'])).decode(),
+              'ONLINE_RECHARGE_BACKUP_UNVERIFIED')
+    workspace = closed_recovery_json(d, (source / WORKSPACE_BACKUP_FILE).read_bytes())
+    d.require(isinstance(workspace, dict), 'ONLINE_RECHARGE_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+    volume = legacy(d).workspace_volume(d, previous, attached=True)
+    manifest = {'commit': RECOVERY_COMMIT, 'workspaceBackupBeforeRelease': workspace.get('name'),
+                'workspaceBackupSha256': fingerprint(workspace)}
+    workspace_backup_receipt(d, source, previous, {'workspaceVolume': volume}, manifest,
+                             {'workspaceBackupSha256': fingerprint(workspace)})
+
+
+def candidate_recovery_source(d, directory, context):
+    policy = context['policy']
+    expected, actual = fixed_recovery_inventory(d), release_source_inventory(d, directory, published=True)
+    allowed = set(policy['candidateAllowedFiles'])
+    d.require({n: row for n, row in actual.items() if n not in allowed}
+              == {n: row for n, row in expected.items() if n not in allowed}
+              and set(expected) <= set(actual), 'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED')
+    grant_source_change(d, context['source'], directory, policy)
+
+
+def grant_source_change(d, previous, target, policy=None):
+    policy = recovery_policy(d) if policy is None else policy
+    grant = policy['sharedGrant']
+    old, new = (previous / GRANT_SOURCE).read_bytes(), (target / GRANT_SOURCE).read_bytes()
+    anchor = b"  'ip_whitelists',\n"
+    added = ''.join("  '" + n + "',\n" for n in RECOVERY_DELETE_TABLES).encode()
+    d.require(hashlib.sha256(old).hexdigest() == grant['beforeSha256']
+              and hashlib.sha256(new).hexdigest() == grant['afterSha256'] and old.count(anchor) == 1
+              and new == old.replace(anchor, anchor + added, 1), 'ONLINE_RECHARGE_SHARED_GATE_SOURCE_CHANGED')
 
 
 def content_command(service):
@@ -592,8 +864,13 @@ def protected_source(d, previous, target):
     for name in ('scripts/v2-data-integrity-audit.mjs', 'scripts/lib/v2-data-integrity-audit.mjs',
                  'scripts/sync-v2-new-table-grants.mjs', 'scripts/lib/v2-production-database-access.mjs'):
         d.require((previous / name).is_file() and (target / name).is_file()
-                  and (previous / name).read_bytes() == (target / name).read_bytes(),
+                  and not (previous / name).is_symlink() and not (target / name).is_symlink(),
                   'ONLINE_RECHARGE_SHARED_GATE_SOURCE_CHANGED')
+        if name == GRANT_SOURCE and (previous / name).read_bytes() != (target / name).read_bytes():
+            grant_source_change(d, previous, target)
+        else:
+            d.require((previous / name).read_bytes() == (target / name).read_bytes(),
+                      'ONLINE_RECHARGE_SHARED_GATE_SOURCE_CHANGED')
 
 
 def workspace_guard(d, directory, expected=None):
@@ -623,19 +900,35 @@ def baseline(d, expected):
     up the already active SQLite workspace before stopping its owner API.
     """
     d.require(expected == BASELINE_COMMIT, 'ONLINE_RECHARGE_BASELINE_NOT_APPROVED')
-    previous, manifest, states, evidence = legacy(d).baseline(d, expected, check_jobs=False)
+    previous = (d.BASE / 'current').resolve()
+    d.require(previous.parent == d.BASE / 'releases', 'ONLINE_RECHARGE_READBACK_PATH_INVALID')
+    recovery = recovery_origin(d, previous)
+    reader = historical_controller(d, previous, recovery['source']) if recovery is not None else d
+    previous, manifest, states, evidence = legacy(d).baseline(reader, expected, check_jobs=False)
     d.require(manifest.get('apiWorkspacePublication', {}).get('scope') == 'API_ADMIN_WORKSPACE'
               and evidence.get('apiSource', {}).get('kind') == 'API_WORKSPACE_BUILD_PROVEN'
               and not manifest.get('apiAdminPublication'), 'ONLINE_RECHARGE_WORKSPACE_NOT_PUBLISHED')
-    receipt = legacy(d).readback(d, expected)
+    receipt = legacy(d).readback(reader, expected)
     d.require(receipt.get('status') == 'API_ADMIN_WORKSPACE_VERIFIED'
               and receipt.get('volumePreserved') is True and receipt.get('volumeDeletionPerformed') is False
               and receipt.get('registrationHealthChecked') is True and receipt.get('services') == states,
               'ONLINE_RECHARGE_WORKSPACE_ORIGIN_INVALID')
+    if recovery is not None:
+        original = recovery['policy']['preflight']
+        d.require(evidence['manifestSha256'] == original['manifestSha256'],
+                  'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+        d.require(receipt['buildProofSha256'] == original['workspaceBuildProofSha256']
+                  and {n: {k: row[k] for k in SERVICE_IDENTITY_KEYS} for n, row in states.items()} == original['services'],
+                  'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
+        verify_permission_seed(d, recovery['source'])
+        require_fresh_resources(d, recovery['source'])
+        jobs_idle(d, previous, migrated=True)
     volume = workspace_guard(d, previous, evidence.get('workspaceVolume'))
     evidence = {**evidence, 'guards': jobs_idle(d, previous), 'workspaceIdle': True,
                 'workspaceVolume': volume, 'workspaceOriginFiles': workspace_files(d, previous),
                 'workspaceBuildProofSha256': receipt['buildProofSha256']}
+    if recovery is not None:
+        evidence['migrationRecovery'] = recovery['marker']
     d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'ONLINE_RECHARGE_DISK_LOW_BEFORE_PULL')
     d.require((d.BASE / 'current').resolve() == previous and snapshot(d, previous) == states,
               'ONLINE_RECHARGE_BASELINE_MOVED')
@@ -675,8 +968,10 @@ def workspace_origin(d, previous, directory, evidence, before):
 def preflight(d, expected):
     previous, manifest, states, evidence = baseline(d, expected)
     migration_source_check(d, previous, candidate=False)
-    migration = migration_database_state(d, previous)
-    d.require(migration['status'] == 'PENDING', 'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT')
+    recovery = recovery_origin(d, previous) if evidence.get('migrationRecovery') is not None else None
+    migration = recovery['state'] if recovery is not None else migration_database_state(d, previous)
+    d.require(migration['status'] == ('APPLIED' if recovery is not None else 'PENDING'),
+              'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT')
     # Running legacy browser windows are preserved; no close/cancel endpoint is called.
     audit = legacy(d).strict_audit(d, previous, Path(__file__).parent / 'online-recharge-preflight-audit.json')
     d.require(snapshot(d, previous) == states and (d.BASE / 'current').resolve() == previous,
@@ -921,11 +1216,21 @@ def validate_receipt(d, value, mode, commit, expected):
                   and re.fullmatch(r'[a-f0-9]{64}', value.get('workspaceVolume', {}).get('identitySha256', ''))
                   and re.fullmatch(r'[a-f0-9]{64}', value.get('workspaceBuildProofSha256', '')),
                   'ONLINE_RECHARGE_RECEIPT_BASELINE_CHANGED')
+        resumed = {}
+        if value.get('migrationRecovery') is not None:
+            d.require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
+                      and value.get('migrationPerformed', False) is False
+                      and value.get('migrationState', {}).get('status') == 'APPLIED'
+                      and value['migrationState'].get('name') == MIGRATION_NAME
+                      and value['migrationState'].get('sha256') == MIGRATION_IDENTITY['sha256']
+                      and value['migrationState'].get('schemaVerified') is True,
+                      'ONLINE_RECHARGE_RECEIPT_BASELINE_CHANGED')
+            resumed = {'migrationRecovery': value['migrationRecovery'], 'migrationPerformed': False}
         return {'status': status, 'commit': expected, 'manifestSha256': value['manifestSha256'],
                 'checkCount': 49, 'violationCount': 0, 'legacyWorkersPreserved': True,
                 'requiresWindowHandoff': False, 'workspaceIdle': True,
                 'workspaceVolumePreserved': True, 'workspaceBuildProofSha256': value['workspaceBuildProofSha256'],
-                'migration': dict(MIGRATION_IDENTITY)}
+                'migration': dict(MIGRATION_IDENTITY), **resumed}
     migration = value.get('migration', {})
     d.require(expected == commit and value.get('servicesUpdated') == list(UPDATED)
               and value.get('preservedServiceCount') == len(PRESERVED)
@@ -942,10 +1247,17 @@ def validate_receipt(d, value, mode, commit, expected):
               and re.fullmatch(r'[a-f0-9]{40}', value.get('sourceTree', ''))
               and re.fullmatch(r'[a-f0-9]{64}', value.get('buildProofSha256', '')),
               'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
-    return {n: value[n] for n in ('status', 'commit', 'sourceTree', 'servicesUpdated', 'preservedServiceCount',
+    resumed = {}
+    if value.get('migrationRecovery') is not None:
+        d.require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
+                  and value['migrationPerformed'] is False, 'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
+        resumed['migrationRecovery'] = value['migrationRecovery']
+    else:
+        d.require(value['migrationPerformed'] is True, 'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
+    return {**{n: value[n] for n in ('status', 'commit', 'sourceTree', 'servicesUpdated', 'preservedServiceCount',
         'buildProofSha256', 'migrationApplied', 'migrationPerformed', 'backupVerified', 'checkCount', 'violationCount',
         'workspaceBackupVerified', 'workspaceVolumePreserved', 'existingEnvironmentPreserved', 'credentialsLoopback',
-        'dedicatedVolume', 'legacyWorkersPublished', 'externalAcceptancePerformed')}
+        'dedicatedVolume', 'legacyWorkersPublished', 'externalAcceptancePerformed')}, **resumed}
 
 
 def verify_running(d, directory, proof):
@@ -995,6 +1307,17 @@ def readback(d, expected):
               and configuration_hashes(previous) == record['configurationBefore']
               and configuration_hashes(directory) == record['configurationAfter'],
               'ONLINE_RECHARGE_READBACK_SOURCE_CHANGED')
+    recovered = {}
+    if record['baselineEvidence'].get('migrationRecovery') is not None:
+        recovery = recovery_origin(d, previous)
+        d.require(recovery is not None and manifest.get('migrationRecovery') == recovery['marker']
+                  == record['baselineEvidence']['migrationRecovery'] and record['migration']['performed'] is False,
+                  'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+        candidate_recovery_source(d, directory, recovery)
+        recovered['migrationRecovery'] = recovery['marker']
+    else:
+        d.require(manifest.get('migrationRecovery') is None and record['migration']['performed'] is True,
+                  'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
     d.require(fingerprint(file_inventory(d, directory / ENGINE_ROOT)) == proof['engineSourceSha256']
               and hashlib.sha256((directory / 'docker-compose.aws-mysql.yml').read_bytes()).hexdigest() == proof['composeSourceSha256'],
               'ONLINE_RECHARGE_READBACK_SOURCE_CHANGED')
@@ -1008,7 +1331,8 @@ def readback(d, expected):
     workspace_origin(d, previous, directory, record['baselineEvidence'], record['before'])
     migration = migration_database_state(d, directory)
     d.require(migration['status'] == 'APPLIED'
-              and all(record['migration'].get(n) == v for n, v in migration.items()),
+              and all(record['migration'].get(n) == v for n, v in migration.items())
+              and manifest.get('migrationPerformed') is record['migration']['performed'],
               'ONLINE_RECHARGE_READBACK_MIGRATION_CHANGED')
     verify_permission_seed(d, directory)
     before = legacy(d).audit_receipt(d, directory / 'before-audit.json')
@@ -1030,7 +1354,7 @@ def readback(d, expected):
             'existingEnvironmentPreserved': True, 'credentialsLoopback': True, 'dedicatedVolume': MEDIA_VOLUME,
             'backupVerified': True, 'workspaceBackupVerified': True, 'workspaceVolumePreserved': True,
             'checkCount': 49, 'violationCount': 0,
-            'legacyWorkersPublished': False, 'externalAcceptancePerformed': False}
+            'legacyWorkersPublished': False, 'externalAcceptancePerformed': False, **recovered}
 
 
 def safe_code(error):
@@ -1116,6 +1440,9 @@ def rollback(d, previous, target, changed, before, *, migrated, workspace=None):
 def _release_locked(d, args):
     proof = validate_arguments(d, args)
     previous, old, before, evidence = baseline(d, args.expected_current)
+    recovery = recovery_origin(d, previous) if evidence.get('migrationRecovery') is not None else None
+    d.require(recovery is None or evidence['migrationRecovery'] == recovery['marker'],
+              'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
     migration_source_check(d, previous, candidate=False)
     environment = (previous / '.env.aws.production').read_bytes()
     configuration_before = configuration_hashes(previous)
@@ -1124,12 +1451,14 @@ def _release_locked(d, args):
     d.require(not target.exists(), 'ONLINE_RECHARGE_RELEASE_EXISTS')
     target.mkdir(mode=0o700)
     changed, step = [], 'source'
-    migration = {'status': 'NOT_ATTEMPTED', 'performed': False}
+    migration = {**recovery['state'], 'performed': False} if recovery is not None else {'status': 'NOT_ATTEMPTED', 'performed': False}
     migration_attempted = False
     try:
         archive = extract_source(d, args.commit, target)
         d.require(legacy(d).source_tree(d, target) == args.source_tree, 'ONLINE_RECHARGE_SOURCE_TREE_CHANGED')
         migration_source_check(d, target)
+        if recovery is not None:
+            candidate_recovery_source(d, target, recovery)
         protected_source(d, previous, target)
         d.require(fingerprint(file_inventory(d, target / ENGINE_ROOT)) == proof['engineSourceSha256']
                   and hashlib.sha256((target / 'docker-compose.aws-mysql.yml').read_bytes()).hexdigest() == proof['composeSourceSha256'],
@@ -1144,7 +1473,8 @@ def _release_locked(d, args):
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
         require_preserved(d, previous, target, before, environment, all_services=True)
         migration = {**migration_database_state(d, previous, source=target), 'performed': False}
-        d.require(migration['status'] == 'PENDING', 'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT')
+        d.require(migration['status'] == ('APPLIED' if recovery is not None else 'PENDING'),
+                  'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT')
         step = 'images'
         d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'ONLINE_RECHARGE_DISK_LOW_BEFORE_PULL')
         password = d.run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
@@ -1174,9 +1504,10 @@ def _release_locked(d, args):
         jobs_idle(d, previous)
         historical_guard(d, previous, evidence, target)
         step = 'migration'
-        migration_attempted = True
-        d.compose(target, 'run', '--rm', '--no-deps', '--pull', 'never', 'migrate', timeout=900)
-        migration = {**migration_database_state(d, target), 'performed': True}
+        migration_attempted = recovery is None
+        if migration_attempted:
+            d.compose(target, 'run', '--rm', '--no-deps', '--pull', 'never', 'migrate', timeout=900)
+        migration = {**migration_database_state(d, target), 'performed': migration_attempted}
         d.require(migration['status'] == 'APPLIED', 'ONLINE_RECHARGE_MIGRATION_NOT_APPLIED')
         verify_permission_seed(d, target)
         require_fresh_resources(d, target)
@@ -1221,7 +1552,7 @@ def _release_locked(d, args):
             'servicesUpdated': list(UPDATED), 'sourceArchiveSha256': hashlib.sha256(archive).hexdigest(),
             'images': {**old['images'], **{n: {'reference': proof['images'][n]['reference'], 'digest': proof['images'][n]['imageId'],
                        'sourceCommit': args.commit} for n in IMAGE_SERVICES}},
-            'backupBeforeRelease': backup['name'], 'migrationApplied': True, 'migrationPerformed': True,
+            'backupBeforeRelease': backup['name'], 'migrationApplied': True, 'migrationPerformed': migration['performed'],
             'workspaceBackupBeforeRelease': sqlite_backup['name'], 'workspaceBackupSha256': fingerprint(sqlite_backup),
             'newMigrations': [MIGRATION_FILE], 'dataAuditBefore': first, 'dataAuditAfter': second,
             'databaseGrants': grants, 'rollback': {'release': str(previous),
@@ -1232,6 +1563,8 @@ def _release_locked(d, args):
                 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}}
         if evidence.get('migrationOrigin') is not None:
             manifest['preservedMigrationOrigin'] = legacy(d).migration_successor_marker(evidence['migrationOrigin'])
+        if recovery is not None:
+            manifest['migrationRecovery'] = recovery['marker']
         (target / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         d.require((d.BASE / 'current').resolve() == previous, 'ONLINE_RECHARGE_BASELINE_MOVED')
         d.point_current(target, f'{stamp}-publish')
