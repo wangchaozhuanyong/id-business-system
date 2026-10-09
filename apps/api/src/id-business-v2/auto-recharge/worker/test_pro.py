@@ -404,6 +404,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         elif path == "/":
             headers = json.dumps({"Authorization": "Bearer " + self.target.old_token, "Content-Type": "application/json"})
             html = '''<html><title>ChatGPT</title><body>
+                <button type="button" data-testid="accounts-profile-button" role="button"
+                  aria-haspopup="menu" aria-expanded="false" onclick="const menu=document.querySelector('#account-menu');
+                  menu.hidden=!menu.hidden;this.setAttribute('aria-expanded',String(!menu.hidden))">Synthetic account</button>
+                <div id="account-menu" role="menu" hidden><button role="menuitem">test@example.invalid</button></div>
                 <button onclick="document.querySelector('[role=dialog]').hidden=false">Upgrade</button>
                 <section role="dialog" hidden><button>Get Plus</button>
                 <button id="five" role="radio" aria-checked="true" onclick="choose(5)">5x</button>
@@ -529,6 +533,15 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         import attempt_ledger
         import payment_state
         self.plan, self.price_controls, self.usage_controls = 'pro-500', True, True
+        page = await self.context.new_page()
+        await page.goto('https://chatgpt.com/')
+        profile = page.get_by_test_id('accounts-profile-button')
+        self.assertTrue(await profile.is_visible())
+        self.assertTrue(await profile.is_enabled())
+        await profile.click()
+        self.assertTrue(await page.get_by_role('menuitem', name='test@example.invalid').is_visible())
+        await profile.click()
+        self.assertEqual(await profile.get_attribute('aria-expanded'), 'false')
         job = server.Job('11111111-1111-4111-8111-111111111111', {
             'action': 'server', 'plan': self.plan, 'sessionJson': fixture().decode(),
             'expectedEmail': 'test@example.invalid', 'expectedCountry': 'US',
