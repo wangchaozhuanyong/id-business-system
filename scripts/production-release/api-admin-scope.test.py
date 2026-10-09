@@ -3372,7 +3372,7 @@ class WorkspaceScopeTests(unittest.TestCase):
 
     def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
         commands = '\n'.join(transport.parameters(COMMIT, OLD, 'preflight', 'API_ADMIN_WORKSPACE')['commands'])
-        self.assertEqual(commands.count('sha256sum -c -'), 3)
+        self.assertEqual(commands.count('sha256sum -c -'), 4)
         self.assertIn('--api-workspace-preflight', commands)
         script = ROOT / 'scripts/production-release/validate-release-selection.sh'
         for operation in ('verify_api_workspace', 'release_api_workspace'):
@@ -3414,7 +3414,7 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
         self.assertNotIn('--image-commit', commands)
         self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 3)
+        self.assertEqual(commands.count('sha256sum -c -'), 4)
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
@@ -3770,6 +3770,130 @@ class InitializedWorkspaceGuardTests(unittest.TestCase):
             controller.compose.return_value = identifiers
             with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
                 workspace.workspace_api_metadata(controller, ROOT)
+
+
+class OnlineRecoveredOriginTests(unittest.TestCase):
+    """Actual recovery/source/backup helpers with isolated Git and SQLite files.
+
+    Reuse the original recovery suite's synthetic failed-receipt boundary; this
+    is local control evidence, never proof of a real completed publication.
+    Docker, S3 and MySQL results are boundaries; no recovery or migration runs.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.fixtures = load('workspace_recovered_origin_fixture', 'online-recharge-scope.test.py')
+        cls.fixtures.RecoveryTests.setUpClass()
+        cls.online = cls.fixtures.scope
+        cls.backups = staticmethod(cls.online.recovery_backups)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixtures.RecoveryTests.tearDownClass()
+
+    @contextmanager
+    def recovered(self):
+        import gzip
+        with self.fixtures.RecoveryTests().fixture() as recovered, OnlineSuccessorTests().lifecycle() as current, ExitStack() as stack:
+            _, previous, failed, failure, *_ = recovered
+            controller, _, _, volume, _, control, database = current
+            controller.BASE = previous.parent.parent
+            original = previous.with_name('20261008T000000Z-' + workspace.WORKSPACE_BOOTSTRAP_COMMIT[:12])
+            previous.rename(original)
+            published = original.parent / ('20261009T120002Z-' + COMMIT[:12])
+            shutil.copytree(self.fixtures.RecoveryTests.prepared, published)
+            policy = self.fixtures.RecoveryTests.policy
+            for name in policy['candidateAllowedFiles']:
+                path = published / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT / name).read_bytes()); path.chmod((ROOT / name).stat().st_mode & 0o777)
+            # The original API is gone. All attached-volume probes must inspect
+            # only this replacement API, without comparing its ID/image to 0a03.
+            control.api['Id'] = '9' * 64; control.api['Config']['Hostname'] = control.api['Id'][:12]
+            controller.api_admin_scope = lambda selected: (workspace, controller)
+            controller.online_recharge_scope = lambda: (self.online, controller)
+            controller.environment_values = lambda path: {'MYSQL_BACKUP_S3_BUCKET': 'isolated-fixture-bucket'}
+            with sqlite3.connect(database) as connection:
+                connection.execute('ALTER TABLE registration_tasks ADD COLUMN status TEXT')
+            audit = {'ok': True, 'checkCount': 49, 'violationCount': 0,
+                     'checks': [{'code': 'fixture-' + str(i), 'count': 0} for i in range(49)]}
+            (failed / 'before-audit.json').write_text(json.dumps(audit))
+            (original / 'after-audit.json').write_text(json.dumps(audit))
+            mysql_root = controller.BASE / 'backups/mysql'; mysql_root.mkdir(parents=True)
+            mysql = mysql_root / 'id-business-v2-20261009T120001Z.sql.gz'
+            mysql.write_bytes(gzip.compress(b'-- synthetic isolated SQL backup\n', mtime=0))
+            (failed / 'backup-verification.json').write_text(json.dumps({'name': mysql.name,
+                'sha256': self.online.file_digest(mysql), 'size': mysql.stat().st_size, 's3Verified': True}))
+            sqlite_root = controller.BASE / 'backups/registration-workspace'; sqlite_root.mkdir()
+            zipped = sqlite_root / ('id-business-v2-online-recharge-workspace-20261009T120001Z-' + self.online.RECOVERY_COMMIT[:12] + '.sqlite3.gz')
+            zipped.write_bytes(gzip.compress(database.read_bytes(), mtime=0))
+            backup = {'version': 1, 'name': zipped.name, 'sha256': self.online.file_digest(zipped),
+                'size': zipped.stat().st_size, 'workspaceVolume': volume, 'integrityCheck': 'ok',
+                'idleSnapshot': True, 'onlineBackup': True, 's3Verified': True}
+            (failed / self.online.WORKSPACE_BACKUP_FILE).write_text(json.dumps(backup))
+            inspect = controller.run; reads = []
+            def run(*args, **kwargs):
+                reads.append(args)
+                if args[:3] == ('aws', 's3api', 'head-object'):
+                    path = zipped if args[args.index('--key') + 1].endswith(zipped.name) else mysql
+                    return json.dumps({'ContentLength': path.stat().st_size, 'ServerSideEncryption': 'AES256',
+                        'ChecksumSHA256': base64.b64encode(hashlib.sha256(path.read_bytes()).digest()).decode()})
+                return inspect(*args, **kwargs)
+            controller.run = run
+            # Restore the genuine backup chain over synthetic S3/Docker reads;
+            # the reused fixture otherwise isolates backups for its source tests.
+            stack.enter_context(patch.object(self.online, 'recovery_backups', wraps=self.backups))
+            marker = self.online.recovery_marker(policy)
+            manifest = {'migrationRecovery': marker, 'migrationPerformed': False}
+            record = {'baselineEvidence': {'migrationRecovery': marker}, 'migration': {'performed': False}}
+            yield controller, original, failed, published, manifest, record, control, reads, failure
+
+    def test_fixed_policy_and_source_bytes_are_required_and_part_of_origin_seal(self):
+        online, _ = d.online_recharge_scope()
+        self.assertEqual(online.fingerprint(online.recovery_policy(d)), online.RECOVERY_POLICY_SHA256)
+        workspace.workspace_online_sources(d, ROOT)
+        self.assertIn('scripts/production-release/online-recharge-recovery.json', workspace.ONLINE_ORIGIN_FILES)
+        with self.recovered() as (controller, original, failed, published, *_):
+            path = published / 'scripts/production-release/online-recharge-recovery.json'
+            path.write_bytes(path.read_bytes() + b'\n')
+            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_POLICY_CHANGED'):
+                workspace.workspace_online_sources(controller, published)
+
+    def test_actual_recovery_origin_source_and_backup_chain_accepts_replaced_api_on_same_volume(self):
+        with self.recovered() as (controller, original, failed, published, manifest, record, control, reads, _):
+            workspace.workspace_online_recovery(controller, self.online, original, published, manifest, record)
+            self.assertTrue(any(args[:3] == ('aws', 's3api', 'head-object') for args in reads))
+            self.assertTrue(any(args[:3] == ('docker', 'inspect', control.api['Id']) for args in reads))
+            self.assertFalse(any(args[:3] == ('docker', 'inspect', '1' * 64) for args in reads))
+            self.assertFalse(control.events)
+            self.assertFalse(list((controller.BASE / 'backups/registration-workspace').glob('*.readback')))
+
+    def test_recovered_origin_rejects_changed_failure_source_policy_marker_or_performed_flag(self):
+        for change in ('failure', 'candidate-source', 'marker', 'performed', 'manifest-performed', 'volume'):
+            with self.subTest(change=change), self.recovered() as fixture:
+                controller, original, failed, published, manifest, record, control, _, failure = fixture
+                if change == 'failure':
+                    failure['servicesAttempted'] = ['api']; (failed / self.online.FAILURE_FILE).write_text(json.dumps(failure))
+                elif change == 'candidate-source':
+                    (published / 'apps/admin/src/v2/features/online-recharge/unapproved.ts').write_text('unapproved')
+                elif change == 'marker': manifest['migrationRecovery'] = {}
+                elif change == 'performed': manifest['migrationPerformed'] = record['migration']['performed'] = True
+                elif change == 'manifest-performed': manifest['migrationPerformed'] = True
+                else: control.volumes['fixture_auto_registration_data']['CreatedAt'] = '2026-10-10T00:00:00Z'
+                with self.assertRaises(RuntimeError):
+                    workspace.workspace_online_recovery(controller, self.online, original, published, manifest, record)
+                self.assertFalse(control.events)
+
+    def test_original_first_publication_cannot_omit_performed_or_claim_unsealed_recovery(self):
+        controller = SimpleNamespace(require=d.require)
+        workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
+            {'migrationPerformed': True}, {'baselineEvidence': {}, 'migration': {'performed': True}})
+        for performed in (False, None, 1):
+            with self.subTest(performed=performed), self.assertRaises(RuntimeError):
+                workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
+                    {'migrationPerformed': performed}, {'baselineEvidence': {}, 'migration': {'performed': performed}})
+        with self.assertRaises(RuntimeError):
+            workspace.workspace_online_recovery(controller, self.online, ROOT, ROOT,
+                {'migrationPerformed': True, 'migrationRecovery': {}},
+                {'baselineEvidence': {}, 'migration': {'performed': True}})
 
 
 class OnlineSuccessorTests(unittest.TestCase):
@@ -4149,7 +4273,7 @@ class OnlineSuccessorTests(unittest.TestCase):
             previous_compose = controller.compose.side_effect
             previous_value = controller.compose.return_value
             def compose(directory, *args, **kwargs):
-                query = args[-1] if args else ''
+                query = kwargs.get('input_data', args[-1] if args else '')
                 if isinstance(query, str) and "'tables'" in query and 'online_recharge_config' in query:
                     return json.dumps(full_online)
                 raw = previous_compose(directory, *args, **kwargs) if callable(previous_compose) else previous_value
@@ -4178,7 +4302,8 @@ class OnlineSuccessorTests(unittest.TestCase):
             root = Path(folder); previous, candidate = root / 'previous', root / 'candidate'
             previous.mkdir(); candidate.mkdir()
             folders = (*workspace.ONLINE_SOURCE_SEALS, workspace.MIGRATION_ROOT)
-            files = (*workspace.CONFIG_FILES, workspace.MIGRATION_SEED, *workspace.ONLINE_ADMISSION_FILES)
+            files = (*workspace.CONFIG_FILES, workspace.MIGRATION_SEED, *workspace.ONLINE_ADMISSION_FILES,
+                     'scripts/production-release/online-recharge-recovery.json')
             for directory in (previous, candidate):
                 for name in folders:
                     target = directory / name; target.parent.mkdir(parents=True, exist_ok=True); shutil.copytree(ROOT / name, target)

@@ -17,7 +17,7 @@ RUNTIME = ROOT / '.runtime/bitbrowser-release-20261009/transport-tests'
 COMMIT, TREE, PREVIOUS = 'a' * 40, 'b' * 40, 'c' * 40
 REPOSITORY = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 COMMON_CONTROLLERS = ('remote-deploy.py', 'api-admin-scope.py')
-WORKSPACE_CONTROLLERS = (*COMMON_CONTROLLERS, 'online-recharge-scope.py')
+WORKSPACE_CONTROLLERS = (*COMMON_CONTROLLERS, 'online-recharge-scope.py', 'online-recharge-recovery.json')
 
 spec = importlib.util.spec_from_file_location('api_admin_transport',
     Path(__file__).with_name('api-admin-readonly.py'))

@@ -39,7 +39,7 @@ def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True
     if scope == 'API_ADMIN_WORKSPACE':
         # A verified online publication retains its migration and engine proof.
         # Pin that reader before either workspace preflight or independent readback.
-        controllers += ('online-recharge-scope.py',)
+        controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json')
     for name in controllers:
         digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',

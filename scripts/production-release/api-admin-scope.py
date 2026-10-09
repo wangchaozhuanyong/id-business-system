@@ -53,7 +53,7 @@ ONLINE_ORIGIN_FILES = ('release-manifest.json', 'online-recharge-build-proof.jso
     'backup-verification.json', 'before-audit.json', 'after-audit.json',
     'docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
     'apps/api/prisma-mysql/schema.prisma', 'apps/api/prisma-mysql/seed.ts',
-    'compose.release.json', '.env.aws.production')
+    'compose.release.json', '.env.aws.production', 'scripts/production-release/online-recharge-recovery.json')
 WORKSPACE_BUSINESS_TABLES = ('accounts', 'email_services', 'registration_tasks', 'proxies',
                             'cpa_services', 'sub2api_services', 'tm_services')
 WORKSPACE_CADDY_BEFORE = 'f8b230bba46136c27651a0df8b7d6fd7fc4f13a47f7db48d0ff0a436fcfe37e0'
@@ -290,6 +290,11 @@ def online_successor_marker(value):
 
 def workspace_online_sources(d, directory):
     online, _ = d.online_recharge_scope()
+    online.recovery_policy(d)
+    policy = directory / 'scripts/production-release' / online.RECOVERY_FILE
+    d.require(policy.is_file() and not policy.is_symlink() and policy.stat().st_size <= 256 * 1024
+              and policy.read_bytes() == Path(online.__file__).with_name(online.RECOVERY_FILE).read_bytes(),
+              'API_ADMIN_ONLINE_RECOVERY_POLICY_CHANGED')
     online.migration_source_check(d, directory)
     d.require(hashlib.sha256((directory / CONFIG_FILES[0]).read_bytes()).hexdigest() == ONLINE_COMPOSE_SEAL
               and all(online.fingerprint(online.file_inventory(d, directory / name)) == digest
@@ -382,6 +387,25 @@ def workspace_online_snapshot(d, directory):
     return states
 
 
+def workspace_online_recovery(d, online, original, source, manifest, record):
+    """Recheck the completed recovery's immutable origin after API replacement."""
+    evidence = record['baselineEvidence']
+    performed = record.get('migration', {}).get('performed')
+    d.require(type(performed) is bool and manifest.get('migrationPerformed') is performed,
+              'API_ADMIN_ONLINE_MIGRATION_CHANGED')
+    if evidence.get('migrationRecovery') is not None:
+        # This reader checks immutable failed source/images, DB and backups;
+        # its attached-volume check uses the current API, not the old API ID.
+        recovery = online.recovery_origin(d, original)
+        d.require(recovery is not None and manifest.get('migrationRecovery') == recovery['marker']
+                  == evidence['migrationRecovery'] and performed is False,
+                  'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+        online.candidate_recovery_source(d, source, recovery)
+    else:
+        d.require(manifest.get('migrationRecovery') is None and performed is True,
+                  'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+
+
 def workspace_online_origin(d, directory, context):
     """Recheck original proof off-line after its API/Admin have been replaced."""
     validate_online_successor_origin(context)
@@ -418,6 +442,7 @@ def workspace_online_origin(d, directory, context):
                     'compose': online.verify_compose(d, original, source),
                     'caddy': online.verify_caddy_projection(d, original, source)}
     d.require(preservation == record.get('preservation'), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+    workspace_online_recovery(d, online, original, source, manifest, record)
     online.protected_source(d, original, source)
     online.historical_guard(d, original, evidence, source)
     online.workspace_origin(d, original, directory, evidence, record['before'])
