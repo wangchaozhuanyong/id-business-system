@@ -21,7 +21,7 @@ from contextlib import ExitStack, contextmanager, redirect_stdout
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNTIME = ROOT / '.deploy'
+RUNTIME = ROOT / '.runtime/apple-hidden-mailbox-20261009/main373-merge/scope-fixtures'
 
 # Historical release cases must keep their original source, including after an
 # additive current-system migration. Read immutable Git blobs, never weaken the
@@ -1023,7 +1023,7 @@ class ReleaseFailureTests(unittest.TestCase):
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
                     migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
-                    sqlite_gate=None, sqlite_prepare_error=False, online_origin_context=None, online_fail=None):
+                    sqlite_gate=None, sqlite_prepare_error=False, online_origin_context=None, online_fail=None, workspace_admission_failure=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1131,6 +1131,17 @@ class ReleaseFailureTests(unittest.TestCase):
             stack.enter_context(patch.object(scope, 'configuration_hashes', return_value={'config': 'hash'}))
             evidence = {'manifestSha256': scope.hashlib.sha256(b'{}').hexdigest(), 'environmentSha256': 'env'}
             if scope.WORKSPACE:
+                controller.workspace_admission = SimpleNamespace(acquire=MagicMock(), before_stop=MagicMock(),
+                    check_idle=MagicMock(), stop=MagicMock(), close=MagicMock())
+                if workspace_admission_failure == 'acquire':
+                    controller.workspace_admission.acquire.side_effect=RuntimeError('API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
+                if workspace_admission_failure == 'before-stop':
+                    controller.workspace_admission.before_stop.side_effect=RuntimeError('API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+                if workspace_admission_failure == 'after-stop':
+                    controller.workspace_admission.check_idle.side_effect=RuntimeError('API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
+                stack.enter_context(patch.object(scope, 'WorkspaceAuditBarrier', return_value=controller.workspace_admission))
+                stack.enter_context(patch.object(scope, 'workspace_database_identity', return_value={'database':'fixture_database'}))
+                stack.enter_context(patch.object(scope, 'workspace_api_metadata', return_value={}))
                 evidence['workspaceVolume'] = {'name': 'fixture_auto_registration_data', 'status': 'ABSENT', 'identitySha256': None}
                 stack.enter_context(patch.object(scope, 'workspace_volume', return_value={
                     'name': 'fixture_auto_registration_data', 'status': 'PRESENT', 'identitySha256': '6' * 64}))
@@ -3742,33 +3753,24 @@ class OnlineWorkspaceCompatibilityTests(unittest.TestCase):
                 if failure=='rollback-busy':self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
 
     def test_eight_service_readback_binds_recreated_engine_to_current_api_and_sealed_origin(self):
-        context=self.context();value=workspace_proof();before=copy.deepcopy(context['binding'])
-        after={**before,'containerId':'6'*64,'startedAtSha256':'7'*64,'apiContainerId':'8'*64}
-        receipt={'status':'API_ADMIN_WORKSPACE_VERIFIED','commit':COMMIT,'sourceTree':TREE,
-            'buildProofSha256':workspace.fingerprint(value),'servicesUpdated':list(workspace.UPDATED),
-            'preservedServiceCount':4,'runningImagesAndContentMatched':True,'environmentUnchanged':True,
-            'workspaceVolume':{'status':'PRESENT','identitySha256':'6'*64},'volumePreserved':True,
-            'volumeDeletionPerformed':False,'registrationHealthChecked':True,'offlineAcceptance':value['acceptance'],
-            'services':{n:{'image':row['imageId'],'reference':row['reference']} for n,row in value['images'].items()},
-            'preservedOnlineRechargeOrigin':workspace.online_marker(context),'servicesRebound':['online-recharge'],
-            'onlineNetworkRebind':{'version':1,'before':before,'after':after,'businessActions':0,
-                'sqlFence':{'version':1,'busyCount':0,'sameConnection':True,'mysqlIdentitySha256':'9'*64,
-                    'connectionIdSha256':'8'*64,'businessActions':0}}}
-        receipt['services'].update({n:{} for n in ('caddy','mysql','media-resolver','auto-recharge','auto-registration')})
-        receipt['services']['api']['containerId']=after['apiContainerId'];receipt['services']['online-recharge']=after
+        fixtures=load('merged_readonly_fixtures','api-admin-readonly.test.py')
+        case=fixtures.WorkspaceSuccessorReceiptTests();case.setUp()
+        value,receipt=case.full_readback_contract()
         def read(path,*a,**kw):
-            return json.dumps({'onlineRechargeOrigin':context} if path.name.endswith('preflight-result.json') else value)
-        with patch.object(Path,'read_text',read),patch.object(Path,'is_file',return_value=True):
-            transport.validate_receipt(receipt,COMMIT,'readback','API_ADMIN_WORKSPACE')
+            return json.dumps(case.before if path.name.endswith('preflight-result.json') else value)
+        with patch.object(Path,'read_text',read),patch.object(Path,'is_file',return_value=True), \
+                patch.dict(os.environ,case.environment,clear=True):
+            transport.validate_receipt(receipt,fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
+            after=receipt['onlineNetworkRebind']['after']
             for changed in ({'servicesRebound':[]},{'preservedOnlineRechargeOrigin':{}},
-                    {'onlineNetworkRebind':{**receipt['onlineNetworkRebind'],'after':{**after,'apiContainerId':'9'*64}}}):
+                    {'onlineNetworkRebind':{**receipt['onlineNetworkRebind'],'after':{**after,'apiContainerId':'0'*64}}}):
                 with self.subTest(changed=changed),self.assertRaises(RuntimeError):
-                    transport.validate_receipt({**receipt,**changed},COMMIT,'readback','API_ADMIN_WORKSPACE')
+                    transport.validate_receipt({**receipt,**changed},fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
             missing={k:v for k,v in receipt.items() if k not in
                 ('preservedOnlineRechargeOrigin','servicesRebound','onlineNetworkRebind')}
             missing['services']={k:v for k,v in receipt['services'].items() if k!='online-recharge'}
             with self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_RECEIPT_CHANGED'):
-                transport.validate_receipt(missing,COMMIT,'readback','API_ADMIN_WORKSPACE')
+                transport.validate_receipt(missing,fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
 
 
 class WorkspaceSqliteProtectionTests(unittest.TestCase):
@@ -4109,6 +4111,249 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
                     self.assertTrue(holder.in_transaction)
                 finally:
                     source.close();destination.close();holder.rollback()
+
+
+class MergedWorkspaceAdmissionTests(unittest.TestCase):
+
+    def test_stopped_database_identity_is_bound_to_live_mysql_and_environment_without_api_probe(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as folder:
+            root = Path(folder).resolve(); (root / '.env.aws.production').write_text('SYNTHETIC_ENV=1\n')
+            state = {'status': 'running', 'health': 'healthy', 'containerId': 'mysql-fixture', 'image': 'fixture-image'}
+            controller = SimpleNamespace(require=d.require, current_job_database=MagicMock(return_value='fixture'),
+                service_state=lambda *a, **k: dict(state))
+            identity = workspace.workspace_database_identity(controller, root)
+            controller.current_job_database.side_effect = AssertionError('old API must stay stopped')
+            self.assertEqual(workspace.workspace_database_identity(controller, root, identity), identity)
+            state['containerId'] = 'changed'
+            with self.assertRaisesRegex(RuntimeError, 'DATABASE_IDENTITY_CHANGED'):
+                workspace.workspace_database_identity(controller, root, identity)
+            state['containerId'] = 'mysql-fixture'; (root / '.env.aws.production').write_text('SYNTHETIC_ENV=2\n')
+            with self.assertRaisesRegex(RuntimeError, 'DATABASE_IDENTITY_CHANGED'):
+                workspace.workspace_database_identity(controller, root, identity)
+
+    def test_stopped_identity_keeps_recharge_registration_leases_and_worker_busy_guards(self):
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value='0'),
+            assert_no_active_recharge=MagicMock(side_effect=AssertionError('cannot probe old API')),
+            current_job_database=MagicMock(side_effect=AssertionError('cannot probe old API')),
+            registration_runtime_state=lambda p: {'supported': True, 'registrationBusy': False,
+                                                  'registrationWindowRetained': True})
+        identity = {'database': 'fixture'}
+        with patch.object(workspace, 'workspace_database_identity', return_value=identity):
+            value = workspace.jobs_idle(controller, ROOT, database_identity=identity)
+            self.assertTrue(value['rechargeIdle']); self.assertFalse(value['registrationLeaseActive'])
+            statements = [call.args[-1] for call in controller.compose.call_args_list]
+            self.assertIn('id_business_v2_recharge_jobs', statements[0])
+            self.assertIn('id_business_v2_registration_jobs', statements[1])
+            for bad_result in (['1'], ['0', '1']):
+                controller.compose.side_effect = bad_result
+                with self.assertRaisesRegex(RuntimeError, 'LEASE_ACTIVE'):
+                    workspace.jobs_idle(controller, ROOT, database_identity=identity)
+            controller.compose.side_effect = None; controller.compose.return_value = '0'
+            controller.registration_runtime_state = lambda p: {'supported': True, 'registrationBusy': True,
+                                                               'registrationWindowRetained': True}
+            with self.assertRaisesRegex(RuntimeError, 'REGISTRATION_BUSY'):
+                workspace.jobs_idle(controller, ROOT, database_identity=identity)
+
+    def test_public_origin_only_emits_https_hostname_and_valid_port(self):
+        controller = SimpleNamespace(require=d.require, environment_values=lambda p: {'APP_PUBLIC_URL': url})
+        url = 'https://fixture.example:8443/'
+        self.assertEqual(workspace.workspace_public_origin(controller, ROOT), 'https://fixture.example:8443')
+        for url in ('http://fixture.example', 'https://user:secret@fixture.example',
+                    'https://fixture.example/?credential=fixture', 'https://fixture.example/#fixture',
+                    'https://fixture.example/private', 'https://fixture.example:0'):
+            with self.assertRaises((RuntimeError, ValueError)):
+                workspace.workspace_public_origin(controller, ROOT)
+
+    def test_stopped_api_probe_rejects_absent_multiple_or_wrong_container(self):
+        identifier = '5' * 64
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value=identifier),
+            run=MagicMock(return_value=json.dumps([{'Id': identifier, 'State': {'Running': False},
+                'Config': {'Labels': {'com.docker.compose.service': 'admin'}}}])))
+        with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
+            workspace.workspace_api_metadata(controller, ROOT)
+        controller.run.assert_called_once()
+        for identifiers in ('', identifier + '\n' + '6' * 64):
+            controller.compose.return_value = identifiers
+            with self.assertRaisesRegex(RuntimeError, 'CONTAINER_UNAVAILABLE'):
+                workspace.workspace_api_metadata(controller, ROOT)
+
+    @contextmanager
+    def audit_fixture(self, *, busy=0, changed_connection=False):
+        with OnlineWorkspaceCompatibilityTests().fixture() as f:
+            popen=subprocess.Popen;commands=[]
+            script=('import sys,json\ncount=0\nfor line in sys.stdin:\n'
+                ' if "SELECT JSON_OBJECT" in line:\n  count+=1\n  print(json.dumps({"version":1,"connectionId":'
+                +('count' if changed_connection else '17')+',"busy":'+str(busy)+'}),flush=True)\n')
+            def launch(command,**kwargs):
+                commands.append(command);return popen([sys.executable,'-u','-c',script],**kwargs)
+            barrier=workspace.WorkspaceAuditBarrier(f.controller,f.previous)
+            with patch.object(workspace,'workspace_audit_protection') as protection, \
+                    patch.object(workspace.subprocess,'Popen',side_effect=launch):
+                try:yield f,barrier,commands,protection
+                finally:barrier.close()
+
+    def test_legacy_admission_uses_private_same_connection_and_since_started_at_mutation_predicate(self):
+        with self.audit_fixture() as (f,barrier,commands,protection):
+            barrier.acquire();barrier.before_stop();barrier.stop(f.states['api'],grace=30)
+            self.assertEqual(barrier.connection_id,17);protection.assert_called_once()
+            self.assertIn('created_at>=CAST(',barrier.QUERY)
+            self.assertIn(' /api/registration',barrier.QUERY);self.assertIn(' /api/ws/',barrier.QUERY)
+            self.assertIn('--skip-reconnect',commands[0][-1]);self.assertNotIn('LOCK TABLES',str(commands[0]))
+            self.assertEqual([a[-1] for a,k in f.calls if a[:2]==('docker','stop')],[f.states['api']['containerId']])
+
+    def test_admitted_legacy_mutation_or_changed_connection_blocks_all_stop_commands(self):
+        with self.audit_fixture(busy=1) as (f,barrier,commands,protection):
+            with self.assertRaisesRegex(RuntimeError,'AUDIT_GUARD_FAILED'):barrier.acquire()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+        with self.audit_fixture(changed_connection=True) as (f,barrier,commands,protection):
+            barrier.acquire()
+            with self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):barrier.before_stop()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_audit_timeout_mysql_identity_drift_and_eof_block_stop_and_close_descriptors(self):
+        for failure in ('timeout','identity','eof'):
+            with self.subTest(failure=failure),self.audit_fixture() as (f,barrier,commands,protection):
+                barrier.acquire();process=barrier.process
+                if failure=='timeout':barrier.deadline=workspace.time.monotonic()+20
+                if failure=='identity':f.states['mysql']['containerId']='0'*64
+                if failure=='eof':process.stdin.close();process.wait(timeout=3)
+                with self.assertRaises(Exception):barrier.before_stop()
+                self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+                barrier.close();self.assertIsNotNone(process.poll());self.assertTrue(process.stdout.closed)
+
+    def test_legacy_guard_failure_before_api_mutation_restores_only_attempted_admin(self):
+        for failure in ('acquire','before-stop'):
+            gate=WorkspaceSqliteProtectionTests().fake_release_gate()
+            code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+                sqlite_gate=gate,workspace_admission_failure=failure)
+            self.assertEqual(code,1);self.assertEqual(result['servicesAttempted'],['admin'])
+            self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['admin'])
+            gate.stop_previous.assert_not_called();controller.workspace_admission.close.assert_called()
+
+    def test_lost_legacy_guard_after_old_api_stop_does_not_stop_engine_and_recovers_through_online_path(self):
+        gate=WorkspaceSqliteProtectionTests().fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,online_origin_context=OnlineWorkspaceCompatibilityTests().context(),
+            workspace_admission_failure='after-stop',online_fail='rollback-busy')
+        self.assertEqual(code,1);self.assertFalse(result['rollbackOk'])
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+        controller.online_fence.stop.assert_not_called();controller.online_rollback.assert_called_once()
+        self.assertNotIn('api',[call.args[2] for call in controller.rollback_service.call_args_list])
+        gate.abort.assert_not_called()
+
+    def test_audit_history_immutable_trigger_contract_is_required(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            folder=Path(temporary)
+            for migration_name in ('20261002123500_routine_audit_retention_exception','20260830182500_mysql_trigger_service_definers'):
+                name=workspace.MIGRATION_ROOT+'/'+migration_name+'/migration.sql';path=folder/name
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+            rows=[]
+            for event,migration_name in (('DELETE','20261002123500_routine_audit_retention_exception'),('UPDATE','20260830182500_mysql_trigger_service_definers')):
+                raw=(folder/workspace.MIGRATION_ROOT/migration_name/'migration.sql').read_text()
+                trigger='idv2_audit_log_no_'+('delete' if event=='DELETE' else 'update')
+                body=raw.split('CREATE TRIGGER `'+trigger+'`',1)[1].split('FOR EACH ROW',1)[1]
+                body=body.split('END;',1)[0]+'END' if event=='DELETE' else body.split(';',1)[0]
+                rows.append({'event':event,'timing':'BEFORE','statement':body})
+            controller=SimpleNamespace(require=d.require,current_job_database=lambda p:'fixture_db',compose=MagicMock(return_value=json.dumps(rows)))
+            digest=workspace.workspace_audit_protection(controller,folder);self.assertRegex(digest,r'^[a-f0-9]{64}$')
+            for value in ([],[rows[0]], [{**rows[0],'statement':'SET @allow=1'},rows[1]], [*rows,rows[0]]):
+                controller.compose.return_value=json.dumps(value)
+                with self.assertRaisesRegex(RuntimeError,'HISTORY_UNPROVEN'):workspace.workspace_audit_protection(controller,folder)
+
+    def test_engine_private_runtime_idle_checks_closed_health_and_active_thread_counter(self):
+        expected={'ready':True,'mode':'enabled','activeTasks':0,'stopping':False,'rpcConnected':True}
+        controller=SimpleNamespace(require=d.require,run=MagicMock(return_value=json.dumps(expected)))
+        workspace.online_engine_idle(controller,{'Id':'1'*64})
+        for change in ({'activeTasks':1},{'activeTasks':False},{'stopping':True},{'rpcConnected':False},{'mode':'disabled'},{'private':'SENTINEL'}):
+            controller.run.return_value=json.dumps({**expected,**change})
+            with self.subTest(change=change),self.assertRaisesRegex(RuntimeError,'ENGINE_NOT_IDLE'):
+                workspace.online_engine_idle(controller,{'Id':'1'*64})
+
+    def test_online_sources_bind_fixed_engine_frontend_schema_compose_and_policy_without_fourteen_receipt_fields(self):
+        online,_=d.online_recharge_scope()
+        with patch.object(workspace,'online_reader',return_value=online):
+            workspace.online_source_guard(d,ROOT)
+            with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+                folder=Path(temporary)
+                for name in (*workspace.ONLINE_SOURCE_SEALS,workspace.MIGRATION_ROOT):
+                    path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copytree(ROOT/name,path)
+                for name in (*workspace.CONFIG_FILES,workspace.MIGRATION_SEED,'scripts/production-release/'+online.RECOVERY_FILE):
+                    path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+                workspace.online_source_guard(d,folder)
+                path=folder/'scripts/production-release'/online.RECOVERY_FILE;path.write_bytes(path.read_bytes()+b'\n')
+                with self.assertRaisesRegex(RuntimeError,'RECOVERY_POLICY_CHANGED'):workspace.online_source_guard(d,folder)
+
+    def test_actual_admission_source_bytes_cannot_change_in_an_online_successor(self):
+        online,_=d.online_recharge_scope()
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            previous=Path(temporary)/'previous';candidate=Path(temporary)/'candidate'
+            folders=(*workspace.ONLINE_SOURCE_SEALS,workspace.MIGRATION_ROOT)
+            files=(*workspace.CONFIG_FILES,workspace.MIGRATION_SEED,*workspace.ONLINE_ADMISSION_FILES,
+                'scripts/production-release/'+online.RECOVERY_FILE)
+            for directory in (previous,candidate):
+                directory.mkdir()
+                for name in folders:
+                    path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copytree(ROOT/name,path)
+                for name in files:
+                    path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+                (directory/'.env.aws.production').write_bytes(b'synthetic-only')
+            controller=SimpleNamespace(**vars(d))
+            with patch.object(workspace,'online_reader',return_value=online):
+                for name in workspace.ONLINE_ADMISSION_FILES:
+                    path=candidate/name;raw=path.read_bytes();path.write_bytes(raw+b'\n// changed\n')
+                    with self.subTest(name=name),self.assertRaisesRegex(RuntimeError,'ADMISSION_SOURCE_CHANGED'):
+                        workspace.require_preserved(controller,previous,candidate,states(),b'synthetic-only',online_context={})
+                    path.write_bytes(raw)
+
+    def test_stopped_identity_adapter_only_reads_the_previously_verified_database(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            folder=Path(temporary);(folder/'.env.aws.production').write_bytes(b'synthetic')
+            row={'status':'running','health':'healthy','containerId':'1'*64,'image':'sha256:'+'2'*64,'environmentSha256':'3'*64}
+            controller=SimpleNamespace(require=d.require,service_state=lambda *a,**kw:dict(row),
+                current_job_database=MagicMock(return_value='fixture_database'))
+            identity=workspace.workspace_database_identity(controller,folder)
+            adapter=workspace.workspace_database_controller(controller,folder,identity)
+            controller.current_job_database.side_effect=AssertionError('stopped API cannot be queried')
+            self.assertEqual(adapter.current_job_database(folder),'fixture_database')
+            row['containerId']='4'*64
+            with self.assertRaisesRegex(RuntimeError,'DATABASE_IDENTITY_CHANGED'):adapter.current_job_database(folder)
+
+    def test_original_first_publication_cannot_omit_performed_or_claim_unsealed_recovery(self):
+        online,_=d.online_recharge_scope();controller=SimpleNamespace(require=d.require)
+        workspace.online_recovery_guard(controller,online,ROOT,ROOT,
+            {'migrationPerformed':True},{'baselineEvidence':{},'migration':{'performed':True}})
+        for performed in (False,None,1):
+            with self.subTest(performed=performed),self.assertRaises(RuntimeError):
+                workspace.online_recovery_guard(controller,online,ROOT,ROOT,
+                    {'migrationPerformed':performed},{'baselineEvidence':{},'migration':{'performed':performed}})
+        with self.assertRaises(RuntimeError):
+            workspace.online_recovery_guard(controller,online,ROOT,ROOT,
+                {'migrationPerformed':True,'migrationRecovery':{}},{'baselineEvidence':{},'migration':{'performed':True}})
+
+    def test_recovery_origin_and_candidate_source_are_revalidated_without_runtime_publication(self):
+        fixtures=load('merged_online_recovery_fixtures','online-recharge-scope.test.py')
+        fixtures.RUNTIME=RUNTIME;fixtures.RecoveryTests.setUpClass()
+        try:
+            with fixtures.RecoveryTests().fixture() as (controller,previous,failed,failure,*_):
+                online=fixtures.scope;published=previous.with_name('candidate')
+                shutil.copytree(fixtures.RecoveryTests.prepared,published)
+                for name in fixtures.RecoveryTests.policy['candidateAllowedFiles']:
+                    path=published/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes((ROOT/name).read_bytes());path.chmod((ROOT/name).stat().st_mode & 0o777)
+                marker=online.recovery_marker(fixtures.RecoveryTests.policy)
+                manifest={'migrationRecovery':marker,'migrationPerformed':False}
+                record={'baselineEvidence':{'migrationRecovery':marker},'migration':{'performed':False}}
+                workspace.online_recovery_guard(controller,online,previous,published,manifest,record)
+                for variation in ('marker','performed','source','failure'):
+                    with self.subTest(variation=variation):
+                        bad_manifest=copy.deepcopy(manifest);bad_record=copy.deepcopy(record)
+                        if variation=='marker':bad_manifest['migrationRecovery']={}
+                        if variation=='performed':bad_manifest['migrationPerformed']=bad_record['migration']['performed']=True
+                        if variation=='source':(published/'apps/admin/src/v2/features/online-recharge/unapproved.ts').write_text('unapproved')
+                        if variation=='failure':failure['servicesAttempted']=['api'];(failed/online.FAILURE_FILE).write_text(json.dumps(failure))
+                        with self.assertRaises(RuntimeError):workspace.online_recovery_guard(controller,online,previous,published,bad_manifest,bad_record)
+                        if variation=='source':(published/'apps/admin/src/v2/features/online-recharge/unapproved.ts').unlink()
+        finally:fixtures.RecoveryTests.tearDownClass()
 
 
 if __name__ == '__main__':

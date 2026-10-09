@@ -6,6 +6,11 @@ import type { Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
 import { hash } from '../recharge-validation';
 import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
+import {
+  findOriginalRechargeCheckout,
+  findRetainedRechargeBrowserProfile,
+  rechargeCheckoutIdentifier
+} from '../recharge-job-helpers';
 
 @Injectable()
 export class RechargeRepository {
@@ -57,6 +62,103 @@ export class RechargeRepository {
     });
   }
 
+  async retainedProfileForAccount(
+    tx: V2CommandTransaction,
+    ownerId: string,
+    accountKey: string,
+    excludeId: string
+  ) {
+    let cursor: string | undefined;
+    // 窗口归属不受列表的30条限制。查询有界，未查完时拒绝把未知当作可新建。
+    for (let page = 0; page < 30; page += 1) {
+      const jobs = await tx.idBusinessV2RechargeJob.findMany({
+        where: {
+          ownerId,
+          accountKey,
+          action: 'bitbrowser',
+          state: 'finished',
+          id: { not: excludeId }
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 30,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+      });
+      const profile = findRetainedRechargeBrowserProfile(jobs, ownerId, accountKey);
+      if (profile) return profile;
+      if (jobs.length < 30) return undefined;
+      cursor = jobs.at(-1)!.id;
+    }
+    throw new ConflictException('原窗口历史尚未完整核验，禁止自动创建新窗口');
+  }
+
+  async originalCheckoutForAccount(
+    tx: V2CommandTransaction,
+    ownerId: string,
+    accountKey: string,
+    plan: string,
+    excludeId: string
+  ) {
+    let cursor: string | undefined;
+    for (let page = 0; page < 30; page += 1) {
+      const jobs = await tx.idBusinessV2RechargeJob.findMany({
+        where: {
+          ownerId,
+          accountKey,
+          plan,
+          action: 'bitbrowser',
+          state: 'finished',
+          id: { not: excludeId }
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 30,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+      });
+      const identifier = findOriginalRechargeCheckout(jobs, ownerId, accountKey, plan);
+      if (identifier) return identifier;
+      if (jobs.length < 30) return undefined;
+      cursor = jobs.at(-1)!.id;
+    }
+    throw new ConflictException('原订单历史尚未完整核验，禁止自动创建新订单');
+  }
+
+  restoreCheckoutIdentifier(
+    records: { fileKey: string; revision: number; document: unknown }[],
+    accountKey: string,
+    plan: string,
+    expected: (string | undefined)[]
+  ) {
+    const fileKey = `${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
+    const record = records.find((item) => item.fileKey === fileKey);
+    const identifiers = expected.filter((value): value is string => value !== undefined);
+    for (const item of records.filter((value) => value.fileKey.startsWith('payments/'))) {
+      if (!item.document || typeof item.document !== 'object' || Array.isArray(item.document))
+        throw new ConflictException('原付款记录未核实，禁止创建新订单');
+      const payment = item.document as Record<string, unknown>;
+      if ((payment.target_plan ?? 'plus') !== plan) continue;
+      const identifier = rechargeCheckoutIdentifier(payment);
+      if (identifier) identifiers.push(identifier);
+    }
+    if (!record) {
+      if (identifiers.length) throw new ConflictException('原订单持久化记录缺失，禁止创建新订单');
+      return undefined;
+    }
+    if (
+      !Number.isSafeInteger(record.revision) ||
+      record.revision < 0 ||
+      !record.document ||
+      typeof record.document !== 'object' ||
+      Array.isArray(record.document)
+    )
+      throw new ConflictException('原订单记录未核实，禁止创建新订单');
+    const document = record.document as Record<string, unknown>;
+    const identifier = rechargeCheckoutIdentifier(document);
+    if (!identifier || (document.target_plan ?? 'plus') !== plan)
+      throw new ConflictException('原订单记录未核实，禁止创建新订单');
+    if (identifiers.some((value) => value !== identifier))
+      throw new ConflictException('原订单编号不一致，禁止创建新订单');
+    return identifier;
+  }
+
   findRunningJob(tx: V2CommandTransaction) {
     return tx.idBusinessV2RechargeJob.findFirst({
       where: { state: { not: 'finished' }, leaseUntil: { gt: new Date() } }
@@ -89,7 +191,7 @@ export class RechargeRepository {
     });
   }
 
-  async retireCancelledCheckout(
+  async inspectStoppedCheckout(
     tx: V2CommandTransaction,
     accountKey: string,
     plan: string,
@@ -99,15 +201,21 @@ export class RechargeRepository {
     const record = await tx.idBusinessV2RechargeRecord.findUnique({
       where: { accountKey_fileKey: { accountKey, fileKey } }
     });
-    if (!record) return 0;
+    if (!record) return false;
     if (record.ownerId !== ownerId) throw new ConflictException('原订单归属不一致');
+    if (!record.document || typeof record.document !== 'object' || Array.isArray(record.document))
+      return false;
     const before = record.document as Record<string, unknown>;
     if (
+      typeof before.checkout_identifier !== 'string' ||
+      !/^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(before.checkout_identifier) ||
+      (before.target_plan ?? 'plus') !== plan ||
+      before.checkout_outcome !== 'created' ||
       before.payment_status !== 'not_attempted' ||
-      before.payment_attempted === true ||
-      Number(before.confirmation_requests_sent ?? 0) !== 0
+      before.payment_attempted !== false ||
+      before.confirmation_requests_sent !== 0
     )
-      return 0;
+      return false;
     const payments = (await this.records(tx, accountKey)).filter(
       (item) =>
         item.fileKey.startsWith('payments/') &&
@@ -119,37 +227,16 @@ export class RechargeRepository {
         const payment = item.document as Record<string, unknown>;
         return (
           item.ownerId !== ownerId ||
+          payment.payment_attempted !== false ||
           payment.confirmation_requests_sent !== 0 ||
           payment.payment_evidence ||
-          !['unknown', 'cancelled'].includes(String(payment.payment_status))
+          payment.payment_status !== 'not_attempted'
         );
       })
     )
-      return 0;
-    // 连接器已停止，且持久记录证明未发送确认；保留审计和原编号，只停用执行记录。
-    for (const item of [...payments, record]) {
-      await tx.idBusinessV2RechargeRecord.update({
-        where: { accountKey_fileKey: { accountKey, fileKey: item.fileKey } },
-        data: {
-          revision: { increment: 1 },
-          document: toV2JsonDocument({
-            ...(item.document as Record<string, unknown>),
-            status: 'cancelled',
-            reason: 'operation_cancelled',
-            cancelled_before_confirmation: true,
-            ...(item.fileKey.startsWith('payments/')
-              ? { payment_status: 'cancelled' }
-              : {
-                  checkout_outcome: 'cancelled',
-                  payment_status: 'not_attempted',
-                  payment_attempted: false,
-                  confirmation_requests_sent: 0
-                })
-          })
-        }
-      });
-    }
-    return payments.length + 1;
+      return false;
+    // 这里只记录可恢复性。任务停止不证明官网订单取消，原编号和付款事实不能改写。
+    return true;
   }
 
   async resolveUnknownPaymentRecords(

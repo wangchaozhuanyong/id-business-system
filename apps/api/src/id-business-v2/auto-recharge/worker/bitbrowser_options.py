@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from checkout_core import Stop
 
 DEFAULTS = {
-    "sessionWaitMinutes": 2, "sessionRetryLimit": 2,
+    "sessionWaitMinutes": 2, "sessionRetryLimit": 9,
     "proxyMode": "dynamic", "staticHost": "", "staticPort": 8080,
     "dynamicProvider": "common", "refreshIp": True, "ipCheckService": "ip-api",
     "os": "Win32", "osVersion": "11", "coreVersion": "152",
@@ -37,11 +37,11 @@ def validate_options(value):
     if value is not None and not isinstance(value, dict):
         invalid()
     options = dict(DEFAULTS) if value is None else {
-        "sessionWaitMinutes": 2, "sessionRetryLimit": 2,
+        "sessionWaitMinutes": 2, "sessionRetryLimit": 9,
         **{key: DEFAULTS[key] for key in PROFILE_KEYS}, **value}
     if not isinstance(options, dict) or set(options) != set(DEFAULTS):
         invalid()
-    for key, low, high in (("sessionWaitMinutes", 1, 10), ("sessionRetryLimit", 0, 2)):
+    for key, low, high in (("sessionWaitMinutes", 1, 10), ("sessionRetryLimit", 0, 9)):
         if type(options[key]) is not int or not low <= options[key] <= high:
             invalid()
     for key, choices in ENUMS.items():

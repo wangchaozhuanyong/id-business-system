@@ -75,10 +75,11 @@ class ServerProxyTests(unittest.TestCase):
             }
         })
         money = {'currency': 'USD', 'amount': '20.00', 'amount_minor': 2000}
-        quote = {'plan': 'plus', 'today': money, 'tax': {**money, 'amount_minor': 0},
+        quote = {'plan': 'plus', 'today': money, 'tax': {**money, 'amount': '0.00', 'amount_minor': 0},
                  'renewal': money, 'renewal_interval': 'monthly'}
         with patch.object(server, 'callback', return_value={'ok': True}) as callback:
-            self.assertTrue(job.confirm(quote, '4242'))
+            with patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)):
+                self.assertTrue(job.confirm(quote, '4242'))
             self.assertEqual(callback.call_count, 1)
             with self.assertRaises(Stop):
                 job.confirm({**quote, 'today': {**money, 'amount_minor': 2600}}, '4242')

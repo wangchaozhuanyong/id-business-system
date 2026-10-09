@@ -1,13 +1,11 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { V2_RECHARGE_PLANS, type V2RechargeServerProxySettings } from '@apple-business/shared';
+import { type V2RechargeServerProxySettings } from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
-  Amount4,
-  type V2CommandTransaction,
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
@@ -112,77 +110,6 @@ export class RechargeSettingsService {
       { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
     );
     return this.getServerProxySettings(operator);
-  }
-
-  async paymentCaps() {
-    const items = await this.repository.listPaymentCaps();
-    return {
-      items: items.map((item) => ({
-        plan: item.plan,
-        currencyCode: item.currencyCode,
-        maxAmount: item.maxAmount.toString()
-      }))
-    };
-  }
-
-  async requirePaymentCap(tx: V2CommandTransaction, plan: string, currencyCode: string) {
-    const cap = await this.repository.paymentCap(tx, plan, currencyCode);
-    if (!cap)
-      throw new ServiceUnavailableException('请先在服务器设置中配置该套餐和币种的付款安全上限');
-    return cap.maxAmount.toString();
-  }
-
-  async updatePaymentCap(
-    plan: string,
-    currencyCode: string,
-    value: unknown,
-    operator: AuthenticatedUser
-  ) {
-    if (!V2_RECHARGE_PLANS.includes(plan as never) || !/^[A-Z]{3}$/.test(currencyCode))
-      throw new BadRequestException('套餐或币种无效');
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-      throw new BadRequestException('付款安全上限格式无效');
-    const input = value as Record<string, unknown>;
-    if (
-      Object.keys(input).some((key) => key !== 'maxAmount') ||
-      typeof input.maxAmount !== 'string' ||
-      !/^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(input.maxAmount)
-    )
-      throw new BadRequestException('付款安全上限格式无效');
-    const amount = Amount4.from(input.maxAmount);
-    if (!amount.gt('0')) throw new BadRequestException('付款安全上限必须大于零');
-    return this.transactions.execute(
-      async (tx) => {
-        const currency = await this.repository.currencyForCap(tx, currencyCode);
-        if (
-          !currency ||
-          !currency.active ||
-          currency.minorUnits > 2 ||
-          ((input.maxAmount as string).split('.')[1]?.length ?? 0) > currency.minorUnits
-        )
-          throw new BadRequestException('币种不可用或金额精度不匹配');
-        const before = await this.repository.paymentCap(tx, plan, currencyCode);
-        const updated = await this.repository.upsertPaymentCap(
-          tx,
-          plan,
-          currencyCode,
-          amount.toString(),
-          operator.id
-        );
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.payment_cap.update',
-          objectType: 'recharge_payment_cap',
-          objectId: `${plan}:${currencyCode}`,
-          beforeData: before ? { maxAmount: before.maxAmount.toString() } : undefined,
-          afterData: { maxAmount: updated.maxAmount.toString() },
-          remark: '设置服务器充值按套餐和币种的付款安全上限'
-        });
-        return { plan, currencyCode, maxAmount: updated.maxAmount.toString() };
-      },
-      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
-    );
   }
 
   async catalogAccess(operator: AuthenticatedUser, value: unknown = {}) {

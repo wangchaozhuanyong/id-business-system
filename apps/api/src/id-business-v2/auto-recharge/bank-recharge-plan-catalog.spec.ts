@@ -65,21 +65,22 @@ describe('手工套餐记录不扩大自动充值权限', () => {
       vi.useRealTimers();
     }
   });
-  it.each(['go', 'pro-500'])('%s 可进入本机执行器，仍要求单次授权、币种和真实上限', (plan) => {
+  it.each(['go', 'pro-500'])('%s 可进入本机执行器，仍要求单次授权与币种', (plan) => {
     const input = {
       id: accountId,
       plan,
       addressId: accountId,
       windowName: '500 档测试',
       lockedCurrency: 'MYR',
-      maxAmount: '2200.00',
       authorizeSinglePayment: true
     };
     expect(validateRechargeBitBrowserStart(input)).toMatchObject({ plan });
     expect(() =>
       validateRechargeBitBrowserStart({ ...input, authorizeSinglePayment: false })
     ).toThrow();
-    expect(() => validateRechargeBitBrowserStart({ ...input, maxAmount: '0' })).toThrow();
+    expect(validateRechargeBitBrowserStart({ ...input, maxAmount: '0' })).not.toHaveProperty(
+      'maxAmount'
+    );
   });
 
   it.each(V2_BANK_RECHARGE_PLANS)('%s 可记录实际付款并沿用关联订阅和审计', async (plan) => {

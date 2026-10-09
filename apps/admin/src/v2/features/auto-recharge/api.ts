@@ -1,5 +1,6 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
+import type { V2RechargeBrowserRestore } from '@apple-business/shared';
 import { connectorRequest, requireConnectorHealth } from './connector-transport';
 import type {
   ImportV2RechargeAddressesResult,
@@ -8,7 +9,6 @@ import type {
   V2RechargeAddressListQuery,
   V2RechargeAddressStatus,
   V2RechargeJob,
-  V2RechargePaymentCap,
   V2RechargeBitBrowserSettings,
   V2RechargeBrowserCatalog,
   V2RechargeBrowserCatalogAccess,
@@ -24,16 +24,6 @@ import type {
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
 export const rechargeApi = {
-  listPaymentCaps(options: ApiRequestOptions = {}) {
-    return request<{ items: V2RechargePaymentCap[] }>(
-      http.get('/id-business-v2/auto-recharge/payment-caps', { signal: options.signal })
-    );
-  },
-  updatePaymentCap(plan: V2RechargePaymentCap['plan'], currencyCode: string, maxAmount: string) {
-    return request<V2RechargePaymentCap>(
-      http.put(`/id-business-v2/auto-recharge/payment-caps/${plan}/${currencyCode}`, { maxAmount })
-    );
-  },
   cancelServer(id: string) {
     return request<{ id: string }>(http.post(`${base}/${id}/cancel`, {}));
   },
@@ -73,7 +63,7 @@ export const rechargeApi = {
     return request<V2RechargeBitBrowserOpenLaunch>(http.post(`${base}/bitbrowser-open`, input));
   },
   directBrowserCallback(id: string, agentToken: string, input: object) {
-    return request<{ ok: true }>(
+    return request<Partial<V2RechargeBrowserRestore> & { ok?: true }>(
       http.post(`/id-business-v2/auto-recharge/local/${id}`, input, {
         headers: { 'X-Recharge-Local': agentToken }
       })

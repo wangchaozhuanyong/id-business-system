@@ -283,7 +283,7 @@ export function serverHandoffProgressState(
       previous.payment_attempted === true ||
       Number(previous.confirmation_requests_sent ?? 0) > 0
       ? 'confirming'
-      : job.nonceHash && previous.manual_payment_confirmation === true
+      : job.nonceHash
         ? 'awaiting_confirmation'
         : 'running';
   }
@@ -291,7 +291,7 @@ export function serverHandoffProgressState(
 }
 
 export function serverQuoteConfirmationState(result: unknown, report: Record<string, unknown>) {
-  if (object(result).manual_payment_confirmation !== true) return 'confirming';
+  void result;
   if (report.status !== 'awaiting_confirmation')
     throw new ConflictException('执行器未进入人工确认等待，已停止付款');
   return 'awaiting_confirmation';
@@ -302,8 +302,6 @@ export function assertManualServerConfirmationAllowed(
   result: Record<string, unknown>
 ) {
   if (job.action !== 'server') return;
-  if (result.manual_payment_confirmation !== true)
-    throw new ConflictException('服务器任务已经获得单次付款授权');
   if (job.leaseUntil.getTime() <= Date.now())
     throw new ConflictException('执行窗口已结束，请核对原单');
   if (
@@ -318,10 +316,8 @@ export function assertManualServerConfirmationAllowed(
   if (
     result.account_matched !== true ||
     quote.today?.currency !== result.locked_currency ||
-    !Number.isSafeInteger(result.max_amount_minor) ||
     !quote.today ||
-    quote.today.amount_minor <= 0 ||
-    quote.today.amount_minor > Number(result.max_amount_minor)
+    quote.today.amount_minor <= 0
   )
     throw new ConflictException('官网身份或报价已变化，请核对原单');
 }

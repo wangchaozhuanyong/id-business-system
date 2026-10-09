@@ -48,10 +48,10 @@ export function validateBrowserOptions(
     fail('窗口配置字段');
   for (const [key, min, max] of [
     ['sessionWaitMinutes', 1, 10],
-    ['sessionRetryLimit', 0, 2]
+    ['sessionRetryLimit', 0, 9]
   ] as const) {
     if (!Number.isInteger(input[key]) || Number(input[key]) < min || Number(input[key]) > max)
-      fail('加载等待或重建次数');
+      fail('加载等待或重试次数');
   }
   for (const [key, choices] of Object.entries(enums)) {
     if (!choices.includes(input[key] as string)) fail('窗口配置选项');

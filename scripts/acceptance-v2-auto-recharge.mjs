@@ -8,7 +8,10 @@ import { chromium } from 'playwright';
 
 const origin = 'http://127.0.0.1:5397',
   connector = 'http://127.0.0.1:55322';
-const evidence = resolve('.runtime/bitbrowser-recharge-rebuild-20261009/browser');
+const evidence = resolve(
+  process.argv.find((arg) => arg.startsWith('--evidence-dir='))?.slice('--evidence-dir='.length) ??
+    '.runtime/bitbrowser-recharge-rebuild-20261009/browser'
+);
 mkdirSync(evidence, { recursive: true });
 const server = spawn(
   process.execPath,
@@ -90,9 +93,9 @@ const account = {
 };
 const quoted = (plan) => ({
   plan,
-  today: { amount: '20.00', amount_minor: 2000, currency: 'PHP' },
+  today: { amount: '1100.00', amount_minor: 110000, currency: 'PHP' },
   tax: { amount: '0.00', amount_minor: 0, currency: 'PHP' },
-  renewal: { amount: '25.00', amount_minor: 2500, currency: 'PHP' },
+  renewal: { amount: '1100.00', amount_minor: 110000, currency: 'PHP' },
   renewal_interval: 'monthly'
 });
 const report = {
@@ -139,11 +142,7 @@ try {
       if (url.origin === origin) {
         if (path === '/api/auth/me') return success(route, user);
         if (path === '/api/auth/session')
-          return route.fulfill({
-            status: 401,
-            contentType: 'application/json',
-            body: JSON.stringify({ success: false, message: '请登录' })
-          });
+          return success(route, { accessToken: 'browser-fixture', user });
         if (path.endsWith('/change-events')) return route.abort();
         if (path.endsWith('/change-versions'))
           return success(route, { generatedAt: timestamp, versions: {} });
@@ -184,13 +183,7 @@ try {
         if (path.endsWith('/auto-recharge/names/payment-card'))
           return success(route, { cardId: '44444444-4444-4444-8444-444444444444' });
         if (path.endsWith('/auto-recharge/payment-caps'))
-          return success(route, {
-            items: ['go', 'plus', 'pro-500'].map((plan) => ({
-              plan,
-              currencyCode: 'PHP',
-              maxAmount: '50000.00'
-            }))
-          });
+          throw new Error('已移除的付款上限不应继续请求');
         if (path.endsWith('/auto-recharge/proxies/countries'))
           return success(route, { items: ['PH'] });
         if (path.endsWith('/auto-recharge/proxies'))
@@ -238,6 +231,7 @@ try {
           assert.equal(JSON.stringify(input).includes('5555555555554444'), false);
           assert.equal(input.manualPaymentConfirmation, true);
           assert.equal(input.authorizeSinglePayment, true);
+          assert.equal(Object.hasOwn(input, 'maxAmount'), false);
           assert.equal(input.addressId, id.address);
           const upgrading = ++apiStarts > 1;
           const job = {
@@ -250,8 +244,7 @@ try {
             updatedAt: timestamp,
             result: {
               status: 'waiting_local_connector',
-              locked_currency: 'PHP',
-              max_amount: input.maxAmount
+              locked_currency: 'PHP'
             }
           };
           jobs.unshift(job);
@@ -287,8 +280,6 @@ try {
             address,
             safety: {
               lockedCurrency: 'PHP',
-              maxAmount: input.maxAmount,
-              maxAmountMinor: 5000000,
               authorizeSinglePayment: true,
               manualPaymentConfirmation: true
             }
@@ -337,6 +328,8 @@ try {
               'payment-unknown-resolution',
               'prepayment-page-recovery',
               'stale-owned-profile-cleanup',
+              'same-profile-proxy-recovery',
+              'json-page-ready',
               'password-login',
               'login-code',
               'manual-payment-confirmation',
@@ -355,6 +348,8 @@ try {
           assert.equal(input.details.number, '5555555555554444');
           assert.equal(input.details.cvc, '123');
           assert.equal(input.safety.manualPaymentConfirmation, true);
+          assert.equal(Object.hasOwn(input.safety, 'maxAmount'), false);
+          assert.equal(Object.hasOwn(input.safety, 'maxAmountMinor'), false);
           starts++;
           entry.job.state = 'awaiting_confirmation';
           entry.job.result = {
@@ -380,7 +375,6 @@ try {
             payment_requests_sent: 0,
             payment_attempted: false,
             locked_currency: 'PHP',
-            max_amount: '50000.00',
             window_name: input.windowName
           };
           return reply({ id: input.id, accepted: true }, 202);
@@ -447,7 +441,8 @@ try {
     };
     await loadJson();
     await form.getByLabel('窗口名称', { exact: true }).fill('充值离线验收');
-    await form.getByLabel('最高付款', { exact: true }).fill('50000');
+    assert.equal(await form.getByLabel('最高付款', { exact: true }).count(), 0);
+    assert.equal(await page.getByText(/付款安全上限|付款上限设置/).count(), 0);
     await page
       .getByRole('combobox', { name: '选择真实账单地址' })
       .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')

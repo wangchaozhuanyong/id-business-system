@@ -20,6 +20,17 @@ const messages = {
     '无法确认比特窗口实际使用的内核版本，本次已停止登录。请更新客户端后重试。',
   official_login_email_mismatch: '官网已登录账号与本次选择不一致，本次已停止。',
   official_login_not_verified: '未能确认官网账号登录成功，请检查原窗口后重试。',
+  access_token_expired:
+    '官网接受了会话，但返回的访问令牌已过期，请更新有效授权后重试；本次未付款。',
+  official_login_network_failed: '代理或网络连接失败，自动恢复已停止，请检查原窗口后重试。',
+  official_login_page_not_ready:
+    '官网会话已登录，但页面登录状态尚未就绪，请检查原窗口；本次未付款。',
+  bitbrowser_recovery_timeout: '加载恢复已达到时间上限，请检查原窗口后重试。',
+  bitbrowser_owned_profile_missing:
+    '原比特窗口已删除或无法核对，本次未新建窗口，请检查原窗口资料。',
+  bitbrowser_owned_profile_unverified: '无法确认原比特窗口属于本次账号，本次已停止。',
+  proxy_probe_unverified: '无法确认代理可正常访问官网，本次已停止，请检查原窗口。',
+  bitbrowser_profile_close_unverified: '无法确认失败窗口已关闭，本次已停止，未重新打开窗口。',
   invalid_session_json: '授权 JSON 缺少有效的会话、用户或账号资料，请重新授权。'
 } as const;
 export type DirectBrowserFailure = keyof typeof messages;
@@ -51,7 +62,11 @@ export function localBrowserUrl(value: string, websocket = false) {
 }
 export function directBrowserApi(url: string, token: string, signal: AbortSignal) {
   const origin = localBrowserUrl(url);
-  async function post(path: string, body: object = {}): Promise<Record<string, unknown>> {
+  async function post(
+    path: string,
+    body: object = {},
+    timeoutMs = 30_000
+  ): Promise<Record<string, unknown>> {
     if (!token || /[\r\n]/.test(token))
       throw new DirectBrowserError('bitbrowser_direct_token_invalid');
     let response: Response;
@@ -64,7 +79,10 @@ export function directBrowserApi(url: string, token: string, signal: AbortSignal
         redirect: 'error',
         headers: { 'Content-Type': 'application/json', 'x-api-key': token },
         body: JSON.stringify(body),
-        signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+        signal: AbortSignal.any([
+          signal,
+          AbortSignal.timeout(Math.max(1, Math.min(30_000, timeoutMs)))
+        ])
       });
     } catch {
       throw new DirectBrowserError(

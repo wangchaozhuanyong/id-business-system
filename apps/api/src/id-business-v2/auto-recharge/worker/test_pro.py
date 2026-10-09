@@ -142,16 +142,17 @@ class ProStateTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 ledger.assert_unattempted()
 
-    def test_server_500_confirmation_enforces_plan_currency_and_actual_cap(self):
+    def test_server_500_confirmation_enforces_plan_currency_and_complete_quote_without_cap(self):
         import server
         quote = {**pro_quote(), 'plan': 'pro-500'}
-        safety = {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 42000}
+        safety = {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 1}
         with patch.object(server, 'callback') as callback:
             job = server.Job('synthetic-job', {'action': 'server', 'plan': 'pro-500', 'safety': safety})
-            self.assertTrue(job.confirm(quote, '4242'))
+            with patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)):
+                self.assertTrue(job.confirm(quote, '4242'))
             self.assertEqual(callback.call_args[0][1]['result']['quote']['plan'], 'pro-500')
             for changed_quote, changed_safety in ((pro_quote(20), safety),
-                    (quote, {**safety, 'maxAmountMinor': 41999}),
+                    ({**quote, 'today': {**quote['today'], 'amount_minor': 41999}}, safety),
                     (quote, {**safety, 'lockedCurrency': 'USD'}),
                     (quote, {**safety, 'authorizeSinglePayment': False})):
                 callback.reset_mock()
@@ -403,6 +404,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         elif path == "/":
             headers = json.dumps({"Authorization": "Bearer " + self.target.old_token, "Content-Type": "application/json"})
             html = '''<html><title>ChatGPT</title><body>
+                <button type="button" data-testid="accounts-profile-button" role="button"
+                  aria-haspopup="menu" aria-expanded="false" onclick="const menu=document.querySelector('#account-menu');
+                  menu.hidden=!menu.hidden;this.setAttribute('aria-expanded',String(!menu.hidden))">Synthetic account</button>
+                <div id="account-menu" role="menu" hidden><button role="menuitem">test@example.invalid</button></div>
                 <button onclick="document.querySelector('[role=dialog]').hidden=false">Upgrade</button>
                 <section role="dialog" hidden><button>Get Plus</button>
                 <button id="five" role="radio" aria-checked="true" onclick="choose(5)">5x</button>
@@ -528,6 +533,15 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         import attempt_ledger
         import payment_state
         self.plan, self.price_controls, self.usage_controls = 'pro-500', True, True
+        page = await self.context.new_page()
+        await page.goto('https://chatgpt.com/')
+        profile = page.get_by_test_id('accounts-profile-button')
+        self.assertTrue(await profile.is_visible())
+        self.assertTrue(await profile.is_enabled())
+        await profile.click()
+        self.assertTrue(await page.get_by_role('menuitem', name='test@example.invalid').is_visible())
+        await profile.click()
+        self.assertEqual(await profile.get_attribute('aria-expanded'), 'false')
         job = server.Job('11111111-1111-4111-8111-111111111111', {
             'action': 'server', 'plan': self.plan, 'sessionJson': fixture().decode(),
             'expectedEmail': 'test@example.invalid', 'expectedCountry': 'US',
@@ -548,6 +562,8 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(body['revision'], records.get(key, {}).get('revision', 0))
                 records[key] = {'revision': body['revision'] + 1, 'document': body['document']}
                 return {'revision': records[key]['revision']}
+            if body['type'] == 'confirmation':
+                job.signal(body['result']['nonce'])
             return {'ok': True}
         original = attempt_ledger.atomic_json
         def durable(path, document):

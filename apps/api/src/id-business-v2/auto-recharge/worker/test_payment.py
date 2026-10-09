@@ -6,9 +6,10 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlsplit
 
 from playwright.async_api import async_playwright
@@ -16,7 +17,8 @@ from playwright.async_api import async_playwright
 from attempt_ledger import AttemptLedger
 from browser_checkout import quote_from_text, workflow
 from checkout_core import ROOT, Stop, parse_browser_credential
-from pay import current_quote, include_payment_record, run_checkout_flow, run_flow, run_payment
+from pay import (current_quote, include_payment_record, payment_handler,
+                 run_checkout_flow, run_flow, run_payment)
 from payment_recovery import recheck_in_context
 from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, billing_value_matches,
                           fill_billing_node, one_billing_field, select_country_option,
@@ -53,6 +55,117 @@ class StateTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_recovery_missing_original_record_never_creates_a_new_checkout(self):
+        root = Path(self.temp.name) / 'missing-original'
+        with patch('pay.run_browser', new=AsyncMock()) as run:
+            result = asyncio.run(run_checkout_flow(
+                self.target, root, 'plus', details_reader=lambda *_: details(),
+                confirmer=lambda *_: False, allow_checkout_replacement=False,
+                expected_checkout_identifier='cs_original'))
+        self.assertEqual(result['reason'], 'existing_checkout_unknown')
+        run.assert_not_awaited()
+        self.assertFalse(result['payment_attempted'])
+
+    def test_recovery_different_original_record_never_opens_another_checkout(self):
+        with patch('pay.run_browser', new=AsyncMock()) as run:
+            result = asyncio.run(run_checkout_flow(
+                self.target, self.root, 'plus', details_reader=lambda *_: details(),
+                confirmer=lambda *_: False, allow_checkout_replacement=False,
+                expected_checkout_identifier='cs_another_original'))
+        self.assertEqual(result['reason'], 'existing_checkout_mismatch')
+        run.assert_not_awaited()
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+    def test_recovery_reads_the_exact_original_checkout_without_replacement(self):
+        with patch('pay.run_browser', new=AsyncMock(return_value={
+                'status': 'blocked', 'reason': 'actual_quote_unknown',
+                'payment_requests_sent': 0, 'confirmation_requests_sent': 0})) as run:
+            result = asyncio.run(run_checkout_flow(
+                self.target, self.root, 'plus', details_reader=lambda *_: details(),
+                confirmer=lambda *_: False, allow_checkout_replacement=False,
+                expected_checkout_identifier='cs_synthetic'))
+        run.assert_awaited_once()
+        self.assertTrue(run.await_args.kwargs['inspect_existing'])
+        self.assertNotIn('create', run.await_args.kwargs)
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+    def test_recovery_inspects_legacy_stopped_checkout_without_rewriting_it(self):
+        from attempt_ledger import atomic_json, checkout_record_path
+        path = checkout_record_path(self.root, self.target.account_id)
+        record = {**json.loads(path.read_text()), 'status': 'cancelled',
+                  'checkout_outcome': 'cancelled', 'cancelled_before_confirmation': True,
+                  'payment_status': 'not_attempted', 'payment_attempted': False,
+                  'confirmation_requests_sent': 0}
+        atomic_json(path, record)
+        before = path.read_bytes()
+        with patch('pay.run_browser', new=AsyncMock(return_value={
+                'status': 'blocked', 'reason': 'actual_quote_unknown',
+                'payment_requests_sent': 0, 'confirmation_requests_sent': 0})) as run:
+            result = asyncio.run(run_checkout_flow(
+                self.target, self.root, 'plus', details_reader=lambda *_: details(),
+                confirmer=lambda *_: False, allow_checkout_replacement=False,
+                expected_checkout_identifier='cs_synthetic'))
+        run.assert_awaited_once()
+        self.assertTrue(run.await_args.kwargs['inspect_existing'])
+        self.assertNotIn('create', run.await_args.kwargs)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(result['reason'], 'actual_quote_unknown')
+
+    def test_recovery_rejects_legacy_stopped_checkout_without_explicit_unpaid_proof(self):
+        from attempt_ledger import atomic_json, checkout_record_path
+        path = checkout_record_path(self.root, self.target.account_id)
+        record = {**json.loads(path.read_text()), 'status': 'cancelled',
+                  'checkout_outcome': 'cancelled', 'cancelled_before_confirmation': True,
+                  'payment_status': 'not_attempted', 'payment_attempted': False,
+                  'confirmation_requests_sent': 0}
+        for changes in ({'payment_attempted': True}, {'payment_attempted': None},
+                        {'confirmation_requests_sent': 1}, {'confirmation_requests_sent': None},
+                        {'confirmation_requests_sent': False}, {'payment_status': 'unknown'},
+                        {'payment_evidence': {'kind': 'checkout_session'}},
+                        {'checkout_outcome': 'unknown'}):
+            with self.subTest(changes=changes):
+                atomic_json(path, {**record, **changes})
+                before = path.read_bytes()
+                with patch('pay.run_browser', new=AsyncMock()) as run:
+                    result = asyncio.run(run_checkout_flow(
+                        self.target, self.root, 'plus', details_reader=lambda *_: details(),
+                        confirmer=lambda *_: False, allow_checkout_replacement=False,
+                        expected_checkout_identifier='cs_synthetic'))
+                run.assert_not_awaited()
+                self.assertEqual(result['reason'], 'existing_checkout_unavailable')
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_recovery_stopped_checkout_cannot_clear_an_unknown_payment_attempt(self):
+        from attempt_ledger import atomic_json, checkout_record_path
+        with PaymentLedger(self.root, self.target.account_id) as ledger:
+            ledger.begin(quote(), confirmed_digest=quote_digest(quote()), card_last4='4242')
+            payment_path = ledger.path
+        payment_before = payment_path.read_bytes()
+        path = checkout_record_path(self.root, self.target.account_id)
+        atomic_json(path, {**json.loads(path.read_text()), 'status': 'cancelled',
+                          'checkout_outcome': 'cancelled', 'cancelled_before_confirmation': True,
+                          'payment_status': 'not_attempted', 'payment_attempted': False,
+                          'confirmation_requests_sent': 0})
+        checkout_before = path.read_bytes()
+
+        async def inspect(target, **kwargs):
+            self.assertTrue(kwargs['inspect_existing'])
+            self.assertNotIn('create', kwargs)
+            guard = PaymentGuard(target)
+            return await kwargs['quote_handler'](None, guard, None, quote())
+
+        with patch('pay.run_browser', new=AsyncMock(side_effect=inspect)), \
+                patch('pay.payment_handler', new=AsyncMock()) as pay_handler:
+            with self.assertRaises(Stop) as stopped:
+                asyncio.run(run_checkout_flow(
+                    self.target, self.root, 'plus', details_reader=lambda *_: details(),
+                    confirmer=lambda *_: False, allow_checkout_replacement=False,
+                    expected_checkout_identifier='cs_synthetic'))
+        self.assertEqual(stopped.exception.report['reason'], 'previous_payment_attempt_exists')
+        pay_handler.assert_not_awaited()
+        self.assertEqual(payment_path.read_bytes(), payment_before)
+        self.assertEqual(path.read_bytes(), checkout_before)
 
     def test_crash_before_click_and_restart_never_repay(self):
         with PaymentLedger(self.root, self.target.account_id) as ledger:
@@ -543,6 +656,134 @@ class StateTests(unittest.TestCase):
         self.assertIsNotNone(payment_evidence({**data, "id": "page_synthetic", "session_id": "cs_synthetic"},
                                              "cs_synthetic", quote()))
         self.assertIsNone(payment_evidence({**data, "session_id": "cs_other"}, "cs_synthetic", quote()))
+
+
+class CurrentQuoteBudgetTests(unittest.IsolatedAsyncioTestCase):
+    def guard(self):
+        return SimpleNamespace(
+            official_quote_binding={"currency": "MYR", "amount_minor": 9250},
+            official_binding_version=1, approve=MagicMock())
+
+    async def bounded_failure(self, reader, *, refresh_handler=None):
+        original_sleep = asyncio.sleep
+        async def short_poll(seconds):
+            await original_sleep(min(seconds, .001))
+        started = time.monotonic()
+        with (patch("pay.quote_from_page", new=AsyncMock(side_effect=reader)),
+              patch("pay.asyncio.sleep", new=short_poll), patch("pay.progress")):
+            with self.assertRaises(Stop) as stopped:
+                await asyncio.wait_for(current_quote(
+                    object(), self.guard(), wait_seconds=.08,
+                    refresh_handler=refresh_handler), timeout=.6)
+        self.assertLess(time.monotonic() - started, .6)
+        self.assertEqual(stopped.exception.report["reason"], "payment_quote_not_ready")
+        self.assertEqual(stopped.exception.report["quote_elapsed_seconds"], .08)
+        self.assertEqual(stopped.exception.report["quote_wait_seconds"], .08)
+        self.assertEqual(stopped.exception.report["page_state"], "quote_incomplete")
+        return stopped.exception.report
+
+    async def test_hanging_primary_quote_read_stops_at_budget_and_cancels_read(self):
+        ended = asyncio.Event()
+        async def reader(*_):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+        report = await self.bounded_failure(reader)
+        self.assertEqual(report["quote_refresh_count"], 0)
+        self.assertTrue(ended.is_set())
+
+    async def test_hanging_currency_hint_read_shares_primary_read_budget(self):
+        reads = 0
+        ended = asyncio.Event()
+        async def reader(*_):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                return {"today": None}
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+        report = await self.bounded_failure(reader)
+        self.assertEqual(reads, 2)
+        self.assertEqual(report["quote_refresh_count"], 0)
+        self.assertTrue(ended.is_set())
+
+    async def test_hanging_refresh_stops_at_original_deadline_and_reports_attempt(self):
+        started, ended = asyncio.Event(), asyncio.Event()
+        async def refresh():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+        report = await self.bounded_failure(lambda *_: {"today": None}, refresh_handler=refresh)
+        self.assertTrue(started.is_set())
+        self.assertTrue(ended.is_set())
+        self.assertEqual(report["quote_refresh_count"], 1)
+
+    async def test_hanging_refill_stops_before_confirmation_and_clears_card(self):
+        page = SimpleNamespace(reload=AsyncMock())
+        card, guard, confirmer = details(), self.guard(), MagicMock()
+        ledger = SimpleNamespace(target_plan="plus", begin=MagicMock())
+        refilling, ended = asyncio.Event(), asyncio.Event()
+        fills = 0
+        async def fill(*_):
+            nonlocal fills
+            fills += 1
+            if fills == 1:
+                return {"billing_fields_filled": []}
+            refilling.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+        original_sleep = asyncio.sleep
+        async def short_poll(seconds):
+            await original_sleep(min(seconds, .001))
+        with (patch("pay.quote_from_page", new=AsyncMock(return_value={"today": None})),
+              patch("pay.fill_official_form", new=AsyncMock(side_effect=fill)),
+              patch("pay.asyncio.sleep", new=short_poll), patch("pay.progress")):
+            with self.assertRaises(Stop) as stopped:
+                await asyncio.wait_for(payment_handler(
+                    page, guard, {"network": {"country": "US"}}, ledger, None,
+                    pay=True, details_reader=lambda: card, confirmer=confirmer,
+                    wait_seconds=1, poll_count=1, poll_interval=0,
+                    quote_wait_seconds=.08), timeout=.6)
+        self.assertEqual(stopped.exception.report["reason"], "payment_quote_not_ready")
+        self.assertEqual(stopped.exception.report["quote_refresh_count"], 1)
+        self.assertTrue(refilling.is_set() and ended.is_set())
+        page.reload.assert_awaited_once_with(wait_until="domcontentloaded", timeout=0)
+        confirmer.assert_not_called()
+        ledger.begin.assert_not_called()
+        guard.approve.assert_not_called()
+        self.assertFalse(card.number or card.cvc)
+
+    async def test_cancellation_during_quote_read_propagates_and_cancels_read(self):
+        started, ended = asyncio.Event(), asyncio.Event()
+        async def reader(*_):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+        with (patch("pay.quote_from_page", new=AsyncMock(side_effect=reader)),
+              patch("pay.progress")):
+            task = asyncio.create_task(current_quote(object(), self.guard(), wait_seconds=60))
+            await asyncio.wait_for(started.wait(), timeout=.6)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertTrue(ended.is_set())
+
+    async def test_official_verification_failure_is_not_changed_to_quote_timeout(self):
+        failure = Stop("verification_required", http_status=403)
+        with (patch("pay.quote_from_page", new=AsyncMock(side_effect=failure)),
+              patch("pay.progress")):
+            with self.assertRaises(Stop) as stopped:
+                await current_quote(object(), self.guard(), wait_seconds=60)
+        self.assertIs(stopped.exception, failure)
 
 
 class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
