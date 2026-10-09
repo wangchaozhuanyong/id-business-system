@@ -11,7 +11,9 @@ from contextlib import closing
 import gzip
 import hashlib
 import io
+import itertools
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -114,6 +116,9 @@ SERVICE_IDENTITY_KEYS = ('status', 'health', 'image', 'reference', 'containerId'
 PROJECTION_REASONS = frozenset(('NOT_PROBED', 'INSPECT_FAILED', 'INPUT_INVALID', 'METADATA_MISMATCH',
     'HOSTNAME_MISMATCH', 'RAW_HASH_MISMATCH', 'COMPOSE_LABELS_MISMATCH', 'NAME_MISMATCH',
     'REPLACE_MISMATCH', 'PROJECTED_HASH_MISMATCH', 'PROJECTED_HASH_AMBIGUOUS', 'MATCH', 'OTHER'))
+API_NATIVE_PATHS = ('Config.Labels.com.docker.compose.depends_on', 'HostConfig.Mounts', 'HostConfig.NetworkMode')
+API_NATIVE_REASONS = frozenset(('NOT_PROBED', 'PROBE_FAILED', 'NO_MATCH', 'AMBIGUOUS', 'MATCH'))
+API_NATIVE_MAX_BYTES = 16 * 1024 * 1024
 
 
 class ProjectionRejection(RuntimeError):
@@ -649,7 +654,9 @@ def restored_origin(d, previous, context):
     d.require(all(re.fullmatch(r'[a-f0-9]{64}', v or '') for row in anchors.values() for v in row.values()),
               'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
     return {'source': source, 'manifestSha256': file_digest(source / 'release-manifest.json'),
-            'recordSha256': file_digest(source / STATE_FILE), 'configurationAnchors': anchors}
+            'recordSha256': file_digest(source / STATE_FILE), 'configurationAnchors': anchors,
+            'previous': previous, 'workspaceOriginFiles': evidence['workspaceOriginFiles'],
+            'configurationBefore': record['configurationBefore'], 'environmentSha256': evidence['environmentSha256']}
 
 
 def release_recovery(d, previous):
@@ -666,6 +673,7 @@ def recovery_services(d, states, context):
         diff = {n: [k for k in SERVICE_IDENTITY_KEYS if states[n].get(k) != original[n][k]] for n in original}
         matched = {n: False for n in ('api', 'admin')}
         reasons = {n: 'NOT_PROBED' for n in matched}
+        api_probe = {'matched': False, 'reason': 'NOT_PROBED', 'changedPaths': []}
         restored = context.get('restored')
         if restored is not None and 'configurationAnchors' in restored:
             for name in matched:
@@ -687,11 +695,13 @@ def recovery_services(d, states, context):
                 except ProjectionRejection as error:
                     reasons[name] = error.reason if (isinstance(error.reason, str)
                         and error.reason in PROJECTION_REASONS and error.reason != 'MATCH') else 'OTHER'
+                    if name == 'api' and reasons[name] == 'PROJECTED_HASH_MISMATCH':
+                        api_probe = api_native_projection_probe(d, metadata[0], states[name], original[name], restored)
                 except Exception:
                     # Never inspect arbitrary exceptions, Docker values or credentials.
                     reasons[name] = 'OTHER'
         d._onlineRechargeIdentityDiagnostic = {'identityDiff': diff, 'restoredProjectionMatch': matched,
-                                               'restoredProjectionReason': reasons}
+                                               'restoredProjectionReason': reasons, 'apiNativeProbe': api_probe}
     for name, row in states.items():
         keys = SERVICE_IDENTITY_KEYS
         if context.get('restored') is not None and name in ('api', 'admin'):
@@ -764,6 +774,106 @@ def restored_configuration_projection(d, service, metadata, actual, original, an
             matches.append(replacement)
     check(len(matches) == 1, 'PROJECTED_HASH_AMBIGUOUS' if len(matches) > 1 else 'PROJECTED_HASH_MISMATCH')
     return {'rawSha256': raw_sha, 'projectedSha256': original['configurationSha256']}
+
+
+def api_native_projection_probe(d, metadata, actual, original, restored):
+    """Read-only bounded hypotheses; a match never approves the failed API gate."""
+    failed = {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []}
+    try:
+        anchors = restored['configurationAnchors']['api']
+        try:
+            restored_configuration_projection(d, 'api', metadata, actual, original, anchors)
+        except ProjectionRejection as error:
+            d.require(error.reason == 'PROJECTED_HASH_MISMATCH', 'ONLINE_RECHARGE_CONTAINER_CHANGED')
+        else:
+            return failed
+        previous = restored['previous']
+        d.require(isinstance(previous, Path) and previous.parent == d.BASE / 'releases'
+                  and (d.BASE / 'current').resolve() == previous
+                  and workspace_files(d, previous) == restored['workspaceOriginFiles']
+                  and configuration_hashes(previous) == restored['configurationBefore']
+                  and file_digest(previous / '.env.aws.production') == restored['environmentSha256'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        declaration = rendered_configuration(d, previous)
+        d.require(workspace_files(d, previous) == restored['workspaceOriginFiles']
+                  and configuration_hashes(previous) == restored['configurationBefore']
+                  and file_digest(previous / '.env.aws.production') == restored['environmentSha256'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        config, host = metadata['Config'], metadata['HostConfig']
+        d.require(declaration.get('name') == config['Labels']['com.docker.compose.project']
+                  and isinstance(declaration['services'].get('api'), dict), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        api = declaration['services']['api']
+        dependencies = api.get('depends_on', {})
+        d.require(isinstance(dependencies, dict) and len(dependencies) <= 4,
+                  'ONLINE_RECHARGE_COMPOSE_INVALID')
+        triples = []
+        for name, row in dependencies.items():
+            d.require(isinstance(name, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', name)
+                      and name in declaration['services'] and isinstance(row, dict)
+                      and row.get('condition') in ('service_started', 'service_healthy', 'service_completed_successfully')
+                      and type(row.get('restart', False)) is bool, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            triples.append(name + ':' + row['condition'] + ':' + str(row.get('restart', False)).lower())
+        dependency_label = config['Labels'].get('com.docker.compose.depends_on')
+        d.require(isinstance(dependency_label, str) and len(dependency_label) <= 2048
+                  and sorted(dependency_label.split(',') if dependency_label else []) == sorted(triples),
+                  'ONLINE_RECHARGE_COMPOSE_INVALID')
+        mounts, volumes = host.get('Mounts'), api.get('volumes', [])
+        d.require(isinstance(mounts, list) and len(mounts) <= 4
+                  and all(isinstance(m, dict) and isinstance(m.get('Target'), str)
+                          and m['Target'].startswith('/') for m in mounts)
+                  and len({m['Target'] for m in mounts}) == len(mounts)
+                  and isinstance(volumes, list) and all(isinstance(v, dict) and isinstance(v.get('target'), str)
+                          for v in volumes) and {m['Target'] for m in mounts} == {v['target'] for v in volumes},
+                  'ONLINE_RECHARGE_COMPOSE_INVALID')
+        mode = host.get('NetworkMode')
+        d.require(isinstance(mode, str) and len(mode) <= 256, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        network_modes = [mode]
+        # Insufficient network binding disables this hypothesis, preserving the live value.
+        selected, declared = api.get('networks'), declaration.get('networks')
+        live = metadata.get('NetworkSettings', {}).get('Networks')
+        if (not api.get('network_mode') and isinstance(selected, dict) and 0 < len(selected) <= 4
+                and isinstance(declared, dict) and all(isinstance(declared.get(n), dict)
+                    and isinstance(declared[n].get('name'), str)
+                    and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', declared[n]['name']) for n in selected)
+                and isinstance(live, dict) and all(isinstance(v, dict) for v in live.values())):
+            names = [declared[n]['name'] for n in selected]
+            if len(set(names)) == len(names) and set(live) == set(names) and mode in names:
+                network_modes = [mode, *sorted(n for n in names if n != mode)]
+        d.require(4 * math.factorial(len(triples)) * math.factorial(len(mounts)) * len(network_modes) <= 768,
+                  'ONLINE_RECHARGE_SOURCE_TOO_LARGE')
+        base = {'Config': copy.deepcopy(config), 'HostConfig': copy.deepcopy(host),
+                'Mounts': sorted(copy.deepcopy(metadata['Mounts']), key=lambda m: m['Destination'])}
+        base['Config']['Hostname'] = original['containerId'][:12]
+        replacements = (anchors['oldBeforeContainerId'], metadata['Name'][1:], 'api-1', None)
+        seen, matches, candidate_bytes = set(), [], 0
+        # This order checks dependencies, then complete mount rows, then primary network.
+        for network in network_modes:
+            for ordered_mounts in itertools.permutations(mounts):
+                for ordered_dependencies in itertools.permutations(triples):
+                    for replacement in replacements:
+                        candidate = copy.deepcopy(base)
+                        if replacement is None:
+                            candidate['Config']['Labels'].pop('com.docker.compose.replace', None)
+                        else:
+                            candidate['Config']['Labels']['com.docker.compose.replace'] = replacement
+                        candidate['Config']['Labels']['com.docker.compose.depends_on'] = ','.join(ordered_dependencies)
+                        candidate['HostConfig']['Mounts'] = list(ordered_mounts)
+                        candidate['HostConfig']['NetworkMode'] = network
+                        encoded = json.dumps(candidate, sort_keys=True, separators=(',', ':'))
+                        if encoded in seen:
+                            continue
+                        candidate_bytes += len(encoded.encode())
+                        d.require(candidate_bytes <= API_NATIVE_MAX_BYTES, 'ONLINE_RECHARGE_SOURCE_TOO_LARGE')
+                        seen.add(encoded)
+                        if fingerprint(candidate) == original['configurationSha256']:
+                            values = (candidate['Config']['Labels']['com.docker.compose.depends_on'] != dependency_label,
+                                      candidate['HostConfig']['Mounts'] != mounts, network != mode)
+                            matches.append([p for p, changed in zip(API_NATIVE_PATHS, values) if changed])
+        if len(matches) != 1:
+            return {'matched': False, 'reason': 'AMBIGUOUS' if matches else 'NO_MATCH', 'changedPaths': []}
+        return {'matched': True, 'reason': 'MATCH', 'changedPaths': matches[0]}
+    except Exception:
+        return failed
 
 
 def recovery_backups(d, source, previous, *, commit=RECOVERY_COMMIT, manifest=None, record=None):
@@ -1497,6 +1607,7 @@ def validate_diagnostic(d, value, expected):
     failed = passed | {'gateCode', 'causeType'}
     details = {'identityDiff', 'restoredProjectionMatch'}
     classified = details | {'restoredProjectionReason'}
+    probed = classified | {'apiNativeProbe'}
     reasons = {'HISTORICAL_MIGRATION_ORIGIN', 'PUBLISHED_IMAGE_CONTENT', 'PUBLISHED_BUILD_PROOF',
                'LEGACY_API_PROJECTION_LABELS', 'LEGACY_API_PROJECTION_SOURCE', 'LEGACY_PROFILE_SCHEMA',
                'RETAINED_PROFILE_ORIGIN', 'BASELINE_PROJECTION'}
@@ -1508,13 +1619,13 @@ def validate_diagnostic(d, value, expected):
               and type(value.get('baselineConfirmed')) is bool,
               'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
     d.require((value['baselineConfirmed'] and set(value) == passed and value.get('reason') == 'BASELINE_GATE_PASSED')
-              or (not value['baselineConfirmed'] and set(value) in (failed, failed | details, failed | classified)
+              or (not value['baselineConfirmed'] and set(value) in (failed, failed | details, failed | classified, failed | probed)
                   and isinstance(value.get('reason'), str) and value['reason'] in reasons
                   and isinstance(value.get('causeType'), str) and value['causeType'] in kinds
                   and isinstance(value.get('gateCode'), str)
                   and re.fullmatch(r'(?:ONLINE_RECHARGE|API_ADMIN)_[A-Z0-9_]+', value.get('gateCode', ''))),
               'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
-    if set(value) in (failed | details, failed | classified):
+    if set(value) in (failed | details, failed | classified, failed | probed):
         diff, matches = value['identityDiff'], value['restoredProjectionMatch']
         d.require(value['reason'] == 'BASELINE_PROJECTION'
                   and value['gateCode'] == 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED'
@@ -1529,6 +1640,18 @@ def validate_diagnostic(d, value, expected):
             d.require(isinstance(reason, dict) and set(reason) == {'api', 'admin'}
                       and all(isinstance(v, str) and v in PROJECTION_REASONS
                               and matches[n] is (v == 'MATCH') for n, v in reason.items()),
+                      'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
+        if 'apiNativeProbe' in value:
+            probe = value['apiNativeProbe']
+            d.require(isinstance(probe, dict) and set(probe) == {'matched', 'reason', 'changedPaths'}
+                      and type(probe['matched']) is bool and isinstance(probe['reason'], str)
+                      and probe['reason'] in API_NATIVE_REASONS and probe['matched'] is (probe['reason'] == 'MATCH')
+                      and isinstance(probe['changedPaths'], list)
+                      and all(isinstance(p, str) and p in API_NATIVE_PATHS for p in probe['changedPaths'])
+                      and probe['changedPaths'] == [p for p in API_NATIVE_PATHS if p in probe['changedPaths']]
+                      and (bool(probe['changedPaths']) if probe['matched'] else probe['changedPaths'] == [])
+                      and (probe['reason'] == 'NOT_PROBED'
+                           or value['restoredProjectionReason']['api'] == 'PROJECTED_HASH_MISMATCH'),
                       'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
     return {k: value[k] for k in sorted(value)}
 

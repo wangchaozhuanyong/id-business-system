@@ -919,7 +919,7 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
         for candidate in candidates:
             with self.subTest(candidate_keys=sorted(candidate)), self.assertRaises(RuntimeError):
                 scope.validate_diagnostic(controller(), candidate, scope.BASELINE_COMMIT)
-        historical = copy.deepcopy(result); historical.pop('restoredProjectionReason')
+        historical = copy.deepcopy(result); historical.pop('restoredProjectionReason'); historical.pop('apiNativeProbe')
         scope.validate_diagnostic(controller(), historical, scope.BASELINE_COMMIT)
 
     def test_inspect_and_unknown_projection_errors_never_expose_raw_values(self):
@@ -965,9 +965,173 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
         self.assertNotIn('identityDiff', result)
         self.assertNotIn('restoredProjectionMatch', result)
         self.assertNotIn('restoredProjectionReason', result)
+        self.assertNotIn('apiNativeProbe', result)
         self.assertFalse(d._onlineRechargeProjectionDiagnostic)
         self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
         scope.validate_diagnostic(controller(), result, scope.BASELINE_COMMIT)
+
+
+class ApiNativeDiagnosticTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, changes=(0,), dependency_count=2, mount_count=2, network_count=2):
+        with tempfile.TemporaryDirectory(prefix='api-native-', dir=RUNTIME) as name:
+            base = Path(name); previous = base / 'releases/old'; previous.mkdir(parents=True)
+            (base / 'current').symlink_to(previous)
+            for filename in ('release-manifest.json', shared.PROOF_FILE, shared.STATE_FILE,
+                             'backup-verification.json', 'before-audit.json', 'after-audit.json'):
+                (previous / filename).write_text(json.dumps({'commit': scope.BASELINE_COMMIT}))
+            for filename in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws', scope.SCHEMA_FILE, 'compose.release.json'):
+                path = previous / filename; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('fixture source')
+            (previous / '.env.aws.production').write_text('FIXTURE=opaque\n')
+            metadata, actual, original, anchors = RestoredConfigurationDiagnosticTests().fixture('api', 'slot', 'slot')
+            triples = [f'dep{i}:service_healthy:false' for i in range(dependency_count)]
+            metadata['Config']['Labels']['com.docker.compose.depends_on'] = ','.join(triples)
+            mounts = [{'Type': 'volume', 'Source': f'fixture_v{i}', 'Target': f'/mount{i}',
+                       'ReadOnly': False, 'VolumeOptions': {'NoCopy': False}} for i in range(mount_count)]
+            metadata['HostConfig']['Mounts'] = mounts
+            metadata['HostConfig']['NetworkMode'] = 'fixture_n0'
+            metadata['NetworkSettings'] = {'Networks': {f'fixture_n{i}': {'NetworkID': str(i) * 64}
+                                                        for i in range(network_count)}}
+            configuration = {k: copy.deepcopy(metadata[k]) for k in ('Config', 'HostConfig', 'Mounts')}
+            configuration['Mounts'].sort(key=lambda m: m['Destination'])
+            actual['configurationSha256'] = scope.fingerprint(configuration)
+            configuration['Config']['Hostname'] = original['containerId'][:12]
+            if 0 in changes:
+                configuration['Config']['Labels']['com.docker.compose.depends_on'] = ','.join(reversed(triples))
+            if 1 in changes:
+                configuration['HostConfig']['Mounts'].reverse()
+            if 2 in changes:
+                configuration['HostConfig']['NetworkMode'] = 'fixture_n1'
+            original['configurationSha256'] = scope.fingerprint(configuration)
+            declaration = {'name': 'fixture', 'services': {'api': {
+                'depends_on': {f'dep{i}': {'condition': 'service_healthy', 'restart': False, 'required': True}
+                               for i in range(dependency_count)},
+                'volumes': [{'target': m['Target']} for m in mounts],
+                'networks': {f'n{i}': {} for i in range(network_count)}},
+                **{f'dep{i}': {} for i in range(dependency_count)}},
+                'networks': {f'n{i}': {'name': f'fixture_n{i}'} for i in range(network_count)}}
+            restored = {'previous': previous, 'workspaceOriginFiles': scope.workspace_files(controller(), previous),
+                        'configurationAnchors': {'api': anchors}, 'configurationBefore': scope.configuration_hashes(previous),
+                        'environmentSha256': scope.file_digest(previous / '.env.aws.production')}
+            d = controller(BASE=base)
+            with patch.object(scope, 'rendered_configuration', return_value=declaration):
+                yield d, metadata, actual, original, restored, declaration
+
+    def test_only_complete_dependency_mount_and_network_variants_can_match(self):
+        for changed in ((0,), (1,), (2,), (0, 1), (0, 1, 2)):
+            with self.subTest(paths=changed), self.fixture(changed) as (d, metadata, actual, original, restored, _):
+                captured = copy.deepcopy((metadata, actual, original))
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertEqual(result, {'matched': True, 'reason': 'MATCH',
+                                         'changedPaths': [scope.API_NATIVE_PATHS[i] for i in changed]})
+                self.assertEqual((metadata, actual, original), captured)
+        with self.fixture(()) as (d, metadata, actual, original, restored, _):
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PROBE_FAILED')
+
+    def test_source_content_dependency_and_mount_binding_fail_closed_without_values(self):
+        mutations = [(('Config', 'Labels', 'com.docker.compose.depends_on'), 'dep0:service_started:false,dep1:service_healthy:false'),
+            (('Config', 'Labels', 'com.docker.compose.depends_on'), 'dep0:service_healthy:false,dep0:service_healthy:false'),
+            (('Config', 'Labels', 'com.docker.compose.depends_on'), 'SECRET_MUST_NOT_ESCAPE'),
+            (('Config', 'Labels', 'unrelated.label'), 'changed'), (('Config', 'Env'), ['SECRET_MUST_NOT_ESCAPE']),
+            (('HostConfig', 'Memory'), 4096), (('HostConfig', 'Mounts'),
+             [{'Type': 'volume', 'Source': 'changed', 'Target': '/mount0', 'ReadOnly': False}])]
+        for path, value in mutations:
+            with self.subTest(path=path), self.fixture() as (d, metadata, actual, original, restored, _):
+                target = metadata
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                configuration = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+                configuration['Mounts'] = sorted(configuration['Mounts'], key=lambda m: m['Destination'])
+                actual['configurationSha256'] = scope.fingerprint(configuration)
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertFalse(result['matched']); self.assertEqual(result['changedPaths'], [])
+                self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+        with self.fixture() as (d, metadata, actual, original, restored, declaration):
+            declaration['name'] = 'other'
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PROBE_FAILED')
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            (restored['previous'] / shared.PROOF_FILE).write_text('changed source')
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PROBE_FAILED')
+        for filename in ('docker-compose.aws-mysql.yml', '.env.aws.production'):
+            with self.subTest(source=filename), self.fixture() as (d, metadata, actual, original, restored, declaration):
+                def changed_during_render(d, directory):
+                    (directory / filename).write_text('SECRET_MUST_NOT_ESCAPE')
+                    return declaration
+                with patch.object(scope, 'rendered_configuration', side_effect=changed_during_render):
+                    result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertEqual(result['reason'], 'PROBE_FAILED'); self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+
+    def test_incomplete_network_binding_never_attempts_other_network_modes(self):
+        for variation in ('missing', 'extra', 'undeclared', 'explicit'):
+            with self.subTest(variation=variation), self.fixture((2,)) as (d, metadata, actual, original, restored, declaration):
+                if variation == 'missing':
+                    metadata['NetworkSettings']['Networks'].pop('fixture_n1')
+                elif variation == 'extra':
+                    metadata['NetworkSettings']['Networks']['other'] = {}
+                elif variation == 'undeclared':
+                    declaration['networks']['n1'].pop('name')
+                else:
+                    declaration['services']['api']['network_mode'] = 'host'
+                self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'NO_MATCH')
+
+    def test_candidate_budget_is_bounded_and_overflow_rejected_before_permutations(self):
+        with self.fixture((0,), mount_count=4, network_count=4) as (d, metadata, actual, original, restored, _):
+            original['configurationSha256'] = '0' * 64
+            with patch.object(scope, 'fingerprint', wraps=scope.fingerprint) as hashes:
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+            self.assertEqual(result['reason'], 'NO_MATCH'); self.assertLessEqual(hashes.call_count, 768 + 6)
+        for counts in ((3, 4, 4), (2, 5, 2)):
+            with self.subTest(counts=counts), self.fixture((0,), *counts) as (d, metadata, actual, original, restored, _):
+                with patch.object(scope.itertools, 'permutations') as permutations:
+                    result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertEqual(result['reason'], 'PROBE_FAILED'); permutations.assert_not_called()
+        with self.fixture() as (d, metadata, actual, original, restored, _), \
+                patch.object(scope, 'API_NATIVE_MAX_BYTES', 1):
+            result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+            self.assertEqual(result, {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []})
+            self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+
+    def test_ambiguous_complete_objects_and_unknown_errors_do_not_match(self):
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            native = scope.fingerprint
+            expected = 'dep1:service_healthy:false,dep0:service_healthy:false'
+            def collide(value):
+                if isinstance(value, dict) and value.get('Config', {}).get('Labels', {}).get('com.docker.compose.depends_on') == expected:
+                    return original['configurationSha256']
+                return native(value)
+            with patch.object(scope, 'fingerprint', side_effect=collide):
+                self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'AMBIGUOUS')
+            with patch.object(scope, 'rendered_configuration', side_effect=RuntimeError('SECRET_MUST_NOT_ESCAPE')):
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+            self.assertEqual(result, {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []})
+
+    def test_probe_match_does_not_change_original_failure_and_closed_transport_validation(self):
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            admin_metadata, admin_actual, admin_original, admin_anchors = RestoredConfigurationDiagnosticTests().fixture('admin', 'slot', 'slot')
+            restored['configurationAnchors']['admin'] = admin_anchors
+            before, live = states(), states()
+            before.update(api=original, admin=admin_original); live.update(api=actual, admin=admin_actual)
+            context = {'policy': {'preflight': {'services': before}}, 'restored': restored}
+            d.run = MagicMock(side_effect=[json.dumps([metadata]), json.dumps([admin_metadata])])
+            def baseline(d, approved):
+                scope.recovery_services(d, live, context)
+            with patch.object(scope, 'baseline', side_effect=baseline):
+                result = scope.projection_diagnostic(d, scope.BASELINE_COMMIT)
+            self.assertFalse(result['baselineConfirmed']); self.assertFalse(result['restoredProjectionMatch']['api'])
+            self.assertEqual(result['restoredProjectionReason']['api'], 'PROJECTED_HASH_MISMATCH')
+            self.assertTrue(result['apiNativeProbe']['matched'])
+            self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+            self.assertFalse(d._onlineRechargeProjectionDiagnostic); self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
+            scope.validate_diagnostic(d, result, scope.BASELINE_COMMIT)
+            for key, value in (('reason', 'secret'), ('matched', 1), ('changedPaths', ['Env']),
+                               ('changedPaths', list(reversed(scope.API_NATIVE_PATHS))), ('extra', 'secret')):
+                candidate = copy.deepcopy(result); candidate['apiNativeProbe'][key] = value
+                with self.subTest(key=key), self.assertRaises(RuntimeError):
+                    scope.validate_diagnostic(d, candidate, scope.BASELINE_COMMIT)
+            for removed in ('apiNativeProbe', 'restoredProjectionReason'):
+                result.pop(removed)
+                scope.validate_diagnostic(d, result, scope.BASELINE_COMMIT)
 
 
 class ProofTests(unittest.TestCase):
