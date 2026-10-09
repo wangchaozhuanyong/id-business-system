@@ -1026,7 +1026,7 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
                                          'changedPaths': [scope.API_NATIVE_PATHS[i] for i in changed]})
                 self.assertEqual((metadata, actual, original), captured)
         with self.fixture(()) as (d, metadata, actual, original, restored, _):
-            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PROBE_FAILED')
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'ELIGIBILITY')
 
     def test_source_content_dependency_and_mount_binding_fail_closed_without_values(self):
         mutations = [(('Config', 'Labels', 'com.docker.compose.depends_on'), 'dep0:service_started:false,dep1:service_healthy:false'),
@@ -1049,10 +1049,10 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
                 self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
         with self.fixture() as (d, metadata, actual, original, restored, declaration):
             declaration['name'] = 'other'
-            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PROBE_FAILED')
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'DECLARATION')
         with self.fixture() as (d, metadata, actual, original, restored, _):
             (restored['previous'] / shared.PROOF_FILE).write_text('changed source')
-            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PROBE_FAILED')
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'OLD_SOURCE_BEFORE_WORKSPACE_FILES')
         for filename in ('docker-compose.aws-mysql.yml', '.env.aws.production'):
             with self.subTest(source=filename), self.fixture() as (d, metadata, actual, original, restored, declaration):
                 def changed_during_render(d, directory):
@@ -1060,7 +1060,8 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
                     return declaration
                 with patch.object(scope, 'rendered_configuration', side_effect=changed_during_render):
                     result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
-                self.assertEqual(result['reason'], 'PROBE_FAILED'); self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+                expected = 'OLD_SOURCE_AFTER_CONFIGURATION_FILES' if filename.endswith('.yml') else 'OLD_SOURCE_AFTER_ENV_FILE'
+                self.assertEqual(result['reason'], expected); self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
 
     def test_incomplete_network_binding_never_attempts_other_network_modes(self):
         for variation in ('missing', 'extra', 'undeclared', 'explicit'):
@@ -1081,15 +1082,15 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
             with patch.object(scope, 'fingerprint', wraps=scope.fingerprint) as hashes:
                 result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
             self.assertEqual(result['reason'], 'NO_MATCH'); self.assertLessEqual(hashes.call_count, 768 + 6)
-        for counts in ((3, 4, 4), (2, 5, 2)):
+        for counts, reason in (((3, 4, 4), 'COMBINATION_LIMIT'), ((2, 5, 2), 'MOUNT_COUNT_LIMIT')):
             with self.subTest(counts=counts), self.fixture((0,), *counts) as (d, metadata, actual, original, restored, _):
                 with patch.object(scope.itertools, 'permutations') as permutations:
                     result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
-                self.assertEqual(result['reason'], 'PROBE_FAILED'); permutations.assert_not_called()
+                self.assertEqual(result['reason'], reason); permutations.assert_not_called()
         with self.fixture() as (d, metadata, actual, original, restored, _), \
                 patch.object(scope, 'API_NATIVE_MAX_BYTES', 1):
             result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
-            self.assertEqual(result, {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []})
+            self.assertEqual(result, {'matched': False, 'reason': 'PAYLOAD_LIMIT', 'changedPaths': []})
             self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
 
     def test_ambiguous_complete_objects_and_unknown_errors_do_not_match(self):
@@ -1105,6 +1106,119 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
             with patch.object(scope, 'rendered_configuration', side_effect=RuntimeError('SECRET_MUST_NOT_ESCAPE')):
                 result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
             self.assertEqual(result, {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []})
+
+    def test_old_source_before_after_and_nested_require_stages_are_closed(self):
+        for filename, suffix in ((shared.PROOF_FILE, 'WORKSPACE_FILES'),
+                                 ('docker-compose.aws-mysql.yml', 'CONFIGURATION_FILES'),
+                                 ('.env.aws.production', 'ENV_FILE')):
+            for phase in ('BEFORE', 'AFTER'):
+                with self.subTest(file=filename, phase=phase), self.fixture() as (d, metadata, actual, original, restored, declaration):
+                    def changed(d, previous):
+                        (previous / filename).write_text('SECRET_MUST_NOT_ESCAPE')
+                        return declaration
+                    if phase == 'BEFORE':
+                        changed(d, restored['previous'])
+                    with patch.object(scope, 'rendered_configuration', side_effect=changed if phase == 'AFTER' else None,
+                                      return_value=declaration):
+                        result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                    self.assertEqual(result, {'matched': False, 'reason': f'OLD_SOURCE_{phase}_{suffix}', 'changedPaths': []})
+                    self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            (d.BASE / 'current').unlink()
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'],
+                             'OLD_SOURCE_BEFORE_PATH_CURRENT')
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            (restored['previous'] / shared.PROOF_FILE).unlink()
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'],
+                             'OLD_SOURCE_BEFORE_WORKSPACE_FILES')
+            self.assertIs(d.require, require)
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            def invalid_render(d, unused):
+                d.require(False, 'SECRET_MUST_NOT_ESCAPE')
+            with patch.object(scope, 'rendered_configuration', side_effect=invalid_render):
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+            self.assertEqual(result, {'matched': False, 'reason': 'DECLARATION_RENDER', 'changedPaths': []})
+
+    def test_each_dependency_mount_and_network_predicate_has_a_literal_stage(self):
+        cases = [
+            ('declaration', ('services', 'api', 'depends_on'), None, 'DEPENDENCY_DECLARATION_TYPE'),
+            ('declaration', ('services', 'api', 'depends_on'), {str(i): {} for i in range(5)}, 'DEPENDENCY_COUNT_LIMIT'),
+            ('declaration', ('services', 'api', 'depends_on'), {'bad name': {}}, 'DEPENDENCY_NAME'),
+            ('declaration', ('services', 'api', 'depends_on'), {'missing': {}}, 'DEPENDENCY_SERVICE'),
+            ('declaration', ('services', 'api', 'depends_on', 'dep0'), None, 'DEPENDENCY_ROW_TYPE'),
+            ('declaration', ('services', 'api', 'depends_on', 'dep0', 'condition'), 'secret', 'DEPENDENCY_CONDITION'),
+            ('declaration', ('services', 'api', 'depends_on', 'dep0', 'restart'), 'false', 'DEPENDENCY_RESTART'),
+            ('metadata', ('Config', 'Labels', 'com.docker.compose.depends_on'), None, 'DEPENDENCY_LABEL_TYPE'),
+            ('metadata', ('Config', 'Labels', 'com.docker.compose.depends_on'), 'X' * 2049, 'DEPENDENCY_LABEL_SIZE'),
+            ('metadata', ('Config', 'Labels', 'com.docker.compose.depends_on'), 'SECRET_MUST_NOT_ESCAPE', 'DEPENDENCY_LABEL_CONTENT'),
+            ('metadata', ('HostConfig', 'Mounts'), None, 'MOUNT_NULL_OR_TYPE'),
+            ('metadata', ('HostConfig', 'Mounts'), [{}] * 5, 'MOUNT_COUNT_LIMIT'),
+            ('metadata', ('HostConfig', 'Mounts'), [{'Target': 'secret'}], 'MOUNT_ROW_TARGET'),
+            ('metadata', ('HostConfig', 'Mounts'), [{'Target': '/same'}] * 2, 'MOUNT_DUPLICATE_TARGET'),
+            ('declaration', ('services', 'api', 'volumes'), [None], 'MOUNT_DECLARED_VOLUMES'),
+            ('declaration', ('services', 'api', 'volumes'), [{'target': '/other'}], 'MOUNT_TARGET_SET_MISMATCH'),
+            ('metadata', ('HostConfig', 'NetworkMode'), None, 'NETWORK_INPUT_TYPE'),
+            ('metadata', ('HostConfig', 'NetworkMode'), 'X' * 257, 'NETWORK_INPUT_SIZE'),
+        ]
+        for target, path, value, reason in cases:
+            with self.subTest(reason=reason), self.fixture() as (d, metadata, actual, original, restored, declaration):
+                item = metadata if target == 'metadata' else declaration
+                for key in path[:-1]:
+                    item = item[key]
+                if reason == 'DEPENDENCY_LABEL_TYPE':
+                    item.pop(path[-1])
+                else:
+                    item[path[-1]] = value
+                raw = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+                raw['Mounts'] = sorted(raw['Mounts'], key=lambda m: m['Destination'])
+                actual['configurationSha256'] = scope.fingerprint(raw)
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertEqual(result, {'matched': False, 'reason': reason, 'changedPaths': []})
+                self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+
+    def test_unknown_exception_and_forged_reason_cannot_claim_match_or_stage(self):
+        class SecretException(RuntimeError):
+            def __str__(self):
+                raise AssertionError('exception text must never be read')
+        class ForgedRejection(scope.ApiNativeProbeRejection):
+            def __getattribute__(self, name):
+                if name == '__dict__':
+                    raise AssertionError('forged exception fields must never be read')
+                return super().__getattribute__(name)
+        class ForgedReason(str):
+            def __hash__(self):
+                raise AssertionError('forged reason must never be hashed')
+        for error in (SecretException('SECRET_MUST_NOT_ESCAPE'), ForgedRejection('DECLARATION_RENDER'),
+                      scope.ApiNativeProbeRejection(ForgedReason('DECLARATION_RENDER')),
+                      *(scope.ApiNativeProbeRejection(v) for v in
+                        ('MATCH', 'NO_MATCH', 'PROBE_FAILED', 'secret', None, [], 'PAYLOAD_LIMIT'))):
+            with self.subTest(type=type(error).__name__), self.fixture() as (d, metadata, actual, original, restored, _):
+                with patch.object(scope, 'rendered_configuration', side_effect=error), io.StringIO() as output, redirect_stdout(output):
+                    result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                    self.assertEqual(output.getvalue(), '')
+                self.assertEqual(result, {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []})
+                self.assertIs(d.require, require)
+                self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+
+    def test_classified_probe_failure_keeps_formal_rejection_and_resets_flags(self):
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            metadata['HostConfig']['Mounts'] = None
+            raw = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+            raw['Mounts'] = sorted(raw['Mounts'], key=lambda m: m['Destination'])
+            actual['configurationSha256'] = scope.fingerprint(raw)
+            admin_metadata, admin_actual, admin_original, admin_anchors = RestoredConfigurationDiagnosticTests().fixture('admin', 'slot', 'slot')
+            restored['configurationAnchors']['admin'] = admin_anchors
+            before, live = states(), states()
+            before.update(api=original, admin=admin_original); live.update(api=actual, admin=admin_actual)
+            context = {'policy': {'preflight': {'services': before}}, 'restored': restored}
+            d.run = MagicMock(side_effect=[json.dumps([metadata]), json.dumps([admin_metadata])])
+            with patch.object(scope, 'baseline', side_effect=lambda d, expected: scope.recovery_services(d, live, context)):
+                result = scope.projection_diagnostic(d, scope.BASELINE_COMMIT)
+            self.assertEqual(result['apiNativeProbe'], {'matched': False, 'reason': 'MOUNT_NULL_OR_TYPE', 'changedPaths': []})
+            self.assertEqual(result['restoredProjectionReason']['api'], 'PROJECTED_HASH_MISMATCH')
+            self.assertEqual(result['gateCode'], 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
+            self.assertFalse(result['baselineConfirmed']); self.assertFalse(result['restoredProjectionMatch']['api'])
+            self.assertFalse(d._onlineRechargeProjectionDiagnostic); self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
 
     def test_probe_match_does_not_change_original_failure_and_closed_transport_validation(self):
         with self.fixture() as (d, metadata, actual, original, restored, _):
@@ -1124,6 +1238,10 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
             self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
             self.assertFalse(d._onlineRechargeProjectionDiagnostic); self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
             scope.validate_diagnostic(d, result, scope.BASELINE_COMMIT)
+            for reason in scope.API_NATIVE_FAILURE_REASONS | {'PROBE_FAILED', 'NO_MATCH', 'AMBIGUOUS'}:
+                candidate = copy.deepcopy(result)
+                candidate['apiNativeProbe'] = {'matched': False, 'reason': reason, 'changedPaths': []}
+                scope.validate_diagnostic(d, candidate, scope.BASELINE_COMMIT)
             for key, value in (('reason', 'secret'), ('matched', 1), ('changedPaths', ['Env']),
                                ('changedPaths', list(reversed(scope.API_NATIVE_PATHS))), ('extra', 'secret')):
                 candidate = copy.deepcopy(result); candidate['apiNativeProbe'][key] = value
