@@ -2,6 +2,8 @@
 
 用户已确认使用系统现有苹果隐藏邮箱注册 ChatGPT／Codex。
 本地改造基线为 `0a03fa28e6b844a18833d5c63f1de700f091fc64`。
+发布候选随后接入已合并线上代充的主线 `28a3ba4ffd17d36001b1104c97394f5ae871d73d`，
+保留其代码、配置及迁移；本功能不代为执行该模块的迁移或真实业务。
 本文记录已完成的代码和本地验收；用户于 2026-10-09 随后明确授权发布本次新增功能。
 正式发布结果以独立运行回执为准，不以本地测试代替线上证明。
 所有改动位于项目内 `.codex-worktrees/open-source-registration-release-20261009/`，
@@ -66,6 +68,12 @@ Python 合计 75 项通过，功能与适配定向测试合计 167 项；发布�
 1440、1024、901、900、768、390px 六种宽度均无整页横向溢出，已核验深浅主题及移动卡片。
 详细结果为 `browser-acceptance.json`，截图为 `desktop-light-fixture.jpg` 与
 `mobile-dark-fixture.jpg`，均为本地合成数据，不含真实邮箱或注册结果。
+
+接入新主线后重新通过前端 53 项、API 39 项、前后端 typecheck/build、定向 lint/format
+及全部七项界面规则。共享表格变化后的第一页、最后一页、空状态外框同为 1187×1089px；
+六宽度无整页溢出，移动端 20 张卡片与深色主题复验通过。
+补充证据为 `rebased-local-evidence.json`、`rebased-browser-geometry.json` 和
+`rebased-mobile-dark-fixture.png`；这些仍为合成数据验收。
 
 ## 边界与后续
 

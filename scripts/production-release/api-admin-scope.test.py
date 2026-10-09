@@ -1005,7 +1005,7 @@ class ReleaseFailureTests(unittest.TestCase):
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
                     migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
-                    sqlite_gate=None, sqlite_prepare_error=False):
+                    sqlite_gate=None, sqlite_prepare_error=False, online_origin_context=None, online_fail=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1032,6 +1032,9 @@ class ReleaseFailureTests(unittest.TestCase):
                 api_workspace_only=scope.WORKSPACE,
                 commit=COMMIT, source_tree=TREE, expected_current=OLD, repository=REPOSITORY, run_id='123', run_attempt='1', ci_run_id='456')
             before = states()
+            if online_origin_context is not None:
+                before['online-recharge']=copy.deepcopy(before['api'])
+                before['online-recharge'].update(online_origin_context['binding'])
             controller = SimpleNamespace(**vars(d)); controller.BASE = base
             controller.compose = MagicMock(); controller.wait_healthy = MagicMock()
             guards, task = migration_guards(), migration_task() if scope.MIGRATION_MODE else registration_task()
@@ -1125,6 +1128,18 @@ class ReleaseFailureTests(unittest.TestCase):
                     else:
                         stack.enter_context(patch.object(scope, 'workspace_prepare', return_value=sqlite_gate))
                     stack.enter_context(patch.object(scope, 'workspace_private_inspect', return_value={}))
+                if online_origin_context is not None:
+                    evidence['onlineRechargeOrigin']=online_origin_context
+                    stack.enter_context(patch.object(scope,'online_origin_guard'))
+                    stack.enter_context(patch.object(scope,'online_binding',return_value=online_origin_context['binding']))
+                    stack.enter_context(patch.object(scope,'online_idle',side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE') if online_fail=='idle' else None))
+                    controller.online_fence=SimpleNamespace(acquire=MagicMock(side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE') if online_fail=='fence' else None),
+                        stop=MagicMock(),check_idle=MagicMock(),close=MagicMock(),mysql=before['mysql'],connection_id=17)
+                    stack.enter_context(patch.object(scope,'OnlineSqlFence',return_value=controller.online_fence))
+                    controller.online_rebind=stack.enter_context(patch.object(scope,'online_rebind',
+                        side_effect=RuntimeError('API_ADMIN_ONLINE_RUNTIME_CHANGED') if online_fail in ('rebind','rollback-busy') else None))
+                    controller.online_rollback=stack.enter_context(patch.object(scope,'online_rollback_api',
+                        side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE') if online_fail=='rollback-busy' else None))
             if migration_origin is not None:
                 evidence['migrationOrigin'] = migration_origin
                 controller.migration_origin_guard = stack.enter_context(patch.object(scope, 'migration_successor_guard', side_effect=migration_origin_guard))
@@ -3329,7 +3344,7 @@ class WorkspaceScopeTests(unittest.TestCase):
 
     def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
         commands = '\n'.join(transport.parameters(COMMIT, OLD, 'preflight', 'API_ADMIN_WORKSPACE')['commands'])
-        self.assertEqual(commands.count('sha256sum -c -'), 2)
+        self.assertEqual(commands.count('sha256sum -c -'), 3)
         self.assertIn('--api-workspace-preflight', commands)
         script = ROOT / 'scripts/production-release/validate-release-selection.sh'
         for operation in ('verify_api_workspace', 'release_api_workspace'):
@@ -3379,7 +3394,7 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
         self.assertNotIn('--image-commit', commands)
         self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 2)
+        self.assertEqual(commands.count('sha256sum -c -'), 3)
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
@@ -3401,6 +3416,313 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertNotIn('workspace.py', arguments[-1])
         controller.compose.return_value = '{"ready":false}'
         with self.assertRaisesRegex(RuntimeError, 'HEALTH_FAILED'): workspace.workspace_health(controller, ROOT)
+
+
+class OnlineWorkspaceCompatibilityTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            base=Path(temporary).resolve();previous=base/'releases/origin';current=base/'releases/current'
+            for directory in (previous,current):
+                directory.mkdir(parents=True);(directory/workspace.CONFIG_FILES[0]).write_bytes((ROOT/workspace.CONFIG_FILES[0]).read_bytes())
+                (directory/'.env.aws.production').write_text('APP_DOMAIN=fixture.example\n')
+                (directory/'compose.release.json').write_text('{"services":{}}')
+                (directory/workspace.CONFIG_FILES[1]).parent.mkdir(parents=True)
+                (directory/workspace.CONFIG_FILES[1]).write_bytes((ROOT/workspace.CONFIG_FILES[1]).read_bytes())
+            original=states();original['online-recharge']=copy.deepcopy(original['api'])
+            metadata={};calls=[]
+            for index,(name,row) in enumerate(original.items(),1):
+                row['containerId']=hex(index)[2:]*64;row['startedAtSha256']='1'*64
+                metadata[row['containerId']]={'Id':row['containerId'],'Image':row['image'],
+                    'Config':{'Env':['NODE_ENV=production'],'Image':row['reference'],'Labels':{}},
+                    'State':{'Running':True,'StartedAt':'2026-10-09T00:00:00Z'},'HostConfig':{},'Mounts':[]}
+                row['startedAtSha256']=hashlib.sha256(metadata[row['containerId']]['State']['StartedAt'].encode()).hexdigest()
+            engine=metadata[original['online-recharge']['containerId']]
+            engine['Config']['Labels']={'com.docker.compose.project.working_dir':str(previous),
+                'com.docker.compose.project.config_files':str(previous/workspace.CONFIG_FILES[0])+','+str(previous/'compose.release.json'),
+                'com.docker.compose.project.environment_file':str(previous/'.env.aws.production'),
+                'com.docker.compose.service':'online-recharge','com.docker.compose.container-number':'1',
+                'com.docker.compose.project':'fixture','com.docker.compose.image':original['online-recharge']['image'],
+                'com.docker.compose.config-hash':'1'*64,'com.docker.compose.depends_on':'api:service_healthy:true',
+                'protected-label':'fixed'}
+            engine['Config']['Hostname']=original['api']['containerId'][:12]
+            metadata[original['api']['containerId']]['Config'].update(Hostname=engine['Config']['Hostname'],
+                Labels={'com.docker.compose.project':'fixture'})
+            engine['HostConfig']={'NetworkMode':'container:'+original['api']['containerId'],'ReadonlyRootfs':True}
+            volume={'Name':'fixture_online_recharge_data','Driver':'local','CreatedAt':'fixed','Labels':{'owner':'fixture'}}
+            engine['Mounts']=[{'Type':'volume','Name':volume['Name'],'RW':True,'Destination':'/workspace/engine/runtime'}]
+            metadata[original['api']['containerId']]['Mounts']=[{'Type':'volume','Name':volume['Name'],'RW':True,'Destination':'/app/.runtime/online-recharge'}]
+            def run(*args,**kwargs):
+                calls.append((args,kwargs))
+                if args[:3]==('docker','volume','inspect'):return json.dumps([volume])
+                if args[:2]==('docker','inspect'):return json.dumps([metadata[args[-1]]])
+                if args[:2]==('docker','stop'):
+                    metadata[args[-1]]['State']['Running']=False;return args[-1]
+                raise AssertionError(args)
+            controller=SimpleNamespace(BASE=base,require=d.require,ALL_SERVICES=d.ALL_SERVICES,run=run,
+                production_services=lambda folder:d.ALL_SERVICES,service_state=lambda folder,name,**kw:copy.deepcopy(original[name]),
+                current_job_database=lambda folder:'fixture_database',compose=MagicMock(),wait_healthy=MagicMock(),rollback_service=MagicMock())
+            yield SimpleNamespace(base=base,previous=previous,current=current,controller=controller,states=original,
+                metadata=metadata,engine=engine,volume=volume,calls=calls)
+
+    def context(self):
+        return {'version':1,'release':'/opt/id-business-v2/releases/origin','commit':COMMIT,
+            'manifestSha256':'1'*64,'buildProofSha256':'2'*64,
+            'files':{n:'1'*64 for n in workspace.ONLINE_ORIGIN_FILES},
+            'migrationState':{'name':'20261009093000_online_recharge','sha256':'44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95',
+                'status':'APPLIED','schemaVerified':True,'appliedMigrationsSha256':'3'*64},
+            'binding':{'image':'sha256:'+'4'*64,'reference':REPOSITORY+':'+COMMIT+'-123-1-online-recharge',
+                **{n:'5'*64 for n in ('environmentSha256','configurationSha256','volumeIdentitySha256','apiContainerId','containerId','startedAtSha256')}}}
+
+    def test_workspace_eight_services_leave_historical_seven_service_set_unchanged(self):
+        with self.fixture() as f:
+            observed=workspace.snapshot(f.controller,f.previous)
+            self.assertEqual(set(observed),set(d.ALL_SERVICES)|{'online-recharge'})
+            self.assertEqual(tuple(d.ALL_SERVICES),tuple(scope.workspace_service_names(d,ROOT)))
+            self.assertEqual(len(scope.snapshot(f.controller,f.previous)),7)
+
+    def test_compose_projection_preserves_exact_online_bytes_and_rejects_any_configuration_change(self):
+        with self.fixture() as f:
+            workspace.workspace_configuration(f.controller,f.previous,f.current)
+            for old,new in ((b'network_mode: service:api',b'network_mode: host'),
+                    (b'  online_recharge_data:',b'  unrelated_data:'),(b'read_only: true',b'read_only: false')):
+                (f.current/workspace.CONFIG_FILES[0]).write_bytes((f.previous/workspace.CONFIG_FILES[0]).read_bytes().replace(old,new,1))
+                with self.assertRaisesRegex(RuntimeError,'WORKSPACE_CONFIG_CHANGED'):
+                    workspace.workspace_configuration(f.controller,f.previous,f.current)
+
+    def test_binding_normalizes_only_verified_compose_paths_and_network_target(self):
+        with self.fixture() as f:
+            before=workspace.online_binding(f.controller,f.previous,f.states)
+            labels=f.engine['Config']['Labels'];labels['com.docker.compose.project.working_dir']=str(f.current)
+            labels['com.docker.compose.project.config_files']=str(f.current/workspace.CONFIG_FILES[0])+','+str(f.current/'compose.release.json')
+            labels['com.docker.compose.project.environment_file']=str(f.current/'.env.aws.production')
+            labels['com.docker.compose.config-hash']='2'*64
+            labels['com.docker.compose.replace']='online-recharge-1'
+            labels['com.docker.compose.depends_on']=''
+            after=workspace.online_binding(f.controller,f.current,f.states)
+            self.assertEqual(before['configurationSha256'],after['configurationSha256'])
+            labels['protected-label']='changed'
+            self.assertNotEqual(workspace.online_binding(f.controller,f.current,f.states)['configurationSha256'],before['configurationSha256'])
+            labels['com.docker.compose.project.config_files']='unverified-source'
+            with self.assertRaisesRegex(RuntimeError,'COMPOSE_ORIGIN_CHANGED'):
+                workspace.online_binding(f.controller,f.current,f.states)
+
+    def test_rebound_hostname_must_inherit_new_api_and_generated_metadata_cannot_hide_business_drift(self):
+        with self.fixture() as f:
+            before=workspace.online_binding(f.controller,f.previous,f.states)
+            old=f.states['api']['containerId'];new='e'*64
+            f.metadata[new]=copy.deepcopy(f.metadata[old]);f.metadata[new]['Id']=new
+            f.metadata[new]['Config']['Hostname']=new[:12];f.states['api']['containerId']=new
+            f.engine['HostConfig']['NetworkMode']='container:'+new;f.engine['Config']['Hostname']=new[:12]
+            self.assertEqual(workspace.online_binding(f.controller,f.previous,f.states)['configurationSha256'],before['configurationSha256'])
+            f.engine['Config']['Hostname']='wrong'
+            with self.assertRaisesRegex(RuntimeError,'GENERATED_IDENTITY_CHANGED'):
+                workspace.online_binding(f.controller,f.previous,f.states)
+        with self.fixture() as f:
+            before=workspace.online_binding(f.controller,f.previous,f.states)
+            f.engine['HostConfig']['ReadonlyRootfs']=False
+            self.assertNotEqual(workspace.online_binding(f.controller,f.previous,f.states)['configurationSha256'],before['configurationSha256'])
+
+    def test_network_volume_and_engine_image_drift_are_rejected(self):
+        with self.fixture() as f:
+            f.engine['HostConfig']['NetworkMode']='container:'+'9'*64
+            with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):workspace.online_binding(f.controller,f.previous,f.states)
+        with self.fixture() as f:
+            f.engine['Mounts'][0]['Name']='other_online_recharge_data'
+            with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):workspace.online_binding(f.controller,f.previous,f.states)
+        with self.fixture() as f:
+            f.engine['Image']='sha256:'+'9'*64
+            with self.assertRaisesRegex(RuntimeError,'BINDING_CHANGED'):workspace.online_binding(f.controller,f.previous,f.states)
+
+    def test_failed_online_publication_cannot_create_a_successor_origin(self):
+        with self.fixture() as f:
+            reader=SimpleNamespace(readback=MagicMock(return_value={'status':'ONLINE_RECHARGE_FAILED_RESTORED'}))
+            with patch.object(workspace,'online_reader',return_value=reader),self.assertRaisesRegex(RuntimeError,'NOT_PUBLISHED'):
+                workspace.online_origin(f.controller,f.previous,{'commit':COMMIT},f.states)
+
+    def test_successful_online_readback_seals_actual_source_files_and_original_binding(self):
+        with self.fixture() as f:
+            for name in workspace.ONLINE_ORIGIN_FILES:(f.previous/name).write_text('sealed-fixture')
+            state=self.context()['migrationState']
+            reader=SimpleNamespace(readback=MagicMock(return_value={'status':'ONLINE_RECHARGE_VERIFIED','services':f.states,
+                'migrationApplied':True,'workspaceBackupVerified':True,'backupVerified':True,'buildProofSha256':'2'*64,'migration':state}))
+            with patch.object(workspace,'online_reader',return_value=reader),patch.object(workspace,'online_origin_guard') as guard:
+                context=workspace.online_origin(f.controller,f.previous,{'commit':OLD},f.states)
+            reader.readback.assert_called_once_with(f.controller,OLD)
+            self.assertEqual(context['commit'],OLD);self.assertEqual(context['binding']['image'],f.states['online-recharge']['image'])
+            self.assertEqual(set(context['files']),set(workspace.ONLINE_ORIGIN_FILES));guard.assert_called_once()
+
+    def test_first_and_repeated_workspace_successors_preserve_same_online_origin_or_fail_closed(self):
+        for repeated in (False,True):
+            with self.subTest(repeated=repeated),self.fixture() as f,ExitStack() as stack:
+                context=self.context();context.update(release=str(f.current),commit=OLD)
+                origin_marker=workspace.online_marker(context)
+                predecessor={'commit':OLD,**({'apiWorkspacePublication':{},'preservedOnlineRechargeOrigin':origin_marker}
+                    if repeated else {'onlineRechargePublication':{'scope':'ONLINE_RECHARGE'}})}
+                raw=(json.dumps(predecessor)+'\n').encode();(f.current/'release-manifest.json').write_bytes(raw)
+                (f.current/workspace.STATE_FILE).write_text(json.dumps({'onlineRechargeOrigin':context}))
+                volume={'name':'fixture_auto_registration_data','status':'PRESENT','identitySha256':'6'*64}
+                proof_value=workspace_proof()
+                manifest={'commit':COMMIT,'sourceTree':TREE,'previousCommit':OLD,'previousRelease':str(f.current),
+                    'previousManifestSha256':hashlib.sha256(raw).hexdigest(),'preservedOnlineRechargeOrigin':origin_marker,
+                    'images':{n:{'reference':row['reference'],'digest':row['image'],'sourceCommit':COMMIT} for n,row in f.states.items()},
+                    'apiWorkspacePublication':{'version':1,'scope':'API_ADMIN_WORKSPACE','buildProofSha256':workspace.fingerprint(proof_value),
+                        'workersPublished':False,'cacheStatus':'SKIPPED','configurationChanged':True,'volume':volume,'volumeDeletionPerformed':False}}
+                record={'workspaceVolumeAfter':volume,'onlineRechargeOrigin':context,
+                    'baselineEvidence':{'onlineRechargeOrigin':context,'manifestSha256':hashlib.sha256(raw).hexdigest()}}
+                (f.previous/'release-manifest.json').write_text(json.dumps(manifest));(f.previous/workspace.STATE_FILE).write_text(json.dumps(record))
+                (f.previous/workspace.PROOF_FILE).write_text(json.dumps(proof_value));(f.base/'current').symlink_to(f.previous)
+                f.controller.SERVICES=d.SERVICES;run=f.controller.run
+                def inspect(*args,**kwargs):
+                    if args[:3]==('docker','image','inspect'):
+                        return json.dumps([{'Id':f.states['api']['image'],'Config':{'Labels':{'org.opencontainers.image.revision':COMMIT}}}])
+                    return run(*args,**kwargs)
+                f.controller.run=inspect
+                stack.enter_context(patch.object(workspace,'snapshot',return_value=f.states))
+                stack.enter_context(patch.object(workspace,'validate_proof',return_value=proof_value))
+                stack.enter_context(patch.object(workspace,'verify_running'))
+                stack.enter_context(patch.object(workspace,'workspace_volume',return_value=volume))
+                stack.enter_context(patch.object(workspace,'online_origin_guard'))
+                stack.enter_context(patch.object(workspace.shutil,'disk_usage',return_value=SimpleNamespace(free=20*1024**3)))
+                previous,observed,states_value,evidence=workspace.baseline(f.controller,COMMIT,check_jobs=False)
+                self.assertEqual(evidence['onlineRechargeOrigin'],context)
+                if repeated:
+                    (f.current/workspace.STATE_FILE).write_text(json.dumps({'onlineRechargeOrigin':{**context,'buildProofSha256':'9'*64}}))
+                else:
+                    (f.current/'release-manifest.json').write_text(json.dumps({**predecessor,'commit':'9'*40}))
+                with self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_CHANGED'):
+                    workspace.baseline(f.controller,COMMIT,check_jobs=False)
+
+    def test_origin_receipt_is_closed_and_preserves_known_migration_identity(self):
+        namespace=vars(workspace);context=self.context()
+        self.assertEqual(transport.validate_online_origin(namespace,context),workspace.online_marker(context))
+        for changed in ({'privateData':'SENTINEL'},{'files':{}},{'migrationState':{**context['migrationState'],'status':'PENDING'}},
+                {'binding':{**context['binding'],'image':'sha256:bad'}}):
+            with self.subTest(changed=changed),self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_RECEIPT_CHANGED'):
+                transport.validate_online_origin(namespace,{**context,**changed})
+
+    def test_retained_quick_action_uses_only_verified_online_history_view(self):
+        context=self.context();o=SimpleNamespace(historical_guard=MagicMock())
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            source=Path(temporary);context['release']=str(source)
+            (source/'release-manifest.json').write_text(json.dumps({'previousRelease':'/opt/id-business-v2/releases/workspace'}))
+            with patch.object(workspace,'online_reader',return_value=o),patch.object(workspace,'migration_successor_guard') as old:
+                workspace.preserved_migration_guard(d,ROOT,{'fixed':'quick-action'},context)
+                old.assert_not_called();o.historical_guard.assert_called_once_with(d,Path('/opt/id-business-v2/releases/workspace'),
+                    {'migrationOrigin':{'fixed':'quick-action'}},source)
+
+    @contextmanager
+    def fence_fixture(self,busy=0,changing_connection=False,lose_after_api=False):
+        with self.fixture() as f:
+            popen=subprocess.Popen
+            script=('import sys,json\ncount=0\nfor line in sys.stdin:\n'
+                ' if "SELECT JSON_OBJECT" in line:\n  count+=1\n  print(json.dumps({"version":1,"connectionId":'
+                +('count' if changing_connection else '(18 if count>2 else 17)' if lose_after_api else '17')+',"busy":'+str(busy)+'}),flush=True)\n')
+            commands=[]
+            def launch(command,**kwargs):
+                commands.append(command);return popen([sys.executable,'-u','-c',script],**kwargs)
+            fence=workspace.OnlineSqlFence(f.controller,f.previous)
+            with patch.object(workspace.subprocess,'Popen',side_effect=launch):
+                try:yield f,fence,commands
+                finally:fence.close()
+
+    def test_fence_uses_same_connection_private_stdin_and_stops_exact_api_then_engine(self):
+        with self.fence_fixture() as (f,fence,commands):
+            fence.acquire();self.assertEqual(fence.connection_id,17)
+            fence.stop(f.states['api'],grace=30);fence.stop(f.states['online-recharge'],grace=45)
+            self.assertEqual([a[-1] for a,k in f.calls if a[:2]==('docker','stop')],
+                [f.states['api']['containerId'],f.states['online-recharge']['containerId']])
+            self.assertIn('--unbuffered',commands[0][-1]);self.assertNotIn('LOCK TABLES',str(commands[0]))
+
+    def test_active_task_or_card_lease_never_stops_any_container(self):
+        with self.fence_fixture(busy=1) as (f,fence,commands):
+            with self.assertRaisesRegex(RuntimeError,'FENCE_UNAVAILABLE'):fence.acquire()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_lost_connection_changed_identity_or_insufficient_budget_prevents_stop(self):
+        with self.fence_fixture(changing_connection=True) as (f,fence,commands):
+            fence.acquire()
+            with self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):fence.stop(f.states['api'],grace=30)
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_lost_fence_after_api_stop_never_sends_stop_to_original_engine(self):
+        with self.fence_fixture(lose_after_api=True) as (f,fence,commands):
+            fence.acquire()
+            with self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):fence.stop(f.states['api'],grace=30)
+            self.assertEqual([a[-1] for a,k in f.calls if a[:2]==('docker','stop')],[f.states['api']['containerId']])
+            self.assertTrue(f.metadata[f.states['online-recharge']['containerId']]['State']['Running'])
+        with self.fence_fixture() as (f,fence,commands):
+            fence.acquire();fence.deadline=workspace.time.monotonic()+20
+            with self.assertRaisesRegex(RuntimeError,'FENCE_TIMEOUT'):fence.stop(f.states['api'],grace=30)
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_reverse_switch_stops_idle_owner_before_original_api_and_original_engine_rebind(self):
+        with self.fixture() as f:
+            order=[];fence=SimpleNamespace(acquire=lambda:order.append('lock'),check_idle=lambda:order.append('idle'),
+                stop=lambda row,grace:order.append('stop-api' if row['image']=='api-image' else 'stop-engine'),close=lambda:order.append('unlock'))
+            f.controller.rollback_service.side_effect=lambda *a:order.append('restore-api')
+            with patch.object(workspace,'OnlineSqlFence',return_value=fence),patch.object(workspace,'online_container',
+                    side_effect=[{'image':'api-image'},{'image':'engine-image'}]),patch.object(workspace,'online_rebind',side_effect=lambda *a:order.append('rebind-original')):
+                workspace.online_rollback_api(f.controller,f.previous,f.current,f.states,workspace_proof(),self.context())
+            self.assertEqual(order,['lock','stop-api','idle','stop-engine','unlock','restore-api','rebind-original'])
+
+    def test_busy_reverse_switch_cannot_restore_api_or_interrupt_engine(self):
+        with self.fixture() as f:
+            fence=SimpleNamespace(acquire=MagicMock(side_effect=RuntimeError('API_ADMIN_ONLINE_TASK_ACTIVE')),close=MagicMock())
+            with patch.object(workspace,'OnlineSqlFence',return_value=fence),patch.object(workspace,'online_rebind') as rebind, \
+                    self.assertRaisesRegex(RuntimeError,'TASK_ACTIVE'):
+                workspace.online_rollback_api(f.controller,f.previous,f.current,f.states,workspace_proof(),self.context())
+            f.controller.rollback_service.assert_not_called();rebind.assert_not_called()
+
+    def test_busy_before_any_api_mutation_never_recreates_old_api_or_engine(self):
+        for failure in ('idle','fence'):
+            with self.subTest(failure=failure):
+                code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+                    online_origin_context=self.context(),online_fail=failure)
+                self.assertEqual(code,1);self.assertEqual(result['servicesAttempted'],['admin'])
+                self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['admin'])
+                controller.online_fence.stop.assert_not_called();controller.online_rebind.assert_not_called()
+                controller.online_rollback.assert_not_called()
+
+    def test_rebind_failure_uses_online_aware_recovery_and_busy_recovery_is_partial(self):
+        for failure in ('rebind','rollback-busy'):
+            with self.subTest(failure=failure):
+                code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+                    online_origin_context=self.context(),online_fail=failure)
+                self.assertEqual(code,1);controller.online_rollback.assert_called_once()
+                self.assertNotIn('api',[call.args[2] for call in controller.rollback_service.call_args_list])
+                self.assertEqual(result['servicesReboundAttempted'],['online-recharge'])
+                self.assertEqual(result['rollbackOk'],failure!='rollback-busy')
+                if failure=='rollback-busy':self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+
+    def test_eight_service_readback_binds_recreated_engine_to_current_api_and_sealed_origin(self):
+        context=self.context();value=workspace_proof();before=copy.deepcopy(context['binding'])
+        after={**before,'containerId':'6'*64,'startedAtSha256':'7'*64,'apiContainerId':'8'*64}
+        receipt={'status':'API_ADMIN_WORKSPACE_VERIFIED','commit':COMMIT,'sourceTree':TREE,
+            'buildProofSha256':workspace.fingerprint(value),'servicesUpdated':list(workspace.UPDATED),
+            'preservedServiceCount':4,'runningImagesAndContentMatched':True,'environmentUnchanged':True,
+            'workspaceVolume':{'status':'PRESENT','identitySha256':'6'*64},'volumePreserved':True,
+            'volumeDeletionPerformed':False,'registrationHealthChecked':True,'offlineAcceptance':value['acceptance'],
+            'services':{n:{'image':row['imageId'],'reference':row['reference']} for n,row in value['images'].items()},
+            'preservedOnlineRechargeOrigin':workspace.online_marker(context),'servicesRebound':['online-recharge'],
+            'onlineNetworkRebind':{'version':1,'before':before,'after':after,'businessActions':0,
+                'sqlFence':{'version':1,'busyCount':0,'sameConnection':True,'mysqlIdentitySha256':'9'*64,
+                    'connectionIdSha256':'8'*64,'businessActions':0}}}
+        receipt['services'].update({n:{} for n in ('caddy','mysql','media-resolver','auto-recharge','auto-registration')})
+        receipt['services']['api']['containerId']=after['apiContainerId'];receipt['services']['online-recharge']=after
+        def read(path,*a,**kw):
+            return json.dumps({'onlineRechargeOrigin':context} if path.name.endswith('preflight-result.json') else value)
+        with patch.object(Path,'read_text',read),patch.object(Path,'is_file',return_value=True):
+            transport.validate_receipt(receipt,COMMIT,'readback','API_ADMIN_WORKSPACE')
+            for changed in ({'servicesRebound':[]},{'preservedOnlineRechargeOrigin':{}},
+                    {'onlineNetworkRebind':{**receipt['onlineNetworkRebind'],'after':{**after,'apiContainerId':'9'*64}}}):
+                with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                    transport.validate_receipt({**receipt,**changed},COMMIT,'readback','API_ADMIN_WORKSPACE')
+            missing={k:v for k,v in receipt.items() if k not in
+                ('preservedOnlineRechargeOrigin','servicesRebound','onlineNetworkRebind')}
+            missing['services']={k:v for k,v in receipt['services'].items() if k!='online-recharge'}
+            with self.assertRaisesRegex(RuntimeError,'ONLINE_ORIGIN_RECEIPT_CHANGED'):
+                transport.validate_receipt(missing,COMMIT,'readback','API_ADMIN_WORKSPACE')
 
 
 class WorkspaceSqliteProtectionTests(unittest.TestCase):

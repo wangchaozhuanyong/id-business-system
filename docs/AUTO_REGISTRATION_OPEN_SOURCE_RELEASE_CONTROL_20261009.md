@@ -96,6 +96,36 @@ API 切换前取得 SQLite `BEGIN IMMEDIATE` 外部写锁，锁内再次扫描�
 审计及原逻辑数据重新核验后解除本次围栏；任何不确定保留围栏并报告 PARTIAL。不会把备份写回
 生产数据库覆盖新资料；未知/外来围栏不得擅自删除，需按受控回执诊断。
 
+## 已上线线上代充的继发兼容
+
+只有 `ONLINE_RECHARGE` 正式发布并通过独立回读后，才能作为此入口的后继基线。
+失败或只应用了部分迁移的状态不得作为发布来源。首次继发封存原代充 manifest、四镜像 proof、
+保护回执、SQLite/MySQL 备份及财务检查摘要；后续 WORKSPACE 继续携带并核对同一来源封印。
+旧 quick-action 来源只通过既有有限历史视图核验：先验证完整 ONLINE 迁移与九张表，再从旧
+读视图中省略那一条已验证迁移，旧任务、窗口、HMAC、镜像和备份保护仍全部执行。
+候选与当前主 schema、seed 和全部 migration 必须一致，`migration_plan=[]`，不执行 DDL。
+Compose 的线上代充定义和共享卷按原字节保留，不接受任意新增配置。
+
+该分支只在 WORKSPACE 内读取八个服务；历史七服务入口不变。API、Admin、Caddy 使用候选，
+线上代充执行器保持原镜像、环境和卷，只重建容器以绑定 API 的新网络空间。
+media-resolver、auto-recharge、auto-registration、MySQL 的容器 ID、启动身份、镜像、环境和
+配置全部保持。回执将执行器列为 `servicesRebound`，不计入四个完全保留的容器。
+
+切换前通过同一私有流式 MySQL CLI 连接对固定的 `online_recharge_tasks` 和
+`online_recharge_cards` 取得短时 WRITE 锁；锁等待 5 秒，维护预算 120 秒。不修改业务行。
+同连接确认 queued/running 及有效任务/卡租约数为 0，核对 MySQL 身份，再停止精确旧 API，
+重核空闲并停止精确旧执行器，释放锁后启动候选 API 和原镜像执行器。失败回退也须重新取得
+同一围栏并确认空闲，再恢复原 API、把原执行器绑定到恢复 API；不能用通用重建绕过代充门禁。
+空闲检查拒绝前未触碰的 API/执行器不重建。围栏遗失、活动任务或恢复未证实均保留现场并报告
+部分恢复；已发送的 Docker 停止请求无法撤回，不把失锁异常描述为业务线程已安全暂停。
+
+重绑回执记录前后容器、启动及 API 网络绑定摘要，并证明镜像、环境和卷未变。
+由 Docker/Compose 生成的 API 短主机名、网络目标、固定项目路径、服务 hash、重建及依赖标签
+逐项验证后规范化；其余 Config、HostConfig、挂载和标签原样纳入指纹。
+独立读回必须与本次预检的来源封印一致，不能省略八服务或重绑证明后退回七服务检查。
+控制脚本同时从本次候选 SHA 下载并校验所依赖的 ONLINE reader；该兼容不发布代充新镜像，
+不授权真实付款、注册、邮件读取、业务清理或再次迁移。
+
 ## 回执位置
 
 GitHub artifact：`api-workspace-evidence-<run>-<attempt>`，保存 runner 的
