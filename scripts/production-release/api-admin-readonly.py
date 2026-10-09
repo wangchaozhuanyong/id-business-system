@@ -35,7 +35,12 @@ def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True
     prefix = 'api-workspace' if scope == 'API_ADMIN_WORKSPACE' else scope.lower().replace('_', '-')
     directory = f'/opt/id-business-v2/.staging/{prefix}-verify-{commit}'
     commands = ['set -eu', f'mkdir -p {directory}']
-    for name in ('remote-deploy.py', 'api-admin-scope.py'):
+    controllers = ('remote-deploy.py', 'api-admin-scope.py')
+    if scope == 'API_ADMIN_WORKSPACE':
+        # A verified online publication retains its migration and engine proof.
+        # Pin that reader before either workspace preflight or independent readback.
+        controllers += ('online-recharge-scope.py',)
+    for name in controllers:
         digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',
                          f'echo "{digest}  {directory}/{name}" | sha256sum -c - >/dev/null'])
@@ -111,6 +116,78 @@ def validate_migration_origin(namespace, context):
     return namespace['migration_successor_marker'](context)
 
 
+def validate_online_workspace_receipt(namespace, receipt, expected, mode):
+    """Admit eight services only through this run's verified online origin."""
+    before = {}
+    if mode == 'readback':
+        path = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
+        before = json.loads(path.read_text()) if path.is_file() else {}
+    services = receipt.get('services', {})
+    selected = (receipt.get('onlineOrigin') is not None
+        or receipt.get('preservedOnlineOrigin') is not None
+        or receipt.get('onlineSuccessorVerified') is True
+        or isinstance(services, dict) and 'online-recharge' in services
+        or isinstance(before, dict) and before.get('onlineOrigin') is not None)
+    if not selected:
+        return False
+    context = receipt.get('onlineOrigin') if mode == 'preflight' else before.get('onlineOrigin')
+    code = 'API_ADMIN_ONLINE_ORIGIN_RECEIPT_CHANGED'
+    try:
+        namespace['validate_online_successor_origin'](context)
+        marker = namespace['online_successor_marker'](context)
+    except (KeyError, TypeError, ValueError, RuntimeError):
+        raise RuntimeError(code) from None
+    if context['commit'] != (receipt.get('commit') if mode == 'preflight' else before.get('commit')):
+        raise RuntimeError(code)
+    names = {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge',
+             'auto-registration', 'online-recharge'}
+    keys = {'image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256',
+            'environmentSha256', 'configurationSha256'}
+    if (receipt.get('onlineSuccessorVerified') is not True
+            or type(receipt.get('observedServiceCount')) is not int
+            or receipt['observedServiceCount'] != len(names)
+            or not isinstance(services, dict) or set(services) != names
+            or any(not isinstance(row, dict) or set(row) != keys or row.get('status') != 'running'
+                or (row.get('health') not in ('healthy', None) if name == 'caddy'
+                    else row.get('health') != 'healthy')
+                or not re.fullmatch(r'sha256:[a-f0-9]{64}', row.get('image', ''))
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9:/@._-]{0,511}', row.get('reference', ''))
+                or any(not re.fullmatch(r'[a-f0-9]{64}', row.get(key, '')) for key in
+                    ('containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))
+                for name, row in services.items())
+            or services['online-recharge']['configurationSha256'] != context['engineConfigurationSha256']):
+        raise RuntimeError(code)
+    if mode == 'readback':
+        prior = before.get('services', {})
+        if (before.get('status') != 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED'
+                or before.get('mode') != 'preflight'
+                or before.get('onlineSuccessorVerified') is not True
+                or type(before.get('observedServiceCount')) is not int
+                or before.get('observedServiceCount') != len(names)
+                or before.get('releaseCandidateCommit') != expected
+                or os.environ.get('RELEASE_COMMIT') != expected
+                or before.get('commit') != os.environ.get('EXPECTED_CURRENT')
+                or not re.fullmatch(r'[a-f0-9]{40}', os.environ.get('EXPECTED_CURRENT', ''))
+                or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ID', ''))
+                or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ATTEMPT', ''))
+                or before.get('workflowRunId') != os.environ['GITHUB_RUN_ID']
+                or before.get('workflowRunAttempt') != os.environ['GITHUB_RUN_ATTEMPT']
+                or receipt.get('preservedOnlineOrigin') != marker
+                or receipt.get('onlineEngineRebound') is not True
+                or receipt.get('migrationPerformed') is not False
+                or not isinstance(prior, dict) or set(prior) != names
+                or any(services[name] != prior[name] for name in
+                    ('mysql', 'media-resolver', 'auto-recharge', 'auto-registration'))
+                or any(services[name][key] != prior.get(name, {}).get(key)
+                    for name in ('online-recharge', 'caddy')
+                    for key in ('image', 'reference', 'environmentSha256'))
+                or services['online-recharge']['configurationSha256']
+                    != prior['online-recharge'].get('configurationSha256')
+                or services['online-recharge']['containerId'] == prior['online-recharge'].get('containerId')):
+            raise RuntimeError(code)
+    return True
+
+
 def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
     wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_OBSERVED' if mode == 'handoff-observe' else '_HANDOFF_VERIFIED' if mode in ('handoff', 'handoff-recover')
                       else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
@@ -127,6 +204,8 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                     or any(not isinstance(row, dict) or row.get('status') != 'running'
                            for row in receipt['services'].values())):
                 raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
+        if scope == 'API_ADMIN_WORKSPACE':
+            validate_online_workspace_receipt(namespace, receipt, expected, mode)
     if scope == 'API_ADMIN_MIGRATION' and mode == 'preflight':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
@@ -161,9 +240,12 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                 if not condition:
                     raise RuntimeError(code)
             namespace['validate_proof'](SimpleNamespace(require=need), proof, expected, receipt.get('sourceTree'))
+        online_workspace = (scope == 'API_ADMIN_WORKSPACE'
+            and validate_online_workspace_receipt(namespace, receipt, expected, mode))
+        updated = [*namespace['UPDATED'], *(['online-recharge'] if online_workspace else [])]
         if (receipt.get('buildProofSha256') != namespace['fingerprint'](proof)
                 or receipt.get('sourceTree') != proof['sourceTree'] or proof['commit'] != expected
-                or receipt.get('servicesUpdated') != list(namespace['UPDATED'])
+                or receipt.get('servicesUpdated') != updated
                 or receipt.get('preservedServiceCount') != (4 if scope == 'API_ADMIN_WORKSPACE' else 5)
                 or receipt.get('runningImagesAndContentMatched') is not True
                 or receipt.get('environmentUnchanged') is not True
