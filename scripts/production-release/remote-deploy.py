@@ -723,8 +723,198 @@ def mailbox_audit(directory, receipt, *, stage, source, before_receipt=None, ori
     return {'checkCount': 48, 'violationCount': 6, 'historicalException': report['gate']}
 
 
+# Finite literal guard/exception codes from the sealed scope and shared controllers.
+# Unknown suffixes are never carried into diagnostics.
+ONLINE_RECHARGE_FAILURE_CODES = frozenset("""
+API_ADMIN_AUDIT_RULES_CHANGED API_ADMIN_AUDIT_SCOPE_CONFLICT API_ADMIN_BASELINE_API_REVISION_CHANGED
+API_ADMIN_BASELINE_CHANGED API_ADMIN_BASELINE_IMAGE_CHANGED API_ADMIN_BASELINE_MANIFEST_CHANGED
+API_ADMIN_BASELINE_MOVED API_ADMIN_BASELINE_PATH_INVALID API_ADMIN_BASELINE_POINTER_MOVED
+API_ADMIN_BASELINE_SERVICES_CHANGED API_ADMIN_BUILD_IMAGE_INVALID API_ADMIN_BUILD_LABEL_CHANGED
+API_ADMIN_BUILD_PROOF_INVALID API_ADMIN_BUILD_PROOF_TOO_LARGE API_ADMIN_BUILD_RUN_CHANGED
+API_ADMIN_BUILD_SOURCE_CHANGED API_ADMIN_CONFIG_OR_SCHEMA_CHANGED API_ADMIN_CONTAINER_CHANGED
+API_ADMIN_CONTAINER_MOUNTS_INVALID API_ADMIN_CONTENT_INVALID API_ADMIN_DISK_LOW API_ADMIN_DISK_LOW_BEFORE_PULL
+API_ADMIN_ECR_LOGIN_FAILED API_ADMIN_ENVIRONMENT_CHANGED API_ADMIN_EXECUTOR_SOURCE_CHANGED
+API_ADMIN_IMAGE_PROVENANCE_FAILED API_ADMIN_INPUT_INVALID API_ADMIN_MIGRATIONS_FORBIDDEN
+API_ADMIN_MIGRATION_BACKUP_CHANGED API_ADMIN_MIGRATION_BUILD_PROOF_CHANGED
+API_ADMIN_MIGRATION_DATABASE_INVALID API_ADMIN_MIGRATION_EXECUTION_FAILED API_ADMIN_MIGRATION_HISTORY_CHANGED
+API_ADMIN_MIGRATION_IMAGE_CHANGED API_ADMIN_MIGRATION_IMAGE_CONTENT_CHANGED API_ADMIN_MIGRATION_NOT_APPLIED
+API_ADMIN_MIGRATION_ORIGIN_CHANGED API_ADMIN_MIGRATION_PRESERVATION_CHANGED
+API_ADMIN_MIGRATION_PROVENANCE_CHANGED API_ADMIN_MIGRATION_READBACK_CHANGED API_ADMIN_MIGRATION_SCHEMA_CHANGED
+API_ADMIN_MIGRATION_SCOPE_CHANGED API_ADMIN_MIGRATION_SOURCE_INVALID API_ADMIN_PRESERVED_CONTAINER_CHANGED
+API_ADMIN_PRESERVED_IMAGE_REFERENCE_CHANGED API_ADMIN_PUBLIC_HEALTH_FAILED API_ADMIN_READBACK_AUDIT_CHANGED
+API_ADMIN_READBACK_CONFIG_CHANGED API_ADMIN_READBACK_MOVED API_ADMIN_READBACK_PRESERVATION_FAILED
+API_ADMIN_REGISTRATION_API_SCOPE_CHANGED API_ADMIN_REGISTRATION_BASIS_CHANGED
+API_ADMIN_REGISTRATION_BUILD_INPUT_CHANGED API_ADMIN_REGISTRATION_BUSINESS_MOVED
+API_ADMIN_REGISTRATION_BUSINESS_UNAVAILABLE API_ADMIN_REGISTRATION_BUSY API_ADMIN_REGISTRATION_CONTENT_CHANGED
+API_ADMIN_REGISTRATION_CONTEXT_EXISTS API_ADMIN_REGISTRATION_CURRENT_CHANGED
+API_ADMIN_REGISTRATION_HANDOFF_ALREADY_ATTEMPTED API_ADMIN_REGISTRATION_HANDOFF_CHANGED
+API_ADMIN_REGISTRATION_HANDOFF_OWNER_CHANGED API_ADMIN_REGISTRATION_LEASE_ACTIVE
+API_ADMIN_REGISTRATION_LOGS_UNAVAILABLE API_ADMIN_REGISTRATION_NATIVE_CONTAINER_CHANGED
+API_ADMIN_REGISTRATION_NATIVE_RECORD_CHANGED API_ADMIN_REGISTRATION_NATIVE_REMAINS
+API_ADMIN_REGISTRATION_NATIVE_UNAVAILABLE API_ADMIN_REGISTRATION_PAIR_CHANGED
+API_ADMIN_REGISTRATION_PREFLIGHT_CHANGED API_ADMIN_REGISTRATION_PRESERVED_PRO_CHANGED
+API_ADMIN_REGISTRATION_PRIVATE_UNAVAILABLE API_ADMIN_REGISTRATION_PROFILE_CHANGED
+API_ADMIN_REGISTRATION_PROJECTION_CHANGED API_ADMIN_REGISTRATION_PROVENANCE_CHANGED
+API_ADMIN_REGISTRATION_RECOVERY_ALREADY_ATTEMPTED API_ADMIN_REGISTRATION_RECOVERY_ALREADY_CONFIRMED
+API_ADMIN_REGISTRATION_RECOVERY_AUDIT_CHANGED API_ADMIN_REGISTRATION_RECOVERY_FAILED
+API_ADMIN_REGISTRATION_RECOVERY_FAILURE_CHANGED API_ADMIN_REGISTRATION_RECOVERY_MARKER_CHANGED
+API_ADMIN_REGISTRATION_RECOVERY_MOVED API_ADMIN_REGISTRATION_RETAINED_API_CHANGED
+API_ADMIN_REGISTRATION_RUNTIME_SOURCE_CHANGED API_ADMIN_REGISTRATION_SOURCE_CHANGED
+API_ADMIN_REGISTRATION_SOURCE_LOCATION_CHANGED API_ADMIN_REGISTRATION_SOURCE_TOO_LARGE
+API_ADMIN_REGISTRATION_TASK_CHANGED API_ADMIN_REGISTRATION_TASK_UNAVAILABLE
+API_ADMIN_REGISTRATION_WINDOW_RETAINED API_ADMIN_RELEASE_EXISTS API_ADMIN_RETAINED_PUBLICATION_AMBIGUOUS
+API_ADMIN_RETAINED_PUBLICATION_CHANGED API_ADMIN_ROLLBACK_NOT_RESTORED API_ADMIN_RUNNING_CONTENT_CHANGED
+API_ADMIN_RUNNING_IMAGE_CHANGED API_ADMIN_SCOPE_CONFLICT API_ADMIN_SCOPE_REQUIRED API_ADMIN_SERVICE_UNHEALTHY
+API_ADMIN_SOURCE_ARCHIVE_INVALID API_ADMIN_SOURCE_ENTRY_INVALID API_ADMIN_SOURCE_TOO_LARGE
+API_ADMIN_SOURCE_TREE_CHANGED API_ADMIN_SPLIT_WORKERS_REQUIRED API_ADMIN_STEP_FAILED API_ADMIN_STRICT_49_FAILED
+API_ADMIN_UNKNOWN_API_PROJECTION API_ADMIN_WORKSPACE_ACCEPTANCE_FAILED
+API_ADMIN_WORKSPACE_ACCEPTANCE_VOLUME_CHANGED API_ADMIN_WORKSPACE_ACCEPTANCE_VOLUME_EXISTS
+API_ADMIN_WORKSPACE_BUILD_PROOF_CHANGED API_ADMIN_WORKSPACE_CADDY_IMAGE_CHANGED
+API_ADMIN_WORKSPACE_CADDY_VALIDATION_FAILED API_ADMIN_WORKSPACE_CONFIG_CHANGED
+API_ADMIN_WORKSPACE_CONFIG_PROOF_CHANGED API_ADMIN_WORKSPACE_EDGE_CHANGED API_ADMIN_WORKSPACE_HEALTH_FAILED
+API_ADMIN_WORKSPACE_MOUNT_CHANGED API_ADMIN_WORKSPACE_PROJECT_INVALID API_ADMIN_WORKSPACE_PROVENANCE_CHANGED
+API_ADMIN_WORKSPACE_PUBLIC_EDGE_CHANGED API_ADMIN_WORKSPACE_READBACK_CHANGED
+API_ADMIN_WORKSPACE_SCOPE_REQUIRED API_ADMIN_WORKSPACE_SQLITE_BACKUP_REQUIRED API_ADMIN_WORKSPACE_TASK_ACTIVE
+API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE API_ADMIN_WORKSPACE_VOLUME_CHANGED
+API_ADMIN_WORKSPACE_VOLUME_MISSING API_ADMIN_WORKSPACE_VOLUME_PATH_INVALID ONLINE_RECHARGE_API_ENV_CHANGED
+ONLINE_RECHARGE_API_MOUNT_CHANGED ONLINE_RECHARGE_AUDIT_RULES_CHANGED ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED
+ONLINE_RECHARGE_BACKUP_UNVERIFIED ONLINE_RECHARGE_BASELINE_MOVED ONLINE_RECHARGE_BASELINE_NOT_APPROVED
+ONLINE_RECHARGE_BUILD_IMAGE_INVALID ONLINE_RECHARGE_BUILD_PROOF_INVALID ONLINE_RECHARGE_BUILD_PROOF_TOO_LARGE
+ONLINE_RECHARGE_BUILD_RUN_CHANGED ONLINE_RECHARGE_BUILD_SOURCE_CHANGED ONLINE_RECHARGE_BUILD_WORKTREE_DIRTY
+ONLINE_RECHARGE_CADDY_IMAGE_CHANGED ONLINE_RECHARGE_CADDY_PROJECTION_CHANGED ONLINE_RECHARGE_COMPOSE_INVALID
+ONLINE_RECHARGE_DATABASE_GRANTS_FAILED ONLINE_RECHARGE_DATABASE_RESPONSE_INVALID
+ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID ONLINE_RECHARGE_DISK_LOW ONLINE_RECHARGE_DISK_LOW_BEFORE_PULL
+ONLINE_RECHARGE_ECR_LOGIN_FAILED ONLINE_RECHARGE_ENGINE_CONTENT_INVALID ONLINE_RECHARGE_ENV_ALREADY_PRESENT
+ONLINE_RECHARGE_ENV_SCOPE_CHANGED ONLINE_RECHARGE_EXECUTOR_ISOLATION_CHANGED
+ONLINE_RECHARGE_EXECUTOR_NETWORK_CHANGED ONLINE_RECHARGE_EXECUTOR_SECRET_SCOPE_CHANGED
+ONLINE_RECHARGE_EXECUTOR_SOURCE_CHANGED ONLINE_RECHARGE_EXECUTOR_UNHEALTHY
+ONLINE_RECHARGE_EXISTING_ENV_CHANGED ONLINE_RECHARGE_EXISTING_SERVICE_CHANGED
+ONLINE_RECHARGE_FIRST_PUBLICATION_RESOURCES_NOT_EMPTY ONLINE_RECHARGE_HISTORY_VIEW_INVALID
+ONLINE_RECHARGE_IMAGE_CONTENT_CHANGED ONLINE_RECHARGE_IMAGE_PROVENANCE_CHANGED
+ONLINE_RECHARGE_IMAGE_SOURCE_CHANGED ONLINE_RECHARGE_INPUT_INVALID ONLINE_RECHARGE_KEY_INVALID
+ONLINE_RECHARGE_LEGACY_SOURCE_CHANGED ONLINE_RECHARGE_LEGACY_SOURCE_UNAVAILABLE
+ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT ONLINE_RECHARGE_MIGRATION_DATABASE_INVALID
+ONLINE_RECHARGE_MIGRATION_HISTORY_CHANGED ONLINE_RECHARGE_MIGRATION_NOT_APPLIED
+ONLINE_RECHARGE_MIGRATION_PARTIAL_SCHEMA ONLINE_RECHARGE_MIGRATION_SCHEMA_CHANGED
+ONLINE_RECHARGE_MIGRATION_SCHEMA_INVALID ONLINE_RECHARGE_MIGRATION_SCOPE_CHANGED
+ONLINE_RECHARGE_MIGRATION_SOURCE_INVALID ONLINE_RECHARGE_PERMISSION_SEED_CHANGED
+ONLINE_RECHARGE_PREFLIGHT_MOVED ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED
+ONLINE_RECHARGE_PRESERVED_IMAGE_REFERENCE_CHANGED ONLINE_RECHARGE_PRESERVED_INFRASTRUCTURE_CHANGED
+ONLINE_RECHARGE_PRESERVED_SERVICE_DEFINITION_CHANGED ONLINE_RECHARGE_PREVIOUS_ENV_CHANGED
+ONLINE_RECHARGE_PUBLIC_HEALTH_FAILED ONLINE_RECHARGE_READBACK_AUDIT_CHANGED
+ONLINE_RECHARGE_READBACK_MIGRATION_CHANGED ONLINE_RECHARGE_READBACK_MOVED
+ONLINE_RECHARGE_READBACK_PATH_INVALID ONLINE_RECHARGE_READBACK_PRESERVATION_CHANGED
+ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED ONLINE_RECHARGE_READBACK_SOURCE_CHANGED
+ONLINE_RECHARGE_RECEIPT_BASELINE_CHANGED ONLINE_RECHARGE_RECEIPT_INVALID
+ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED ONLINE_RECHARGE_RECEIPT_SERVICES_CHANGED
+ONLINE_RECHARGE_RELEASE_EXISTS ONLINE_RECHARGE_ROLLBACK_EXECUTOR_REMAINS ONLINE_RECHARGE_ROLLBACK_NOT_RESTORED
+ONLINE_RECHARGE_RUNNING_CONTENT_CHANGED ONLINE_RECHARGE_RUNNING_IMAGE_CHANGED ONLINE_RECHARGE_SCOPE_CONFLICT
+ONLINE_RECHARGE_SCOPE_REQUIRED ONLINE_RECHARGE_SHARED_GATE_SOURCE_CHANGED
+ONLINE_RECHARGE_SHARED_VOLUME_CHANGED ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID ONLINE_RECHARGE_SOURCE_INVALID
+ONLINE_RECHARGE_SOURCE_TOO_LARGE ONLINE_RECHARGE_SOURCE_TREE_CHANGED ONLINE_RECHARGE_STEP_FAILED
+ONLINE_RECHARGE_TASKS_BUSY ONLINE_RECHARGE_VOLUME_SCOPE_CHANGED ONLINE_RECHARGE_WORKSPACE_BACKUP_CHANGED
+ONLINE_RECHARGE_WORKSPACE_BACKUP_CONFIG_INVALID ONLINE_RECHARGE_WORKSPACE_BACKUP_EXISTS
+ONLINE_RECHARGE_WORKSPACE_BACKUP_FAILED ONLINE_RECHARGE_WORKSPACE_BACKUP_INVALID
+ONLINE_RECHARGE_WORKSPACE_BACKUP_NAME_INVALID ONLINE_RECHARGE_WORKSPACE_BACKUP_PATH_INVALID
+ONLINE_RECHARGE_WORKSPACE_BACKUP_RECEIPT_CHANGED ONLINE_RECHARGE_WORKSPACE_BACKUP_TIMEOUT
+ONLINE_RECHARGE_WORKSPACE_DATABASE_INVALID ONLINE_RECHARGE_WORKSPACE_IMAGE_CHANGED
+ONLINE_RECHARGE_WORKSPACE_INTEGRITY_FAILED ONLINE_RECHARGE_WORKSPACE_NOT_PUBLISHED
+ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED ONLINE_RECHARGE_WORKSPACE_ORIGIN_INVALID
+ONLINE_RECHARGE_WORKSPACE_S3_UNVERIFIED ONLINE_RECHARGE_WORKSPACE_TASK_ACTIVE
+ONLINE_RECHARGE_WORKSPACE_VOLUME_CHANGED
+""".split())
+
+
+def online_recharge_command_failure(data):
+    """Project one completed, explicitly bound failure; never expose command output."""
+    try:
+        command_id = data.get('CommandId')
+        requested_id = os.environ.get('DIAGNOSTIC_COMMAND_ID')
+        require(isinstance(command_id, str)
+                and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id)
+                and (requested_id is None or requested_id == command_id)
+                and data.get('Status') == 'Failed'
+                and type(data.get('ResponseCode')) is int and 0 < data['ResponseCode'] <= 255,
+                'ONLINE_RECHARGE_FAILURE_INVALID')
+        raw = data.get('StandardOutputContent')
+        require(isinstance(raw, str) and 0 < len(raw.encode()) <= 256 * 1024,
+                'ONLINE_RECHARGE_FAILURE_INVALID')
+        receipt = fixed_recharge_json(raw.encode())
+        keys = {'status', 'step', 'code', 'errorType', 'rollbackOk', 'rollback', 'servicesAttempted',
+                'candidateCommit', 'previousCommit', 'migration', 'migrationAttempted',
+                'inverseMigrationPerformed', 'mediaVolumeDeleted', 'currentPointsToCandidate', 'receiptPersisted'}
+        require(isinstance(receipt, dict) and set(receipt) == keys
+                and receipt.get('previousCommit') == '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+                and isinstance(receipt.get('candidateCommit'), str)
+                and re.fullmatch(r'[a-f0-9]{40}', receipt['candidateCommit'])
+                and receipt.get('step') in ('source', 'images', 'audit-before', 'backup', 'workspace-backup',
+                                           'migration', 'grants', 'switch', 'audit-after')
+                and isinstance(receipt.get('code'), str)
+                and receipt['code'] in ONLINE_RECHARGE_FAILURE_CODES
+                and receipt.get('errorType') in ('RuntimeError', 'ValueError', 'TypeError', 'KeyError',
+                    'AttributeError', 'FileNotFoundError', 'PermissionError', 'OSError', 'JSONDecodeError',
+                    'TimeoutExpired', 'HTTPError', 'URLError')
+                and all(type(receipt.get(name)) is bool for name in ('rollbackOk', 'migrationAttempted',
+                    'inverseMigrationPerformed', 'mediaVolumeDeleted', 'currentPointsToCandidate', 'receiptPersisted'))
+                and receipt['inverseMigrationPerformed'] is False and receipt['mediaVolumeDeleted'] is False,
+                'ONLINE_RECHARGE_FAILURE_INVALID')
+        attempted = receipt['servicesAttempted']
+        order = ['admin', 'api', 'online-recharge']
+        require(isinstance(attempted, list) and len(attempted) <= len(order)
+                and attempted == order[:len(attempted)]
+                and (receipt['step'] in ('switch', 'audit-after') or not attempted)
+                and (receipt['step'] != 'audit-after' or attempted == order),
+                'ONLINE_RECHARGE_FAILURE_INVALID')
+        restored = receipt['rollback']
+        require(isinstance(restored, dict) and set(restored) <= set(attempted)
+                and all(value in ('RESTORED', 'BLOCKED_OR_FAILED') for value in restored.values())
+                and (not receipt['rollbackOk'] or set(restored) == set(attempted)
+                     and all(value == 'RESTORED' for value in restored.values()))
+                and receipt['status'] == ('ONLINE_RECHARGE_FAILED_RESTORED' if attempted and receipt['rollbackOk']
+                    else 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH' if not attempted and receipt['rollbackOk']
+                    else 'ONLINE_RECHARGE_PARTIAL_RECOVERY_REQUIRED')
+                and (not receipt['rollbackOk'] or receipt['currentPointsToCandidate'] is False),
+                'ONLINE_RECHARGE_FAILURE_INVALID')
+        migration = receipt['migration']
+        require(isinstance(migration, dict), 'ONLINE_RECHARGE_FAILURE_INVALID')
+        if migration.get('status') in ('NOT_ATTEMPTED', 'UNVERIFIED'):
+            require(set(migration) == {'status', 'performed'}
+                    and (migration == {'status': 'NOT_ATTEMPTED', 'performed': False}
+                         and type(migration['performed']) is bool
+                         and not receipt['migrationAttempted'] and receipt['step'] == 'source'
+                         or migration == {'status': 'UNVERIFIED', 'performed': None}
+                         and receipt['migrationAttempted'] and not receipt['rollbackOk']),
+                    'ONLINE_RECHARGE_FAILURE_INVALID')
+        else:
+            require(set(migration) == {'name', 'sha256', 'status', 'schemaVerified', 'appliedMigrationsSha256', 'performed'}
+                    and migration['name'] == '20261009093000_online_recharge'
+                    and migration['sha256'] == '44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95'
+                    and migration['status'] in ('PENDING', 'APPLIED') and migration['schemaVerified'] is True
+                    and isinstance(migration['appliedMigrationsSha256'], str)
+                    and re.fullmatch(r'[a-f0-9]{64}', migration['appliedMigrationsSha256'])
+                    and type(migration['performed']) is bool
+                    and migration['performed'] is (migration['status'] == 'APPLIED' and receipt['migrationAttempted']),
+                    'ONLINE_RECHARGE_FAILURE_INVALID')
+        require(receipt['migrationAttempted'] is (receipt['step'] in ('migration', 'grants', 'switch', 'audit-after')),
+                'ONLINE_RECHARGE_FAILURE_INVALID')
+        return {name: receipt[name] for name in ('status', 'step', 'code', 'rollbackOk', 'servicesAttempted',
+                'candidateCommit', 'previousCommit')} | {'commandId': command_id,
+                'failureReceiptSha256': hashlib.sha256(json.dumps(receipt, sort_keys=True,
+                    separators=(',', ':')).encode()).hexdigest(),
+                'migration': {name: migration[name] for name in ('status', 'performed', 'name', 'sha256', 'schemaVerified')
+                              if name in migration}}
+    except Exception:
+        return None
+
+
 def command_failure_summary(data):
+    if not isinstance(data, dict):
+        data = {}
+    online = online_recharge_command_failure(data)
+    if online is not None:
+        return online
     error = data.get('StandardErrorContent', '')
+    error = error if isinstance(error, str) else ''
     errors = re.findall(r'(?m)^([A-Za-z]+Error):', error)
     lines = re.findall(r'File "[^"\n]*remote-deploy\.py", line ([0-9]+)', error)
     reasons = (
@@ -756,6 +946,15 @@ def command_failure_summary(data):
         'sourceLine': int(lines[-1]) if lines else None,
         'reason': next((reason for reason in reasons if reason in error), 'raw error suppressed'),
     }
+
+
+def command_result_summary(raw):
+    """Bounded CLI JSON parsing also rejects malformed/duplicate invocation fields."""
+    try:
+        require(isinstance(raw, bytes) and 0 < len(raw) <= 256 * 1024, 'Command result unavailable')
+        return command_failure_summary(fixed_recharge_json(raw))
+    except Exception:
+        return command_failure_summary({})
 
 
 def require_reusable_paths(paths, *, mailbox_only=False):
@@ -13433,7 +13632,7 @@ if __name__ == '__main__':
                               'errorType': type(error).__name__}))
             raise SystemExit(1) from None
     elif sys.argv[1:] == ['--summarize-command-result']:
-        print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_failure_summary(json.load(sys.stdin))))
+        print('RELEASE_FAILURE_DIAGNOSTIC ' + json.dumps(command_result_summary(sys.stdin.buffer.read(256 * 1024 + 1))))
     elif sys.argv[1:2] in (['--check-fixed-registration-scope'], ['--prepare-fixed-registration-build']):
         try:
             tokens = sys.argv[2:]
