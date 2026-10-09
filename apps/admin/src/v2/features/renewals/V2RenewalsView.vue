@@ -9,12 +9,12 @@
       skeleton="table"
       :phase="bankWarnings.phase.value"
       :error="bankWarnings.error.value ? getApiErrorMessage(bankWarnings.error.value) : ''"
-      loading-title="正在加载银充续费提醒"
+      loading-title="正在加载比特充值续费提醒"
       @retry="bankWarnings.refresh"
     >
-      <section class="v2-records-list bank-recharge-renewals" aria-label="银充续费提醒">
+      <section class="v2-records-list bank-recharge-renewals" aria-label="比特充值续费提醒">
         <header>
-          <V2SectionHeading title="银充续费提醒">
+          <V2SectionHeading title="比特充值续费提醒">
             <template #actions>
               <span>即将到期 {{ bankWarnings.data.value?.upcomingCount ?? 0 }}</span>
               <span>已到期 {{ bankWarnings.data.value?.expiredCount ?? 0 }}</span>
@@ -23,7 +23,7 @@
           </V2SectionHeading>
         </header>
         <p v-if="!bankWarnings.data.value?.items.length" class="v2-records-empty">
-          当前没有银充续费提醒
+          当前没有比特充值续费提醒
         </p>
         <ul v-else class="bank-recharge-renewal-list">
           <li v-for="item in bankWarnings.data.value.items" :key="item.id">
@@ -34,11 +34,11 @@
             <el-tag :type="item.warningState === 'expired' ? 'danger' : 'warning'" effect="plain">{{
               item.warningState === 'expired' ? '已到期' : '即将到期'
             }}</el-tag>
-            <RouterLink to="/v2/auto-recharge/bank-orders">查看银充订单</RouterLink>
+            <RouterLink to="/v2/auto-recharge/bank-orders">查看比特订单</RouterLink>
           </li>
         </ul>
         <p v-if="(bankWarnings.data.value?.totalCount ?? 0) > 100" class="bank-recharge-form-note">
-          当前显示最早到期的 100 条；完整订单请在银充订单查看。
+          当前显示最早到期的 100 条；完整订单请在比特订单查看。
         </p>
       </section>
     </V2AsyncRegion>

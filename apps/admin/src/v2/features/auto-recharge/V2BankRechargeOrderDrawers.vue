@@ -3,7 +3,7 @@
     <V2FormDrawer
       v-model="drawerOpen"
       retain-draft
-      :title="correcting ? '更正银充订单' : creating ? '手工录入银充订单' : '银充订单资料'"
+      :title="correcting ? '更正比特订单' : creating ? '手工录入比特订单' : '比特订单资料'"
       :description="
         creating
           ? '先记录实际代付和付款凭据，再补客户、手续费、收款与到期时间。'
@@ -46,7 +46,13 @@
                 " /></el-select
           ></el-form-item>
           <el-form-item label="代付币种" required
-            ><el-select v-model="form.chargeCurrencyCode" aria-label="代付币种"
+            ><el-select
+              v-model="form.chargeCurrencyCode"
+              aria-label="代付币种"
+              @change="
+                form.chargeFxRateToCny = '';
+                form.cardId = '';
+              "
               ><el-option
                 v-for="item in activeCurrencies"
                 :key="item.code"
@@ -107,7 +113,13 @@
                   " /></el-select
             ></el-form-item>
             <el-form-item label="代付币种" required
-              ><el-select v-model="form.chargeCurrencyCode" aria-label="代付币种"
+              ><el-select
+                v-model="form.chargeCurrencyCode"
+                aria-label="代付币种"
+                @change="
+                  form.chargeFxRateToCny = '';
+                  form.cardId = '';
+                "
                 ><el-option
                   v-for="item in activeCurrencies"
                   :key="item.code"
@@ -184,6 +196,18 @@
             :new-fee-mode="newFeeMode"
             @change="Object.assign(form, $event)"
           />
+          <el-form-item v-if="!readonly && newFeeMode" label="收费计算">
+            <AppButton
+              variant="soft"
+              :disabled="pricing.query.phase.value !== 'ready'"
+              @click="applyPricingDefaults"
+              >按设置计算收款与手续费</AppButton
+            >
+          </el-form-item>
+          <p v-if="!readonly && newFeeMode" class="bank-recharge-form-note">
+            套餐金额是收款参考价，请按实际到账修改客户实收；购物网费用按实际收款计算，USDT
+            费用按官网当次补付计算。
+          </p>
           <el-form-item label="客户实收"
             ><div class="bank-recharge-inline">
               <el-input
@@ -195,6 +219,10 @@
                 v-model="form.receivedCurrencyCode"
                 aria-label="客户实收币种"
                 :disabled="readonly"
+                @change="
+                  form.receivedFxRateToCny = '';
+                  form.receivedFinanceAccountId = '';
+                "
                 ><el-option
                   v-for="item in financeCurrencies"
                   :key="item"
@@ -296,7 +324,7 @@
     <V2FormDrawer
       v-model="currencyOpen"
       retain-draft
-      title="新增银充币种"
+      title="新增比特充值币种"
       description="只添加自动充值执行器支持的币种；币种精度与官网付款一致。"
       :confirm-loading="working"
       :dirty="Boolean(currencyForm.code || currencyForm.name)"
@@ -319,7 +347,7 @@
     <V2FormDrawer
       v-model="cardOpen"
       retain-draft
-      title="新增银充银行卡"
+      title="新增比特充值银行卡"
       description="只保存名称和卡尾四位，不保存完整卡号。"
       :confirm-loading="working"
       :dirty="Boolean(cardForm.label || cardForm.last4)"
@@ -327,7 +355,7 @@
     >
       <el-form label-position="left" label-width="110px" require-asterisk-position="right">
         <el-form-item label="银行卡名称" required
-          ><el-input v-model="cardForm.label" maxlength="80" placeholder="例如 菲律宾银充卡"
+          ><el-input v-model="cardForm.label" maxlength="80" placeholder="例如 菲律宾比特充值卡"
         /></el-form-item>
         <el-form-item label="卡尾四位" required
           ><el-input
@@ -350,7 +378,7 @@
     <V2FormDrawer
       v-model="refundOpen"
       retain-draft
-      title="登记银充退款"
+      title="登记比特充值退款"
       description="按实际已发生金额登记。订阅本金和两项手续费未退回时保持为零，不会自动恢复代付资金。"
       :confirm-loading="working"
       :dirty="
@@ -431,6 +459,8 @@ import { bankRechargePlanOptions } from './recharge-plan-options';
 
 const props = defineProps<{ state: ReturnType<typeof useBankRechargeOrdersPage> }>();
 const {
+  pricing,
+  applyPricingDefaults,
   drawerOpen,
   creating,
   correcting,

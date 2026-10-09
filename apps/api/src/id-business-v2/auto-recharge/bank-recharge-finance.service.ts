@@ -1,4 +1,5 @@
 import { BankRechargeFeesService } from './bank-recharge-fees.service';
+import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import {
   BadRequestException,
   ConflictException,
@@ -30,7 +31,7 @@ import { object } from './recharge-validation';
 import { calculateBankRechargeRefund } from './bank-recharge-refund-calculation';
 import { bankRechargeJournalProfit } from './bank-recharge-journal-profit';
 
-const FINANCE_CURRENCIES = new Set(['CNY', 'MYR', 'USD', 'USDT']);
+const FINANCE_CURRENCIES = new Set<string>(V2_FINANCE_CURRENCIES);
 
 @Injectable()
 export class BankRechargeFinanceService {
@@ -120,7 +121,7 @@ export class BankRechargeFinanceService {
       order.receivedCurrencyCode
     );
     if (!FINANCE_CURRENCIES.has(order.receivedCurrencyCode)) {
-      throw new BadRequestException('客户实收币种暂不支持财务入账，请选择 CNY、MYR、USD 或 USDT');
+      throw new BadRequestException('客户实收币种暂不支持财务入账，请选择系统支持的币种');
     }
     const receivedAccount = await this.repository.findFinanceAccount(
       tx,
