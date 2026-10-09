@@ -1,9 +1,35 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
+export const onlineRechargeRecoveryPolicy =
+  'scripts/production-release/online-recharge-recovery.json';
+export const productionDatabaseAccessHelper = 'scripts/lib/v2-production-database-access.mjs';
+export const productionDatabaseAccessTest = 'scripts/production-database-access.test.mjs';
+const onlineRecoveryControls = new Set([
+  onlineRechargeRecoveryPolicy,
+  productionDatabaseAccessTest
+]);
+
+function hasOnlineRechargeDeleteGrantProof(snapshot) {
+  if (typeof snapshot?.before !== 'string' || typeof snapshot?.after !== 'string') return false;
+  const digest = (source) => createHash('sha256').update(source).digest('hex');
+  if (
+    digest(snapshot.before) !== '6c8285ba7322d460c89778dc1793a553d1ddd8316f246d0411a3275857881e00'
+  )
+    return false;
+  const anchor = "  'ip_whitelists',\n";
+  if (snapshot.before.split(anchor).length !== 2) return false;
+  const added =
+    "  'online_recharge_bills',\n  'online_recharge_cards',\n  'online_recharge_proxies',\n";
+  return (
+    snapshot.after === snapshot.before.replace(anchor, anchor + added) &&
+    digest(snapshot.after) === '7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546'
+  );
+}
 export const auditRetentionMigration =
   'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
 export const historicalReleaseControlPaths = Object.freeze([
@@ -328,6 +354,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         historicalReleaseControlPaths.includes(p) ||
+        onlineRecoveryControls.has(p) ||
         /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/check-v2-(?:module-architecture|prisma-runtime-boundary|concurrency-standard)(?:\.test)?\.mjs|scripts\/production-release\/online-recharge-entry\.test\.mjs|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance|api-admin-scope|api-admin-readonly|online-recharge-scope|online-recharge-readonly)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
           p
         )
@@ -396,7 +423,7 @@ export function isMailboxOnly(paths) {
   );
 }
 
-export function checkMode(paths, oldSchema, newSchema) {
+export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot) {
   if (paths.includes(rechargePricingProfile)) {
     if (!isRechargePricingOnly(paths)) return 'full';
     return paths.some((path) => rechargePricingSources.has(path)) ? 'recharge' : 'ci-only';
@@ -438,6 +465,11 @@ export function checkMode(paths, oldSchema, newSchema) {
     paths.every((path) => path === auditRetentionMigration || isCiOnly([path]))
   )
     return 'audit-retention';
+  if (paths.includes(productionDatabaseAccessHelper))
+    return hasOnlineRechargeDeleteGrantProof(grantHelperSnapshot) &&
+      paths.every((path) => path === productionDatabaseAccessHelper || isCiOnly([path]))
+      ? 'ci-only'
+      : 'full';
   if (isCiOnly(paths)) return 'ci-only';
   if (isMailboxOnly(paths)) return 'mailbox';
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
@@ -757,7 +789,27 @@ async function main() {
   const base = process.env.BASE_SHA;
   ensureCommit(base);
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
-  const mode = checkMode(paths, git('show', `${base}:${schema}`), git('show', `HEAD:${schema}`));
+  let grantHelperSnapshot;
+  if (paths.includes(productionDatabaseAccessHelper)) {
+    try {
+      grantHelperSnapshot = {
+        before: execFileSync('git', ['show', `${base}:${productionDatabaseAccessHelper}`], {
+          encoding: 'utf8'
+        }),
+        after: execFileSync('git', ['show', `HEAD:${productionDatabaseAccessHelper}`], {
+          encoding: 'utf8'
+        })
+      };
+    } catch {
+      // Missing source snapshots must retain the full check mode.
+    }
+  }
+  const mode = checkMode(
+    paths,
+    git('show', `${base}:${schema}`),
+    git('show', `HEAD:${schema}`),
+    grantHelperSnapshot
+  );
   const currentTree = git('rev-parse', 'HEAD^{tree}');
   let reuseMain = false;
   const reused = new Set();

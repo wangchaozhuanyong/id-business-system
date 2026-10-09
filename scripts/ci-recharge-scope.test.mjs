@@ -1,6 +1,9 @@
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   affectsPart,
   isRechargeOnly,
@@ -16,12 +19,265 @@ import {
   adminUiGuardChecks,
   backendArchitectureGuardChecks,
   registrationOnboardingControls,
-  hasRegistrationOnboardingScope
+  hasRegistrationOnboardingScope,
+  onlineRechargeRecoveryPolicy,
+  productionDatabaseAccessHelper,
+  productionDatabaseAccessTest
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
+const root = fileURLToPath(new URL('../', import.meta.url));
+const grantHelperBefore = execFileSync(
+  'git',
+  ['show', 'ca36c52ab5df39a8eb1da7f1d763f6714399965a:' + productionDatabaseAccessHelper],
+  { cwd: root, encoding: 'utf8' }
+);
+const grantAnchor = "  'ip_whitelists',\n";
+const grantAdditions =
+  "  'online_recharge_bills',\n  'online_recharge_cards',\n  'online_recharge_proxies',\n";
+const grantHelperAfter = grantHelperBefore.replace(grantAnchor, grantAnchor + grantAdditions);
+const grantProof = { before: grantHelperBefore, after: grantHelperAfter };
+
+function recordScopeClassification(paths, snapshot, eventName = 'pull_request') {
+  // Exercise the real CLI with synthetic Git snapshots and successful same-tree PR evidence.
+  // No remote API, artifact download, file write or business command is executed.
+  const script = `
+    import childProcess from 'node:child_process';
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const paths = JSON.parse(process.env.SCOPE_TEST_PATHS);
+    const snapshot = JSON.parse(process.env.SCOPE_TEST_SNAPSHOT);
+    const gitCalls = [];
+    const writes = [];
+    const tree = 'd'.repeat(40);
+    const pr = { number: 372, merged_at: '2026-10-09T00:00:00Z',
+      merge_commit_sha: process.env.GITHUB_SHA, base: { ref: 'main' },
+      head: { sha: 'b'.repeat(40), repo: { full_name: process.env.GITHUB_REPOSITORY } } };
+    const run = { id: 123, run_attempt: 1, event: 'pull_request',
+      path: '.github/workflows/quality.yml', status: 'completed',
+      head_sha: pr.head.sha, conclusion: 'success' };
+    const proof = { repository: process.env.GITHUB_REPOSITORY,
+      runId: run.id, runAttempt: run.run_attempt, pullRequest: pr.number,
+      headSha: pr.head.sha, baseSha: process.env.BASE_SHA, testedTree: tree };
+    childProcess.execFileSync = (file, args) => {
+      if (file === 'git') {
+        gitCalls.push(args);
+        if (args[0] === 'cat-file') return '';
+        if (args[0] === 'diff') return paths.join('\\n') + '\\n';
+        if (args[0] === 'rev-parse') return tree + '\\n';
+        if (args[0] === 'show' && args[1].endsWith(':' + process.env.SCOPE_TEST_HELPER)) {
+          const source = args[1].startsWith('HEAD:') ? snapshot?.after : snapshot?.before;
+          if (typeof source !== 'string') throw new Error('synthetic missing Git blob');
+          return source;
+        }
+        if (args[0] === 'show' && args[1].endsWith(':apps/api/prisma-mysql/schema.prisma'))
+          return process.env.SCOPE_TEST_SCHEMA;
+        throw new Error('Unexpected Git command: ' + JSON.stringify(args));
+      }
+      if (file === 'gh' && args[0] === 'run') return '';
+      if (file === 'gh' && args[0] === 'api') {
+        if (args[1].endsWith('/pulls')) return JSON.stringify([pr]);
+        if (args[1].includes('/workflows/quality.yml/runs?'))
+          return JSON.stringify({ workflow_runs: [run] });
+        if (args[1].endsWith('/artifacts?per_page=100'))
+          return JSON.stringify({ artifacts: [{ name: 'quality-source-evidence-1', expired: false }] });
+        if (args[1].endsWith('/jobs?per_page=100'))
+          return JSON.stringify({ jobs: [{ name: 'quality', conclusion: 'success' }] });
+      }
+      throw new Error('Unexpected process: ' + file);
+    };
+    const readFile = fs.readFileSync;
+    fs.readFileSync = (path, ...args) => {
+      if (path === process.env.GITHUB_EVENT_PATH) return JSON.stringify({ pull_request: pr });
+      if (path === '.deploy/ci-source-evidence/123-1/evidence.json') return JSON.stringify(proof);
+      return readFile(path, ...args);
+    };
+    fs.appendFileSync = (path, contents) => writes.push({ path, contents });
+    syncBuiltinESMExports();
+    let result;
+    console.log = (value) => { result = JSON.parse(value); };
+    process.argv = ['node', 'scripts/ci-recharge-scope.mjs'];
+    await import('./scripts/ci-recharge-scope.mjs');
+    process.stdout.write(JSON.stringify({ result, gitCalls, writes }));
+  `;
+  return JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: eventName,
+        GITHUB_EVENT_PATH: root + '/.runtime/online-recharge-ci-synthetic-event.json',
+        GITHUB_OUTPUT: root + '/.runtime/online-recharge-ci-synthetic-output',
+        GITHUB_STEP_SUMMARY: root + '/.runtime/online-recharge-ci-synthetic-summary',
+        GITHUB_REPOSITORY: 'fixture/id-business',
+        GITHUB_SHA: 'c'.repeat(40),
+        BASE_SHA: 'a'.repeat(40),
+        SCOPE_TEST_PATHS: JSON.stringify(paths),
+        SCOPE_TEST_SNAPSHOT: JSON.stringify(snapshot),
+        SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
+        SCOPE_TEST_SCHEMA: schema
+      }
+    })
+  );
+}
+
+test('online recovery accepts only the reviewed three-line grant change with exact source proof', () => {
+  assert.equal(
+    createHash('sha256').update(grantHelperBefore).digest('hex'),
+    '6c8285ba7322d460c89778dc1793a553d1ddd8316f246d0411a3275857881e00'
+  );
+  assert.equal(
+    createHash('sha256').update(grantHelperAfter).digest('hex'),
+    '7ece1de5cbba89b26615d749a671d32a380f4dc377548071746d14f1f2e2a546'
+  );
+  const controls = [
+    onlineRechargeRecoveryPolicy,
+    productionDatabaseAccessTest,
+    'scripts/production-release/online-recharge-scope.py',
+    'scripts/production-release/online-recharge-readonly.test.py',
+    'scripts/ci-recharge-scope.mjs',
+    'docs/ONLINE_RECHARGE.md'
+  ];
+  assert.equal(isCiOnly(controls), true);
+  assert.equal(checkMode(controls, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  for (const paths of [
+    [productionDatabaseAccessHelper],
+    [...controls, productionDatabaseAccessHelper]
+  ]) {
+    assert.equal(isCiOnly(paths), false);
+    assert.equal(checkMode(paths, schema, schema, grantProof), 'ci-only');
+  }
+});
+
+test('grant source proof is fail closed for missing snapshots and any additional source edit', () => {
+  const invalid = [
+    undefined,
+    null,
+    {},
+    { before: grantHelperBefore },
+    { after: grantHelperAfter },
+    { before: grantHelperBefore.trim(), after: grantHelperAfter },
+    { before: grantHelperBefore, after: grantHelperAfter.trim() },
+    { before: grantHelperAfter, after: grantHelperBefore },
+    { before: grantHelperBefore, after: grantHelperBefore },
+    { before: grantHelperBefore, after: grantHelperAfter + '\n' },
+    {
+      before: grantHelperBefore,
+      after: grantHelperAfter.replace(grantAdditions, grantAdditions + "  'audit_logs',\n")
+    },
+    {
+      before: grantHelperBefore,
+      after: grantHelperAfter.replace("  'role_permissions',\n", '')
+    },
+    {
+      before: grantHelperBefore,
+      after: grantHelperAfter.replace("  'role_permissions',", "  'different_table',")
+    },
+    {
+      before: grantHelperBefore,
+      after: grantHelperAfter.replace(
+        "const RUNTIME_USERNAME = 'id_business_app';",
+        "const RUNTIME_USERNAME = 'other';"
+      )
+    },
+    {
+      before: grantHelperBefore + '\n',
+      after: grantHelperAfter + '\n'
+    }
+  ];
+  for (const snapshot of invalid)
+    assert.equal(checkMode([productionDatabaseAccessHelper], schema, schema, snapshot), 'full');
+  assert.equal(isCiOnly([productionDatabaseAccessHelper]), false);
+});
+
+test('the fixed recovery policy and grant test are bounded controls and never authorize mixed apps', () => {
+  for (const path of [onlineRechargeRecoveryPolicy, productionDatabaseAccessTest]) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  }
+  for (const path of [
+    onlineRechargeRecoveryPolicy + '.backup',
+    onlineRechargeRecoveryPolicy.replace('recovery.json', 'recovery-other.json'),
+    onlineRechargeRecoveryPolicy.replace('production-release/', ''),
+    productionDatabaseAccessTest.replace('.test.mjs', '.mjs'),
+    productionDatabaseAccessHelper + '.backup'
+  ]) {
+    assert.equal(isCiOnly([path]), false);
+    assert.equal(checkMode([path], schema, schema), 'full');
+    assert.equal(
+      checkMode([productionDatabaseAccessHelper, path], schema, schema, grantProof),
+      'full'
+    );
+  }
+  for (const path of [
+    'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(
+      checkMode(
+        [onlineRechargeRecoveryPolicy, productionDatabaseAccessHelper, path],
+        schema,
+        schema,
+        grantProof
+      ),
+      'full',
+      path
+    );
+});
+
+test('PR and same-tree main CLI classification both read raw BASE_SHA and HEAD helper snapshots', () => {
+  const paths = [
+    onlineRechargeRecoveryPolicy,
+    productionDatabaseAccessHelper,
+    productionDatabaseAccessTest
+  ];
+  for (const eventName of ['pull_request', 'push']) {
+    const { result, gitCalls, writes } = recordScopeClassification(paths, grantProof, eventName);
+    assert.equal(result.mode, 'ci-only');
+    assert.deepEqual(result.checkParts, ['guards']);
+    assert.equal(result.reuseMain, eventName === 'push');
+    assert.ok(
+      gitCalls.some(
+        (args) => args.join(' ') === 'show ' + 'a'.repeat(40) + ':' + productionDatabaseAccessHelper
+      )
+    );
+    assert.ok(
+      gitCalls.some((args) => args.join(' ') === 'show HEAD:' + productionDatabaseAccessHelper)
+    );
+    assert.ok(writes.some(({ contents }) => contents.startsWith('mode=ci-only\n')));
+  }
+});
+
+test('PR and main CLI classification retain full mode for missing blobs, wider grants and mixed apps', () => {
+  for (const eventName of ['pull_request', 'push']) {
+    for (const { paths, snapshot } of [
+      { paths: [productionDatabaseAccessHelper], snapshot: {} },
+      {
+        paths: [productionDatabaseAccessHelper],
+        snapshot: { before: grantHelperBefore, after: grantHelperAfter + '\n' }
+      },
+      {
+        paths: [productionDatabaseAccessHelper, 'apps/api/src/auth/auth.service.ts'],
+        snapshot: grantProof
+      }
+    ])
+      assert.equal(recordScopeClassification(paths, snapshot, eventName).result.mode, 'full');
+  }
+  const noHelper = recordScopeClassification([onlineRechargeRecoveryPolicy], {}, 'pull_request');
+  assert.equal(noHelper.result.mode, 'ci-only');
+  assert.equal(
+    noHelper.gitCalls.some(
+      (args) => args[0] === 'show' && args[1].endsWith(':' + productionDatabaseAccessHelper)
+    ),
+    false
+  );
+});
 const files = [
   'apps/admin/src/v2/features/auto-recharge/example.vue',
   'apps/api/prisma-mysql/schema.prisma'

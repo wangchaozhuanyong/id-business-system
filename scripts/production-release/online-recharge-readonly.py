@@ -39,7 +39,8 @@ def parameters(commit, expected, mode):
         raise ValueError('ONLINE_RECHARGE_INPUT_INVALID')
     directory = f'/opt/id-business-v2/.staging/online-recharge-verify-{commit}'
     commands = ['set -eu', f'mkdir -p {directory}']
-    for name in ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py'):
+    for name in ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
+                 'online-recharge-recovery.json'):
         digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         commands.extend([
             f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',
@@ -74,11 +75,16 @@ def validate(receipt, mode, commit, expected, output):
         scope.validate_proof(controller, proof, commit, os.environ['SOURCE_TREE'],
             os.environ['RELEASE_REPOSITORY'], os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'])
         before = closed_json((output / 'online-recharge-preflight-result.json').read_text())
+        recovery = before.get('migrationRecovery')
         if (summary['sourceTree'] != proof['sourceTree'] or summary['buildProofSha256'] != scope.fingerprint(proof)
                 or before.get('releaseCandidateCommit') != commit
                 or before.get('workflowRunId') != os.environ['GITHUB_RUN_ID']
                 or before.get('workflowRunAttempt') != os.environ['GITHUB_RUN_ATTEMPT']
                 or before.get('status') != 'ONLINE_RECHARGE_BASELINE_VERIFIED'
+                or summary.get('migrationRecovery') != recovery
+                or (recovery is not None and (before.get('migrationPerformed') is not False
+                                             or summary.get('migrationPerformed') is not False))
+                or (recovery is None and summary.get('migrationPerformed') is not True)
                 or any(services.get(n) != before.get('services', {}).get(n) for n in scope.PRESERVED)
                 or any(services[n]['image'] != proof['images'][n]['imageId']
                        or services[n]['reference'] != proof['images'][n]['reference'] for n in scope.UPDATED)):

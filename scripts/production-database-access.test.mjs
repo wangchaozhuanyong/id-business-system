@@ -11,6 +11,19 @@ import {
 } from './lib/v2-production-database-access.mjs';
 
 const databaseName = 'id_business_v2';
+const onlineHardDeleteTables = [
+  'online_recharge_bills',
+  'online_recharge_cards',
+  'online_recharge_proxies'
+];
+const onlineRetainedTables = [
+  'online_recharge_addresses',
+  'online_recharge_codes',
+  'online_recharge_config',
+  'online_recharge_events',
+  'online_recharge_tasks',
+  'online_recharge_webhook_receipts'
+];
 const environment = {
   DATABASE_URL: 'mysql://id_business_app:runtime-password-123456789@mysql:3306/id_business_v2',
   MIGRATION_DATABASE_URL:
@@ -107,6 +120,73 @@ test('runtime grants protect migration and audit records while limiting physical
     )
   );
   assert.equal(V2_RUNTIME_DELETE_TABLES.includes('id_business_v2_orders'), false);
+});
+
+test('online recharge grants DELETE only to its three existing physical-delete tables', () => {
+  const tables = [...onlineHardDeleteTables, ...onlineRetainedTables];
+  const grants = buildV2RuntimeTableGrantStatements(databaseName, tables);
+  assert.deepEqual(
+    V2_RUNTIME_DELETE_TABLES.filter((name) => name.startsWith('online_recharge_')).sort(),
+    onlineHardDeleteTables
+  );
+  for (const table of tables) {
+    const permissions = onlineHardDeleteTables.includes(table)
+      ? 'SELECT, INSERT, UPDATE, DELETE'
+      : 'SELECT, INSERT, UPDATE';
+    assert.ok(
+      grants.includes(
+        `GRANT ${permissions} ON \`${databaseName}\`.\`${table}\` TO 'id_business_app'@'%'`
+      )
+    );
+  }
+});
+
+test('the full grant gate accepts online deletes and rejects any additional DELETE privilege', () => {
+  const oldRetained = [
+    'id_business_v2_orders',
+    'id_business_v2_balance_ledger',
+    'id_business_v2_finance_journals'
+  ];
+  const tables = [...onlineHardDeleteTables, ...onlineRetainedTables, ...oldRetained];
+  const input = {
+    databaseName,
+    tableNames: tables,
+    backupGrants: [
+      {
+        grant: `GRANT SELECT, SHOW VIEW, TRIGGER ON \`${databaseName}\`.* TO 'id_business_backup'@'%'`
+      }
+    ],
+    migrationGrants: [
+      { grant: `GRANT ALL PRIVILEGES ON \`${databaseName}\`.* TO 'id_business_migrator'@'%'` }
+    ],
+    runtimeGrants: buildV2RuntimeTableGrantStatements(databaseName, tables).map((grant) => ({
+      grant
+    }))
+  };
+  assert.doesNotThrow(() => assertV2ProductionDatabaseGrants(input));
+  for (const table of [...onlineRetainedTables, ...oldRetained]) {
+    const index = input.runtimeGrants.findIndex(({ grant }) => grant.includes(`.\`${table}\` `));
+    assert.ok(index >= 0);
+    const grants = structuredClone(input.runtimeGrants);
+    assert.equal(grants[index].grant.includes('DELETE'), false);
+    grants[index].grant = grants[index].grant.replace(
+      'SELECT, INSERT, UPDATE',
+      'SELECT, INSERT, UPDATE, DELETE'
+    );
+    assert.throws(
+      () => assertV2ProductionDatabaseGrants({ ...input, runtimeGrants: grants }),
+      new RegExp(table)
+    );
+  }
+  for (const table of onlineHardDeleteTables) {
+    const grants = input.runtimeGrants.map(({ grant }) => ({
+      grant: grant.includes(`.\`${table}\` `) ? grant.replace(', DELETE', '') : grant
+    }));
+    assert.throws(
+      () => assertV2ProductionDatabaseGrants({ ...input, runtimeGrants: grants }),
+      new RegExp(table)
+    );
+  }
 });
 
 test('production grant gate rejects DDL, broad runtime access and unexpected deletes', () => {

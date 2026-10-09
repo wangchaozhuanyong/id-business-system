@@ -4,6 +4,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  onlineRechargeRecoveryPolicy,
+  productionDatabaseAccessHelper,
+  productionDatabaseAccessTest
+} from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const gates = [
@@ -43,6 +48,49 @@ function recordGuardCommands(mode, paths, part = 'guards') {
     })
   );
 }
+
+test('recovery controls execute database grants and every existing online release suite in both dispatchers', () => {
+  const commands = [
+    ['node', '--test', productionDatabaseAccessTest],
+    ['python3', '-B', 'scripts/production-release/online-recharge-scope.test.py'],
+    ['python3', '-B', 'scripts/production-release/online-recharge-readonly.test.py'],
+    ['node', '--test', 'scripts/production-release/online-recharge-entry.test.mjs']
+  ];
+  const controlled = [
+    onlineRechargeRecoveryPolicy,
+    productionDatabaseAccessHelper,
+    productionDatabaseAccessTest
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    for (const paths of [...controlled.map((path) => [path]), controlled]) {
+      const calls = recordGuardCommands('ci-only', paths, part);
+      for (const expected of commands)
+        assert.equal(
+          calls.filter((call) => JSON.stringify(call) === JSON.stringify(expected)).length,
+          1,
+          part + ': ' + paths.join(', ') + ': ' + expected.join(' ')
+        );
+      assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+      assert.ok(calls.every((call) => !call.includes('online-engine')));
+    }
+  }
+});
+
+test('unrelated control edits do not execute database grant tests', () => {
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of [
+      'docs/UI_DESIGN.md',
+      'scripts/ci-change-scope.mjs',
+      onlineRechargeRecoveryPolicy + '.backup'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.equal(
+        calls.some((call) => call.includes(productionDatabaseAccessTest)),
+        false
+      );
+    }
+  }
+});
 
 function recordOnlineEngineCommands(failBrowser = false) {
   const script = `
