@@ -1826,5 +1826,65 @@ class DeclarationSuccessorConsumers(unittest.TestCase):
                 self.assertNotIn('SECRET', str(error.exception))
 
 
+class DeclarationReadbackTransportContract(unittest.TestCase):
+    """Real remote readback -> real client finite parser; runtime is synthetic."""
+    fixture = DeclarationPublicationConsumers.fixture
+    complete_readback = DeclarationPublicationConsumers.complete_readback
+    successor = DeclarationSuccessorConsumers.successor
+
+    @classmethod
+    def setUpClass(cls):
+        DeclarationSuccessorConsumers.setUpClass()
+        cls.pure = DeclarationSuccessorConsumers.pure
+        cls.wire = DeclarationSuccessorConsumers.wire
+        cls.output = DeclarationSuccessorConsumers.output
+
+    def assert_client(self, f, receipt, preflight_raw, context, proof, seal_key):
+        spec = importlib.util.spec_from_file_location('actual_readback_client', ROOT / 'scripts/production-release/api-admin-readonly.py')
+        client = importlib.util.module_from_spec(spec); spec.loader.exec_module(client)
+        directory = f.d.BASE / '.deploy/production-release'
+        directory.mkdir(parents=True, mode=0o700)
+        (directory / 'api-workspace-preflight-result.json').write_bytes(preflight_raw)
+        producer = f.d._apiWorkspaceDeclarationProducer
+        predecessor = context['priorPublications'][-1]['commit'] if context['priorPublications'] else s.WORKSPACE_BOOTSTRAP_COMMIT
+        env = {'RELEASE_COMMIT': producer['commit'], 'SOURCE_TREE': producer['sourceTree'],
+               'GITHUB_RUN_ID': producer['workflowRunId'], 'GITHUB_RUN_ATTEMPT': producer['workflowRunAttempt'],
+               'EXPECTED_CURRENT': predecessor}
+        cwd = Path.cwd()
+        try:
+            os.chdir(f.d.BASE)
+            with patch.dict(os.environ, env):
+                self.assertTrue(client.validate_pending_workspace_receipt(s.__dict__, receipt,
+                    producer['commit'], 'readback', proof=proof))
+                for changed in ('missing-seal', 'wrong-seal'):
+                    value = copy.deepcopy(receipt)
+                    if changed == 'missing-seal': value['preservedPendingOnlineMigration'].pop(seal_key)
+                    else: value['preservedPendingOnlineMigration'][seal_key]['preflightBytesSha256'] = '0' * 64
+                    with self.subTest(change=changed), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):
+                        client.validate_pending_workspace_receipt(s.__dict__, value,
+                            producer['commit'], 'readback', proof=proof)
+        finally:
+            os.chdir(cwd)
+
+    def test_initial_a_actual_independent_readback_reaches_client_full_marker(self):
+        with self.complete_readback() as a:
+            value = s.readback(a.d, a.proof['commit'])
+            self.assertEqual(value['preservedPendingOnlineMigration'], a.manifest['pendingOnlineMigration'])
+            self.assert_client(a, value, a.preflight, a.context, a.proof, 'configurationEquivalenceSeal')
+            a.d.run.assert_not_called()
+
+    def test_successor_b_actual_independent_readback_reaches_client_full_marker(self):
+        with self.successor() as b:
+            stage = s.readback(b.d, b.proof['commit'])
+            self.assertEqual(stage['preservedPendingOnlineMigration'], s.pending_online_marker(b.context))
+            self.assertNotIn('declarationEquivalenceSuccessorPublication', stage)
+            b.d._apiWorkspaceDeclarationEntry = 'READBACK'
+            b.d.sys.argv = ['remote.py', '--api-workspace-readback']
+            value = s.readback(b.d, b.proof['commit'])
+            self.assertEqual(value['preservedPendingOnlineMigration'], b.manifest['pendingOnlineMigration'])
+            self.assert_client(b, value, b.preflight, b.context, b.proof, 'successorConfigurationSeal')
+            b.d.run.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

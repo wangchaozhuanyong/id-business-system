@@ -4001,7 +4001,10 @@ def readback(d, expected, *, check_task=True):
                          migrationPerformed=False, observedServiceCount=7)
         if pending['version'] == 2 and pending_online_declaration_entry(d) == 'READBACK':
             field = 'declarationEquivalenceSuccessorPublication' if pending['priorPublications'] else 'declarationEquivalencePublication'
-            workspace[field] = pending_online_declaration_readback(d, previous, pending, states)
+            summary = pending_online_declaration_readback(d, previous, pending, states)
+            workspace[field] = summary
+            seal = 'successorConfigurationSeal' if pending['priorPublications'] else 'configurationEquivalenceSeal'
+            workspace['preservedPendingOnlineMigration'] = {**pending_online_marker(pending), seal: summary[seal]}
     return {'status': SCOPE + '_VERIFIED', 'commit': expected, 'sourceTree': proof['sourceTree'],
             'servicesUpdated': list(updated), 'preservedServiceCount': 5 if pending is not None else 4 if WORKSPACE else 5,
             'runningImagesAndContentMatched': True, 'buildProofSha256': fingerprint(proof),
