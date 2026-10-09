@@ -3462,9 +3462,10 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
         self.assertNotIn('--image-commit', commands)
         self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 8)
+        self.assertEqual(commands.count('sha256sum -c -'), 11)
         for name in ('api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
-                     'api-admin-readonly.py'):
+                     'api-admin-readonly.py', 'online-recharge-daemon-identity.py',
+                     'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py'):
             self.assertIn('/' + name, commands)
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
