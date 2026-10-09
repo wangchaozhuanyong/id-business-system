@@ -743,7 +743,8 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
             'Config': {'Image': 'old-' + service, 'Hostname': '3' * 12, 'Env': ['FIXTURE=SECRET_MUST_NOT_ESCAPE'],
                 'Labels': {'com.docker.compose.project': 'fixture', 'com.docker.compose.service': service,
                     'com.docker.compose.container-number': '1', 'com.docker.compose.replace':
-                        anchors['candidateAfterContainerId'] if current_replace == 'cid' else stable_name,
+                        anchors['candidateAfterContainerId'] if current_replace == 'cid'
+                        else service + '-1' if current_replace == 'slot' else stable_name,
                     'unrelated.label': 'unchanged'}},
             'HostConfig': {'NetworkMode': 'fixture_default', 'ReadonlyRootfs': True},
             'Mounts': [{'Destination': '/z', 'Source': '/fixture/z', 'RW': False},
@@ -759,15 +760,16 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
             configuration['Config']['Labels'].pop('com.docker.compose.replace')
         else:
             configuration['Config']['Labels']['com.docker.compose.replace'] = (
-                anchors['oldBeforeContainerId'] if original_replace == 'cid' else stable_name)
+                anchors['oldBeforeContainerId'] if original_replace == 'cid'
+                else service + '-1' if original_replace == 'slot' else stable_name)
         original = {**actual, 'containerId': '4' * 64, 'startedAtSha256': '5' * 64,
                     'configurationSha256': scope.fingerprint(configuration)}
         return metadata, actual, original, anchors
 
-    def test_only_two_native_fields_uniquely_reconstruct_three_finite_historical_forms(self):
+    def test_only_two_native_fields_uniquely_reconstruct_four_finite_historical_forms(self):
         for service in ('api', 'admin'):
-            for old in ('cid', 'name', 'absent'):
-                for current in ('cid', 'name'):
+            for old in ('cid', 'name', 'slot', 'absent'):
+                for current in ('cid', 'name', 'slot'):
                     for separator in ('-', '_'):
                         values = self.fixture(service, old, current, separator)
                         preserved = copy.deepcopy(values)
@@ -776,6 +778,33 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
                             self.assertEqual(result, {'rawSha256': values[1]['configurationSha256'],
                                                       'projectedSha256': values[2]['configurationSha256']})
                             self.assertEqual(values, preserved)
+
+    def test_native_slot_rejects_wrong_service_number_secret_and_other_configuration_drift(self):
+        for service in ('api', 'admin'):
+            for bad in (('admin' if service == 'api' else 'api') + '-1', service + '-0',
+                        service + '-2', service + '_1', 'SECRET_MUST_NOT_ESCAPE'):
+                values = self.fixture(service, 'slot', 'slot')
+                values[0]['Config']['Labels']['com.docker.compose.replace'] = bad
+                configuration = {k: values[0][k] for k in ('Config', 'HostConfig', 'Mounts')}
+                configuration['Mounts'] = sorted(configuration['Mounts'], key=lambda m: m['Destination'])
+                values[1]['configurationSha256'] = scope.fingerprint(configuration)
+                with self.subTest(service=service, kind='replace'), self.assertRaises(scope.ProjectionRejection) as error:
+                    scope.restored_configuration_projection(controller(), service, *values)
+                self.assertEqual(error.exception.reason, 'REPLACE_MISMATCH')
+                self.assertNotIn('SECRET_MUST_NOT_ESCAPE', str(error.exception))
+            changes = [(('Config', 'Labels', 'unrelated.label'), 'changed'),
+                       (('Config', 'Env'), ['FIXTURE=changed']), (('HostConfig', 'ReadonlyRootfs'), False),
+                       (('Mounts',), [{'Destination': '/z', 'Source': '/changed', 'RW': False}])]
+            for path, changed in changes:
+                values = self.fixture(service, 'slot', 'slot'); target = values[0]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = changed
+                configuration = {k: values[0][k] for k in ('Config', 'HostConfig', 'Mounts')}
+                configuration['Mounts'] = sorted(configuration['Mounts'], key=lambda m: m['Destination'])
+                values[1]['configurationSha256'] = scope.fingerprint(configuration)
+                with self.subTest(service=service, path=path), self.assertRaises(scope.ProjectionRejection):
+                    scope.restored_configuration_projection(controller(), service, *values)
 
     def test_raw_snapshot_and_every_identity_field_are_verified_before_projection(self):
         paths = [('Id',), ('Image',), ('Config', 'Image'), ('State', 'Status'),
