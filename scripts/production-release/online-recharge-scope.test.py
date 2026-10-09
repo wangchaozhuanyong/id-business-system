@@ -1151,7 +1151,7 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
             ('metadata', ('Config', 'Labels', 'com.docker.compose.depends_on'), None, 'DEPENDENCY_LABEL_TYPE'),
             ('metadata', ('Config', 'Labels', 'com.docker.compose.depends_on'), 'X' * 2049, 'DEPENDENCY_LABEL_SIZE'),
             ('metadata', ('Config', 'Labels', 'com.docker.compose.depends_on'), 'SECRET_MUST_NOT_ESCAPE', 'DEPENDENCY_LABEL_CONTENT'),
-            ('metadata', ('HostConfig', 'Mounts'), None, 'MOUNT_NULL_OR_TYPE'),
+            ('metadata', ('HostConfig', 'Mounts'), None, 'MOUNT_BIND_DECLARATION'),
             ('metadata', ('HostConfig', 'Mounts'), [{}] * 5, 'MOUNT_COUNT_LIMIT'),
             ('metadata', ('HostConfig', 'Mounts'), [{'Target': 'secret'}], 'MOUNT_ROW_TARGET'),
             ('metadata', ('HostConfig', 'Mounts'), [{'Target': '/same'}] * 2, 'MOUNT_DUPLICATE_TARGET'),
@@ -1214,7 +1214,7 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
             d.run = MagicMock(side_effect=[json.dumps([metadata]), json.dumps([admin_metadata])])
             with patch.object(scope, 'baseline', side_effect=lambda d, expected: scope.recovery_services(d, live, context)):
                 result = scope.projection_diagnostic(d, scope.BASELINE_COMMIT)
-            self.assertEqual(result['apiNativeProbe'], {'matched': False, 'reason': 'MOUNT_NULL_OR_TYPE', 'changedPaths': []})
+            self.assertEqual(result['apiNativeProbe'], {'matched': False, 'reason': 'MOUNT_BIND_DECLARATION', 'changedPaths': []})
             self.assertEqual(result['restoredProjectionReason']['api'], 'PROJECTED_HASH_MISMATCH')
             self.assertEqual(result['gateCode'], 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
             self.assertFalse(result['baselineConfirmed']); self.assertFalse(result['restoredProjectionMatch']['api'])
@@ -1250,6 +1250,125 @@ class ApiNativeDiagnosticTests(unittest.TestCase):
             for removed in ('apiNativeProbe', 'restoredProjectionReason'):
                 result.pop(removed)
                 scope.validate_diagnostic(d, result, scope.BASELINE_COMMIT)
+
+    @contextmanager
+    def bind_fixture(self, shape, old_empty=False):
+        with self.fixture(mount_count=1) as (d, metadata, actual, original, restored, declaration):
+            declaration['services']['api']['volumes'] = [{'type': 'volume', 'source': shared.WORKSPACE_VOLUME,
+                'target': shared.WORKSPACE_DIRECTORY, 'volume': {}}]
+            name = 'fixture_' + shared.WORKSPACE_VOLUME
+            declaration['volumes'] = {shared.WORKSPACE_VOLUME: {'name': name}}
+            metadata['Mounts'] = [{'Type': 'volume', 'Name': name, 'Source': '/var/lib/docker/volumes/' + name + '/_data',
+                'Destination': shared.WORKSPACE_DIRECTORY, 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''}]
+            metadata['HostConfig']['Binds'] = [name + ':' + shared.WORKSPACE_DIRECTORY + ':rw']
+            if shape == 'missing':
+                metadata['HostConfig'].pop('Mounts')
+            else:
+                metadata['HostConfig']['Mounts'] = None if shape == 'null' else []
+            metadata['Config']['Labels']['com.docker.compose.depends_on'] = ''
+            raw = {k: copy.deepcopy(metadata[k]) for k in ('Config', 'HostConfig', 'Mounts')}
+            actual['configurationSha256'] = scope.fingerprint(raw)
+            raw['Config']['Hostname'] = original['containerId'][:12]
+            if old_empty:
+                raw['HostConfig']['NetworkMode'] = 'fixture_n1'
+            else:
+                raw['Config']['Labels']['com.docker.compose.depends_on'] = 'dep1:service_healthy:false,dep0:service_healthy:false'
+            original['configurationSha256'] = scope.fingerprint(raw)
+            yield d, metadata, actual, original, restored, declaration
+
+    def test_exact_empty_label_adds_only_complete_declaration_and_empty_candidates(self):
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            metadata['Config']['Labels']['com.docker.compose.depends_on'] = ''
+            raw = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+            raw['Mounts'] = sorted(raw['Mounts'], key=lambda m: m['Destination'])
+            actual['configurationSha256'] = scope.fingerprint(raw)
+            result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+            self.assertEqual(result, {'matched': True, 'reason': 'MATCH', 'changedPaths': [scope.API_NATIVE_PATHS[0]]})
+        for label in (' ', 'dep0:service_healthy:false', 'dep0:service_started:false,dep1:service_healthy:false',
+                      'dep0:service_healthy:true,dep1:service_healthy:false',
+                      'dep0:service_healthy:false,dep0:service_healthy:false', 'SECRET_MUST_NOT_ESCAPE'):
+            with self.subTest(label=label), self.fixture() as (d, metadata, actual, original, restored, _):
+                metadata['Config']['Labels']['com.docker.compose.depends_on'] = label
+                raw = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+                raw['Mounts'] = sorted(raw['Mounts'], key=lambda m: m['Destination'])
+                actual['configurationSha256'] = scope.fingerprint(raw)
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertEqual(result, {'matched': False, 'reason': 'DEPENDENCY_LABEL_CONTENT', 'changedPaths': []})
+                self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+
+    def test_plain_binds_keep_missing_null_empty_complete_host_shape(self):
+        for shape in ('missing', 'null', 'empty'):
+            for old_empty in (False, True):
+                with self.subTest(shape=shape, old_empty=old_empty), self.bind_fixture(shape, old_empty) as (d, metadata, actual, original, restored, _):
+                    before = copy.deepcopy(metadata)
+                    result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                    self.assertEqual(result, {'matched': True, 'reason': 'MATCH',
+                        'changedPaths': [scope.API_NATIVE_PATHS[2 if old_empty else 0]]})
+                    self.assertEqual(metadata, before)
+                    self.assertEqual('Mounts' in metadata['HostConfig'], shape != 'missing')
+            with self.bind_fixture(shape) as (d, metadata, actual, original, restored, _):
+                raw = {k: copy.deepcopy(metadata[k]) for k in ('Config', 'HostConfig', 'Mounts')}
+                raw['Config']['Hostname'] = original['containerId'][:12]
+                raw['Config']['Labels']['com.docker.compose.depends_on'] = 'dep1:service_healthy:false,dep0:service_healthy:false'
+                raw['HostConfig']['Mounts'] = None if shape == 'empty' else []
+                original['configurationSha256'] = scope.fingerprint(raw)
+                self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'NO_MATCH')
+
+    def test_plain_bind_requires_exact_declaration_top_mount_and_one_host_bind(self):
+        cases = [
+            ('declaration', ('services', 'api', 'volumes', 0, 'source'), 'external', 'MOUNT_BIND_DECLARATION'),
+            ('declaration', ('services', 'api', 'volumes', 0, 'target'), '/other', 'MOUNT_BIND_DECLARATION'),
+            ('declaration', ('services', 'api', 'volumes', 0, 'read_only'), True, 'MOUNT_BIND_DECLARATION'),
+            ('declaration', ('services', 'api', 'volumes', 0, 'volume'), {'nocopy': False}, 'MOUNT_BIND_DECLARATION'),
+            ('declaration', ('services', 'api', 'volumes', 0, 'unknown'), 'secret', 'MOUNT_BIND_DECLARATION'),
+            ('declaration', ('volumes', shared.WORKSPACE_VOLUME), {'name': 'external'}, 'MOUNT_BIND_NAME'),
+            ('metadata', ('Mounts', 0, 'Type'), 'bind', 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('Mounts', 0, 'Name'), 'external', 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('Mounts', 0, 'Destination'), '/other', 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('Mounts', 0, 'Mode'), 'ro', 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('Mounts', 0, 'RW'), False, 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('Mounts', 0, 'Driver'), 'external', 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('Mounts', 0, 'unknown'), 'secret', 'MOUNT_BIND_INSPECT'),
+            ('metadata', ('HostConfig', 'Binds'), [], 'MOUNT_BIND_HOST'),
+            ('metadata', ('HostConfig', 'Binds'), ['SECRET_MUST_NOT_ESCAPE'], 'MOUNT_BIND_HOST'),
+        ]
+        for target, path, value, reason in cases:
+            with self.subTest(reason=reason, path=path), self.bind_fixture('null') as (d, metadata, actual, original, restored, declaration):
+                item = declaration if target == 'declaration' else metadata
+                for key in path[:-1]:
+                    item = item[key]
+                item[path[-1]] = value
+                actual['configurationSha256'] = scope.fingerprint({k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')})
+                result = scope.api_native_projection_probe(d, metadata, actual, original, restored)
+                self.assertEqual(result, {'matched': False, 'reason': reason, 'changedPaths': []})
+                self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+        with self.bind_fixture('null') as (d, metadata, actual, original, restored, _):
+            metadata['HostConfig']['Binds'] *= 2
+            actual['configurationSha256'] = scope.fingerprint({k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')})
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'MOUNT_BIND_HOST')
+        with self.fixture() as (d, metadata, actual, original, restored, _):
+            metadata['HostConfig']['Binds'] = ['SECRET_MUST_NOT_ESCAPE']
+            raw = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+            raw['Mounts'] = sorted(raw['Mounts'], key=lambda m: m['Destination'])
+            actual['configurationSha256'] = scope.fingerprint(raw)
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'MOUNT_BIND_MIXED')
+
+    def test_empty_label_keeps_source_anchor_and_both_candidate_budgets(self):
+        with self.bind_fixture('null') as (d, metadata, actual, original, restored, declaration):
+            (restored['previous'] / 'docker-compose.aws-mysql.yml').write_text('changed dependency condition')
+            declaration['services']['api']['depends_on']['dep0']['condition'] = 'service_started'
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'],
+                             'OLD_SOURCE_BEFORE_CONFIGURATION_FILES')
+        with self.fixture(mount_count=4, network_count=4) as (d, metadata, actual, original, restored, _):
+            metadata['Config']['Labels']['com.docker.compose.depends_on'] = ''
+            raw = {k: metadata[k] for k in ('Config', 'HostConfig', 'Mounts')}
+            raw['Mounts'] = sorted(raw['Mounts'], key=lambda m: m['Destination'])
+            actual['configurationSha256'] = scope.fingerprint(raw)
+            with patch.object(scope.itertools, 'permutations') as permutations:
+                self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'COMBINATION_LIMIT')
+                permutations.assert_not_called()
+        with self.bind_fixture('null') as (d, metadata, actual, original, restored, _), patch.object(scope, 'API_NATIVE_MAX_BYTES', 1):
+            self.assertEqual(scope.api_native_projection_probe(d, metadata, actual, original, restored)['reason'], 'PAYLOAD_LIMIT')
 
 
 class ProofTests(unittest.TestCase):
