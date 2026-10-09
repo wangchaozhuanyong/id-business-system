@@ -128,6 +128,8 @@ jobs:
           if [[ -n "$(git diff --name-only "$CHECK_BASE" HEAD -- apps/api/src/id-business-v2/auto-registration/ apps/api/Dockerfile.mysql)" ]]; then
             npm run auto-registration:setup
             .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_workspace.py'
+            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_apple_mailboxes.py'
+            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_release_safety.py'
             .runtime/auto-registration/venv/bin/python -B apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py
           fi
 

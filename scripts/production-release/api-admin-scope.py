@@ -2,18 +2,21 @@
 
 import base64
 import hashlib
+import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import secrets
 import sqlite3
 import stat
 import subprocess
 import tarfile
 import time
 import urllib.request
+from contextlib import closing
 
 SCOPE = globals().get('SCOPE', 'API_ADMIN')
 if SCOPE not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE'):
@@ -29,6 +32,9 @@ CONFIG_FILES = ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
                 'apps/api/prisma-mysql/schema.prisma')
 WORKSPACE_VOLUME = 'auto_registration_data'
 WORKSPACE_DIRECTORY = '/app/.runtime/auto-registration'
+WORKSPACE_MAINTENANCE = '.id-release-maintenance.json'
+WORKSPACE_SAFETY = 'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py'
+WORKSPACE_SQLITE_RECEIPT = PREFIX + '-sqlite-protection.json'
 WORKSPACE_CADDY_BEFORE = 'f8b230bba46136c27651a0df8b7d6fd7fc4f13a47f7db48d0ff0a436fcfe37e0'
 WORKSPACE_CADDY_AFTER = 'f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674'
 WORKSPACE_API_ROOTS = ('/app/apps/api/dist', '/app/packages/shared/dist',
@@ -306,7 +312,7 @@ def workspace_volume(d, directory, *, empty=False, attached=False):
     return {'name': name, 'status': 'PRESENT', 'identitySha256': fingerprint(identity)}
 
 
-def workspace_idle(d, directory):
+def workspace_idle(d, directory, *, legacy=False):
     """Fail closed before stopping a worker; read only the controlled task statuses."""
     identity = workspace_volume(d, directory)
     if identity['status'] == 'ABSENT':
@@ -326,11 +332,401 @@ def workspace_idle(d, directory):
             rows = connection.execute('SELECT status, COUNT(*) FROM registration_tasks GROUP BY status').fetchall()
         d.require(all(status in ('pending', 'running', 'completed', 'failed', 'cancelled')
                       and type(count) is int and count >= 0 for status, count in rows)
-                  and sum(count for status, count in rows if status in ('pending', 'running')) == 0,
+                  and sum(count for status, count in rows if status in ('pending', 'running') or legacy and status == 'cancelled') == 0,
                   'API_ADMIN_WORKSPACE_TASK_ACTIVE')
     except sqlite3.Error:
         raise RuntimeError('API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE') from None
     return identity
+
+
+def workspace_api_identity(d, directory, *, expected=None, timeout=30):
+    state = d.service_state(directory, 'api', include_container_id=True) if expected is None else expected
+    value = json.loads(d.run('docker', 'inspect', state['containerId'], timeout=timeout))[0]
+    started = value.get('State', {}).get('StartedAt', '')
+    d.require(value.get('Id') == state['containerId'] and value.get('Image') == state['image']
+              and value.get('State', {}).get('Running') is True
+              and re.fullmatch(r'20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z', started)
+              and hashlib.sha256(started.encode()).hexdigest() == state['startedAtSha256'],
+              'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+    # Date.parse and MySQL UTC_TIMESTAMP must agree; an unverifiable/future start is rejected.
+    from datetime import datetime, timezone
+    observed = datetime.fromisoformat(started[:19] + '+00:00')
+    d.require(0 < observed.timestamp() <= datetime.now(timezone.utc).timestamp() + 5,
+              'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+    return {'containerId': state['containerId'], 'image': state['image'],
+            'startedAtSha256': state['startedAtSha256'], 'startedAt': started}
+
+
+def workspace_legacy_audit(d, directory, identity=None, *, deadline=None):
+    """Old workers lack a live-thread protocol. Any registration mutation since boot blocks them."""
+    identity = identity or workspace_api_identity(d, directory)
+    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+    d.require(timeout > 0, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+    source = r'''const {PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});
+const since=new Date(process.argv[1]);
+(async()=>{if(!Number.isFinite(+since))throw Error();
+const clock=await p.$queryRaw`SELECT UTC_TIMESTAMP(6) AS observed`;
+if(clock.length!==1||!(clock[0].observed instanceof Date)||+clock[0].observed<+since)throw Error();
+const mutationCount=await p.auditLog.count({where:{module:'自动注册',action:'操作请求',objectType:'开源注册模块',
+createdAt:{gte:since},OR:[{remark:{contains:' /api/registration'}},{remark:{contains:' /api/ws/'}}]}});
+if(!Number.isSafeInteger(mutationCount)||mutationCount<0)throw Error();
+console.log(JSON.stringify({version:1,mutationCount}));})().catch(()=>process.exitCode=2).finally(()=>p.$disconnect());'''
+    try:
+        result = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', source,
+                                     identity['startedAt'], timeout=timeout))
+    except Exception:
+        raise RuntimeError('API_ADMIN_WORKSPACE_LEGACY_AUDIT_UNAVAILABLE') from None
+    d.require(isinstance(result, dict) and set(result) == {'version', 'mutationCount'}
+              and type(result['version']) is int and result['version'] == 1
+              and type(result['mutationCount']) is int and result['mutationCount'] == 0,
+              'API_ADMIN_WORKSPACE_LEGACY_MUTATION_UNVERIFIED')
+    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+    d.require(timeout > 0, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+    d.require(workspace_api_identity(d, directory, expected=identity, timeout=timeout) == identity,
+              'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+    return {'legacyMutationCount': 0, 'containerId': identity['containerId'],
+            'startedAtSha256': identity['startedAtSha256']}
+
+
+def workspace_safety_result(d, value):
+    fields = {'version', 'status', 'schemaSha256', 'logicalSha256', 'tableCounts', 'taskCounts',
+              'activeAppleLeaseCount', 'corruptEncryptedValueCount', 'businessActions'}
+    d.require(isinstance(value, dict) and set(value) == fields and type(value['version']) is int
+              and value['version'] == 1 and value['status'] == 'PASS'
+              and all(isinstance(value[n], str) and re.fullmatch(r'[a-f0-9]{64}', value[n])
+                      for n in ('schemaSha256', 'logicalSha256'))
+              and isinstance(value['tableCounts'], dict)
+              and set(value['tableCounts']) == {'accounts', 'email_services', 'registration_tasks', 'settings',
+                     'proxies', 'cpa_services', 'sub2api_services', 'tm_services'}
+              and all(type(n) is int and 0 <= n <= 2_000_000 for n in value['tableCounts'].values())
+              and isinstance(value['taskCounts'], dict)
+              and set(value['taskCounts']) == {'pending', 'running', 'completed', 'failed', 'cancelled'}
+              and all(type(n) is int and 0 <= n <= 2_000_000 for n in value['taskCounts'].values())
+              and value['taskCounts']['pending'] == value['taskCounts']['running'] == 0
+              and sum(value['taskCounts'].values()) == value['tableCounts']['registration_tasks']
+              and all(type(value[n]) is int and value[n] == 0 for n in
+                      ('activeAppleLeaseCount', 'corruptEncryptedValueCount', 'businessActions')),
+              'API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+    return value
+
+
+def workspace_private_inspect(d, directory, reference, volume, *, mode='inspect', expected=None, timeout=60):
+    values = d.environment_values(directory / '.env.aws.production')
+    key = values.get('FIELD_ENCRYPTION_KEY')
+    d.require(isinstance(key, str) and len(key) >= 32, 'API_ADMIN_WORKSPACE_SQLITE_KEY_UNAVAILABLE')
+    request = {'mode': mode, 'databasePath': WORKSPACE_DIRECTORY + '/database.db', 'encryptionKey': key}
+    if expected is not None:
+        request['expectedLogicalSha256'] = expected
+    try:
+        output = d.run('docker', 'run', '--rm', '-i', '--network', 'none', '--read-only',
+            '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',
+            '--mount', 'type=volume,source=' + volume + ',target=' + WORKSPACE_DIRECTORY + ',readonly',
+            '--entrypoint', '/opt/id-registration/venv/bin/python', reference, '-B',
+            '/app/' + WORKSPACE_SAFETY, timeout=timeout, input_data=json.dumps(request))
+        result = workspace_safety_result(d, json.loads(output))
+    except Exception:
+        raise RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED') from None
+    return result
+
+
+class WorkspaceSqliteProtection:
+    """A bounded writer fence, immutable encrypted backup and isolated restore proof."""
+
+    def __init__(self, d, previous, target, proof, args, *, legacy):
+        self.d, self.previous, self.target, self.proof, self.args = d, previous, target, proof, args
+        self.legacy, self.connection, self.marker_bytes = legacy, None, None
+        self.volume = workspace_volume(d, previous, attached=True)
+        meta = json.loads(d.run('docker', 'volume', 'inspect', self.volume['name']))[0]
+        self.root = Path(meta['Mountpoint'])
+        self.database = self.root / 'database.db'
+        self.marker = self.root / WORKSPACE_MAINTENANCE
+        self.summary = None
+        self.record = None
+        self.api_identity = workspace_api_identity(d, previous)
+
+    def summary_reader(self):
+        path = self.target / WORKSPACE_SAFETY
+        self.d.require(path.is_file() and not path.is_symlink(), 'API_ADMIN_WORKSPACE_SQLITE_HELPER_MISSING')
+        spec = importlib.util.spec_from_file_location('id_release_sqlite_safety', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.logical_summary
+
+    def lock(self):
+        self.deadline = time.monotonic() + 150
+        self.d.require(not self.marker.exists() and not self.marker.is_symlink(),
+                       'API_ADMIN_WORKSPACE_MAINTENANCE_EXISTS')
+        self.d.require(self.database.is_file() and not self.database.is_symlink()
+                       and stat.S_IMODE(self.database.stat().st_mode) == 0o600
+                       and all(not (self.root / ('database.db' + suffix)).is_symlink()
+                               for suffix in ('-wal', '-shm', '-journal')),
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_INVALID')
+        self.database_identity = (self.database.stat().st_dev, self.database.stat().st_ino)
+        try:
+            self.connection = sqlite3.connect(self.database.as_uri() + '?mode=rw', uri=True, timeout=2)
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.connection.set_progress_handler(lambda: int(time.monotonic() >= self.deadline), 10000)
+            self.d.require(self.connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)],
+                           'API_ADMIN_WORKSPACE_SQLITE_INTEGRITY_FAILED')
+            self.summary = self.summary_reader()(self.connection)
+            tasks = self.summary['taskCounts']
+            self.d.require(tasks['pending'] == tasks['running'] == 0
+                           and (not self.legacy or tasks['cancelled'] == 0),
+                           'API_ADMIN_WORKSPACE_TASK_ACTIVE')
+            if self.legacy:
+                self.legacy_proof = workspace_legacy_audit(self.d, self.previous, self.api_identity, deadline=self.deadline)
+            else:
+                self.legacy_proof = None
+            marker = {'version': 1, 'runId': self.args.run_id, 'runAttempt': self.args.run_attempt,
+                      'candidateCommit': self.args.commit, 'nonce': secrets.token_hex(32)}
+            self.marker_bytes = (json.dumps(marker, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            descriptor = os.open(self.marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(self.marker_bytes); stream.flush(); os.fsync(stream.fileno())
+            os.chown(self.marker, self.database.stat().st_uid, self.database.stat().st_gid)
+            self.marker_identity = (self.marker.stat().st_dev, self.marker.stat().st_ino)
+            self.check_locked()
+        except Exception:
+            self.close()
+            raise
+
+    def check_marker(self):
+        self.d.require(self.marker_bytes is not None and self.marker.is_file() and not self.marker.is_symlink()
+                       and stat.S_IMODE(self.marker.stat().st_mode) == 0o600
+                       and (self.marker.stat().st_dev, self.marker.stat().st_ino) == self.marker_identity
+                       and self.marker.read_bytes() == self.marker_bytes,
+                       'API_ADMIN_WORKSPACE_MAINTENANCE_CHANGED')
+
+    def check_locked(self):
+        self.check_marker()
+        self.d.require(time.monotonic() < self.deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+        self.d.require(self.connection is not None and self.connection.in_transaction
+                       and (self.database.stat().st_dev, self.database.stat().st_ino) == self.database_identity
+                       and not self.database.is_symlink()
+                       and self.summary_reader()(self.connection) == self.summary,
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        self.d.require(workspace_api_identity(self.d, self.previous, expected=self.api_identity,
+                       timeout=min(30, self.deadline - time.monotonic())) == self.api_identity,
+                       'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+        if self.legacy:
+            self.d.require(workspace_legacy_audit(self.d, self.previous, self.api_identity,
+                           deadline=self.deadline) == self.legacy_proof,
+                           'API_ADMIN_WORKSPACE_LEGACY_MUTATION_UNVERIFIED')
+
+    def backup_restore(self):
+        self.check_locked()
+        self.d.require(self.database.stat().st_size <= 256 * 1024**2
+                       and shutil.disk_usage(self.target).free > max(2 * 1024**3, self.database.stat().st_size * 4),
+                       'API_ADMIN_WORKSPACE_SQLITE_CAPACITY_FAILED')
+        backup_root = self.target / 'backups'
+        backup_root.mkdir(mode=0o700, exist_ok=True)
+        self.d.require(backup_root.is_dir() and not backup_root.is_symlink()
+                       and stat.S_IMODE(backup_root.stat().st_mode) == 0o700,
+                       'API_ADMIN_WORKSPACE_SQLITE_BACKUP_PATH_INVALID')
+        directory = backup_root / 'auto-registration'
+        directory.mkdir(mode=0o700)
+        backup = directory / 'database.db'
+        descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.close(descriptor)
+        deadline = min(self.deadline, time.monotonic() + 30)
+        def progress(*_):
+            self.d.require(time.monotonic() < deadline, 'API_ADMIN_WORKSPACE_SQLITE_BACKUP_TIMEOUT')
+        with closing(sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=2)) as source:
+            with closing(sqlite3.connect(backup)) as destination:
+                source.backup(destination, pages=256, progress=progress, sleep=0.01)
+                # A WAL source can transfer its journal flag. Seal the independent
+                # snapshot as a standalone database before mounting its restore read-only.
+                self.d.require(destination.execute('PRAGMA journal_mode=DELETE').fetchone() == ('delete',),
+                               'API_ADMIN_WORKSPACE_SQLITE_BACKUP_CHANGED')
+                self.d.require(destination.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+                               and self.summary_reader()(destination) == self.summary,
+                               'API_ADMIN_WORKSPACE_SQLITE_BACKUP_CHANGED')
+        with backup.open('rb') as stream:
+            os.fsync(stream.fileno())
+        name = 'id-sqlite-restore-' + self.args.run_id + '-' + self.args.run_attempt
+        self.d.require(re.fullmatch(r'id-sqlite-restore-[1-9][0-9]*-[1-9][0-9]*', name)
+                       and not self.d.run('docker', 'volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}'),
+                       'API_ADMIN_WORKSPACE_RESTORE_VOLUME_EXISTS')
+        self.d.run('docker', 'volume', 'create', '--label', 'id-business-v2.sqlite-restore=' + self.args.run_id + '-' + self.args.run_attempt, name)
+        try:
+            meta = json.loads(self.d.run('docker', 'volume', 'inspect', name))[0]
+            clone = Path(meta['Mountpoint'])
+            self.d.require(clone.is_absolute() and clone.resolve() == clone and clone.is_dir()
+                           and not clone.is_symlink() and not any(clone.iterdir()),
+                           'API_ADMIN_WORKSPACE_RESTORE_VOLUME_CHANGED')
+            clone.chmod(0o700)
+            original_stat = self.database.stat()
+            os.chown(clone, original_stat.st_uid, original_stat.st_gid)
+            cloned_db = clone / 'database.db'
+            descriptor = os.open(cloned_db, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
+            shutil.copyfile(backup, cloned_db)
+            cloned_db.chmod(0o600)
+            os.chown(cloned_db, original_stat.st_uid, original_stat.st_gid)
+            restored = workspace_private_inspect(self.d, self.previous, self.proof['images']['api']['reference'],
+                                                name, mode='restore', expected=self.summary['logicalSha256'],
+                                                timeout=max(0.1, min(60, self.deadline - time.monotonic())))
+            self.d.require(all(restored[key] == self.summary[key] for key in self.summary),
+                           'API_ADMIN_WORKSPACE_SQLITE_RESTORE_CHANGED')
+        finally:
+            meta = json.loads(self.d.run('docker', 'volume', 'inspect', name))[0]
+            self.d.require(meta.get('Name') == name and meta.get('Labels', {}).get('id-business-v2.sqlite-restore')
+                           == self.args.run_id + '-' + self.args.run_attempt,
+                           'API_ADMIN_WORKSPACE_RESTORE_VOLUME_CHANGED')
+            self.d.run('docker', 'volume', 'rm', name)
+        self.check_locked()
+        self.record = {'version': 1, 'volume': self.volume, 'backupName': 'backups/auto-registration/database.db',
+            'backupSha256': hashlib.sha256(backup.read_bytes()).hexdigest(), 'backupSize': backup.stat().st_size,
+            'sourceDatabaseIdentitySha256': fingerprint(self.database_identity),
+            'sourceApiIdentity': {k: v for k, v in self.api_identity.items() if k != 'startedAt'},
+            'candidateImageId': self.proof['images']['api']['imageId'], 'inspection': restored,
+            'legacyAudit': self.legacy_proof, 'sourceSummary': self.summary,
+            'maintenanceSha256': hashlib.sha256(self.marker_bytes).hexdigest(),
+            'restoreVerified': True, 'temporaryRestoreVolumeRemoved': True, 'volumeDeletionPerformed': False}
+        receipt = self.target / WORKSPACE_SQLITE_RECEIPT
+        with receipt.open('x') as stream:
+            json.dump(self.record, stream, sort_keys=True); stream.write('\n')
+        receipt.chmod(0o600)
+        return self.record
+
+    def stop_previous(self):
+        self.check_locked()
+        remaining = self.deadline - time.monotonic()
+        self.d.require(remaining > 35, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+        self.d.run('docker', 'stop', '--time', '30', self.api_identity['containerId'], timeout=min(45, remaining - 2))
+        remaining = self.deadline - time.monotonic()
+        self.d.require(remaining > 0, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+        value = json.loads(self.d.run('docker', 'inspect', self.api_identity['containerId'], timeout=min(15, remaining)))[0]
+        self.d.require(value.get('Id') == self.api_identity['containerId']
+                       and value.get('State', {}).get('Running') is False,
+                       'API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
+        self.close()
+
+    def finish(self):
+        self.check_marker()
+        current = workspace_private_inspect(self.d, self.target, self.proof['images']['api']['reference'],
+                                            self.volume['name'], expected=self.summary['logicalSha256'])
+        self.d.require(all(current[key] == self.summary[key] for key in self.summary),
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        self.check_marker()
+        self.marker.unlink()
+
+    def abort(self):
+        """Clear only our fence after the original image and unchanged, idle data are proven."""
+        self.close()
+        if self.marker_bytes is None:
+            return
+        self.check_marker()
+        self.d.require(not self.database.is_symlink()
+                       and (self.database.stat().st_dev, self.database.stat().st_ino) == self.database_identity,
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        identity = workspace_api_identity(self.d, self.previous)
+        self.d.require(identity['image'] == self.api_identity['image'],
+                       'API_ADMIN_WORKSPACE_OLD_API_NOT_RESTORED')
+        deadline = time.monotonic() + 60
+        try:
+            self.connection = sqlite3.connect(self.database.as_uri() + '?mode=rw', uri=True, timeout=2)
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
+            self.d.require(self.summary_reader()(self.connection) == self.summary,
+                           'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+            if self.legacy:
+                workspace_legacy_audit(self.d, self.previous, identity, deadline=deadline)
+            else:
+                workspace_private_inspect(self.d, self.previous, identity['image'], self.volume['name'],
+                                          expected=self.summary['logicalSha256'],
+                                          timeout=max(0.1, min(30, deadline - time.monotonic())))
+            self.d.require(time.monotonic() < deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+            self.d.require(workspace_api_identity(self.d, self.previous, expected=identity,
+                           timeout=min(15, deadline - time.monotonic())) == identity,
+                           'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+            self.check_marker()
+            self.marker.unlink()
+        finally:
+            self.close()
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.rollback(); self.connection.close(); self.connection = None
+
+
+def workspace_prepare(d, previous, target, proof, args, evidence, *, legacy):
+    if evidence['workspaceVolume']['status'] == 'ABSENT':
+        workspace_volume(d, previous, empty=True)
+        return None
+    volume = workspace_volume(d, previous, attached=True)
+    meta = json.loads(d.run('docker', 'volume', 'inspect', volume['name']))[0]
+    root = Path(meta['Mountpoint'])
+    if not (root / 'database.db').exists():
+        workspace_volume(d, previous, empty=True)
+        return None
+    gate = WorkspaceSqliteProtection(d, previous, target, proof, args, legacy=legacy)
+    try:
+        gate.lock()
+        gate.backup_restore()
+    except Exception as error:
+        gate.close()
+        code = str(error)
+        if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
+            code = 'API_ADMIN_WORKSPACE_SQLITE_PREPARATION_FAILED'
+        failure = RuntimeError(code)
+        failure.sqlite_gate = gate
+        raise failure from None
+    return gate
+
+
+def workspace_sqlite_receipt(d, directory, proof, record, manifest):
+    digest = manifest['apiWorkspacePublication'].get('sqliteProtectionSha256')
+    if digest is None:
+        d.require('sqliteProtectionSha256' not in record, 'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+        return None
+    path = directory / WORKSPACE_SQLITE_RECEIPT
+    d.require(isinstance(digest, str) and re.fullmatch(r'[a-f0-9]{64}', digest)
+              and record.get('sqliteProtectionSha256') == digest and path.is_file() and not path.is_symlink()
+              and stat.S_IMODE(path.stat().st_mode) == 0o600 and path.stat().st_size < 16384,
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    value = json.loads(path.read_bytes())
+    fields = {'version', 'volume', 'backupName', 'backupSha256', 'backupSize', 'sourceDatabaseIdentitySha256',
+              'sourceApiIdentity', 'candidateImageId', 'inspection', 'legacyAudit', 'sourceSummary',
+              'maintenanceSha256', 'restoreVerified', 'temporaryRestoreVolumeRemoved', 'volumeDeletionPerformed'}
+    d.require(isinstance(value, dict) and set(value) == fields and fingerprint(value) == digest
+              and value['version'] == 1 and type(value['version']) is int
+              and value['volume'] == record['workspaceVolumeBefore'] == record['workspaceVolumeAfter']
+              and value['candidateImageId'] == proof['images']['api']['imageId']
+              and value['backupName'] == 'backups/auto-registration/database.db'
+              and type(value['backupSize']) is int and 0 < value['backupSize'] <= 256 * 1024**2
+              and value['restoreVerified'] is True and value['temporaryRestoreVolumeRemoved'] is True
+              and value['volumeDeletionPerformed'] is False
+              and all(isinstance(value[name], str) and re.fullmatch(r'[a-f0-9]{64}', value[name])
+                      for name in ('backupSha256', 'sourceDatabaseIdentitySha256', 'maintenanceSha256')),
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    inspection = workspace_safety_result(d, value['inspection'])
+    d.require(value['sourceSummary'] == {k: inspection[k] for k in
+              ('schemaSha256', 'logicalSha256', 'tableCounts', 'taskCounts')},
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    identity = value['sourceApiIdentity']
+    d.require(isinstance(identity, dict) and set(identity) == {'containerId', 'image', 'startedAtSha256'}
+              and isinstance(identity['containerId'], str) and re.fullmatch(r'[a-f0-9]{64}', identity['containerId'])
+              and identity['image'] == record['before']['api']['image']
+              and identity['containerId'] == record['before']['api']['containerId']
+              and identity['startedAtSha256'] == record['before']['api']['startedAtSha256'],
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    if value['legacyAudit'] is not None:
+        d.require(value['legacyAudit'] == {'legacyMutationCount': 0, 'containerId': identity['containerId'],
+                  'startedAtSha256': identity['startedAtSha256']} and inspection['taskCounts']['cancelled'] == 0,
+                  'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    backup = directory / value['backupName']
+    d.require(backup.parent.parent.is_dir() and not backup.parent.parent.is_symlink()
+              and stat.S_IMODE(backup.parent.parent.stat().st_mode) == 0o700
+              and backup.parent.is_dir() and not backup.parent.is_symlink()
+              and stat.S_IMODE(backup.parent.stat().st_mode) == 0o700
+              and backup.is_file() and not backup.is_symlink()
+              and stat.S_IMODE(backup.stat().st_mode) == 0o600
+              and backup.stat().st_size == value['backupSize']
+              and hashlib.sha256(backup.read_bytes()).hexdigest() == value['backupSha256'],
+              'API_ADMIN_WORKSPACE_SQLITE_BACKUP_CHANGED')
+    return {'backupVerified': True, 'restoreVerified': True, 'sqliteProtectionSha256': digest,
+            'backupSha256': value['backupSha256'], 'backupSize': value['backupSize']}
 
 
 def workspace_acceptance(d, reference, run_id, attempt):
@@ -1638,7 +2034,10 @@ def baseline(d, expected, *, check_jobs=True):
                 d.require(manifest['apiWorkspacePublication'] == {'version': 1, 'scope': SCOPE,
                     'buildProofSha256': fingerprint(proof), 'workersPublished': False, 'cacheStatus': 'SKIPPED',
                     'configurationChanged': True, 'volume': record.get('workspaceVolumeAfter'),
-                    'volumeDeletionPerformed': False}, 'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
+                    'volumeDeletionPerformed': False,
+                    **({'sqliteProtectionSha256': record['sqliteProtectionSha256']} if 'sqliteProtectionSha256' in record else {})},
+                    'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
+                workspace_sqlite_receipt(d, previous, proof, record, manifest)
             elif WORKSPACE:
                 original, _ = d.api_admin_scope()
                 proof = original.validate_proof(d, json.loads((previous / original.PROOF_FILE).read_text()), expected, manifest['sourceTree'])
@@ -1722,8 +2121,21 @@ def baseline(d, expected, *, check_jobs=True):
             d.require(free_bytes > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         stage = 'JOBS'
         guards = jobs_idle(d, previous) if check_jobs else None
-        workspace_state = workspace_volume(d, previous, empty=check_jobs,
+        workspace_state = workspace_volume(d, previous,
                                             attached=bool(manifest.get('apiWorkspacePublication'))) if WORKSPACE else None
+        if WORKSPACE and check_jobs:
+            legacy = 'sqliteProtectionSha256' not in manifest.get('apiWorkspacePublication', {})
+            workspace_idle(d, previous, legacy=legacy)
+            if workspace_state['status'] == 'PRESENT':
+                root = Path(json.loads(d.run('docker', 'volume', 'inspect', workspace_state['name']))[0]['Mountpoint'])
+                if (root / 'database.db').exists():
+                    d.require(not (root / WORKSPACE_MAINTENANCE).exists()
+                              and not (root / WORKSPACE_MAINTENANCE).is_symlink(),
+                              'API_ADMIN_WORKSPACE_MAINTENANCE_EXISTS')
+                    if legacy:
+                        workspace_legacy_audit(d, previous)
+                    else:
+                        workspace_private_inspect(d, previous, states['api']['reference'], workspace_state['name'])
         if REGISTRATION and check_jobs:
             require_registration_handoff(d, previous, manifest)
         migration_state = migration_database_state(d, previous) if MIGRATION_MODE else None
@@ -1883,6 +2295,9 @@ def readback(d, expected, *, check_task=True):
         workspace_health(d, previous)
         workspace = {'workspaceVolume': volume, 'volumePreserved': True, 'volumeDeletionPerformed': False,
                      'offlineAcceptance': proof['acceptance'], 'registrationHealthChecked': True}
+        sqlite_protection = workspace_sqlite_receipt(d, previous, proof, record, manifest)
+        if sqlite_protection is not None:
+            workspace['sqliteProtection'] = sqlite_protection
     d.require(audit_receipt(d, previous / 'before-audit.json') == manifest['dataAuditBefore']
               and audit_receipt(d, previous / 'after-audit.json') == manifest['dataAuditAfter']
               and manifest['dataAuditBefore']['checksSha256'] == manifest['dataAuditAfter']['checksSha256'],
@@ -1986,6 +2401,7 @@ def _release_locked(d, args):
     d.require(not target.exists(), 'API_ADMIN_RELEASE_EXISTS')
     target.mkdir(mode=0o700)
     changed, step = [], 'source'
+    sqlite_gate = None
     try:
         with urllib.request.urlopen(f'https://github.com/wangchaozhuanyong/id-business-system/archive/{args.commit}.tar.gz', timeout=60) as response:
             data = response.read(128 * 1024 * 1024 + 1)
@@ -2065,7 +2481,7 @@ def _release_locked(d, args):
         require_preserved(d, previous, target, before, environment, all_services=True)
         jobs_idle(d, previous)
         if WORKSPACE:
-            workspace_volume(d, previous, empty=True)
+            workspace_idle(d, previous, legacy='sqliteProtectionSha256' not in old.get('apiWorkspacePublication', {}))
         if retained_origin is not None:
             migration_successor_guard(d, target, retained_origin)
         if MIGRATION_MODE:
@@ -2085,13 +2501,19 @@ def _release_locked(d, args):
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
                 if WORKSPACE:
-                    workspace_volume(d, previous, empty=True)
+                    step = 'sqlite-protection'
+                    sqlite_gate = workspace_prepare(d, previous, target, proof, args, evidence,
+                        legacy='sqliteProtectionSha256' not in old.get('apiWorkspacePublication', {}))
+                    step = 'switch'
                 if REGISTRATION:
                     require_registration_handoff(d, previous, old)
                     d.require(registration_task(d, previous) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
             if WORKSPACE and name == 'caddy':
                 workspace_idle(d, target)
             changed.append(name)
+            if WORKSPACE and name == 'api' and sqlite_gate is not None:
+                # The old singleton must actually stop before releasing its writer fence.
+                sqlite_gate.stop_previous()
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name, timeout=300)
             d.wait_healthy(target, name)
         step = 'audit-after'
@@ -2123,6 +2545,8 @@ def _release_locked(d, args):
         if WORKSPACE:
             record.update(workspaceVolumeBefore=evidence['workspaceVolume'],
                           workspaceVolumeAfter=workspace_volume(d, target, attached=True))
+            if sqlite_gate is not None:
+                record['sqliteProtectionSha256'] = fingerprint(sqlite_gate.record)
         (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
         (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
         manifest = {'images': old['images'],
@@ -2144,7 +2568,8 @@ def _release_locked(d, args):
             **{'apiAdminMigrationPublication' if MIGRATION_MODE else 'apiRegistrationPublication' if REGISTRATION else 'apiWorkspacePublication' if WORKSPACE else 'apiAdminPublication':
                 {'version': 1, 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
                  'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': WORKSPACE,
-                 **({'volume': record['workspaceVolumeAfter'], 'volumeDeletionPerformed': False} if WORKSPACE else {}),
+                 **({'volume': record['workspaceVolumeAfter'], 'volumeDeletionPerformed': False,
+                     **({'sqliteProtectionSha256': record['sqliteProtectionSha256']} if sqlite_gate is not None else {})} if WORKSPACE else {}),
                  **({'schemaChanged': True, 'migration': dict(MIGRATION_IDENTITY)} if MIGRATION_MODE else {})}})
         if MIGRATION_MODE:
             manifest['migrationPerformed'] = migration_result['performed']
@@ -2154,10 +2579,16 @@ def _release_locked(d, args):
         d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_MOVED')
         d.point_current(target, f'{stamp}-publish')
         result = readback(d, args.commit)
+        if sqlite_gate is not None:
+            sqlite_gate.finish()
         result.update(backupVerified=True, checkCount=49, violationCount=0)
         print(json.dumps(result))
         return 0
     except Exception as error:
+        if sqlite_gate is None:
+            sqlite_gate = getattr(error, 'sqlite_gate', None)
+        if sqlite_gate is not None:
+            sqlite_gate.close()
         if MIGRATION_MODE and migration_attempted:
             try:
                 observed = migration_database_state(d, target)
@@ -2176,6 +2607,10 @@ def _release_locked(d, args):
                     jobs_idle(d, target)
                     if WORKSPACE:
                         workspace_idle(d, target)
+                        if sqlite_gate is not None:
+                            sqlite_gate.check_marker()
+                            workspace_private_inspect(d, target, proof['images']['api']['reference'],
+                                sqlite_gate.volume['name'], expected=sqlite_gate.summary['logicalSha256'])
                 if MIGRATION_MODE:
                     d.require(jobs_idle(d, target) == evidence['guards'], 'API_ADMIN_REGISTRATION_TASK_CHANGED')
                     registration_private(d, target, retained=evidence['guards']['registrationWindowRetained'])
@@ -2197,6 +2632,11 @@ def _release_locked(d, args):
                     migration_task_guard(d, previous, original_task, evidence['guards'])
                 if retained_origin is not None:
                     migration_successor_guard(d, previous, retained_origin)
+            except Exception:
+                rollback_ok = False
+        if sqlite_gate is not None and rollback_ok:
+            try:
+                sqlite_gate.abort()
             except Exception:
                 rollback_ok = False
         if rollback_ok and (d.BASE / 'current').resolve() == target:
@@ -2223,7 +2663,9 @@ def _release_locked(d, args):
                   'candidateCommit': args.commit, 'previousCommit': args.expected_current,
                   'currentPointsToCandidate': (d.BASE / 'current').resolve() == target}
         if WORKSPACE:
-            result.update(volumeDeletionPerformed=False, sqliteBackupStatus='FIRST_EMPTY_VOLUME_ONLY')
+            result.update(volumeDeletionPerformed=False, sqliteBackupStatus=(
+                'VERIFIED_RESTORE' if sqlite_gate is not None and sqlite_gate.record is not None
+                else 'INCOMPLETE_PROOF' if sqlite_gate is not None else 'NOT_SWITCHED_OR_EMPTY_VOLUME'))
         result['receiptPersisted'] = True
         if MIGRATION_MODE:
             result.update(migration=migration_result,

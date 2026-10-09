@@ -4,6 +4,33 @@ import { onlineTablesByFeature } from './online-recharge/tableSchemas';
 const table = defineV2TableSchema;
 
 export const v2TableSchemas = {
+  autoRegistration: {
+    appleMailboxes: table({
+      id: 'auto-registration.apple-mailboxes',
+      feature: 'auto-registration',
+      role: 'primary',
+      mobileMode: 'cards',
+      rowKey: { kind: 'path', value: 'aliasId' },
+      columns: [
+        {
+          key: 'selection',
+          label: '选择',
+          kind: 'control',
+          control: 'selection',
+          width: 46,
+          pin: 'start'
+        },
+        { key: 'email', label: '隐藏邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
+        { key: 'primaryEmail', label: '主邮箱', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'registrationStatus', label: '注册状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'registrationIp', label: '注册 IP', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'source', label: '标记来源', kind: 'text', widthPreset: 'standard' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'taskStatus', label: '任务状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    })
+  },
   chatgptAccounts: {
     main: table({
       id: 'chatgpt-accounts.main',
@@ -1390,7 +1417,7 @@ export const v2TableSchemas = {
 
 export const v2TablesByFeature = {
   ...onlineTablesByFeature,
-  'auto-registration': [],
+  'auto-registration': [v2TableSchemas.autoRegistration.appleMailboxes],
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],

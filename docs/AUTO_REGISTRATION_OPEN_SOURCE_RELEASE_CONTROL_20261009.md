@@ -55,12 +55,33 @@ API 的生产 `/api/health/ready` 必须通过真实 singleton 注册子服务�
 
 ## 数据卷与恢复边界
 
-本入口当前只接纳首次不存在或为空的生产注册卷。
-若卷已有 SQLite、日志或其他文件，返回 `API_ADMIN_WORKSPACE_SQLITE_BACKUP_REQUIRED`，
-不得清空卷、覆盖资料或跳过门禁重试。
-后续重发必须先补齐明确的 SQLite 在线一致性备份、备份完整性和恢复证明，
-并在发布期间保护任务状态；现有 MySQL 备份不能替代该证明。
-本范围暂不提供有数据卷的重发入口。
+首次不存在或为空的生产注册卷仍沿用原受控入口。已有 SQLite 的非空卷必须经过专属保护，
+不能清空卷、覆盖资料、删除历史任务或跳过门禁重试。只有日志等文件而没有数据库时仍拒绝。
+预检只核验卷身份、任务和旧 API 容器本次启动以来的注册操作审计，不生成备份、围栏或改业务资料。
+
+兼容尚无维护协议的旧 worker 时，要求本次 API 真实 `StartedAt` 以来所有注册、任务和注册
+WebSocket 操作请求审计数为 0；审计缺失、容器/启动时间漂移、未知状态，以及任何旧 `cancelled`
+记录均拒绝。取消或删除后的任务行不能证明原执行线程已结束，不能用空表或终态计数绕过。
+新协议版本则要求没有待执行/执行中任务、加密邮箱占用或损坏资料。
+
+API 切换前取得 SQLite `BEGIN IMMEDIATE` 外部写锁，锁内再次扫描任务、核对逻辑指纹和旧运行期
+审计，在卷根以独占创建方式写入本次 `.id-release-maintenance.json`（0600）。锁保护整个备份及
+恢复证明，写锁预算为 150 秒；连接和命令另有超时，预算不足时不得停止旧 API。源数据库必须既存、0600，路径/数据库/侧车均拒绝
+软链接。只用另一条 `mode=ro` 连接的 SQLite backup API 读取一致性快照，包含已提交 WAL 数据；
+不能直接复制主库遗漏 WAL，也不修改源库业务状态。独立备份封存为无需 WAL 侧车的 DELETE 模式，
+保存于本次 release 的 `backups/auto-registration/database.db`，目录 0700、文件 0600。
+
+备份与源库的完整性、schema、全部业务行和密文逻辑指纹必须相同。将备份复制到仅本次使用的
+带身份标签临时卷，用固定候选 API 镜像、只读根、无网络和只读副本挂载执行 `release_safety.py`：
+既有密钥仅走内存/私有 stdin，验证原健康标记、全部受控密文字段、邮箱租约、任务状态及恢复
+逻辑指纹。该 helper 不启动应用、不初始化数据库、不读取邮件、不执行注册。临时卷只在再次
+验证本次标签后清理；生产卷和原始备份始终保留。MySQL 原有本地/S3备份继续执行，不能替代
+这份 SQLite 证明。
+
+旧 API 精确容器实际停止后才释放 SQLite 写锁，再启动候选 API。候选维护围栏阻止全部修改、
+注册和 WebSocket 取消动作，保留读取和健康检查；成功完成生产回读且在围栏内确认数据仍与
+备份一致后，才删除本次围栏。写锁期间原 worker 的写健康校验可能暂时不可 ready，该现象不
+放宽容器 ID、镜像、启动来源或数据保护规则，也不以此强行取消或中断活动注册。
 普通 `release`、`API_ADMIN` 和 `API_ADMIN_MIGRATION` 在当前配置包含注册卷、API 实际挂载该卷，
 或回滚后同项目仍保留该卷时均拒绝执行；候选普通发布也不能引入注册卷来绕过本入口。
 仅不重启 API 的 Admin 单独发布可继续走原入口。
@@ -71,6 +92,9 @@ API 的生产 `/api/health/ready` 必须通过真实 singleton 注册子服务�
 `pending`/`running` 数量必须为 0，未知状态、损坏或不可读立即阻止 API 恢复。
 新任务已开始或恢复不完整时报告 `API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED`，保存现场，
 不强制取消任务、不修改 SQLite 状态，也不声称已回滚。
+准备阶段失败也必须交回本次围栏对象。仅在原/已恢复的原镜像 API 身份、空闲任务、旧运行期
+审计及原逻辑数据重新核验后解除本次围栏；任何不确定保留围栏并报告 PARTIAL。不会把备份写回
+生产数据库覆盖新资料；未知/外来围栏不得擅自删除，需按受控回执诊断。
 
 ## 回执位置
 
@@ -79,7 +103,10 @@ GitHub artifact：`api-workspace-evidence-<run>-<attempt>`，保存 runner 的
 
 生产候选目录：`/opt/id-business-v2/releases/<timestamp>-<sha-prefix>/`，包括
 `api-workspace-build-proof.json`、`api-workspace-preservation.json`、前后财务回执、
-MySQL 备份证明及 `release-manifest.json`；失败时另存 `api-workspace-failure.json`。
+MySQL 备份证明及 `release-manifest.json`；非空卷另存 `api-workspace-sqlite-protection.json` 和私有
+SQLite 原始备份。恢复证明摘要绑定卷、旧容器及启动时间、源数据库身份、旧/候选镜像、schema、
+逻辑指纹和备份 SHA/大小，并绑定 manifest 与 preservation 回执。GitHub 仅接收受控摘要，不能
+上传数据库文件、密钥、查询授权或原始业务数据。失败时另存 `api-workspace-failure.json`。
 独立 SSM 回读重新绑定本次 build proof、来源链、四个保留服务、卷身份和实际健康。
 WORKSPACE 预检失败时可增加 `workspaceDiagnostic`，仅包含阶段、步骤、服务、范围和异常类型的
 受控枚举。步骤区分当前 API/Admin 镜像与内容、原迁移镜像及内容、schema、任务、空闲及窗口。

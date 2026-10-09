@@ -188,6 +188,14 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                     or receipt.get('volumePreserved') is not True or receipt.get('volumeDeletionPerformed') is not False
                     or receipt.get('registrationHealthChecked') is not True or receipt.get('offlineAcceptance') != proof.get('acceptance')):
                 raise RuntimeError('API_ADMIN_WORKSPACE_READBACK_CHANGED')
+            protection = receipt.get('sqliteProtection')
+            if protection is not None and (not isinstance(protection, dict)
+                    or set(protection) != {'backupVerified', 'restoreVerified', 'sqliteProtectionSha256', 'backupSha256', 'backupSize'}
+                    or protection['backupVerified'] is not True or protection['restoreVerified'] is not True
+                    or type(protection['backupSize']) is not int or not 0 < protection['backupSize'] <= 256 * 1024**2
+                    or any(not isinstance(protection[key], str) or not re.fullmatch(r'[a-f0-9]{64}', protection[key])
+                           for key in ('sqliteProtectionSha256', 'backupSha256'))):
+                raise RuntimeError('API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
         if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE'):
             before_file = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
             before = json.loads(before_file.read_text()) if before_file.is_file() else {}

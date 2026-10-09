@@ -55,6 +55,8 @@ REPOSITORY = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-r
 registration = load('api_registration_scope', 'api-admin-scope.py', 'API_REGISTRATION')
 migration = load('api_admin_migration_scope', 'api-admin-scope.py', 'API_ADMIN_MIGRATION')
 workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPACE')
+PRIVATE_INSPECT_ORIGINAL = workspace.workspace_private_inspect
+SUMMARY_READER_ORIGINAL = workspace.WorkspaceSqliteProtection.summary_reader
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
 # Workspace publication has its own reviewed historical Compose and edge seal.
@@ -1002,7 +1004,8 @@ class ReleaseFailureTests(unittest.TestCase):
     def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False,
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
-                    migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False):
+                    migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
+                    sqlite_gate=None, sqlite_prepare_error=False):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1110,7 +1113,18 @@ class ReleaseFailureTests(unittest.TestCase):
                 evidence['workspaceVolume'] = {'name': 'fixture_auto_registration_data', 'status': 'ABSENT', 'identitySha256': None}
                 stack.enter_context(patch.object(scope, 'workspace_volume', return_value={
                     'name': 'fixture_auto_registration_data', 'status': 'PRESENT', 'identitySha256': '6' * 64}))
-                stack.enter_context(patch.object(scope, 'workspace_idle', side_effect=RuntimeError('API_ADMIN_WORKSPACE_TASK_ACTIVE') if workspace_busy else None))
+                def workspace_task_guard(_controller, directory, **kwargs):
+                    if workspace_busy and directory != previous:
+                        raise RuntimeError('API_ADMIN_WORKSPACE_TASK_ACTIVE')
+                stack.enter_context(patch.object(scope, 'workspace_idle', side_effect=workspace_task_guard))
+                if sqlite_gate is not None:
+                    if sqlite_prepare_error:
+                        error = RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+                        error.sqlite_gate = sqlite_gate
+                        stack.enter_context(patch.object(scope, 'workspace_prepare', side_effect=error))
+                    else:
+                        stack.enter_context(patch.object(scope, 'workspace_prepare', return_value=sqlite_gate))
+                    stack.enter_context(patch.object(scope, 'workspace_private_inspect', return_value={}))
             if migration_origin is not None:
                 evidence['migrationOrigin'] = migration_origin
                 controller.migration_origin_guard = stack.enter_context(patch.object(scope, 'migration_successor_guard', side_effect=migration_origin_guard))
@@ -3338,6 +3352,14 @@ class WorkspaceScopeTests(unittest.TestCase):
             'services': {name: {'image': row['imageId'], 'reference': row['reference']} for name, row in value['images'].items()}}
         with patch.object(Path, 'read_text', return_value=json.dumps(value)):
             transport.validate_receipt(receipt, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
+            protection={'backupVerified':True,'restoreVerified':True,'sqliteProtectionSha256':'7'*64,
+                'backupSha256':'8'*64,'backupSize':4096}
+            transport.validate_receipt({**receipt,'sqliteProtection':protection},COMMIT,'readback','API_ADMIN_WORKSPACE')
+            for change in ({'backupSize':False},{'restoreVerified':False},{'backupSha256':'not-a-hash'},
+                    {'backupSize':256*1024**2+1},{'privateData':'PRIVATE_SENTINEL'}):
+                with self.subTest(protection=change),self.assertRaisesRegex(RuntimeError,'SQLITE_RECEIPT_CHANGED'):
+                    transport.validate_receipt({**receipt,'sqliteProtection':{**protection,**change}},
+                        COMMIT,'readback','API_ADMIN_WORKSPACE')
             for field, changed in [('preservedServiceCount', 5), ('registrationHealthChecked', False),
                 ('volumeDeletionPerformed', True), ('workspaceVolume', {}), ('offlineAcceptance', {})]:
                 with self.subTest(field=field), self.assertRaises(RuntimeError):
@@ -3379,6 +3401,346 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertNotIn('workspace.py', arguments[-1])
         controller.compose.return_value = '{"ready":false}'
         with self.assertRaisesRegex(RuntimeError, 'HEALTH_FAILED'): workspace.workspace_health(controller, ROOT)
+
+
+class WorkspaceSqliteProtectionTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, *, task_status=None, wal=False):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve()
+            volume_root = base / 'source'; volume_root.mkdir(mode=0o700)
+            previous = base / 'previous'; previous.mkdir(mode=0o700)
+            target = base / 'candidate'; target.mkdir(mode=0o700)
+            database = volume_root / 'database.db'
+            tables = ('accounts', 'email_services', 'registration_tasks', 'settings', 'proxies',
+                      'cpa_services', 'sub2api_services', 'tm_services')
+            writer = sqlite3.connect(database)
+            if wal: writer.execute('PRAGMA journal_mode=WAL')
+            for name in tables:
+                writer.execute('CREATE TABLE "' + name + '" (id INTEGER PRIMARY KEY, status TEXT, value TEXT)')
+            writer.execute('INSERT INTO settings VALUES (1,NULL,?)', ('PRIVATE_SENTINEL_CIPHERTEXT',))
+            if task_status is not None:
+                writer.execute('INSERT INTO registration_tasks VALUES (1,?,?)', (task_status, 'PRIVATE_TASK'))
+            writer.commit(); database.chmod(0o600)
+            stack.callback(writer.close)
+            name = 'fixture_auto_registration_data'
+            identity = {'name': name, 'status': 'PRESENT', 'identitySha256': '6' * 64}
+            api = {'Id': 'a' * 64, 'Image': 'sha256:' + '1' * 64,
+                   'State': {'Running': True, 'StartedAt': '2026-10-01T00:00:00.000000000Z'}}
+            state = {'containerId': api['Id'], 'image': api['Image'],
+                     'startedAtSha256': hashlib.sha256(api['State']['StartedAt'].encode()).hexdigest()}
+            calls, volumes = [], {name: {'Name': name, 'Mountpoint': str(volume_root)}}
+            def run(*args, **kwargs):
+                calls.append((args, kwargs))
+                if args[:2] == ('docker', 'inspect'): return json.dumps([api])
+                if args[:3] == ('docker', 'volume', 'inspect'): return json.dumps([volumes[args[-1]]])
+                if args[:3] == ('docker', 'volume', 'ls'): return ''
+                if args[:3] == ('docker', 'volume', 'create'):
+                    root = base / args[-1]; root.mkdir()
+                    volumes[args[-1]] = {'Name': args[-1], 'Mountpoint': str(root),
+                        'Labels': {'id-business-v2.sqlite-restore': '123-1'}}
+                    return args[-1]
+                if args[:3] == ('docker', 'volume', 'rm'): return args[-1]
+                if args[:2] == ('docker', 'stop'):
+                    # A competing writer is still blocked until the exact old process is stopped.
+                    with sqlite3.connect(database, timeout=0.01) as competing:
+                        with self.assertRaises(sqlite3.OperationalError):
+                            competing.execute('INSERT INTO settings VALUES (2,NULL,NULL)')
+                    api['State']['Running'] = False
+                    return args[-1]
+                raise AssertionError(args)
+            controller = SimpleNamespace(require=d.require, run=run, service_state=lambda *a, **kw: dict(state),
+                compose=MagicMock(return_value='{"version":1,"mutationCount":0}'))
+            def summary(connection):
+                task_counts = {key: 0 for key in ('pending','running','completed','failed','cancelled')}
+                for key,count in connection.execute('SELECT status,COUNT(*) FROM registration_tasks GROUP BY status'):
+                    if key not in task_counts: raise RuntimeError('API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE')
+                    task_counts[key] = count
+                counts = {key: connection.execute('SELECT COUNT(*) FROM "' + key + '"').fetchone()[0] for key in tables}
+                return {'schemaSha256': '7'*64,
+                    'logicalSha256': hashlib.sha256('\n'.join(connection.iterdump()).encode()).hexdigest(),
+                    'tableCounts': counts, 'taskCounts': task_counts}
+            stack.enter_context(patch.object(workspace, 'workspace_volume', return_value=identity))
+            stack.enter_context(patch.object(workspace.WorkspaceSqliteProtection, 'summary_reader', return_value=summary))
+            args = SimpleNamespace(run_id='123', run_attempt='1', commit=COMMIT)
+            candidate = {'images': {'api': {'reference':'fixture-image','imageId':'sha256:'+'2'*64}}}
+            gate = workspace.WorkspaceSqliteProtection(controller, previous, target, candidate, args, legacy=True)
+            stack.callback(gate.close)
+            def inspect(_d, _directory, _reference, volume, **kwargs):
+                path = Path(volumes[volume]['Mountpoint']) / 'database.db'
+                with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as restored:
+                    value = summary(restored)
+                return {'version':1,'status':'PASS', **value,
+                    'activeAppleLeaseCount':0,'corruptEncryptedValueCount':0,'businessActions':0}
+            inspector = stack.enter_context(patch.object(workspace, 'workspace_private_inspect', side_effect=inspect))
+            yield SimpleNamespace(gate=gate, controller=controller, database=database, root=volume_root,
+                previous=previous, target=target, summary=summary, candidate=candidate,
+                api=api,state=state,calls=calls,volumes=volumes,inspector=inspector,writer=writer)
+
+    def test_lock_blocks_new_task_creation_until_exact_old_api_stops(self):
+        with self.fixture() as f:
+            f.gate.lock()
+            with sqlite3.connect(f.database, timeout=0.01) as competing:
+                with self.assertRaises(sqlite3.OperationalError):
+                    competing.execute("INSERT INTO registration_tasks VALUES (9,'pending',NULL)")
+            f.gate.backup_restore(); f.gate.stop_previous()
+            self.assertIsNone(f.gate.connection)
+            with sqlite3.connect(f.database) as competing:
+                competing.execute("INSERT INTO settings VALUES (9,NULL,'AFTER_STOP')")
+            self.assertFalse(f.api['State']['Running'])
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).is_file())
+
+    def test_wal_committed_data_is_in_consistent_backup_and_source_never_replaced(self):
+        with self.fixture(wal=True) as f:
+            original_inode = f.database.stat().st_ino
+            self.assertTrue(Path(str(f.database)+'-wal').exists())
+            f.gate.lock(); value=f.gate.backup_restore()
+            backup=f.target/value['backupName']
+            with sqlite3.connect(backup) as read:
+                self.assertEqual(read.execute('SELECT value FROM settings').fetchone()[0], 'PRIVATE_SENTINEL_CIPHERTEXT')
+                self.assertEqual(f.summary(read),f.gate.summary)
+            self.assertEqual(f.database.stat().st_ino,original_inode)
+            self.assertEqual(backup.stat().st_mode & 0o777,0o600)
+            self.assertEqual(backup.parent.stat().st_mode & 0o777,0o700)
+            removals=[a[-1] for a,k in f.calls if a[:3]==('docker','volume','rm')]
+            self.assertEqual(removals,['id-sqlite-restore-123-1'])
+            self.assertNotIn('PRIVATE_SENTINEL',json.dumps(value))
+
+    def test_legacy_pending_running_cancelled_and_unknown_fail_before_marker(self):
+        for status in ('pending','running','cancelled','unknown'):
+            with self.subTest(status=status), self.fixture(task_status=status) as f:
+                with self.assertRaises(RuntimeError): f.gate.lock()
+                self.assertIsNone(f.gate.connection)
+                self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+
+    def test_completed_and_failed_history_remain_intact(self):
+        for status in ('completed','failed'):
+            with self.subTest(status=status), self.fixture(task_status=status) as f:
+                f.gate.lock(); f.gate.backup_restore()
+                self.assertEqual(f.gate.summary['taskCounts'][status],1)
+                self.assertTrue(f.gate.connection.in_transaction)
+
+    def test_legacy_mutation_or_missing_audit_cannot_be_silently_empty(self):
+        for response in ('{"version":1,"mutationCount":1}', '{}','{"version":1,"mutationCount":false}'):
+            with self.subTest(response=response), self.fixture() as f:
+                f.controller.compose.return_value=response
+                with self.assertRaisesRegex(RuntimeError,'LEGACY_MUTATION'): f.gate.lock()
+                self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+        with self.fixture() as f:
+            f.controller.compose.side_effect=RuntimeError('PRIVATE_DATABASE_OUTPUT')
+            with self.assertRaisesRegex(RuntimeError,'LEGACY_AUDIT_UNAVAILABLE') as caught: f.gate.lock()
+            self.assertNotIn('PRIVATE_DATABASE_OUTPUT',str(caught.exception))
+
+    def test_new_mutation_before_stop_blocks_without_sending_stop(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore()
+            f.controller.compose.return_value='{"version":1,"mutationCount":1}'
+            with self.assertRaisesRegex(RuntimeError,'LEGACY_MUTATION'): f.gate.stop_previous()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+
+    def test_existing_foreign_or_symlink_maintenance_marker_is_never_overwritten(self):
+        for symlink in (False,True):
+            with self.subTest(symlink=symlink),self.fixture() as f:
+                marker=f.root/workspace.WORKSPACE_MAINTENANCE
+                if symlink: marker.symlink_to(f.target/'not-created')
+                else: marker.write_text('FOREIGN_MARKER')
+                with self.assertRaisesRegex(RuntimeError,'MAINTENANCE_EXISTS'): f.gate.lock()
+                if not symlink: self.assertEqual(marker.read_text(),'FOREIGN_MARKER')
+
+    def test_source_sidecar_symlink_and_source_permissions_are_rejected(self):
+        with self.fixture() as f:
+            f.database.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_INVALID'): f.gate.lock()
+        with self.fixture() as f:
+            (f.root/'database.db-wal').symlink_to(f.target/'outside')
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_INVALID'): f.gate.lock()
+
+    def test_marker_changed_or_deadline_passed_blocks_and_preserves_original_database(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.deadline=0
+            with self.assertRaisesRegex(RuntimeError,'FENCE_TIMEOUT'): f.gate.backup_restore()
+            self.assertFalse((f.target/'backups'/'auto-registration').exists())
+        with self.fixture() as f:
+            f.gate.lock(); (f.root/workspace.WORKSPACE_MAINTENANCE).write_text('CHANGED')
+            with self.assertRaisesRegex(RuntimeError,'MAINTENANCE_CHANGED'): f.gate.stop_previous()
+            self.assertTrue(f.api['State']['Running'])
+
+    def test_stop_is_rejected_without_budget_and_docker_timeout_stays_inside_remaining_budget(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore()
+            f.gate.deadline=workspace.time.monotonic()+34
+            with self.assertRaisesRegex(RuntimeError,'FENCE_TIMEOUT'): f.gate.stop_previous()
+            self.assertFalse(any(a[:2]==('docker','stop') for a,k in f.calls))
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore()
+            f.gate.deadline=workspace.time.monotonic()+40
+            f.gate.stop_previous()
+            timeouts=[k['timeout'] for a,k in f.calls if a[:2]==('docker','stop')]
+            self.assertEqual(len(timeouts),1);self.assertTrue(35<timeouts[0]<40)
+
+    def test_failed_restore_keeps_backup_and_fence_and_cleans_only_own_clone(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.inspector.side_effect=RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+            with self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED'): f.gate.backup_restore()
+            self.assertTrue((f.target/'backups/auto-registration/database.db').is_file())
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).is_file())
+            self.assertEqual([a[-1] for a,k in f.calls if a[:3]==('docker','volume','rm')],['id-sqlite-restore-123-1'])
+            self.assertTrue(f.api['State']['Running'])
+
+    def test_finish_only_removes_owned_fence_after_live_data_matches_verified_backup(self):
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore(); f.gate.stop_previous()
+            f.gate.finish()
+            self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            self.assertTrue((f.target/'backups/auto-registration/database.db').exists())
+        with self.fixture() as f:
+            f.gate.lock(); f.gate.backup_restore(); f.gate.stop_previous()
+            with sqlite3.connect(f.database) as changing:
+                changing.execute("INSERT INTO settings VALUES (99,NULL,'AFTER_SNAPSHOT')")
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_CHANGED'): f.gate.finish()
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+
+    def test_private_safety_container_is_offline_readonly_and_key_never_in_arguments(self):
+        with self.fixture() as f:
+            value={'version':1,'status':'PASS',**f.summary(f.writer),
+                'activeAppleLeaseCount':0,'corruptEncryptedValueCount':0,'businessActions':0}
+            key='PRIVATE_FIXTURE_KEY_'+'x'*40
+            controller=SimpleNamespace(require=d.require,environment_values=lambda p:{'FIELD_ENCRYPTION_KEY':key},
+                run=MagicMock(return_value=json.dumps(value)))
+            # The fixture patches inspect for other tests; call the original saved function directly.
+            result=PRIVATE_INSPECT_ORIGINAL(controller,f.previous,'fixed-image','controlled-volume')
+            self.assertEqual(result,value)
+            command=controller.run.call_args.args
+            self.assertIn('none',command); self.assertIn('--read-only',command)
+            self.assertIn('no-new-privileges:true',command); self.assertIn('ALL',command)
+            self.assertTrue(command[command.index('--mount')+1].endswith(',readonly'))
+            self.assertNotIn(key,json.dumps(command))
+            self.assertEqual(json.loads(controller.run.call_args.kwargs['input_data'])['encryptionKey'],key)
+
+    def test_prepare_failure_carries_owned_gate_and_safe_abort_removes_only_its_marker(self):
+        with self.fixture() as f:
+            f.inspector.side_effect=RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+            args=SimpleNamespace(run_id='123',run_attempt='1',commit=COMMIT)
+            with self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED') as caught:
+                workspace.workspace_prepare(f.controller,f.previous,f.target,f.candidate,args,
+                    {'workspaceVolume':f.gate.volume},legacy=True)
+            owned=caught.exception.sqlite_gate
+            self.assertIsNone(owned.connection)
+            self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            owned.abort()
+            self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            self.assertTrue((f.target/'backups/auto-registration/database.db').exists())
+
+    def test_abort_after_old_image_restore_checks_new_container_and_clears_owned_marker(self):
+        with self.fixture() as f:
+            f.gate.lock();f.gate.backup_restore();f.gate.stop_previous()
+            f.api['State']['Running']=True
+            f.api['Id']='c'*64;f.state['containerId']=f.api['Id']
+            f.api['State']['StartedAt']='2026-10-02T00:00:00.000000000Z'
+            f.state['startedAtSha256']=hashlib.sha256(f.api['State']['StartedAt'].encode()).hexdigest()
+            f.gate.abort()
+            self.assertFalse((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+            self.assertIsNone(f.gate.connection)
+
+    def test_abort_keeps_fence_if_new_data_or_original_api_or_audit_cannot_be_proven(self):
+        for failure in ('data','image','audit'):
+            with self.subTest(failure=failure),self.fixture() as f:
+                f.gate.lock();f.gate.backup_restore();f.gate.close()
+                if failure=='data':
+                    f.writer.execute("INSERT INTO settings VALUES (55,NULL,'NEW_DATA')");f.writer.commit()
+                if failure=='image':
+                    f.api['Image']='sha256:'+'3'*64;f.state['image']=f.api['Image']
+                if failure=='audit':f.controller.compose.return_value='{"version":1,"mutationCount":1}'
+                with self.assertRaises(RuntimeError):f.gate.abort()
+                self.assertTrue((f.root/workspace.WORKSPACE_MAINTENANCE).exists())
+                self.assertIsNone(f.gate.connection)
+
+    def fake_release_gate(self):
+        return SimpleNamespace(record={'safeFixture':True},summary={'logicalSha256':'7'*64},
+            volume={'name':'fixture_auto_registration_data'},stop_previous=MagicMock(),finish=MagicMock(),
+            check_marker=MagicMock(),close=MagicMock(),abort=MagicMock())
+
+    def test_release_does_not_discard_prepare_exception_gate_before_cleanup(self):
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,sqlite_prepare_error=True)
+        self.assertEqual(code,1);self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_FAILED_RESTORED')
+        self.assertEqual(result['servicesAttempted'],['admin'])
+        gate.abort.assert_called_once();gate.stop_previous.assert_not_called()
+        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['admin'])
+
+    def test_prepare_failure_does_not_report_unfinished_restore_proof_as_verified(self):
+        gate=self.fake_release_gate();gate.record=None
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,sqlite_prepare_error=True)
+        self.assertEqual(code,1);self.assertTrue(result['rollbackOk'])
+        self.assertEqual(result['sqliteBackupStatus'],'INCOMPLETE_PROOF')
+
+    def test_release_success_and_rollback_finalize_gate_only_after_validation(self):
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,sqlite_gate=gate)
+        self.assertEqual(code,0);gate.stop_previous.assert_called_once();gate.finish.assert_called_once()
+        gate.abort.assert_not_called()
+        self.assertEqual(manifest['apiWorkspacePublication']['sqliteProtectionSha256'],workspace.fingerprint(gate.record))
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,fail_at='caddy-health')
+        self.assertEqual(code,1);self.assertTrue(result['rollbackOk']);gate.abort.assert_called_once()
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_FAILED_RESTORED')
+        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list],['caddy','api','admin'])
+
+    def test_uncertain_abort_is_partial_and_never_reported_restored(self):
+        gate=self.fake_release_gate();gate.abort.side_effect=RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        code,result,controller,manifest,_=ReleaseFailureTests().run_release(selected_scope=workspace,
+            sqlite_gate=gate,sqlite_prepare_error=True)
+        self.assertEqual(code,1);self.assertFalse(result['rollbackOk'])
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+        self.assertFalse(result['currentPointsToCandidate'])
+
+    def test_persisted_restore_receipt_rechecks_binding_and_backup_bytes(self):
+        with self.fixture() as f:
+            f.gate.lock();value=f.gate.backup_restore()
+            digest=workspace.fingerprint(value)
+            record={'sqliteProtectionSha256':digest,'workspaceVolumeBefore':f.gate.volume,
+                'workspaceVolumeAfter':f.gate.volume,'before':{'api':f.state}}
+            manifest={'apiWorkspacePublication':{'sqliteProtectionSha256':digest}}
+            result=workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+            self.assertTrue(result['restoreVerified']);self.assertTrue(result['backupVerified'])
+            with (f.target/value['backupName']).open('ab') as stream:stream.write(b'CHANGED')
+            with self.assertRaisesRegex(RuntimeError,'BACKUP_CHANGED'):
+                workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+
+    def test_safe_receipt_rejects_extra_data_bad_types_or_unproven_lease(self):
+        with self.fixture() as f:
+            original={'version':1,'status':'PASS',**f.summary(f.writer),
+                'activeAppleLeaseCount':0,'corruptEncryptedValueCount':0,'businessActions':0}
+            for key,value in [('privateData','PRIVATE_SENTINEL'),('activeAppleLeaseCount',1),
+                    ('businessActions',False),('schemaSha256','not-a-hash')]:
+                changed={**original,key:value}
+                with self.subTest(key=key),self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED'):
+                    workspace.workspace_safety_result(f.controller,changed)
+            with self.assertRaisesRegex(RuntimeError,'SAFETY_FAILED'):
+                workspace.workspace_safety_result(f.controller,{**original,
+                    'tableCounts':{**original['tableCounts'],'sqlite_sequence':0}})
+
+    def test_frozen_pure_helper_runs_on_host_and_wal_backup_shares_its_algorithm(self):
+        with self.fixture(wal=True) as f:
+            helper=f.target/workspace.WORKSPACE_SAFETY
+            helper.parent.mkdir(parents=True,mode=0o700)
+            helper.write_bytes((ROOT/workspace.WORKSPACE_SAFETY).read_bytes())
+            before_crypto={name for name in sys.modules if name.startswith('cryptography')}
+            summary=SUMMARY_READER_ORIGINAL(f.gate)
+            self.assertEqual(before_crypto,{name for name in sys.modules if name.startswith('cryptography')})
+            with sqlite3.connect(f.database.as_uri()+'?mode=rw',uri=True) as holder:
+                holder.execute('BEGIN IMMEDIATE');original=summary(holder)
+                source=sqlite3.connect(f.database.as_uri()+'?mode=ro',uri=True)
+                destination=sqlite3.connect(f.target/'standalone-proof.db')
+                try:
+                    source.backup(destination);destination.execute('PRAGMA journal_mode=DELETE')
+                    self.assertEqual(summary(destination),original)
+                    self.assertTrue(holder.in_transaction)
+                finally:
+                    source.close();destination.close();holder.rollback()
 
 
 if __name__ == '__main__':
