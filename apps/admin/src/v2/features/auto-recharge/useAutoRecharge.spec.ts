@@ -271,6 +271,23 @@ const directSessionJson = (email = 'registered@example.com') =>
     sessionToken: 'fixture-session'
   });
 
+function pendingJsonFile() {
+  let resolve: (value: string) => void = () => {};
+  const text = vi.fn(
+    () =>
+      new Promise<string>((complete) => {
+        resolve = complete;
+      })
+  );
+  const target = { files: [{ size: 128, text }], value: 'synthetic.json' };
+  return {
+    event: { target } as unknown as Event,
+    target,
+    text,
+    complete: (value: string) => resolve(value)
+  };
+}
+
 function fillForm() {
   flow.updateJsonInput(sessionJson());
   flow.windowName.value = '申请gpt-001';
@@ -294,7 +311,10 @@ beforeEach(() => {
     email: 'registered@example.com',
     password: 'synthetic-password'
   });
-  mock.accountTotpCode.mockResolvedValue({ token: '123456' });
+  mock.accountTotpCode.mockImplementation(async () => ({
+    token: '123456',
+    expiresAt: new Date(Date.now() + 30_000).toISOString()
+  }));
   jobs.value = { configured: true, items: [] };
   addresses.value.items = [address];
   savedTotp.value.items = [
@@ -406,7 +426,10 @@ beforeEach(() => {
   flow.operationMode.value = 'payment';
 });
 
-afterEach(() => scope.stop());
+afterEach(() => {
+  scope.stop();
+  vi.useRealTimers();
+});
 
 const account = (hasPassword = true, hasTotp = false): BankChatgptAccount =>
   ({
@@ -459,6 +482,113 @@ describe('比特浏览器充值入口', () => {
     expect(flow.jsonError.value).not.toContain('sensitive-fixture');
     flow.updateJsonInput('not-json');
     expect(flow.sessionJson.value).toBe('');
+  });
+  it('直接粘贴第二个 JSON 替换第一个账号，提交只使用新授权，无需刷新', async () => {
+    fillForm();
+    const replacement = directSessionJson('replacement@example.com');
+    flow.updateJsonInput(replacement);
+    expect(flow.jsonInput.value).toBe('');
+    expect(flow.details.value.email).toBe('replacement@example.com');
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startBitBrowser.mock.calls[0]![0].expectedEmail).toBe('replacement@example.com');
+    expect(mock.connectorStart.mock.calls[0]![2].sessionJson).toBe(replacement);
+  });
+  it('同账号新授权也替换旧授权，仅登录直连拿到最新会话', async () => {
+    const original = JSON.parse(directSessionJson()) as Record<string, unknown>;
+    const replacement = JSON.stringify({ ...original, sessionToken: 'synthetic-new-session' });
+    flow.operationMode.value = 'open_browser';
+    flow.updateJsonInput(JSON.stringify(original));
+    flow.updateJsonInput(replacement);
+    expect(flow.canStartOpen.value).toBe(true);
+    await flow.startOpen();
+    expect(mock.directStart.mock.calls[0]![1]).toEqual({ sessionJson: replacement });
+  });
+  it.each(['not-json', '{"user":{"email":"first@example.com"', '{"token":"synthetic-only"}'])(
+    '无效替换不能继续提交旧账号授权，并提示错误（%s）',
+    async (invalid) => {
+      fillForm();
+      flow.updateJsonInput(invalid);
+      expect(flow.sessionJson.value).toBe('');
+      expect(flow.details.value.email).toBe('');
+      expect(flow.jsonError.value).not.toBe('');
+      expect(flow.jsonError.value).not.toContain(invalid);
+      expect(flow.canStart.value).toBe(false);
+      expect(flow.canStartOpen.value).toBe(false);
+      await flow.start();
+      await flow.startOpen();
+      expect(mock.startBitBrowser).not.toHaveBeenCalled();
+      expect(mock.startBitBrowserOpen).not.toHaveBeenCalled();
+    }
+  );
+  it('文件读取期间粘贴的新 JSON 不被迟到文件覆盖', async () => {
+    fillForm();
+    const file = pendingJsonFile();
+    const importing = flow.importJson(file.event);
+    expect(flow.importing.value).toBe(true);
+    expect(flow.canStart.value).toBe(false);
+    const replacement = directSessionJson('replacement@example.com');
+    flow.updateJsonInput(replacement);
+    file.complete(directSessionJson('file@example.com'));
+    await importing;
+    expect(flow.importing.value).toBe(false);
+    expect(flow.sessionJson.value).toBe(replacement);
+    expect(flow.details.value.email).toBe('replacement@example.com');
+    expect(flow.canStart.value).toBe(true);
+  });
+  it('连续导入文件只应用最后一次选择，先前文件迟到无效', async () => {
+    const first = pendingJsonFile();
+    const second = pendingJsonFile();
+    const firstImport = flow.importJson(first.event);
+    const secondImport = flow.importJson(second.event);
+    const replacement = directSessionJson('replacement@example.com');
+    second.complete(replacement);
+    await secondImport;
+    first.complete(directSessionJson('first@example.com'));
+    await firstImport;
+    expect(flow.sessionJson.value).toBe(replacement);
+    expect(flow.details.value.email).toBe('replacement@example.com');
+    expect(flow.importing.value).toBe(false);
+  });
+  it('文件读取期间粘贴无效新 JSON 后，旧文件不能恢复旧授权', async () => {
+    fillForm();
+    const file = pendingJsonFile();
+    const importing = flow.importJson(file.event);
+    flow.updateJsonInput('synthetic-invalid-json');
+    file.complete(directSessionJson());
+    await importing;
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.details.value.email).toBe('');
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.jsonError.value).not.toBe('');
+  });
+  it('文件读取期间改为账号密码，迟到 JSON 不能覆盖该账号邮箱', async () => {
+    const file = pendingJsonFile();
+    const importing = flow.importJson(file.event);
+    await choosePasswordAccount();
+    file.complete(directSessionJson('file@example.com'));
+    await importing;
+    expect(flow.importing.value).toBe(false);
+    expect(flow.details.value.email).toBe('registered@example.com');
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.jsonInput.value).toBe('');
+  });
+  it('读取文件后原任务锁定时不回写新授权，锁定时粘贴和导入也无效', async () => {
+    fillForm();
+    const file = pendingJsonFile();
+    const importing = flow.importJson(file.event);
+    jobs.value.items = [job('running')];
+    expect(flow.formLocked.value).toBe(true);
+    file.complete(directSessionJson('file@example.com'));
+    await importing;
+    expect(flow.jsonInput.value).toBe('');
+    expect(flow.sessionJson.value).toBe('');
+    flow.updateJsonInput(directSessionJson('replacement@example.com'));
+    const blocked = pendingJsonFile();
+    await flow.importJson(blocked.event);
+    expect(blocked.text).not.toHaveBeenCalled();
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.details.value.email).toBe('');
   });
   it('单次付款授权和安全码必须本次填写，不需要填写最高付款金额', () => {
     fillForm();
@@ -753,6 +883,127 @@ describe('比特浏览器充值入口', () => {
     flow.retryAutomaticCode();
     await nextTick();
     expect(mock.connectorSubmitCode).toHaveBeenCalledOnce();
+  });
+  it('仅登录自动2FA与有效期只交给所属网页任务，不经过连接器', async () => {
+    await choosePasswordAccount(true, true);
+    mock.directOwns.mockReturnValue(true);
+    const expiresAt = new Date(Date.now() + 30_000).toISOString();
+    mock.accountTotpCode.mockResolvedValueOnce({ token: '123456', expiresAt });
+    jobs.value.items = [
+      job('awaiting_human_verification', { stage: 'login_code_required', transport: 'web_direct' })
+    ];
+    await vi.waitFor(() => expect(mock.directSubmitCode).toHaveBeenCalledOnce());
+    expect(mock.directSubmitCode).toHaveBeenCalledWith('job-fixture', '123456', expiresAt);
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+  });
+  it('临期2FA等待下一周期，只重取一次并向同一任务提交一次', async () => {
+    vi.useFakeTimers();
+    await choosePasswordAccount(true, true);
+    mock.accountTotpCode.mockResolvedValueOnce({
+      token: '111111',
+      expiresAt: new Date(Date.now() + 3000).toISOString()
+    });
+    jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(mock.accountTotpCode).toHaveBeenCalledTimes(2);
+    expect(mock.accountTotpCode.mock.calls.every(([id]) => id === 'account-fixture')).toBe(true);
+    expect(mock.connectorSubmitCode).toHaveBeenCalledOnce();
+    expect(mock.connectorSubmitCode.mock.calls[0]?.slice(2, 4)).toEqual(['job-fixture', '123456']);
+    expect(Date.parse(mock.connectorSubmitCode.mock.calls[0]?.[4])).toBeGreaterThan(Date.now());
+  });
+  it('旧助手拒绝有效期时保留手动兜底，不去掉有效期自动重发', async () => {
+    await choosePasswordAccount(true, true);
+    mock.connectorSubmitCode.mockRejectedValueOnce(
+      new RechargeConnectorError('codeExpiryUnsupported')
+    );
+    jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];
+    await vi.waitFor(() => expect(flow.needsManualCode.value).toBe(true));
+    expect(flow.error.value).toContain('更新本机助手');
+    expect(mock.connectorSubmitCode).toHaveBeenCalledOnce();
+    expect(mock.connectorSubmitCode.mock.calls[0]!.length).toBe(6);
+    expect(mock.accountTotpCode).toHaveBeenCalledOnce();
+    flow.loginCode.value = '654321';
+    await flow.submitLoginCode();
+    expect(mock.connectorSubmitCode).toHaveBeenCalledTimes(2);
+    expect(mock.connectorSubmitCode.mock.calls[1]?.slice(2)).toEqual(['job-fixture', '654321']);
+  });
+  it.each(['task', 'account', 'cancel', 'dispose'])(
+    '临期2FA等待期间%s改变时停止重取和提交',
+    async (change) => {
+      vi.useFakeTimers();
+      await choosePasswordAccount(true, true);
+      mock.accountTotpCode.mockResolvedValueOnce({
+        token: '111111',
+        expiresAt: new Date(Date.now() + 3000).toISOString()
+      });
+      jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];
+      await vi.advanceTimersByTimeAsync(0);
+      if (change === 'task') jobs.value.items = [];
+      else if (change === 'account') flow.selectedBankAccountId.value = 'other-account';
+      else if (change === 'cancel') await flow.cancel();
+      else scope.stop();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mock.accountTotpCode).toHaveBeenCalledOnce();
+      expect(mock.accountTotpCode.mock.calls[0]?.[1].signal.aborted).toBe(true);
+      expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    }
+  );
+  it('已选择账号与原任务绑定不同账号时不自动生成2FA', async () => {
+    await choosePasswordAccount(true, true);
+    jobs.value.items = [
+      {
+        ...job('awaiting_human_verification', { stage: 'login_code_required' }),
+        chatgptAccountId: 'other-account'
+      }
+    ];
+    await nextTick();
+    expect(mock.accountTotpCode).not.toHaveBeenCalled();
+    expect(flow.needsManualCode.value).toBe(true);
+  });
+  it('重取的2FA仍临期时停止自动提交并显示手动兜底', async () => {
+    vi.useFakeTimers();
+    await choosePasswordAccount(true, true);
+    mock.accountTotpCode.mockImplementation(async () => ({
+      token: '111111',
+      expiresAt: new Date(Date.now() + 2000).toISOString()
+    }));
+    jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(mock.accountTotpCode).toHaveBeenCalledTimes(2);
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    expect(flow.needsManualCode.value).toBe(true);
+    expect(flow.error.value).toContain('有效时间不足');
+  });
+  it.each(['expired', 'invalid'])('取码响应%s时不提交或循环重试，保留人工输入', async (expiry) => {
+    await choosePasswordAccount(true, true);
+    mock.accountTotpCode.mockResolvedValueOnce({
+      token: '123456',
+      expiresAt: expiry === 'expired' ? new Date(Date.now() - 1000).toISOString() : 'invalid'
+    });
+    jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];
+    await vi.waitFor(() => expect(flow.needsManualCode.value).toBe(true));
+    expect(mock.accountTotpCode).toHaveBeenCalledOnce();
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    expect(flow.error.value).toContain('已过期或格式无效');
+  });
+  it('连接资料等待耗尽验证码有效期时不再发往连接器', async () => {
+    vi.useFakeTimers();
+    await choosePasswordAccount(true, true);
+    mock.accountTotpCode.mockResolvedValueOnce({
+      token: '123456',
+      expiresAt: new Date(Date.now() + 10_000).toISOString()
+    });
+    mock.bitBrowserAccess.mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 10_000);
+      return { connectorUrl: settings.connectorUrl, connectorToken: launch.connectorToken };
+    });
+    jobs.value.items = [job('awaiting_human_verification', { stage: 'login_code_required' })];
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    expect(flow.needsManualCode.value).toBe(true);
+    expect(flow.error.value).toContain('有效时间不足');
   });
   it('人工验证恢复丢失响应时先查原状态，不重复发继续', async () => {
     jobs.value.items = [job('awaiting_human_verification', { stage: 'three_ds' })];

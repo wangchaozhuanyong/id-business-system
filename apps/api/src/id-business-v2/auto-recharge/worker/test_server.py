@@ -741,6 +741,7 @@ class ServerTests(unittest.TestCase):
             context.route = AsyncMock()
             context.unroute = AsyncMock()
             fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+            fields[2].input_value = AsyncMock(return_value='94287082')
             target = MagicMock()
             login = {'email': 'test@example.invalid', 'password': 'synthetic', 'totp': {
                 'secret': 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',

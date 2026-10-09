@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
+import math
 import re
 import time
 from urllib.parse import urlsplit
@@ -17,6 +19,39 @@ LOGIN_HOSTS = {"chatgpt.com", "auth.openai.com", "auth0.openai.com"}
 EMAIL_INPUT = 'input[type="email"], input[name="username"], input[autocomplete="username"]'
 PASSWORD_INPUT = 'input[type="password"], input[autocomplete="current-password"]'
 CODE_INPUT = 'input[autocomplete="one-time-code"], input[name="code"], input[name*="otp"]'
+
+
+def login_code_expiry(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+        raise Stop("invalid_login_code")
+    try:
+        expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if expiry.tzinfo is None or expiry.utcoffset() is None:
+            raise ValueError()
+        timestamp = expiry.timestamp()
+        if not math.isfinite(timestamp):
+            raise ValueError()
+        return timestamp
+    except (ValueError, OverflowError):
+        raise Stop("invalid_login_code") from None
+
+
+def login_code_value(value):
+    expiry = None
+    if isinstance(value, dict):
+        if set(value) != {"code", "expiresAt"}:
+            raise Stop("invalid_login_code")
+        expiry = login_code_expiry(value["expiresAt"])
+        if time.time() >= expiry:
+            raise Stop("login_code_expired", user_action_required=True)
+        value = value["code"]
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{6,8}", value):
+        raise Stop("login_code_required", user_action_required=True)
+    return value, expiry
+
+
+def login_code_current(expiry):
+    return expiry is None or time.time() < expiry
 
 
 def official_login_page(url):
@@ -38,9 +73,6 @@ async def login_code_type(page, field):
     text = text.casefold()
     if re.search(r"sms|text message|phone number|短信|手机", text):
         return "unknown"
-    if (re.search(r"mfa-otp-challenge|authenticator|totp", path)
-            or re.search(r"authenticator|authentication app|verification app|验证器|身份验证应用", text)):
-        return "totp"
     if (re.search(r"email-verification|email-otp|email-code", path)
             or re.search(r"check your (?:email|inbox)|email verification code|"
                          r"(?:sent|emailed).{0,60}code.{0,60}(?:email|inbox)|"
@@ -49,6 +81,9 @@ async def login_code_type(page, field):
                          r"邮箱验证码|邮箱.{0,30}(?:已发送|发送了).{0,30}验证码|"
                          r"验证码.{0,30}(?:发送|发至).{0,30}邮箱", text)):
         return "email"
+    if (re.search(r"mfa-otp-challenge|authenticator|totp", path)
+            or re.search(r"authenticator|authentication app|verification app|验证器|身份验证应用", text)):
+        return "totp"
     return "unknown"
 
 
@@ -202,26 +237,57 @@ async def login_with_password(page, email, password, wait_for_code, wait_for_use
                 # explicitly recognized challenge may continue this same login attempt.
                 await asyncio.sleep(.5)
                 continue
-            if code_type == "email":
-                if wait_for_email_code:
-                    progress("login_email_code_required")
-                    code = await wait_for_email_code(120)
+            try:
+                if code_type == "email":
+                    if wait_for_email_code:
+                        progress("login_email_code_required")
+                        received_code = await wait_for_email_code(120)
+                    else:
+                        # The generic callback supplies TOTP in the BitBrowser flow.
+                        # Complete this email challenge in the original official window.
+                        return await manual_completion()
+                elif code_type == "totp":
+                    received_code = await wait_for_code(1800)
                 else:
-                    code = await wait_for_code(1800)
-            elif code_type == "totp":
-                code = await wait_for_code(1800)
-            else:
+                    return await manual_completion()
+                try:
+                    code, code_expiry = login_code_value(received_code)
+                finally:
+                    if isinstance(received_code, dict):
+                        received_code.clear()
+                    received_code = None
+            except Stop as exc:
+                if exc.report["reason"] != "login_code_expired":
+                    raise
+                await clear_visible_secrets(page)
                 return await manual_completion()
             code_field = await unique_visible(page, CODE_INPUT)
             if not code_field or await login_code_type(page, code_field) != code_type:
                 code = ""
                 raise Stop("recharge_email_code_type_changed", user_action_required=True)
-            if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6,8}", code):
+            if not login_code_current(code_expiry):
                 code = ""
-                raise Stop("login_code_required", user_action_required=True)
+                await clear_visible_secrets(page)
+                return await manual_completion()
             try:
                 await code_field.fill(code)
-                await code_field.press("Enter")
+                try:
+                    submitted_field = await unique_visible(page, CODE_INPUT)
+                    ready = (submitted_field is not None
+                             and await submitted_field.input_value() == code
+                             and await login_code_type(page, submitted_field) == code_type
+                             and login_code_current(code_expiry))
+                except Stop as exc:
+                    if exc.report["reason"] != "login_form_ambiguous":
+                        raise
+                    ready = False
+                except Exception:
+                    ready = False
+                if not ready:
+                    code = ""
+                    await clear_visible_secrets(page)
+                    return await manual_completion()
+                await submitted_field.press("Enter")
             finally:
                 code = ""
             submitted_code_types.add(code_type)

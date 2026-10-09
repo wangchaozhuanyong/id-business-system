@@ -37,6 +37,24 @@ export async function inspectLoginPage(
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   };
+  const codeType = (input: HTMLInputElement) => {
+    const text = (input.form?.innerText ?? '').toLowerCase();
+    const path = location.pathname.toLowerCase();
+    if (/sms|text message|phone number|短信|手机/.test(text)) return 'sms' as const;
+    if (
+      /email-verification|email-otp|email-code/.test(path) ||
+      /check your (?:email|inbox)|email verification code|(?:sent|emailed).{0,60}code.{0,60}(?:email|inbox)|code.{0,60}(?:sent|emailed).{0,60}(?:email|inbox)|(?:email|inbox).{0,60}(?:sent|emailed).{0,60}code|邮箱验证码|邮箱.{0,30}(?:已发送|发送了).{0,30}验证码|验证码.{0,30}(?:发送|发至).{0,30}邮箱/.test(
+        text
+      )
+    )
+      return 'email' as const;
+    if (
+      /mfa-otp-challenge|authenticator|totp/.test(path) ||
+      /authenticator|authentication app|verification app|验证器|身份验证应用/.test(text)
+    )
+      return 'totp' as const;
+    return 'unknown' as const;
+  };
   if (action === 'clear') {
     for (const key of ['password', 'code'] as const)
       for (const input of visible(selectors[key])) write(input, '');
@@ -77,6 +95,8 @@ export async function inspectLoginPage(
     const input = matches[0];
     const form = input?.form;
     if (matches.length !== 1 || !input || !form) return { kind: 'manual' as const };
+    if (stage === 'code' && codeType(input) !== 'totp')
+      return { kind: 'manual' as const, codeType: codeType(input) };
     const formEmails = Array.from(form.querySelectorAll<HTMLInputElement>(selectors.email)).filter(
       (email) => email.getClientRects().length && getComputedStyle(email).visibility !== 'hidden'
     );
@@ -210,7 +230,11 @@ export async function inspectLoginPage(
   for (const kind of ['code', 'password', 'email'] as const) {
     const inputs = visible(selectors[kind]);
     if (inputs.length > 1) return { kind: 'manual' as const };
-    if (inputs.length === 1) return { kind };
+    if (inputs.length === 1) {
+      if (kind === 'code' && codeType(inputs[0]!) !== 'totp')
+        return { kind: 'manual' as const, codeType: codeType(inputs[0]!) };
+      return { kind };
+    }
   }
   if (unauthenticated && loginControls().length === 1) return { kind: 'login' as const };
   return { kind: unauthenticated ? ('unauthenticated' as const) : ('loading' as const) };
