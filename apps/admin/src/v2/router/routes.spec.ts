@@ -27,7 +27,7 @@ describe('V2 route navigation state', () => {
       permissions: ['audit_log.view']
     };
     const admin: CurrentUser = { ...employee, roles: ['admin'], permissions: [] };
-    for (const key of ['audit-logs', 'data-governance']) {
+    for (const key of ['audit-logs', 'data-governance', 'auto-registration']) {
       const feature = v2ModuleDefinitions.find((module) => module.key === key)!;
       expect(hasUserFeatureAccess(employee, feature)).toBe(false);
       expect(hasUserFeatureAccess(admin, feature)).toBe(true);

@@ -17,6 +17,8 @@ def command(*args):
 
 
 def selected_scope(operation):
+    if operation in ('verify_api_workspace', 'release_api_workspace'):
+        return 'API_ADMIN_WORKSPACE'
     if operation in ('verify_api_admin_migration', 'release_api_admin_migration'):
         return 'API_ADMIN_MIGRATION'
     if operation in ('verify_api_registration', 'handoff_api_registration', 'release_api_registration',
@@ -27,10 +29,10 @@ def selected_scope(operation):
 
 def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True):
     if (not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (commit, expected))
-            or scope not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION') or mode not in ('preflight', 'readback', 'handoff', 'business', 'handoff-observe', 'handoff-recover')
+            or scope not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE') or mode not in ('preflight', 'readback', 'handoff', 'business', 'handoff-observe', 'handoff-recover')
             or mode in ('handoff', 'business', 'handoff-observe', 'handoff-recover') and scope != 'API_REGISTRATION' or type(require_closed) is not bool):
         raise ValueError('API_ADMIN_INPUT_INVALID')
-    prefix = scope.lower().replace('_', '-')
+    prefix = 'api-workspace' if scope == 'API_ADMIN_WORKSPACE' else scope.lower().replace('_', '-')
     directory = f'/opt/id-business-v2/.staging/{prefix}-verify-{commit}'
     commands = ['set -eu', f'mkdir -p {directory}']
     for name in ('remote-deploy.py', 'api-admin-scope.py'):
@@ -107,7 +109,7 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                       else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
     if not isinstance(receipt, dict) or receipt.get('status') != wanted or receipt.get('commit') != expected:
         raise RuntimeError('API_ADMIN_RECEIPT_CHANGED')
-    if scope == 'API_ADMIN' and mode == 'preflight':
+    if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE') and mode == 'preflight':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
         if expected == namespace['MIGRATION_SUCCESSOR_COMMIT'] or receipt.get('migrationOrigin') is not None:
@@ -146,10 +148,16 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
         proof = json.loads((Path('.deploy/production-release') / namespace['PROOF_FILE']).read_text())
+        if scope == 'API_ADMIN_WORKSPACE':
+            from types import SimpleNamespace
+            def need(condition, code):
+                if not condition:
+                    raise RuntimeError(code)
+            namespace['validate_proof'](SimpleNamespace(require=need), proof, expected, receipt.get('sourceTree'))
         if (receipt.get('buildProofSha256') != namespace['fingerprint'](proof)
                 or receipt.get('sourceTree') != proof['sourceTree'] or proof['commit'] != expected
                 or receipt.get('servicesUpdated') != list(namespace['UPDATED'])
-                or receipt.get('preservedServiceCount') != 5
+                or receipt.get('preservedServiceCount') != (4 if scope == 'API_ADMIN_WORKSPACE' else 5)
                 or receipt.get('runningImagesAndContentMatched') is not True
                 or receipt.get('environmentUnchanged') is not True
                 or any(receipt.get('services', {}).get(name, {}).get('image') != row['imageId']
@@ -167,13 +175,19 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                 or receipt.get('migrationState', {}).get('schemaVerified') is not True
                 or not re.fullmatch(r'[a-f0-9]{64}', receipt.get('migrationState', {}).get('appliedMigrationsSha256', ''))):
             raise RuntimeError('API_ADMIN_MIGRATION_READBACK_CHANGED')
-        if scope == 'API_ADMIN':
-            before_file = Path('.deploy/production-release/api-admin-preflight-result.json')
+        if scope == 'API_ADMIN_WORKSPACE':
+            if (receipt.get('workspaceVolume', {}).get('status') != 'PRESENT'
+                    or not re.fullmatch(r'[a-f0-9]{64}', receipt.get('workspaceVolume', {}).get('identitySha256', ''))
+                    or receipt.get('volumePreserved') is not True or receipt.get('volumeDeletionPerformed') is not False
+                    or receipt.get('registrationHealthChecked') is not True or receipt.get('offlineAcceptance') != proof.get('acceptance')):
+                raise RuntimeError('API_ADMIN_WORKSPACE_READBACK_CHANGED')
+        if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE'):
+            before_file = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
             before = json.loads(before_file.read_text()) if before_file.is_file() else {}
             context = before.get('migrationOrigin')
             if context is not None or receipt.get('preservedMigrationOrigin') is not None:
                 marker = validate_migration_origin(namespace, context)
-                if (before.get('status') != 'API_ADMIN_BASELINE_VERIFIED'
+                if (before.get('status') != scope + '_BASELINE_VERIFIED'
                         or before.get('mode') != 'preflight'
                         or before.get('releaseCandidateCommit') != expected
                         or os.environ.get('RELEASE_COMMIT') != expected
@@ -210,7 +224,7 @@ def main():
     if not re.fullmatch(r'[a-f0-9-]{36}', command_id):
         raise RuntimeError('API_ADMIN_COMMAND_ID_INVALID')
     print(scope + '_COMMAND ' + command_id, flush=True)
-    target = Path('.deploy/production-release') / (scope.lower().replace('_', '-') + f'-{mode}-result.json')
+    target = Path('.deploy/production-release') / (('api-workspace' if scope == 'API_ADMIN_WORKSPACE' else scope.lower().replace('_', '-')) + f'-{mode}-result.json')
     target.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(36):
         time.sleep(10)

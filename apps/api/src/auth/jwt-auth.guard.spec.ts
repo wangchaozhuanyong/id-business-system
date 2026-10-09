@@ -10,6 +10,10 @@ import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 import type { AuthenticatedUser } from './auth.types';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { BROWSER_SESSION_COOKIE_NAME } from './browser-session-cookie';
+import {
+  createRegistrationWorkspaceSession,
+  REGISTRATION_WORKSPACE_PATH
+} from './registration-workspace-session';
 
 interface FixtureOptions {
   allowDuringPasswordReset?: boolean;
@@ -32,6 +36,7 @@ function createFixture(options: FixtureOptions = {}) {
     headers: {
       authorization: 'Bearer local-access-token',
       cookie: `${BROWSER_SESSION_COOKIE_NAME}=cookie-access-token`,
+      origin: 'http://localhost:5374',
       'sec-fetch-site': 'same-origin',
       'user-agent': 'jwt-auth-guard-unit-test'
     },
@@ -86,6 +91,58 @@ function createFixture(options: FixtureOptions = {}) {
 }
 
 describe('JwtAuthGuard', () => {
+  it('validates an opaque workspace session through all existing authentication checks', async () => {
+    const fixture = createFixture({ mfaRequired: true, tokenMfaVerified: true });
+    attachWorkspaceSession(fixture);
+    await expect(fixture.guard.canActivate(fixture.context)).resolves.toBe(true);
+    expect(fixture.jwtService.verifyAsync).toHaveBeenCalledWith('workspace-access-token');
+    expect(fixture.securityService.isAccessTokenActive).toHaveBeenCalledWith(
+      'workspace-access-token'
+    );
+    expect(fixture.securityService.isRequestIpAllowed).toHaveBeenCalledWith('127.0.0.1', [
+      'admin',
+      'api'
+    ]);
+    expect(fixture.identityService.getAuthenticatedUser).toHaveBeenCalledWith(fixture.user.id);
+    expect(fixture.securityService.isMfaRequiredForUser).toHaveBeenCalledWith(fixture.user);
+  });
+
+  it('keeps a Bearer session ahead of the workspace cookie', async () => {
+    const fixture = createFixture();
+    attachWorkspaceSession(fixture);
+    fixture.request.headers.authorization = 'Bearer local-access-token';
+    await expect(fixture.guard.canActivate(fixture.context)).resolves.toBe(true);
+    expect(fixture.jwtService.verifyAsync).toHaveBeenCalledWith('local-access-token');
+  });
+
+  it('rejects a workspace handle whose authenticated user differs from the JWT subject', async () => {
+    const fixture = createFixture();
+    attachWorkspaceSession(fixture, 'another-user-id');
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_INVALID');
+    expect(fixture.securityService.isAccessTokenActive).not.toHaveBeenCalled();
+    expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
+  });
+
+  it('rejects a revoked workspace session', async () => {
+    const fixture = createFixture();
+    attachWorkspaceSession(fixture);
+    jest.mocked(fixture.securityService.isAccessTokenActive).mockResolvedValueOnce(false);
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
+  });
+
+  it('rejects workspace sessions without the required MFA evidence', async () => {
+    const fixture = createFixture({ mfaRequired: true });
+    attachWorkspaceSession(fixture);
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_MFA_REQUIRED');
+  });
+
+  it('rejects workspace sessions on blocked request IPs', async () => {
+    const fixture = createFixture();
+    attachWorkspaceSession(fixture);
+    jest.mocked(fixture.securityService.isRequestIpAllowed).mockResolvedValueOnce(false);
+    await expectApiError(fixture.guard.canActivate(fixture.context), 403, 'AUTH_IP_BLOCKED');
+  });
+
   it('validates the cookie through all existing checks only on the restore read', async () => {
     const fixture = createFixture({ mfaRequired: true, tokenMfaVerified: true });
     fixture.request.headers.authorization = '';
@@ -203,6 +260,17 @@ describe('JwtAuthGuard', () => {
     await expect(fixture.guard.canActivate(fixture.context)).resolves.toBe(true);
   });
 });
+
+function attachWorkspaceSession(
+  fixture: ReturnType<typeof createFixture>,
+  userId = fixture.user.id
+) {
+  const response = { setHeader: jest.fn() };
+  createRegistrationWorkspaceSession(response, 'workspace-access-token', userId, fixture.request);
+  fixture.request.headers.authorization = '';
+  fixture.request.headers.cookie = String(response.setHeader.mock.calls[0]?.[1]).split(';')[0]!;
+  fixture.request.originalUrl = `${REGISTRATION_WORKSPACE_PATH}/api/tasks`;
+}
 
 async function expectApiError(promise: Promise<unknown>, status: number, errorCode: string) {
   try {

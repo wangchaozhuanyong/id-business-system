@@ -9,6 +9,7 @@ import { apiListenerHost } from './common/http/listener-options';
 async function bootstrap() {
   const host = apiListenerHost(process.argv.slice(2));
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.enableShutdownHooks();
   configureProductionTrustedProxy(app);
   const allowedOrigins = process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())

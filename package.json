@@ -9,6 +9,8 @@
     "apps/*"
   ],
   "scripts": {
+    "auto-registration:setup": "node scripts/setup-auto-registration.mjs",
+    "auto-registration:local": "node scripts/start-auto-registration-local.mjs",
     "auto-recharge:connector": "sh scripts/start-auto-recharge-connector.sh",
     "setup:env": "node scripts/setup-env.mjs",
     "doctor": "node scripts/doctor.mjs",

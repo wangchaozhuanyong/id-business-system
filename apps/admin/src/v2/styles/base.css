@@ -1,6 +1,125 @@
 @import 'element-plus/theme-chalk/dark/css-vars.css';
 @import './layout.css';
 
+/* The embedded open-source workspace uses the same system skin and tokens. */
+html[data-v2-registration-workspace] {
+  --primary-color: var(--v2-accent-solid);
+  --primary-hover: var(--v3-primary-solid-hover);
+  --primary-light: var(--v2-accent-soft);
+  --danger-color: var(--v2-danger);
+  --danger-hover: var(--v3-danger-solid);
+  --danger-light: var(--v3-danger-soft);
+  --warning-color: var(--v3-warning);
+  --warning-light: var(--v3-warning-soft);
+  --success-color: var(--v2-success);
+  --success-light: var(--v3-success-soft);
+  --info-color: var(--v3-info);
+  --info-light: var(--v3-info-soft);
+  --secondary-color: var(--v2-text-soft);
+  --background: var(--v2-bg);
+  --surface: var(--v2-surface);
+  --surface-hover: var(--v2-surface-hover);
+  --border: var(--v2-border);
+  --border-light: var(--v2-border-soft);
+  --text-primary: var(--v2-text);
+  --text-secondary: var(--v2-text-soft);
+  --text-muted: var(--v2-text-soft);
+  --font-sans: var(--v3-font-sans);
+  --font-mono: var(--v3-font-mono);
+  --radius: var(--v3-radius);
+  --shadow: var(--v3-shadow-sm);
+  --shadow-lg: var(--v3-shadow-md);
+  color-scheme: light;
+}
+
+html[data-v2-registration-workspace][data-v2-theme='dark'] {
+  color-scheme: dark;
+}
+
+html[data-v2-registration-workspace] body,
+html[data-v2-registration-workspace] input,
+html[data-v2-registration-workspace] select,
+html[data-v2-registration-workspace] textarea,
+html[data-v2-registration-workspace] button {
+  font-family: var(--v3-font-sans);
+  font-size: var(--v3-font-size-body);
+  line-height: var(--v3-line-height-body);
+}
+
+html[data-v2-registration-workspace] .btn,
+html[data-v2-registration-workspace] .form-group input:not([type='checkbox']):not([type='radio']),
+html[data-v2-registration-workspace] .form-group select {
+  height: 36px;
+  min-height: 36px;
+  border-radius: var(--v3-radius-sm);
+}
+
+html[data-v2-registration-workspace] .btn-lg {
+  height: 40px;
+}
+
+html[data-v2-registration-workspace] .form-group > label:has(input:disabled) {
+  color: var(--v3-disabled-text);
+  opacity: 1 !important;
+}
+
+html[data-v2-registration-workspace] .btn-primary {
+  color: var(--v2-on-accent-solid);
+  background: var(--v2-accent-solid);
+  border-color: var(--v2-accent-solid);
+}
+
+html[data-v2-registration-workspace] .console-log {
+  background: var(--v2-surface-muted);
+  color: var(--v2-text);
+}
+
+html[data-v2-registration-workspace] .console-log .log-entry,
+html[data-v2-registration-workspace] .console-log .log-line {
+  color: var(--v2-text);
+}
+
+html[data-v2-registration-workspace] .console-log::before {
+  background: none;
+}
+
+html[data-v2-registration-workspace] .console-log .timestamp {
+  color: var(--v2-text-soft);
+}
+
+html[data-v2-registration-workspace] .console-log .log-line.info {
+  color: var(--v2-accent);
+}
+
+html[data-v2-registration-workspace] .console-log .log-line.success {
+  color: var(--v2-success);
+}
+
+html[data-v2-registration-workspace] .console-log .log-line.error {
+  color: var(--v2-danger);
+}
+
+html[data-v2-registration-workspace] .console-log .log-line.warning {
+  color: var(--v3-warning);
+}
+
+html[data-v2-registration-workspace] .btn:focus-visible,
+html[data-v2-registration-workspace] input:focus-visible,
+html[data-v2-registration-workspace] select:focus-visible,
+html[data-v2-registration-workspace] textarea:focus-visible {
+  outline: 2px solid var(--v3-focus-color);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  html[data-v2-registration-workspace] .btn,
+  html[data-v2-registration-workspace] .form-group input:not([type='checkbox']):not([type='radio']),
+  html[data-v2-registration-workspace] .form-group select {
+    height: 44px;
+    min-height: 44px;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

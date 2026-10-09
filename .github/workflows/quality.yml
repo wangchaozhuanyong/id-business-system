@@ -115,6 +115,17 @@ jobs:
       - name: Install Chromium for layout acceptance
         run: npx playwright install chromium
 
+      - name: Verify open-source registration adapter
+        env:
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -n "$(git diff --name-only "$CHECK_BASE" HEAD -- apps/api/src/id-business-v2/auto-registration/ apps/api/Dockerfile.mysql)" ]]; then
+            npm run auto-registration:setup
+            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_workspace.py'
+            .runtime/auto-registration/venv/bin/python -B apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py
+          fi
+
       - name: Check formatting
         run: npm run format:check
 

@@ -18,3 +18,4 @@ scripts/*.sh
 .runtime/
 .codex-worktrees/
 .worktrees/
+apps/api/src/id-business-v2/auto-registration/upstream/
