@@ -1604,3 +1604,24 @@ test('fixed95 plaintext module remains a finite control and rejects mixed Pro ap
     assert.equal(isTargetedOnly(drift, schema, schema), false);
   }
 });
+
+test('pending online bridge control names are finite and preserve business scope', () => {
+  const paths = [
+    'scripts/production-release/api-admin-pending-projection.py',
+    'scripts/production-release/api-admin-pending-projection.test.py',
+    'scripts/production-release/api-admin-pending-online.test.py'
+  ];
+  for (const path of paths) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  }
+  assert.equal(isCiOnly([...paths, 'apps/api/src/auth/unknown.ts']), false);
+  for (const unknown of [
+    'scripts/production-release/api-admin-pending-online.py',
+    'scripts/production-release/api-admin-pending-anything.py',
+    'scripts/production-release/api-admin-pending-projection.py.backup'
+  ]) {
+    assert.equal(isCiOnly([unknown]), false);
+    assert.equal(checkMode([unknown], schema, schema), 'full');
+  }
+});

@@ -15,6 +15,7 @@ class RechargeEmailCodeTests(unittest.IsolatedAsyncioTestCase):
             ("https://auth.openai.com/u/email-verification", "Check your inbox", "email"),
             ("https://auth.openai.com/u/challenge", "Enter the code sent to your email", "email"),
             ("https://auth.openai.com/u/mfa-otp-challenge", "Enter a code", "totp"),
+            ("https://auth.openai.com/u/mfa-otp-challenge", "Check your email for a code", "email"),
             ("https://auth.openai.com/u/challenge", "Use your authenticator app", "totp"),
             ("https://auth.openai.com/u/challenge", "Enter verification code", "unknown"),
             ("https://auth.openai.com/u/challenge", "Email owner@example.invalid. Enter your code", "unknown"),
@@ -30,6 +31,7 @@ class RechargeEmailCodeTests(unittest.IsolatedAsyncioTestCase):
                             observed=None, failed=False):
         page = MagicMock(url="https://auth.openai.com/u/email-verification")
         fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+        fields[2].input_value = AsyncMock(side_effect=lambda: fields[2].fill.await_args.args[0])
         received = AsyncMock(return_value="123456")
         totp = AsyncMock(return_value="654321")
         accepted = AsyncMock()
@@ -109,6 +111,7 @@ class RechargeEmailCodeTests(unittest.IsolatedAsyncioTestCase):
     async def chained_challenge_fixture(self, challenges):
         page = MagicMock(url="https://auth.openai.com/u/challenge")
         fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+        fields[2].input_value = AsyncMock(side_effect=lambda: fields[2].fill.await_args.args[0])
         received = AsyncMock(return_value="123456")
         totp = AsyncMock(return_value="654321")
         human = AsyncMock(side_effect=Stop("verification_required", user_action_required=True))
@@ -175,6 +178,7 @@ class RechargeEmailCodeTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_official_identity_does_not_acknowledge_the_email(self):
         page = MagicMock(url="https://auth.openai.com/u/email-verification")
         fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+        fields[2].input_value = AsyncMock(side_effect=lambda: fields[2].fill.await_args.args[0])
         accepted = AsyncMock()
         with (patch.object(login, "official_identity", new=AsyncMock(side_effect=[
                 None, None, Stop("official_login_email_mismatch")])),

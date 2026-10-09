@@ -17,7 +17,9 @@ RUNTIME = ROOT / '.runtime/bitbrowser-release-20261009/transport-tests'
 COMMIT, TREE, PREVIOUS = 'a' * 40, 'b' * 40, 'c' * 40
 REPOSITORY = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 COMMON_CONTROLLERS = ('remote-deploy.py', 'api-admin-scope.py')
-WORKSPACE_CONTROLLERS = (*COMMON_CONTROLLERS, 'online-recharge-scope.py', 'online-recharge-recovery.json')
+ONLINE_CONTROLLERS = (*COMMON_CONTROLLERS, 'online-recharge-scope.py', 'online-recharge-recovery.json')
+WORKSPACE_CONTROLLERS = (*ONLINE_CONTROLLERS,
+                         'api-admin-pending-projection.py')
 
 spec = importlib.util.spec_from_file_location('api_admin_transport',
     Path(__file__).with_name('api-admin-readonly.py'))
@@ -115,7 +117,7 @@ class WorkspaceStagingTests(unittest.TestCase):
         self.assertIn('--api-admin-only --api-admin-build-proof ', api['commands'][-1])
         self.assertNotIn('online-recharge-scope.py', '\n'.join(api['commands']))
         online = self.dispatch_parameters('release_online_recharge')
-        self.assert_pinned(online['commands'], WORKSPACE_CONTROLLERS)
+        self.assert_pinned(online['commands'], ONLINE_CONTROLLERS)
         self.assertIn('--online-recharge-only --online-recharge-build-proof ', online['commands'][-1])
         self.assertNotIn('--api-workspace-only', online['commands'][-1])
 

@@ -1003,7 +1003,8 @@ class ReleaseFailureTests(unittest.TestCase):
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
                     migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
-                    workspace_initialized=False, workspace_stop_error=None, workspace_rollback_error=None, online_lifecycle=None):
+                    workspace_initialized=False, workspace_stop_error=None, workspace_rollback_error=None, online_lifecycle=None,
+                    pending_origin=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1029,6 +1030,13 @@ class ReleaseFailureTests(unittest.TestCase):
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
             candidate = migration_proof() if scope.MIGRATION_MODE else registration_proof() if scope.REGISTRATION else workspace_proof() if scope.WORKSPACE else proof()
+            if pending_origin is not None:
+                candidate['pendingOnlineProjection'] = {'fixture': 'separately-tested-projection'}
+                projection = scope.pending_projection()
+                stack.enter_context(patch.object(scope, 'pending_projection', return_value=SimpleNamespace(
+                    __file__=projection.__file__, validate_record=MagicMock())))
+                controller_projection = stack.enter_context(patch.object(scope, 'apply_pending_runtime_projection'))
+                stack.enter_context(patch.object(scope, 'pending_online_guard'))
             args = SimpleNamespace(admin_only=False, image_commit=None, image_run_id=None, image_run_attempt=None,
                 post_cleanup_seal_sha256=None, order_archive_seal_sha256=None, order_archive_prepared_images_sha256=None,
                 api_admin_build_proof=base64.b64encode(json.dumps(candidate).encode()).decode(), api_admin_migration_only=scope.MIGRATION_MODE,
@@ -1090,7 +1098,8 @@ class ReleaseFailureTests(unittest.TestCase):
                     runtime.compose(original, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name))
             archive_data = io.BytesIO()
             with tarfile.open(fileobj=archive_data, mode='w:gz') as archive:
-                for name in ('remote-deploy.py', 'api-admin-scope.py', *(('online-recharge-scope.py',) if online_lifecycle is not None else ())):
+                for name in ('remote-deploy.py', 'api-admin-scope.py', *(('online-recharge-scope.py',) if online_lifecycle is not None else ()),
+                             *(('api-admin-pending-projection.py',) if pending_origin is not None else ())):
                     path = Path(__file__).with_name(name)
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
@@ -1132,6 +1141,9 @@ class ReleaseFailureTests(unittest.TestCase):
             stack.enter_context(patch.object(scope, 'source_tree', return_value=TREE))
             stack.enter_context(patch.object(scope, 'configuration_hashes', return_value={'config': 'hash'}))
             evidence = {'manifestSha256': scope.hashlib.sha256(b'{}').hexdigest(), 'environmentSha256': 'env'}
+            if pending_origin is not None:
+                evidence.update(pendingOnlineMigrationOrigin=pending_origin, onlinePublished=False, migrationPerformed=False)
+                controller._pendingOnlineMigrationOrigin = pending_origin
             if scope.WORKSPACE:
                 evidence['workspaceVolume'] = {'name': 'fixture_auto_registration_data', 'status': 'ABSENT', 'identitySha256': None}
                 evidence['workspacePreparation'] = {'status': 'ABSENT', 'backupRequired': False}
@@ -1213,6 +1225,11 @@ class ReleaseFailureTests(unittest.TestCase):
             manifests = list((base / 'releases').glob('*/release-manifest.json'))
             new_manifest = next((json.loads(p.read_text()) for p in manifests if p.parent != previous), None)
             failure_files = list((base / 'releases').glob('*/' + scope.FAILURE_FILE))
+            if pending_origin is not None:
+                controller.pending_projection = controller_projection
+                controller.pending_build_proof = candidate
+                records = list((base / 'releases').glob('*/' + scope.STATE_FILE))
+                controller.pending_record = json.loads(records[-1].read_text()) if records else None
             return code, result, controller, new_manifest, bool(failure_files)
 
     def test_success_updates_only_api_admin_and_drops_historical_classification(self):
@@ -3372,7 +3389,7 @@ class WorkspaceScopeTests(unittest.TestCase):
 
     def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
         commands = '\n'.join(transport.parameters(COMMIT, OLD, 'preflight', 'API_ADMIN_WORKSPACE')['commands'])
-        self.assertEqual(commands.count('sha256sum -c -'), 4)
+        self.assertEqual(commands.count('sha256sum -c -'), 5)
         self.assertIn('--api-workspace-preflight', commands)
         script = ROOT / 'scripts/production-release/validate-release-selection.sh'
         for operation in ('verify_api_workspace', 'release_api_workspace'):
@@ -3414,7 +3431,7 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
         self.assertNotIn('--image-commit', commands)
         self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 4)
+        self.assertEqual(commands.count('sha256sum -c -'), 5)
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):

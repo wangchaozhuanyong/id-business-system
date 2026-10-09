@@ -40,6 +40,7 @@ describe('本机连接错误识别', () => {
     [409, 'bitbrowser_local_api_unavailable', 'bitbrowser'],
     [409, 'another_local_job_is_running', 'busy'],
     [409, 'unknown-fixture-secret', 'rejected'],
+    [409, 'login_code_expired', 'codeExpired'],
     [404, undefined, 'missing']
   ])('状态 %s 与原因 %s 显示受控说明', async (status, reason, code) => {
     vi.stubGlobal(
@@ -61,6 +62,24 @@ describe('本机连接错误识别', () => {
         code: 'protocol'
       });
     }
+  });
+  it('旧助手拒绝验证码期限时提示更新，不删除期限重新发送', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ok: false, reason: 'invalid_login_code' }), { status: 409 })
+      );
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      connectorRequest('http://127.0.0.1:55321', '/jobs/job-fixture/code', {
+        body: { code: '123456', expiresAt: new Date(Date.now() + 30_000).toISOString() }
+      })
+    ).rejects.toMatchObject({
+      code: 'codeExpiryUnsupported',
+      message: expect.stringContaining('更新本机助手')
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetch.mock.calls[0]![1].body)).toHaveProperty('expiresAt');
   });
   it('区分旧连接器、来源未允许和占用状态', () => {
     expect(requireConnectorHealth(health)).toBe(health);

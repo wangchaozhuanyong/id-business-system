@@ -1382,6 +1382,100 @@ describe('账号密码自动登录的入口与表单提交', () => {
 });
 
 describe('等待2FA时持续核对官网与任务截止', () => {
+  it('有效期充足的自动2FA只填写并提交一次，再核实同一官网身份', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin(['code', 'identity']);
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'fixture-password' } },
+      '测试窗口',
+      new AbortController().signal,
+      {
+        progress: vi.fn(),
+        code: vi.fn().mockResolvedValue({
+          token: '123456',
+          expiresAt: new Date(Date.now() + 30_000).toISOString()
+        })
+      }
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await result).toMatchObject({ status: 'session_ready', account_matched: true });
+    expect(actions.filter((action) => action === 'code')).toHaveLength(1);
+    expect(actions.filter((action) => action === 'submit')).toHaveLength(1);
+  });
+  it('临时取码期间挑战改为邮箱时丢弃迟到TOTP，不在后续挑战重新填写', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin(['code', 'manual', 'code', 'identity']);
+    const evaluate = mock.evaluate.getMockImplementation()!;
+    mock.evaluate.mockImplementation(async (...args) => {
+      const state = await evaluate(...args);
+      return state.kind === 'manual' ? { ...state, codeType: 'email' } : state;
+    });
+    const pending = pendingCode();
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'fixture-password' } },
+      '测试窗口',
+      new AbortController().signal,
+      { progress: vi.fn(), code: pending.code }
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await result).status).toBe('session_ready');
+    expect(actions.filter((action) => action === 'code' || action === 'submit')).toHaveLength(0);
+    expect(pending.code).toHaveBeenCalledOnce();
+  });
+  it('已接收的自动2FA临近过期时不填写或提交，保留原窗口人工核验', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin(['code', 'identity']);
+    const progress = vi.fn();
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'fixture-password' } },
+      '测试窗口',
+      new AbortController().signal,
+      {
+        progress,
+        code: vi.fn().mockResolvedValue({
+          token: '123456',
+          expiresAt: new Date(Date.now() + 2000).toISOString()
+        })
+      }
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+    expect((await result).status).toBe('session_ready');
+    expect(actions.filter((action) => action === 'code' || action === 'submit')).toHaveLength(0);
+    expect(progress).toHaveBeenCalledWith('verification_required', { user_action_required: true });
+  });
+  it('填写自动2FA期间有效期耗尽时清空输入，点击前再次拒绝过期码', async () => {
+    vi.useFakeTimers();
+    const actions = automaticLogin(['code', 'identity']);
+    const evaluate = mock.evaluate.getMockImplementation()!;
+    mock.evaluate.mockImplementation(async (...args) => {
+      const state = await evaluate(...args);
+      if (actions.at(-1) === 'code') vi.setSystemTime(Date.now() + 5000);
+      return state;
+    });
+    const result = runDirectLogin(
+      settings,
+      { login: { email: 'user@example.com', password: 'fixture-password' } },
+      '测试窗口',
+      new AbortController().signal,
+      {
+        progress: vi.fn(),
+        code: vi.fn().mockResolvedValue({
+          token: '123456',
+          expiresAt: new Date(Date.now() + 6000).toISOString()
+        })
+      }
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+    expect((await result).status).toBe('session_ready');
+    expect(actions.filter((action) => action === 'code')).toHaveLength(1);
+    expect(actions.filter((action) => action === 'submit')).toHaveLength(0);
+    expect(actions.filter((action) => action === 'clear').length).toBeGreaterThan(0);
+  });
   it('取码尚未完成时继续观察，码到达后只提交一次', async () => {
     vi.useFakeTimers();
     const actions = automaticLogin(['code', 'code', 'identity']);

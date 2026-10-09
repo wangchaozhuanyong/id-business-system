@@ -15,6 +15,89 @@ import {
 
 const signal = () => new AbortController().signal;
 afterEach(() => vi.unstubAllGlobals());
+describe('直连验证码只用于明确的身份验证器挑战', () => {
+  function challenge(path: string, text: string) {
+    const click = vi.fn();
+    const form = {
+      innerText: text,
+      checkValidity: () => true,
+      querySelectorAll: (selector: string) =>
+        selector.includes('button')
+          ? [{ form, click, getClientRects: () => [{}], getAttribute: () => null }]
+          : []
+    };
+    class Input {
+      private text = '';
+      form = form;
+      get value() {
+        return this.text;
+      }
+      set value(value: string) {
+        this.text = value;
+      }
+      getClientRects = () => [{}];
+      dispatchEvent = vi.fn();
+      focus = vi.fn();
+    }
+    const input = new Input();
+    vi.stubGlobal('HTMLInputElement', Input);
+    vi.stubGlobal('location', {
+      protocol: 'https:',
+      hostname: 'auth.openai.com',
+      pathname: path
+    });
+    vi.stubGlobal('document', {
+      readyState: 'complete',
+      title: 'Log in',
+      querySelectorAll: (selector: string) => (selector.includes('one-time-code') ? [input] : [])
+    });
+    vi.stubGlobal('getComputedStyle', () => ({ visibility: 'visible' }));
+    return { input, form, click };
+  }
+  it.each([
+    ['/u/mfa-otp-challenge', 'Enter a code'],
+    ['/u/challenge', 'Use your authenticator app'],
+    ['/u/challenge', '请输入身份验证应用的验证码']
+  ])('明确 TOTP 挑战可以获取、填入并提交当前验证码：%s', async (path, text) => {
+    const { input, click } = challenge(path, text);
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'code' });
+    expect(await inspectLoginPage('code', '123456')).toEqual({ kind: 'filled' });
+    expect(input.value).toBe('123456');
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code' })).toEqual({
+      kind: 'submitted'
+    });
+    expect(click).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['/u/email-verification', 'Check your inbox', 'email'],
+    ['/u/challenge', 'Enter the code sent to your email', 'email'],
+    ['/u/challenge', '验证码发送到邮箱', 'email'],
+    ['/u/mfa-otp-challenge', 'SMS sent to your phone number', 'sms'],
+    ['/u/mfa-otp-challenge', 'Check your email for a code', 'email'],
+    ['/u/challenge', 'Enter verification code', 'unknown']
+  ])('邮箱、短信及不明确挑战保留原窗口人工处理：%s %s', async (path, text, codeType) => {
+    const { input, click } = challenge(path, text);
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'manual', codeType });
+    expect(await inspectLoginPage('code', '123456')).toEqual({ kind: 'manual', codeType });
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code' })).toEqual({
+      kind: 'manual',
+      codeType
+    });
+    expect(input.value).toBe('');
+    expect(input.dispatchEvent).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+  });
+  it('已填入后页面改为邮箱挑战时不点击提交', async () => {
+    const { form, click } = challenge('/u/mfa-otp-challenge', 'Use your authenticator app');
+    expect(await inspectLoginPage('code', '123456')).toEqual({ kind: 'filled' });
+    form.innerText = 'Enter the code sent to your email';
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code' })).toEqual({
+      kind: 'manual',
+      codeType: 'email'
+    });
+    expect(click).not.toHaveBeenCalled();
+  });
+});
 describe('官网已登录页面与真实代理的独立证据', () => {
   function official(controls: object[] = [], title = 'ChatGPT') {
     vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });

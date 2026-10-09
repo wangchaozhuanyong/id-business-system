@@ -306,9 +306,9 @@ export const bankRechargeApi = {
       ['auto-recharge', 'renewals', 'renewal-warning-summary']
     );
   },
-  totpCode(id: string) {
+  totpCode(id: string, options: ApiRequestOptions = {}) {
     return request<{ token: string; expiresAt: string }>(
-      http.post(`${base}/accounts/${id}/totp-code`, {})
+      http.post(`${base}/accounts/${id}/totp-code`, {}, { signal: options.signal })
     );
   },
   accountIdentity(id: string) {

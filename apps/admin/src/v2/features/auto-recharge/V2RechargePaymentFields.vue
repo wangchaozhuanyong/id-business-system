@@ -14,16 +14,25 @@
         :validate-event="validateEvent !== false"
         :placeholder="field.placeholder"
         inputmode="numeric"
+        name="recharge-entry-expiry"
         autocomplete="off"
         @update:model-value="details.expiry = formatRechargeExpiry(String($event))"
+      />
+      <RechargeSensitiveInput
+        v-else-if="field.secret"
+        v-model="details[field.key]"
+        :validate-event="validateEvent !== false"
+        :maxlength="field.max"
+        :name="`recharge-entry-${field.key}`"
+        :placeholder="field.placeholder"
+        inputmode="numeric"
       />
       <el-input
         v-else
         v-model="details[field.key]"
         :validate-event="validateEvent !== false"
-        :type="field.secret ? 'password' : 'text'"
-        :show-password="field.secret"
         :maxlength="field.max"
+        :name="`recharge-entry-${field.key}`"
         :placeholder="field.placeholder"
         autocomplete="off"
         :readonly="field.key === 'name' && nameConfirmed"
@@ -44,6 +53,7 @@ import { computed, type Ref } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RechargeDetails } from './contracts';
 import { formatRechargeExpiry, rechargePaymentFields } from './recharge-form';
+import RechargeSensitiveInput from './RechargeSensitiveInput.vue';
 
 const props = defineProps<{
   validateEvent?: boolean;
