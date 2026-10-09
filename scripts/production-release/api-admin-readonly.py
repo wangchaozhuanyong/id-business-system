@@ -203,7 +203,9 @@ def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True
                         'api-admin-pending-projection.py', 'api-admin-readonly.py',
                         'api-admin-pending-receipt-wire.py')
         if declaration_producer is not None:
-            controllers += ('online-recharge-declaration-measurement.py',)
+            controllers += ('online-recharge-declaration-measurement.py',
+                            'online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
+                            'online-recharge-daemon-socket.py')
     for name in controllers:
         digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',
@@ -434,10 +436,13 @@ def validate_pending_ended_failures(namespace, context):
 
 def validate_pending_workspace_receipt(namespace, receipt, expected, mode, *, proof=None):
     before_file = Path('.deploy/production-release/api-workspace-preflight-result.json')
-    before = json.loads(before_file.read_text()) if mode == 'readback' and before_file.is_file() else {}
+    before_raw = before_file.read_bytes() if mode == 'readback' and before_file.is_file() else None
+    before = json.loads(before_raw) if before_raw is not None else {}
     context = receipt.get('pendingOnlineMigrationOrigin') if mode == 'preflight' else before.get('pendingOnlineMigrationOrigin')
     selected = (context is not None or receipt.get('preservedPendingOnlineMigration') is not None
                 or receipt.get('pendingOnlineMigrationOrigin') is not None
+                or 'declarationEquivalencePublication' in receipt
+                or 'declarationEquivalenceSuccessorPublication' in receipt
                 or isinstance(proof, dict) and (proof.get('pendingOnlineProjection') is not None
                     or 'pendingOnlineOriginSha256' in proof))
     if not selected:
@@ -459,6 +464,29 @@ def validate_pending_workspace_receipt(namespace, receipt, expected, mode, *, pr
         if predecessor != expected or services != context['services']:
             raise RuntimeError(code)
     else:
+        publication_keys = ('declarationEquivalencePublication', 'declarationEquivalenceSuccessorPublication')
+        try:
+            if context['version'] == 2:
+                prior_count = len(context['priorPublications'])
+                if prior_count not in (0, 1):
+                    raise RuntimeError(code)
+                key = publication_keys[prior_count]
+                if publication_keys[1 - prior_count] in receipt or key not in receipt:
+                    raise RuntimeError(code)
+                from types import SimpleNamespace
+                def need(condition, reason):
+                    if not condition:
+                        raise RuntimeError(reason)
+                validated = namespace['pending_online_declaration_summary'](
+                    SimpleNamespace(require=need), receipt[key], context,
+                    producer=declaration_producer_metadata(), preflight_raw=before_raw,
+                    build_proof_sha256=namespace['fingerprint'](proof))
+                seal_key = 'configurationEquivalenceSeal' if prior_count == 0 else 'successorConfigurationSeal'
+                marker = {**marker, seal_key: validated[seal_key]}
+            elif any(key in receipt for key in publication_keys):
+                raise RuntimeError(code)
+        except Exception:
+            raise RuntimeError(code) from None
         if (before.get('status') != 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED' or before.get('mode') != 'preflight'
                 or before.get('releaseCandidateCommit') != expected
                 or before.get('commit') != os.environ.get('EXPECTED_CURRENT')

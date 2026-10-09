@@ -217,6 +217,9 @@ if (part === 'guards') {
       '-B',
       'scripts/production-release/online-recharge-declaration-measurement.test.py'
     ]);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-identity.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-listener.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-socket.test.py']);
     run('python3', [
       '-B',
       'scripts/production-release/api-workspace-declaration-artifacts.test.py'
@@ -353,6 +356,9 @@ if (part === 'guards') {
       '-B',
       'scripts/production-release/online-recharge-declaration-measurement.test.py'
     ]);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-identity.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-listener.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-socket.test.py']);
     run('python3', [
       '-B',
       'scripts/production-release/api-workspace-declaration-artifacts.test.py'

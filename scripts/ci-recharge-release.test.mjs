@@ -246,6 +246,9 @@ test('actual source entry rejects failed evidence on Bash before emitting reusab
     'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
     'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
     'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
     'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
   ]);
@@ -1493,6 +1496,9 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
     'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
     'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
     'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
     ...onlineReleaseRegressionCommands,
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
@@ -1540,6 +1546,9 @@ test('actual full-mode release controls preserve exact maintenance selection and
             'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
             'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
             'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+            'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+            'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+            'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
             'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py'
           ]),
       ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
@@ -1559,6 +1568,9 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
       'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
       'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
       'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
       'python3 -B scripts/production-release/retire-orphan-retention.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
@@ -1575,6 +1587,9 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
       'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
       'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
       'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
       'python3 -B scripts/production-release/prepared-images.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'

@@ -107,7 +107,13 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/api-workspace-declaration-artifacts.py',
   'scripts/production-release/api-workspace-declaration-artifacts.test.py',
   'scripts/production-release/online-recharge-declaration-measurement.py',
-  'scripts/production-release/online-recharge-declaration-measurement.test.py'
+  'scripts/production-release/online-recharge-declaration-measurement.test.py',
+  'scripts/production-release/online-recharge-daemon-identity.py',
+  'scripts/production-release/online-recharge-daemon-identity.test.py',
+  'scripts/production-release/online-recharge-daemon-listener.py',
+  'scripts/production-release/online-recharge-daemon-listener.test.py',
+  'scripts/production-release/online-recharge-daemon-socket.py',
+  'scripts/production-release/online-recharge-daemon-socket.test.py'
 ]);
 const recharge4cProfile = 'deploy/aws/recharge-pro-4c-20261008.json';
 const recharge4cSources = new Set([

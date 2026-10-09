@@ -291,7 +291,7 @@ test('read-only and release transports seal controllers and recovery policy and 
   );
   assert.match(
     dispatch,
-    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py'\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
+    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py',\n {24}'online-recharge-daemon-identity\.py', 'online-recharge-daemon-listener\.py',\n {24}'online-recharge-daemon-socket\.py'\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
   );
   assert.match(
     dispatch,
@@ -359,7 +359,7 @@ test('actual dispatch generator binds all four carriers before deployment and re
   });
 });
 
-test('workspace dispatch binds the original preflight and all eight carriers before producing bounded parameters', () => {
+test('workspace dispatch binds the original preflight and all eleven carriers before producing bounded parameters', () => {
   const dispatch = readFileSync(join(scripts, 'dispatch.sh'), 'utf8');
   const generator = dispatch.split("<<'PY'\n")[1].split('\nPY\n')[0];
   const carriers = [
@@ -370,7 +370,10 @@ test('workspace dispatch binds the original preflight and all eight carriers bef
     'api-admin-pending-projection.py',
     'api-admin-pending-receipt-wire.py',
     'online-recharge-declaration-measurement.py',
-    'api-admin-readonly.py'
+    'api-admin-readonly.py',
+    'online-recharge-daemon-identity.py',
+    'online-recharge-daemon-listener.py',
+    'online-recharge-daemon-socket.py'
   ];
   fixture(({ env, folder, log }) => {
     const sourceDirectory = join(folder, 'scripts/production-release');
@@ -414,8 +417,8 @@ test('workspace dispatch binds the original preflight and all eight carriers bef
     const paramsRaw = readFileSync(parametersFile);
     const parameters = JSON.parse(paramsRaw);
     assert.ok(paramsRaw.length < 20 * 1024);
-    assert.equal(parameters.commands.filter((line) => line.includes('sha256sum -c -')).length, 8);
-    assert.equal(parameters.commands.filter((line) => line.startsWith('curl ')).length, 8);
+    assert.equal(parameters.commands.filter((line) => line.includes('sha256sum -c -')).length, 11);
+    assert.equal(parameters.commands.filter((line) => line.startsWith('curl ')).length, 11);
     assert.match(
       parameters.commands[2],
       new RegExp(
