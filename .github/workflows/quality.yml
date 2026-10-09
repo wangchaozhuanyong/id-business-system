@@ -115,12 +115,7 @@ jobs:
       - name: Verify frozen online recharge engine
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
-        run: |
-          set -Eeuo pipefail
-          if [[ -n "$(git diff --name-only "$CHECK_BASE" HEAD -- apps/api/src/id-business-v2/online-recharge/)" ]]; then
-            npm ci --ignore-scripts --no-audit --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream
-            npm run test:online-recharge:engine
-          fi
+        run: node scripts/ci-recharge-check.mjs online-engine "$CHECK_BASE"
 
       - name: Install Chromium for layout acceptance
         run: npx playwright install chromium

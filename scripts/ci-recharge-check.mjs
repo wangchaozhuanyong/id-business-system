@@ -19,6 +19,19 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .split('\n')
   .filter(Boolean);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
+const onlineEngine = () => {
+  const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
+  npm('ci', '--prefix', directory, '--ignore-scripts', '--no-audit', '--no-fund');
+  run('node', [
+    directory + '/node_modules/playwright/cli.js',
+    'install',
+    '--with-deps',
+    'chromium'
+  ]);
+  if (process.platform === 'linux')
+    run('sudo', ['apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg']);
+  npm('run', 'test:online-recharge:engine');
+};
 const onlineReleaseControlPaths = new Set([
   '.github/workflows/production-release.yml',
   'scripts/ci-recharge-check.mjs',
@@ -349,11 +362,11 @@ if (part === 'guards') {
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
-  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))) {
-    const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
-    npm('ci', '--prefix', directory, '--ignore-scripts', '--no-audit', '--no-fund');
-    npm('run', 'test:online-recharge:engine');
-  }
+  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
+    onlineEngine();
+} else if (part === 'online-engine') {
+  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
+    onlineEngine();
 } else if (part === 'migration') {
   run('python3', ['scripts/ci-recharge-migration.py']);
 } else if (part === 'connector') {

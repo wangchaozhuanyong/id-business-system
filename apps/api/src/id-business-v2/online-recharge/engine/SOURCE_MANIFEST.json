@@ -145,9 +145,9 @@
     {
       "path": "test/media-browser.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "f54ad08e7ea46b50f4ab44df09f60201f8b063008601467b0580076eaf06edc4",
+      "adaptedSha256": "592d9b8a260bcbc2c61c2ac13b8808e15d55488f989175336172fc6c4cd72e15",
       "changed": true,
-      "reason": "Isolated synthetic Chromium pixel masks, no page raw-video, real VP9 WebM and zero external requests."
+      "reason": "Synthetic isolated browser verifies masked real pixels and encoded video; portable media tools and caller environment restoration for CI."
     },
     {
       "path": "test/payment-core.test.cjs",

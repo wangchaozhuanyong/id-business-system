@@ -60,18 +60,22 @@ function readPixels(png) {
 test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels and encodes safe video', async () => {
   const output = path.join(__dirname, '..', 'runtime', 'verification', 'masked-media');
   await fs.mkdir(output, { recursive: true });
+  const originalEnvironment = {
+    ONLINE_RECHARGE_MEDIA_DIR: process.env.ONLINE_RECHARGE_MEDIA_DIR,
+    ONLINE_RECHARGE_FFMPEG_PATH: process.env.ONLINE_RECHARGE_FFMPEG_PATH
+  };
   process.env.ONLINE_RECHARGE_MEDIA_DIR = output;
-  process.env.ONLINE_RECHARGE_FFMPEG_PATH =
-    process.env.ONLINE_RECHARGE_FFMPEG_PATH || '/Users/wangchao/.local/bin/ffmpeg';
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--disable-background-networking',
-      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
-    ]
-  });
-  let blocked = 0;
+  process.env.ONLINE_RECHARGE_FFMPEG_PATH = process.env.ONLINE_RECHARGE_FFMPEG_PATH || 'ffmpeg';
+  let browser,
+    blocked = 0;
   try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--disable-background-networking',
+        '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+      ]
+    });
     const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
     await context.route('**/*', (route) => {
       blocked++;
@@ -124,7 +128,7 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
     const video = files.find((f) => f.endsWith('.webm'));
     assert.ok(video, 'masked frames must encode a real WebM');
     const { stdout } = await promisify(execFile)(
-      process.env.ONLINE_RECHARGE_FFPROBE_PATH || '/Users/wangchao/.local/bin/ffprobe',
+      process.env.ONLINE_RECHARGE_FFPROBE_PATH || 'ffprobe',
       [
         '-v',
         'error',
@@ -160,8 +164,13 @@ test('isolated Chromium masks actual input/session/PAN/CVC/email/iframe pixels a
     assert.equal(blocked, 0);
     await context.close();
   } finally {
-    await browser.close();
-    delete process.env.ONLINE_RECHARGE_MEDIA_DIR;
-    delete process.env.ONLINE_RECHARGE_FFMPEG_PATH;
+    try {
+      await browser?.close();
+    } finally {
+      for (const [key, value] of Object.entries(originalEnvironment)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   }
 });
