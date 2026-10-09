@@ -278,6 +278,11 @@ validate_release_selection() {
     return 0
   fi
   local policy="${HISTORICAL_EXCEPTION:-none}"
+  if [[ "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == verify_api_workspace ]]; then
+    [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}${CACHE_PLAN_SHA256:-}${DIAGNOSTIC_COMMAND_ID:-}" ]] || return 1
+    return 0
+  fi
   case "$policy" in
     registration-worker-*|historical-finance-20261005-registration-continuation)
       echo 'Automatic registration has been removed; registration releases are disabled' >&2

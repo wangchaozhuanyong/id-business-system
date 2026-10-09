@@ -181,6 +181,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     volumes:
+      - auto_registration_data:/app/.runtime/auto-registration
       - online_recharge_data:/app/.runtime/online-recharge
     logging: *default-logging
     environment:
@@ -276,6 +277,7 @@ services:
 volumes:
   mysql_data:
   online_recharge_data:
+  auto_registration_data:
   caddy_data:
   caddy_config:
 

@@ -14,6 +14,8 @@
     "test:online-recharge:controls": "node --test scripts/check-v2-online-recharge-controls.test.mjs",
     "acceptance:v2-online-recharge-ui": "node scripts/acceptance-v2-online-recharge-ui.mjs",
     "acceptance:v2-online-recharge-mysql": "node scripts/acceptance-v2-online-recharge-mysql.mjs",
+    "auto-registration:setup": "node scripts/setup-auto-registration.mjs",
+    "auto-registration:local": "node scripts/start-auto-registration-local.mjs",
     "auto-recharge:connector": "sh scripts/start-auto-recharge-connector.sh",
     "setup:env": "node scripts/setup-env.mjs",
     "doctor": "node scripts/doctor.mjs",

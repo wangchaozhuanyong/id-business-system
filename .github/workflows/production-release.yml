@@ -13,6 +13,8 @@ on:
           - verify_online_recharge
           - release_online_recharge
           - verify_api_admin
+          - verify_api_workspace
+          - release_api_workspace
           - release_api_admin
           - verify_api_admin_migration
           - release_api_admin_migration
@@ -427,9 +429,15 @@ jobs:
       - name: Diagnose an online recharge predecessor failure without writes
         if: failure() && (inputs.operation == 'verify_online_recharge' || inputs.operation == 'release_online_recharge')
         run: python3 -B scripts/production-release/online-recharge-readonly.py diagnostic
+      - name: Verify explicit API Workspace release selection
+        if: inputs.operation == 'verify_api_workspace' || inputs.operation == 'release_api_workspace'
+        env:
+          CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
+          DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
+        run: bash scripts/production-release/validate-release-selection.sh
 
       - name: Verify API Admin baseline and idle workers before building
-        if: inputs.operation == 'verify_api_admin' || inputs.operation == 'release_api_admin' || inputs.operation == 'verify_api_admin_migration' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'verify_api_registration' || inputs.operation == 'release_api_registration'
+        if: inputs.operation == 'verify_api_workspace' || inputs.operation == 'release_api_workspace' || inputs.operation == 'verify_api_admin' || inputs.operation == 'release_api_admin' || inputs.operation == 'verify_api_admin_migration' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'verify_api_registration' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py preflight
 
       - name: Hand off the bound completed registration window once
@@ -467,7 +475,7 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry" >/dev/null
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/build-images.sh
 
       - name: Verify reusable build and unchanged application source
@@ -504,7 +512,7 @@ jobs:
           aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
 
       - name: Push immutable images
-        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
+        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration' || (inputs.operation == 'release' && inputs.reuse_image_run == '') || inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
         run: bash scripts/production-release/push-images.sh
 
       - name: Save fixed registration Worker build projection
@@ -2222,11 +2230,11 @@ jobs:
           PY
 
       - name: Deploy through the production instance
-        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
+        if: inputs.operation == 'release_online_recharge' || inputs.operation == 'release_api_workspace' || inputs.operation == 'release' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: bash scripts/production-release/dispatch.sh
 
       - name: Independently read back API Admin running images and preserved services
-        if: inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
+        if: inputs.operation == 'release_api_workspace' || inputs.operation == 'release_api_admin' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py readback
 
       - name: Independently read back online recharge runtime and preserved services
@@ -2249,6 +2257,16 @@ jobs:
         with:
           name: api-admin-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/api-admin-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save API Workspace build and independent runtime evidence
+        if: always() && (inputs.operation == 'verify_api_workspace' || inputs.operation == 'release_api_workspace')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: api-workspace-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/api-workspace-*.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

@@ -188,6 +188,23 @@ test('production Compose enforces the API and migration container boundaries', (
   }
 });
 
+test('registration runtime is packaged outside its writable persistent data volume', () => {
+  const dockerfile = readProjectFile('apps/api/Dockerfile.mysql');
+  const runtime = dockerfile.split(/ AS runtime\s*\n/u).at(-1);
+  const compose = readProjectFile('docker-compose.aws-mysql.yml');
+  const api = compose.split(/\n {2}api:\n/u)[1].split(/\n {2}admin:\n/u)[0];
+
+  assert.match(runtime, /apt-get install[^\n]*python3/u);
+  assert.match(runtime, /COPY --from=registration-dependencies \/opt\/id-registration\/venv/u);
+  assert.match(runtime, /\/app\/apps\/api\/src\/id-business-v2\/auto-registration/u);
+  assert.match(runtime, /\/app\/apps\/admin\/src\/v2\/styles\/base\.css/u);
+  assert.match(runtime, /chown node:node \/app\/\.runtime/u);
+  assert.match(api, /read_only: true/u);
+  assert.match(api, /auto_registration_data:\/app\/\.runtime\/auto-registration/u);
+  assert.match(compose, /^ {2}auto_registration_data:$/mu);
+  assert.doesNotMatch(api, /\/opt\/id-registration/u);
+});
+
 test('media resolver is an isolated, bounded and non-root sidecar', () => {
   const dockerfile = readProjectFile(
     'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile'

@@ -10,6 +10,7 @@ const issues = [];
 
 const expectedFeatures = [
   'online-recharge',
+  'auto-registration',
   'auto-recharge',
   'account-losses',
   'accounts',
@@ -39,6 +40,7 @@ const expectedFeatures = [
 const plannedFeatures = new Set();
 const expectedBackendDomains = [
   'online-recharge',
+  'auto-registration',
   'auto-recharge',
   'accounts',
   'activations',

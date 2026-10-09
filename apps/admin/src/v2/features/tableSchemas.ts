@@ -1390,6 +1390,7 @@ export const v2TableSchemas = {
 
 export const v2TablesByFeature = {
   ...onlineTablesByFeature,
+  'auto-registration': [],
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],

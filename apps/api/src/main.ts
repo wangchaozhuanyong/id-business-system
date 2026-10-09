@@ -15,6 +15,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   app.use('/api/id-business-v2/online-recharge/worker/rpc', createOnlineRechargeWorkerBodyParser());
   app.use('/api/id-business-v2/online-recharge', createOnlineRechargeBodyParser());
+  app.enableShutdownHooks();
   configureProductionTrustedProxy(app);
   const allowedOrigins = process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())

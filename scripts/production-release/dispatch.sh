@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]] || exit 1
 
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [[ "$EXPECTED_CURRENT" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -365,11 +365,11 @@ image_flags = f' --image-commit {image_commit} --image-run-id {image_run} --imag
 script_path = f'/opt/id-business-v2/.staging/oidc-{sha}/remote-deploy.py'
 url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/remote-deploy.py'
 online_recharge = os.environ.get('RELEASE_OPERATION') == 'release_online_recharge'
-api_admin = os.environ.get('RELEASE_OPERATION') in ('release_api_admin', 'release_api_admin_migration', 'release_api_registration')
+api_admin = os.environ.get('RELEASE_OPERATION') in ('release_api_workspace', 'release_api_admin', 'release_api_admin_migration', 'release_api_registration')
 if api_admin:
     import base64
     from pathlib import Path
-    scope_name = {'release_api_registration': 'api-registration', 'release_api_admin_migration': 'api-admin-migration'}.get(os.environ['RELEASE_OPERATION'], 'api-admin')
+    scope_name = {'release_api_workspace': 'api-workspace', 'release_api_registration': 'api-registration', 'release_api_admin_migration': 'api-admin-migration'}.get(os.environ['RELEASE_OPERATION'], 'api-admin')
     scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()).decode()
     image_flags = ''
 if online_recharge:

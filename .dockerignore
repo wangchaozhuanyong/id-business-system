@@ -10,6 +10,8 @@ dist
 apps/*/dist
 packages/*/dist
 coverage
+**/__pycache__
+**/*.pyc
 
 .env
 .env.production

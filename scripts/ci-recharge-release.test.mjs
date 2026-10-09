@@ -1075,6 +1075,8 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
           ([
             'verify_online_recharge',
             'release_online_recharge',
+            'verify_api_workspace',
+            'release_api_workspace',
             'verify_api_admin',
             'release_api_admin',
             'verify_api_admin_migration',

@@ -37,6 +37,22 @@ RUN npm pkg delete devDependencies --workspaces --include-workspace-root \
     --workspace @apple-business/shared \
     --include-workspace-root
 
+FROM node:24-bookworm-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS registration-dependencies
+
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt /tmp/registration-requirements.txt
+COPY scripts/audit-python-dependencies.py /tmp/audit-registration-dependencies.py
+RUN python3 -m venv /opt/id-registration/venv \
+  && /opt/id-registration/venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /tmp/registration-requirements.txt \
+  && /opt/id-registration/venv/bin/pip check \
+  && /opt/id-registration/venv/bin/pip uninstall -y pip setuptools \
+  && /opt/id-registration/venv/bin/python /tmp/audit-registration-dependencies.py \
+    --python /opt/id-registration/venv/bin/python --output /opt/id-registration/dependency-audit.json \
+  && rm /tmp/registration-requirements.txt /tmp/audit-registration-dependencies.py
+
 FROM node:24-bookworm-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS migration
 
 WORKDIR /app
@@ -61,15 +77,23 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && apt-get install -y --no-install-recommends ca-certificates openssl python3 \
   && rm -rf /var/lib/apt/lists/*
 
+COPY --from=registration-dependencies /opt/id-registration/venv /opt/id-registration/venv
+COPY --from=registration-dependencies /opt/id-registration/dependency-audit.json /opt/id-registration/dependency-audit.json
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
 COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build --chown=node:node /app/apps/api/src/id-business-v2/auto-registration ./apps/api/src/id-business-v2/auto-registration
+COPY --from=build --chown=node:node /app/apps/admin/src/v2/styles/base.css ./apps/admin/src/v2/styles/base.css
+
+RUN mkdir -p /app/.runtime/auto-registration \
+  && chown node:node /app/.runtime /app/.runtime/auto-registration \
+  && chmod 700 /app/.runtime/auto-registration
 
 RUN mkdir -p /app/.runtime/online-recharge \
   && chown node:node /app/.runtime /app/.runtime/online-recharge \

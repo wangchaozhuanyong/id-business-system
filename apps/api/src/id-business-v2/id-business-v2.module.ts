@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AutoRegistrationModule } from './auto-registration/public-api';
 import { RechargeModule } from './auto-recharge/public-api';
 import { OnlineRechargeModule } from './online-recharge/public-api';
 import { IdBusinessV2AccountsModule } from './accounts/public-api';
@@ -25,6 +26,7 @@ import { IdBusinessV2WorkspaceModule } from './workspace/public-api';
 
 @Module({
   imports: [
+    AutoRegistrationModule,
     OnlineRechargeModule,
     RechargeModule,
     IdBusinessV2OptionsModule,
@@ -48,6 +50,7 @@ import { IdBusinessV2WorkspaceModule } from './workspace/public-api';
     IdBusinessV2SystemMonitoringModule,
     IdBusinessV2WorkspaceModule
   ],
-  controllers: [IdBusinessV2TimeController]
+  controllers: [IdBusinessV2TimeController],
+  exports: [AutoRegistrationModule]
 })
 export class IdBusinessV2Module {}

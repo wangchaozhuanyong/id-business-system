@@ -1,4 +1,5 @@
 import base64
+import gzip
 import copy
 from contextlib import ExitStack, contextmanager, redirect_stdout
 import hashlib
@@ -8,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -28,7 +30,7 @@ def load(name, filename):
 
 
 scope = load('online_recharge_scope_tests', 'online-recharge-scope.py')
-shared = load('online_recharge_legacy_scope_tests', 'api-admin-scope.py')
+shared = scope._load_legacy()
 
 
 def require(value, code):
@@ -180,8 +182,21 @@ class MigrationTests(unittest.TestCase):
             value = {n: 0 for n in scope.TABLES}; value[key] = 1
             with self.subTest(table=key), patch.object(scope, 'database_read', return_value=value), self.assertRaisesRegex(RuntimeError, 'NOT_EMPTY'):
                 scope.require_fresh_resources(controller(), self.new)
-        with patch.object(shared, 'jobs_idle', return_value={}), patch.object(scope, 'database_read', return_value={'busy': 1}), self.assertRaisesRegex(RuntimeError, 'TASKS_BUSY'):
+        with patch.object(shared, 'jobs_idle', return_value={}), patch.object(scope, 'workspace_guard'), patch.object(scope, 'database_read', return_value={'busy': 1}), self.assertRaisesRegex(RuntimeError, 'TASKS_BUSY'):
             scope.jobs_idle(controller(), self.new, migrated=True)
+
+    def test_timestamp_default_case_and_mysql_sort_order_are_normalized_without_weakening_enum(self):
+        data = database_fixture(self.new, True)
+        data['columns'].reverse(); data['indexes'].reverse()
+        for row in data['columns']:
+            if row['type'] == 'datetime' and row['default']:
+                row['default'] = row['default'].upper()
+        with patch.object(scope, 'database_read', return_value=data):
+            self.assertEqual(scope.migration_database_state(controller(), self.new)['status'], 'APPLIED')
+        enum = next(row for row in data['columns'] if row['type'] == 'enum' and row['default'])
+        enum['default'] = enum['default'].upper()
+        with patch.object(scope, 'database_read', return_value=data), self.assertRaisesRegex(RuntimeError, 'SCHEMA_CHANGED'):
+            scope.migration_database_state(controller(), self.new)
 
 
 class ProofTests(unittest.TestCase):
@@ -233,7 +248,7 @@ class ProofTests(unittest.TestCase):
             expected_current=scope.BASELINE_COMMIT, repository=REPOSITORY, run_id='123', run_attempt='1', ci_run_id='234',
             online_recharge_build_proof=base64.b64encode(json.dumps(proof()).encode()).decode())
         scope.validate_arguments(controller(), args)
-        for key, value in (('api_registration_only', True), ('historical_mailbox', True), ('expected_current', COMMIT)):
+        for key, value in (('api_registration_only', True), ('api_workspace_only', True), ('historical_mailbox', True), ('expected_current', COMMIT)):
             test = copy.copy(args); setattr(test, key, value)
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 scope.validate_arguments(controller(), test)
@@ -286,6 +301,152 @@ def configurations():
         'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'], 'volumes': [mount(scope.ENGINE_VOLUME_PATH)],
         'environment': {**env, 'NODE_ENV': 'production', 'ONLINE_RECHARGE_WORKER_KEY': 'a' * 43}}
     return old, new
+
+
+class WorkspaceTests(unittest.TestCase):
+    def fixture(self):
+        temporary = tempfile.TemporaryDirectory(prefix='workspace-', dir=RUNTIME)
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        directory, volume = base / 'releases/old', base / 'workspace-volume'
+        directory.mkdir(parents=True); volume.mkdir()
+        (base / 'current').symlink_to(directory)
+        (directory / '.env.aws.production').write_text(
+            'MYSQL_BACKUP_S3_BUCKET=fixture-backups\nMYSQL_BACKUP_S3_PREFIX=mysql/daily\n')
+        connection = sqlite3.connect(volume / 'database.db')
+        self.addCleanup(connection.close)
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute('CREATE TABLE registration_tasks(id INTEGER PRIMARY KEY, status TEXT, payload TEXT)')
+        connection.execute("INSERT INTO registration_tasks VALUES(1,'completed','SYNTHETIC_PRIVATE_FIXTURE')")
+        connection.commit()
+        metadata = {'Name': 'prod_auto_registration_data', 'Driver': 'local', 'Scope': 'local',
+                    'Options': None, 'Mountpoint': str(volume), 'CreatedAt': '2026-10-09T00:00:00Z',
+                    'Labels': {'com.docker.compose.project': 'prod', 'com.docker.compose.volume': 'auto_registration_data'}}
+        api = {'Config': {'Labels': {'com.docker.compose.project': 'prod'}},
+               'Mounts': [{'Destination': shared.WORKSPACE_DIRECTORY, 'Name': metadata['Name'],
+                           'Type': 'volume', 'RW': True}]}
+        uploaded, calls = {}, []
+        def run(*args, **kwargs):
+            calls.append(args)
+            if args[:3] == ('docker', 'volume', 'ls'):
+                return metadata['Name']
+            if args[:3] == ('docker', 'volume', 'inspect'):
+                return json.dumps([metadata])
+            if args[:2] == ('docker', 'inspect'):
+                return json.dumps([api])
+            if args[:3] == ('aws', 's3api', 'put-object'):
+                body = Path(args[args.index('--body') + 1])
+                uploaded.update(ContentLength=body.stat().st_size,
+                    ChecksumSHA256=base64.b64encode(bytes.fromhex(scope.file_digest(body))).decode(),
+                    ServerSideEncryption=args[args.index('--server-side-encryption') + 1])
+                return '{}'
+            if args[:3] == ('aws', 's3api', 'head-object'):
+                return json.dumps(uploaded)
+            raise AssertionError('Unexpected local fixture tool selection')
+        d = controller(BASE=base, service_state=MagicMock(return_value={'containerId': 'fixture-api'}),
+                       run=run, environment_values=env_values)
+        identity = scope.workspace_guard(d, directory)
+        return d, directory, volume, identity, connection, metadata, api, uploaded, calls
+
+    def test_nonempty_published_workspace_is_required_and_empty_gate_never_used(self):
+        d, directory, _, identity, _, _, _, _, _ = self.fixture()
+        evidence = {'workspaceVolume': identity, 'apiSource': {'kind': 'API_WORKSPACE_BUILD_PROVEN'}}
+        manifest = {'apiWorkspacePublication': {'scope': 'API_ADMIN_WORKSPACE'}}
+        receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFIED', 'services': states(), 'volumePreserved': True,
+                   'volumeDeletionPerformed': False, 'registrationHealthChecked': True, 'buildProofSha256': '1' * 64}
+        with patch.object(shared, 'baseline', return_value=(directory, manifest, states(), evidence)) as reader, \
+                patch.object(shared, 'readback', return_value=receipt), patch.object(scope, 'workspace_files', return_value={}), \
+                patch.object(shared, 'jobs_idle', return_value={}), patch.object(scope, 'snapshot', return_value=states()), \
+                patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)):
+            result = scope.baseline(d, scope.BASELINE_COMMIT)
+            self.assertTrue(result[3]['workspaceIdle'])
+            reader.assert_called_once_with(d, scope.BASELINE_COMMIT, check_jobs=False)
+            manifest.clear()
+            with self.assertRaisesRegex(RuntimeError, 'NOT_PUBLISHED'):
+                scope.baseline(d, scope.BASELINE_COMMIT)
+            with self.assertRaisesRegex(RuntimeError, 'BASELINE_NOT_APPROVED'):
+                scope.baseline(d, '554eaff77d67cce4b760d24a5c358ccabf2b3a4c')
+
+    def test_real_wal_online_backup_s3_integrity_and_receipt_readback(self):
+        d, directory, volume, identity, _, _, _, _, calls = self.fixture()
+        self.assertTrue((volume / 'database.db-wal').exists())
+        receipt = scope.workspace_backup(d, directory, identity, COMMIT, '20261009T120000Z')
+        self.assertTrue(receipt['onlineBackup']); self.assertTrue(receipt['s3Verified'])
+        path = d.BASE / 'backups/registration-workspace' / receipt['name']
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        copied = d.BASE / 'copied.sqlite3'
+        with gzip.open(path, 'rb') as stream:
+            copied.write_bytes(stream.read())
+        with sqlite3.connect(copied) as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM registration_tasks').fetchone(), (1,))
+            self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone(), ('ok',))
+        copied.unlink()
+        (directory / scope.WORKSPACE_BACKUP_FILE).write_text(json.dumps(receipt))
+        manifest = {'commit': COMMIT, 'workspaceBackupBeforeRelease': receipt['name'], 'workspaceBackupSha256': scope.fingerprint(receipt)}
+        record = {'workspaceBackupSha256': scope.fingerprint(receipt)}
+        result = scope.workspace_backup_receipt(d, directory, directory, {'workspaceVolume': identity}, manifest, record)
+        self.assertEqual(result, receipt)
+        uploads = [args for args in calls if args[:3] == ('aws', 's3api', 'put-object')]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(uploads[0][uploads[0].index('--key') + 1], 'mysql/daily/' + receipt['name'])
+        self.assertNotIn('SYNTHETIC_PRIVATE_FIXTURE', json.dumps(receipt))
+        self.assertTrue((volume / 'database.db').is_file())
+        self.assertFalse(any('empty' in str(args) or 'rm' in args for args in calls))
+
+    def test_active_workspace_blocks_backup_and_rollback_before_any_service_stop(self):
+        d, directory, _, identity, connection, _, _, _, calls = self.fixture()
+        connection.execute("UPDATE registration_tasks SET status='running'"); connection.commit()
+        with self.assertRaisesRegex(RuntimeError, 'TASK_ACTIVE'):
+            scope.workspace_backup(d, directory, identity, COMMIT, '20261009T120000Z')
+        self.assertFalse(any(args[:3] == ('aws', 's3api', 'put-object') for args in calls))
+        d.compose = MagicMock(); d.rollback_service = MagicMock()
+        with patch.object(shared, 'jobs_idle', return_value={}):
+            okay, result = scope.rollback(d, directory, directory, ['admin', 'api', 'online-recharge'], states(), migrated=False)
+        self.assertFalse(okay); self.assertEqual(result, {'online-recharge': 'BLOCKED_OR_FAILED'})
+        d.compose.assert_not_called(); d.rollback_service.assert_not_called()
+
+    def test_identity_attachment_and_symlinks_cannot_be_substituted(self):
+        d, directory, volume, identity, _, metadata, api, _, _ = self.fixture()
+        metadata['CreatedAt'] = 'changed'
+        with self.assertRaisesRegex(RuntimeError, 'VOLUME_CHANGED'):
+            scope.workspace_guard(d, directory, identity)
+        metadata['CreatedAt'] = '2026-10-09T00:00:00Z'
+        api['Mounts'][0]['RW'] = False
+        with self.assertRaisesRegex(RuntimeError, 'MOUNT_CHANGED'):
+            scope.workspace_guard(d, directory, identity)
+        api['Mounts'][0]['RW'] = True
+        (volume / 'database.db-journal').symlink_to(volume / 'database.db')
+        with self.assertRaisesRegex(RuntimeError, 'TASK_STATE_UNAVAILABLE'):
+            scope.workspace_backup(d, directory, identity, COMMIT, '20261009T120000Z')
+
+    def test_failed_s3_checksum_or_corrupted_backup_never_proves_success(self):
+        d, directory, _, identity, _, _, _, uploaded, _ = self.fixture()
+        original = d.run
+        def mismatched(*args, **kwargs):
+            if args[:3] == ('aws', 's3api', 'head-object'):
+                return json.dumps({**uploaded, 'ChecksumSHA256': 'wrong'})
+            return original(*args, **kwargs)
+        d.run = mismatched
+        with self.assertRaisesRegex(RuntimeError, 'S3_UNVERIFIED'):
+            scope.workspace_backup(d, directory, identity, COMMIT, '20261009T120000Z')
+        d.run = original
+        receipt = scope.workspace_backup(d, directory, identity, COMMIT, '20261009T120001Z')
+        (directory / scope.WORKSPACE_BACKUP_FILE).write_text(json.dumps(receipt))
+        path = d.BASE / 'backups/registration-workspace' / receipt['name']
+        path.write_bytes(b'corrupted synthetic backup')
+        manifest = {'commit': COMMIT, 'workspaceBackupBeforeRelease': receipt['name'], 'workspaceBackupSha256': scope.fingerprint(receipt)}
+        with self.assertRaisesRegex(RuntimeError, 'BACKUP_CHANGED'):
+            scope.workspace_backup_receipt(d, directory, directory, {'workspaceVolume': identity}, manifest,
+                                           {'workspaceBackupSha256': scope.fingerprint(receipt)})
+
+    def test_api_proof_contains_all_published_workspace_runtime_resources(self):
+        command = scope.content_command('api')
+        for name in shared.WORKSPACE_API_ROOTS:
+            self.assertIn(name, command)
+        rows = '\n'.join('a' * 64 + '  ' + (name if name.endswith(('.css', '.json')) else name + '/fixture')
+                         for name in shared.WORKSPACE_API_ROOTS)
+        self.assertEqual(scope.content_summary(controller(), 'api', rows)['fileCount'], len(shared.WORKSPACE_API_ROOTS))
 
 
 class IsolationTests(unittest.TestCase):
@@ -385,6 +546,8 @@ class ReceiptTests(unittest.TestCase):
     def test_preflight_requires_historical_guard_zero49_and_only_returns_summary(self):
         value = {'status': 'ONLINE_RECHARGE_BASELINE_VERIFIED', 'commit': scope.BASELINE_COMMIT,
             'services': states(), 'manifestSha256': 'a' * 64, 'migration': dict(scope.MIGRATION_IDENTITY),
+            'workspaceIdle': True, 'workspaceVolume': {'status': 'PRESENT', 'identitySha256': '1' * 64},
+            'workspaceBuildProofSha256': '2' * 64,
             'workersPreserved': True, 'requiresWindowHandoff': False,
             'guards': {'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
                        'registrationWindowRetained': True},
@@ -408,7 +571,7 @@ class ReceiptTests(unittest.TestCase):
                 raise RuntimeError('API_ADMIN_BASELINE_PROJECTION_FAILED') from None
         except RuntimeError as error:
             failure = error
-        with patch.object(shared, 'baseline', side_effect=failure):
+        with patch.object(scope, 'baseline', side_effect=failure):
             result = scope.projection_diagnostic(controller(), scope.BASELINE_COMMIT)
         self.assertFalse(result['baselineConfirmed'])
         self.assertEqual(result['causeType'], 'KeyError')
@@ -486,6 +649,11 @@ class ReleaseSequenceTests(unittest.TestCase):
             return {'checkCount': 49, 'violationCount': 0, 'mode': 'STRICT_ZERO_49', 'checksSha256': 'f' * 64}
         fake_legacy = SimpleNamespace(baseline=MagicMock(return_value=(previous, old_manifest, states(),
             {'manifestSha256': hashlib.sha256(raw).hexdigest()})), source_tree=MagicMock(return_value=TREE), strict_audit=audit)
+        baseline_evidence = {'manifestSha256': hashlib.sha256(raw).hexdigest(),
+                             'workspaceVolume': {'name': 'fixture_auto_registration_data'}}
+        def sqlite_backup(*args):
+            events.append('sqlite-backup')
+            return {'name': 'synthetic.sqlite3.gz', 's3Verified': True}
         def backup(folder):
             events.append('backup')
             return {'s3Verified': True, 'name': 'synthetic.sql.gz', 'sha256': 'e' * 64, 'size': 123}
@@ -519,6 +687,8 @@ class ReleaseSequenceTests(unittest.TestCase):
         with ExitStack() as stack:
             for name, value in {
                 'legacy': fake_legacy, 'extract_source': extract,
+                'baseline': MagicMock(return_value=(previous, old_manifest, states(), baseline_evidence)),
+                'workspace_backup': sqlite_backup,
                 'migration_source_check': MagicMock(), 'protected_source': MagicMock(),
                 'require_preserved': MagicMock(return_value=(states(True), {})),
                 'migration_database_state': MagicMock(side_effect=[{'status': 'PENDING'}, {'status': 'APPLIED'}, {'status': 'APPLIED'}]),
@@ -526,6 +696,7 @@ class ReleaseSequenceTests(unittest.TestCase):
                 'verify_image_content': MagicMock(), 'verify_running': MagicMock(), 'historical_guard': MagicMock(),
                 'verify_permission_seed': MagicMock(), 'require_fresh_resources': lambda *a: events.append('empty9'),
                 'jobs_idle': idle, 'snapshot': MagicMock(return_value=states()),
+                'workspace_guard': MagicMock(),
                 'readback': lambda *a: {'status': 'ONLINE_RECHARGE_VERIFIED'},
             }.items():
                 stack.enter_context(patch.object(scope, name, return_value=value) if name == 'legacy' else patch.object(scope, name, value))
@@ -540,8 +711,8 @@ class ReleaseSequenceTests(unittest.TestCase):
         result, receipt, events = self.execute()
         self.assertEqual(result, 0)
         self.assertEqual(receipt['status'], 'ONLINE_RECHARGE_VERIFIED')
-        selected = [e for e in events if e.startswith(('audit:', 'switch:')) or e in ('backup', 'migration', 'grants')]
-        self.assertEqual(selected, ['audit:before-audit.json', 'backup', 'migration', 'grants',
+        selected = [e for e in events if e.startswith(('audit:', 'switch:')) or e in ('backup', 'sqlite-backup', 'migration', 'grants')]
+        self.assertEqual(selected, ['audit:before-audit.json', 'backup', 'sqlite-backup', 'migration', 'grants',
                                    'switch:admin', 'switch:api', 'switch:online-recharge', 'audit:after-audit.json'])
         self.assertEqual(events.count('empty9'), 4)
 

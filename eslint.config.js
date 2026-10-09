@@ -16,6 +16,7 @@ export default [
       'coverage/**',
       'backups/**',
       'apps/*/dist/**',
+      'apps/api/src/id-business-v2/auto-registration/upstream/**',
       'apps/api/src/id-business-v2/auto-recharge/worker/.browsers/**',
       'packages/*/dist/**',
       'design-prototypes/**',
@@ -95,6 +96,12 @@ export default [
     files: ['apps/admin/src/v2/features/**/components/*.vue'],
     rules: {
       'vue/no-mutating-props': ['error', { shallowOnly: true }]
+    }
+  },
+  {
+    files: ['apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js'],
+    languageOptions: {
+      globals: { ...globals.browser }
     }
   },
   {

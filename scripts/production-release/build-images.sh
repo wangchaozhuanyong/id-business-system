@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
-[[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge ]] || exit 1
+[[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
 validate_browser_cache_reference() {
   local reference="${RELEASE_BROWSER_CACHE_IMAGE:-}" image_id="${RELEASE_BROWSER_CACHE_IMAGE_ID:-}" tag
@@ -63,7 +63,7 @@ build_image() {
   local service="$1" dockerfile="$2" target="$3" context="${4:-.}"
   local reference="${RELEASE_REPOSITORY}:${RELEASE_COMMIT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${service}"
   local -a options=(--platform linux/amd64 --label "org.opencontainers.image.revision=$RELEASE_COMMIT")
-  if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
+  if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
@@ -149,6 +149,14 @@ if [[ "${RELEASE_OPERATION:-release}" == release_api_admin_migration ]]; then
   build_image admin apps/admin/Dockerfile runtime
   build_image migrate apps/api/Dockerfile.mysql migration
   python3 -B scripts/production-release/remote-deploy.py --write-api-admin-migration-build-proof
+  exit 0
+fi
+
+if [[ "${RELEASE_OPERATION:-release}" == release_api_workspace ]]; then
+  echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
+  build_image api apps/api/Dockerfile.mysql runtime
+  build_image admin apps/admin/Dockerfile runtime
+  python3 -B scripts/production-release/remote-deploy.py --write-api-workspace-build-proof
   exit 0
 fi
 

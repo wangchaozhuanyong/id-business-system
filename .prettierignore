@@ -20,3 +20,5 @@ scripts/*.sh
 .worktrees/
 apps/api/src/id-business-v2/online-recharge/engine/upstream/
 apps/api/src/id-business-v2/online-recharge/engine/package-lock.json
+apps/api/src/id-business-v2/auto-registration/upstream/
+apps/api/src/id-business-v2/online-recharge/engine/runtime/

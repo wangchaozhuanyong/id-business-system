@@ -1,0 +1,72 @@
+/* Layout only. Colors, typography and controls come from the shared base.css. */
+html[data-v2-registration-workspace] .container {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+}
+
+html[data-v2-registration-workspace] .main-content {
+  margin: 0;
+  padding: 0;
+}
+
+html[data-v2-registration-workspace] .two-column-layout {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+}
+
+html[data-v2-registration-workspace] .left-panel {
+  position: static;
+}
+
+html[data-v2-registration-workspace] .card,
+html[data-v2-registration-workspace] .right-panel {
+  min-width: 0;
+}
+
+html[data-v2-registration-workspace] .form-group {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 28%) minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--spacing-sm);
+}
+
+html[data-v2-registration-workspace] .form-group > label:first-child:not(:has(input)) {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  padding-block: 8px;
+}
+
+html[data-v2-registration-workspace] .form-group > :not(label) {
+  grid-column: 2;
+  min-width: 0;
+}
+
+html[data-v2-registration-workspace] .form-group > label:has(input) {
+  grid-column: 2;
+  grid-row: auto;
+  padding-block: 0;
+}
+
+html[data-v2-registration-workspace] .form-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-v2-registration-workspace] .table-container,
+html[data-v2-registration-workspace] .recent-accounts-table {
+  overflow-x: auto;
+}
+
+@media (max-width: 900px) {
+  html[data-v2-registration-workspace] .two-column-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-v2-registration-workspace] .form-group {
+    grid-template-columns: minmax(4.8rem, 30%) minmax(0, 1fr);
+  }
+
+  html[data-v2-registration-workspace] .form-group > label:first-child:not(:has(input)) {
+    padding-block: 12px;
+  }
+}
