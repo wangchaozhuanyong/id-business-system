@@ -307,7 +307,10 @@ test('API Admin control edits execute their suite in both CI entry points', () =
       'scripts/production-release/api-admin-scope.py',
       'scripts/production-release/api-admin-readonly.py',
       'scripts/production-release/api-admin-scope.test.py',
-      'scripts/production-release/api-admin-readonly.test.py'
+      'scripts/production-release/api-admin-readonly.test.py',
+      'scripts/production-release/api-admin-pending-projection.py',
+      'scripts/production-release/api-admin-pending-projection.test.py',
+      'scripts/production-release/api-admin-pending-online.test.py'
     ]) {
       const calls = recordGuardCommands('ci-only', [path], part);
       assert.equal(
@@ -324,6 +327,14 @@ test('API Admin control edits execute their suite in both CI entry points', () =
         ).length,
         1
       );
+      for (const suite of ['api-admin-pending-projection', 'api-admin-pending-online']) {
+        assert.equal(
+          calls.filter(
+            (call) => call.join(' ') === `python3 -B scripts/production-release/${suite}.test.py`
+          ).length,
+          1
+        );
+      }
       assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
     }
   }

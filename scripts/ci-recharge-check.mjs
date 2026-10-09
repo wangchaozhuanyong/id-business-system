@@ -209,6 +209,8 @@ if (part === 'guards') {
   ) {
     run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
     run('python3', ['-B', 'scripts/production-release/api-admin-readonly.test.py']);
+    run('python3', ['-B', 'scripts/production-release/api-admin-pending-projection.test.py']);
+    run('python3', ['-B', 'scripts/production-release/api-admin-pending-online.test.py']);
   }
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
@@ -333,6 +335,8 @@ if (part === 'guards') {
   ) {
     run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
     run('python3', ['-B', 'scripts/production-release/api-admin-readonly.test.py']);
+    run('python3', ['-B', 'scripts/production-release/api-admin-pending-projection.test.py']);
+    run('python3', ['-B', 'scripts/production-release/api-admin-pending-online.test.py']);
   }
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))

@@ -370,7 +370,18 @@ if api_admin:
     import base64
     from pathlib import Path
     scope_name = {'release_api_workspace': 'api-workspace', 'release_api_registration': 'api-registration', 'release_api_admin_migration': 'api-admin-migration'}.get(os.environ['RELEASE_OPERATION'], 'api-admin')
-    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()).decode()
+    proof_raw = Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()
+    proof = json.loads(proof_raw) if os.environ['RELEASE_OPERATION'] == 'release_api_workspace' else {}
+    if os.environ['RELEASE_OPERATION'] == 'release_api_workspace' and proof.get('pendingOnlineProjection') is not None:
+        import gzip
+        proof_raw = json.dumps(proof, separators=(',', ':')).encode()
+        assert len(proof_raw) < 65536
+        proof_arg = 'gzip:' + base64.b64encode(gzip.compress(proof_raw, mtime=0)).decode()
+        assert len(proof_arg) < 49152
+    else:
+        assert len(proof_raw) < 16384
+        proof_arg = base64.b64encode(proof_raw).decode()
+    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + proof_arg
     image_flags = ''
 if online_recharge:
     import base64
@@ -474,6 +485,8 @@ if api_admin or online_recharge:
     controllers = ('remote-deploy.py', 'api-admin-scope.py')
     if online_recharge or os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
         controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json')
+    if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
+        controllers += ('api-admin-pending-projection.py',)
     for name in controllers:
         digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
         target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'

@@ -13519,10 +13519,13 @@ if __name__ == '__main__':
                 '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id')
             for token in sys.argv[1:]):
         raise SystemExit('API_ADMIN_SCOPE_CONFLICT')
-    if sys.argv[1:2] and sys.argv[1] in ('--write-api-workspace-build-proof', '--api-workspace-preflight', '--api-workspace-readback'):
+    if sys.argv[1:2] and sys.argv[1] in ('--prepare-api-workspace-build', '--write-api-workspace-build-proof', '--api-workspace-preflight', '--api-workspace-readback'):
         try:
             scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
-            if sys.argv[1:] == ['--write-api-workspace-build-proof']:
+            if sys.argv[1:] == ['--prepare-api-workspace-build']:
+                result = scope.prepare_workspace_build(controller)
+                print(json.dumps({'status': 'API_ADMIN_WORKSPACE_CONTEXT_PROVEN', 'contextPath': result['contextPath']}))
+            elif sys.argv[1:] == ['--write-api-workspace-build-proof']:
                 scope.build_proof(controller)
             else:
                 require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
