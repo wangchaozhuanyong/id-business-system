@@ -1058,6 +1058,8 @@ class ReleaseFailureTests(unittest.TestCase):
             controller.commands = []
             def run(*command, **kw):
                 controller.commands.append(command)
+                if fail_at == 'caddy-validation' and command[:2] == ('docker', 'run') and 'validate' in command:
+                    raise RuntimeError('PRIVATE_SENTINEL_CADDY_OUTPUT')
                 if command[:3] == ('docker', 'image', 'inspect'):
                     row = next(row for row in candidate['images'].values() if row['reference'] == command[-1])
                     return json.dumps([{'Id': row['imageId'], 'Architecture': 'amd64', 'Config': {'Labels': {
@@ -3265,6 +3267,40 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertEqual(len([args for args in controller.commands if args[:2] == ('docker', 'pull')]), 2)
         self.assertFalse(any(args[:3] == ('docker', 'volume', 'rm') for args in controller.commands))
         controller.rollback_service.assert_not_called()
+
+    def test_caddy_validation_uses_disposable_bounded_storage_and_preserves_runtime_isolation(self):
+        code, result, controller, manifest, _ = ReleaseFailureTests().run_release(selected_scope=workspace)
+        self.assertEqual(code, 0)
+        validations = [args for args in controller.commands if args[:2] == ('docker', 'run') and 'validate' in args]
+        self.assertEqual(len(validations), 1)
+        command = validations[0]
+        self.assertEqual(command[2:6], ('--rm', '--network', 'none', '--read-only'))
+        tmpfs = [command[index + 1] for index, value in enumerate(command) if value == '--tmpfs']
+        self.assertEqual(tmpfs, ['/data:rw,noexec,nosuid,nodev,size=16m', '/config:rw,noexec,nosuid,nodev,size=16m'])
+        mounts = [command[index + 1] for index, value in enumerate(command) if value == '--mount']
+        self.assertEqual(len(mounts), 1)
+        self.assertTrue(mounts[0].startswith('type=bind,source='))
+        self.assertTrue(mounts[0].endswith('/deploy/caddy/Caddyfile.aws,target=/etc/caddy/Caddyfile,readonly'))
+        self.assertEqual(command[command.index('--env') + 1], 'APP_DOMAIN=workspace-acceptance.local')
+        self.assertEqual(command[-7:], ('caddy', states()['caddy']['image'], 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'))
+        self.assertFalse(any(value in command for value in ('--volume', '-v', '--privileged', '--network=host')))
+        self.assertFalse(any('caddy_data' in value or 'caddy_config' in value for value in command))
+
+    def test_caddy_validation_failure_is_controlled_before_any_pull_or_service_switch(self):
+        code, result, controller, manifest, persisted = ReleaseFailureTests().run_release(
+            selected_scope=workspace, fail_at='caddy-validation')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_FAILED_BEFORE_SWITCH')
+        self.assertEqual(result['step'], 'source')
+        self.assertEqual(result['code'], 'API_ADMIN_WORKSPACE_CADDY_VALIDATION_FAILED')
+        self.assertEqual(result['servicesAttempted'], [])
+        self.assertTrue(result['rollbackOk']); self.assertTrue(persisted)
+        self.assertFalse(result['currentPointsToCandidate']); self.assertIsNone(manifest)
+        self.assertFalse(result['volumeDeletionPerformed'])
+        self.assertNotIn('PRIVATE_SENTINEL', json.dumps(result))
+        controller.compose.assert_not_called(); controller.rollback_service.assert_not_called()
+        self.assertFalse(any(args[:2] == ('docker', 'pull') for args in controller.commands))
+        self.assertFalse(any(args[:3] == ('docker', 'volume', 'rm') for args in controller.commands))
 
     def test_failure_restores_three_only_and_active_new_task_blocks_api_rollback(self):
         code, result, controller, manifest, _ = ReleaseFailureTests().run_release(selected_scope=workspace, fail_at='caddy-health')

@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import urllib.request
 
 SCOPE = 'ONLINE_RECHARGE'
-BASELINE_COMMIT = '2b54aad43dafc2e8ea9cebb46fc72aa8af003ac6'
+BASELINE_COMMIT = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 UPDATED = ('api', 'admin', 'online-recharge')
 IMAGE_SERVICES = ('api', 'admin', 'online-recharge', 'migrate')
 SWITCH_ORDER = ('admin', 'api', 'online-recharge')

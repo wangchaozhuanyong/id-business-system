@@ -2022,10 +2022,16 @@ def _release_locked(d, args):
             d.require(proof['configuration'] == workspace_configuration(d, previous, target),
                       'API_ADMIN_WORKSPACE_CONFIG_PROOF_CHANGED')
             # Validate without mounting Caddy's live certificate/config volumes.
-            d.run('docker', 'run', '--rm', '--network', 'none', '--read-only',
-                '--mount', 'type=bind,source=' + str(target / CONFIG_FILES[1]) + ',target=/etc/caddy/Caddyfile,readonly',
-                '--env', 'APP_DOMAIN=workspace-acceptance.local', '--entrypoint', 'caddy',
-                before['caddy']['image'], 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
+            # Local PKI provisioning needs disposable storage even during validate.
+            try:
+                d.run('docker', 'run', '--rm', '--network', 'none', '--read-only',
+                    '--tmpfs', '/data:rw,noexec,nosuid,nodev,size=16m',
+                    '--tmpfs', '/config:rw,noexec,nosuid,nodev,size=16m',
+                    '--mount', 'type=bind,source=' + str(target / CONFIG_FILES[1]) + ',target=/etc/caddy/Caddyfile,readonly',
+                    '--env', 'APP_DOMAIN=workspace-acceptance.local', '--entrypoint', 'caddy',
+                    before['caddy']['image'], 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
+            except RuntimeError:
+                raise RuntimeError('API_ADMIN_WORKSPACE_CADDY_VALIDATION_FAILED') from None
         if retained_origin is not None:
             migration_successor_guard(d, target, retained_origin)
         step = 'images'
