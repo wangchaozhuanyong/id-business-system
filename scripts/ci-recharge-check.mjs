@@ -19,6 +19,15 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .split('\n')
   .filter(Boolean);
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
+const onlineReleaseControlPaths = new Set([
+  '.github/workflows/production-release.yml',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/production-release/remote-deploy.py',
+  'scripts/production-release/build-images.sh',
+  'scripts/production-release/push-images.sh',
+  'scripts/production-release/dispatch.sh',
+  'scripts/production-release/validate-release-selection.sh'
+]);
 const retirementControlPaths = [
   '.github/workflows/production-release.yml',
   'scripts/production-release/remote-deploy.py',
@@ -167,6 +176,13 @@ if (part === 'guards') {
     )
   )
     run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
+  if (
+    changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
+  ) {
+    run('python3', ['-B', 'scripts/production-release/online-recharge-scope.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
+    run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
+  }
   releaseMaintenanceControls();
   archiveReleaseControls();
   if (
@@ -227,6 +243,14 @@ if (part === 'guards') {
   )
     run('python3', ['-B', 'scripts/production-release/audit-retention-mysql.test.py']);
   const uiChecks = adminUiGuardChecks(mode, changed);
+  if (
+    changed.some(
+      (path) =>
+        path.includes('online-recharge') ||
+        /^scripts\/check-v2-(?:table|loading|input-retention|decimal)-standard/.test(path)
+    )
+  )
+    npm('run', 'test:online-recharge:controls');
   const architectureChecks = backendArchitectureGuardChecks(mode, changed);
   for (const name of new Set([...uiChecks, ...architectureChecks])) npm('run', name);
   if (!uiChecks.length && mode !== 'ci-only' && mode !== 'audit-retention') {
@@ -273,6 +297,13 @@ if (part === 'guards') {
     )
   )
     run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
+  if (
+    changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
+  ) {
+    run('python3', ['-B', 'scripts/production-release/online-recharge-scope.test.py']);
+    run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
+    run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
+  }
   releaseMaintenanceControls();
   archiveReleaseControls();
 } else if (part === 'admin') {
@@ -300,6 +331,9 @@ if (part === 'guards') {
       '@apple-business/api',
       '--',
       'src/id-business-v2/auto-recharge',
+      ...(changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))
+        ? ['src/id-business-v2/online-recharge']
+        : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/auth/'))
         ? ['src/auth', 'src/security']
         : []),
@@ -315,6 +349,11 @@ if (part === 'guards') {
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
+  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))) {
+    const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
+    npm('ci', '--prefix', directory, '--ignore-scripts', '--no-audit', '--no-fund');
+    npm('run', 'test:online-recharge:engine');
+  }
 } else if (part === 'migration') {
   run('python3', ['scripts/ci-recharge-migration.py']);
 } else if (part === 'connector') {

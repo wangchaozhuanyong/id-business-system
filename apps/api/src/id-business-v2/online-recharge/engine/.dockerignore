@@ -1,0 +1,7 @@
+upstream/node_modules
+runtime
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc

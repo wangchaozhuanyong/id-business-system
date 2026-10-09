@@ -62,6 +62,7 @@ export const PERMISSION_MODULE_LABELS: Record<string, string> = {
   'data.dictionary': '业务选项',
   audit_log: '审计日志',
   'id_business_v2.renewal_warning': '续费预警',
+  'id_business_v2.online_recharge': '线上代充',
   'data.analytics': '经营分析',
   finance: '财务'
 };

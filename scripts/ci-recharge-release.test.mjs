@@ -182,6 +182,12 @@ function dispatchFixture(historyPolicy, current, run, extraEnv = {}) {
   });
 }
 
+const onlineReleaseRegressionCommands = [
+  'python3 -B scripts/production-release/online-recharge-scope.test.py',
+  'python3 -B scripts/production-release/online-recharge-readonly.test.py',
+  'node --test scripts/production-release/online-recharge-entry.test.mjs'
+];
+
 test('actual source entry rejects failed evidence on Bash before emitting reusable proof and remains control-only', () => {
   const path = 'scripts/production-release/check-source.sh';
   assert.equal(checkMode([path], '', ''), 'ci-only');
@@ -1067,6 +1073,8 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
         (error) =>
           error.status === 1 &&
           ([
+            'verify_online_recharge',
+            'release_online_recharge',
             'verify_api_admin',
             'release_api_admin',
             'verify_api_admin_migration',
@@ -1427,6 +1435,7 @@ test('actual full-mode release controls select each missing suite once without r
     'node --test scripts/v2-registration-finance-audit.test.mjs',
     'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
+    ...onlineReleaseRegressionCommands,
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
     'python3 -B scripts/production-release/build-image-cache.test.py',
@@ -1465,6 +1474,7 @@ test('actual full-mode release controls preserve exact maintenance selection and
       ...(path === '.github/workflows/quality.yml'
         ? []
         : ['python3 -B scripts/production-release/api-admin-scope.test.py']),
+      ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]);
   }

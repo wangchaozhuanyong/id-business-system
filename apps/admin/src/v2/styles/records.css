@@ -194,8 +194,11 @@
 }
 
 .v2-records-list > .v2-unified-table-shell {
-  /* 预留 42px 表头和 230px 空状态，少量数据切换为空时也保持原框架。 */
-  min-height: max(var(--v2-records-list-body-min-height, 0px), 272px);
+  /* 空状态基础高度加上共享表格实际列设置栏，少量数据切换为空时保持原框架。 */
+  min-height: max(
+    var(--v2-records-list-body-min-height, 0px),
+    calc(272px + var(--v2-table-toolbar-height, 0px))
+  );
 }
 
 .v2-records-list > .v2-records-mobile-list {

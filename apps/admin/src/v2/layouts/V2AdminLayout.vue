@@ -498,6 +498,7 @@ const liveMessage = ref('');
 const currentPageTitle = computed(() => String(route.meta.title ?? '工作台'));
 const navigationSectionIcons: Record<string, Component> = {
   overview: Collection,
+  'online-recharge': Monitor,
   workspace: Monitor,
   business: DataAnalysis,
   finance: Files,

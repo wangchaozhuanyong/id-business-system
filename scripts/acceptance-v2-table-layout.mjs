@@ -2,9 +2,10 @@
 /* global document, getComputedStyle, location, requestAnimationFrame, window */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { loadV2TableSchemaRegistry } from './lib/v2-table-schema-registry.mjs';
 
 const rootDir = process.cwd();
 const adminDir = path.join(rootDir, 'apps', 'admin');
@@ -1679,19 +1680,14 @@ async function waitForTwoAnimationFrames(page) {
 }
 
 function loadRegisteredSchemaIds() {
-  const source = readFileSync(
-    path.join(rootDir, 'apps/admin/src/v2/features/tableSchemas.ts'),
-    'utf8'
-  )
-    .replace(/^import[^\n]+\n/m, '')
-    .replace('const table = defineV2TableSchema;', 'const table = (schema) => schema;')
-    .replaceAll('export const ', 'const ')
-    .replaceAll(' as const', '');
-  const registry = new Function(`${source}\nreturn v2TableSchemas;`)();
-  return Object.values(registry)
-    .flatMap((schemas) => Object.values(schemas))
-    .map((schema) => schema.id)
-    .sort();
+  const registry = loadV2TableSchemaRegistry(rootDir);
+  return [
+    ...new Set(
+      Object.values(registry.v2TablesByFeature)
+        .flat()
+        .map((schema) => schema.id)
+    )
+  ].sort();
 }
 
 async function maybeCaptureScreenshot(page, scenarioKey, width) {

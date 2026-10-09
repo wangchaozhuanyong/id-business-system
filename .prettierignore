@@ -18,3 +18,5 @@ scripts/*.sh
 .runtime/
 .codex-worktrees/
 .worktrees/
+apps/api/src/id-business-v2/online-recharge/engine/upstream/
+apps/api/src/id-business-v2/online-recharge/engine/package-lock.json

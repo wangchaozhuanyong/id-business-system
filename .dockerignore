@@ -1,6 +1,10 @@
 node_modules
 apps/*/node_modules
 packages/*/node_modules
+apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules
+apps/api/src/id-business-v2/online-recharge/engine/runtime
+**/__pycache__
+**/*.pyc
 
 dist
 apps/*/dist

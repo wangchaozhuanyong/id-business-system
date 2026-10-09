@@ -26,7 +26,8 @@ export default [
       '.audit/**',
       '.codex-worktrees/**',
       '.worktrees/**',
-      '.runtime/**'
+      '.runtime/**',
+      'apps/api/src/id-business-v2/online-recharge/engine/upstream/**'
     ]
   },
   js.configs.recommended,
@@ -49,6 +50,20 @@ export default [
         tsconfigRootDir
       }
     }
+  },
+  {
+    files: ['apps/api/src/id-business-v2/online-recharge/engine/**/*.{cjs,mjs}'],
+    languageOptions: {
+      globals: { ...globals.node }
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' }
+  },
+  {
+    files: [
+      'apps/api/src/id-business-v2/online-recharge/engine/safe-media.cjs',
+      'apps/api/src/id-business-v2/online-recharge/engine/test/media-browser.test.cjs'
+    ],
+    languageOptions: { globals: { ...globals.browser } }
   },
   {
     files: ['apps/admin/**/*.vue'],

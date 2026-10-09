@@ -9,6 +9,7 @@ const backendRoot = 'apps/api/src/id-business-v2';
 const issues = [];
 
 const expectedFeatures = [
+  'online-recharge',
   'auto-recharge',
   'account-losses',
   'accounts',
@@ -37,6 +38,7 @@ const expectedFeatures = [
 ];
 const plannedFeatures = new Set();
 const expectedBackendDomains = [
+  'online-recharge',
   'auto-recharge',
   'accounts',
   'activations',
@@ -418,6 +420,7 @@ function recursiveFiles(projectPath) {
   if (!exists(projectPath)) return [];
   const entries = readdirSync(absolute(projectPath), { withFileTypes: true });
   return entries.flatMap((entry) => {
+    if (entry.name === 'node_modules') return [];
     const childPath = `${projectPath}/${entry.name}`;
     return entry.isDirectory() ? recursiveFiles(childPath) : [childPath];
   });

@@ -71,6 +71,10 @@ COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
 COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
 
+RUN mkdir -p /app/.runtime/online-recharge \
+  && chown node:node /app/.runtime /app/.runtime/online-recharge \
+  && chmod 700 /app/.runtime/online-recharge
+
 USER node
 
 EXPOSE 3000

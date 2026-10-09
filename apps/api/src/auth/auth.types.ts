@@ -4,6 +4,7 @@ export interface AuthenticatedUser {
   displayName: string;
   roles: string[];
   permissions: string[];
+  sensitiveApprovalPermissionCodes?: string[];
   mustResetPassword?: boolean;
 }
 

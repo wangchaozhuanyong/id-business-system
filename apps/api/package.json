@@ -23,18 +23,22 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
     "@prisma/client": "^6.0.0",
+    "express": "^5.2.1",
     "imapflow": "^1.7.1",
     "mailparser": "3.9.33",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.0"
+    "rxjs": "^7.8.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
+    "@types/express": "^5.0.6",
     "@types/mailparser": "^3.4.6",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.5",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",
     "prisma": "^6.0.0",
     "ts-node": "^10.9.0",

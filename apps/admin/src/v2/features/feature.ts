@@ -2,6 +2,21 @@ import type { Component } from 'vue';
 import type { V2TableSchema } from '@/v2/components/tableSystem';
 
 export type V2ModuleKey =
+  | 'online-recharge-overview'
+  | 'online-recharge-config'
+  | 'online-recharge-proxies'
+  | 'online-recharge-browser-pool'
+  | 'online-recharge-addresses'
+  | 'online-recharge-checkout-debug'
+  | 'online-recharge-cards'
+  | 'online-recharge-cdks'
+  | 'online-recharge-sessions'
+  | 'online-recharge-renewal'
+  | 'online-recharge-jobs'
+  | 'online-recharge-automation'
+  | 'online-recharge-billing'
+  | 'online-recharge-runtime-logs'
+  | 'online-recharge-login-logs'
   | 'auto-recharge'
   | 'chatgpt-accounts'
   | 'bank-recharge-cards'

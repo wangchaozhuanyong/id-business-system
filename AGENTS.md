@@ -15,6 +15,16 @@
 Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使用的模型；migration 目录只允许保留
 当前系统纯净基线和此后新增的当前系统迁移，不得导入其他仓库的历史迁移。
 
+2026-10-09 用户明确授权新增独立“线上代充”模块，完整迁移固定版本
+`nowtostudeyday/PAY-GPT-UPGRADE@ba6cf96312a6953e62edb9d74299d438d12549df`。
+本次仅允许在 `apps/admin/src/v2/features/online-recharge` 和
+`apps/api/src/id-business-v2/online-recharge` 内增加该模块的兑换码、第三方代充、
+Telegram 通知、原 JavaScript/Python 执行器与独立资源池；这些能力属于新模块，
+不恢复旧系统或另建用户体系。数据库只新增当前模块专属迁移，不修改纯净基线。
+原充值行为以固定源码为准，必要差异与验收登记于 `docs/ONLINE_RECHARGE.md`。
+用户随后明确授权本窗口完成运行配套、生产迁移及线上代充单独发布；只纳入本模块及必要接入，
+保留其他任务未发布源码与既有服务。真实付款另行验收，不执行真实订阅更改或外部通知。
+
 ## 开发规则
 
 - 默认使用简体中文。

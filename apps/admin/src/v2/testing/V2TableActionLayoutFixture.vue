@@ -191,7 +191,7 @@ import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
 import { defineV2TableSchema, type V2TableSchema } from '@/v2/components/tableSystem';
-import { v2TableSchemas } from '@/v2/features/tableSchemas';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 const alignmentColumns = [
   { key: 'rowNumber', label: '序号', kind: 'index', widthPreset: 'index' },
@@ -267,9 +267,9 @@ const lifecycleRows = computed(() =>
     customer: `${row.customer} ${lifecycleRevision.value}`
   }))
 );
-const registeredSchemas = Object.values(v2TableSchemas).flatMap((schemas) =>
-  Object.values(schemas)
-) as readonly V2TableSchema[];
+const registeredSchemas = [
+  ...new Set(Object.values(v2TablesByFeature).flat())
+] as readonly V2TableSchema[];
 
 const registryRows = [
   {

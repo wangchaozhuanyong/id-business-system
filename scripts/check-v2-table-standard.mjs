@@ -6,6 +6,7 @@ import { parse as parseSfc } from '@vue/compiler-sfc';
 import { NodeTypes, parse as parseTemplate } from '@vue/compiler-dom';
 import ts from 'typescript';
 import postcss from 'postcss';
+import { loadV2TableSchemaRegistry } from './lib/v2-table-schema-registry.mjs';
 
 const rootDir = process.cwd();
 const featuresRoot = path.join(rootDir, 'apps/admin/src/v2/features');
@@ -40,6 +41,9 @@ for (const [group, schemas] of Object.entries(schemaRegistry.v2TableSchemas)) {
   for (const [name, schema] of Object.entries(schemas)) {
     schemaByExpression.set(`v2TableSchemas.${group}.${name}`, schema);
   }
+}
+for (const [section, schema] of Object.entries(schemaRegistry.onlineTableSchemas)) {
+  schemaByExpression.set(`onlineTableSchemas.${section}`, schema);
 }
 
 validateSchemaRegistry(schemaRegistry, schemaByExpression);
@@ -78,7 +82,11 @@ for (const file of walk(v2Root).filter((target) => target.endsWith('.vue'))) {
     if (projectPath === layoutFixturePath) fixtureTableCount += 1;
     else businessTableCount += 1;
     const schemaExpression = validateTableNode(node, projectPath, consumedSchemas);
-    if (schemaExpression) tableSchemasInFile.push(schemaExpression);
+    if (schemaExpression) {
+      tableSchemasInFile.push(
+        ...(Array.isArray(schemaExpression) ? schemaExpression : [schemaExpression])
+      );
+    }
     actionColumnCount += collectOwnedColumns(node).filter(
       (column) => column.tag === 'V2TableActionColumn'
     ).length;
@@ -120,12 +128,7 @@ if (issues.length) {
 }
 
 function loadSchemaRegistry() {
-  const source = read(schemasPath)
-    .replace(/^import[^\n]+\n/m, '')
-    .replace('const table = defineV2TableSchema;', 'const table = (schema) => schema;')
-    .replaceAll('export const ', 'const ')
-    .replaceAll(' as const', '');
-  return new Function(`${source}\nreturn { v2TableSchemas, v2TablesByFeature };`)();
+  return loadV2TableSchemaRegistry(rootDir);
 }
 
 function validateSchemaRegistry(registry, schemas) {
@@ -313,6 +316,13 @@ function validateTableNode(tableNode, projectPath, consumedSchemas) {
     }
   }
 
+  if (
+    projectPath === 'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue' &&
+    schemaExpression === 'schema'
+  ) {
+    return validateOnlineResourceTable(columns, projectPath, consumedSchemas);
+  }
+
   if (!schema) {
     if (projectPath !== layoutFixturePath && !schemaExpression.startsWith('fixtureSchemas.')) {
       issues.push(`${projectPath}: 未登记的 schema ${schemaExpression}`);
@@ -359,6 +369,69 @@ function validateTableNode(tableNode, projectPath, consumedSchemas) {
     issues.push(`${projectPath}: ${schemaExpression} schema 必须声明已使用的 rowKey`);
   }
   return schemaExpression;
+}
+
+function validateOnlineResourceTable(columns, projectPath, consumedSchemas) {
+  const source = read(projectPath).replace(/\s+/g, '').replaceAll('(column)=>', 'column=>');
+  for (const expected of [
+    'constsection=props.descriptor.section;',
+    'constschema=computed(()=>onlineTableSchemas[section])',
+    'constdataColumns=computed(()=>schema.value.columns.filter(isV2TableDataColumn).map(column=>({...column,fieldName:column.key})));',
+    "schema.value.columns.find(column=>column.kind==='actions')"
+  ]) {
+    if (!source.includes(expected))
+      issues.push(`${projectPath}: 动态表必须从登记 schema 原样派生列 ${expected}`);
+  }
+  const selection = columns[0]?.tag === 'V2TableControlColumn' ? columns[0] : null;
+  const dataIndex = selection ? 1 : 0;
+  if (
+    selection &&
+    (boundExpression(selection, 'definition') !== 'controlColumn' ||
+      !source.includes("schema.value.columns.find(column=>column.kind==='control')") ||
+      !selection.props.some(
+        (prop) =>
+          prop.type === NodeTypes.DIRECTIVE &&
+          prop.name === 'if' &&
+          prop.exp?.content === 'controlColumn'
+      ))
+  ) {
+    issues.push(`${projectPath}: 可选选择列必须原样来自 schema 控制列`);
+  }
+  const dataColumn = columns[dataIndex];
+  const actionColumn = columns[dataIndex + 1];
+  if (
+    columns.length !== dataIndex + 2 ||
+    dataColumn?.tag !== 'V2TableColumn' ||
+    boundExpression(dataColumn, 'definition') !== 'column' ||
+    !dataColumn.props.some(
+      (prop) =>
+        prop.type === NodeTypes.DIRECTIVE &&
+        prop.name === 'for' &&
+        prop.exp?.content === 'column in dataColumns'
+    ) ||
+    actionColumn?.tag !== 'V2TableActionColumn' ||
+    boundExpression(actionColumn, 'definition') !== 'actionColumn'
+  ) {
+    issues.push(`${projectPath}: 动态表只能遍历 schema 数据列并使用唯一的 schema 操作列`);
+  }
+  const expressions = [];
+  for (const section of Object.keys(schemaRegistry.onlineTableSchemas)) {
+    const schema = schemaRegistry.onlineTableSchemas[section];
+    if (schema.columns.some((column) => column.kind === 'control') && !selection) {
+      issues.push(`${projectPath}: schema ${section} 的控制列没有真实消费者`);
+    }
+    const expression = `onlineTableSchemas.${section}`;
+    const wrappers = walk(path.join(featuresRoot, 'online-recharge')).filter(
+      (file) =>
+        file.endsWith('View.vue') &&
+        new RegExp(`section:\\s*'${section}'`).test(read(path.relative(rootDir, file)))
+    );
+    if (wrappers.length !== 1)
+      issues.push(`${projectPath}: schema ${section} 必须有且仅有一个显式页面消费者`);
+    consumedSchemas.set(expression, [projectPath]);
+    expressions.push(expression);
+  }
+  return expressions;
 }
 
 function collectOwnedColumns(tableNode) {
@@ -495,7 +568,10 @@ function validateSharedImplementation() {
     issues.push('apps/admin/src/v2/components/V2ElTable.vue: 旧适配器必须删除');
   }
   for (const [pattern, message] of [
-    [/Object\.values\(v2TableSchemas\)\.flatMap/, '必须从最终 schema registry 动态生成验收夹具'],
+    [
+      /new Set\(Object\.values\(v2TablesByFeature\)\.flat\(\)\)/,
+      '必须从最终 schema registry 去重并动态生成验收夹具'
+    ],
     [/v-for="schema in registeredSchemas"/, '必须遍历所有最终 schema'],
     [/:data-schema-fixture="schema\.id"/, '每个 schema 验收夹具必须暴露稳定 id'],
     [/:schema="lifecycleSchema"/, '滚动生命周期夹具必须支持 schema 切换']

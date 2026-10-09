@@ -74,6 +74,7 @@ function lineAt(source, index = 0) {
 function listSourceFiles(relativeRoot) {
   const absoluteRoot = path.join(rootDir, relativeRoot);
   return readdirSync(absoluteRoot, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === 'node_modules') return [];
     const relativePath = path.join(relativeRoot, entry.name);
     if (entry.isDirectory()) return listSourceFiles(relativePath);
     return /\.(?:ts|tsx|vue|mjs)$/.test(entry.name) ? [relativePath] : [];

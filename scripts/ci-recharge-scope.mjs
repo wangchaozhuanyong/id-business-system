@@ -328,7 +328,7 @@ export function isCiOnly(paths) {
     paths.every(
       (p) =>
         historicalReleaseControlPaths.includes(p) ||
-        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/check-v2-(?:module-architecture|prisma-runtime-boundary|concurrency-standard)(?:\.test)?\.mjs|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance|api-admin-scope|api-admin-readonly)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+        /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/check-v2-(?:module-architecture|prisma-runtime-boundary|concurrency-standard)(?:\.test)?\.mjs|scripts\/production-release\/online-recharge-entry\.test\.mjs|scripts\/production-release\/mailbox-diagnostic(?:\.test)?\.(?:mjs|py)|scripts\/production-release\/(?:cleanup-reviewed-cache|cleanup-verified-backups|maintain-image-cache|remote-deploy|reuse-images|storage-maintenance|api-admin-scope|api-admin-readonly|online-recharge-scope|online-recharge-readonly)(?:\.test)?\.py|scripts\/production-release\/audit-retention-mysql\.test\.py|scripts\/production-release\/(?:build-images|push-images|dispatch|check-source)\.sh|deploy\/aws\/cache-cleanup-(?:legacy-20261002|unused-legacy-20261003|storage-20261002|bitbrowser-direct-20261003|20261001|fx-subscription-20261002|unified(?:-recovery)?-20261002|recharge-(?:names|execution)-20261002)\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
           p
         )
     )
@@ -512,12 +512,23 @@ export function adminCheckCommands(mode, paths) {
       : [
           '--',
           'src/v2/features/auto-recharge',
+          ...(paths.some((p) => p.startsWith('apps/admin/src/v2/features/online-recharge/'))
+            ? ['src/v2/features/online-recharge']
+            : []),
           ...(paths.some((p) => p.includes('/audit-logs/'))
             ? ['src/v2/features/audit-logs/audit-log-presentation.spec.ts']
             : [])
         ])
   ]);
   commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
+  if (
+    paths.some(
+      (path) =>
+        path.startsWith('apps/admin/src/v2/features/online-recharge/') ||
+        path === 'scripts/acceptance-v2-online-recharge-ui.mjs'
+    )
+  )
+    commands.push(['run', 'acceptance:v2-online-recharge-ui']);
   if (
     paths.some((path) =>
       /^(?:apps\/admin\/src\/v2\/features\/orders\/|apps\/admin\/src\/v2\/(?:api|types)\/orders\.ts$|apps\/admin\/src\/v2\/styles\/(?:base|layout|records)\.css$|scripts\/acceptance-v2-order-archive-ui\.mjs$)/.test(
@@ -840,7 +851,7 @@ async function main() {
     adminCheckCommands(mode, paths).some((args) =>
       args.some(
         (arg) =>
-          /^acceptance:v2-(?:auto-recharge|table-layout)$/.test(arg) ||
+          /^acceptance:v2-(?:auto-recharge|table-layout|online-recharge-ui)$/.test(arg) ||
           arg === 'scripts/acceptance-v2-order-archive-ui.mjs'
       )
     );

@@ -1,0 +1,11 @@
+{
+  "name": "id-online-recharge-engine",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node worker.cjs",
+    "health": "node healthcheck.cjs",
+    "test": "node --test test/*.test.cjs",
+    "test:upstream": "npm test --prefix upstream"
+  }
+}

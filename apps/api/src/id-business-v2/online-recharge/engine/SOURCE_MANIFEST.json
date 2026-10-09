@@ -1,0 +1,440 @@
+{
+  "repository": "https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git",
+  "commit": "ba6cf96312a6953e62edb9d74299d438d12549df",
+  "license": "upstream/LICENSE",
+  "excluded": [
+    "旧Express server/admin页面认证",
+    "旧MySQL实现/SQL/schema/reset与部署脚本",
+    "原始截图录像/求解器机密文件"
+  ],
+  "dependencyLockPreserved": true,
+  "files": [
+    {
+      "path": ".dockerignore",
+      "originalSha256": null,
+      "adaptedSha256": "6eb0e0e877d4ee3c5c6b697383b0280890214db3d80b07d100f7a612d1e62858",
+      "changed": true,
+      "reason": "Exclude node caches, runtime evidence and every private env file from the build context; keep placeholder example."
+    },
+    {
+      "path": ".env.example",
+      "originalSha256": null,
+      "adaptedSha256": "fa4bcc6b4897ac9fe32fb8394d0cffe0fb859809f94b9b41ac28514676e70d19",
+      "changed": true,
+      "reason": "Placeholder-only independent environment; external execution disabled; output paths must belong to project."
+    },
+    {
+      "path": ".gitignore",
+      "originalSha256": null,
+      "adaptedSha256": "ee2666d766b138b1597680a997c7c3f3d1bdf2df69e27c1a6e89850745cb8710",
+      "changed": true,
+      "reason": "Exclude only module dependencies/runtime/local secrets/Python caches."
+    },
+    {
+      "path": "confirmation.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "b4b706e21c4fddf84564ac6a20c54b494a6e3a13f20ca80caacfef433092dcac",
+      "changed": true,
+      "reason": "Upstream account identity and fixed Plus/Pro-5x/Pro-20x evidence; original-order read-only recheck; generic Pro stays unknown."
+    },
+    {
+      "path": "credential-client.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "410caab6d4fa7b748d21bea0c21750023ff480e9c408aa54a0fd5fa28e7c1f2b",
+      "changed": true,
+      "reason": "Transient parent-child IPC credential retrieval and forgetting; no disk/environment credentials."
+    },
+    {
+      "path": "credentials.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "9aaa73b82db49bf04976691c176a5de9001995a1899b6cc6130b8aee9169d410",
+      "changed": true,
+      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials."
+    },
+    {
+      "path": "Dockerfile",
+      "originalSha256": null,
+      "adaptedSha256": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
+      "changed": true,
+      "reason": "Pin Node image digest, original Node/Chromium lock and validated independent CPU-only Python lock; non-root, private health, signal forwarding and transient profiles."
+    },
+    {
+      "path": "healthcheck.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "81799f67b00683c59e7ab124ef4bcc8658e32ed5a8b669ec2b1b3a5651be0907",
+      "changed": true,
+      "reason": "Authenticated loopback-only readiness probe with timeout and generic error output; no public credential/CDP exposure."
+    },
+    {
+      "path": "outcomes.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "0176cd590dde00bf0cf14983932ebd2fffdabc526e62645598e2cfce74c65c62",
+      "changed": true,
+      "reason": "Exact provider statuses and verified redirect predicates; structured outcome replaces ambiguous success log parsing."
+    },
+    {
+      "path": "package.json",
+      "originalSha256": null,
+      "adaptedSha256": "2ee7791b52b6604f0285db32ed9809639d472efadd9bbfb75873bbef57afc92d",
+      "changed": true,
+      "reason": "Independent worker, tests and authenticated private health command; no new dependency or source version upgrade."
+    },
+    {
+      "path": "paths.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "04408965422ae6cf175db9b68eb40f9fcb8fec9f5dcae45009ce4c0c12353e1a",
+      "changed": true,
+      "reason": "Keep validated project-owned media paths and allocate owned 0700 platform temporary directories for profiles and solver task data; remove only directories created by this process."
+    },
+    {
+      "path": "README.md",
+      "originalSha256": null,
+      "adaptedSha256": "1ef572faa28da7d5d4e4833fb7fc34cf6b16cf04b51dbf50bd8ec397804dcd69",
+      "changed": true,
+      "reason": "Document locked Python runtime, measured offline Linux image compatibility, private networking, bounded shutdown and transient secrets versus persisted masked media/model cache; distinguish image and business proof."
+    },
+    {
+      "path": "requirements-hcaptcha.lock.txt",
+      "originalSha256": null,
+      "adaptedSha256": "b28f6a620ffdb5815de2bf1ecebc17336f18f530b55ce56e33f674e7d1786e74",
+      "changed": true,
+      "reason": "Independent Linux amd64 Python solver lock frozen from an actual successful CPU-only build; original requirements unchanged."
+    },
+    {
+      "path": "rpc.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "7035512ff0cce47d90f01032e737f9feafed23d807ef93d0c20aefce385164b7",
+      "changed": true,
+      "reason": "Allowlisted internal HTTP RPC, task/card leases, pre-submit authorization and unknown/confirmed-payment states."
+    },
+    {
+      "path": "safe-media.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "33db82b0f0ea60675e829f028a5e2e532d6b42a6fbdf9f6c9f23eeb32f9e187c",
+      "changed": true,
+      "reason": "Actual-page mandatory masks, screenshot-sequence VP9 WebM; no raw recording or fallback capture."
+    },
+    {
+      "path": "security.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "af54cc6a612fb0db973c5ffc7599c2a186d680782a3678479a145b728abb55e1",
+      "changed": true,
+      "reason": "Transient-secret redaction and cleanup; protected debug link transfer and fixed public billing-link allowlist."
+    },
+    {
+      "path": "task-runner.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "a1fee4b58d8886146656df2181704d5c6d9c2a976dfc1bd05e399a1f75fa78ae",
+      "changed": true,
+      "reason": "Scoped runtime configuration, original-core operation dispatch and structured results; safe login/security notification events."
+    },
+    {
+      "path": "test/credentials-main.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "a4abbc72402643943455b855b01010b26c6c9441569d82c957b616e4f018fb1c",
+      "changed": true,
+      "reason": "Credentials-only entrypoint boots/stops without RPC, browser or external execution."
+    },
+    {
+      "path": "test/dispatch.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f556465b75cb0f75e860e81ef41666200e4f9f97854d3de281c9e416efe94368",
+      "changed": true,
+      "reason": "Each original configuration/proxy/security-notification capability is invoked, beyond queue/HTTP acceptance."
+    },
+    {
+      "path": "test/media-browser.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f54ad08e7ea46b50f4ab44df09f60201f8b063008601467b0580076eaf06edc4",
+      "changed": true,
+      "reason": "Isolated synthetic Chromium pixel masks, no page raw-video, real VP9 WebM and zero external requests."
+    },
+    {
+      "path": "test/payment-core.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "7b0d21a209afc6d676ca8f057955d896085b73ef2dc6c164e949dc671b5e3772",
+      "changed": true,
+      "reason": "Actual original local core: max-three decline rotation, no unknown retry, observed-only amounts and retained locks on post-payment write failures."
+    },
+    {
+      "path": "test/regressions.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "c9166d4b86d978d727f9bb02531675aa4aee41fd3dd7bbb327b6b9c56caca106",
+      "changed": true,
+      "reason": "False positives, dual leases, CVC lifecycle, provider unknown outcomes, same-account recheck and media/path regressions."
+    },
+    {
+      "path": "test/runtime-main.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "99b22d50874cdd306e449e8452e0e618780ff696f3a137509a98807ebcce30a0",
+      "changed": true,
+      "reason": "Offline synthetic runtime tests for private health, 0700 transient paths, SIGINT/SIGTERM, late result/claim races and lease-based interrupted-task recovery."
+    },
+    {
+      "path": "third-party.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "a63f4a235507f93b932497f820deab43c4045c86c05a1d13e3578bad097991ad",
+      "changed": true,
+      "reason": "Original API client with stable CDK/task idempotency, single submit/poll path and strict account/plan confirmation; no new cancellation or local bills."
+    },
+    {
+      "path": "UPSTREAM.json",
+      "originalSha256": null,
+      "adaptedSha256": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
+      "changed": true,
+      "reason": "Frozen source repository/commit and original SHA256 for 34 upstream files."
+    },
+    {
+      "path": "upstream/auth-page-detect.js",
+      "originalSha256": "32d6fae901ccd9b7831b35e99560973eebf8629ea8b0038602ea0a020f346fc3",
+      "adaptedSha256": "32d6fae901ccd9b7831b35e99560973eebf8629ea8b0038602ea0a020f346fc3",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/browser-pool-client.js",
+      "originalSha256": "38704e189b225597949ad02a4e7520ab440ae2c8a55890927d508c3db363080c",
+      "adaptedSha256": "38704e189b225597949ad02a4e7520ab440ae2c8a55890927d508c3db363080c",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/browser-pool.js",
+      "originalSha256": "523d8570160a2849ed53b0f6615dd113fb025a4e1faeb78e18a2803b4b106f01",
+      "adaptedSha256": "46b518e765106162d5be9d1c567bdcffc23fdbf78683cd2490f6f9783aad7c73",
+      "changed": true,
+      "reason": "Preserve original pool sizing, slot and context behavior; only move profile storage into controlled ephemeral runtime root, with immutable root while initialized."
+    },
+    {
+      "path": "upstream/browser-runtime.js",
+      "originalSha256": "6a2063b7f6d56fc1e92adc1f7f2acaa046acad2fc706fda21f05c3e1fcc005a7",
+      "adaptedSha256": "6a2063b7f6d56fc1e92adc1f7f2acaa046acad2fc706fda21f05c3e1fcc005a7",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/browser-standalone.js",
+      "originalSha256": "7466cb284f635c7dc5cadc9839427d32bd3585e1da8828f2c20214798e588b29",
+      "adaptedSha256": "7466cb284f635c7dc5cadc9839427d32bd3585e1da8828f2c20214798e588b29",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/captcha-platform.js",
+      "originalSha256": "960475605eb8525420b3862d06f9d87df2ea11823bb72bcae5f3a5a10ae0d6df",
+      "adaptedSha256": "960475605eb8525420b3862d06f9d87df2ea11823bb72bcae5f3a5a10ae0d6df",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/card-supplier-webhook.js",
+      "originalSha256": "9cd4789d3eed261be8d8d905392ee55c683eff26048aec6059ab1915d7c0f85b",
+      "adaptedSha256": "9cd4789d3eed261be8d8d905392ee55c683eff26048aec6059ab1915d7c0f85b",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/card-validator.js",
+      "originalSha256": "17071251ec7383a594f1f7e874ed0a161f69a94864f85a4001dfc802a22e8035",
+      "adaptedSha256": "17071251ec7383a594f1f7e874ed0a161f69a94864f85a4001dfc802a22e8035",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/chatgpt.js",
+      "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
+      "adaptedSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/gpt-api-client.js",
+      "originalSha256": "352d67efabfb1add8acc028d609f9553322f5cf6f627322684506a25c4646ee9",
+      "adaptedSha256": "352d67efabfb1add8acc028d609f9553322f5cf6f627322684506a25c4646ee9",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/hcaptcha-runtime.js",
+      "originalSha256": "c1ac5696068def26f1350534ea782fc30a69d54f5aa9569e2513bb2c7e8b563e",
+      "adaptedSha256": "629177e135147eb9ddc60525b60e0885f4d4bcd4f2a475d46b22101065f1bee1",
+      "changed": true,
+      "reason": "运行目录归项目，选择显式独立Python环境；配置/池CDP适配。"
+    },
+    {
+      "path": "upstream/hcaptcha-solver.js",
+      "originalSha256": "16c85029a4ae4fa7ea97545c9c93675b7751481a3cb87bfb4cb4b585652e39ec",
+      "adaptedSha256": "4df559d6c5624ef7ab96d62a29685eb79551d319cc4e14c6d673b7e41c5976d2",
+      "changed": true,
+      "reason": "求解器stdout只内存解析+脱敏任务日志；不写原始日志；独立Python环境与受限子进程环境。"
+    },
+    {
+      "path": "upstream/hcaptcha/solver.py",
+      "originalSha256": "28bbf0bc2f25a75fafae2d399d05403a0ce4e132764a3c2ab632b441f5ccda42",
+      "adaptedSha256": "0e1224c30771f339bf6c83febc2527ef7d2328ee25190d55baac45bdeabf6057",
+      "changed": true,
+      "reason": "保留Python求解核心；不写挑战图片/会话元数据/checkcaptcha/verify原始诊断，Node统一脱敏媒体。"
+    },
+    {
+      "path": "upstream/human-verification.js",
+      "originalSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
+      "adaptedSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/index.js",
+      "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
+      "adaptedSha256": "0880c71f1943ce98029c1deed51b94c591eda97176ec95d7172ea375f4530925",
+      "changed": true,
+      "reason": "保留Session/API优先及UI回退；结构化结果、严格账户/目标套餐确认、本地成功取消续费、强制脱敏媒体及context清理。"
+    },
+    {
+      "path": "upstream/LICENSE",
+      "originalSha256": "5de9a1fe797832d01e42932e57d087b8a67280431bc4eebe90519e5c2a98806d",
+      "adaptedSha256": "5de9a1fe797832d01e42932e57d087b8a67280431bc4eebe90519e5c2a98806d",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/mysql-store.js",
+      "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
+      "adaptedSha256": "fee06739c2dd245b04d631594c13035624b75cf9fbb45c58964f3851c94f8d41",
+      "changed": true,
+      "reason": "替换MySQL实现为allowlist内部HTTP RPC；所有权/版本校验；CVC仅engine内存经IPC提供。"
+    },
+    {
+      "path": "upstream/package-lock.json",
+      "originalSha256": "0832ac4b0d289e1aa6d23f26269b2c9b91c7cb3ab1c9f7b2d4c44ed00dc9d109",
+      "adaptedSha256": "0832ac4b0d289e1aa6d23f26269b2c9b91c7cb3ab1c9f7b2d4c44ed00dc9d109",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/package.json",
+      "originalSha256": "120600fa54537e83ac54ba039e4331dd079194894828eef0f05577cbd1c65b46",
+      "adaptedSha256": "ff13c2cb43e58318d101532119f5ac1863616cd939b0e0b53f303f9d1f68ac8b",
+      "changed": true,
+      "reason": "仅运行入口改独立worker；依赖声明和原lock保持不升级。"
+    },
+    {
+      "path": "upstream/payment-retry.js",
+      "originalSha256": "41d4f3fad99d2f0b8036fa7da597bd251134361232fe96b4515a1d2b5bd80597",
+      "adaptedSha256": "17e21123d7be24b230fd834c80b763c1a4209d240eeff7c541df223e20f37371",
+      "changed": true,
+      "reason": "保留三卡拒付轮换；UUID/原子租约适配；未知或已付款后失败保持资产；账单仅记录实测金额。"
+    },
+    {
+      "path": "upstream/playwright-proxy.js",
+      "originalSha256": "f07bd9f5b62363d2e2c3c5df93e219c3e43000965d1b2a6248d717bfd98d26b0",
+      "adaptedSha256": "f07bd9f5b62363d2e2c3c5df93e219c3e43000965d1b2a6248d717bfd98d26b0",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/pricing-checkout.js",
+      "originalSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
+      "adaptedSha256": "b3f7914013cfbc7b17469396fc51b80f32acc99e940b810d48ba8cea4237f894",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/proxy-pool.js",
+      "originalSha256": "50762b9ed3e7cab8ac6d54a377f77bc4e11c5c34f38bebbca5ea16184294b0ef",
+      "adaptedSha256": "50762b9ed3e7cab8ac6d54a377f77bc4e11c5c34f38bebbca5ea16184294b0ef",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/region-config.js",
+      "originalSha256": "057c54db616846692bb942f037f6be3860a644a8d03b269cc41a9328187e3fd5",
+      "adaptedSha256": "057c54db616846692bb942f037f6be3860a644a8d03b269cc41a9328187e3fd5",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/requirements-hcaptcha.txt",
+      "originalSha256": "2dc2e143fb0fb2be771f5a851e4230e9d5d34bd79b63863f59d91111a048bbe2",
+      "adaptedSha256": "2dc2e143fb0fb2be771f5a851e4230e9d5d34bd79b63863f59d91111a048bbe2",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/session-auth.js",
+      "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
+      "adaptedSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/stripe-payment.js",
+      "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
+      "adaptedSha256": "79a8cbfe8824d074a7c4718ad0d9e9d0edbcf454c9c693f19a3c23218f201be9",
+      "changed": true,
+      "reason": "移除登录/离开checkout即成功误判；提交前租约校验、未知结果不可重复提交；强制脱敏截图。"
+    },
+    {
+      "path": "upstream/subscription-check.js",
+      "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
+      "adaptedSha256": "46ce23ad91d0ff548d216efd00ccfc3e30f5eaa99754b47f0c5849deaf6bab97",
+      "changed": true,
+      "reason": "保留原订阅解析/续费操作；增加实际上游账户证据；变更前校验租约，POST失败不二次发送。"
+    },
+    {
+      "path": "upstream/tax-free-address.js",
+      "originalSha256": "978e2fd1a1634aa28487dbfc3f26a9e1de9969058e693bfe98ebbb59b2f6c506",
+      "adaptedSha256": "5f5eb1a5b958f624e177a81df7467d9ba45fd678a10cac94e75e71731a9c9e06",
+      "changed": true,
+      "reason": "保留原免税地址选择/随机生成逻辑，将地址持久操作映射当前系统RPC，不复制旧SQL CRUD。"
+    },
+    {
+      "path": "upstream/telegram-notify.js",
+      "originalSha256": "ef07e90766ffd85445dd3996b0975d406a96ecca086fdf03f863fb1c582ae8b9",
+      "adaptedSha256": "ef07e90766ffd85445dd3996b0975d406a96ecca086fdf03f863fb1c582ae8b9",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/test/card-supplier-webhook.test.js",
+      "originalSha256": "2f36e1e6a2e2de655ae06942ecd07eaee68d92984d56dd0cabf9b409c968a835",
+      "adaptedSha256": "2f36e1e6a2e2de655ae06942ecd07eaee68d92984d56dd0cabf9b409c968a835",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/test/gpt-api-client.test.js",
+      "originalSha256": "c96341bd6857ea0f146f43dde0790465f0e39e574d8c8abef1a685edc1ecd4b4",
+      "adaptedSha256": "c96341bd6857ea0f146f43dde0790465f0e39e574d8c8abef1a685edc1ecd4b4",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/test/pricing-checkout.test.js",
+      "originalSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
+      "adaptedSha256": "d5354791a21258f84f523943d381f25d89d00bf85cb8cfe78ed1c73b9f85c619",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "upstream/vitest.config.js",
+      "originalSha256": "cc93b9d616f22a2ae8524884776407149fee55c4016fb6e1c13bdd5bea355e6a",
+      "adaptedSha256": "cc93b9d616f22a2ae8524884776407149fee55c4016fb6e1c13bdd5bea355e6a",
+      "changed": false,
+      "reason": "冻结原版保持不变。"
+    },
+    {
+      "path": "verify-image-runtime.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "fb1bafb7220664c4a220c410580ceeae78bedd4a9986ae2ef01b4bd6a9efcc4a",
+      "changed": true,
+      "reason": "Offline synthetic Linux image acceptance: exact Python lock, CPU Torch/CLIP imports, private health, non-root/read-only transient profiles, original Node Chromium and Python CDP compatibility, signal exit."
+    },
+    {
+      "path": "worker.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "464f1c1c0d41b00da1b3e08d376376dabe455d24c4f301ca6abf00792f1b93c6",
+      "changed": true,
+      "reason": "Native independent worker with private health, bounded signal shutdown, outcome transaction completion and lease-safe interrupted jobs; browser/solver transient data never enters persisted media/model volume."
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { defineV2TableSchema } from '@/v2/components/tableSystem';
+import { onlineTablesByFeature } from './online-recharge/tableSchemas';
 
 const table = defineV2TableSchema;
 
@@ -1388,6 +1389,7 @@ export const v2TableSchemas = {
 } as const;
 
 export const v2TablesByFeature = {
+  ...onlineTablesByFeature,
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],
