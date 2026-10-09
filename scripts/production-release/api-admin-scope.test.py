@@ -4332,28 +4332,48 @@ class MergedWorkspaceAdmissionTests(unittest.TestCase):
 
     def test_recovery_origin_and_candidate_source_are_revalidated_without_runtime_publication(self):
         fixtures=load('merged_online_recovery_fixtures','online-recharge-scope.test.py')
-        fixtures.RUNTIME=RUNTIME;fixtures.RecoveryTests.setUpClass()
+        fixtures.RUNTIME=RUNTIME;fixtures.RecoveryTests.setUpClass();fixtures.RestoredRecoveryTests.setUpClass()
         try:
-            with fixtures.RecoveryTests().fixture() as (controller,previous,failed,failure,*_):
-                online=fixtures.scope;published=previous.with_name('candidate')
-                shutil.copytree(fixtures.RecoveryTests.prepared,published)
-                for name in fixtures.RecoveryTests.policy['candidateAllowedFiles']:
+            with fixtures.RestoredRecoveryTests().fixture() as restored:
+                controller,previous,second,context,documents,save,*_=restored
+                online=fixtures.scope
+                # The latest official reader requires both ended attempts. Reuse its
+                # actual two immutable source fixtures rather than bypass that reader.
+                with fixtures.RecoveryTests().fixture() as first:
+                    first_controller,_,first_source,failure,*_=first
+                    failed=previous.parent/first_source.name
+                    shutil.copytree(first_source,failed);failed.chmod(0o700)
+                    failure=copy.deepcopy(failure)
+                database=fixtures.database_fixture(failed,True)
+                published=previous.with_name('candidate')
+                shutil.copytree(fixtures.RestoredRecoveryTests.prepared/online.RECOVERY_COMMIT,published)
+                for name in context['policy']['candidateAllowedFiles']:
                     path=published/name;path.parent.mkdir(parents=True,exist_ok=True)
                     path.write_bytes((ROOT/name).read_bytes());path.chmod((ROOT/name).stat().st_mode & 0o777)
-                marker=online.recovery_marker(fixtures.RecoveryTests.policy)
+                marker=online.recovery_marker(context['policy'])
                 manifest={'migrationRecovery':marker,'migrationPerformed':False}
                 record={'baselineEvidence':{'migrationRecovery':marker},'migration':{'performed':False}}
-                workspace.online_recovery_guard(controller,online,previous,published,manifest,record)
-                for variation in ('marker','performed','source','failure'):
-                    with self.subTest(variation=variation):
-                        bad_manifest=copy.deepcopy(manifest);bad_record=copy.deepcopy(record)
-                        if variation=='marker':bad_manifest['migrationRecovery']={}
-                        if variation=='performed':bad_manifest['migrationPerformed']=bad_record['migration']['performed']=True
-                        if variation=='source':(published/'apps/admin/src/v2/features/online-recharge/unapproved.ts').write_text('unapproved')
-                        if variation=='failure':failure['servicesAttempted']=['api'];(failed/online.FAILURE_FILE).write_text(json.dumps(failure))
-                        with self.assertRaises(RuntimeError):workspace.online_recovery_guard(controller,online,previous,published,bad_manifest,bad_record)
-                        if variation=='source':(published/'apps/admin/src/v2/features/online-recharge/unapproved.ts').unlink()
-        finally:fixtures.RecoveryTests.tearDownClass()
+                with patch.object(online,'recovery_policy',return_value=context['policy']), \
+                        patch.object(online,'RECOVERY_FAILURE_SHA256',online.fingerprint(failure)), \
+                        patch.object(online,'database_read',return_value=database):
+                    workspace.online_recovery_guard(controller,online,previous,published,manifest,record)
+                    for variation in ('marker','performed','source','first-failure','restored-failure'):
+                        with self.subTest(variation=variation):
+                            bad_manifest=copy.deepcopy(manifest);bad_record=copy.deepcopy(record)
+                            if variation=='marker':bad_manifest['migrationRecovery']={}
+                            if variation=='performed':bad_manifest['migrationPerformed']=bad_record['migration']['performed']=True
+                            extra=published/'apps/admin/src/v2/features/online-recharge/unapproved.ts'
+                            if variation=='source':extra.write_text('unapproved')
+                            if variation=='first-failure':(failed/online.FAILURE_FILE).write_text(json.dumps({**failure,'servicesAttempted':['api']}))
+                            if variation=='restored-failure':
+                                documents[online.FAILURE_FILE]['rollbackOk']=False;save()
+                            with self.assertRaises(RuntimeError):
+                                workspace.online_recovery_guard(controller,online,previous,published,bad_manifest,bad_record)
+                            if variation=='source':extra.unlink()
+                            if variation=='first-failure':(failed/online.FAILURE_FILE).write_text(json.dumps(failure))
+                            if variation=='restored-failure':documents[online.FAILURE_FILE]['rollbackOk']=True;save()
+        finally:
+            fixtures.RestoredRecoveryTests.tearDownClass();fixtures.RecoveryTests.tearDownClass()
 
 
 if __name__ == '__main__':
