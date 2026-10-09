@@ -93,6 +93,16 @@ Bit 初次发布的 P1、独立完整 F、再次测量 P2、state/manifest/build
 
 本次先提交仅包含发布控制器的前置版本，不携带比特 A／B 业务代码，不构建或启用线上代充。新增独立只读来源盘点，只有指定 API 工作区前置步骤失败且当前仍为固定 `0a03fa28` 时执行。盘点绑定实际候选源码、运行编号、原双失败历史和首尾七服务身份，只输出版本、来源摘要、字段名称及数量；明确携带 `authority=false`、`productionEligible=false`。它不是前置 F 或成功 Q，也不会将原预检失败改为通过。
 
+控制器 PR #386 已合并为 `560dd5bad1af89bb62b664efb2b9c8df6d52e8b5`，PR Quality `37992283226`、main Quality `37993616671` 成功，源码树均为 `1e6c94975e806f4970a2116260297c85554bde2e`。实际只读 `37993672649/1` 的盘点步骤成功、整个工作流失败；原预检明确拒绝 `API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED`。生产仍为固定 `0a03fa28`，七服务八字段首尾摘要相同，无构建、迁移或服务切换。
+
+实际盘点取得 Engine `25.0.16`／API `1.44`、Docker CLI `25.0.14`、Compose `5.5.0`、`linux/x86_64`；旧 API 缓存镜像匹配，四个网络和一个命名卷的已知 schema 无未知字段。Compose 二进制 SHA256 与[官方 v5.5.0 Linux x86_64 发布资产](https://github.com/docker/compose/releases/tag/v5.5.0)一致。但地址池与声明形态分别为 `DEFAULT_POOLS_UNAVAILABLE`／`SOURCE_SHAPE_UNAVAILABLE`，不构造 P，也不发放发布资格。安全盘点原字节 SHA256 为 `3e0f52f156e2ef5e82c35dda96c83bb94a4ce74da49e6befddc8a410e7eebf32`，实际命令为 `1d601046-ce3b-4099-bb1d-59aa4775334a`。
+
+本地使用固定 `0a03fa28` 原声明且仅渲染，复现盘点器遗漏 `command:null`／`entrypoint:null`。Compose 5.5 的[固定 compose-go v2.14.0 定义](https://github.com/compose-spec/compose-go/blob/d70c053ec9cbd7180c7881ba769d277f5cfc6fb5/types/command.go)明确区分 null 与清空命令的数组。因此盘点仅接受未声明或 null，保留完整原 JSON，拒绝空数组、字符串及其他值，不改变真实启动命令。
+
+[Moby v25.0.16 固定信息读取源码](https://github.com/moby/moby/blob/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/daemon/info.go)仅填入自定义地址池，未配置时 nil 可由模板输出 null。盘点仅将 null 或空数组记作 `UNDECLARED`，同时分别封印原值类型与摘要，不将其当成实际生效默认池的证明。新增已安装 RPM 身份与实际版本接口的 GitCommit 只读字段，以及依赖、网络、挂载的有限字段名称，用于下一轮准确来源审阅；已安装包不等于正在运行的 daemon 来源，未读到的字段仍为未测量。未知字段不输出原文。
+
+生产 25 版本不能直接采用此前仅在本机验证的 IPv6-only 自动 ULA 参考策略。新的参考隔离适配必须另有准确版本与实际生命周期证据，不能通过空池兼容、盘点成功或本机测试激活旧策略；正式 registry 和测量入口继续关闭。
+
 回执压缩、原始 F／Q 私有传输和来源读取接口随控制器纳入有限 CI 路径。成功回执保存前必须通过实际 AWS 已结束命令和原完整业务校验，私有文件只允许原字节重用，拒绝覆盖、符号链接、权限及来源漂移。历史 manifest／state／proof 的原字节摘要再次绑定已验证恢复记录；后继冷读还要核实际主机身份和已结束命令。新传输仍保留原输出上限；未确定的生产来源不会由本地夹具或调用者自报值补齐。
 
 ## 验证边界与当前状态
