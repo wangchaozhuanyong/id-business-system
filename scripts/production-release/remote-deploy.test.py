@@ -474,6 +474,172 @@ class RegistrationReleaseGuardTests(unittest.TestCase):
 
 
 class CommandFailureSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.environment = patch.dict(deployment.os.environ)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        deployment.os.environ.pop('DIAGNOSTIC_COMMAND_ID', None)
+
+    def online_fixture(self):
+        receipt = {'status': 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH', 'step': 'images',
+            'code': 'ONLINE_RECHARGE_STEP_FAILED', 'errorType': 'RuntimeError', 'rollbackOk': True,
+            'rollback': {}, 'servicesAttempted': [], 'candidateCommit': '28a3ba4ffd17d36001b1104c97394f5ae871d73d',
+            'previousCommit': '0a03fa28e6b844a18833d5c63f1de700f091fc64',
+            'migration': {'name': '20261009093000_online_recharge',
+                'sha256': '44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95',
+                'status': 'PENDING', 'schemaVerified': True, 'appliedMigrationsSha256': 'a' * 64, 'performed': False},
+            'migrationAttempted': False, 'inverseMigrationPerformed': False, 'mediaVolumeDeleted': False,
+            'currentPointsToCandidate': False, 'receiptPersisted': True}
+        invocation = {'CommandId': 'ab33d2e0-6135-47ed-8f20-e2defd7c82cd', 'Status': 'Failed', 'ResponseCode': 1,
+            'StandardOutputContent': json.dumps(receipt), 'StandardErrorContent': 'fixture-sensitive-stderr',
+            'Private': 'fixture-sensitive-envelope'}
+        return receipt, invocation
+
+    def online_summary(self, receipt, invocation):
+        return deployment.command_failure_summary({**invocation, 'StandardOutputContent': json.dumps(receipt)})
+
+    def assert_online_rejected(self, receipt, invocation):
+        result = self.online_summary(receipt, invocation)
+        self.assertNotIn('candidateCommit', result)
+        self.assertNotIn('migration', result)
+        self.assertNotIn('fixture-sensitive', json.dumps(result))
+
+    def test_online_failure_projects_only_controlled_fields_and_original_candidate(self):
+        receipt, invocation = self.online_fixture()
+        deployment.os.environ['DIAGNOSTIC_COMMAND_ID'] = invocation['CommandId']
+        deployment.os.environ['RELEASE_COMMIT'] = 'b' * 40
+        result = self.online_summary(receipt, invocation)
+        expected = {name: receipt[name] for name in ('status', 'step', 'code', 'rollbackOk', 'servicesAttempted',
+                                                   'candidateCommit', 'previousCommit')}
+        expected['commandId'] = invocation['CommandId']
+        expected['failureReceiptSha256'] = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        expected['migration'] = {name: receipt['migration'][name] for name in ('status', 'performed', 'name', 'sha256', 'schemaVerified')}
+        self.assertEqual(result, expected)
+        self.assertNotIn('fixture-sensitive', json.dumps(result))
+        self.assertNotIn('appliedMigrationsSha256', result['migration'])
+
+    def test_online_failure_hash_binds_complete_validated_receipt_independent_of_json_order(self):
+        receipt, invocation = self.online_fixture()
+        original = self.online_summary(receipt, invocation)['failureReceiptSha256']
+        reordered = deployment.command_failure_summary({**invocation,
+            'StandardOutputContent': json.dumps(dict(reversed(list(receipt.items()))), indent=2)})
+        self.assertEqual(reordered['failureReceiptSha256'], original)
+        changed = self.online_summary({**receipt, 'code': 'ONLINE_RECHARGE_ECR_LOGIN_FAILED'}, invocation)
+        self.assertNotEqual(changed['failureReceiptSha256'], original)
+
+    def test_online_failure_never_projects_unknown_code_even_with_allowed_prefix(self):
+        receipt, invocation = self.online_fixture()
+        for code in ('ONLINE_RECHARGE_FIXTURE_SENSITIVE_TOKEN', 'API_ADMIN_FIXTURE_SENSITIVE_TOKEN',
+                     'ONLINE_RECHARGE_WORKER_KEY', 'ONLINE_RECHARGE_FAILURE_INVALID'):
+            with self.subTest(code=code):
+                result = self.online_summary({**receipt, 'code': code}, invocation)
+                self.assertNotIn('candidateCommit', result)
+                self.assertNotIn(code, json.dumps(result))
+
+    def test_online_failure_requires_valid_requested_command_and_ended_failed_status(self):
+        receipt, invocation = self.online_fixture()
+        for field, values in (
+                ('CommandId', [None, 'fixture-sensitive-token', invocation['CommandId'].upper(), 1]),
+                ('Status', ['Success', 'Pending', 'InProgress', 'Cancelled', 'TimedOut', 'fixture-sensitive-token']),
+                ('ResponseCode', [0, -1, 256, True, '1', None])):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.assert_online_rejected(receipt, {**invocation, field: value})
+        for value in ('', 'fixture-sensitive-token', '00000000-0000-0000-0000-000000000000'):
+            with self.subTest(requested=value), patch.dict(deployment.os.environ, DIAGNOSTIC_COMMAND_ID=value):
+                self.assert_online_rejected(receipt, invocation)
+
+    def test_online_failure_rejects_unknown_scope_stage_status_boolean_and_secret_fields(self):
+        receipt, invocation = self.online_fixture()
+        cases = [('previousCommit', 'a' * 40), ('candidateCommit', 'fixture-sensitive-token'),
+                 ('candidateCommit', 'a' * 39), ('step', 'controller'), ('step', 'fixture-sensitive-token'),
+                 ('status', 'ONLINE_RECHARGE_VERIFIED'), ('status', 'fixture-sensitive-token'),
+                 ('code', 'fixture-sensitive-token'), ('errorType', 'fixture-sensitive-token'),
+                 ('rawSecret', 'fixture-sensitive-token'), ('inverseMigrationPerformed', True),
+                 ('mediaVolumeDeleted', True), ('currentPointsToCandidate', True)]
+        cases.extend((name, 1) for name in ('rollbackOk', 'migrationAttempted', 'inverseMigrationPerformed',
+                    'mediaVolumeDeleted', 'currentPointsToCandidate', 'receiptPersisted'))
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                self.assert_online_rejected({**receipt, field: value}, invocation)
+
+    def test_online_failure_service_attempts_must_be_the_controlled_switch_prefix(self):
+        receipt, invocation = self.online_fixture()
+        receipt.update(step='switch', migrationAttempted=True)
+        receipt['migration'].update(status='APPLIED', performed=True)
+        for count in (1, 2, 3):
+            attempted = ['admin', 'api', 'online-recharge'][:count]
+            good = {**receipt, 'status': 'ONLINE_RECHARGE_FAILED_RESTORED', 'servicesAttempted': attempted,
+                    'rollback': {name: 'RESTORED' for name in attempted}}
+            self.assertEqual(self.online_summary(good, invocation)['servicesAttempted'], attempted)
+        for attempted in (['api'], ['online-recharge'], ['admin', 'admin'], ['admin', 'auto-recharge'],
+                          ['admin', 'api', 'online-recharge', 'mysql'], ['fixture-sensitive-token'], 'admin', None):
+            with self.subTest(attempted=attempted):
+                self.assert_online_rejected({**receipt, 'servicesAttempted': attempted}, invocation)
+        for field, value in (('rollback', {'mysql': 'RESTORED'}), ('rollback', {'admin': 'fixture-sensitive-token'}),
+                             ('rollback', {}), ('step', 'audit-before')):
+            good = {**receipt, 'status': 'ONLINE_RECHARGE_FAILED_RESTORED', 'servicesAttempted': ['admin'],
+                    'rollback': {'admin': 'RESTORED'}}
+            self.assert_online_rejected({**good, field: value}, invocation)
+
+    def test_online_failure_keeps_applied_migration_even_before_service_switch(self):
+        receipt, invocation = self.online_fixture()
+        receipt.update(step='grants', migrationAttempted=True)
+        receipt['migration'].update(status='APPLIED', performed=True)
+        result = self.online_summary(receipt, invocation)
+        self.assertEqual(result['status'], 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH')
+        self.assertEqual(result['migration']['status'], 'APPLIED')
+        self.assertTrue(result['migration']['performed'])
+
+    def test_online_failure_distinguishes_not_attempted_from_unverified_migration(self):
+        receipt, invocation = self.online_fixture()
+        receipt.update(step='source', migration={'status': 'NOT_ATTEMPTED', 'performed': False})
+        self.assertEqual(self.online_summary(receipt, invocation)['migration'], receipt['migration'])
+        self.assert_online_rejected({**receipt, 'migration': {'status': 'NOT_ATTEMPTED', 'performed': 0}}, invocation)
+        receipt.update(status='ONLINE_RECHARGE_PARTIAL_RECOVERY_REQUIRED', step='migration', rollbackOk=False,
+                       migrationAttempted=True, migration={'status': 'UNVERIFIED', 'performed': None})
+        self.assertEqual(self.online_summary(receipt, invocation)['migration'], receipt['migration'])
+        for changed in ({**receipt, 'rollbackOk': True}, {**receipt, 'migrationAttempted': False}):
+            self.assert_online_rejected(changed, invocation)
+
+    def test_online_failure_rejects_unknown_or_changed_migration_identity_and_state(self):
+        receipt, invocation = self.online_fixture()
+        for field, value in (('name', 'fixture-sensitive-token'), ('sha256', 'b' * 64), ('status', 'UNKNOWN'),
+                ('status', 'fixture-sensitive-token'), ('schemaVerified', 1), ('schemaVerified', False),
+                ('performed', 0), ('performed', True), ('appliedMigrationsSha256', 'fixture-sensitive-token'),
+                ('rawSecret', 'fixture-sensitive-token')):
+            with self.subTest(field=field, value=value):
+                self.assert_online_rejected({**receipt, 'migration': {**receipt['migration'], field: value}}, invocation)
+
+    def test_online_failure_rejects_duplicate_damaged_oversized_or_nonfinite_receipts(self):
+        receipt, invocation = self.online_fixture()
+        raw = json.dumps(receipt)
+        for changed in (raw[:-1] + ',"step":"images"}', raw.replace('"status": "PENDING"', '"status": "PENDING", "status": "APPLIED"'),
+                '{"fixture-sensitive-token":', 'fixture-sensitive-token', 'x' * (256 * 1024 + 1),
+                raw.replace('"performed": false', '"performed": NaN'), '[]', 'null'):
+            with self.subTest(length=len(changed)):
+                result = deployment.command_failure_summary({**invocation, 'StandardOutputContent': changed})
+                self.assertNotIn('candidateCommit', result)
+                self.assertNotIn('fixture-sensitive', json.dumps(result))
+
+    def test_real_online_summary_cli_never_prints_raw_or_damaged_invocation(self):
+        receipt, invocation = self.online_fixture()
+        script = Path(__file__).with_name('remote-deploy.py')
+        raw = json.dumps(invocation)
+        for changed, accepted in ((raw, True), (raw[:-1] + ',"CommandId":"fixture-sensitive-token"}', False),
+                ('{"fixture-sensitive-token":', False), ('[]', False), ('null', False),
+                ('x' * (256 * 1024 + 1), False)):
+            with self.subTest(accepted=accepted, length=len(changed)):
+                result = deployment.subprocess.run([deployment.sys.executable, '-B', str(script), '--summarize-command-result'],
+                    input=changed, capture_output=True, text=True, timeout=30,
+                    env={**deployment.os.environ, 'DIAGNOSTIC_COMMAND_ID': invocation['CommandId'], 'RELEASE_COMMIT': 'b' * 40})
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(len(result.stdout.splitlines()), 1)
+                self.assertEqual(result.stderr, '')
+                self.assertNotIn('fixture-sensitive', result.stdout)
+                summary = json.loads(result.stdout.removeprefix('RELEASE_FAILURE_DIAGNOSTIC '))
+                self.assertEqual('candidateCommit' in summary, accepted)
+
     def test_failure_reports_controlled_reason_and_source_line(self):
         result = deployment.command_failure_summary({
             'Status': 'Failed', 'ResponseCode': 1,
