@@ -748,12 +748,14 @@ def restored_configuration_projection(d, service, metadata, actual, original, an
     names = tuple(separator.join((project, service, '1')) for separator in ('-', '_'))
     check(isinstance(metadata.get('Name'), str) and metadata['Name'] in tuple('/' + n for n in names), 'NAME_MISMATCH')
     stable_name = metadata['Name'][1:]
+    # Compose v2.39.4 recreateContainer uses service.Name + api.Separator + number.
+    native_slot = service + '-1'
     replace_key = 'com.docker.compose.replace'
-    check(labels.get(replace_key) in (anchors['candidateAfterContainerId'], stable_name), 'REPLACE_MISMATCH')
+    check(labels.get(replace_key) in (anchors['candidateAfterContainerId'], stable_name, native_slot), 'REPLACE_MISMATCH')
     projected = copy.deepcopy(configuration)
     projected['Config']['Hostname'] = original['containerId'][:12]
     matches = []
-    for replacement in (anchors['oldBeforeContainerId'], stable_name, None):
+    for replacement in (anchors['oldBeforeContainerId'], stable_name, native_slot, None):
         if replacement is None:
             projected['Config']['Labels'].pop(replace_key, None)
         else:
