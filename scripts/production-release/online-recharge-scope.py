@@ -111,6 +111,15 @@ RECOVERY_GENERATED_FILES = frozenset(('.env.aws.production', 'compose.release.js
     'backup-verification.json', WORKSPACE_BACKUP_FILE, FAILURE_FILE))
 SERVICE_IDENTITY_KEYS = ('status', 'health', 'image', 'reference', 'containerId', 'startedAtSha256',
                          'environmentSha256', 'configurationSha256')
+PROJECTION_REASONS = frozenset(('NOT_PROBED', 'INSPECT_FAILED', 'INPUT_INVALID', 'METADATA_MISMATCH',
+    'HOSTNAME_MISMATCH', 'RAW_HASH_MISMATCH', 'COMPOSE_LABELS_MISMATCH', 'NAME_MISMATCH',
+    'REPLACE_MISMATCH', 'PROJECTED_HASH_MISMATCH', 'PROJECTED_HASH_AMBIGUOUS', 'MATCH', 'OTHER'))
+
+
+class ProjectionRejection(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__('ONLINE_RECHARGE_CONTAINER_CHANGED')
 
 
 def fingerprint(value):
@@ -656,6 +665,7 @@ def recovery_services(d, states, context):
     if getattr(d, '_onlineRechargeProjectionDiagnostic', False):
         diff = {n: [k for k in SERVICE_IDENTITY_KEYS if states[n].get(k) != original[n][k]] for n in original}
         matched = {n: False for n in ('api', 'admin')}
+        reasons = {n: 'NOT_PROBED' for n in matched}
         restored = context.get('restored')
         if restored is not None and 'configurationAnchors' in restored:
             for name in matched:
@@ -666,13 +676,22 @@ def recovery_services(d, states, context):
                     metadata = json.loads(raw)
                     d.require(isinstance(metadata, list) and len(metadata) == 1,
                               'ONLINE_RECHARGE_CONTAINER_CHANGED')
+                except Exception:
+                    reasons[name] = 'INSPECT_FAILED'
+                    continue
+                try:
                     restored_configuration_projection(d, name, metadata[0], states[name], original[name],
                                                       restored['configurationAnchors'][name])
                     matched[name] = True
+                    reasons[name] = 'MATCH'
+                except ProjectionRejection as error:
+                    reasons[name] = error.reason if (isinstance(error.reason, str)
+                        and error.reason in PROJECTION_REASONS and error.reason != 'MATCH') else 'OTHER'
                 except Exception:
-                    # Only a boolean leaves this probe; Docker data and errors remain private.
-                    pass
-        d._onlineRechargeIdentityDiagnostic = {'identityDiff': diff, 'restoredProjectionMatch': matched}
+                    # Never inspect arbitrary exceptions, Docker values or credentials.
+                    reasons[name] = 'OTHER'
+        d._onlineRechargeIdentityDiagnostic = {'identityDiff': diff, 'restoredProjectionMatch': matched,
+                                               'restoredProjectionReason': reasons}
     for name, row in states.items():
         keys = SERVICE_IDENTITY_KEYS
         if context.get('restored') is not None and name in ('api', 'admin'):
@@ -690,8 +709,10 @@ def restored_configuration_projection(d, service, metadata, actual, original, an
     Config, HostConfig and destination-sorted complete Mounts must match the
     original sealed configuration hash, including environment and all labels.
     """
-    code = 'ONLINE_RECHARGE_CONTAINER_CHANGED'
-    d.require(service in ('api', 'admin') and isinstance(metadata, dict)
+    def check(value, reason):
+        if not value:
+            raise ProjectionRejection(reason)
+    check(service in ('api', 'admin') and isinstance(metadata, dict)
               and all(isinstance(row, dict) and set(row) == set(SERVICE_IDENTITY_KEYS)
                       and all(isinstance(row[k], str) and re.fullmatch(r'[a-f0-9]{64}', row[k]) for k in
                               ('containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))
@@ -699,9 +720,9 @@ def restored_configuration_projection(d, service, metadata, actual, original, an
               and isinstance(anchors, dict) and set(anchors) == {'oldBeforeContainerId', 'candidateAfterContainerId'}
               and all(isinstance(v, str) and re.fullmatch(r'[a-f0-9]{64}', v) for v in anchors.values())
               and all(actual[k] == original[k] for k in ('status', 'health', 'image', 'reference', 'environmentSha256')),
-              code)
+              'INPUT_INVALID')
     config, host, mounts, state = (metadata.get(k) for k in ('Config', 'HostConfig', 'Mounts', 'State'))
-    d.require(isinstance(config, dict) and isinstance(host, dict) and isinstance(state, dict)
+    check(isinstance(config, dict) and isinstance(host, dict) and isinstance(state, dict)
               and isinstance(mounts, list) and all(isinstance(m, dict) and isinstance(m.get('Destination'), str)
                   and m['Destination'].startswith('/') for m in mounts)
               and len({m['Destination'] for m in mounts}) == len(mounts)
@@ -712,22 +733,23 @@ def restored_configuration_projection(d, service, metadata, actual, original, an
               and config.get('Image') == actual['reference'] and state.get('Status') == actual['status']
               and (state.get('Health') or {}).get('Status') == actual['health']
               and hashlib.sha256(state['StartedAt'].encode()).hexdigest() == actual['startedAtSha256']
-              and fingerprint(sorted(config['Env'])) == actual['environmentSha256']
-              and config.get('Hostname') == actual['containerId'][:12], code)
+              and fingerprint(sorted(config['Env'])) == actual['environmentSha256'], 'METADATA_MISMATCH')
+    check(config.get('Hostname') == actual['containerId'][:12], 'HOSTNAME_MISMATCH')
     configuration = {'Config': config, 'HostConfig': host, 'Mounts': sorted(mounts, key=lambda m: m['Destination'])}
     raw_sha = fingerprint(configuration)
-    d.require(raw_sha == actual['configurationSha256'], code)
+    check(raw_sha == actual['configurationSha256'], 'RAW_HASH_MISMATCH')
     labels = config.get('Labels')
-    d.require(isinstance(labels, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in labels.items())
+    check(isinstance(labels, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in labels.items())
               and labels.get('com.docker.compose.service') == service
               and labels.get('com.docker.compose.container-number') == '1'
-              and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', labels.get('com.docker.compose.project', '')), code)
+              and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', labels.get('com.docker.compose.project', '')),
+              'COMPOSE_LABELS_MISMATCH')
     project = labels['com.docker.compose.project']
     names = tuple(separator.join((project, service, '1')) for separator in ('-', '_'))
-    d.require(isinstance(metadata.get('Name'), str) and metadata['Name'] in tuple('/' + n for n in names), code)
+    check(isinstance(metadata.get('Name'), str) and metadata['Name'] in tuple('/' + n for n in names), 'NAME_MISMATCH')
     stable_name = metadata['Name'][1:]
     replace_key = 'com.docker.compose.replace'
-    d.require(labels.get(replace_key) in (anchors['candidateAfterContainerId'], stable_name), code)
+    check(labels.get(replace_key) in (anchors['candidateAfterContainerId'], stable_name), 'REPLACE_MISMATCH')
     projected = copy.deepcopy(configuration)
     projected['Config']['Hostname'] = original['containerId'][:12]
     matches = []
@@ -738,7 +760,7 @@ def restored_configuration_projection(d, service, metadata, actual, original, an
             projected['Config']['Labels'][replace_key] = replacement
         if fingerprint(projected) == original['configurationSha256']:
             matches.append(replacement)
-    d.require(len(matches) == 1, code)
+    check(len(matches) == 1, 'PROJECTED_HASH_AMBIGUOUS' if len(matches) > 1 else 'PROJECTED_HASH_MISMATCH')
     return {'rawSha256': raw_sha, 'projectedSha256': original['configurationSha256']}
 
 
@@ -1472,6 +1494,7 @@ def validate_diagnostic(d, value, expected):
     passed = {'status', 'commit', 'baselineConfirmed', 'reason', 'rawOutputSuppressed'}
     failed = passed | {'gateCode', 'causeType'}
     details = {'identityDiff', 'restoredProjectionMatch'}
+    classified = details | {'restoredProjectionReason'}
     reasons = {'HISTORICAL_MIGRATION_ORIGIN', 'PUBLISHED_IMAGE_CONTENT', 'PUBLISHED_BUILD_PROOF',
                'LEGACY_API_PROJECTION_LABELS', 'LEGACY_API_PROJECTION_SOURCE', 'LEGACY_PROFILE_SCHEMA',
                'RETAINED_PROFILE_ORIGIN', 'BASELINE_PROJECTION'}
@@ -1483,13 +1506,13 @@ def validate_diagnostic(d, value, expected):
               and type(value.get('baselineConfirmed')) is bool,
               'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
     d.require((value['baselineConfirmed'] and set(value) == passed and value.get('reason') == 'BASELINE_GATE_PASSED')
-              or (not value['baselineConfirmed'] and set(value) in (failed, failed | details)
+              or (not value['baselineConfirmed'] and set(value) in (failed, failed | details, failed | classified)
                   and isinstance(value.get('reason'), str) and value['reason'] in reasons
                   and isinstance(value.get('causeType'), str) and value['causeType'] in kinds
                   and isinstance(value.get('gateCode'), str)
                   and re.fullmatch(r'(?:ONLINE_RECHARGE|API_ADMIN)_[A-Z0-9_]+', value.get('gateCode', ''))),
               'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
-    if set(value) == failed | details:
+    if set(value) in (failed | details, failed | classified):
         diff, matches = value['identityDiff'], value['restoredProjectionMatch']
         d.require(value['reason'] == 'BASELINE_PROJECTION'
                   and value['gateCode'] == 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED'
@@ -1499,6 +1522,12 @@ def validate_diagnostic(d, value, expected):
                           and fields == [k for k in SERVICE_IDENTITY_KEYS if k in fields] for fields in diff.values())
                   and isinstance(matches, dict) and set(matches) == {'api', 'admin'}
                   and all(type(v) is bool for v in matches.values()), 'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
+        if 'restoredProjectionReason' in value:
+            reason = value['restoredProjectionReason']
+            d.require(isinstance(reason, dict) and set(reason) == {'api', 'admin'}
+                      and all(isinstance(v, str) and v in PROJECTION_REASONS
+                              and matches[n] is (v == 'MATCH') for n, v in reason.items()),
+                      'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
     return {k: value[k] for k in sorted(value)}
 
 
