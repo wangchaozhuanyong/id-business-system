@@ -124,7 +124,8 @@ API_NATIVE_FAILURE_REASONS = frozenset(('ELIGIBILITY', 'OLD_SOURCE_BEFORE_PATH_C
     'DEPENDENCY_NAME', 'DEPENDENCY_SERVICE', 'DEPENDENCY_ROW_TYPE', 'DEPENDENCY_CONDITION', 'DEPENDENCY_RESTART',
     'DEPENDENCY_LABEL_TYPE', 'DEPENDENCY_LABEL_SIZE', 'DEPENDENCY_LABEL_CONTENT', 'MOUNT_NULL_OR_TYPE',
     'MOUNT_COUNT_LIMIT', 'MOUNT_ROW_TARGET', 'MOUNT_DUPLICATE_TARGET', 'MOUNT_DECLARED_VOLUMES',
-    'MOUNT_TARGET_SET_MISMATCH', 'NETWORK_INPUT_TYPE', 'NETWORK_INPUT_SIZE', 'COMBINATION_LIMIT', 'PAYLOAD_LIMIT'))
+    'MOUNT_TARGET_SET_MISMATCH', 'MOUNT_BIND_DECLARATION', 'MOUNT_BIND_NAME', 'MOUNT_BIND_INSPECT',
+    'MOUNT_BIND_HOST', 'MOUNT_BIND_MIXED', 'NETWORK_INPUT_TYPE', 'NETWORK_INPUT_SIZE', 'COMBINATION_LIMIT', 'PAYLOAD_LIMIT'))
 API_NATIVE_REASONS = frozenset(('NOT_PROBED', 'PROBE_FAILED', 'NO_MATCH', 'AMBIGUOUS', 'MATCH')) | API_NATIVE_FAILURE_REASONS
 API_NATIVE_MAX_BYTES = 16 * 1024 * 1024
 
@@ -865,24 +866,55 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
         stage = 'DEPENDENCY_LABEL_SIZE'
         d.require(len(dependency_label) <= 2048, 'ONLINE_RECHARGE_COMPOSE_INVALID')
         stage = 'DEPENDENCY_LABEL_CONTENT'
-        d.require(sorted(dependency_label.split(',') if dependency_label else []) == sorted(triples),
+        d.require(dependency_label == '' or sorted(dependency_label.split(',')) == sorted(triples),
                   'ONLINE_RECHARGE_COMPOSE_INVALID')
         mounts, volumes = host.get('Mounts'), api.get('volumes', [])
-        stage = 'MOUNT_NULL_OR_TYPE'
-        d.require(isinstance(mounts, list), 'ONLINE_RECHARGE_COMPOSE_INVALID')
-        stage = 'MOUNT_COUNT_LIMIT'
-        d.require(len(mounts) <= 4, 'ONLINE_RECHARGE_COMPOSE_INVALID')
-        stage = 'MOUNT_ROW_TARGET'
-        d.require(all(isinstance(m, dict) and isinstance(m.get('Target'), str)
-                      and m['Target'].startswith('/') for m in mounts), 'ONLINE_RECHARGE_COMPOSE_INVALID')
-        stage = 'MOUNT_DUPLICATE_TARGET'
-        d.require(len({m['Target'] for m in mounts}) == len(mounts), 'ONLINE_RECHARGE_COMPOSE_INVALID')
-        stage = 'MOUNT_DECLARED_VOLUMES'
-        d.require(isinstance(volumes, list) and all(isinstance(v, dict) and isinstance(v.get('target'), str)
-                  for v in volumes), 'ONLINE_RECHARGE_COMPOSE_INVALID')
-        stage = 'MOUNT_TARGET_SET_MISMATCH'
-        d.require({m['Target'] for m in mounts} == {v['target'] for v in volumes},
-                  'ONLINE_RECHARGE_COMPOSE_INVALID')
+        bind_representation = mounts is None or mounts == []
+        if bind_representation:
+            shared = legacy(d)
+            stage = 'MOUNT_BIND_DECLARATION'
+            d.require(isinstance(volumes, list) and len(volumes) == 1 and isinstance(volumes[0], dict)
+                      and {'type', 'source', 'target'} <= set(volumes[0])
+                      and set(volumes[0]) <= {'type', 'source', 'target', 'read_only', 'volume'}
+                      and volumes[0]['type'] == 'volume' and volumes[0]['source'] == shared.WORKSPACE_VOLUME
+                      and volumes[0]['target'] == shared.WORKSPACE_DIRECTORY
+                      and volumes[0].get('read_only', False) is False and volumes[0].get('volume', {}) == {},
+                      'ONLINE_RECHARGE_COMPOSE_INVALID')
+            name = config['Labels']['com.docker.compose.project'] + '_' + shared.WORKSPACE_VOLUME
+            stage = 'MOUNT_BIND_NAME'
+            d.require(declaration.get('volumes', {}).get(shared.WORKSPACE_VOLUME) == {'name': name},
+                      'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_BIND_INSPECT'
+            observed = metadata['Mounts']
+            d.require(len(observed) == 1 and set(observed[0]) == {
+                      'Type', 'Name', 'Source', 'Destination', 'Driver', 'Mode', 'RW', 'Propagation'}
+                      and observed[0]['Type'] == 'volume' and observed[0]['Name'] == name
+                      and observed[0]['Destination'] == shared.WORKSPACE_DIRECTORY
+                      and observed[0]['Mode'] == 'rw' and observed[0]['RW'] is True
+                      and observed[0]['Driver'] == 'local' and observed[0]['Propagation'] == ''
+                      and isinstance(observed[0]['Source'], str) and observed[0]['Source'].startswith('/')
+                      and observed[0]['Source'].endswith('/' + name + '/_data'), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_BIND_HOST'
+            d.require(host.get('Binds') == [name + ':' + shared.WORKSPACE_DIRECTORY + ':rw'],
+                      'ONLINE_RECHARGE_COMPOSE_INVALID')
+        else:
+            stage = 'MOUNT_NULL_OR_TYPE'
+            d.require(isinstance(mounts, list), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_COUNT_LIMIT'
+            d.require(len(mounts) <= 4, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_ROW_TARGET'
+            d.require(all(isinstance(m, dict) and isinstance(m.get('Target'), str)
+                          and m['Target'].startswith('/') for m in mounts), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_DUPLICATE_TARGET'
+            d.require(len({m['Target'] for m in mounts}) == len(mounts), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_DECLARED_VOLUMES'
+            d.require(isinstance(volumes, list) and all(isinstance(v, dict) and isinstance(v.get('target'), str)
+                      for v in volumes), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_TARGET_SET_MISMATCH'
+            d.require({m['Target'] for m in mounts} == {v['target'] for v in volumes},
+                      'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'MOUNT_BIND_MIXED'
+            d.require(host.get('Binds') in (None, []), 'ONLINE_RECHARGE_COMPOSE_INVALID')
         mode = host.get('NetworkMode')
         stage = 'NETWORK_INPUT_TYPE'
         d.require(isinstance(mode, str), 'ONLINE_RECHARGE_COMPOSE_INVALID')
@@ -901,8 +933,13 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
             if len(set(names)) == len(names) and set(live) == set(names) and mode in names:
                 network_modes = [mode, *sorted(n for n in names if n != mode)]
         stage = 'COMBINATION_LIMIT'
-        d.require(4 * math.factorial(len(triples)) * math.factorial(len(mounts)) * len(network_modes) <= 768,
+        dependency_count = math.factorial(len(triples)) + int(dependency_label == '' and bool(triples))
+        mount_count = 1 if bind_representation else math.factorial(len(mounts))
+        d.require(4 * dependency_count * mount_count * len(network_modes) <= 768,
                   'ONLINE_RECHARGE_SOURCE_TOO_LARGE')
+        dependency_variants = list(itertools.permutations(triples))
+        if dependency_label == '' and triples:
+            dependency_variants.append(())
         base = {'Config': copy.deepcopy(config), 'HostConfig': copy.deepcopy(host),
                 'Mounts': sorted(copy.deepcopy(metadata['Mounts']), key=lambda m: m['Destination'])}
         base['Config']['Hostname'] = original['containerId'][:12]
@@ -910,8 +947,8 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
         seen, matches, candidate_bytes = set(), [], 0
         # This order checks dependencies, then complete mount rows, then primary network.
         for network in network_modes:
-            for ordered_mounts in itertools.permutations(mounts):
-                for ordered_dependencies in itertools.permutations(triples):
+            for ordered_mounts in ((None,) if bind_representation else itertools.permutations(mounts)):
+                for ordered_dependencies in dependency_variants:
                     for replacement in replacements:
                         candidate = copy.deepcopy(base)
                         if replacement is None:
@@ -919,7 +956,8 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
                         else:
                             candidate['Config']['Labels']['com.docker.compose.replace'] = replacement
                         candidate['Config']['Labels']['com.docker.compose.depends_on'] = ','.join(ordered_dependencies)
-                        candidate['HostConfig']['Mounts'] = list(ordered_mounts)
+                        if not bind_representation:
+                            candidate['HostConfig']['Mounts'] = list(ordered_mounts)
                         candidate['HostConfig']['NetworkMode'] = network
                         encoded = json.dumps(candidate, sort_keys=True, separators=(',', ':'))
                         if encoded in seen:
@@ -930,7 +968,7 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
                         seen.add(encoded)
                         if fingerprint(candidate) == original['configurationSha256']:
                             values = (candidate['Config']['Labels']['com.docker.compose.depends_on'] != dependency_label,
-                                      candidate['HostConfig']['Mounts'] != mounts, network != mode)
+                                      candidate['HostConfig'].get('Mounts') != mounts, network != mode)
                             matches.append([p for p, changed in zip(API_NATIVE_PATHS, values) if changed])
         if len(matches) != 1:
             return {'matched': False, 'reason': 'AMBIGUOUS' if matches else 'NO_MATCH', 'changedPaths': []}
