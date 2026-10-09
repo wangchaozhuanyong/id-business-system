@@ -370,7 +370,31 @@ if api_admin:
     import base64
     from pathlib import Path
     scope_name = {'release_api_workspace': 'api-workspace', 'release_api_registration': 'api-registration', 'release_api_admin_migration': 'api-admin-migration'}.get(os.environ['RELEASE_OPERATION'], 'api-admin')
-    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + base64.b64encode(Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()).decode()
+    proof_raw = Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()
+    proof = json.loads(proof_raw) if os.environ['RELEASE_OPERATION'] == 'release_api_workspace' else {}
+    if os.environ['RELEASE_OPERATION'] == 'release_api_workspace' and proof.get('pendingOnlineProjection') is not None:
+        import gzip
+        proof_raw = json.dumps(proof, separators=(',', ':')).encode()
+        assert len(proof_raw) < 65536
+        proof_arg = 'gzip:' + base64.b64encode(gzip.compress(proof_raw, mtime=0)).decode()
+        assert len(proof_arg) < 49152
+    else:
+        assert len(proof_raw) < 16384
+        proof_arg = base64.b64encode(proof_raw).decode()
+    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + proof_arg
+    if (os.environ['RELEASE_OPERATION'] == 'release_api_workspace'
+            and proof.get('pendingOnlineProjection') is not None
+            and proof.get('pendingOnlinePreflightSha256') is not None):
+        import hashlib
+        preflight_raw = Path('.deploy/production-release/api-workspace-preflight-result.json').read_bytes()
+        assert 0 < len(preflight_raw) < 65536
+        preflight = json.loads(preflight_raw)
+        preflight_sha = hashlib.sha256(preflight_raw).hexdigest()
+        assert preflight_sha == proof['pendingOnlinePreflightSha256']
+        assert preflight['releaseCandidateCommit'] == sha
+        assert preflight['workflowRunId'] == run_id and preflight['workflowRunAttempt'] == attempt
+        assert preflight['status'] == 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED' and preflight['mode'] == 'preflight'
+        scope_flag += ' --api-workspace-preflight-sha256 ' + preflight_sha
     image_flags = ''
 if online_recharge:
     import base64
@@ -469,21 +493,38 @@ if history_policy == 'registration-worker-95-20261008':
         f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{module_name} -o {module_target}',
         f'chmod 0644 {script_path} {profile_target} {module_target}','python3 -c '+shlex.quote(verify)]
 if api_admin or online_recharge:
-    import hashlib
+    import hashlib, shlex
     pinned = []
+    controller_directory = f'/opt/id-business-v2/.staging/oidc-{sha}'
+    controller_url = f'https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release'
+    workspace_transport = os.environ.get('RELEASE_OPERATION') == 'release_api_workspace'
     controllers = ('remote-deploy.py', 'api-admin-scope.py')
     if online_recharge or os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
         controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json')
+    if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
+        controllers += ('api-admin-pending-projection.py', 'api-admin-pending-receipt-wire.py',
+                        'online-recharge-declaration-measurement.py', 'api-admin-readonly.py')
     for name in controllers:
         digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
-        target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
-        pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',
-                       f'echo "{digest}  {target_path}" | sha256sum -c - >/dev/null'])
-    commands[2:3] = pinned
+        if workspace_transport:
+            pinned.extend([f'curl -fsSL --retry 3 --max-time 30 "$release_controller_url/{name}" -o "$release_controller_directory/{name}"',
+                           f'echo "{digest}  $release_controller_directory/{name}" | sha256sum -c - >/dev/null'])
+        else:
+            target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
+            pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',
+                           f'echo "{digest}  {target_path}" | sha256sum -c - >/dev/null'])
+    if workspace_transport:
+        commands[2:3] = ['readonly release_controller_directory=' + shlex.quote(controller_directory)
+                         + ' release_controller_url=' + shlex.quote(controller_url), *pinned]
+    else:
+        commands[2:3] = pinned
 if online_recharge or history_policy == 'registration-worker-96-20261008':
     assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}).encode('utf-8')) < 48 * 1024
+if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
+    assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}, separators=(',', ':')).encode('utf-8')) < 20 * 1024
 with open(sys.argv[1], 'w', encoding='utf-8') as target:
-    json.dump({'commands': commands, 'executionTimeout': ['3600']}, target)
+    options = {'separators': (',', ':')} if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace' else {}
+    json.dump({'commands': commands, 'executionTimeout': ['3600']}, target, **options)
 PY
 
 command_id="$(aws ssm send-command --region "$AWS_REGION" \

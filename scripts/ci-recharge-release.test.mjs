@@ -99,6 +99,48 @@ const workflowPredicate = (expression) => (inputs) =>
     () => false
   );
 
+test('declaration inventory requires its actual failed workspace preflight and grants no release', () => {
+  const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
+  const steps = workflow.jobs.release.steps;
+  const preflight = steps.find((step) => step.id === 'api_admin_preflight');
+  const inventory = steps.find(
+    (step) =>
+      step.run === 'python3 -B scripts/production-release/api-workspace-declaration-readonly.py'
+  );
+  assert.equal(
+    preflight.run,
+    'python3 -B scripts/production-release/api-admin-readonly.py preflight'
+  );
+  assert.equal(inventory['continue-on-error'], undefined);
+  const enabled = new Function('inputs', 'failure', 'steps', `return (${inventory.if});`);
+  for (const operation of ['verify_api_workspace', 'release_api_workspace']) {
+    assert.equal(
+      enabled({ operation }, () => true, { api_admin_preflight: { outcome: 'failure' } }),
+      true
+    );
+    for (const outcome of ['success', 'skipped', 'cancelled']) {
+      assert.equal(
+        enabled({ operation }, () => true, { api_admin_preflight: { outcome } }),
+        false
+      );
+    }
+    assert.equal(
+      enabled({ operation }, () => false, { api_admin_preflight: { outcome: 'failure' } }),
+      false
+    );
+  }
+  for (const operation of [
+    'release_online_recharge',
+    'release_api_admin',
+    'release_api_admin_migration'
+  ]) {
+    assert.equal(
+      enabled({ operation }, () => true, { api_admin_preflight: { outcome: 'failure' } }),
+      false
+    );
+  }
+});
+
 function guardCommands(
   paths,
   {
@@ -199,6 +241,12 @@ test('actual source entry rejects failed evidence on Bash before emitting reusab
     'node --test scripts/ci-recharge-release.test.mjs',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
     'python3 -B scripts/production-release/api-admin-readonly.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+    'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
   ]);
   for (const changed of [
@@ -1440,6 +1488,12 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
     'python3 -B scripts/production-release/api-admin-readonly.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+    'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
     ...onlineReleaseRegressionCommands,
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
@@ -1480,7 +1534,13 @@ test('actual full-mode release controls preserve exact maintenance selection and
         ? []
         : [
             'python3 -B scripts/production-release/api-admin-scope.test.py',
-            'python3 -B scripts/production-release/api-admin-readonly.test.py'
+            'python3 -B scripts/production-release/api-admin-readonly.test.py',
+            'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+            'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+            'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+            'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+            'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+            'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py'
           ]),
       ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
@@ -1494,6 +1554,12 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'node --test scripts/ci-recharge-release.test.mjs',
       'python3 -B scripts/production-release/api-admin-scope.test.py',
       'python3 -B scripts/production-release/api-admin-readonly.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+      'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
       'python3 -B scripts/production-release/retire-orphan-retention.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]
@@ -1504,6 +1570,12 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'node --test scripts/ci-recharge-release.test.mjs',
       'python3 -B scripts/production-release/api-admin-scope.test.py',
       'python3 -B scripts/production-release/api-admin-readonly.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+      'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
       'python3 -B scripts/production-release/prepared-images.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]

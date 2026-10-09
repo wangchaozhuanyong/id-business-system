@@ -96,7 +96,18 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/remote-deploy.py',
   'scripts/production-release/remote-deploy.test.py',
   'scripts/production-release/maintain-image-cache.py',
-  'scripts/production-release/maintain-image-cache.test.py'
+  'scripts/production-release/maintain-image-cache.test.py',
+  'scripts/production-release/api-admin-pending-projection.py',
+  'scripts/production-release/api-admin-pending-projection.test.py',
+  'scripts/production-release/api-admin-pending-online.test.py',
+  'scripts/production-release/api-admin-pending-receipt-wire.py',
+  'scripts/production-release/api-admin-pending-receipt-wire.test.py',
+  'scripts/production-release/api-workspace-declaration-readonly.py',
+  'scripts/production-release/api-workspace-declaration-readonly.test.py',
+  'scripts/production-release/api-workspace-declaration-artifacts.py',
+  'scripts/production-release/api-workspace-declaration-artifacts.test.py',
+  'scripts/production-release/online-recharge-declaration-measurement.py',
+  'scripts/production-release/online-recharge-declaration-measurement.test.py'
 ]);
 const recharge4cProfile = 'deploy/aws/recharge-pro-4c-20261008.json';
 const recharge4cSources = new Set([

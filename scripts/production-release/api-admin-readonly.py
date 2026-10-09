@@ -1,10 +1,12 @@
 """Pinned, independent SSM readback for the explicit API/Admin scope."""
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import stat
 import sys
 import time
 
@@ -14,6 +16,163 @@ def command(*args):
     if result.returncode:
         raise RuntimeError('API_ADMIN_TRANSPORT_FAILED')
     return result.stdout.strip()
+
+
+def command_raw(*args):
+    """Keep AWS CLI stdout bytes unchanged for a successful invocation seal."""
+    result = subprocess.run(args, capture_output=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError('API_ADMIN_TRANSPORT_FAILED')
+    return result.stdout
+
+
+def validated_workspace_invocation(raw, command_id):
+    """Check transport metadata before retaining the original invocation bytes."""
+    code = 'API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED'
+    try:
+        if type(raw) is not bytes or not 0 < len(raw) < 128 * 1024:
+            raise ValueError('size')
+        def unique(items):
+            row = {}
+            for key, value in items:
+                if key in row:
+                    raise ValueError('duplicate')
+                row[key] = value
+            return row
+        def constant(unused):
+            raise ValueError('constant')
+        value = json.loads(raw, object_pairs_hook=unique, parse_constant=constant)
+        if (type(value) is not dict or value.get('CommandId') != command_id
+                or type(command_id) is not str
+                or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id)
+                or value.get('InstanceId') != os.environ['PRODUCTION_INSTANCE_ID']
+                or value.get('DocumentName') != 'AWS-RunShellScript'
+                or value.get('PluginName') != 'aws:runShellScript'
+                or value.get('Status') != 'Success'
+                or type(value.get('ResponseCode')) is not int or value['ResponseCode'] != 0
+                or type(value.get('ExecutionEndDateTime')) is not str
+                or not 0 < len(value['ExecutionEndDateTime']) <= 80
+                or value.get('StandardErrorContent') != ''
+                or type(value.get('StandardOutputContent')) is not str
+                or not 0 < len(value['StandardOutputContent']) < 24000):
+            raise ValueError('metadata')
+        return value
+    except Exception:
+        raise RuntimeError(code) from None
+
+
+def write_workspace_private_bytes(path, raw):
+    """Write once through directory descriptors; never follow a path symlink."""
+    code = 'API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED'
+    descriptor = directory = None
+    try:
+        if type(raw) is not bytes or not 0 < len(raw) < 128 * 1024:
+            raise ValueError('size')
+        path = Path(path)
+        parts = path.parts[1:] if path.is_absolute() else path.parts
+        if not parts or any(part in ('', '.', '..') for part in parts):
+            raise ValueError('path')
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        directory = os.open('/' if path.is_absolute() else '.', directory_flags)
+        for part in parts[:-1]:
+            try:
+                os.mkdir(part, 0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+            child = os.open(part, directory_flags, dir_fd=directory)
+            try:
+                row = os.fstat(child)
+                if (not stat.S_ISDIR(row.st_mode) or row.st_uid not in (0, os.getuid())
+                        or row.st_mode & 0o022):
+                    raise ValueError('directory')
+            except Exception:
+                os.close(child)
+                raise
+            os.close(directory)
+            directory = child
+        flags = os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            descriptor = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | flags,
+                                 0o600, dir_fd=directory)
+        except FileExistsError:
+            descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | flags, dir_fd=directory)
+            row = os.fstat(descriptor)
+            if (not stat.S_ISREG(row.st_mode) or row.st_uid != os.getuid() or row.st_nlink != 1
+                    or stat.S_IMODE(row.st_mode) != 0o600 or row.st_size != len(raw)):
+                raise ValueError('file')
+            with os.fdopen(descriptor, 'rb') as stream:
+                descriptor = None
+                if stream.read(128 * 1024) != raw:
+                    raise ValueError('bytes')
+            return
+        row = os.fstat(descriptor)
+        if (not stat.S_ISREG(row.st_mode) or row.st_uid != os.getuid()
+                or row.st_nlink != 1 or stat.S_IMODE(row.st_mode) != 0o600):
+            raise ValueError('file')
+        with os.fdopen(descriptor, 'wb') as stream:
+            descriptor = None
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        raise RuntimeError(code) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory is not None:
+            os.close(directory)
+
+
+def save_workspace_artifact(producer, kind, raw):
+    """Save the validated exact F/Q bytes through a separate bounded SSM command."""
+    code = 'API_ADMIN_PENDING_ONLINE_ARTIFACT_SAVE_FAILED'
+    try:
+        import runpy
+        namespace = runpy.run_path(str(Path(__file__).with_name('api-workspace-declaration-artifacts.py')))
+        data = namespace['artifact_parameters'](producer, kind, raw)
+        if len(json.dumps(data).encode()) >= 20 * 1024:
+            raise ValueError('size')
+        aws = ['aws', '--region', os.environ['AWS_REGION'], 'ssm']
+        command_id = command(*aws, 'send-command', '--instance-ids', os.environ['PRODUCTION_INSTANCE_ID'],
+            '--document-name', 'AWS-RunShellScript', '--parameters', json.dumps(data), '--timeout-seconds', '300',
+            '--comment', 'ID API_ADMIN_WORKSPACE immutable artifact', '--query', 'Command.CommandId', '--output', 'text')
+        if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id):
+            raise ValueError('command')
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            time.sleep(10)
+            try:
+                invocation_raw = command_raw(*aws, 'get-command-invocation', '--command-id', command_id,
+                    '--instance-id', os.environ['PRODUCTION_INSTANCE_ID'], '--output', 'json')
+            except RuntimeError:
+                continue
+            if type(invocation_raw) is not bytes or not 0 < len(invocation_raw) < 128 * 1024:
+                raise ValueError('size')
+            # This provisional parse selects pending/ended only. The successful
+            # invocation and ACK are validated independently before continuing.
+            provisional = json.loads(invocation_raw)
+            if type(provisional) is not dict:
+                raise ValueError('invocation')
+            if provisional.get('Status') in ('Pending', 'InProgress', 'Delayed'):
+                continue
+            invocation = validated_workspace_invocation(invocation_raw, command_id)
+            output = invocation['StandardOutputContent']
+            if len(output.encode()) >= 4096:
+                raise ValueError('ack-size')
+            def unique(items):
+                value = {}
+                for key, item in items:
+                    if key in value:
+                        raise ValueError('duplicate')
+                    value[key] = item
+                return value
+            ack = json.loads(output, object_pairs_hook=unique,
+                             parse_constant=lambda unused: (_ for _ in ()).throw(ValueError('constant')))
+            namespace['validate_artifact_ack'](ack, producer, kind, raw)
+            return {'commandId': command_id, 'kind': kind, 'ack': ack}
+        raise ValueError('timeout')
+    except Exception:
+        raise RuntimeError(code) from None
 
 
 def selected_scope(operation):
@@ -27,7 +186,8 @@ def selected_scope(operation):
     return 'API_ADMIN'
 
 
-def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True):
+def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True,
+               declaration_producer=None):
     if (not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (commit, expected))
             or scope not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE') or mode not in ('preflight', 'readback', 'handoff', 'business', 'handoff-observe', 'handoff-recover')
             or mode in ('handoff', 'business', 'handoff-observe', 'handoff-recover') and scope != 'API_REGISTRATION' or type(require_closed) is not bool):
@@ -39,14 +199,59 @@ def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True
     if scope == 'API_ADMIN_WORKSPACE':
         # A verified online publication retains its migration and engine proof.
         # Pin that reader before either workspace preflight or independent readback.
-        controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json')
+        controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json',
+                        'api-admin-pending-projection.py', 'api-admin-readonly.py',
+                        'api-admin-pending-receipt-wire.py')
+        if declaration_producer is not None:
+            controllers += ('online-recharge-declaration-measurement.py',)
     for name in controllers:
         digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',
                          f'echo "{digest}  {directory}/{name}" | sha256sum -c - >/dev/null'])
     action = 'verify' if scope == 'API_REGISTRATION' and mode == 'preflight' and not require_closed else mode
-    commands.append(f'python3 -B {directory}/remote-deploy.py --{prefix}-{action} --expected-current {expected}')
+    producer_flag = ''
+    if declaration_producer is not None:
+        if (scope != 'API_ADMIN_WORKSPACE' or type(declaration_producer) is not dict
+                or set(declaration_producer) != {'commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'}
+                or declaration_producer.get('commit') != commit
+                or not all(type(declaration_producer.get(k)) is str
+                    and re.fullmatch(r'[a-f0-9]{40}', declaration_producer[k]) for k in ('commit', 'sourceTree'))
+                or not all(type(declaration_producer.get(k)) is str
+                    and re.fullmatch(r'[1-9][0-9]{0,19}', declaration_producer[k])
+                    for k in ('workflowRunId', 'workflowRunAttempt'))):
+            raise ValueError('API_ADMIN_INPUT_INVALID')
+        payload = base64.b64encode(json.dumps(declaration_producer, separators=(',', ':')).encode()).decode('ascii')
+        producer_flag = ' --declaration-producer ' + payload
+    commands.append(f'python3 -B {directory}/remote-deploy.py --{prefix}-{action} --expected-current {expected}' + producer_flag)
+    if len(json.dumps({'commands': commands, 'executionTimeout': ['300']}).encode()) >= 48 * 1024:
+        raise ValueError('API_ADMIN_INPUT_INVALID')
     return {'commands': commands, 'executionTimeout': ['300']}
+
+
+def decode_transport_receipt(output, scope):
+    """Decode bounded workspace framing from the candidate's pinned helper."""
+    if not isinstance(output, str) or not 0 < len(output) < 24000:
+        raise RuntimeError('API_ADMIN_RECEIPT_WIRE_INVALID')
+    if scope == 'API_ADMIN_WORKSPACE':
+        import runpy
+        namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-pending-receipt-wire.py')))
+        return namespace['decode_receipt_output'](output, scope=scope)
+    value = json.loads(output)
+    if not isinstance(value, dict):
+        raise RuntimeError('API_ADMIN_RECEIPT_CHANGED')
+    return value
+
+
+def declaration_producer_metadata():
+    """Use the verified checkout and this workflow's actual execution identity."""
+    value = {key: os.environ.get(name, '') for key, name in (
+        ('commit', 'RELEASE_COMMIT'), ('sourceTree', 'SOURCE_TREE'),
+        ('workflowRunId', 'GITHUB_RUN_ID'), ('workflowRunAttempt', 'GITHUB_RUN_ATTEMPT'))}
+    if (not all(re.fullmatch(r'[a-f0-9]{40}', value[k]) for k in ('commit', 'sourceTree'))
+            or not all(re.fullmatch(r'[1-9][0-9]{0,19}', value[k])
+                       for k in ('workflowRunId', 'workflowRunAttempt'))):
+        raise RuntimeError('API_ADMIN_INPUT_INVALID')
+    return value
 
 
 def safe_failure(receipt, scope='API_ADMIN'):
@@ -188,6 +393,92 @@ def validate_online_workspace_receipt(namespace, receipt, expected, mode):
     return True
 
 
+def validate_pending_ended_failures(namespace, context):
+    """Independently read only the two immutable, ended failed SSM commands."""
+    code = 'API_ADMIN_PENDING_ONLINE_ENDED_FAILURE_CHANGED'
+    try:
+        expected = namespace['pending_online_ended_failures'](context)
+        def unique(items):
+            row = {}
+            for key, value in items:
+                if key in row:
+                    raise ValueError('duplicate')
+                row[key] = value
+            return row
+        for row in expected:
+            raw = command('aws', '--region', os.environ['AWS_REGION'], 'ssm', 'get-command-invocation',
+                '--command-id', row['commandId'], '--instance-id', os.environ['PRODUCTION_INSTANCE_ID'],
+                '--query', '{commandId:CommandId,instanceId:InstanceId,documentName:DocumentName,status:Status,'
+                           'responseCode:ResponseCode,executionEnd:ExecutionEndDateTime,output:StandardOutputContent}',
+                '--output', 'json')
+            if not isinstance(raw, str) or len(raw.encode()) > 128 * 1024:
+                raise ValueError('size')
+            invocation = json.loads(raw, object_pairs_hook=unique)
+            if (not isinstance(invocation, dict) or set(invocation) != {'commandId', 'instanceId', 'documentName',
+                    'status', 'responseCode', 'executionEnd', 'output'}
+                    or invocation['commandId'] != row['commandId']
+                    or invocation['instanceId'] != os.environ['PRODUCTION_INSTANCE_ID']
+                    or invocation['documentName'] != 'AWS-RunShellScript' or invocation['status'] != 'Failed'
+                    or type(invocation['responseCode']) is not int or not 0 < invocation['responseCode'] <= 255
+                    or not isinstance(invocation['executionEnd'], str) or not 0 < len(invocation['executionEnd']) <= 80
+                    or not isinstance(invocation['output'], str) or len(invocation['output'].encode()) > 16384):
+                raise ValueError('metadata')
+            receipt = json.loads(invocation['output'], object_pairs_hook=unique)
+            if not isinstance(receipt, dict) or namespace['fingerprint'](receipt) != row['receiptSha256']:
+                raise ValueError('receipt')
+        return expected
+    except Exception:
+        # No raw invocation, stdout, credentials or parsing error leaves this boundary.
+        raise RuntimeError(code) from None
+
+
+def validate_pending_workspace_receipt(namespace, receipt, expected, mode, *, proof=None):
+    before_file = Path('.deploy/production-release/api-workspace-preflight-result.json')
+    before = json.loads(before_file.read_text()) if mode == 'readback' and before_file.is_file() else {}
+    context = receipt.get('pendingOnlineMigrationOrigin') if mode == 'preflight' else before.get('pendingOnlineMigrationOrigin')
+    selected = (context is not None or receipt.get('preservedPendingOnlineMigration') is not None
+                or receipt.get('pendingOnlineMigrationOrigin') is not None
+                or isinstance(proof, dict) and (proof.get('pendingOnlineProjection') is not None
+                    or 'pendingOnlineOriginSha256' in proof))
+    if not selected:
+        return False
+    code = 'API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED'
+    try:
+        namespace['validate_pending_online_origin'](context)
+        marker = namespace['pending_online_marker'](context)
+    except (ValueError, TypeError, KeyError, RuntimeError):
+        raise RuntimeError(code) from None
+    services = receipt.get('services', {})
+    if (receipt.get('onlinePublished') is not False or receipt.get('migrationPerformed') is not False
+            or receipt.get('onlineSuccessorVerified') is True or receipt.get('onlineOrigin') is not None
+            or receipt.get('preservedOnlineOrigin') is not None or receipt.get('onlineEngineRebound') is True
+            or not isinstance(services, dict) or set(services) != set(context['services'])):
+        raise RuntimeError(code)
+    if mode == 'preflight':
+        predecessor = context['priorPublications'][-1]['commit'] if context['priorPublications'] else namespace['WORKSPACE_BOOTSTRAP_COMMIT']
+        if predecessor != expected or services != context['services']:
+            raise RuntimeError(code)
+    else:
+        if (before.get('status') != 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED' or before.get('mode') != 'preflight'
+                or before.get('releaseCandidateCommit') != expected
+                or before.get('commit') != os.environ.get('EXPECTED_CURRENT')
+                or os.environ.get('RELEASE_COMMIT') != expected
+                or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ID', ''))
+                or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ATTEMPT', ''))
+                or before.get('workflowRunId') != os.environ['GITHUB_RUN_ID']
+                or before.get('workflowRunAttempt') != os.environ['GITHUB_RUN_ATTEMPT']
+                or before.get('pendingOnlineEndedFailures') != namespace['pending_online_ended_failures'](context)
+                or receipt.get('pendingOnlineMigrationOrigin') != context
+                or receipt.get('preservedPendingOnlineMigration') != marker
+                or receipt.get('observedServiceCount') != 7 or type(receipt.get('observedServiceCount')) is not int
+                or receipt.get('servicesUpdated') != ['api', 'admin']
+                or not isinstance(proof, dict) or proof.get('pendingOnlineProjection') is None
+                or proof.get('pendingOnlineOriginSha256') != namespace['fingerprint'](context)
+                or any(services[n] != context['services'][n] for n in services if n not in ('api', 'admin'))):
+            raise RuntimeError(code)
+    return True
+
+
 def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
     wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_OBSERVED' if mode == 'handoff-observe' else '_HANDOFF_VERIFIED' if mode in ('handoff', 'handoff-recover')
                       else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
@@ -196,6 +487,8 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
     if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE') and mode == 'preflight':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
+        if scope == 'API_ADMIN_WORKSPACE':
+            validate_pending_workspace_receipt(namespace, receipt, expected, mode)
         online_workspace = (scope == 'API_ADMIN_WORKSPACE'
             and validate_online_workspace_receipt(namespace, receipt, expected, mode))
         services = {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'}
@@ -247,11 +540,13 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
             namespace['validate_proof'](SimpleNamespace(require=need), proof, expected, receipt.get('sourceTree'))
         online_workspace = (scope == 'API_ADMIN_WORKSPACE'
             and validate_online_workspace_receipt(namespace, receipt, expected, mode))
-        updated = [*namespace['UPDATED'], *(['online-recharge'] if online_workspace else [])]
+        pending_workspace = (scope == 'API_ADMIN_WORKSPACE'
+            and validate_pending_workspace_receipt(namespace, receipt, expected, mode, proof=proof))
+        updated = ['api', 'admin'] if pending_workspace else [*namespace['UPDATED'], *(['online-recharge'] if online_workspace else [])]
         if (receipt.get('buildProofSha256') != namespace['fingerprint'](proof)
                 or receipt.get('sourceTree') != proof['sourceTree'] or proof['commit'] != expected
                 or receipt.get('servicesUpdated') != updated
-                or receipt.get('preservedServiceCount') != (4 if scope == 'API_ADMIN_WORKSPACE' else 5)
+                or receipt.get('preservedServiceCount') != (5 if pending_workspace else 4 if scope == 'API_ADMIN_WORKSPACE' else 5)
                 or receipt.get('runningImagesAndContentMatched') is not True
                 or receipt.get('environmentUnchanged') is not True
                 or any(receipt.get('services', {}).get(name, {}).get('image') != row['imageId']
@@ -309,8 +604,9 @@ def main():
     if mode in ('handoff-observe', 'handoff-recover') and operation != {'handoff-observe': 'verify_registration_handoff', 'handoff-recover': 'recover_registration_handoff'}[mode]:
         raise ValueError('API_ADMIN_SCOPE_CONFLICT')
     expected = os.environ['RELEASE_COMMIT'] if mode == 'readback' else os.environ['EXPECTED_CURRENT']
+    producer = declaration_producer_metadata() if scope == 'API_ADMIN_WORKSPACE' else None
     data = parameters(os.environ['RELEASE_COMMIT'], expected, mode, scope,
-                      require_closed=operation != 'verify_api_registration')
+                      require_closed=operation != 'verify_api_registration', declaration_producer=producer)
     aws = ['aws', '--region', os.environ['AWS_REGION'], 'ssm']
     command_id = command(*aws, 'send-command', '--instance-ids', os.environ['PRODUCTION_INSTANCE_ID'],
         '--document-name', 'AWS-RunShellScript', '--parameters', json.dumps(data), '--timeout-seconds', '300',
@@ -323,8 +619,13 @@ def main():
     for _ in range(36):
         time.sleep(10)
         try:
-            result = json.loads(command(*aws, 'get-command-invocation', '--command-id', command_id,
-                '--instance-id', os.environ['PRODUCTION_INSTANCE_ID'], '--output', 'json'))
+            arguments = (*aws, 'get-command-invocation', '--command-id', command_id,
+                         '--instance-id', os.environ['PRODUCTION_INSTANCE_ID'], '--output', 'json')
+            invocation_raw = command_raw(*arguments) if scope == 'API_ADMIN_WORKSPACE' else command(*arguments)
+            if scope == 'API_ADMIN_WORKSPACE' and (type(invocation_raw) is not bytes
+                    or not 0 < len(invocation_raw) < 128 * 1024):
+                raise ValueError('size')
+            result = json.loads(invocation_raw)
         except RuntimeError:
             continue
         if result.get('Status') in ('Pending', 'InProgress', 'Delayed'):
@@ -332,21 +633,46 @@ def main():
         output = result.get('StandardOutputContent', '')
         # Remote helper emits only hashes, identifiers, guarded booleans and status.
         try:
-            receipt = json.loads(output) if len(output) < 24000 else {}
-        except (ValueError, TypeError):
+            receipt = decode_transport_receipt(output, scope)
+        except (ValueError, TypeError, RuntimeError):
             receipt = {}
         wanted = scope + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_HANDOFF_OBSERVED' if mode == 'handoff-observe' else '_HANDOFF_VERIFIED' if mode in ('handoff', 'handoff-recover')
                           else '_BUSINESS_OBSERVED' if mode == 'business' else '_VERIFIED')
         if result.get('Status') != 'Success' or result.get('ResponseCode') != 0 or receipt.get('status') != wanted:
             failure = safe_failure(receipt, scope)
-            target.write_text(json.dumps({'commandId': command_id, 'mode': mode, **failure}, indent=2) + '\n')
+            raw_failure = (json.dumps({'commandId': command_id, 'mode': mode, **failure}, indent=2) + '\n').encode()
+            if scope == 'API_ADMIN_WORKSPACE':
+                failure_target = target.with_name(target.stem + '-failure.json') if target.exists() else target
+                write_workspace_private_bytes(failure_target, raw_failure)
+            else:
+                target.write_bytes(raw_failure)
             print(json.dumps(failure))
             raise RuntimeError(failure['code'])
+        if scope == 'API_ADMIN_WORKSPACE':
+            # Keep malformed terminal metadata outside the retry catch above.
+            validated_workspace_invocation(invocation_raw, command_id)
         validate_receipt(receipt, expected, mode, scope)
-        target.write_text(json.dumps({'commandId': command_id, 'mode': mode,
+        if scope == 'API_ADMIN_WORKSPACE' and receipt.get('pendingOnlineMigrationOrigin') is not None:
+            import runpy
+            namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
+            receipt['pendingOnlineEndedFailures'] = validate_pending_ended_failures(namespace, receipt['pendingOnlineMigrationOrigin'])
+        raw_result = (json.dumps({'commandId': command_id, 'mode': mode,
             'releaseCandidateCommit': os.environ['RELEASE_COMMIT'],
             'workflowRunId': os.environ.get('GITHUB_RUN_ID', ''),
-            'workflowRunAttempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''), **receipt}, indent=2) + '\n')
+            'workflowRunAttempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''), **receipt}, indent=2) + '\n').encode()
+        if scope == 'API_ADMIN_WORKSPACE':
+            write_workspace_private_bytes(target, raw_result)
+            context = receipt.get('pendingOnlineMigrationOrigin')
+            if type(context) is dict and context.get('version') == 2:
+                kind = 'preflight' if mode == 'preflight' else 'readback-invocation'
+                artifact_raw = raw_result if mode == 'preflight' else invocation_raw
+                if mode == 'readback':
+                    write_workspace_private_bytes(target.with_name('api-workspace-readback-invocation.json'), artifact_raw)
+                ack = save_workspace_artifact(producer, kind, artifact_raw)
+                ack_target = target.with_name(target.stem + '-artifact-save.json')
+                write_workspace_private_bytes(ack_target, (json.dumps(ack, indent=2) + '\n').encode())
+        else:
+            target.write_bytes(raw_result)
         print(json.dumps(receipt))
         return 0
     raise RuntimeError('API_ADMIN_READONLY_TIMEOUT')

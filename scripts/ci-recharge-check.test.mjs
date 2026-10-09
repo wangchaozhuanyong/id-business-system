@@ -307,7 +307,18 @@ test('API Admin control edits execute their suite in both CI entry points', () =
       'scripts/production-release/api-admin-scope.py',
       'scripts/production-release/api-admin-readonly.py',
       'scripts/production-release/api-admin-scope.test.py',
-      'scripts/production-release/api-admin-readonly.test.py'
+      'scripts/production-release/api-admin-readonly.test.py',
+      'scripts/production-release/api-admin-pending-projection.py',
+      'scripts/production-release/api-admin-pending-projection.test.py',
+      'scripts/production-release/api-admin-pending-online.test.py',
+      'scripts/production-release/api-admin-pending-receipt-wire.py',
+      'scripts/production-release/api-admin-pending-receipt-wire.test.py',
+      'scripts/production-release/api-workspace-declaration-readonly.py',
+      'scripts/production-release/api-workspace-declaration-readonly.test.py',
+      'scripts/production-release/api-workspace-declaration-artifacts.py',
+      'scripts/production-release/api-workspace-declaration-artifacts.test.py',
+      'scripts/production-release/online-recharge-declaration-measurement.py',
+      'scripts/production-release/online-recharge-declaration-measurement.test.py'
     ]) {
       const calls = recordGuardCommands('ci-only', [path], part);
       assert.equal(
@@ -324,6 +335,21 @@ test('API Admin control edits execute their suite in both CI entry points', () =
         ).length,
         1
       );
+      for (const suite of [
+        'api-admin-pending-projection',
+        'api-admin-pending-online',
+        'api-admin-pending-receipt-wire',
+        'api-workspace-declaration-readonly',
+        'api-workspace-declaration-artifacts',
+        'online-recharge-declaration-measurement'
+      ]) {
+        assert.equal(
+          calls.filter(
+            (call) => call.join(' ') === `python3 -B scripts/production-release/${suite}.test.py`
+          ).length,
+          1
+        );
+      }
       assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
     }
   }
