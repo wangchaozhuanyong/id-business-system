@@ -822,8 +822,32 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
         values = self.fixture()
         for row in values[1:3]:
             row['environmentSha256'] = row['configurationSha256'] = '0' * 64
-        with patch.object(scope, 'fingerprint', return_value='0' * 64), self.assertRaises(RuntimeError):
+        with patch.object(scope, 'fingerprint', return_value='0' * 64), self.assertRaises(scope.ProjectionRejection) as error:
             scope.restored_configuration_projection(controller(), 'api', *values)
+        self.assertEqual(error.exception.reason, 'PROJECTED_HASH_AMBIGUOUS')
+
+    def test_every_fixed_rejection_stage_retains_the_existing_projection_predicates(self):
+        changes = [(3, ('extra',), 'secret', 'INPUT_INVALID'),
+            (0, ('Id',), 'forged', 'METADATA_MISMATCH'),
+            (0, ('Config', 'Hostname'), 'custom', 'HOSTNAME_MISMATCH'),
+            (1, ('configurationSha256',), '0' * 64, 'RAW_HASH_MISMATCH'),
+            (0, ('Config', 'Labels', 'com.docker.compose.service'), 'admin', 'COMPOSE_LABELS_MISMATCH'),
+            (0, ('Name',), '/arbitrary', 'NAME_MISMATCH'),
+            (0, ('Config', 'Labels', 'com.docker.compose.replace'), 'unsealed', 'REPLACE_MISMATCH'),
+            (0, ('Config', 'Labels', 'unrelated.label'), 'changed', 'PROJECTED_HASH_MISMATCH')]
+        for index, path, changed, expected in changes:
+            values = self.fixture(); target = values[index]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = changed
+            if index == 0:
+                configuration = {k: values[0][k] for k in ('Config', 'HostConfig', 'Mounts')}
+                configuration['Mounts'] = sorted(configuration['Mounts'], key=lambda m: m['Destination'])
+                values[1]['configurationSha256'] = scope.fingerprint(configuration)
+            with self.subTest(reason=expected), self.assertRaises(scope.ProjectionRejection) as error:
+                scope.restored_configuration_projection(controller(), 'api', *values)
+            self.assertEqual(error.exception.reason, expected)
+            self.assertEqual(str(error.exception), 'ONLINE_RECHARGE_CONTAINER_CHANGED')
 
     def test_finite_diagnostic_reports_all_seven_services_but_does_not_relax_main_gate(self):
         original, actual = states(), states()
@@ -841,6 +865,7 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
         self.assertFalse(result['baselineConfirmed'])
         self.assertEqual(result['gateCode'], 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
         self.assertEqual(result['restoredProjectionMatch'], {'api': True, 'admin': True})
+        self.assertEqual(result['restoredProjectionReason'], {'api': 'MATCH', 'admin': 'MATCH'})
         self.assertEqual(result['identityDiff']['mysql'], ['containerId'])
         self.assertEqual(set(result['identityDiff']), set(original))
         self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
@@ -858,9 +883,45 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
         candidate = copy.deepcopy(result); candidate['identityDiff']['api'] = ['image', 'status']; candidates.append(candidate)
         candidate = copy.deepcopy(result); candidate['restoredProjectionMatch']['extra'] = True; candidates.append(candidate)
         candidate = copy.deepcopy(result); candidate.pop('restoredProjectionMatch'); candidates.append(candidate)
+        for bad in ('secret', True, ['MATCH']):
+            candidate = copy.deepcopy(result); candidate['restoredProjectionReason']['api'] = bad; candidates.append(candidate)
+        candidate = copy.deepcopy(result); candidate['restoredProjectionReason']['api'] = 'OTHER'; candidates.append(candidate)
+        candidate = copy.deepcopy(result); candidate['restoredProjectionReason']['extra'] = 'MATCH'; candidates.append(candidate)
         for candidate in candidates:
             with self.subTest(candidate_keys=sorted(candidate)), self.assertRaises(RuntimeError):
                 scope.validate_diagnostic(controller(), candidate, scope.BASELINE_COMMIT)
+        historical = copy.deepcopy(result); historical.pop('restoredProjectionReason')
+        scope.validate_diagnostic(controller(), historical, scope.BASELINE_COMMIT)
+
+    def test_inspect_and_unknown_projection_errors_never_expose_raw_values(self):
+        original, actual = states(), states()
+        metadata, anchors = {}, {}
+        for name in ('api', 'admin'):
+            metadata[name], actual[name], original[name], anchors[name] = self.fixture(name)
+        context = {'policy': {'preflight': {'services': original}}, 'restored': {'configurationAnchors': anchors}}
+        cases = [('INSPECT_FAILED', RuntimeError('SECRET_MUST_NOT_ESCAPE'), None),
+                 ('INSPECT_FAILED', '[{"raw":"SECRET_MUST_NOT_ESCAPE"},{}]', None),
+                 ('OTHER', None, RuntimeError('SECRET_MUST_NOT_ESCAPE')),
+                 ('OTHER', None, scope.ProjectionRejection('SECRET_MUST_NOT_ESCAPE')),
+                 ('OTHER', None, scope.ProjectionRejection(['MATCH'])),
+                 ('OTHER', None, scope.ProjectionRejection('MATCH')), ('NOT_PROBED', None, None)]
+        for expected, raw, failure in cases:
+            d = controller(run=MagicMock(side_effect=raw if isinstance(raw, Exception) else None,
+                return_value=raw))
+            if raw is None:
+                d.run.side_effect = [json.dumps([metadata[n]]) for n in ('api', 'admin')]
+            selected = context if expected != 'NOT_PROBED' else {'policy': context['policy'], 'restored': {}}
+            def probe(d, approved):
+                scope.recovery_services(d, actual, selected)
+            with self.subTest(reason=expected), patch.object(scope, 'baseline', side_effect=probe), \
+                    patch.object(scope, 'restored_configuration_projection', side_effect=failure):
+                result = scope.projection_diagnostic(d, scope.BASELINE_COMMIT)
+            self.assertEqual(result['restoredProjectionReason'], {n: expected for n in ('api', 'admin')})
+            self.assertEqual(result['restoredProjectionMatch'], {'api': False, 'admin': False})
+            self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+            self.assertFalse(d._onlineRechargeProjectionDiagnostic)
+            self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
+            scope.validate_diagnostic(controller(), result, scope.BASELINE_COMMIT)
 
     def test_later_baseline_failure_discards_identity_details_and_clears_probe_state(self):
         d = controller()
@@ -874,6 +935,7 @@ class RestoredConfigurationDiagnosticTests(unittest.TestCase):
         self.assertEqual(result['gateCode'], 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
         self.assertNotIn('identityDiff', result)
         self.assertNotIn('restoredProjectionMatch', result)
+        self.assertNotIn('restoredProjectionReason', result)
         self.assertFalse(d._onlineRechargeProjectionDiagnostic)
         self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
         scope.validate_diagnostic(controller(), result, scope.BASELINE_COMMIT)
