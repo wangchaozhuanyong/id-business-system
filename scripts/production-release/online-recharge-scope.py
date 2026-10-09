@@ -117,11 +117,25 @@ PROJECTION_REASONS = frozenset(('NOT_PROBED', 'INSPECT_FAILED', 'INPUT_INVALID',
     'HOSTNAME_MISMATCH', 'RAW_HASH_MISMATCH', 'COMPOSE_LABELS_MISMATCH', 'NAME_MISMATCH',
     'REPLACE_MISMATCH', 'PROJECTED_HASH_MISMATCH', 'PROJECTED_HASH_AMBIGUOUS', 'MATCH', 'OTHER'))
 API_NATIVE_PATHS = ('Config.Labels.com.docker.compose.depends_on', 'HostConfig.Mounts', 'HostConfig.NetworkMode')
-API_NATIVE_REASONS = frozenset(('NOT_PROBED', 'PROBE_FAILED', 'NO_MATCH', 'AMBIGUOUS', 'MATCH'))
+API_NATIVE_FAILURE_REASONS = frozenset(('ELIGIBILITY', 'OLD_SOURCE_BEFORE_PATH_CURRENT',
+    'OLD_SOURCE_BEFORE_WORKSPACE_FILES', 'OLD_SOURCE_BEFORE_CONFIGURATION_FILES', 'OLD_SOURCE_BEFORE_ENV_FILE',
+    'OLD_SOURCE_AFTER_WORKSPACE_FILES', 'OLD_SOURCE_AFTER_CONFIGURATION_FILES', 'OLD_SOURCE_AFTER_ENV_FILE',
+    'DECLARATION_RENDER', 'DECLARATION', 'DEPENDENCY_DECLARATION_TYPE', 'DEPENDENCY_COUNT_LIMIT',
+    'DEPENDENCY_NAME', 'DEPENDENCY_SERVICE', 'DEPENDENCY_ROW_TYPE', 'DEPENDENCY_CONDITION', 'DEPENDENCY_RESTART',
+    'DEPENDENCY_LABEL_TYPE', 'DEPENDENCY_LABEL_SIZE', 'DEPENDENCY_LABEL_CONTENT', 'MOUNT_NULL_OR_TYPE',
+    'MOUNT_COUNT_LIMIT', 'MOUNT_ROW_TARGET', 'MOUNT_DUPLICATE_TARGET', 'MOUNT_DECLARED_VOLUMES',
+    'MOUNT_TARGET_SET_MISMATCH', 'NETWORK_INPUT_TYPE', 'NETWORK_INPUT_SIZE', 'COMBINATION_LIMIT', 'PAYLOAD_LIMIT'))
+API_NATIVE_REASONS = frozenset(('NOT_PROBED', 'PROBE_FAILED', 'NO_MATCH', 'AMBIGUOUS', 'MATCH')) | API_NATIVE_FAILURE_REASONS
 API_NATIVE_MAX_BYTES = 16 * 1024 * 1024
 
 
 class ProjectionRejection(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__('ONLINE_RECHARGE_CONTAINER_CHANGED')
+
+
+class ApiNativeProbeRejection(RuntimeError):
     def __init__(self, reason):
         self.reason = reason
         super().__init__('ONLINE_RECHARGE_CONTAINER_CHANGED')
@@ -780,53 +794,100 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
     """Read-only bounded hypotheses; a match never approves the failed API gate."""
     failed = {'matched': False, 'reason': 'PROBE_FAILED', 'changedPaths': []}
     try:
+        stage = 'ELIGIBILITY'
+        def need(condition, unused):
+            if not condition:
+                raise ApiNativeProbeRejection(stage)
+        # Only this probe's helpers classify their existing require checks.
+        d = SimpleNamespace(**vars(d))
+        d.require = need
         anchors = restored['configurationAnchors']['api']
         try:
             restored_configuration_projection(d, 'api', metadata, actual, original, anchors)
         except ProjectionRejection as error:
             d.require(error.reason == 'PROJECTED_HASH_MISMATCH', 'ONLINE_RECHARGE_CONTAINER_CHANGED')
         else:
-            return failed
+            raise ApiNativeProbeRejection('ELIGIBILITY')
         previous = restored['previous']
+        stage = 'OLD_SOURCE_BEFORE_PATH_CURRENT'
         d.require(isinstance(previous, Path) and previous.parent == d.BASE / 'releases'
-                  and (d.BASE / 'current').resolve() == previous
-                  and workspace_files(d, previous) == restored['workspaceOriginFiles']
-                  and configuration_hashes(previous) == restored['configurationBefore']
-                  and file_digest(previous / '.env.aws.production') == restored['environmentSha256'],
+                  and (d.BASE / 'current').resolve() == previous,
                   'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        stage = 'OLD_SOURCE_BEFORE_WORKSPACE_FILES'
+        d.require(workspace_files(d, previous) == restored['workspaceOriginFiles'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        stage = 'OLD_SOURCE_BEFORE_CONFIGURATION_FILES'
+        d.require(configuration_hashes(previous) == restored['configurationBefore'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        stage = 'OLD_SOURCE_BEFORE_ENV_FILE'
+        d.require(file_digest(previous / '.env.aws.production') == restored['environmentSha256'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        stage = 'DECLARATION_RENDER'
         declaration = rendered_configuration(d, previous)
-        d.require(workspace_files(d, previous) == restored['workspaceOriginFiles']
-                  and configuration_hashes(previous) == restored['configurationBefore']
-                  and file_digest(previous / '.env.aws.production') == restored['environmentSha256'],
+        stage = 'OLD_SOURCE_AFTER_WORKSPACE_FILES'
+        d.require(workspace_files(d, previous) == restored['workspaceOriginFiles'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        stage = 'OLD_SOURCE_AFTER_CONFIGURATION_FILES'
+        d.require(configuration_hashes(previous) == restored['configurationBefore'],
+                  'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        stage = 'OLD_SOURCE_AFTER_ENV_FILE'
+        d.require(file_digest(previous / '.env.aws.production') == restored['environmentSha256'],
                   'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
         config, host = metadata['Config'], metadata['HostConfig']
+        stage = 'DECLARATION'
         d.require(declaration.get('name') == config['Labels']['com.docker.compose.project']
                   and isinstance(declaration['services'].get('api'), dict), 'ONLINE_RECHARGE_COMPOSE_INVALID')
         api = declaration['services']['api']
         dependencies = api.get('depends_on', {})
-        d.require(isinstance(dependencies, dict) and len(dependencies) <= 4,
+        stage = 'DEPENDENCY_DECLARATION_TYPE'
+        d.require(isinstance(dependencies, dict), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'DEPENDENCY_COUNT_LIMIT'
+        d.require(len(dependencies) <= 4,
                   'ONLINE_RECHARGE_COMPOSE_INVALID')
         triples = []
         for name, row in dependencies.items():
-            d.require(isinstance(name, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', name)
-                      and name in declaration['services'] and isinstance(row, dict)
-                      and row.get('condition') in ('service_started', 'service_healthy', 'service_completed_successfully')
-                      and type(row.get('restart', False)) is bool, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'DEPENDENCY_NAME'
+            d.require(isinstance(name, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', name),
+                      'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'DEPENDENCY_SERVICE'
+            d.require(name in declaration['services'], 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'DEPENDENCY_ROW_TYPE'
+            d.require(isinstance(row, dict), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'DEPENDENCY_CONDITION'
+            d.require(row.get('condition') in ('service_started', 'service_healthy', 'service_completed_successfully'),
+                      'ONLINE_RECHARGE_COMPOSE_INVALID')
+            stage = 'DEPENDENCY_RESTART'
+            d.require(type(row.get('restart', False)) is bool, 'ONLINE_RECHARGE_COMPOSE_INVALID')
             triples.append(name + ':' + row['condition'] + ':' + str(row.get('restart', False)).lower())
         dependency_label = config['Labels'].get('com.docker.compose.depends_on')
-        d.require(isinstance(dependency_label, str) and len(dependency_label) <= 2048
-                  and sorted(dependency_label.split(',') if dependency_label else []) == sorted(triples),
+        stage = 'DEPENDENCY_LABEL_TYPE'
+        d.require(isinstance(dependency_label, str), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'DEPENDENCY_LABEL_SIZE'
+        d.require(len(dependency_label) <= 2048, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'DEPENDENCY_LABEL_CONTENT'
+        d.require(sorted(dependency_label.split(',') if dependency_label else []) == sorted(triples),
                   'ONLINE_RECHARGE_COMPOSE_INVALID')
         mounts, volumes = host.get('Mounts'), api.get('volumes', [])
-        d.require(isinstance(mounts, list) and len(mounts) <= 4
-                  and all(isinstance(m, dict) and isinstance(m.get('Target'), str)
-                          and m['Target'].startswith('/') for m in mounts)
-                  and len({m['Target'] for m in mounts}) == len(mounts)
-                  and isinstance(volumes, list) and all(isinstance(v, dict) and isinstance(v.get('target'), str)
-                          for v in volumes) and {m['Target'] for m in mounts} == {v['target'] for v in volumes},
+        stage = 'MOUNT_NULL_OR_TYPE'
+        d.require(isinstance(mounts, list), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'MOUNT_COUNT_LIMIT'
+        d.require(len(mounts) <= 4, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'MOUNT_ROW_TARGET'
+        d.require(all(isinstance(m, dict) and isinstance(m.get('Target'), str)
+                      and m['Target'].startswith('/') for m in mounts), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'MOUNT_DUPLICATE_TARGET'
+        d.require(len({m['Target'] for m in mounts}) == len(mounts), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'MOUNT_DECLARED_VOLUMES'
+        d.require(isinstance(volumes, list) and all(isinstance(v, dict) and isinstance(v.get('target'), str)
+                  for v in volumes), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'MOUNT_TARGET_SET_MISMATCH'
+        d.require({m['Target'] for m in mounts} == {v['target'] for v in volumes},
                   'ONLINE_RECHARGE_COMPOSE_INVALID')
         mode = host.get('NetworkMode')
-        d.require(isinstance(mode, str) and len(mode) <= 256, 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'NETWORK_INPUT_TYPE'
+        d.require(isinstance(mode, str), 'ONLINE_RECHARGE_COMPOSE_INVALID')
+        stage = 'NETWORK_INPUT_SIZE'
+        d.require(len(mode) <= 256, 'ONLINE_RECHARGE_COMPOSE_INVALID')
         network_modes = [mode]
         # Insufficient network binding disables this hypothesis, preserving the live value.
         selected, declared = api.get('networks'), declaration.get('networks')
@@ -839,6 +900,7 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
             names = [declared[n]['name'] for n in selected]
             if len(set(names)) == len(names) and set(live) == set(names) and mode in names:
                 network_modes = [mode, *sorted(n for n in names if n != mode)]
+        stage = 'COMBINATION_LIMIT'
         d.require(4 * math.factorial(len(triples)) * math.factorial(len(mounts)) * len(network_modes) <= 768,
                   'ONLINE_RECHARGE_SOURCE_TOO_LARGE')
         base = {'Config': copy.deepcopy(config), 'HostConfig': copy.deepcopy(host),
@@ -863,6 +925,7 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
                         if encoded in seen:
                             continue
                         candidate_bytes += len(encoded.encode())
+                        stage = 'PAYLOAD_LIMIT'
                         d.require(candidate_bytes <= API_NATIVE_MAX_BYTES, 'ONLINE_RECHARGE_SOURCE_TOO_LARGE')
                         seen.add(encoded)
                         if fingerprint(candidate) == original['configurationSha256']:
@@ -872,6 +935,13 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
         if len(matches) != 1:
             return {'matched': False, 'reason': 'AMBIGUOUS' if matches else 'NO_MATCH', 'changedPaths': []}
         return {'matched': True, 'reason': 'MATCH', 'changedPaths': matches[0]}
+    except ApiNativeProbeRejection as error:
+        if type(error) is not ApiNativeProbeRejection:
+            return failed
+        reason = vars(error).get('reason')
+        if type(reason) is str and reason in API_NATIVE_FAILURE_REASONS and reason == stage:
+            return {'matched': False, 'reason': reason, 'changedPaths': []}
+        return failed
     except Exception:
         return failed
 
