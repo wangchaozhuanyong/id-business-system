@@ -26,7 +26,7 @@ IDENTITY_KEYS = frozenset(('image', 'reference', 'status', 'health', 'containerI
 FILES = ('docker-compose.aws-mysql.yml', 'compose.release.json', '.env.aws.production')
 API_FIELDS = frozenset(('build', 'cap_drop', 'depends_on', 'environment', 'healthcheck', 'init',
                        'logging', 'networks', 'read_only', 'restart', 'security_opt', 'tmpfs',
-                       'volumes', 'image', 'pull_policy', 'labels'))
+                       'volumes', 'image', 'pull_policy', 'labels', 'command', 'entrypoint'))
 POOL_KEYS = frozenset(('Base', 'Size'))
 NETWORK_FIELDS = frozenset(('Name', 'Id', 'Created', 'Scope', 'Driver', 'EnableIPv4', 'EnableIPv6',
     'IPAM', 'Internal', 'Attachable', 'Ingress', 'ConfigFrom', 'ConfigOnly', 'Containers', 'Options', 'Labels'))
@@ -50,9 +50,9 @@ REPORT_KEYS = frozenset(('version', 'kind', 'status', 'authority', 'productionEl
     'daemonDefaultAddressPools', 'sourceShape', 'resources', 'cacheImage', 'codes'))
 GENERATOR_KEYS = frozenset(('composeVersion', 'engineVersion', 'engineApiVersion', 'dockerCliVersion',
     'dockerCliSha256', 'composeCliSha256', 'daemonIdentitySha256', 'nativePlatform',
-    'reviewedSourceStatus'))
+    'reviewedSourceStatus', 'engineGitCommit', 'dockerCliGitCommit', 'enginePackage', 'dockerCliPackage'))
 SOURCE_KEYS = frozenset(('status', 'apiFieldNames', 'environmentKeyCount', 'declaredNetworkCount',
-    'mountTypeCounts', 'schemaSha256'))
+    'mountTypeCounts', 'schemaSha256', 'representation'))
 RESOURCE_KEYS = frozenset(('status', 'connectedNetworkCount', 'namedVolumeCount',
     'networkSchemaSha256', 'volumeSchemaSha256', 'propertiesSha256',
     'unknownNetworkFieldCount', 'unknownVolumeFieldCount', 'reviewedSchemaStatus'))
@@ -124,16 +124,46 @@ def source_shape(model):
     api = model['services'].get('api')
     check(isinstance(api, dict) and set(api) <= API_FIELDS and isinstance(api.get('environment'), dict)
           and all(isinstance(v, str) for v in api['environment'].values()), 'INPUT_INVALID')
+    # Fixed 0a source declares neither command nor entrypoint. compose-go v2.14
+    # intentionally emits null for both in JSON; [] means clearing image defaults
+    # and must remain a different, rejected source. Keep the full rendered fields.
+    check(all(api.get(key) is None for key in ('command', 'entrypoint')), 'INPUT_INVALID')
     networks = api.get('networks')
     check(isinstance(networks, dict) and set(networks) == set(NETWORK_ROLES), 'INPUT_INVALID')
     mounts = api.get('volumes')
     check(isinstance(mounts, list) and all(isinstance(m, dict) and m.get('type') in ('volume', 'bind')
           for m in mounts), 'INPUT_INVALID')
+    dependencies = api.get('depends_on', {})
+    check(isinstance(dependencies, dict) and set(dependencies) <= {'migrate', 'media-resolver'}
+          and all(isinstance(row, dict) and set(row) <= {'condition', 'required', 'restart'}
+                  for row in dependencies.values())
+          and all(row is None or isinstance(row, dict) and set(row) <= {'priority'}
+                  for row in networks.values())
+          and all(set(row) <= {'type', 'source', 'target', 'read_only', 'volume', 'bind', 'consistency'}
+                  for row in mounts), 'INPUT_INVALID')
+    representation = {'dependencyFieldNames': {key: sorted(row) for key, row in sorted(dependencies.items())},
+        'networkEntryFieldNames': {key: sorted(row or {}) for key, row in sorted(networks.items())},
+        'volumeFieldNames': [sorted(row) for row in mounts]}
     schema = {key: type(value).__name__ for key, value in api.items()}
     return {'status': 'OBSERVED', 'apiFieldNames': sorted(api), 'environmentKeyCount': len(api['environment']),
             'declaredNetworkCount': len(networks), 'mountTypeCounts': {
                 kind: sum(m['type'] == kind for m in mounts) for kind in ('volume', 'bind')},
-            'schemaSha256': fingerprint(schema)}
+            'schemaSha256': fingerprint(schema), 'representation': representation}
+
+
+def native_package(d, path, expected_name):
+    """Installed RPM identity only; it does not prove the daemon executable.
+
+    Literal paths and known package names, closed metadata, no RPM scripts or
+    package installation. Unsupported/non-RPM hosts report unmeasured.
+    """
+    raw = d.run('rpm', '-qf', path, '--queryformat', '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}', timeout=30)
+    check(isinstance(raw, str) and 0 < len(raw) <= 256, 'INPUT_INVALID')
+    rows = raw.split('|')
+    check(len(rows) == 4 and rows[0] in expected_name and VERSION.fullmatch(rows[1])
+          and re.fullmatch(r'[0-9][a-z0-9._]{0,95}', rows[2])
+          and rows[3] in ('x86_64', 'aarch64'), 'INPUT_INVALID')
+    return dict(zip(('name', 'version', 'release', 'architecture'), rows))
 
 
 def binary_hash(path, name):
@@ -155,6 +185,12 @@ def binary_hash(path, name):
 
 
 def pools_statement(rows):
+    # Moby 25 leaves this slice nil when no custom pools are configured; the
+    # Docker info JSON template emits null. This observes an absent custom
+    # declaration only, never the effective builtin pool or source approval.
+    raw_rows = rows
+    if rows is None:
+        rows = []
     check(isinstance(rows, list) and len(rows) <= 32, 'INPUT_INVALID')
     pools = []
     for row in rows:
@@ -168,7 +204,9 @@ def pools_statement(rows):
         pools.append({'base': str(network), 'size': row['Size']})
     check(len({(r['base'], r['size']) for r in pools}) == len(pools), 'INPUT_INVALID')
     return {'status': 'DECLARED' if pools else 'UNDECLARED', 'pools': pools,
-            'reviewedRulesStatus': 'SOURCE_NOT_MEASURED'}
+            'reviewedRulesStatus': 'SOURCE_NOT_MEASURED',
+            'sourceEncoding': 'NULL' if raw_rows is None else 'ARRAY',
+            'sourceValueSha256': fingerprint(raw_rows)}
 
 
 def schema_summary(value, known):
@@ -201,9 +239,11 @@ def inventory(d, directory, *, services, image_reference, image_id):
     report = {'version': 1, 'kind': KIND, 'status': 'SOURCE_NOT_MEASURED', 'authority': False,
         'productionEligible': False, 'measurementPerformed': False, 'proofConstructed': False,
         'rawOutputSuppressed': True, 'generator': {key: None for key in GENERATOR_KEYS},
-        'daemonDefaultAddressPools': {'status': 'UNAVAILABLE', 'pools': [], 'reviewedRulesStatus': 'SOURCE_NOT_MEASURED'},
+        'daemonDefaultAddressPools': {'status': 'UNAVAILABLE', 'pools': [], 'reviewedRulesStatus': 'SOURCE_NOT_MEASURED',
+                                     'sourceEncoding': None, 'sourceValueSha256': None},
         'sourceShape': {'status': 'NOT_MEASURED', 'apiFieldNames': [], 'environmentKeyCount': None,
-                       'declaredNetworkCount': None, 'mountTypeCounts': None, 'schemaSha256': None},
+                       'declaredNetworkCount': None, 'mountTypeCounts': None, 'schemaSha256': None,
+                       'representation': None},
         'resources': {'status': 'NOT_MEASURED', 'connectedNetworkCount': None, 'namedVolumeCount': None,
             'networkSchemaSha256': None, 'volumeSchemaSha256': None, 'propertiesSha256': None,
             'unknownNetworkFieldCount': None, 'unknownVolumeFieldCount': None, 'reviewedSchemaStatus': 'SOURCE_NOT_MEASURED'},
@@ -226,6 +266,16 @@ def inventory(d, directory, *, services, image_reference, image_id):
         report['generator'].update({'composeVersion': compose, 'engineVersion': server['Version'],
             'engineApiVersion': server['ApiVersion'], 'dockerCliVersion': client['Version'],
             'daemonIdentitySha256': sha(info['id']), 'nativePlatform': platform})
+        for output, branch in (('engineGitCommit', server), ('dockerCliGitCommit', client)):
+            value = branch.get('GitCommit')
+            if isinstance(value, str) and re.fullmatch(r'[a-f0-9]{7,40}', value):
+                report['generator'][output] = value
+        for output, path, names in (('enginePackage', '/usr/bin/dockerd', ('docker', 'moby-engine')),
+                                    ('dockerCliPackage', '/usr/bin/docker', ('docker', 'docker-cli', 'moby-cli'))):
+            try:
+                report['generator'][output] = native_package(d, path, names)
+            except Exception:
+                pass
         try:
             report['daemonDefaultAddressPools'] = pools_statement(info['defaultAddressPools'])
         except Exception:
@@ -304,13 +354,29 @@ def _validate_inventory(value):
           and all(g[k] is None or isinstance(g[k], str) and HEX.fullmatch(g[k]) for k in
                   ('dockerCliSha256', 'composeCliSha256', 'daemonIdentitySha256'))
           and g['nativePlatform'] in (None, 'linux/x86_64', 'linux/amd64', 'linux/aarch64', 'linux/arm64'), 'INVENTORY_INVALID')
-    check(isinstance(p, dict) and set(p) == {'status', 'pools', 'reviewedRulesStatus'}
+    check(all(g[k] is None or isinstance(g[k], str) and re.fullmatch(r'[a-f0-9]{7,40}', g[k])
+              for k in ('engineGitCommit', 'dockerCliGitCommit')), 'INVENTORY_INVALID')
+    for key in ('enginePackage', 'dockerCliPackage'):
+        row = g[key]
+        check(row is None or isinstance(row, dict) and set(row) == {'name', 'version', 'release', 'architecture'}
+              and row['name'] in (('docker', 'moby-engine') if key == 'enginePackage'
+                                  else ('docker', 'docker-cli', 'moby-cli'))
+              and isinstance(row['version'], str) and VERSION.fullmatch(row['version'])
+              and isinstance(row['release'], str) and re.fullmatch(r'[0-9][a-z0-9._]{0,95}', row['release'])
+              and row['architecture'] in ('x86_64', 'aarch64'), 'INVENTORY_INVALID')
+    check(isinstance(p, dict) and set(p) == {'status', 'pools', 'reviewedRulesStatus', 'sourceEncoding', 'sourceValueSha256'}
           and p['status'] in ('DECLARED', 'UNDECLARED', 'UNAVAILABLE') and p['reviewedRulesStatus'] == 'SOURCE_NOT_MEASURED'
           and isinstance(p['pools'], list) and len(p['pools']) <= 32, 'INVENTORY_INVALID')
     normalized = pools_statement([{'Base': row.get('base'), 'Size': row.get('size')} for row in p['pools']
                                  if isinstance(row, dict) and set(row) == {'base', 'size'}])
     check(len(normalized['pools']) == len(p['pools']) and normalized['pools'] == p['pools']
           and (p['status'] == 'DECLARED') is bool(p['pools']), 'INVENTORY_INVALID')
+    check((p['status'] == 'UNAVAILABLE' and p['sourceEncoding'] is None and p['sourceValueSha256'] is None)
+          or (p['status'] != 'UNAVAILABLE' and p['sourceEncoding'] in ('NULL', 'ARRAY')
+              and p['sourceValueSha256'] == (fingerprint(None) if p['sourceEncoding'] == 'NULL'
+                                             else normalized['sourceValueSha256'])
+              and (p['sourceEncoding'] != 'NULL' or p['status'] == 'UNDECLARED')),
+          'INVENTORY_INVALID')
     check(isinstance(s, dict) and set(s) == SOURCE_KEYS and s['status'] in ('OBSERVED', 'NOT_MEASURED')
           and isinstance(s['apiFieldNames'], list) and s['apiFieldNames'] == sorted(set(s['apiFieldNames']))
           and set(s['apiFieldNames']) <= API_FIELDS, 'INVENTORY_INVALID')
@@ -333,11 +399,24 @@ def _validate_inventory(value):
           and (c['status'] != 'MISMATCH' or c['expectedImageIdSha256'] != c['observedImageIdSha256']), 'INVENTORY_INVALID')
     if s['status'] == 'NOT_MEASURED':
         check(s['apiFieldNames'] == [] and all(s[k] is None for k in
-              ('environmentKeyCount', 'declaredNetworkCount', 'mountTypeCounts', 'schemaSha256')), 'INVENTORY_INVALID')
+              ('environmentKeyCount', 'declaredNetworkCount', 'mountTypeCounts', 'schemaSha256', 'representation')), 'INVENTORY_INVALID')
     else:
         check({'environment', 'networks', 'volumes'} <= set(s['apiFieldNames'])
               and s['environmentKeyCount'] is not None and s['declaredNetworkCount'] == 4
               and s['mountTypeCounts'] is not None and s['schemaSha256'] is not None, 'INVENTORY_INVALID')
+        shape = s['representation']
+        check(isinstance(shape, dict) and set(shape) == {'dependencyFieldNames', 'networkEntryFieldNames', 'volumeFieldNames'}
+              and isinstance(shape['dependencyFieldNames'], dict)
+              and set(shape['dependencyFieldNames']) <= {'migrate', 'media-resolver'}
+              and isinstance(shape['networkEntryFieldNames'], dict)
+              and set(shape['networkEntryFieldNames']) == set(NETWORK_ROLES)
+              and isinstance(shape['volumeFieldNames'], list) and len(shape['volumeFieldNames']) <= 8,
+              'INVENTORY_INVALID')
+        for rows, allowed in ((shape['dependencyFieldNames'].values(), {'condition', 'required', 'restart'}),
+                              (shape['networkEntryFieldNames'].values(), {'priority'}),
+                              (shape['volumeFieldNames'], {'type', 'source', 'target', 'read_only', 'volume', 'bind', 'consistency'})):
+            check(all(isinstance(row, list) and row == sorted(set(row)) and set(row) <= allowed
+                      for row in rows), 'INVENTORY_INVALID')
     if r['status'] == 'NOT_MEASURED':
         check(all(r[k] is None for k in RESOURCE_KEYS - {'status', 'reviewedSchemaStatus'}), 'INVENTORY_INVALID')
     else:

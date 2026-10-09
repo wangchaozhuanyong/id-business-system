@@ -35,6 +35,7 @@ class DockerReadFixture:
     def __init__(self):
         self.calls=[];self.failed=set();self.default_pools=[];self.compose_version='2.39.4'
         self.cached_image=IMAGE;self.source=model();self.network_unknown=False;self.volume_unknown=False
+        self.packages={}
         self.info={'id':'engine-fixture-only','serverVersion':'28.4.0','defaultAddressPools':self.default_pools,
             'osType':'linux','architecture':'x86_64','plugins':[{'Name':'compose','Path':'/usr/libexec/docker/cli-plugins/docker-compose'}]}
         self.version={'Server':{'Version':'28.4.0','ApiVersion':'1.51'},'Client':{'Version':'28.4.0'}}
@@ -54,6 +55,9 @@ class DockerReadFixture:
             self.info['defaultAddressPools']=self.default_pools
             return json.dumps(self.info)
         if args[:2]==('docker','version'):return json.dumps(self.version)
+        if args[:2]==('rpm','-qf'):
+            if args[2] in self.packages:return self.packages[args[2]]
+            raise RuntimeError(SENTINEL)
         if args[:3]==('docker','image','inspect'):
             if 'image' in self.failed:raise RuntimeError(SENTINEL)
             return json.dumps(self.cached_image)
@@ -110,12 +114,46 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(result['daemonDefaultAddressPools']['pools'],[{'base':'10.64.0.0/16','size':24}])
         self.assertEqual(result['daemonDefaultAddressPools']['reviewedRulesStatus'],'SOURCE_NOT_MEASURED')
     def test_unknown_or_malformed_daemon_pools_not_silently_assumed(self):
-        for rows in (None,[{'Base':SENTINEL,'Size':24}],[{'Base':'10.0.0.1/16','Size':24}],
+        for rows in ('',False,{},[{'Base':SENTINEL,'Size':24}],[{'Base':'10.0.0.1/16','Size':24}],
                      [{'Base':'10.0.0.0/16','Size':True}],[{'Base':'10.0.0.0/16','Size':24,'token':SENTINEL}]):
             with self.subTest(type=type(rows).__name__):
                 self.d.default_pools=rows;r=self.inventory()
                 self.assertEqual(r['daemonDefaultAddressPools']['status'],'UNAVAILABLE')
                 self.assertIn('DEFAULT_POOLS_UNAVAILABLE',r['codes']);self.assertNotIn(SENTINEL,json.dumps(r))
+    def test_native_nil_pools_only_observes_no_custom_declaration(self):
+        self.d.default_pools=None
+        r=self.inventory()
+        self.assertEqual(r['daemonDefaultAddressPools'],{'status':'UNDECLARED','pools':[],
+            'reviewedRulesStatus':'SOURCE_NOT_MEASURED','sourceEncoding':'NULL',
+            'sourceValueSha256':m.fingerprint(None)})
+        self.assertNotIn('DEFAULT_POOLS_UNAVAILABLE',r['codes'])
+        self.assertEqual(m.REVIEWED_GENERATORS,{})
+        self.assertFalse(r['authority']);self.assertFalse(r['measurementPerformed'])
+        self.d.default_pools=[]
+        array=self.inventory()['daemonDefaultAddressPools']
+        self.assertEqual(array['sourceEncoding'],'ARRAY')
+        self.assertNotEqual(array['sourceValueSha256'],r['daemonDefaultAddressPools']['sourceValueSha256'])
+    def test_native_version_git_and_installed_package_identity_are_observed_only(self):
+        self.d.version['Server']['GitCommit']='abc1234'
+        self.d.version['Client']['GitCommit']='def1234'
+        self.d.packages={'/usr/bin/dockerd':'docker|25.0.16|1.amzn2023.0.1|x86_64',
+                         '/usr/bin/docker':'docker-cli|25.0.14|1.amzn2023.0.1|x86_64'}
+        r=self.inventory();g=r['generator']
+        self.assertEqual(g['engineGitCommit'],'abc1234')
+        self.assertEqual(g['dockerCliGitCommit'],'def1234')
+        self.assertEqual(g['enginePackage']['version'],'25.0.16')
+        self.assertEqual(g['dockerCliPackage']['name'],'docker-cli')
+        self.assertFalse(r['authority']);self.assertFalse(r['productionEligible'])
+        self.assertEqual(m.REVIEWED_GENERATORS,{})
+    def test_unmeasured_or_malformed_native_package_fields_are_suppressed(self):
+        for value in (SENTINEL,'unknown|25.0.16|1.amzn2023.0.1|x86_64',
+                      'docker|'+SENTINEL+'|1.amzn2023.0.1|x86_64',
+                      'docker|25.0.16|'+SENTINEL+'|x86_64',
+                      'docker|25.0.16|1.amzn2023.0.1|'+SENTINEL):
+            self.d.version['Server']['GitCommit']=SENTINEL
+            self.d.packages={'/usr/bin/dockerd':value}
+            r=self.inventory();self.assertIsNone(r['generator']['enginePackage'])
+            self.assertIsNone(r['generator']['engineGitCommit']);self.assertNotIn(SENTINEL,json.dumps(r))
     def test_unreviewed_local_generator_versions_only_observed_not_registered(self):
         self.d.compose_version='5.4.0'
         r=self.inventory();self.assertEqual(r['generator']['composeVersion'],'5.4.0')
@@ -143,6 +181,40 @@ class InventoryTests(unittest.TestCase):
         self.d.source['services']['api']['environment']['API_PRIVATE']=None
         r=self.inventory();self.assertEqual(r['sourceShape']['status'],'NOT_MEASURED')
         self.assertIn('SOURCE_SHAPE_UNAVAILABLE',r['codes'])
+    def test_native_null_command_fields_are_observed_without_removing_them(self):
+        self.d.source['services']['api'].update(command=None,entrypoint=None)
+        before=copy.deepcopy(self.d.source)
+        r=self.inventory()
+        self.assertEqual(r['sourceShape']['status'],'OBSERVED')
+        self.assertTrue({'command','entrypoint'} <= set(r['sourceShape']['apiFieldNames']))
+        self.assertEqual(self.d.source,before)
+        self.assertFalse(r['authority']);self.assertFalse(r['proofConstructed'])
+    def test_rendered_shape_keeps_only_known_nested_field_names(self):
+        api=self.d.source['services']['api']
+        api['depends_on']={'migrate':{'condition':'service_completed_successfully','required':True}}
+        api['networks']={role:{'priority':0} for role in m.NETWORK_ROLES}
+        api['volumes'][0]['volume']={}
+        r=self.inventory();shape=r['sourceShape']['representation']
+        self.assertEqual(shape['dependencyFieldNames'],{'migrate':['condition','required']})
+        self.assertEqual(shape['networkEntryFieldNames']['default'],['priority'])
+        self.assertEqual(shape['volumeFieldNames'],[['source','target','type','volume']])
+        for branch in ('depends_on','networks'):
+            bad=copy.deepcopy(api)
+            target=bad[branch][next(iter(bad[branch]))];target[SENTINEL]=SENTINEL
+            self.d.source['services']['api']=bad
+            rejected=self.inventory()
+            self.assertEqual(rejected['sourceShape']['status'],'NOT_MEASURED')
+            self.assertNotIn(SENTINEL,json.dumps(rejected))
+        self.d.source['services']['api']=api
+    def test_explicit_command_or_entrypoint_cannot_claim_fixed_source_shape(self):
+        for key in ('command','entrypoint'):
+            for value in ([],['true'],'',SENTINEL,False,0,{}):
+                with self.subTest(key=key,value_type=type(value).__name__):
+                    self.d.source=model();self.d.source['services']['api'][key]=value
+                    r=self.inventory()
+                    self.assertEqual(r['sourceShape']['status'],'NOT_MEASURED')
+                    self.assertIn('SOURCE_SHAPE_UNAVAILABLE',r['codes'])
+                    self.assertNotIn(SENTINEL,json.dumps(r))
     def test_schema_unknown_names_are_counted_and_hashed_not_output(self):
         self.d.network_unknown=True;self.d.volume_unknown=True
         r=self.inventory();self.assertEqual(r['resources']['unknownNetworkFieldCount'],4)
