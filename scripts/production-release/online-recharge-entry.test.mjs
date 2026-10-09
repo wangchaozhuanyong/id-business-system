@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -281,7 +282,7 @@ test('real Python CLI dispatches preflight/readback/diagnostic/proof without inv
   }
 });
 
-test('read-only and release transports seal all three controller sources and suppress raw output', () => {
+test('read-only and release transports seal controllers and recovery policy and suppress raw output', () => {
   const dispatch = readFileSync(join(scripts, 'dispatch.sh'), 'utf8');
   const helper = readFileSync(join(scripts, 'online-recharge-readonly.py'), 'utf8');
   assert.match(
@@ -289,6 +290,7 @@ test('read-only and release transports seal all three controller sources and sup
     /if online_recharge:[\s\S]*--online-recharge-only --online-recharge-build-proof/
   );
   assert.match(dispatch, /remote-deploy\.py', 'api-admin-scope\.py', 'online-recharge-scope\.py/);
+  assert.match(dispatch, /online-recharge-scope\.py', 'online-recharge-recovery\.json'/);
   assert.match(dispatch, /sha256sum -c - >\/dev\/null/);
   assert.equal((dispatch.match(/online-recharge-readonly\.py filter-deploy/g) || []).length, 2);
   assert.match(helper, /closed_json\(value\.get\('StandardOutputContent'/);
@@ -297,4 +299,57 @@ test('read-only and release transports seal all three controller sources and sup
   assert.match(helper, /validate_diagnostic\(controller, receipt, expected\)/);
   assert.match(helper, /object_pairs_hook=unique/);
   assert.equal(helper.includes("print(value['StandardOutputContent'])"), false);
+});
+
+test('actual dispatch generator binds all four carriers before deployment and rejects a missing policy', () => {
+  const dispatch = readFileSync(join(scripts, 'dispatch.sh'), 'utf8');
+  const generator = dispatch.match(/python3 - "\$parameters_file" <<'PY'\n([\s\S]*?)\nPY/)[1];
+  const carriers = [
+    'remote-deploy.py',
+    'api-admin-scope.py',
+    'online-recharge-scope.py',
+    'online-recharge-recovery.json'
+  ];
+  fixture(({ env, folder }) => {
+    const sourceDirectory = join(folder, 'scripts/production-release');
+    const outputDirectory = join(folder, '.deploy/production-release');
+    mkdirSync(sourceDirectory, { recursive: true });
+    mkdirSync(outputDirectory, { recursive: true });
+    for (const name of carriers)
+      writeFileSync(join(sourceDirectory, name), readFileSync(join(scripts, name)));
+    writeFileSync(join(outputDirectory, 'online-recharge-build-proof.json'), '{}\n');
+    const parametersFile = join(folder, 'parameters.json');
+    const generationEnv = { ...env, PATH: process.env.PATH };
+    for (const key of ['REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'])
+      delete generationEnv[key];
+    const invoke = () =>
+      execFileSync('python3', ['-B', '-c', generator, parametersFile], {
+        cwd: folder,
+        env: generationEnv,
+        stdio: 'pipe'
+      });
+    invoke();
+    const parameters = JSON.parse(readFileSync(parametersFile, 'utf8'));
+    assert.deepEqual(parameters.executionTimeout, ['3600']);
+    assert.equal(parameters.commands.length, 11);
+    assert.match(parameters.commands.at(-1), /--online-recharge-only/);
+    for (const [index, name] of carriers.entries()) {
+      const target = `/opt/id-business-v2/.staging/oidc-${commit}/${name}`;
+      const digest = createHash('sha256')
+        .update(readFileSync(join(scripts, name)))
+        .digest('hex');
+      assert.equal(
+        parameters.commands[2 + index * 2],
+        `curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/${commit}/scripts/production-release/${name} -o ${target}`
+      );
+      assert.equal(
+        parameters.commands[3 + index * 2],
+        `echo "${digest}  ${target}" | sha256sum -c - >/dev/null`
+      );
+    }
+    rmSync(join(sourceDirectory, carriers.at(-1)));
+    rmSync(parametersFile);
+    assert.throws(invoke);
+    assert.throws(() => readFileSync(parametersFile));
+  });
 });

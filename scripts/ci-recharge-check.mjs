@@ -7,7 +7,10 @@ import {
   backendArchitectureGuardChecks,
   auditRetentionMigration,
   historicalReleaseControlPaths,
-  hasRegistrationOnboardingScope
+  hasRegistrationOnboardingScope,
+  onlineRechargeRecoveryPolicy,
+  productionDatabaseAccessHelper,
+  productionDatabaseAccessTest
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -33,6 +36,9 @@ const onlineEngine = () => {
   npm('run', 'test:online-recharge:engine');
 };
 const onlineReleaseControlPaths = new Set([
+  onlineRechargeRecoveryPolicy,
+  productionDatabaseAccessHelper,
+  productionDatabaseAccessTest,
   '.github/workflows/production-release.yml',
   'scripts/ci-recharge-check.mjs',
   'scripts/production-release/remote-deploy.py',
@@ -125,6 +131,18 @@ const releaseMaintenanceControls = () => {
 const archiveReleaseControls = () => {
   run('node', ['--test', 'scripts/v2-order-archive-release-policy.test.mjs']);
 };
+const onlineRecoveryGrantControls = () => {
+  if (
+    changed.some((path) =>
+      [
+        onlineRechargeRecoveryPolicy,
+        productionDatabaseAccessHelper,
+        productionDatabaseAccessTest
+      ].includes(path)
+    )
+  )
+    run('node', ['--test', productionDatabaseAccessTest]);
+};
 
 if (part === 'guards') {
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
@@ -193,6 +211,7 @@ if (part === 'guards') {
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
+    onlineRecoveryGrantControls();
     run('python3', ['-B', 'scripts/production-release/online-recharge-scope.test.py']);
     run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);
@@ -314,6 +333,7 @@ if (part === 'guards') {
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
+    onlineRecoveryGrantControls();
     run('python3', ['-B', 'scripts/production-release/online-recharge-scope.test.py']);
     run('python3', ['-B', 'scripts/production-release/online-recharge-readonly.test.py']);
     run('node', ['--test', 'scripts/production-release/online-recharge-entry.test.mjs']);

@@ -99,6 +99,46 @@ def database_fixture(directory, applied):
     return {'rows': migration_rows, **(expected if applied else {'tables': None, 'columns': None, 'indexes': None})}
 
 
+class DatabaseReadTests(unittest.TestCase):
+    def test_sql_reaches_client_stdin_without_shell_expansion_or_requoting(self):
+        with directories() as (folder, _):
+            marker, captured = folder / 'must-not-exist', folder / 'stdin.txt'
+            client = folder / 'mysql'
+            client.write_text('#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n'
+                + 'Path(' + repr(str(captured)) + ').write_text(sys.stdin.read())\n'
+                + 'print(json.dumps({"result":"literal SQL received"}))\n')
+            client.chmod(0o700)
+            query = ("SELECT JSON_OBJECT('table', `online_recharge_cards`, 'quoted', '\"literal\"', "
+                     "'payload', '$(touch " + str(marker) + ")', 'backtick', '`touch " + str(marker)
+                     + "`');\n-- keep newlines and spaces")
+            calls = []
+            def compose(directory, *args, **kwargs):
+                calls.append((args, kwargs))
+                environment = {**os.environ, 'PATH': str(folder) + os.pathsep + os.environ['PATH'],
+                               'MYSQL_ROOT_PASSWORD': 'local-fixture-only', 'MYSQL_DATABASE': 'fixture'}
+                result = subprocess.run(['sh', '-c', args[-1]], input=kwargs['input_data'],
+                    capture_output=True, text=True, env=environment, check=True)
+                return result.stdout.strip()
+            d = controller(current_job_database=lambda _: 'fixture', compose=compose)
+            self.assertEqual(scope.database_read(d, folder, query), {'result': 'literal SQL received'})
+            self.assertEqual(captured.read_text(), query + '\n')
+            self.assertFalse(marker.exists())
+            args, kwargs = calls[0]
+            self.assertEqual(args[:-1], ('exec', '-e', 'MYSQL_DATABASE=fixture', '-T', 'mysql', 'sh', '-c'))
+            self.assertNotIn(query, args[-1])
+            self.assertNotIn('-e "', args[-1])
+            self.assertIn('mysql --batch --raw --skip-column-names', args[-1])
+            self.assertEqual(kwargs['timeout'], 60)
+
+    def test_invalid_or_oversized_sql_never_invokes_compose(self):
+        d = controller(current_job_database=MagicMock(), compose=MagicMock())
+        for value in ('', None, 'x' * (128 * 1024 + 1)):
+            with self.subTest(value_type=type(value).__name__), self.assertRaises(RuntimeError):
+                scope.database_read(d, ROOT, value)
+        d.current_job_database.assert_not_called()
+        d.compose.assert_not_called()
+
+
 class MigrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -197,6 +237,218 @@ class MigrationTests(unittest.TestCase):
         enum['default'] = enum['default'].upper()
         with patch.object(scope, 'database_read', return_value=data), self.assertRaisesRegex(RuntimeError, 'SCHEMA_CHANGED'):
             scope.migration_database_state(controller(), self.new)
+
+
+class RecoveryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix='recovery-source-', dir=RUNTIME)
+        cls.prepared = Path(cls.temporary.name)
+        cls.archive = subprocess.check_output(['git', 'archive', '--format=tar.gz',
+            '--prefix=id-business-system-' + scope.RECOVERY_COMMIT + '/', scope.RECOVERY_COMMIT], cwd=ROOT)
+        cls.inventory = scope.archive_inventory(controller(), cls.archive, scope.RECOVERY_COMMIT, scope.RECOVERY_TREE)
+        with tarfile.open(fileobj=io.BytesIO(cls.archive), mode='r:gz') as archive:
+            prefix = 'id-business-system-' + scope.RECOVERY_COMMIT + '/'
+            for member in archive.getmembers():
+                if not member.isfile():
+                    continue
+                path = cls.prepared / member.name[len(prefix):]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.extractfile(member).read())
+                path.chmod(0o755 if member.mode & 0o111 else 0o644)
+        cls.policy = scope.recovery_policy(controller())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    @contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(prefix='recovery-', dir=RUNTIME) as name:
+            base = Path(name)
+            previous = base / 'releases/old'
+            source = base / 'releases' / ('20261009T120000Z-' + scope.RECOVERY_COMMIT[:12])
+            previous.mkdir(parents=True)
+            shutil.copytree(self.prepared, source)
+            source.chmod(0o700)
+            (base / 'current').symlink_to(previous)
+            data = database_fixture(source, True)
+            with patch.object(scope, 'database_read', return_value=data):
+                state = scope.migration_database_state(controller(), previous, source=source)
+            receipt = {'status': 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH', 'step': 'migration',
+                'code': 'ONLINE_RECHARGE_STEP_FAILED', 'errorType': 'RuntimeError', 'rollbackOk': True,
+                'rollback': {}, 'servicesAttempted': [], 'candidateCommit': scope.RECOVERY_COMMIT,
+                'previousCommit': scope.BASELINE_COMMIT, 'migration': {**state, 'performed': True},
+                'migrationAttempted': True, 'inverseMigrationPerformed': False, 'mediaVolumeDeleted': False,
+                'currentPointsToCandidate': False, 'receiptPersisted': True}
+            (source / scope.FAILURE_FILE).write_text(json.dumps(receipt))
+            for filename in ('before-audit.json', 'backup-verification.json', scope.WORKSPACE_BACKUP_FILE):
+                (source / filename).write_text('{}')
+            d = controller(BASE=base)
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(scope, 'RECOVERY_FAILURE_SHA256', scope.fingerprint(receipt)))
+                stack.enter_context(patch.object(scope, 'recovery_policy', return_value=copy.deepcopy(self.policy)))
+                stack.enter_context(patch.object(scope, 'database_read', return_value=data))
+                stack.enter_context(patch.object(scope, 'fixed_recovery_inventory', return_value=self.inventory))
+                image = stack.enter_context(patch.object(scope, 'verify_image_content'))
+                backups = stack.enter_context(patch.object(scope, 'recovery_backups'))
+                inspected = stack.enter_context(patch.object(scope, 'inspect_image'))
+                yield d, previous, source, receipt, image, backups, inspected
+
+    def test_fixed_policy_and_duplicate_json_are_closed(self):
+        self.assertEqual(scope.fingerprint(self.policy), scope.RECOVERY_POLICY_SHA256)
+        self.assertEqual(self.policy['sharedGrant']['addedDeleteTables'], list(scope.RECOVERY_DELETE_TABLES))
+        for raw in (b'{"version":1,"version":1}', b'x' * (256 * 1024 + 1), b'{'):
+            with self.subTest(raw_length=len(raw)), self.assertRaises(RuntimeError):
+                scope.closed_recovery_json(controller(), raw)
+        cases = []
+        value = copy.deepcopy(self.policy); value['unknown'] = True; cases.append(value)
+        value = copy.deepcopy(self.policy); value['candidateAllowedFiles'].append('apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts'); cases.append(value)
+        value = copy.deepcopy(self.policy); value['failedCommandId'] = 'f' * 36; cases.append(value)
+        for value in cases:
+            with self.subTest(fields=set(value)), patch.object(scope, 'closed_recovery_json', return_value=value), \
+                    patch.object(scope, 'RECOVERY_POLICY_SHA256', scope.fingerprint(value)), self.assertRaises(RuntimeError):
+                scope.recovery_policy(controller())
+
+    def test_git_archive_tree_is_independent_of_failed_folder_name(self):
+        self.assertEqual(scope.archive_inventory(controller(), self.archive, scope.RECOVERY_COMMIT, scope.RECOVERY_TREE), self.inventory)
+        with self.assertRaisesRegex(RuntimeError, 'TREE_CHANGED'):
+            scope.archive_inventory(controller(), self.archive, scope.RECOVERY_COMMIT, 'f' * 40)
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w:gz') as archive:
+            member = tarfile.TarInfo('id-business-system-' + scope.RECOVERY_COMMIT + '/forged-link')
+            member.type = tarfile.SYMTYPE; member.linkname = '/outside'
+            archive.addfile(member)
+        with self.assertRaisesRegex(RuntimeError, 'ARCHIVE_INVALID'):
+            scope.archive_inventory(controller(), data.getvalue(), scope.RECOVERY_COMMIT, scope.RECOVERY_TREE)
+
+    def test_applied_origin_rechecks_database_and_source_while_reusing_static_proofs(self):
+        with self.fixture() as (d, previous, source, receipt, images, backups, inspected):
+            first = scope.recovery_origin(d, previous)
+            self.assertEqual(first['source'], source)
+            self.assertEqual(first['state'], {k: v for k, v in receipt['migration'].items() if k != 'performed'})
+            self.assertEqual(images.call_count, 4)
+            backups.assert_called_once()
+            self.assertEqual(scope.recovery_origin(d, previous)['marker'], first['marker'])
+            self.assertEqual(images.call_count, 4)
+            self.assertEqual(inspected.call_count, 4)
+            (source / 'apps/api/src/id-business-v2/online-recharge/online-recharge.service.ts').write_text('forged source')
+            with self.assertRaisesRegex(RuntimeError, 'TREE_CHANGED'):
+                scope.recovery_origin(d, previous)
+
+    def test_unsealed_or_changed_failure_is_rejected_before_any_image_execution(self):
+        with self.fixture() as (d, previous, source, receipt, images, _, _):
+            receipt['servicesAttempted'] = ['admin']
+            (source / scope.FAILURE_FILE).write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError, 'PROVENANCE_CHANGED'):
+                scope.recovery_origin(d, previous)
+            images.assert_not_called()
+
+    def test_unknown_file_symlink_and_second_matching_directory_are_rejected(self):
+        for variation in ('unknown', 'symlink', 'second'):
+            with self.subTest(variation=variation), self.fixture() as (d, previous, source, _, images, _, _):
+                if variation == 'unknown':
+                    (source / 'unapproved-source.txt').write_text('unapproved')
+                elif variation == 'symlink':
+                    path = source / 'package.json'; path.unlink(); path.symlink_to(ROOT / 'package.json')
+                else:
+                    (source.parent / ('20261009T120001Z-' + scope.RECOVERY_COMMIT[:12])).mkdir()
+                with self.assertRaises(RuntimeError):
+                    scope.recovery_origin(d, previous)
+                images.assert_not_called()
+
+    def test_partial_schema_and_nonmatching_completed_migration_cannot_be_resumed(self):
+        with self.fixture() as (d, previous, source, _, images, _, _):
+            data = database_fixture(source, True)
+            data['columns'][0]['nullable'] = 'UNKNOWN'
+            with patch.object(scope, 'database_read', return_value=data), self.assertRaisesRegex(RuntimeError, 'SCHEMA_CHANGED'):
+                scope.recovery_origin(d, previous)
+            data = database_fixture(source, True)
+            data['rows'].append({'name': '20261010000000_unknown', 'checksum': 'f' * 64, 'finished': 1, 'rolledBack': 0})
+            with patch.object(scope, 'database_read', return_value=data), self.assertRaisesRegex(RuntimeError, 'HISTORY_CHANGED'):
+                scope.recovery_origin(d, previous)
+            images.assert_not_called()
+
+    def test_only_exact_three_delete_lines_and_control_changes_are_allowed(self):
+        with self.fixture() as (d, previous, source, *_):
+            target = previous.parent / 'new-candidate'
+            shutil.copytree(self.prepared, target)
+            for name in self.policy['candidateAllowedFiles']:
+                path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT / name).read_bytes())
+                path.chmod(0o755 if (ROOT / name).stat().st_mode & 0o111 else 0o644)
+            context = {'policy': self.policy, 'source': source}
+            scope.candidate_recovery_source(d, target, context)
+            helper = target / scope.GRANT_SOURCE
+            helper.write_bytes(helper.read_bytes().replace(b"  'online_recharge_bills',\n", b"  'online_recharge_bills',\n  'online_recharge_tasks',\n"))
+            with self.assertRaisesRegex(RuntimeError, 'SHARED_GATE_SOURCE_CHANGED'):
+                scope.candidate_recovery_source(d, target, context)
+            helper.write_bytes((ROOT / scope.GRANT_SOURCE).read_bytes())
+            path = target / 'apps/admin/src/v2/features/online-recharge/unapproved.ts'
+            path.write_text('unapproved UI change')
+            with self.assertRaisesRegex(RuntimeError, 'BUILD_SOURCE_CHANGED'):
+                scope.candidate_recovery_source(d, target, context)
+
+    def test_current_seven_services_and_complete_predecessor_are_verified_through_projection(self):
+        with self.fixture() as (d, previous, source, *_):
+            context = {'source': source, 'policy': self.policy, 'state': {'status': 'APPLIED'},
+                       'marker': scope.recovery_marker(self.policy)}
+            original = self.policy['preflight']
+            running = copy.deepcopy(original['services'])
+            manifest = {'apiWorkspacePublication': {'scope': 'API_ADMIN_WORKSPACE'}}
+            evidence = {'apiSource': {'kind': 'API_WORKSPACE_BUILD_PROVEN'},
+                        'manifestSha256': original['manifestSha256']}
+            receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFIED', 'volumePreserved': True,
+                'volumeDeletionPerformed': False, 'registrationHealthChecked': True,
+                'services': running, 'buildProofSha256': original['workspaceBuildProofSha256']}
+            reader = SimpleNamespace(projected=True)
+            legacy = SimpleNamespace(baseline=MagicMock(return_value=(previous, manifest, running, evidence)),
+                                     readback=MagicMock(return_value=receipt))
+            with ExitStack() as stack:
+                for name, mock in {'recovery_origin': MagicMock(return_value=context),
+                    'historical_controller': MagicMock(return_value=reader), 'legacy': MagicMock(return_value=legacy),
+                    'workspace_guard': MagicMock(return_value={}), 'workspace_files': MagicMock(return_value={}),
+                    'verify_permission_seed': MagicMock(), 'require_fresh_resources': MagicMock(),
+                    'jobs_idle': MagicMock(return_value={}), 'snapshot': MagicMock(return_value=running)}.items():
+                    stack.enter_context(patch.object(scope, name, mock))
+                stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
+                _, _, _, verified = scope.baseline(d, scope.BASELINE_COMMIT)
+                self.assertEqual(verified['migrationRecovery'], context['marker'])
+                self.assertIs(legacy.baseline.call_args.args[0], reader)
+                self.assertIs(legacy.readback.call_args.args[0], reader)
+                for service in running:
+                    old = running[service]['containerId']; running[service]['containerId'] = '0' * 64
+                    with self.subTest(service=service), self.assertRaisesRegex(RuntimeError, 'PRESERVED_CONTAINER_CHANGED'):
+                        scope.baseline(d, scope.BASELINE_COMMIT)
+                    running[service]['containerId'] = old
+
+    def test_original_mysql_backup_file_and_s3_checksum_are_reverified_without_age_limit(self):
+        verify = scope.recovery_backups
+        with self.fixture() as (d, previous, source, *_):
+            backup_root = d.BASE / 'backups/mysql'; backup_root.mkdir(parents=True)
+            path = backup_root / 'id-business-v2-20261009T120001Z.sql.gz'
+            path.write_bytes(gzip.compress(b'-- synthetic isolated recovery backup\n', mtime=0))
+            os.utime(path, (1, 1))
+            digest = scope.file_digest(path)
+            (source / 'backup-verification.json').write_text(json.dumps({'name': path.name, 'sha256': digest,
+                'size': path.stat().st_size, 's3Verified': True}))
+            (source / scope.WORKSPACE_BACKUP_FILE).write_text(json.dumps({'name': 'synthetic-workspace'}))
+            head = {'ContentLength': path.stat().st_size, 'ServerSideEncryption': 'AES256',
+                    'ChecksumSHA256': base64.b64encode(bytes.fromhex(digest)).decode()}
+            d.run = MagicMock(return_value=json.dumps(head))
+            d.environment_values = lambda _: {'MYSQL_BACKUP_S3_BUCKET': 'isolated-fixture-bucket'}
+            with patch.object(shared, 'audit_receipt', return_value={'checksSha256': 'f' * 64}), \
+                    patch.object(shared, 'workspace_volume', return_value={'fixture': 'volume'}), \
+                    patch.object(scope, 'workspace_backup_receipt') as workspace:
+                verify(d, source, previous)
+                workspace.assert_called_once()
+                head['ChecksumSHA256'] = base64.b64encode(b'\0' * 32).decode()
+                d.run.return_value = json.dumps(head)
+                with self.assertRaisesRegex(RuntimeError, 'BACKUP_UNVERIFIED'):
+                    verify(d, source, previous)
+                path.write_bytes(path.read_bytes() + b'changed')
+                with self.assertRaisesRegex(RuntimeError, 'BACKUP_RECEIPT_CHANGED'):
+                    verify(d, source, previous)
 
 
 class ProofTests(unittest.TestCase):
@@ -356,6 +608,7 @@ class WorkspaceTests(unittest.TestCase):
                    'volumeDeletionPerformed': False, 'registrationHealthChecked': True, 'buildProofSha256': '1' * 64}
         with patch.object(shared, 'baseline', return_value=(directory, manifest, states(), evidence)) as reader, \
                 patch.object(shared, 'readback', return_value=receipt), patch.object(scope, 'workspace_files', return_value={}), \
+                patch.object(scope, 'recovery_origin', return_value=None), \
                 patch.object(shared, 'jobs_idle', return_value={}), patch.object(scope, 'snapshot', return_value=states()), \
                 patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)):
             result = scope.baseline(d, scope.BASELINE_COMMIT)
@@ -563,6 +816,32 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(scope.safe_code(RuntimeError('API_ADMIN_BASELINE_PROJECTION_FAILED')), 'API_ADMIN_BASELINE_PROJECTION_FAILED')
         self.assertEqual(scope.safe_code(RuntimeError('synthetic secret must not escape')), 'ONLINE_RECHARGE_STEP_FAILED')
 
+    def test_readback_requires_sealed_marker_when_migration_was_preserved(self):
+        policy = scope.recovery_policy(controller())
+        value = {'status': 'ONLINE_RECHARGE_VERIFIED', 'commit': COMMIT, 'sourceTree': TREE,
+            'services': states(True), 'servicesUpdated': list(scope.UPDATED), 'preservedServiceCount': len(scope.PRESERVED),
+            'runningImagesAndContentMatched': True, 'migrationApplied': True, 'migrationPerformed': False,
+            'migration': {'name': scope.MIGRATION_NAME, 'sha256': scope.MIGRATION_IDENTITY['sha256'],
+                'status': 'APPLIED', 'schemaVerified': True, 'appliedMigrationsSha256': 'f' * 64},
+            'existingEnvironmentPreserved': True, 'credentialsLoopback': True, 'backupVerified': True,
+            'workspaceBackupVerified': True, 'workspaceVolumePreserved': True,
+            'legacyWorkersPublished': False, 'externalAcceptancePerformed': False, 'dedicatedVolume': scope.MEDIA_VOLUME,
+            'checkCount': 49, 'violationCount': 0, 'buildProofSha256': 'e' * 64,
+            'migrationRecovery': scope.recovery_marker(policy)}
+        result = scope.validate_receipt(controller(), value, 'readback', COMMIT, COMMIT)
+        self.assertEqual(result['migrationRecovery'], value['migrationRecovery'])
+        self.assertFalse(result['migrationPerformed'])
+        for variation in ('missing', 'performed', 'forged'):
+            candidate = copy.deepcopy(value)
+            if variation == 'missing':
+                candidate.pop('migrationRecovery')
+            elif variation == 'performed':
+                candidate['migrationPerformed'] = True
+            else:
+                candidate['migrationRecovery']['failureReceiptSha256'] = '0' * 64
+            with self.subTest(variation=variation), self.assertRaisesRegex(RuntimeError, 'READBACK_CHANGED'):
+                scope.validate_receipt(controller(), candidate, 'readback', COMMIT, COMMIT)
+
     def test_projection_diagnostic_retains_gate_and_exposes_only_bounded_cause(self):
         try:
             try:
@@ -611,7 +890,7 @@ class ReceiptTests(unittest.TestCase):
 
 
 class ReleaseSequenceTests(unittest.TestCase):
-    def execute(self, fail=None, busy=False):
+    def execute(self, fail=None, busy=False, recovered=False):
         temporary = tempfile.TemporaryDirectory(prefix='release-', dir=RUNTIME)
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name)
@@ -651,6 +930,10 @@ class ReleaseSequenceTests(unittest.TestCase):
             {'manifestSha256': hashlib.sha256(raw).hexdigest()})), source_tree=MagicMock(return_value=TREE), strict_audit=audit)
         baseline_evidence = {'manifestSha256': hashlib.sha256(raw).hexdigest(),
                              'workspaceVolume': {'name': 'fixture_auto_registration_data'}}
+        recovery = {'source': previous, 'policy': {}, 'state': {'status': 'APPLIED'},
+                    'marker': {'fixed-recovery-fixture': True}}
+        if recovered:
+            baseline_evidence['migrationRecovery'] = recovery['marker']
         def sqlite_backup(*args):
             events.append('sqlite-backup')
             return {'name': 'synthetic.sqlite3.gz', 's3Verified': True}
@@ -688,10 +971,12 @@ class ReleaseSequenceTests(unittest.TestCase):
             for name, value in {
                 'legacy': fake_legacy, 'extract_source': extract,
                 'baseline': MagicMock(return_value=(previous, old_manifest, states(), baseline_evidence)),
+                'recovery_origin': MagicMock(return_value=recovery),
+                'candidate_recovery_source': MagicMock(),
                 'workspace_backup': sqlite_backup,
                 'migration_source_check': MagicMock(), 'protected_source': MagicMock(),
                 'require_preserved': MagicMock(return_value=(states(True), {})),
-                'migration_database_state': MagicMock(side_effect=[{'status': 'PENDING'}, {'status': 'APPLIED'}, {'status': 'APPLIED'}]),
+                'migration_database_state': MagicMock(side_effect=[{'status': 'APPLIED' if recovered else 'PENDING'}, {'status': 'APPLIED'}, {'status': 'APPLIED'}]),
                 'configuration_hashes': MagicMock(return_value={}),
                 'verify_image_content': MagicMock(), 'verify_running': MagicMock(), 'historical_guard': MagicMock(),
                 'verify_permission_seed': MagicMock(), 'require_fresh_resources': lambda *a: events.append('empty9'),
@@ -724,6 +1009,24 @@ class ReleaseSequenceTests(unittest.TestCase):
         self.assertEqual(receipt['migration']['status'], 'APPLIED')
         self.assertFalse(receipt['inverseMigrationPerformed'])
         self.assertNotIn('RAW_SYNTHETIC_SECRET', json.dumps(receipt))
+
+    def test_sealed_applied_recovery_skips_migration_but_takes_new_backups_and_runs_grants(self):
+        result, receipt, events = self.execute(recovered=True)
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['status'], 'ONLINE_RECHARGE_VERIFIED')
+        selected = [e for e in events if e.startswith(('audit:', 'switch:')) or e in ('backup', 'sqlite-backup', 'migration', 'grants')]
+        self.assertEqual(selected, ['audit:before-audit.json', 'backup', 'sqlite-backup', 'grants',
+                                   'switch:admin', 'switch:api', 'switch:online-recharge', 'audit:after-audit.json'])
+
+    def test_recovery_second_failure_keeps_schema_without_repeating_migration_or_switch(self):
+        result, receipt, events = self.execute(fail='grants', recovered=True)
+        self.assertEqual(result, 1)
+        self.assertEqual(receipt['status'], 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH')
+        self.assertEqual(receipt['migration'], {'status': 'APPLIED', 'performed': False})
+        self.assertFalse(receipt['migrationAttempted'])
+        self.assertFalse(receipt['inverseMigrationPerformed'])
+        self.assertNotIn('migration', events)
+        self.assertFalse(any(e.startswith('switch:') for e in events))
 
     def test_executor_start_failure_removes_only_executor_and_restores_api_admin(self):
         result, receipt, events = self.execute(fail='online-recharge')
