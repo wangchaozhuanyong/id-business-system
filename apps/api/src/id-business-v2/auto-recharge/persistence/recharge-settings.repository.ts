@@ -4,6 +4,8 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import { ACCOUNT_COPY_SETTINGS_OWNER_ID, accountCopySuffix } from '../account-copy-settings';
 
+export const BIT_ORDER_PRICING_SETTINGS_OWNER_ID = '__bit_order_pricing_settings__';
+
 @Injectable()
 export class RechargeSettingsRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -14,6 +16,33 @@ export class RechargeSettingsRepository {
 
   findInTransaction(tx: V2CommandTransaction, ownerId: string) {
     return tx.idBusinessV2RechargeBrowserSetting.findUnique({ where: { ownerId } });
+  }
+
+  findOrderPricing(tx?: V2CommandTransaction) {
+    return (tx ?? this.prisma).idBusinessV2RechargeBrowserSetting.findUnique({
+      where: { ownerId: BIT_ORDER_PRICING_SETTINGS_OWNER_ID },
+      select: { browserOptions: true, updatedAt: true }
+    });
+  }
+
+  async compareAndSetOrderPricing(
+    tx: V2CommandTransaction,
+    expectedUpdatedAt: Date | null,
+    browserOptions: Prisma.InputJsonValue
+  ) {
+    const ownerId = BIT_ORDER_PRICING_SETTINGS_OWNER_ID;
+    const updatedAt = new Date(Math.max(Date.now(), (expectedUpdatedAt?.getTime() ?? 0) + 1));
+    const result =
+      expectedUpdatedAt === null
+        ? await tx.idBusinessV2RechargeBrowserSetting.createMany({
+            data: [{ ownerId, browserOptions, updatedAt }],
+            skipDuplicates: true
+          })
+        : await tx.idBusinessV2RechargeBrowserSetting.updateMany({
+            where: { ownerId, updatedAt: expectedUpdatedAt },
+            data: { browserOptions, updatedAt }
+          });
+    return result.count === 1 ? this.findOrderPricing(tx) : null;
   }
 
   async findAccountCopySuffix(tx?: V2CommandTransaction) {

@@ -18,7 +18,7 @@ import type {
 const currencies = V2_FINANCE_CURRENCY_OPTIONS.map((item) => item.code);
 const journalTypeOptions: Array<{ value: V2FinanceJournalType; label: string }> = [
   { value: 'fx_exchange', label: '账户换汇' },
-  { value: 'bank_recharge_completed', label: '银充订单完成' },
+  { value: 'bank_recharge_completed', label: '比特订单完成' },
   { value: 'order_completed', label: '订单完成' },
   { value: 'order_refund', label: '订单退款' },
   { value: 'order_upgrade_balance_return', label: '订单升级退币' },
@@ -251,10 +251,10 @@ function accountCodeLabel(value: V2FinanceAccountCode) {
     realized_fx_gain_loss: '已实现汇兑损益',
     opening_equity: '期初权益',
     manual_adjustment: '手工调整',
-    bank_recharge_revenue: '银充代充收入',
-    bank_recharge_service_fee: '银充客户手续费收入',
-    bank_recharge_cost: '银充代付成本',
-    bank_recharge_bank_fee: '银充银行手续费'
+    bank_recharge_revenue: '比特充值代充收入',
+    bank_recharge_service_fee: '比特充值客户手续费收入',
+    bank_recharge_cost: '比特充值代付成本',
+    bank_recharge_bank_fee: '比特充值银行手续费'
   };
   return labels[value];
 }

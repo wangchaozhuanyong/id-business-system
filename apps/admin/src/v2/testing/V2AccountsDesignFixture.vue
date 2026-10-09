@@ -278,6 +278,14 @@ const page = reactive({
   total: 0,
   loading: false,
   listError: '',
+  queryPhase: 'ready' as const,
+  isParameterTransition: false,
+  get displayedPage(): number {
+    return page.query.page;
+  },
+  get displayedPageSize(): number {
+    return page.query.pageSize;
+  },
   countryOptions,
   statusOptions,
   supplierOptions,
@@ -343,8 +351,14 @@ const page = reactive({
     page.query.lifecycle = lifecycle;
     applyFilters(true);
   },
-  handlePageSizeChange: () => applyFilters(true),
-  handlePageChange: () => applyFilters(),
+  handlePageSizeChange: (pageSize: number) => {
+    page.query.pageSize = pageSize;
+    applyFilters(true);
+  },
+  handlePageChange: (currentPage: number) => {
+    page.query.page = currentPage;
+    applyFilters();
+  },
   handleSortChange: () => undefined,
   getAccountExchangeRate: (item: V2Account) =>
     exchangeRates[

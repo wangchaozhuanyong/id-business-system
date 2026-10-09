@@ -52,7 +52,7 @@
           </dd>
         </div>
         <div>
-          <dt>银充代充收入</dt>
+          <dt>比特充值代充收入</dt>
           <dd class="is-positive">
             {{ formatCny(overview.profitLoss.bankRechargeRevenueCny ?? '0') }}
           </dd>
@@ -97,7 +97,7 @@
           </dd>
         </div>
         <div>
-          <dt>银充官网代付成本</dt>
+          <dt>比特充值官网代付成本</dt>
           <dd>{{ formatCny(overview.profitLoss.bankRechargeCostCny ?? '0') }}</dd>
         </div>
         <div>

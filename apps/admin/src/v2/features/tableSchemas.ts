@@ -104,7 +104,7 @@ export const v2TableSchemas = {
       columns: [
         {
           key: 'orderNo',
-          label: '银充订单',
+          label: '比特订单',
           kind: 'identifier',
           widthPreset: 'wide',
           pin: 'start'
@@ -113,7 +113,7 @@ export const v2TableSchemas = {
         { key: 'account', label: 'ChatGPT 账号', kind: 'identifier', widthPreset: 'wide' },
         { key: 'plan', label: '套餐', kind: 'text', widthPreset: 'standard' },
         { key: 'card', label: '银行卡', kind: 'identifier', widthPreset: 'standard' },
-        { key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'wide' },
         { key: 'usdtFeeAmount', label: 'USDT 手续费', kind: 'numeric', widthPreset: 'standard' },
         {
           key: 'shoppingFeeAmount',

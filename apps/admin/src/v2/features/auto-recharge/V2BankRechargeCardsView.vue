@@ -1,7 +1,7 @@
 <template>
   <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
-      description="管理银充银行卡，查看关联的充值账号与订单。卡号加密保存，安全码只在单笔充值时临时输入。"
+      description="管理比特充值银行卡，查看关联的充值账号与订单。卡号加密保存，安全码只在单笔充值时临时输入。"
     >
       <template #actions>
         <AppButton @click="openImport">批量导入</AppButton>
