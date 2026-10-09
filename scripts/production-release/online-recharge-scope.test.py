@@ -500,6 +500,10 @@ class RestoredRecoveryTests(unittest.TestCase):
                           for n, r in self.policy['preflight']['services'].items() if n not in ('mysql', 'caddy')}
             old_images['migrate'] = {'reference': 'old-migrate', 'digest': 'sha256:' + 'f' * 64, 'sourceCommit': scope.BASELINE_COMMIT}
             (previous / 'release-manifest.json').write_text(json.dumps({'commit': scope.BASELINE_COMMIT, 'images': old_images}))
+            old_before = copy.deepcopy(self.policy['preflight']['services'])
+            for name in ('api', 'admin'):
+                old_before[name]['containerId'] = '9' * 64
+            (previous / shared.STATE_FILE).write_text(json.dumps({'before': old_before}))
             (previous / 'compose.release.json').write_text(json.dumps({'services': {n: {'image': r['reference']} for n, r in old_images.items()}}))
             policy = copy.deepcopy(self.policy)
             for before in (policy['preflight'], policy['restoredAttempt']['preflight']):
@@ -525,7 +529,8 @@ class RestoredRecoveryTests(unittest.TestCase):
                 'guards': {'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
                            'registrationWindowRetained': False},
                 'freeBytes': 10 * 1024**3, 'migrationOrigin': migration_origin, 'workspaceVolume': {'fixture': 'volume'},
-                'workspaceIdle': True, 'workspaceOriginFiles': {'fixture': 'files'},
+                'workspaceIdle': True, 'workspaceOriginFiles': {
+                    shared.STATE_FILE: scope.file_digest(previous / shared.STATE_FILE)},
                 'workspaceBuildProofSha256': policy['preflight']['workspaceBuildProofSha256'],
                 'migrationRecovery': scope.original_recovery_marker(policy)}
             after = copy.deepcopy(policy['preflight']['services'])
@@ -607,6 +612,8 @@ class RestoredRecoveryTests(unittest.TestCase):
         with self.fixture() as (d, previous, source, context, documents, save, images, backups, workspace, historical, inspected):
             result = scope.restored_origin(d, previous, context)
             self.assertEqual(result['source'], source)
+            self.assertEqual(result['configurationAnchors']['api'], {
+                'oldBeforeContainerId': '9' * 64, 'candidateAfterContainerId': '0' * 64})
             self.assertEqual(images.call_count, 4); backups.assert_called_once()
             workspace.assert_called_once_with(d, previous, previous, documents[scope.STATE_FILE]['baselineEvidence'],
                                               documents[scope.STATE_FILE]['before'])
@@ -616,6 +623,9 @@ class RestoredRecoveryTests(unittest.TestCase):
             with patch.object(scope, 'recovery_origin', return_value=context), patch.object(scope, 'restored_origin', return_value=result) as second:
                 combined = scope.release_recovery(d, previous)
                 self.assertEqual(combined['restored'], result); second.assert_called_once()
+            (previous / shared.STATE_FILE).write_text(json.dumps({'before': {'api': {'containerId': '8' * 64}}}))
+            with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                scope.restored_origin(d, previous, context)
 
     def test_missing_or_forged_failure_never_reaches_images_backups_or_identity_exception(self):
         changes = [('step', 'switch'), ('status', 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH'), ('rollbackOk', False),
@@ -722,6 +732,151 @@ class RestoredRecoveryTests(unittest.TestCase):
                 guard.side_effect = None
                 if guard is not historical:
                     self.assertIsNone(d._onlineRechargeVerifiedRestored)
+
+
+class RestoredConfigurationDiagnosticTests(unittest.TestCase):
+    def fixture(self, service='api', original_replace='cid', current_replace='cid', separator='-'):
+        anchors = {'oldBeforeContainerId': '1' * 64, 'candidateAfterContainerId': '2' * 64}
+        stable_name = separator.join(('fixture', service, '1'))
+        metadata = {'Id': '3' * 64, 'Image': 'sha256:' + 'c' * 64, 'Name': '/' + stable_name,
+            'State': {'Status': 'running', 'Health': {'Status': 'healthy'}, 'StartedAt': '2026-10-10T01:00:00Z'},
+            'Config': {'Image': 'old-' + service, 'Hostname': '3' * 12, 'Env': ['FIXTURE=SECRET_MUST_NOT_ESCAPE'],
+                'Labels': {'com.docker.compose.project': 'fixture', 'com.docker.compose.service': service,
+                    'com.docker.compose.container-number': '1', 'com.docker.compose.replace':
+                        anchors['candidateAfterContainerId'] if current_replace == 'cid' else stable_name,
+                    'unrelated.label': 'unchanged'}},
+            'HostConfig': {'NetworkMode': 'fixture_default', 'ReadonlyRootfs': True},
+            'Mounts': [{'Destination': '/z', 'Source': '/fixture/z', 'RW': False},
+                       {'Destination': '/a', 'Source': '/fixture/a', 'RW': True}]}
+        configuration = {k: copy.deepcopy(metadata[k]) for k in ('Config', 'HostConfig', 'Mounts')}
+        configuration['Mounts'].sort(key=lambda m: m['Destination'])
+        actual = {**states()[service], 'containerId': metadata['Id'],
+            'startedAtSha256': hashlib.sha256(metadata['State']['StartedAt'].encode()).hexdigest(),
+            'environmentSha256': scope.fingerprint(sorted(metadata['Config']['Env'])),
+            'configurationSha256': scope.fingerprint(configuration)}
+        configuration['Config']['Hostname'] = '4' * 12
+        if original_replace == 'absent':
+            configuration['Config']['Labels'].pop('com.docker.compose.replace')
+        else:
+            configuration['Config']['Labels']['com.docker.compose.replace'] = (
+                anchors['oldBeforeContainerId'] if original_replace == 'cid' else stable_name)
+        original = {**actual, 'containerId': '4' * 64, 'startedAtSha256': '5' * 64,
+                    'configurationSha256': scope.fingerprint(configuration)}
+        return metadata, actual, original, anchors
+
+    def test_only_two_native_fields_uniquely_reconstruct_three_finite_historical_forms(self):
+        for service in ('api', 'admin'):
+            for old in ('cid', 'name', 'absent'):
+                for current in ('cid', 'name'):
+                    for separator in ('-', '_'):
+                        values = self.fixture(service, old, current, separator)
+                        preserved = copy.deepcopy(values)
+                        with self.subTest(service=service, old=old, current=current, separator=separator):
+                            result = scope.restored_configuration_projection(controller(), service, *values)
+                            self.assertEqual(result, {'rawSha256': values[1]['configurationSha256'],
+                                                      'projectedSha256': values[2]['configurationSha256']})
+                            self.assertEqual(values, preserved)
+
+    def test_raw_snapshot_and_every_identity_field_are_verified_before_projection(self):
+        paths = [('Id',), ('Image',), ('Config', 'Image'), ('State', 'Status'),
+                 ('State', 'Health', 'Status'), ('State', 'StartedAt')]
+        for path in paths:
+            values = self.fixture(); target = values[0]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = 'forged'
+            with self.subTest(path=path), self.assertRaises(RuntimeError):
+                scope.restored_configuration_projection(controller(), 'api', *values)
+        for key in ('configurationSha256', 'startedAtSha256', 'environmentSha256', 'containerId'):
+            values = self.fixture(); values[1][key] = '0' * 64
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                scope.restored_configuration_projection(controller(), 'api', *values)
+
+    def test_names_hostname_replace_labels_environment_host_config_and_mount_changes_are_rejected(self):
+        changes = [(('Name',), '/arbitrary-name'), (('Config', 'Hostname'), 'custom-host'),
+            (('Config', 'Labels', 'com.docker.compose.replace'), 'unsealed'),
+            (('Config', 'Labels', 'com.docker.compose.project'), 'other'),
+            (('Config', 'Labels', 'com.docker.compose.service'), 'admin'),
+            (('Config', 'Labels', 'com.docker.compose.container-number'), '2'),
+            (('Config', 'Labels', 'unrelated.label'), 'changed'),
+            (('Config', 'Env'), ['FIXTURE=changed']), (('HostConfig', 'ReadonlyRootfs'), False),
+            (('Mounts',), [{'Destination': '/changed', 'Source': '/fixture/z', 'RW': False}])]
+        for path, changed in changes:
+            values = self.fixture(); target = values[0]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = changed
+            configuration = {k: values[0][k] for k in ('Config', 'HostConfig', 'Mounts')}
+            configuration['Mounts'] = sorted(configuration['Mounts'], key=lambda m: m['Destination'])
+            values[1]['configurationSha256'] = scope.fingerprint(configuration)
+            with self.subTest(path=path), self.assertRaises(RuntimeError):
+                scope.restored_configuration_projection(controller(), 'api', *values)
+        values = self.fixture(); values[3]['unsealed'] = '0' * 64
+        with self.assertRaises(RuntimeError):
+            scope.restored_configuration_projection(controller(), 'api', *values)
+
+    def test_no_match_or_ambiguous_match_never_proves_projection(self):
+        values = self.fixture(); values[2]['configurationSha256'] = '0' * 64
+        with self.assertRaises(RuntimeError):
+            scope.restored_configuration_projection(controller(), 'api', *values)
+        values = self.fixture()
+        for row in values[1:3]:
+            row['environmentSha256'] = row['configurationSha256'] = '0' * 64
+        with patch.object(scope, 'fingerprint', return_value='0' * 64), self.assertRaises(RuntimeError):
+            scope.restored_configuration_projection(controller(), 'api', *values)
+
+    def test_finite_diagnostic_reports_all_seven_services_but_does_not_relax_main_gate(self):
+        original, actual = states(), states()
+        metadata, anchors = {}, {}
+        for name in ('api', 'admin'):
+            data, actual[name], original[name], anchors[name] = self.fixture(name)
+            metadata[name] = data
+        actual['mysql']['containerId'] = '6' * 64
+        context = {'policy': {'preflight': {'services': original}}, 'restored': {'configurationAnchors': anchors}}
+        d = controller(run=MagicMock(side_effect=[json.dumps([metadata[n]]) for n in ('api', 'admin')]))
+        def probe(d, expected):
+            scope.recovery_services(d, actual, context)
+        with patch.object(scope, 'baseline', side_effect=probe):
+            result = scope.projection_diagnostic(d, scope.BASELINE_COMMIT)
+        self.assertFalse(result['baselineConfirmed'])
+        self.assertEqual(result['gateCode'], 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
+        self.assertEqual(result['restoredProjectionMatch'], {'api': True, 'admin': True})
+        self.assertEqual(result['identityDiff']['mysql'], ['containerId'])
+        self.assertEqual(set(result['identityDiff']), set(original))
+        self.assertNotIn('SECRET_MUST_NOT_ESCAPE', json.dumps(result))
+        self.assertFalse(d._onlineRechargeProjectionDiagnostic)
+        self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
+        with self.assertRaisesRegex(RuntimeError, 'PRESERVED_CONTAINER_CHANGED'):
+            scope.recovery_services(d, actual, context)
+        self.assertEqual(d.run.call_count, 2)
+        candidates = []
+        for field, changed in (('identityDiff', {}), ('restoredProjectionMatch', {'api': 1, 'admin': True}),
+                               ('reason', 'PUBLISHED_BUILD_PROOF'), ('rawSecret', 'secret')):
+            candidates.append({**result, field: changed})
+        candidate = copy.deepcopy(result); candidate['identityDiff']['api'] = ['secret']; candidates.append(candidate)
+        candidate = copy.deepcopy(result); candidate['identityDiff']['api'] = ['image', 'image']; candidates.append(candidate)
+        candidate = copy.deepcopy(result); candidate['identityDiff']['api'] = ['image', 'status']; candidates.append(candidate)
+        candidate = copy.deepcopy(result); candidate['restoredProjectionMatch']['extra'] = True; candidates.append(candidate)
+        candidate = copy.deepcopy(result); candidate.pop('restoredProjectionMatch'); candidates.append(candidate)
+        for candidate in candidates:
+            with self.subTest(candidate_keys=sorted(candidate)), self.assertRaises(RuntimeError):
+                scope.validate_diagnostic(controller(), candidate, scope.BASELINE_COMMIT)
+
+    def test_later_baseline_failure_discards_identity_details_and_clears_probe_state(self):
+        d = controller()
+        original = states()
+        def later_failure(d, expected):
+            scope.recovery_services(d, original, {'policy': {'preflight': {'services': original}}})
+            self.assertIsNotNone(d._onlineRechargeIdentityDiagnostic)
+            raise RuntimeError('ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        with patch.object(scope, 'baseline', side_effect=later_failure):
+            result = scope.projection_diagnostic(d, scope.BASELINE_COMMIT)
+        self.assertEqual(result['gateCode'], 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        self.assertNotIn('identityDiff', result)
+        self.assertNotIn('restoredProjectionMatch', result)
+        self.assertFalse(d._onlineRechargeProjectionDiagnostic)
+        self.assertIsNone(d._onlineRechargeIdentityDiagnostic)
+        scope.validate_diagnostic(controller(), result, scope.BASELINE_COMMIT)
 
 
 class ProofTests(unittest.TestCase):
