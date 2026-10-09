@@ -38,6 +38,18 @@ const args = Object.entries({
 }).map(([name, value]) => `--${name}=${value}`);
 const options = () => parseNativeServicesOptions(args);
 
+function composeServiceContract(compose, name) {
+  const serviceSection = compose.match(/^services:\n([\s\S]*?)(?=^\S|(?![\s\S]))/m)?.[1];
+  assert.ok(serviceSection, 'missing Compose services section');
+  const matches = [
+    ...serviceSection.matchAll(
+      new RegExp(`^ {2}${name}:\\n([\\s\\S]*?)(?=^ {2}[a-z][a-z-]*:\\n|^\\S|(?![\\s\\S]))`, 'gm')
+    )
+  ];
+  assert.equal(matches.length, 1, `expected one Compose service: ${name}`);
+  return matches[0][1];
+}
+
 test('默认结构预检只读取三个公开源契约，不读取秘密或调用安装/启动/健康', async () => {
   const output = [];
   assert.equal(
@@ -104,18 +116,16 @@ test('六服务独立非 root 账号、私有目录、固定角色端口与停�
   );
 });
 
-test('API、浏览器与媒体的临时 tmpfs 限额沿用 Compose，共享内存独立限额', () => {
-  const bundle = nativeServiceBundle(options());
-  const compose = readFileSync(resolve(projectDir, 'docker-compose.aws-mysql.yml'), 'utf8');
+function assertTemporaryStorageContracts(bundle, compose) {
   for (const [service, composeName] of [
     ['api', 'api'],
     ['recharge', 'auto-recharge'],
     ['media', 'media-resolver']
   ]) {
-    const contract = compose.match(
-      new RegExp(`  ${composeName}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z-]*:\\n|$)`)
-    )[1];
-    const size = Number(contract.match(/\/tmp:rw,noexec,nosuid,nodev,size=(\d+)m/)[1]);
+    const contract = composeServiceContract(compose, composeName);
+    const sizeMatch = contract.match(/\/tmp:rw,noexec,nosuid,nodev,size=(\d+)m/);
+    assert.ok(sizeMatch, `missing bounded /tmp contract: ${composeName}`);
+    const size = Number(sizeMatch[1]);
     const unit = bundle.files[`systemd/id-business-v2-${service}.service`];
     const directives = unit.split('\n').filter((line) => line.startsWith('TemporaryFileSystem='));
     assert.equal(directives.length, 1);
@@ -142,6 +152,66 @@ test('API、浏览器与媒体的临时 tmpfs 限额沿用 Compose，共享内�
       'PrivateTmp=false'
     );
     assert.doesNotMatch(unit, /BindPaths=.*\/tmp|uid=|gid=|JoinsNamespaceOf=/);
+  }
+}
+
+test('API、浏览器与媒体的临时 tmpfs 限额沿用 Compose，共享内存独立限额', () => {
+  assertTemporaryStorageContracts(
+    nativeServiceBundle(options()),
+    readFileSync(resolve(projectDir, 'docker-compose.aws-mysql.yml'), 'utf8')
+  );
+});
+
+test('Compose 服务读取忽略嵌套依赖，并拒绝缺失或重复的真实服务', () => {
+  const fixture = `services:
+  online-recharge:
+    depends_on:
+      api:
+        condition: service_healthy
+        tmpfs:
+          - /tmp:rw,noexec,nosuid,nodev,size=999m
+  api:
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+volumes:
+  api:
+    driver: local
+`;
+  assert.equal(
+    composeServiceContract(fixture, 'api'),
+    '    tmpfs:\n      - /tmp:rw,noexec,nosuid,nodev,size=64m\n'
+  );
+  assert.throws(() =>
+    composeServiceContract(fixture.replace('  api:\n    tmpfs:', '  renamed:\n    tmpfs:'), 'api')
+  );
+  assert.throws(() =>
+    composeServiceContract(fixture.replace('volumes:', '  api:\n    tmpfs: []\nvolumes:'), 'api')
+  );
+});
+
+test('真实临时目录限额或浏览器共享内存变化仍使容量契约失败', () => {
+  const bundle = nativeServiceBundle(options());
+  const compose = readFileSync(resolve(projectDir, 'docker-compose.aws-mysql.yml'), 'utf8');
+  for (const name of ['api', 'auto-recharge', 'media-resolver']) {
+    const contract = composeServiceContract(compose, name);
+    const changed = contract.replace(
+      /\/tmp:rw,noexec,nosuid,nodev,size=\d+m/,
+      '/tmp:rw,noexec,nosuid,nodev,size=1m'
+    );
+    assert.notEqual(changed, contract);
+    assert.throws(() =>
+      assertTemporaryStorageContracts(bundle, compose.replace(contract, changed))
+    );
+  }
+  const recharge = composeServiceContract(compose, 'auto-recharge');
+  for (const changed of [
+    recharge.replace('shm_size: 256m', 'shm_size: 512m'),
+    recharge.replace('    shm_size: 256m\n', '')
+  ]) {
+    assert.notEqual(changed, recharge);
+    assert.throws(() =>
+      assertTemporaryStorageContracts(bundle, compose.replace(recharge, changed))
+    );
   }
 });
 
