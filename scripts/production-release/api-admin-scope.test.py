@@ -57,6 +57,20 @@ migration = load('api_admin_migration_scope', 'api-admin-scope.py', 'API_ADMIN_M
 workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPACE')
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
+# Workspace publication has its own reviewed historical Compose and edge seal.
+# New checkout services must not redefine that scope. Keep only its configuration
+# and auto-registration source structure, never a second copy of this repository.
+_WORKSPACE_COMMIT = '2b54aad43dafc2e8ea9cebb46fc72aa8af003ac6'
+_WORKSPACE_SOURCE = tempfile.TemporaryDirectory(prefix='legacy-workspace-', dir=RUNTIME)
+WORKSPACE_SOURCE_ROOT = Path(_WORKSPACE_SOURCE.name)
+_workspace_files = set(workspace.CONFIG_FILES)
+_workspace_files.update(subprocess.check_output(['git', 'ls-tree', '-r', '--name-only',
+    _WORKSPACE_COMMIT, 'apps/api/src/id-business-v2/auto-registration'], cwd=ROOT).decode().splitlines())
+for _name in sorted(_workspace_files):
+    _target = WORKSPACE_SOURCE_ROOT / _name
+    _target.parent.mkdir(parents=True, exist_ok=True)
+    _target.write_bytes(subprocess.check_output(['git', 'show', _WORKSPACE_COMMIT + ':' + _name], cwd=ROOT))
+
 
 def proof():
     return {'version': 1, 'commit': COMMIT, 'sourceTree': TREE, 'images': {
@@ -67,7 +81,7 @@ def proof():
 
 def workspace_proof():
     return {**proof(), 'scope': 'API_ADMIN_WORKSPACE',
-            'configuration': workspace.workspace_configuration(d, ROOT, ROOT),
+            'configuration': workspace.workspace_configuration(d, WORKSPACE_SOURCE_ROOT, WORKSPACE_SOURCE_ROOT),
             'acceptance': {'status': 'PASS', 'checks': ['private-health', 'packaged-resources', 'private-sqlite',
                 'encrypted-storage', 'restart-persistence', 'wrong-key-rejected'],
                 'businessActions': 0, 'temporaryVolumeRemoved': True}}
@@ -1004,7 +1018,7 @@ class ReleaseFailureTests(unittest.TestCase):
             (previous / 'release-manifest.json').write_text('{}')
             for name in scope.CONFIG_FILES:
                 path = previous / name; path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=ROOT) if scope.WORKSPACE else b'config')
+                path.write_bytes((WORKSPACE_SOURCE_ROOT / name).read_bytes() if scope.WORKSPACE else b'config')
             (previous / 'compose.release.json').write_text(json.dumps({'services': {name: {'image': 'old'} for name in d.SERVICES}}))
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
@@ -1062,7 +1076,8 @@ class ReleaseFailureTests(unittest.TestCase):
                         info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
                 if scope.WORKSPACE or candidate_workspace:
                     for name in scope.CONFIG_FILES:
-                        raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
+                        source = WORKSPACE_SOURCE_ROOT if scope.WORKSPACE else ROOT
+                        raw = (source / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
                         info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
                 if scope.REGISTRATION:
                     for name in scope.WORKER_PAIR:
@@ -1081,7 +1096,7 @@ class ReleaseFailureTests(unittest.TestCase):
                 value = io.BytesIO(archive_data.getvalue() if 'archive/' in url else b'')
                 value.status = 200
                 if scope.WORKSPACE:
-                    value.headers = {'Content-Security-Policy': re.search(r'Content-Security-Policy "([^"]+)"', (ROOT / scope.CONFIG_FILES[1]).read_text()).group(1)}
+                    value.headers = {'Content-Security-Policy': re.search(r'Content-Security-Policy "([^"]+)"', (WORKSPACE_SOURCE_ROOT / scope.CONFIG_FILES[1]).read_text()).group(1)}
                 return value
             stack.enter_context(patch.object(scope.urllib.request, 'urlopen', side_effect=response))
             stack.enter_context(patch.object(scope.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
@@ -3105,8 +3120,7 @@ class WorkspaceScopeTests(unittest.TestCase):
                 directory.mkdir()
                 for name in scope.CONFIG_FILES:
                     path = directory / name; path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=ROOT)
-                        if directory == previous else (ROOT / name).read_bytes())
+                    path.write_bytes((WORKSPACE_SOURCE_ROOT / name).read_bytes())
             yield previous, candidate
 
     def test_configuration_allows_only_exact_api_mount_and_reviewed_caddy_bytes(self):

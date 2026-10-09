@@ -89,13 +89,14 @@ function assertRegistrationReleaseRetired(profile) {
 }
 
 const workflowPredicate = (expression) => (inputs) =>
-  new Function('inputs', 'startsWith', 'always', `return (${expression});`)(
+  new Function('inputs', 'startsWith', 'always', 'failure', `return (${expression});`)(
     inputs,
     (value, prefix) =>
       String(value ?? '')
         .toLowerCase()
         .startsWith(String(prefix).toLowerCase()),
-    () => true
+    () => true,
+    () => false
   );
 
 function guardCommands(

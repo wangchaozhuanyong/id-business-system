@@ -9,13 +9,18 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const evidence = resolve(root, '.runtime/online-recharge/container');
 const usage =
-  'node scripts/acceptance-v2-online-recharge-container.mjs --api-image <local:tag> --migration-image <local:tag> --engine-image <local:tag> [--docker <path>]';
+  'node scripts/acceptance-v2-online-recharge-container.mjs --api-image <local:tag> --migration-image <local:tag> --engine-image <local:tag> [--docker <path>] [--api-recheck]';
 const options = {};
 for (let index = 2; index < process.argv.length; index++) {
   const key = process.argv[index];
   if (key === '--help') {
     console.log(usage);
     process.exit(0);
+  }
+  if (key === '--api-recheck') {
+    if (options[key]) throw new Error('Duplicate fixture option');
+    options[key] = true;
+    continue;
   }
   if (!['--api-image', '--migration-image', '--engine-image', '--docker'].includes(key))
     throw new Error('Unknown fixture option');
@@ -49,6 +54,7 @@ const cardId = randomUUID();
 const taskId = randomUUID();
 const report = {
   scope: 'LOCAL_SYNTHETIC_CONTAINER_ONLY',
+  mode: options['--api-recheck'] ? 'API_INTEGRATION_RECHECK' : 'FULL',
   fixtureId,
   realSession: 'NOT_USED',
   realPayment: 'NOT_MEASURED',
@@ -56,16 +62,21 @@ const report = {
   externalNotification: 'NOT_SENT',
   websocket: 'REUSES_UNCHANGED_GATEWAY_9_CASES',
   cases: [],
+  reusedCases: [],
   images: {},
   cleanup: []
 };
+const reusableCases = new Set([
+  'actual_nine_table_schema_information_schema_reflection',
+  'credentials_only_engine_ready_without_jobs_or_browser',
+  'cvc_extraction_endpoint_absent_and_wrong_key_denied'
+]);
 let stage = 'preflight';
 let api,
   engine,
   mysql,
   dataVolume,
   network,
-  apiUrl,
   engineGeneration = 0;
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 const unwrap = (value) => (value?.success === true && 'data' in value ? value.data : value);
@@ -96,8 +107,15 @@ async function command(args, { input, timeout = 60000, allowFailure = false } = 
         stderr: Buffer.concat(stderr).toString('utf8').trim()
       };
       if (expired) reject(new Error('DOCKER_COMMAND_TIMEOUT'));
-      else if (code !== 0 && !allowFailure) reject(new Error('DOCKER_COMMAND_FAILED'));
-      else done(result);
+      else if (code !== 0 && !allowFailure) {
+        const error = new Error('DOCKER_COMMAND_FAILED');
+        error.dockerDiagnostic = result.stderr
+          .replace(/mysql:\/\/[^\s"']+/gi, '[redacted-database-url]')
+          .replace(/\b[a-f0-9]{64}\b/gi, '[redacted-secret-or-digest]')
+          .replace(/\b731\b/g, '[redacted-synthetic-cvc]')
+          .slice(0, 1000);
+        reject(error);
+      } else done(result);
     });
     child.stdin.on('error', () => {});
     child.stdin.end(input);
@@ -110,7 +128,39 @@ function owned(value) {
   const actual = value.Config?.Labels ?? value.Labels;
   return Object.entries(labels).every(([key, expected]) => actual?.[key] === expected);
 }
+async function availableSubnet() {
+  const ids = (await command(['network', 'ls', '--quiet'])).stdout.split('\n').filter(Boolean);
+  const networks = ids.length
+    ? JSON.parse((await command(['network', 'inspect', ...ids])).stdout)
+    : [];
+  const ipv4Range = (cidr) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr ?? '');
+    if (!match) return undefined;
+    const octets = match.slice(1, 5).map(Number),
+      bits = Number(match[5]);
+    if (bits > 32 || octets.some((value) => value > 255)) return undefined;
+    const address = octets.reduce((value, octet) => value * 256 + octet, 0);
+    const size = 2 ** (32 - bits),
+      start = Math.floor(address / size) * size;
+    return [start, start + size - 1];
+  };
+  const occupied = networks
+    .flatMap((value) => value.IPAM?.Config ?? [])
+    .map((value) => ipv4Range(value.Subnet))
+    .filter(Boolean);
+  const offset = parseInt(fixtureId.replaceAll('-', '').slice(0, 2), 16);
+  for (const second of [240, 241, 242, 243]) {
+    for (let step = 0; step < 256; step++) {
+      const subnet = `10.${second}.${(offset + step) % 256}.0/24`;
+      const candidate = ipv4Range(subnet);
+      if (occupied.every((range) => candidate[1] < range[0] || candidate[0] > range[1]))
+        return subnet;
+    }
+  }
+  throw new Error('NO_UNOCCUPIED_FIXTURE_SUBNET');
+}
 async function createResource(kind, name, args) {
+  stage = `create_${kind}`;
   const output = await command(
     kind === 'network'
       ? [kind, 'create', ...labelArgs, ...args, name]
@@ -124,6 +174,7 @@ async function createResource(kind, name, args) {
   return resource;
 }
 async function createVolume(name) {
+  stage = 'create_volume';
   // Docker volume create accepts its name as a positional argument.
   const output = await command(['volume', 'create', ...labelArgs, name]);
   const value = await inspect('volume', output.stdout);
@@ -172,6 +223,12 @@ async function until(check, timeout = 120000) {
 }
 async function test(name, action) {
   stage = name;
+  if (options['--api-recheck'] && reusableCases.has(name)) {
+    assert.ok(report.reusedEvidence, 'Unchanged-image evidence must be validated before reuse');
+    report.reusedCases.push({ name, status: 'REUSED_PRIOR_PASS' });
+    console.log(`REUSE ${name}`);
+    return;
+  }
   await action();
   report.cases.push({ name, status: 'PASS' });
   console.log(`PASS ${name}`);
@@ -197,19 +254,27 @@ async function execNode(container, source) {
   return JSON.parse(output.stdout);
 }
 async function request(path, { method = 'GET', body, key } = {}) {
-  const response = await fetch(`${apiUrl}${path}`, {
-    method,
-    headers: {
-      ...(body ? { 'content-type': 'application/json' } : {}),
-      ...(key ? { 'x-online-recharge-worker': key } : {})
-    },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(8000)
-  });
+  const response = await execNode(
+    api,
+    `
+    (async () => {
+      const response = await fetch('http://127.0.0.1:3000' + ${JSON.stringify(path)}, {
+        method: ${JSON.stringify(method)},
+        headers: {
+          ${body ? "'content-type': 'application/json'," : ''}
+          ${key ? `'x-online-recharge-worker': ${key === workerKey ? 'process.env.ONLINE_RECHARGE_WORKER_KEY' : JSON.stringify(key)}` : ''}
+        },
+        ${body ? `body: ${JSON.stringify(JSON.stringify(body))},` : ''}
+        signal: AbortSignal.timeout(8000)
+      });
+      console.log(JSON.stringify({ status: response.status, body: await response.json(), headers: { 'cache-control': response.headers.get('cache-control') } }));
+    })().catch(() => process.exit(1));
+  `
+  );
   return {
     status: response.status,
-    body: unwrap(await response.json()),
-    headers: response.headers
+    body: unwrap(response.body),
+    headers: new Headers(response.headers)
   };
 }
 async function rpc(method, args = {}, key = workerKey) {
@@ -351,11 +416,33 @@ try {
       };
     }
   });
-  network = await createResource('network', `${prefix}-network`, ['--internal']);
+  if (options['--api-recheck']) {
+    const proofPath = resolve(evidence, 'full-result.json');
+    const bytes = await readFile(proofPath);
+    const prior = JSON.parse(bytes);
+    assert.equal(prior.status, 'PASS');
+    assert.equal(prior.images.engine.id, report.images.engine.id);
+    assert.equal(prior.images.mysql.id, report.images.mysql.id);
+    assert.equal(prior.images.mysql.platform, report.images.mysql.platform);
+    assert.deepEqual(prior.migrations, migrations);
+    for (const name of reusableCases)
+      assert.ok(prior.cases.some((item) => item.name === name && item.status === 'PASS'));
+    report.reusedEvidence = { path: proofPath, sha256: digest(bytes), cases: [...reusableCases] };
+    report.schemaReflection = prior.schemaReflection;
+    report.schemaReflectionEvidence = 'REUSED_UNCHANGED_MIGRATION_SQL_AND_MYSQL_IMAGE';
+  }
+  const subnet = await availableSubnet();
+  network = await createResource('network', `${prefix}-network`, [
+    '--internal',
+    '--subnet',
+    subnet
+  ]);
+  report.network = { internal: true, subnet };
   await test('exclusive_internal_network', async () =>
     assert.equal((await inspect('network', network.id)).Internal, true));
   const mysqlVolume = await createVolume(`${prefix}-mysql`);
   dataVolume = await createVolume(`${prefix}-data`);
+  const registrationVolume = await createVolume(`${prefix}-auto-registration`);
   mysql = await startContainer(
     'mysql',
     [
@@ -472,10 +559,10 @@ try {
     ...hardening,
     '--network',
     network.id,
-    '--publish',
-    '127.0.0.1::3000',
     '--mount',
     `type=volume,src=${dataVolume.id},dst=/app/.runtime/online-recharge`,
+    '--mount',
+    `type=volume,src=${registrationVolume.id},dst=/app/.runtime/auto-registration`,
     ...envArgs({
       NODE_ENV: 'production',
       APP_PORT: '3000',
@@ -507,10 +594,7 @@ try {
     }),
     report.images.api.id
   ]);
-  const bindings = (await inspect('container', api.id)).NetworkSettings.Ports['3000/tcp'];
-  assert.equal(bindings.length, 1);
-  assert.equal(bindings[0].HostIp, '127.0.0.1');
-  apiUrl = `http://127.0.0.1:${bindings[0].HostPort}`;
+  report.apiTransport = 'ACTUAL_NEST_PRIVATE_LOOPBACK_NO_HOST_PORT';
   await test('actual_nest_database_ready', async () => {
     await until(async () => {
       const response = await request('/api/health/ready');
@@ -574,7 +658,7 @@ try {
         )
       );
       const ports = value.HostConfig.PortBindings ?? {};
-      assert.ok(Object.keys(ports).every((port) => resource === api && port === '3000/tcp'));
+      assert.deepEqual(ports, {});
       for (const port of ['8053/tcp', '9222/tcp', '9223/tcp']) assert.equal(ports[port], undefined);
     }
     assert.equal(
@@ -763,7 +847,11 @@ try {
 } catch (error) {
   report.status = 'FAIL';
   // Intentionally omit raw error messages/stacks: an assertion may contain a response secret.
-  report.failure = { stage, type: error?.name ?? 'Error' };
+  report.failure = {
+    stage,
+    type: error?.name ?? 'Error',
+    ...(error?.dockerDiagnostic ? { dockerDiagnostic: error.dockerDiagnostic } : {})
+  };
   process.exitCode = 1;
 } finally {
   for (const resource of [...resources].reverse()) {
@@ -782,6 +870,10 @@ try {
   report.finishedAt = new Date().toISOString();
   await mkdir(evidence, { recursive: true });
   await writeFile(resolve(evidence, 'result.json'), JSON.stringify(report, null, 2) + '\n');
+  await writeFile(
+    resolve(evidence, `attempt-${fixtureId}.json`),
+    JSON.stringify(report, null, 2) + '\n'
+  );
   console.log(
     JSON.stringify({
       status: report.status,
