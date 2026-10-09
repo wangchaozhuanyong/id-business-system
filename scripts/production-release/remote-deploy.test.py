@@ -2,6 +2,7 @@ import importlib.util
 import ast
 import base64
 import gzip
+import hashlib
 import lzma
 from pathlib import Path
 import unittest
@@ -633,13 +634,19 @@ class ReusableImageTests(unittest.TestCase):
 
 class WorkerComposeTransitionTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(prefix='worker-compose-transition-', dir=TEST_RUNTIME)
         self.addCleanup(self.temp.cleanup)
         self.previous = Path(self.temp.name) / 'previous'
         self.release = Path(self.temp.name) / 'release'
         self.previous.mkdir()
         self.release.mkdir()
-        self.split = (Path(__file__).parents[2] / 'docker-compose.aws-mysql.yml').read_text()
+        # Freeze the original reviewed worker isolation layout, not later
+        # additive services or workspace mounts from the current checkout.
+        layout = subprocess.check_output(['git', 'show',
+            '6cacbfb51e1b599dc8510e3ca521db937d9902f6:docker-compose.aws-mysql.yml'],
+            cwd=TEST_RUNTIME.parent)
+        self.assertEqual(hashlib.sha256(layout).hexdigest(), deployment.DIAGNOSTICS_COMPOSE_SHA256)
+        self.split = layout.decode()
         # Legacy layout fixture: preserve every existing service setting while
         # removing only the reviewed new worker, fixed role and API binding.
         self.legacy = re.sub(r'(?ms)^  auto-registration:\n.*?(?=^  api:)', '', self.split)
