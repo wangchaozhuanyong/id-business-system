@@ -405,9 +405,10 @@ class RecoveryTests(unittest.TestCase):
             legacy = SimpleNamespace(baseline=MagicMock(return_value=(previous, manifest, running, evidence)),
                                      readback=MagicMock(return_value=receipt))
             with ExitStack() as stack:
-                for name, mock in {'recovery_origin': MagicMock(return_value=context),
+                for name, mock in {'release_recovery': MagicMock(return_value=context),
                     'historical_controller': MagicMock(return_value=reader), 'legacy': MagicMock(return_value=legacy),
                     'workspace_guard': MagicMock(return_value={}), 'workspace_files': MagicMock(return_value={}),
+                    'workspace_origin': MagicMock(),
                     'verify_permission_seed': MagicMock(), 'require_fresh_resources': MagicMock(),
                     'jobs_idle': MagicMock(return_value={}), 'snapshot': MagicMock(return_value=running)}.items():
                     stack.enter_context(patch.object(scope, name, mock))
@@ -442,6 +443,14 @@ class RecoveryTests(unittest.TestCase):
                     patch.object(scope, 'workspace_backup_receipt') as workspace:
                 verify(d, source, previous)
                 workspace.assert_called_once()
+                manifest = {'commit': scope.RESTORED_COMMIT, 'backupBeforeRelease': path.name,
+                    'workspaceBackupBeforeRelease': 'synthetic-workspace', 'workspaceBackupSha256': 'e' * 64}
+                record = {'workspaceBackupSha256': 'e' * 64}
+                verify(d, source, previous, commit=scope.RESTORED_COMMIT, manifest=manifest, record=record)
+                self.assertEqual(workspace.call_args.args[-2:], (manifest, record))
+                with self.assertRaisesRegex(RuntimeError, 'BACKUP_RECEIPT_CHANGED'):
+                    verify(d, source, previous, commit=scope.RESTORED_COMMIT,
+                           manifest={**manifest, 'backupBeforeRelease': 'forged.sql.gz'}, record=record)
                 head['ChecksumSHA256'] = base64.b64encode(b'\0' * 32).decode()
                 d.run.return_value = json.dumps(head)
                 with self.assertRaisesRegex(RuntimeError, 'BACKUP_UNVERIFIED'):
@@ -449,6 +458,270 @@ class RecoveryTests(unittest.TestCase):
                 path.write_bytes(path.read_bytes() + b'changed')
                 with self.assertRaisesRegex(RuntimeError, 'BACKUP_RECEIPT_CHANGED'):
                     verify(d, source, previous)
+
+
+class RestoredRecoveryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix='restored-source-', dir=RUNTIME)
+        cls.prepared = Path(cls.temporary.name)
+        cls.inventories = {}
+        for commit, tree in ((scope.RECOVERY_COMMIT, scope.RECOVERY_TREE), (scope.RESTORED_COMMIT, scope.RESTORED_TREE)):
+            archive = subprocess.check_output(['git', 'archive', '--format=tar.gz',
+                '--prefix=id-business-system-' + commit + '/', commit], cwd=ROOT)
+            cls.inventories[commit] = scope.archive_inventory(controller(), archive, commit, tree)
+            with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as opened:
+                for member in opened.getmembers():
+                    if not member.isfile():
+                        continue
+                    path = cls.prepared / commit / member.name[len('id-business-system-' + commit + '/'):]
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(opened.extractfile(member).read())
+                    path.chmod(0o755 if member.mode & 0o111 else 0o644)
+        cls.policy = scope.recovery_policy(controller())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    @contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(prefix='restored-', dir=RUNTIME) as name:
+            base = Path(name); previous = base / 'releases/old'
+            previous.mkdir(parents=True)
+            source = base / 'releases' / ('20261009T140000Z-' + scope.RESTORED_COMMIT[:12])
+            shutil.copytree(self.prepared / scope.RESTORED_COMMIT, source); source.chmod(0o700)
+            (base / 'current').symlink_to(previous)
+            for filename in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws', scope.SCHEMA_FILE):
+                path = previous / filename; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(subprocess.check_output(['git', 'show', scope.BASELINE_COMMIT + ':' + filename], cwd=ROOT))
+            (previous / '.env.aws.production').write_text('APP_PUBLIC_URL=https://fixture.invalid\n')
+            old_images = {n: {'reference': r['reference'], 'digest': r['image'], 'sourceCommit': scope.BASELINE_COMMIT}
+                          for n, r in self.policy['preflight']['services'].items() if n not in ('mysql', 'caddy')}
+            old_images['migrate'] = {'reference': 'old-migrate', 'digest': 'sha256:' + 'f' * 64, 'sourceCommit': scope.BASELINE_COMMIT}
+            (previous / 'release-manifest.json').write_text(json.dumps({'commit': scope.BASELINE_COMMIT, 'images': old_images}))
+            (previous / 'compose.release.json').write_text(json.dumps({'services': {n: {'image': r['reference']} for n, r in old_images.items()}}))
+            policy = copy.deepcopy(self.policy)
+            for before in (policy['preflight'], policy['restoredAttempt']['preflight']):
+                before['manifestSha256'] = scope.file_digest(previous / 'release-manifest.json')
+            proof_value = policy['restoredAttempt']['buildProof']
+            (source / 'compose.release.json').write_text(json.dumps({'services': {n: {'image': r['reference']} for n, r in proof_value['images'].items()}}))
+            data = database_fixture(source, True)
+            with patch.object(scope, 'database_read', return_value=data):
+                state = scope.migration_database_state(controller(), previous, source=source)
+            receipt = {'status': 'ONLINE_RECHARGE_FAILED_RESTORED', 'step': 'audit-after',
+                'code': 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED', 'errorType': 'RuntimeError',
+                'rollbackOk': True, 'rollback': {n: 'RESTORED' for n in scope.SWITCH_ORDER},
+                'servicesAttempted': list(scope.SWITCH_ORDER), 'candidateCommit': scope.RESTORED_COMMIT,
+                'previousCommit': scope.BASELINE_COMMIT, 'migration': {**state, 'performed': False},
+                'migrationAttempted': False, 'inverseMigrationPerformed': False, 'mediaVolumeDeleted': False,
+                'currentPointsToCandidate': False, 'receiptPersisted': True}
+            self.assertEqual(scope.fingerprint(receipt), scope.RESTORED_FAILURE_SHA256)
+            migration_origin = {'commit': 'c' * 40, 'manifestSha256': 'd' * 64, 'buildProofSha256': 'e' * 64}
+            evidence = {'manifestSha256': policy['preflight']['manifestSha256'],
+                'environmentSha256': scope.file_digest(previous / '.env.aws.production'),
+                'apiSource': {'imageId': policy['preflight']['services']['api']['image'], 'revision': scope.BASELINE_COMMIT,
+                              'kind': 'API_WORKSPACE_BUILD_PROVEN'},
+                'guards': {'rechargeIdle': True, 'registrationBusy': False, 'registrationLeaseActive': False,
+                           'registrationWindowRetained': False},
+                'freeBytes': 10 * 1024**3, 'migrationOrigin': migration_origin, 'workspaceVolume': {'fixture': 'volume'},
+                'workspaceIdle': True, 'workspaceOriginFiles': {'fixture': 'files'},
+                'workspaceBuildProofSha256': policy['preflight']['workspaceBuildProofSha256'],
+                'migrationRecovery': scope.original_recovery_marker(policy)}
+            after = copy.deepcopy(policy['preflight']['services'])
+            for n in scope.UPDATED:
+                row = copy.deepcopy(after['api']); row.update(image=proof_value['images'][n]['imageId'],
+                    reference=proof_value['images'][n]['reference'], containerId='0' * 64, startedAtSha256='1' * 64)
+                after[n] = row
+            audit = {'checkCount': 49, 'violationCount': 0, 'mode': 'STRICT_ZERO_49', 'checksSha256': 'f' * 64}
+            grants = {'ok': True, 'newTableCount': 9, 'runtimeTableCount': 70}
+            preservation = {'environment': {'fixture': 'environment'}, 'compose': {'fixture': 'compose'},
+                            'caddy': scope.verify_caddy_projection(controller(), previous, source)}
+            manifest = {'commit': scope.RESTORED_COMMIT, 'sourceBranch': 'main', 'sourceTree': scope.RESTORED_TREE,
+                'previousCommit': scope.BASELINE_COMMIT, 'previousRelease': str(previous),
+                'previousManifestSha256': evidence['manifestSha256'], 'releaseTag': 'v2-production-' + source.name[:16],
+                'deployedAt': '2026-10-09T14:00:00Z', 'ciWorkflow': 'Quality Gate', 'ciWorkflowRunId': 123,
+                'deploymentRun': f'github-actions-{scope.RESTORED_RUN}-{scope.RESTORED_ATTEMPT}',
+                'imageBuildRun': f'github-actions-{scope.RESTORED_RUN}-{scope.RESTORED_ATTEMPT}',
+                'servicesUpdated': list(scope.UPDATED), 'sourceArchiveSha256': '2' * 64,
+                'images': {**old_images, **{n: {'reference': r['reference'], 'digest': r['imageId'],
+                          'sourceCommit': scope.RESTORED_COMMIT} for n, r in proof_value['images'].items()}},
+                'backupBeforeRelease': 'fixture.sql.gz', 'migrationApplied': True, 'migrationPerformed': False,
+                'workspaceBackupBeforeRelease': 'fixture.sqlite3.gz', 'workspaceBackupSha256': '3' * 64,
+                'newMigrations': [scope.MIGRATION_FILE], 'dataAuditBefore': audit, 'dataAuditAfter': audit,
+                'databaseGrants': grants, 'rollback': {'release': str(previous),
+                    'images': {n: policy['preflight']['services'][n]['image'] for n in ('api', 'admin')},
+                    'servicesAdded': ['online-recharge'], 'inverseMigrationAllowed': False,
+                    'mediaVolumePreserved': True, 'workspaceVolumePreserved': True},
+                'onlineRechargePublication': {'version': 1, 'scope': scope.SCOPE,
+                    'buildProofSha256': scope.fingerprint(proof_value), 'migration': dict(scope.MIGRATION_IDENTITY),
+                    'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'},
+                'preservedMigrationOrigin': shared.migration_successor_marker(migration_origin),
+                'migrationRecovery': scope.original_recovery_marker(policy)}
+            record = {'before': copy.deepcopy(policy['preflight']['services']), 'after': after, 'baselineEvidence': evidence,
+                'buildProofSha256': scope.fingerprint(proof_value), 'configurationBefore': scope.configuration_hashes(previous),
+                'configurationAfter': scope.configuration_hashes(source), 'preservation': preservation,
+                'migration': {**state, 'performed': False}, 'databaseGrants': grants, 'workspaceBackupSha256': '3' * 64}
+            documents = {scope.FAILURE_FILE: receipt, 'release-manifest.json': manifest, scope.STATE_FILE: record,
+                scope.PROOF_FILE: proof_value, 'before-audit.json': audit, 'after-audit.json': audit,
+                'backup-verification.json': {}, scope.WORKSPACE_BACKUP_FILE: {}}
+            def save():
+                for filename, value in documents.items():
+                    (source / filename).write_text(json.dumps(value))
+            save()
+            context = {'policy': policy, 'state': state, 'source': self.prepared / scope.RECOVERY_COMMIT,
+                       'marker': scope.recovery_marker(policy)}
+            d = controller(BASE=base)
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(scope, 'fixed_recovery_inventory',
+                    side_effect=lambda d, commit=scope.RECOVERY_COMMIT, tree=scope.RECOVERY_TREE: self.inventories[commit]))
+                stack.enter_context(patch.object(shared, 'audit_receipt', side_effect=lambda d, path: json.loads(path.read_text())
+                    if path.parent == source else audit))
+                stack.enter_context(patch.object(scope, 'verify_environment', return_value=preservation['environment']))
+                stack.enter_context(patch.object(scope, 'verify_compose', return_value=preservation['compose']))
+                images = stack.enter_context(patch.object(scope, 'verify_image_content'))
+                backups = stack.enter_context(patch.object(scope, 'recovery_backups'))
+                workspace = stack.enter_context(patch.object(scope, 'workspace_origin'))
+                historical = stack.enter_context(patch.object(scope, 'historical_guard'))
+                inspected = stack.enter_context(patch.object(scope, 'inspect_image'))
+                yield d, previous, source, context, documents, save, images, backups, workspace, historical, inspected
+
+    def test_policy_closes_and_seals_the_second_attempt_and_original_marker(self):
+        self.assertEqual(scope.original_recovery_marker(self.policy)['policySha256'], scope.ORIGINAL_RECOVERY_POLICY_SHA256)
+        self.assertEqual(scope.recovery_marker(self.policy)['policySha256'], scope.RECOVERY_POLICY_SHA256)
+        self.assertEqual(scope.recovery_marker(self.policy)['restoredAttempt']['buildProofSha256'], scope.RESTORED_PROOF_SHA256)
+        for key, bad in (('version', True), ('commit', '0' * 40), ('sourceTree', '0' * 40), ('workflowRunId', '123'),
+                         ('workflowRunAttempt', '2'), ('commandId', scope.RECOVERY_COMMAND),
+                         ('failureReceiptSha256', '0' * 64), ('unknown', True)):
+            candidate = copy.deepcopy(self.policy); candidate['restoredAttempt'][key] = bad
+            with self.subTest(key=key), patch.object(scope, 'closed_recovery_json', return_value=candidate), \
+                    patch.object(scope, 'RECOVERY_POLICY_SHA256', scope.fingerprint(candidate)), self.assertRaises(RuntimeError):
+                scope.recovery_policy(controller())
+        for key in ('buildProof', 'preflight'):
+            candidate = copy.deepcopy(self.policy); candidate['restoredAttempt'][key]['sourceTree'] = '0' * 40
+            with self.subTest(key=key), patch.object(scope, 'closed_recovery_json', return_value=candidate), \
+                    patch.object(scope, 'RECOVERY_POLICY_SHA256', scope.fingerprint(candidate)), self.assertRaises(RuntimeError):
+                scope.recovery_policy(controller())
+
+    def test_both_immutable_sources_and_complete_second_publication_are_required(self):
+        with self.fixture() as (d, previous, source, context, documents, save, images, backups, workspace, historical, inspected):
+            result = scope.restored_origin(d, previous, context)
+            self.assertEqual(result['source'], source)
+            self.assertEqual(images.call_count, 4); backups.assert_called_once()
+            workspace.assert_called_once_with(d, previous, previous, documents[scope.STATE_FILE]['baselineEvidence'],
+                                              documents[scope.STATE_FILE]['before'])
+            scope.restored_origin(d, previous, context)
+            self.assertEqual(images.call_count, 4); self.assertEqual(inspected.call_count, 4)
+            self.assertEqual(historical.call_count, 2)
+            with patch.object(scope, 'recovery_origin', return_value=context), patch.object(scope, 'restored_origin', return_value=result) as second:
+                combined = scope.release_recovery(d, previous)
+                self.assertEqual(combined['restored'], result); second.assert_called_once()
+
+    def test_missing_or_forged_failure_never_reaches_images_backups_or_identity_exception(self):
+        changes = [('step', 'switch'), ('status', 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH'), ('rollbackOk', False),
+            ('rollback', {'api': 'RESTORED'}), ('servicesAttempted', ['api']), ('migrationAttempted', True),
+            ('currentPointsToCandidate', True), ('receiptPersisted', False), ('unknown', True)]
+        with self.fixture() as (d, previous, source, context, documents, save, images, backups, *_):
+            original = copy.deepcopy(documents[scope.FAILURE_FILE])
+            for key, bad in changes:
+                documents[scope.FAILURE_FILE] = {**original, key: bad}; save()
+                with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'PROVENANCE_CHANGED'):
+                    scope.restored_origin(d, previous, context)
+            images.assert_not_called(); backups.assert_not_called()
+            (source / scope.FAILURE_FILE).unlink()
+            with self.assertRaisesRegex(RuntimeError, 'PROVENANCE_CHANGED'):
+                scope.restored_origin(d, previous, context)
+
+    def test_second_folder_unknown_source_symlink_wrong_tree_and_duplicate_are_rejected(self):
+        with self.fixture() as (d, previous, source, context, _, save, images, *_):
+            extra = source / 'forged-extra.txt'; extra.write_text('forged')
+            with self.assertRaisesRegex(RuntimeError, 'TREE_CHANGED'):
+                scope.restored_origin(d, previous, context)
+            extra.unlink(); extra.symlink_to(source / scope.PROOF_FILE)
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_INVALID'):
+                scope.restored_origin(d, previous, context)
+            extra.unlink()
+            with patch.object(scope, 'fixed_recovery_inventory', return_value=self.inventories[scope.RECOVERY_COMMIT]), \
+                    self.assertRaisesRegex(RuntimeError, 'TREE_CHANGED'):
+                scope.restored_origin(d, previous, context)
+            duplicate = source.with_name('20261009T140001Z-' + scope.RESTORED_COMMIT[:12]); duplicate.mkdir()
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_INVALID'):
+                scope.restored_origin(d, previous, context)
+            images.assert_not_called()
+
+    def test_every_publication_document_change_and_missing_backup_is_rejected(self):
+        changes = [('release-manifest.json', 'commit', '0' * 40), ('release-manifest.json', 'sourceTree', '0' * 40),
+            ('release-manifest.json', 'deploymentRun', 'github-actions-123-1'),
+            ('release-manifest.json', 'migrationPerformed', True), ('release-manifest.json', 'sourceArchiveSha256', 'invalid'),
+            ('release-manifest.json', 'migrationRecovery', scope.recovery_marker(self.policy)),
+            (scope.STATE_FILE, 'before', {}), (scope.STATE_FILE, 'after', {}),
+            (scope.STATE_FILE, 'configurationBefore', {}), (scope.STATE_FILE, 'configurationAfter', {}),
+            (scope.STATE_FILE, 'migration', {'status': 'APPLIED', 'performed': True}),
+            (scope.PROOF_FILE, 'commit', '0' * 40)]
+        with self.fixture() as (d, previous, source, context, documents, save, images, *_):
+            original = copy.deepcopy(documents)
+            for filename, key, bad in changes:
+                documents.clear(); documents.update(copy.deepcopy(original)); documents[filename][key] = bad; save()
+                with self.subTest(file=filename, key=key), self.assertRaises(RuntimeError):
+                    scope.restored_origin(d, previous, context)
+            documents.clear(); documents.update(original); save()
+            for filename in ('release-manifest.json', scope.PROOF_FILE, scope.STATE_FILE, 'backup-verification.json', scope.WORKSPACE_BACKUP_FILE):
+                raw = (source / filename).read_bytes(); (source / filename).unlink()
+                with self.subTest(file=filename), self.assertRaises(RuntimeError):
+                    scope.restored_origin(d, previous, context)
+                (source / filename).write_bytes(raw)
+            images.assert_not_called()
+
+    def test_all_five_retained_identities_and_second_updated_images_are_fully_bound(self):
+        with self.fixture() as (d, previous, _, context, documents, save, *_):
+            original = copy.deepcopy(documents[scope.STATE_FILE]['after'])
+            for name in scope.PRESERVED:
+                for key in scope.SERVICE_IDENTITY_KEYS:
+                    documents[scope.STATE_FILE]['after'] = copy.deepcopy(original)
+                    documents[scope.STATE_FILE]['after'][name][key] = 'forged'; save()
+                    with self.subTest(service=name, key=key), self.assertRaises(RuntimeError):
+                        scope.restored_origin(d, previous, context)
+            for name in scope.UPDATED:
+                for key in ('image', 'reference'):
+                    documents[scope.STATE_FILE]['after'] = copy.deepcopy(original)
+                    documents[scope.STATE_FILE]['after'][name][key] = 'forged'; save()
+                    with self.subTest(service=name, key=key), self.assertRaises(RuntimeError):
+                        scope.restored_origin(d, previous, context)
+
+    def test_only_proven_restoration_permits_two_api_admin_identity_fields(self):
+        context = {'policy': self.policy, 'restored': {'source': 'sealed'}}
+        original = copy.deepcopy(self.policy['preflight']['services'])
+        recreated = copy.deepcopy(original)
+        for name in ('api', 'admin'):
+            recreated[name]['containerId'] = '0' * 64; recreated[name]['startedAtSha256'] = '1' * 64
+        scope.recovery_services(controller(), recreated, context)
+        with self.assertRaisesRegex(RuntimeError, 'PRESERVED_CONTAINER_CHANGED'):
+            scope.recovery_services(controller(), recreated, {'policy': self.policy})
+        for name in original:
+            for key in scope.SERVICE_IDENTITY_KEYS:
+                if name in ('api', 'admin') and key in ('containerId', 'startedAtSha256'):
+                    continue
+                forged = copy.deepcopy(recreated); forged[name][key] = 'forged'
+                with self.subTest(service=name, key=key), self.assertRaisesRegex(RuntimeError, 'PRESERVED_CONTAINER_CHANGED'):
+                    scope.recovery_services(controller(), forged, context)
+        for name in ('api', 'admin'):
+            forged = copy.deepcopy(recreated); forged[name]['containerId'] = 'invalid'
+            with self.assertRaisesRegex(RuntimeError, 'PRESERVED_CONTAINER_CHANGED'):
+                scope.recovery_services(controller(), forged, context)
+
+    def test_image_backup_workspace_and_current_history_failures_cannot_seal_restoration(self):
+        with self.fixture() as (d, previous, _, context, _, _, images, backups, workspace, historical, _):
+            for guard, code in ((images, 'ONLINE_RECHARGE_IMAGE_CONTENT_CHANGED'),
+                                (backups, 'ONLINE_RECHARGE_BACKUP_UNVERIFIED'),
+                                (workspace, 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED'),
+                                (historical, 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')):
+                d._onlineRechargeVerifiedRestored = None
+                guard.side_effect = RuntimeError(code)
+                with self.subTest(code=code), self.assertRaisesRegex(RuntimeError, code):
+                    scope.restored_origin(d, previous, context)
+                guard.side_effect = None
+                if guard is not historical:
+                    self.assertIsNone(d._onlineRechargeVerifiedRestored)
 
 
 class ProofTests(unittest.TestCase):
@@ -608,11 +881,12 @@ class WorkspaceTests(unittest.TestCase):
                    'volumeDeletionPerformed': False, 'registrationHealthChecked': True, 'buildProofSha256': '1' * 64}
         with patch.object(shared, 'baseline', return_value=(directory, manifest, states(), evidence)) as reader, \
                 patch.object(shared, 'readback', return_value=receipt), patch.object(scope, 'workspace_files', return_value={}), \
-                patch.object(scope, 'recovery_origin', return_value=None), \
+                patch.object(scope, 'release_recovery', return_value=None), patch.object(scope, 'workspace_origin') as origin, \
                 patch.object(shared, 'jobs_idle', return_value={}), patch.object(scope, 'snapshot', return_value=states()), \
                 patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)):
             result = scope.baseline(d, scope.BASELINE_COMMIT)
             self.assertTrue(result[3]['workspaceIdle'])
+            origin.assert_called_once_with(d, directory, directory, result[3], states())
             reader.assert_called_once_with(d, scope.BASELINE_COMMIT, check_jobs=False)
             manifest.clear()
             with self.assertRaisesRegex(RuntimeError, 'NOT_PUBLISHED'):
@@ -831,14 +1105,18 @@ class ReceiptTests(unittest.TestCase):
         result = scope.validate_receipt(controller(), value, 'readback', COMMIT, COMMIT)
         self.assertEqual(result['migrationRecovery'], value['migrationRecovery'])
         self.assertFalse(result['migrationPerformed'])
-        for variation in ('missing', 'performed', 'forged'):
+        for variation in ('missing', 'performed', 'forged', 'second-forged', 'second-missing'):
             candidate = copy.deepcopy(value)
             if variation == 'missing':
                 candidate.pop('migrationRecovery')
             elif variation == 'performed':
                 candidate['migrationPerformed'] = True
-            else:
+            elif variation == 'forged':
                 candidate['migrationRecovery']['failureReceiptSha256'] = '0' * 64
+            elif variation == 'second-forged':
+                candidate['migrationRecovery']['restoredAttempt']['failureReceiptSha256'] = '0' * 64
+            else:
+                candidate['migrationRecovery'].pop('restoredAttempt')
             with self.subTest(variation=variation), self.assertRaisesRegex(RuntimeError, 'READBACK_CHANGED'):
                 scope.validate_receipt(controller(), candidate, 'readback', COMMIT, COMMIT)
 
@@ -887,6 +1165,195 @@ class ReceiptTests(unittest.TestCase):
             response = MagicMock(); response.__enter__.return_value.read.return_value = data.getvalue()
             with directories() as (_, target), patch.object(scope.urllib.request, 'urlopen', return_value=response), self.assertRaisesRegex(RuntimeError, 'ARCHIVE_INVALID'):
                 scope.extract_source(controller(), COMMIT, target)
+
+
+class WorkspaceOriginTests(unittest.TestCase):
+    def fixture(self, previous):
+        managed = ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin')
+        before = states()
+        content = {'api': '\n'.join('1' * 64 + '  ' + path
+            + ('' if path.endswith(('.css', '.json')) else '/fixture.js')
+            for path in shared.WORKSPACE_API_ROOTS),
+            'admin': '2' * 64 + '  /usr/share/nginx/html/index.html'}
+        published = {'version': 1, 'scope': 'API_ADMIN_WORKSPACE', 'commit': scope.BASELINE_COMMIT,
+            'sourceTree': TREE, 'configuration': {'composeSha256': '3' * 64,
+                'caddySha256': shared.WORKSPACE_CADDY_AFTER, 'volume': shared.WORKSPACE_VOLUME,
+                'containerDirectory': shared.WORKSPACE_DIRECTORY},
+            'acceptance': {'status': 'PASS', 'checks': ['private-health', 'packaged-resources',
+                'private-sqlite', 'encrypted-storage', 'restart-persistence', 'wrong-key-rejected'],
+                'businessActions': 0, 'temporaryVolumeRemoved': True},
+            'images': {name: {'reference': f'{REPOSITORY}:{scope.BASELINE_COMMIT}-123-1-{name}',
+                'imageId': before[name]['image'], **shared.content_summary(controller(), name, content[name])}
+                for name in shared.IMAGE_SERVICES}}
+        for name in shared.IMAGE_SERVICES:
+            before[name]['reference'] = published['images'][name]['reference']
+        volume = {'name': 'fixture_auto_registration_data', 'status': 'PRESENT'}
+        digest = scope.fingerprint(published)
+        manifest = {'commit': scope.BASELINE_COMMIT, 'sourceTree': TREE, 'servicesUpdated': list(shared.UPDATED),
+            'images': {name: {'reference': before[name]['reference'], 'digest': before[name]['image'],
+                'sourceCommit': scope.BASELINE_COMMIT if name in shared.IMAGE_SERVICES else '8' * 40}
+                for name in managed},
+            'apiWorkspacePublication': {'version': 1, 'scope': 'API_ADMIN_WORKSPACE',
+                'buildProofSha256': digest, 'workersPublished': False, 'cacheStatus': 'SKIPPED',
+                'configurationChanged': True, 'volume': volume, 'volumeDeletionPerformed': False}}
+        record = {'workspaceVolumeAfter': volume, 'buildProofSha256': digest, 'after': copy.deepcopy(before)}
+        for name, value in {'release-manifest.json': manifest, shared.PROOF_FILE: published,
+                shared.STATE_FILE: record, 'backup-verification.json': {'verified': True},
+                'before-audit.json': {'violationCount': 0}, 'after-audit.json': {'violationCount': 0}}.items():
+            (previous / name).write_text(json.dumps(value))
+        evidence = {'workspaceVolume': volume, 'workspaceBuildProofSha256': digest,
+                    'workspaceOriginFiles': scope.workspace_files(controller(), previous)}
+        def run(*args):
+            if args[:3] == ('docker', 'image', 'inspect'):
+                name = next(n for n, row in published['images'].items() if row['reference'] == args[3])
+                return json.dumps([{'Id': published['images'][name]['imageId'], 'Architecture': 'amd64',
+                    'Config': {'Labels': {'org.opencontainers.image.revision': scope.BASELINE_COMMIT,
+                        'id-business-v2.source-tree': TREE}}}])
+            if args[:2] == ('docker', 'run'):
+                name = next(n for n, row in published['images'].items() if row['reference'] in args)
+                return content[name]
+            raise AssertionError('Unexpected workspace origin fixture command')
+        d = controller(SERVICES=managed, run=MagicMock(side_effect=run), compose=MagicMock(return_value='{"ready":true}'))
+        return d, before, evidence, manifest, record, published, content
+
+    def reseal(self, d, previous, evidence):
+        # Model a structure being accepted initially, then independently check
+        # its semantics instead of testing only the immutable-file guard.
+        evidence['workspaceOriginFiles'] = scope.workspace_files(d, previous)
+
+    def test_seven_runtime_services_and_only_five_manifest_images_are_valid(self):
+        with directories() as (previous, current):
+            d, before, evidence, manifest, _, _, _ = self.fixture(previous)
+            self.assertEqual(len(before), 7)
+            self.assertEqual(set(manifest['images']), set(d.SERVICES))
+            self.assertNotIn('mysql', manifest['images']); self.assertNotIn('caddy', manifest['images'])
+            with patch.object(scope, 'workspace_guard') as guard:
+                scope.workspace_origin(d, previous, current, evidence, before)
+            guard.assert_called_once_with(d, current, evidence['workspaceVolume'])
+            self.assertEqual(d.run.call_count, 4)
+            d.compose.assert_called_once()
+            self.assertEqual(d.compose.call_args.args[0], current)
+            self.assertEqual(d.compose.call_args.args[1:5], ('exec', '-T', 'api', 'node'))
+
+    def test_every_managed_reference_digest_and_missing_entry_are_rejected(self):
+        for name in ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin'):
+            for field in ('reference', 'digest', 'missing'):
+                with self.subTest(service=name, field=field), directories() as (previous, current):
+                    d, before, evidence, manifest, _, _, _ = self.fixture(previous)
+                    if field == 'missing':
+                        del manifest['images'][name]
+                    else:
+                        manifest['images'][name][field] = 'changed-fixture-image'
+                    (previous / 'release-manifest.json').write_text(json.dumps(manifest))
+                    self.reseal(d, previous, evidence)
+                    with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                        scope.workspace_origin(d, previous, current, evidence, before)
+                    d.run.assert_not_called(); d.compose.assert_not_called()
+
+    def test_seven_published_after_services_and_all_preserved_identities_are_required(self):
+        changes = [(n, k) for n in scope.PRESERVED for k in scope.SERVICE_IDENTITY_KEYS]
+        changes += [(n, k) for n in ('api', 'admin') for k in scope.SERVICE_IDENTITY_KEYS
+                    if k not in ('containerId', 'startedAtSha256')]
+        with directories() as (previous, current):
+            d, before, evidence, _, record, _, _ = self.fixture(previous)
+            original = copy.deepcopy(record['after'])
+            for name, key in changes:
+                record['after'] = copy.deepcopy(original); record['after'][name][key] = 'forged'
+                (previous / shared.STATE_FILE).write_text(json.dumps(record)); self.reseal(d, previous, evidence)
+                with self.subTest(service=name, key=key), self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+            for name in ('api', 'mysql', 'caddy', 'extra'):
+                record['after'] = copy.deepcopy(original)
+                if name == 'extra':
+                    record['after'][name] = copy.deepcopy(original['api'])
+                else:
+                    del record['after'][name]
+                (previous / shared.STATE_FILE).write_text(json.dumps(record)); self.reseal(d, previous, evidence)
+                with self.subTest(service=name), self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+            d.run.assert_not_called(); d.compose.assert_not_called()
+
+    def test_sealed_source_commit_and_every_predecessor_file_change_are_rejected(self):
+        for name in ('media-resolver', 'auto-recharge', 'auto-registration', 'api', 'admin'):
+            with self.subTest(service=name), directories() as (previous, current):
+                d, before, evidence, manifest, _, _, _ = self.fixture(previous)
+                manifest['images'][name]['sourceCommit'] = '9' * 40
+                (previous / 'release-manifest.json').write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+        with directories() as (previous, current):
+            d, before, evidence, _, _, _, _ = self.fixture(previous)
+            for name in evidence['workspaceOriginFiles']:
+                path = previous / name
+                original = path.read_bytes()
+                path.write_bytes(original + b'\n')
+                with self.subTest(file=name), self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+                path.write_bytes(original)
+
+    def test_commit_proof_and_volume_mismatch_fail_even_with_fresh_file_seal(self):
+        for changed in ('manifest-commit', 'proof-commit', 'proof-tree', 'proof-fingerprint', 'volume'):
+            with self.subTest(changed=changed), directories() as (previous, current):
+                d, before, evidence, manifest, record, published, _ = self.fixture(previous)
+                if changed == 'manifest-commit':
+                    manifest['commit'] = COMMIT
+                elif changed == 'volume':
+                    record['workspaceVolumeAfter'] = {'name': 'other_volume', 'status': 'PRESENT'}
+                elif changed == 'proof-fingerprint':
+                    published['images']['api']['sha256'] = '0' * 64
+                else:
+                    published['commit' if changed == 'proof-commit' else 'sourceTree'] = '9' * 40
+                for name, value in {'release-manifest.json': manifest, shared.STATE_FILE: record,
+                        shared.PROOF_FILE: published}.items():
+                    (previous / name).write_text(json.dumps(value))
+                self.reseal(d, previous, evidence)
+                with self.assertRaises(RuntimeError):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+                d.run.assert_not_called(); d.compose.assert_not_called()
+
+    def test_missing_infrastructure_or_managed_snapshot_and_extra_service_are_rejected(self):
+        for changed in (*states(), 'extra'):
+            with self.subTest(changed=changed), directories() as (previous, current):
+                d, before, evidence, _, _, _, _ = self.fixture(previous)
+                if changed == 'extra':
+                    before['online-recharge'] = before['api']
+                else:
+                    del before[changed]
+                with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_ORIGIN_CHANGED'):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+                d.run.assert_not_called(); d.compose.assert_not_called()
+
+    def test_actual_image_provenance_and_content_must_still_match_the_proof(self):
+        for changed in ('image-label', 'image-content'):
+            with self.subTest(changed=changed), directories() as (previous, current):
+                d, before, evidence, _, _, _, content = self.fixture(previous)
+                if changed == 'image-content':
+                    content['api'] = content['api'].replace('1' * 64, '0' * 64)
+                else:
+                    original = d.run.side_effect
+                    def run(*args):
+                        output = original(*args)
+                        return output.replace(scope.BASELINE_COMMIT, COMMIT) if args[:3] == ('docker', 'image', 'inspect') else output
+                    d.run.side_effect = run
+                with patch.object(scope, 'workspace_guard') as guard, self.assertRaisesRegex(RuntimeError,
+                        'IMAGE_PROVENANCE_CHANGED|WORKSPACE_IMAGE_CHANGED'):
+                    scope.workspace_origin(d, previous, current, evidence, before)
+                guard.assert_not_called(); d.compose.assert_not_called()
+
+    def test_workspace_volume_guard_and_real_health_reader_remain_mandatory(self):
+        for changed in ('volume', 'health'):
+            with self.subTest(changed=changed), directories() as (previous, current):
+                d, before, evidence, _, _, _, _ = self.fixture(previous)
+                d.compose.return_value = '{"ready":false}'
+                with patch.object(scope, 'workspace_guard', side_effect=(RuntimeError(
+                        'ONLINE_RECHARGE_WORKSPACE_VOLUME_CHANGED') if changed == 'volume' else None)) as guard:
+                    with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_VOLUME_CHANGED|WORKSPACE_HEALTH_FAILED'):
+                        scope.workspace_origin(d, previous, current, evidence, before)
+                guard.assert_called_once_with(d, current, evidence['workspaceVolume'])
+                if changed == 'volume':
+                    d.compose.assert_not_called()
+                else:
+                    d.compose.assert_called_once()
 
 
 class ReleaseSequenceTests(unittest.TestCase):
@@ -960,6 +1427,11 @@ class ReleaseSequenceTests(unittest.TestCase):
             if busy and broken[0]:
                 raise RuntimeError('ONLINE_RECHARGE_TASKS_BUSY')
             events.append('idle')
+        def origin(d, source, running, evidence, before):
+            self.assertEqual(source, previous); self.assertEqual(running, previous)
+            events.append('workspace-origin')
+            if fail == 'workspace-origin':
+                raise RuntimeError('ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
         d = controller(BASE=base, __file__=str(ROOT / 'scripts/production-release/remote-deploy.py'),
             run=MagicMock(return_value='synthetic-login-password'), compose=compose, wait_healthy=MagicMock(),
             environment_values=env_values, fresh_backup=backup, sync_new_table_grants=grants,
@@ -971,7 +1443,7 @@ class ReleaseSequenceTests(unittest.TestCase):
             for name, value in {
                 'legacy': fake_legacy, 'extract_source': extract,
                 'baseline': MagicMock(return_value=(previous, old_manifest, states(), baseline_evidence)),
-                'recovery_origin': MagicMock(return_value=recovery),
+                'release_recovery': MagicMock(return_value=recovery),
                 'candidate_recovery_source': MagicMock(),
                 'workspace_backup': sqlite_backup,
                 'migration_source_check': MagicMock(), 'protected_source': MagicMock(),
@@ -982,6 +1454,7 @@ class ReleaseSequenceTests(unittest.TestCase):
                 'verify_permission_seed': MagicMock(), 'require_fresh_resources': lambda *a: events.append('empty9'),
                 'jobs_idle': idle, 'snapshot': MagicMock(return_value=states()),
                 'workspace_guard': MagicMock(),
+                'workspace_origin': origin,
                 'readback': lambda *a: {'status': 'ONLINE_RECHARGE_VERIFIED'},
             }.items():
                 stack.enter_context(patch.object(scope, name, return_value=value) if name == 'legacy' else patch.object(scope, name, value))
@@ -996,10 +1469,20 @@ class ReleaseSequenceTests(unittest.TestCase):
         result, receipt, events = self.execute()
         self.assertEqual(result, 0)
         self.assertEqual(receipt['status'], 'ONLINE_RECHARGE_VERIFIED')
-        selected = [e for e in events if e.startswith(('audit:', 'switch:')) or e in ('backup', 'sqlite-backup', 'migration', 'grants')]
-        self.assertEqual(selected, ['audit:before-audit.json', 'backup', 'sqlite-backup', 'migration', 'grants',
+        selected = [e for e in events if e.startswith(('audit:', 'switch:')) or e in ('workspace-origin', 'backup', 'sqlite-backup', 'migration', 'grants')]
+        self.assertEqual(selected, ['workspace-origin', 'audit:before-audit.json', 'backup', 'sqlite-backup', 'migration', 'grants',
                                    'switch:admin', 'switch:api', 'switch:online-recharge', 'audit:after-audit.json'])
         self.assertEqual(events.count('empty9'), 4)
+
+    def test_invalid_predecessor_is_rejected_before_migration_grants_or_switch(self):
+        result, receipt, events = self.execute(fail='workspace-origin')
+        self.assertEqual(result, 1)
+        self.assertEqual(receipt['status'], 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH')
+        self.assertEqual(receipt['step'], 'source')
+        self.assertEqual(receipt['code'], 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+        self.assertEqual(receipt['servicesAttempted'], [])
+        self.assertEqual(receipt['migration'], {'status': 'NOT_ATTEMPTED', 'performed': False})
+        self.assertFalse(any(e.startswith('switch:') or e in ('migration', 'grants', 'backup', 'sqlite-backup') for e in events))
 
     def test_post_migration_grant_failure_keeps_additive_schema_and_never_switches(self):
         result, receipt, events = self.execute(fail='grants')

@@ -178,5 +178,169 @@
     "scripts/production-release/online-recharge-scope.test.py",
     "scripts/production-release/remote-deploy.py",
     "scripts/production-release/remote-deploy.test.py"
-  ]
+  ],
+  "restoredAttempt": {
+    "version": 1,
+    "commit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",
+    "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",
+    "workflowRunId": "37944613453",
+    "workflowRunAttempt": "1",
+    "commandId": "ac5c9f85-e813-499c-8e90-92c1ce011bfa",
+    "failureReceiptSha256": "f04e9356221bc10a33c774ce9e692b40db6afa23fd2a3bde23caf096a4f07485",
+    "buildProof": {
+      "baselineCommit": "0a03fa28e6b844a18833d5c63f1de700f091fc64",
+      "commit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",
+      "composeSourceSha256": "8250b0b74da9271e4254448dd97c53b30129f6e37e9fc5203ccd1a01200c2792",
+      "engineSourceSha256": "309ad31694045d49d2577b9bafe74d6e598e111084b2ada7f9d1d1beba20ed73",
+      "images": {
+        "admin": {
+          "fileCount": 256,
+          "imageId": "sha256:fe78934db0a717dfc5dd5752d6a96118d72662e994f7d418fa6ae43afce0ac85",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-admin",
+          "sha256": "87d963eaa71550a4d09f79ce57d29e1afd1fc2df22e800eda7ff65494347de56"
+        },
+        "api": {
+          "fileCount": 4320,
+          "imageId": "sha256:34ba5b3a31bf4d82900d481a9f5d7b061834400adcab1458f1c0bbbb8b7eca5e",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-api",
+          "sha256": "c95d0e1133101bdc06873517296d907bbadbff643e5c9889d03095fea63b49c4"
+        },
+        "migrate": {
+          "fileCount": 50,
+          "imageId": "sha256:51f80ed0fd62cfd767e31dd52ef53dcafa8565531c950d66d4c52962df89617a",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-migrate",
+          "sha256": "42e5d67fac62e54889591c85b95b7ad26d552e919427c905743ca3125477b1c9"
+        },
+        "online-recharge": {
+          "fileCount": 62,
+          "imageId": "sha256:e0824caf6a6ca75cc65cadf6f40c6c60e8d0118227193f293c681f241d24ec23",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:296c096af7c4c79a8ffc2f57d9a15ea75684f431-37944613453-1-online-recharge",
+          "sha256": "56cd07b61bfcc6f993e8dc417c515b24f1ecec9638942185aeff9756664a066b"
+        }
+      },
+      "migration": {
+        "baselineFileCount": 47,
+        "baselineFilesSha256": "3baef4b2e1fcc1b1194d5ffa0197dabd09ee01a757abe7478e1f3488f8019a14",
+        "name": "20261009093000_online_recharge",
+        "schemaAfterSha256": "8ae09e883e79bfb85cd65edbf630f2ec03b6b397eb46d172b4c4f05514b715a7",
+        "schemaBeforeSha256": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",
+        "seedAfterSha256": "2a7becbe8da189adad73b30d7bfe36070fd44ae4f683f7e4a01178d14ae08b5b",
+        "seedBeforeSha256": "ac9940a7977def1ed6eaad38ed154d81963ce6e877f02ffc07234fa61591096b",
+        "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95"
+      },
+      "scope": "ONLINE_RECHARGE",
+      "sourceTree": "472947076a5b5fb73d6777413505d60ac2379fb1",
+      "version": 1
+    },
+    "preflight": {
+      "checkCount": 49,
+      "commit": "0a03fa28e6b844a18833d5c63f1de700f091fc64",
+      "legacyWorkersPreserved": true,
+      "manifestSha256": "317fbcd0e307789539009a2798b7017ff5b977041cc1b8ab617f5f3f2dc5efa3",
+      "migration": {
+        "baselineFileCount": 47,
+        "baselineFilesSha256": "3baef4b2e1fcc1b1194d5ffa0197dabd09ee01a757abe7478e1f3488f8019a14",
+        "name": "20261009093000_online_recharge",
+        "schemaAfterSha256": "8ae09e883e79bfb85cd65edbf630f2ec03b6b397eb46d172b4c4f05514b715a7",
+        "schemaBeforeSha256": "8006d3ce6f0b44cf62f3b47bb7b4a0b14d0ddc18ddf113a5da34a901b62fb197",
+        "seedAfterSha256": "2a7becbe8da189adad73b30d7bfe36070fd44ae4f683f7e4a01178d14ae08b5b",
+        "seedBeforeSha256": "ac9940a7977def1ed6eaad38ed154d81963ce6e877f02ffc07234fa61591096b",
+        "sha256": "44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95"
+      },
+      "migrationPerformed": false,
+      "migrationRecovery": {
+        "buildProofSha256": "ae6a32418e0a0d4ff3d799e3416cf27a150fd1bd925dd91cfa09b56c30e0ffff",
+        "failedCommandId": "ab33d2e0-6135-47ed-8f20-e2defd7c82cd",
+        "failedCommit": "28a3ba4ffd17d36001b1104c97394f5ae871d73d",
+        "failedSourceTree": "014959a59519da585928adaa7f76f7236e1786d1",
+        "failedWorkflowRunAttempt": "1",
+        "failedWorkflowRunId": "37933246605",
+        "failureReceiptSha256": "1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a",
+        "policySha256": "7600c0ed6173896824a9def8857eccbc9f99b41b62290fde6a061e2ab63b756c",
+        "preflightSha256": "212b6c36d98e003d551284342ddd1c4e468018ff0febc85caff4aee6481e83d4",
+        "version": 1
+      },
+      "releaseCandidateCommit": "296c096af7c4c79a8ffc2f57d9a15ea75684f431",
+      "requiresWindowHandoff": false,
+      "services": {
+        "admin": {
+          "configurationSha256": "365d65fc2966cbfce8d21ec63ae7fd60a86c08809a87f86366aad66b7b7c9131",
+          "containerId": "4fce1f10a97284185149a50042d116839715f20ff34b127b083705b84d8184a5",
+          "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+          "health": "healthy",
+          "image": "sha256:9e2092779d6c7acb9a854011d09040f8927cb010216cce4be65138a2a6471a30",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:0a03fa28e6b844a18833d5c63f1de700f091fc64-37918150573-1-admin",
+          "startedAtSha256": "3a567204b50c87a055931828a3d9713d74a6fb27f44b16b54384af072ebdad07",
+          "status": "running"
+        },
+        "api": {
+          "configurationSha256": "19bb7066a47dd67fec8e0752976b21fab4c450b915c653549b47c922cd93cc8e",
+          "containerId": "e8cb536dda0fb35801a02d894febbe52b0478be9c92a4e939d7d0961db80f7d9",
+          "environmentSha256": "9f88452817b9343fb1751d8bfbee6e70b82d4098be9ee5034d9b3dbfc80d705c",
+          "health": "healthy",
+          "image": "sha256:74fdce6e4f05c10bd7f52f94fb9a53a36349bafd8ca8e2637d047f62a92bee42",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:0a03fa28e6b844a18833d5c63f1de700f091fc64-37918150573-1-api",
+          "startedAtSha256": "3f47d9351881e4a2e3b512b952407eb6b6e98651835d6611e25798bb3d54aa87",
+          "status": "running"
+        },
+        "auto-recharge": {
+          "configurationSha256": "1c341043b62969f855cc1f5852181c949b8ea7831f8c82f15cd7364ee7767120",
+          "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+          "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+          "health": "healthy",
+          "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+          "startedAtSha256": "b54ae0f7bbf6ae90e14b78e4d86fa39ae8d5fef49c5f3a95cd4bd811e3645eda",
+          "status": "running"
+        },
+        "auto-registration": {
+          "configurationSha256": "0da1fad093493de7997af6d9c2c855e1e4272711eb63a3a0f36f4a3fea1fb0c8",
+          "containerId": "16de5229289255cd47c3f9336e24aa611c0f9bbc76af2fcdfc5e5e1928d68add",
+          "environmentSha256": "de69bd06209b17619f8cb7ae38bace36c27dc4203c67e09fd1b8d21023fbcb17",
+          "health": "healthy",
+          "image": "sha256:759f60543c2fc5661c5d21644fdc1e9cb0e5cb39c930e9c400f869e0c72be568",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:18e23ee1ab1a8d5c988ff6ba24149e1c741d62f8-37788833835-1-auto-recharge",
+          "startedAtSha256": "463587855c649edc70eb7ce82744c1caf57a49d7fbbfb10206bf1531443bb229",
+          "status": "running"
+        },
+        "caddy": {
+          "configurationSha256": "3662db0efe0d9d7854a52da2c4fe71e626ebc9a122d9c2da76ed497b403815a0",
+          "containerId": "0ee2a1ea26eec74fef64362fd77a69894e3dc4dddd412c38ebd59c747aa6e203",
+          "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+          "health": null,
+          "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+          "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+          "startedAtSha256": "8c855d6048304bfcba4e29cbde6443070cdbbf778fe722648b491c763f285d24",
+          "status": "running"
+        },
+        "media-resolver": {
+          "configurationSha256": "88cfc4c67adc0d0fe78e5434d8c1ebfcaeaef7e2726f3f2b30b0d4c85e0c70cb",
+          "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+          "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+          "health": "healthy",
+          "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+          "startedAtSha256": "8814f073adf9a0964f3beaf17b261fea765db8d0059e2425ee39fe0afdf31d1f",
+          "status": "running"
+        },
+        "mysql": {
+          "configurationSha256": "47f62efcca224ee71466bf71a0337d791b9f6d8b42b024208cc3a29c6585beaf",
+          "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+          "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+          "health": "healthy",
+          "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+          "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+          "startedAtSha256": "de8aff8d3d7634b524828ded3df29bba37d7ef4cf817deff61402fdfcf767ec7",
+          "status": "running"
+        }
+      },
+      "status": "ONLINE_RECHARGE_BASELINE_VERIFIED",
+      "violationCount": 0,
+      "workflowRunAttempt": "1",
+      "workflowRunId": "37944613453",
+      "workspaceBuildProofSha256": "7ff4afef2c97d4c7b9961f8e415861c1510d589762b044e0950a02c6b64c507a",
+      "workspaceIdle": true,
+      "workspaceVolumePreserved": true
+    }
+  }
 }
