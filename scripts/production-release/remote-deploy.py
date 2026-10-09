@@ -10737,6 +10737,16 @@ def api_admin_scope(scope='API_ADMIN'):
     namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
     return types.SimpleNamespace(**namespace), types.SimpleNamespace(**globals())
 
+
+def require_workspace_publication_scope(previous, candidate, *, admin_only=False):
+    # Admin-only changes never stop the API/SQLite worker. All other ordinary
+    # publications must enter the explicit workspace backup/task guard.
+    if admin_only:
+        return
+    scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
+    require(not scope.workspace_existing(controller, previous) and not scope.workspace_present(candidate),
+            'API_ADMIN_WORKSPACE_SCOPE_REQUIRED')
+
 # A finite successor of the native92 release. No generic or all-service fallback.
 RECHARGE_2F_ID = 'recharge-pro-2f-20261007'
 RECHARGE_2F_FILE = 'deploy/aws/' + RECHARGE_2F_ID + '.json'
@@ -12615,6 +12625,7 @@ def main():
     parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
     parser.add_argument('--api-admin-only', action='store_true')
+    parser.add_argument('--api-workspace-only', action='store_true')
     parser.add_argument('--api-admin-migration-only', action='store_true')
     parser.add_argument('--api-registration-only', action='store_true')
     parser.add_argument('--api-admin-build-proof')
@@ -12649,6 +12660,9 @@ def main():
     parser.add_argument('--registration-worker-94', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
+    if args.api_workspace_only:
+        scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
+        return scope.release(controller, args)
     if args.api_admin_migration_only:
         scope, controller = api_admin_scope('API_ADMIN_MIGRATION')
         return scope.release(controller, args)
@@ -12838,6 +12852,7 @@ def main():
             item.rename(release / item.name)
         extracted.rmdir()
         archive.unlink()
+        require_workspace_publication_scope(previous, release, admin_only=args.admin_only)
         if args.historical_finance_continuation or args.historical_finance_recharge_diagnostics:
             policy = continuation_policy(release, historical_policy_id)
             verified_manifest = verify_continuation_baseline(previous, policy, historical_policy_id)
@@ -13279,6 +13294,35 @@ if __name__ == '__main__':
         reject_retired_registration_selection(sys.argv[1:])
     except RuntimeError as error:
         raise SystemExit(str(error)) from None
+    if '--api-workspace-only' in sys.argv[1:] and any(
+            token.startswith('--') and token not in ('--api-workspace-only', '--api-admin-build-proof',
+                '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id')
+            for token in sys.argv[1:]):
+        raise SystemExit('API_ADMIN_SCOPE_CONFLICT')
+    if sys.argv[1:2] and sys.argv[1] in ('--write-api-workspace-build-proof', '--api-workspace-preflight', '--api-workspace-readback'):
+        try:
+            scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
+            if sys.argv[1:] == ['--write-api-workspace-build-proof']:
+                scope.build_proof(controller)
+            else:
+                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                        and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'API_ADMIN_INPUT_INVALID')
+                if sys.argv[1] == '--api-workspace-readback':
+                    result = scope.readback(controller, sys.argv[3])
+                else:
+                    previous, manifest, states, evidence = scope.baseline(controller, sys.argv[3])
+                    result = {'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': sys.argv[3], 'services': states, **evidence}
+                print(json.dumps(result))
+        except Exception as error:
+            message = str(error)
+            code = message if re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', message) else 'API_ADMIN_READ_UNAVAILABLE'
+            result = {'status': 'API_ADMIN_WORKSPACE_VERIFICATION_FAILED', 'code': code, 'errorType': type(error).__name__}
+            diagnostic = getattr(error, 'workspaceDiagnostic', None)
+            if 'scope' in locals() and scope.valid_workspace_diagnostic(diagnostic):
+                result['workspaceDiagnostic'] = diagnostic
+            print(json.dumps(result))
+            raise SystemExit(1) from None
+        raise SystemExit(0)
     if '--api-admin-migration-only' in sys.argv[1:] and any(
             token.startswith('--') and token not in ('--api-admin-migration-only', '--api-admin-build-proof',
                 '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id')

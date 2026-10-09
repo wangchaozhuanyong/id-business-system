@@ -4,6 +4,7 @@
 
 ## 当前功能
 
+- 自动注册：系统管理员登录后使用开源注册控制台、账号管理、邮箱服务、订阅管理和设置
 - 续费操作
 - 订单录入
 - 加卡
@@ -106,7 +107,18 @@ npm run auto-recharge:connector -- --allowed-origin=https://你的管理端域�
 旧的 `55321` 助手不能承担新版充值任务，网页会提示升级；已运行的旧窗口不会被静默接管。
 账号密码、银行卡安全码和一次性付款授权不要发到聊天或写到日志。
 
-自动注册页面、API 和新启动入口已退役；既有注册历史、迁移、账号和审计保留。
+旧自研自动注册页面、API 和 Worker 已退役；既有注册历史、迁移、账号和审计保留。
+2026-10-09 按用户新授权接入 `cf-jx/codex-register`，原注册算法、邮箱、并发和账号逻辑保留；
+接入系统管理员登录、审计、加密和共享主题。该模块的数据独立保存在项目
+`.runtime/auto-registration/database.db`，不会自动导入已有账号库。
+
+首次配置运行环境执行 `npm run auto-registration:setup`；启动系统 API 后会自动启动
+仅监听 `127.0.0.1:55323` 的私有 Python 服务。管理员从左侧“自动注册”进入。
+已有本地 API 配置可继续使用 `npm run dev:api` 与 `npm run dev:admin`。
+本次独立开发库入口为 `npm run auto-registration:local`，需要已启动本项目的本地 MySQL
+以及已完成 API 构建；它只初始化 `id_business_registration_local`，管理员沿用本地配置。
+源码版本、必要适配和本地验证见 `docs/AUTO_REGISTRATION_OPEN_SOURCE_LOCAL_20261009.md`。
+
 历史服务器执行器原生工具仅保留兼容与诊断能力，新充值请求不能走服务器付款流程。
 完整比特方案与本地合成验收见 `docs/BITBROWSER_RECHARGE_REBUILD_RESULT_20261009.md`，
 统一上线与清理范围见 `docs/UNIFIED_RELEASE_20261009.md`。

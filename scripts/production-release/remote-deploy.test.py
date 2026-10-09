@@ -43,7 +43,9 @@ def synthetic_historical_release_scope():
     """Reproduce old receipts locally without reopening any current CLI entry."""
     namespace = dict(vars(deployment))
     exec(compile(ast.Module(body=HISTORICAL_RELEASE_SCOPE, type_ignores=[]), 'pinned-historical-release-scope', 'exec'), namespace)
-    with patch.object(deployment, 'release_services', namespace['release_services']):
+    with patch.object(deployment, 'release_services', namespace['release_services']), \
+         patch.object(deployment, 'require_workspace_publication_scope'):
+        # These receipts predate the SQLite workspace; its real guard is tested separately.
         yield
 
 
@@ -2929,7 +2931,9 @@ class RechargeOnlyPublicationTests(unittest.TestCase):
                 for service in deployment.ALL_SERVICES}
             if running_image_mutation:
                 states['auto-registration']['image'] = 'sha256:' + 'f' * 64
-            compose_text = (Path(__file__).resolve().parents[2] / 'docker-compose.aws-mysql.yml').read_bytes()
+            compose_text = subprocess.check_output(['git', 'show',
+                deployment.HISTORY_DIAGNOSTICS_BASELINE + ':docker-compose.aws-mysql.yml'],
+                cwd=Path(__file__).resolve().parents[2])
             frozen = {'docker-compose.aws-mysql.yml': compose_text,
                 'deploy/caddy/Caddyfile.aws': b'unchanged synthetic edge'}
             if order_archive:
@@ -4128,7 +4132,9 @@ class ReadOnlyMaintenanceBaselineProofTests(unittest.TestCase):
             (self.directory / name).write_bytes(data); (self.directory / name).chmod(0o600)
         project = Path(__file__).resolve().parents[2]
         self.compose = self.directory / 'docker-compose.aws-mysql.yml'
-        self.compose.write_bytes((project / 'docker-compose.aws-mysql.yml').read_bytes()); self.compose.chmod(0o664)
+        self.compose.write_bytes(subprocess.check_output(['git', 'show',
+            self.namespace['PROOF_MAINTENANCE_CURRENT'] + ':docker-compose.aws-mysql.yml'], cwd=project))
+        self.compose.chmod(0o664)
         self.override = {'services': {service: {'image': self.manifest['images'][service]['reference'], 'pull_policy': 'never'}
             for service in (*self.namespace['PROOF_SERVICES'], 'migrate')}}
         self.override_path = self.directory / 'compose.release.json'
@@ -4346,7 +4352,9 @@ class FixedRechargeDeploymentReadbackTests(unittest.TestCase):
             path = current / (stage + '-audit.json'); path.write_text(json.dumps(report)); path.chmod(0o600)
         path = current / 'release-manifest.json'; path.write_text(json.dumps(manifest)); path.chmod(0o600)
         path = current / 'docker-compose.aws-mysql.yml'
-        path.write_bytes((Path(__file__).resolve().parents[2] / 'docker-compose.aws-mysql.yml').read_bytes()); path.chmod(0o644)
+        path.write_bytes(subprocess.check_output(['git', 'show',
+            deployment.RECHARGE_SCOPE_CURRENT + ':docker-compose.aws-mysql.yml'],
+            cwd=Path(__file__).resolve().parents[2])); path.chmod(0o644)
         override = {'services': {service: {'image': images[service]['reference'], 'pull_policy': 'never'}
             for service in (*deployment.SERVICES, 'migrate')}}
         path = current / 'compose.release.json'; path.write_text(json.dumps(override)); path.chmod(0o600)
@@ -4787,6 +4795,7 @@ class FixedRechargeRuntimeScopeTests(unittest.TestCase):
                     if path.name == '.deploy.lock': stack.callback(result.close)
                     return result
                 stack.enter_context(patch.object(Path, 'open', track_lock))
+                stack.enter_context(patch.object(deployment, 'require_workspace_publication_scope'))
                 for obj, attr, kwargs in [
                     (deployment, 'BASE', {'new': fixture.base}), (deployment.sys, 'argv', {'new': argv}),
                     (deployment, 'maintenance_policy', {'return_value': {'candidateSourceSha256': {}}}),
@@ -6167,6 +6176,7 @@ class FixedRecharge7fRuntimeScopeTests(unittest.TestCase):
                     if path.name == '.deploy.lock': stack.callback(result.close)
                     return result
                 stack.enter_context(patch.object(Path, 'open', track_lock))
+                stack.enter_context(patch.object(deployment, 'require_workspace_publication_scope'))
                 for obj, attr, kwargs in [
                     (deployment, 'BASE', {'new': fixture.base}), (deployment.sys, 'argv', {'new': argv}),
                     (deployment, 'maintenance_policy', {'return_value': fixture.finance_policy}),
@@ -7203,6 +7213,7 @@ class FixedRechargeMain80NativeTests(unittest.TestCase):
         stack,_=self.patches(f);old_umask=deployment.os.umask(0o077)
         try:
             with stack,redirect_stdout(output):
+                stack.enter_context(patch.object(deployment, 'require_workspace_publication_scope'))
                 stack.enter_context(patch.object(deployment.sys,'argv',argv))
                 stack.enter_context(patch.object(deployment,'fixed_recharge_runtime_archive',return_value=f.archive))
                 stack.enter_context(patch.object(deployment,'service_state',side_effect=state))

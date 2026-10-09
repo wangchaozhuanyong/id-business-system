@@ -6,6 +6,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import sqlite3
 import subprocess
 import shutil
 import select
@@ -39,6 +41,7 @@ COMMIT, TREE, OLD = 'a' * 40, 'b' * 40, 'c' * 40
 REPOSITORY = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 registration = load('api_registration_scope', 'api-admin-scope.py', 'API_REGISTRATION')
 migration = load('api_admin_migration_scope', 'api-admin-scope.py', 'API_ADMIN_MIGRATION')
+workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPACE')
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
 
@@ -47,6 +50,14 @@ def proof():
         name: {'reference': f'{REPOSITORY}:{COMMIT}-123-1-{name}', 'imageId': 'sha256:' + str(index) * 64,
                'fileCount': 1, 'sha256': str(index) * 64}
         for index, name in enumerate(scope.UPDATED, 1)}}
+
+
+def workspace_proof():
+    return {**proof(), 'scope': 'API_ADMIN_WORKSPACE',
+            'configuration': workspace.workspace_configuration(d, ROOT, ROOT),
+            'acceptance': {'status': 'PASS', 'checks': ['private-health', 'packaged-resources', 'private-sqlite',
+                'encrypted-storage', 'restart-persistence', 'wrong-key-rejected'],
+                'businessActions': 0, 'temporaryVolumeRemoved': True}}
 
 
 def registration_proof():
@@ -303,6 +314,7 @@ class BaselineAndReadbackTests(unittest.TestCase):
                 'org.opencontainers.image.revision': origin}}}]))
             controller.check_registration_followup_deployment = MagicMock(return_value=proof)
             stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             result = scope.baseline(controller, COMMIT, check_jobs=False)
             self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_RETAINED_API_ADMIN_PUBLICATION')
@@ -346,6 +358,7 @@ class BaselineAndReadbackTests(unittest.TestCase):
             controller.load_registration_interstitial95 = MagicMock()
             controller.check_registration_interstitial_deployment = MagicMock(return_value=proof)
             stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             result = scope.baseline(controller, COMMIT, check_jobs=False)
             self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_RETAINED_API_ADMIN_PUBLICATION')
@@ -409,6 +422,7 @@ class BaselineAndReadbackTests(unittest.TestCase):
             controller.registration_recovery_api_hashes = MagicMock()
             controller.registration_recovery_image_labels = MagicMock()
             snapshot_mock = stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             result = scope.baseline(controller, OLD, check_jobs=False)
             self.assertEqual(result[3]['apiSource']['kind'], 'VERIFIED_EXISTING_API_PROJECTION')
@@ -495,6 +509,7 @@ class BaselineAndReadbackTests(unittest.TestCase):
             controller.migration_plan = MagicMock(return_value=[])
             stack.enter_context(patch.object(scope, 'baseline', return_value=(current, manifest, before, {'environmentSha256': 'env'})))
             stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(scope, 'verify_running'))
             self.assertEqual(scope.readback(controller, COMMIT)['status'], 'API_ADMIN_VERIFIED')
             (current / scope.CONFIG_FILES[0]).write_text('changed')
@@ -878,6 +893,7 @@ class RegistrationScopeTests(unittest.TestCase):
             controller = SimpleNamespace(require=d.require, BASE=base, compose=MagicMock(return_value=json.dumps(task)))
             readback = stack.enter_context(patch.object(registration, 'readback', return_value={'services': states()}))
             stack.enter_context(patch.object(registration, 'snapshot', return_value=states()))
+            stack.enter_context(patch.object(registration, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(registration, 'business_logs', return_value={'rawOutputSuppressed': True}))
             result = registration.registration_business(controller, COMMIT)
             self.assertTrue(result['businessAcceptanceConfirmed'])
@@ -905,6 +921,7 @@ class RegistrationHandoffTests(unittest.TestCase):
             proof = {'requiresWindowHandoff': True, 'task': registration_task(), 'services': states()}
             preflight = stack.enter_context(patch.object(registration, 'registration_preflight', return_value=proof))
             stack.enter_context(patch.object(registration, 'snapshot', return_value=states()))
+            stack.enter_context(patch.object(registration, 'workspace_existing', return_value=False))
             task = stack.enter_context(patch.object(registration, 'registration_task', return_value=registration_task()))
             stack.enter_context(patch.object(registration, 'jobs_idle'))
             calls = []
@@ -958,7 +975,7 @@ class ReleaseFailureTests(unittest.TestCase):
     def run_release(self, fail_at=None, busy_after_switch=False, preserved_changed=False, failure_receipt_unwritable=False,
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
-                    migration_origin=None, migration_origin_guard=None):
+                    migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -973,14 +990,16 @@ class ReleaseFailureTests(unittest.TestCase):
             (previous / '.env.aws.production').write_text('preserved')
             (previous / 'release-manifest.json').write_text('{}')
             for name in scope.CONFIG_FILES:
-                path = previous / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('config')
+                path = previous / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=ROOT) if scope.WORKSPACE else b'config')
             (previous / 'compose.release.json').write_text(json.dumps({'services': {name: {'image': 'old'} for name in d.SERVICES}}))
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
-            candidate = migration_proof() if scope.MIGRATION_MODE else registration_proof() if scope.REGISTRATION else proof()
+            candidate = migration_proof() if scope.MIGRATION_MODE else registration_proof() if scope.REGISTRATION else workspace_proof() if scope.WORKSPACE else proof()
             args = SimpleNamespace(admin_only=False, image_commit=None, image_run_id=None, image_run_attempt=None,
                 post_cleanup_seal_sha256=None, order_archive_seal_sha256=None, order_archive_prepared_images_sha256=None,
                 api_admin_build_proof=base64.b64encode(json.dumps(candidate).encode()).decode(), api_admin_migration_only=scope.MIGRATION_MODE,
+                api_workspace_only=scope.WORKSPACE,
                 commit=COMMIT, source_tree=TREE, expected_current=OLD, repository=REPOSITORY, run_id='123', run_attempt='1', ci_run_id='456')
             before = states()
             controller = SimpleNamespace(**vars(d)); controller.BASE = base
@@ -1028,6 +1047,10 @@ class ReleaseFailureTests(unittest.TestCase):
                     for name in [scope.MIGRATION_SCHEMA, scope.MIGRATION_SEED, *(scope.MIGRATION_ROOT + '/' + name for name in scope.migration_files(d, ROOT))]:
                         raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
                         info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
+                if scope.WORKSPACE or candidate_workspace:
+                    for name in scope.CONFIG_FILES:
+                        raw = (ROOT / name).read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/' + name)
+                        info.size = len(raw); info.mode = 0o644; archive.addfile(info, io.BytesIO(raw))
                 if scope.REGISTRATION:
                     for name in scope.WORKER_PAIR:
                         raw = b'candidate-pair'; candidate['workerProjection'][name]['sha256'] = scope.hashlib.sha256(raw).hexdigest()
@@ -1043,13 +1066,21 @@ class ReleaseFailureTests(unittest.TestCase):
                 args.api_admin_build_proof = base64.b64encode(json.dumps(candidate).encode()).decode()
             def response(url, **kw):
                 value = io.BytesIO(archive_data.getvalue() if 'archive/' in url else b'')
-                value.status = 200; return value
+                value.status = 200
+                if scope.WORKSPACE:
+                    value.headers = {'Content-Security-Policy': re.search(r'Content-Security-Policy "([^"]+)"', (ROOT / scope.CONFIG_FILES[1]).read_text()).group(1)}
+                return value
             stack.enter_context(patch.object(scope.urllib.request, 'urlopen', side_effect=response))
             stack.enter_context(patch.object(scope.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             stack.enter_context(patch.object(scope, 'source_tree', return_value=TREE))
             stack.enter_context(patch.object(scope, 'configuration_hashes', return_value={'config': 'hash'}))
             evidence = {'manifestSha256': scope.hashlib.sha256(b'{}').hexdigest(), 'environmentSha256': 'env'}
+            if scope.WORKSPACE:
+                evidence['workspaceVolume'] = {'name': 'fixture_auto_registration_data', 'status': 'ABSENT', 'identitySha256': None}
+                stack.enter_context(patch.object(scope, 'workspace_volume', return_value={
+                    'name': 'fixture_auto_registration_data', 'status': 'PRESENT', 'identitySha256': '6' * 64}))
+                stack.enter_context(patch.object(scope, 'workspace_idle', side_effect=RuntimeError('API_ADMIN_WORKSPACE_TASK_ACTIVE') if workspace_busy else None))
             if migration_origin is not None:
                 evidence['migrationOrigin'] = migration_origin
                 controller.migration_origin_guard = stack.enter_context(patch.object(scope, 'migration_successor_guard', side_effect=migration_origin_guard))
@@ -1075,6 +1106,7 @@ class ReleaseFailureTests(unittest.TestCase):
             restore = copy.deepcopy(before)
             if preserved_changed: restore['auto-registration']['containerId'] = 'changed'
             stack.enter_context(patch.object(scope, 'snapshot', return_value=restore))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             if busy_after_switch:
                 idle.side_effect = [None, None, RuntimeError('API_ADMIN_REGISTRATION_BUSY')]
                 controller.wait_healthy.side_effect = [None, RuntimeError('unhealthy')]
@@ -1083,6 +1115,8 @@ class ReleaseFailureTests(unittest.TestCase):
                 idle.side_effect = [None, RuntimeError('API_ADMIN_REGISTRATION_BUSY')]
             if fail_at == 'api-health':
                 controller.wait_healthy.side_effect = [None, RuntimeError('unhealthy')]
+            if fail_at == 'caddy-health':
+                controller.wait_healthy.side_effect = [None, None, RuntimeError('unhealthy')]
             if fail_at == 'queued-after-api':
                 idle.side_effect = [None, None, RuntimeError('API_ADMIN_REGISTRATION_BUSY')]
             output = io.StringIO()
@@ -2080,6 +2114,7 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
             controller.current_job_database = MagicMock(return_value='fixture_db')
             controller.compose = MagicMock(return_value=json.dumps(migration_database_fixture()))
             stack.enter_context(patch.object(migration, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(migration, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(migration.shutil, 'disk_usage', return_value=SimpleNamespace(free=free)))
             native = stack.enter_context(patch.object(migration, 'registration_native_baseline', return_value={'kind': 'VERIFIED_EXISTING_API_REGISTRATION_SOURCE'}))
             idle = stack.enter_context(patch.object(migration, 'jobs_idle', return_value=migration_guards()))
@@ -2149,9 +2184,11 @@ new Function('require','process',__SOURCE__)(fakeRequire,{env:{AUTO_RECHARGE_WOR
     def test_registration_origin_still_supports_its_own_namespace_and_default_mode_cannot_use_it(self):
         with self.registration_baseline_fixture() as (controller, current, before, native, idle, stack, *_):
             stack.enter_context(patch.object(registration, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(registration, 'workspace_existing', return_value=False))
             result = registration.baseline(controller, COMMIT, check_jobs=False)
             self.assertEqual(result[3]['apiSource']['kind'], 'API_REGISTRATION_BUILD_PROVEN')
             stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_SCOPE_CONFLICT$'):
                 scope.baseline(controller, COMMIT, check_jobs=False)
 
@@ -2359,6 +2396,7 @@ class MigrationReadbackTests(unittest.TestCase):
                 'dataAuditAfter': migration.audit_receipt(d, current / 'after-audit.json')}
             stack.enter_context(patch.object(migration, 'baseline', return_value=(current, manifest, after, {'environmentSha256': environment_sha})))
             stack.enter_context(patch.object(migration, 'snapshot', return_value=after))
+            stack.enter_context(patch.object(migration, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(migration, 'verify_running'))
             stack.enter_context(patch.object(migration, 'jobs_idle', return_value=migration_guards()))
             task = stack.enter_context(patch.object(migration, 'registration_task', return_value=migration_task()))
@@ -2648,6 +2686,7 @@ class MigrationSuccessorTests(unittest.TestCase):
                 return original_run(*args, **kwargs)
             controller.run.side_effect = inspect
             stack.enter_context(patch.object(scope, 'snapshot', return_value=before))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(scope.shutil, 'disk_usage', return_value=SimpleNamespace(free=10 * 1024**3)))
             stack.enter_context(patch.object(scope, 'jobs_idle', return_value=migration_guards()))
             yield controller, current, manifest, candidate, before, task, private, handoff, stack
@@ -2723,6 +2762,7 @@ class MigrationSuccessorTests(unittest.TestCase):
             (current / 'release-manifest.json').write_text(json.dumps(manifest))
             (controller.BASE / 'current').unlink(); (controller.BASE / 'current').symlink_to(current)
             stack.enter_context(patch.object(scope, 'snapshot', return_value=after))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             stack.enter_context(patch.object(scope, 'verify_running'))
             controller.migration_plan = MagicMock(return_value=[])
             controller.service_state = lambda _directory, name, **kwargs: after[name]
@@ -2772,6 +2812,7 @@ class MigrationSuccessorTests(unittest.TestCase):
             (current / 'release-manifest.json').write_text(json.dumps(manifest))
             (controller.BASE / 'current').unlink(); (controller.BASE / 'current').symlink_to(current)
             stack.enter_context(patch.object(scope, 'snapshot', return_value=after))
+            stack.enter_context(patch.object(scope, 'workspace_existing', return_value=False))
             controller.service_state = lambda _directory, name, **kwargs: after[name]
             original_run = controller.run.side_effect
             def inspect(*args, **kwargs):
@@ -2847,6 +2888,434 @@ class MigrationSuccessorTests(unittest.TestCase):
             code, result, controller, manifest, _ = ReleaseFailureTests().run_release(migration_origin=context, fail_at='api-health')
             self.assertEqual(code, 1); self.assertEqual(result['status'], 'API_ADMIN_FAILED_RESTORED')
             self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list], ['api', 'admin'])
+
+
+
+class WorkspaceDiagnosticTests(unittest.TestCase):
+    def test_current_api_admin_image_and_content_failures_have_bounded_steps_and_preserve_gate(self):
+        for service in ('api', 'admin'):
+            for step in ('RUNTIME_IMAGE', 'RUNTIME_CONTENT'):
+                with self.subTest(service=service, step=step), tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+                    base = Path(temporary); current = base / 'releases/current'; current.mkdir(parents=True)
+                    (base / 'current').symlink_to(current)
+                    candidate = proof(); before = states()
+                    content = {'api': '1' * 64 + '  /app/apps/api/dist/main.js',
+                        'admin': '2' * 64 + '  /usr/share/nginx/html/index.html'}
+                    for name, row in candidate['images'].items():
+                        before[name].update(image=row['imageId'], reference=row['reference'])
+                        row.update(scope.content_summary(d, name, content[name]))
+                    manifest = {'commit': COMMIT, 'sourceTree': TREE, 'apiAdminPublication': {'version': 1},
+                        'images': {name: {'reference': row['reference'], 'digest': row['image'], 'sourceCommit': COMMIT}
+                            for name, row in before.items() if name in d.SERVICES}}
+                    (current / 'release-manifest.json').write_text(json.dumps(manifest))
+                    (current / scope.PROOF_FILE).write_text(json.dumps(candidate))
+                    controller = SimpleNamespace(**vars(d)); controller.BASE = base
+                    controller.api_admin_scope = MagicMock(return_value=(scope, controller))
+                    controller.service_state = lambda _directory, name, **kwargs: before[name]
+                    inspections = 0
+                    def inspect(*args, **kwargs):
+                        nonlocal inspections
+                        inspections += 1
+                        selected = next(name for name in scope.UPDATED if before[name]['image'] == args[-1])
+                        if inspections > 1 and selected == service and step == 'RUNTIME_IMAGE':
+                            raise RuntimeError('SENTINEL_PRIVATE_COMMAND_OUTPUT')
+                        return json.dumps([{'Id': before[selected]['image'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                            'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE}}}])
+                    controller.run = inspect
+                    def compose(_directory, *args, **kwargs):
+                        if args[2] == service and step == 'RUNTIME_CONTENT':
+                            raise RuntimeError('SENTINEL_PRIVATE_COMMAND_OUTPUT')
+                        return content[args[2]]
+                    controller.compose = compose
+                    with patch.object(workspace, 'snapshot', return_value=before):
+                        with self.assertRaises(workspace.WorkspaceBaselineError) as failed:
+                            workspace.baseline(controller, COMMIT)
+                    diagnostic = failed.exception.workspaceDiagnostic
+                    self.assertEqual(str(failed.exception), 'API_ADMIN_BASELINE_PROJECTION_FAILED')
+                    self.assertEqual(diagnostic, {'phase': 'PROJECTION', 'step': step, 'scope': 'API_ADMIN',
+                        'service': service, 'errorType': 'RuntimeError', 'rawOutputSuppressed': True})
+                    self.assertTrue(workspace.valid_workspace_diagnostic(diagnostic))
+                    self.assertFalse(hasattr(controller, '_workspaceBaselineDiagnostic'))
+                    self.assertNotIn('SENTINEL', json.dumps(diagnostic))
+
+    def test_missing_retained_migration_image_is_identified_without_bypassing_origin_proof(self):
+        with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
+            for name in ('MIGRATION_SUCCESSOR_COMMIT', 'MIGRATION_SUCCESSOR_MANIFEST_SHA', 'MIGRATION_SUCCESSOR_PROOF_SHA'):
+                stack.enter_context(patch.object(workspace, name, getattr(scope, name)))
+            context = workspace.migration_successor_origin(controller, current)
+            controller._workspaceBaselineDiagnostic = {}
+            original = controller.run.side_effect
+            def inspect(*args, **kwargs):
+                if args[:3] == ('docker', 'image', 'inspect') and args[-1] == candidate['images']['migrate']['reference']:
+                    raise RuntimeError('SENTINEL_PRIVATE_IMAGE_ERROR')
+                return original(*args, **kwargs)
+            controller.run.side_effect = inspect
+            with self.assertRaisesRegex(RuntimeError, 'SENTINEL_PRIVATE_IMAGE_ERROR'):
+                workspace.migration_successor_guard(controller, current, context)
+            self.assertEqual(controller._workspaceBaselineDiagnostic,
+                {'step': 'MIGRATION_IMAGE', 'service': 'migrate', 'scope': 'API_ADMIN_MIGRATION'})
+            handoff.assert_not_called()
+
+    def test_schema_task_idle_and_window_calls_set_safe_steps_before_private_query_failure(self):
+        for name, step in [('migration_database_state', 'MIGRATION_SCHEMA'), ('registration_task', 'TASK_IDENTITY'),
+                ('jobs_idle', 'JOBS_IDLE'), ('registration_private', 'WINDOW_STATE')]:
+            with self.subTest(function=name):
+                controller = SimpleNamespace(**vars(d)); controller._workspaceBaselineDiagnostic = {}
+                controller.compose = MagicMock(side_effect=RuntimeError('SENTINEL_PRIVATE_QUERY_OUTPUT'))
+                controller.current_job_database = MagicMock(return_value='fixture_db')
+                with self.assertRaises(Exception):
+                    getattr(migration, name)(controller, ROOT)
+                self.assertEqual(controller._workspaceBaselineDiagnostic,
+                    {'step': step, 'service': 'none', 'scope': 'API_ADMIN_MIGRATION'})
+
+    def test_transport_only_preserves_exact_workspace_diagnostic_enums(self):
+        diagnostic = {'phase': 'PROJECTION', 'step': 'MIGRATION_IMAGE', 'service': 'migrate',
+            'scope': 'API_ADMIN_MIGRATION', 'errorType': 'RuntimeError', 'rawOutputSuppressed': True}
+        receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFICATION_FAILED', 'code': 'API_ADMIN_BASELINE_PROJECTION_FAILED',
+            'errorType': 'WorkspaceBaselineError', 'workspaceDiagnostic': diagnostic}
+        self.assertEqual(transport.safe_failure(receipt, 'API_ADMIN_WORKSPACE'), receipt)
+        for field, value in [('phase', 'SENTINEL'), ('step', []), ('service', 'secret-service'),
+                ('scope', 'OTHER'), ('errorType', 'PRIVATE_ERROR'), ('rawOutputSuppressed', False), ('extra', 'SENTINEL')]:
+            changed = {**diagnostic, field: value}
+            self.assertFalse(workspace.valid_workspace_diagnostic(changed))
+            self.assertNotIn('workspaceDiagnostic', transport.safe_failure(
+                {**receipt, 'workspaceDiagnostic': changed}, 'API_ADMIN_WORKSPACE'))
+        legacy = {**receipt, 'status': 'API_ADMIN_VERIFICATION_FAILED'}
+        self.assertNotIn('workspaceDiagnostic', transport.safe_failure(legacy))
+
+
+class WorkspaceScopeTests(unittest.TestCase):
+    def test_existing_workspace_detection_includes_configuration_mount_and_retained_orphan_volume(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            directory = Path(temporary)
+            api = {'Config': {'Labels': {'com.docker.compose.project': 'fixture'}}, 'Mounts': []}
+            found = ''
+            def run(*args):
+                if args[:2] == ('docker', 'inspect'): return json.dumps([api])
+                if args[:3] == ('docker', 'volume', 'ls'): return found
+                raise AssertionError(args)
+            controller = SimpleNamespace(require=d.require, run=run,
+                service_state=MagicMock(return_value={'containerId': '1' * 64}))
+            self.assertFalse(workspace.workspace_existing(controller, directory))
+            found = 'fixture_auto_registration_data'
+            self.assertTrue(workspace.workspace_existing(controller, directory))
+            found = ''
+            api['Mounts'] = [{'Destination': workspace.WORKSPACE_DIRECTORY}]
+            self.assertTrue(workspace.workspace_existing(controller, directory))
+            api['Mounts'] = []
+            path = directory / workspace.CONFIG_FILES[0]
+            path.write_bytes(b'volumes:\n  auto_registration_data:\n')
+            self.assertTrue(workspace.workspace_existing(controller, directory))
+            path.unlink()
+            found = 'unexpected-volume'
+            with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_VOLUME_CHANGED'):
+                workspace.workspace_existing(controller, directory)
+            found = ''
+            api['Config']['Labels'] = {}
+            with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_PROJECT_INVALID'):
+                workspace.workspace_existing(controller, directory)
+
+    def test_old_api_modes_reject_existing_workspace_before_audit_or_service_switch(self):
+        for selected in (scope, migration, registration):
+            for kind in ('configured', 'mounted', 'orphan-volume'):
+                with self.subTest(scope=selected.SCOPE, kind=kind), tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+                    base = Path(temporary); current = base / 'releases/current'; current.mkdir(parents=True)
+                    (base / 'current').symlink_to(current)
+                    (current / 'release-manifest.json').write_text(json.dumps({'commit': COMMIT}))
+                    if kind == 'configured':
+                        (current / selected.CONFIG_FILES[0]).write_bytes(b'volumes:\n  auto_registration_data:\n')
+                    api = {'Config': {'Labels': {'com.docker.compose.project': 'fixture'}},
+                        'Mounts': [{'Destination': workspace.WORKSPACE_DIRECTORY}] if kind == 'mounted' else []}
+                    def run(*args):
+                        if args[:2] == ('docker', 'inspect'): return json.dumps([api])
+                        if args[:3] == ('docker', 'volume', 'ls'):
+                            return 'fixture_auto_registration_data' if kind == 'orphan-volume' else ''
+                        raise AssertionError(args)
+                    controller = SimpleNamespace(BASE=base, require=d.require, run=run,
+                        service_state=MagicMock(return_value={'containerId': '1' * 64}), compose=MagicMock())
+                    with patch.object(selected, 'snapshot', return_value=states()), \
+                         patch.object(selected, 'strict_audit') as audit:
+                        with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_SCOPE_REQUIRED$'):
+                            selected.baseline(controller, COMMIT)
+                        audit.assert_not_called(); controller.compose.assert_not_called()
+
+    def test_ordinary_release_requires_workspace_scope_and_admin_only_never_reads_api_or_volume(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            previous, candidate = (Path(temporary) / name for name in ('previous', 'candidate'))
+            previous.mkdir(); candidate.mkdir()
+            controller = SimpleNamespace(require=d.require)
+            with patch.object(d, 'api_admin_scope', return_value=(workspace, controller)), \
+                 patch.object(workspace, 'workspace_existing', return_value=True) as exists:
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_SCOPE_REQUIRED$'):
+                    d.require_workspace_publication_scope(previous, candidate)
+                exists.return_value = False
+                d.require_workspace_publication_scope(previous, candidate)
+                (candidate / workspace.CONFIG_FILES[0]).write_bytes(b'volumes:\n  auto_registration_data:\n')
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_WORKSPACE_SCOPE_REQUIRED$'):
+                    d.require_workspace_publication_scope(previous, candidate)
+                exists.reset_mock()
+                d.require_workspace_publication_scope(previous, candidate, admin_only=True)
+                exists.assert_not_called()
+        import ast
+        tree = ast.parse((ROOT / 'scripts/production-release/remote-deploy.py').read_bytes())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        calls = [(node.func.id, node.lineno) for node in ast.walk(main)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        guard_line = next(line for name, line in calls if name == 'require_workspace_publication_scope')
+        self.assertLess(guard_line, next(line for name, line in calls if name == 'run_release_migrations'))
+
+    def test_old_api_release_modes_reject_candidate_workspace_configuration_before_switch(self):
+        for selected in (scope, migration):
+            with self.subTest(scope=selected.SCOPE):
+                code, result, controller, manifest, _ = ReleaseFailureTests().run_release(
+                    selected_scope=selected, candidate_workspace=True)
+                self.assertEqual(code, 1)
+                self.assertEqual(result['code'], 'API_ADMIN_WORKSPACE_SCOPE_REQUIRED')
+                self.assertEqual(result['servicesAttempted'], [])
+                controller.compose.assert_not_called()
+                self.assertFalse(any(command[:2] == ('docker', 'pull') for command in controller.commands))
+
+    def test_three_services_only_two_fresh_images_and_old_modes_unchanged(self):
+        self.assertEqual(workspace.UPDATED, ('api', 'admin', 'caddy'))
+        self.assertEqual(workspace.IMAGE_SERVICES, ('api', 'admin'))
+        self.assertEqual(workspace.SWITCH_ORDER, ('admin', 'api', 'caddy'))
+        self.assertEqual(scope.UPDATED, ('api', 'admin'))
+        self.assertEqual(migration.IMAGE_SERVICES, ('api', 'admin', 'migrate'))
+        self.assertEqual(transport.selected_scope('release_api_workspace'), 'API_ADMIN_WORKSPACE')
+        self.assertEqual(d.api_admin_scope('API_ADMIN_WORKSPACE')[0].PREFIX, 'api-workspace')
+
+    @contextmanager
+    def config_fixture(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            previous, candidate = (Path(temporary) / name for name in ('previous', 'candidate'))
+            for directory in (previous, candidate):
+                directory.mkdir()
+                for name in scope.CONFIG_FILES:
+                    path = directory / name; path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(subprocess.check_output(['git', 'show', 'HEAD:' + name], cwd=ROOT)
+                        if directory == previous else (ROOT / name).read_bytes())
+            yield previous, candidate
+
+    def test_configuration_allows_only_exact_api_mount_and_reviewed_caddy_bytes(self):
+        with self.config_fixture() as (previous, candidate):
+            expected = workspace.workspace_configuration(d, previous, candidate)
+            self.assertEqual(expected, workspace_proof()['configuration'])
+            original = (candidate / scope.CONFIG_FILES[0]).read_bytes()
+            for changed in (original.replace(b'    read_only: true', b'    read_only: false', 1),
+                original.replace(b'auto_registration_data:/app/.runtime/auto-registration', b'auto_registration_data:/tmp/workspace'),
+                original.replace(b'  auto_registration_data:\n', b'  auto_registration_data:\n    driver: remote\n'),
+                original.replace(b'      NODE_ENV: production', b'      NODE_ENV: development', 1)):
+                (candidate / scope.CONFIG_FILES[0]).write_bytes(changed)
+                with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_CONFIG_CHANGED'):
+                    workspace.workspace_configuration(d, previous, candidate)
+            (candidate / scope.CONFIG_FILES[0]).write_bytes(original)
+            path = candidate / scope.CONFIG_FILES[1]
+            path.write_bytes(path.read_bytes() + b'\n# unreviewed edge change\n')
+            with self.assertRaisesRegex(RuntimeError, 'WORKSPACE_EDGE_CHANGED'):
+                workspace.workspace_configuration(d, previous, candidate)
+
+    def test_proof_includes_python_venv_css_and_offline_acceptance_but_never_runtime_data(self):
+        command = workspace.content_command('api')
+        for root in workspace.WORKSPACE_API_ROOTS:
+            self.assertIn(root, command)
+        self.assertNotIn('.runtime', command)
+        self.assertNotIn('/opt/id-registration/venv', scope.content_command('api'))
+        value = workspace_proof()
+        workspace.validate_proof(d, value, COMMIT, TREE, REPOSITORY, '123', '1')
+        for change in ('acceptance', 'configuration', 'caddy-image', 'other-attempt'):
+            candidate = copy.deepcopy(value)
+            if change == 'acceptance': candidate['acceptance']['businessActions'] = 1
+            elif change == 'configuration': candidate['configuration']['caddySha256'] = '0' * 64
+            elif change == 'caddy-image': candidate['images']['caddy'] = candidate['images']['admin']
+            else: candidate['images']['api']['reference'] = candidate['images']['api']['reference'].replace('-123-1-', '-123-2-')
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                workspace.validate_proof(d, candidate, COMMIT, TREE, REPOSITORY, '123', '1')
+        with self.assertRaises(RuntimeError): scope.validate_proof(d, value, COMMIT, TREE)
+        for path in ('/app/.runtime/auto-registration/database.db', '/app/.runtime/auto-registration/logs/private.log'):
+            with self.assertRaises(RuntimeError): workspace.content_summary(d, 'api', '1' * 64 + '  ' + path)
+
+    @contextmanager
+    def volume_fixture(self, *, exists=True):
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            root = Path(temporary).resolve()
+            name = 'fixture_' + workspace.WORKSPACE_VOLUME
+            api = {'Config': {'Labels': {'com.docker.compose.project': 'fixture'}},
+                   'Mounts': [{'Type': 'volume', 'Name': name, 'Destination': workspace.WORKSPACE_DIRECTORY, 'RW': True}]}
+            value = {'Name': name, 'Driver': 'local', 'Scope': 'local', 'Mountpoint': str(root),
+                     'Labels': {'com.docker.compose.project': 'fixture', 'com.docker.compose.volume': workspace.WORKSPACE_VOLUME},
+                     'CreatedAt': 'fixture-created'}
+            calls = []
+            def run(*args):
+                calls.append(args)
+                if args[:3] == ('docker', 'volume', 'ls'): return name if exists else ''
+                if args[:3] == ('docker', 'volume', 'inspect'): return json.dumps([value])
+                if args[:2] == ('docker', 'inspect'): return json.dumps([api])
+                raise AssertionError(args)
+            controller = SimpleNamespace(require=d.require, run=run,
+                service_state=lambda *args, **kw: {'containerId': 'fixture-api'})
+            yield controller, root, value, api, calls
+
+    def test_absent_and_empty_volume_allowed_only_attached_identity_can_become_runtime(self):
+        with self.volume_fixture(exists=False) as (controller, root, value, api, calls):
+            self.assertEqual(workspace.workspace_volume(controller, None, empty=True)['status'], 'ABSENT')
+            with self.assertRaisesRegex(RuntimeError, 'VOLUME_MISSING'):
+                workspace.workspace_volume(controller, None, attached=True)
+        with self.volume_fixture() as (controller, root, value, api, calls):
+            before = workspace.workspace_volume(controller, None, empty=True, attached=True)
+            (root / 'database.db').write_bytes(b'private fixture')
+            self.assertEqual(workspace.workspace_volume(controller, None, attached=True), before)
+            with self.assertRaisesRegex(RuntimeError, 'SQLITE_BACKUP_REQUIRED'):
+                workspace.workspace_volume(controller, None, empty=True)
+            api['Mounts'][0]['RW'] = False
+            with self.assertRaisesRegex(RuntimeError, 'MOUNT_CHANGED'):
+                workspace.workspace_volume(controller, None, attached=True)
+            self.assertFalse(any(args[:3] == ('docker', 'volume', 'rm') for args in calls))
+
+    def test_volume_project_driver_and_name_drift_fail_closed(self):
+        for key, changed in [('Driver', 'remote'), ('Name', 'other'), ('Scope', 'global'), ('Labels', {})]:
+            with self.volume_fixture() as (controller, root, value, api, calls):
+                value[key] = changed
+                with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'VOLUME_CHANGED'):
+                    workspace.workspace_volume(controller, None)
+        with self.volume_fixture() as (controller, root, value, api, calls):
+            api['Config']['Labels']['com.docker.compose.project'] = '../other'
+            with self.assertRaisesRegex(RuntimeError, 'PROJECT_INVALID'):
+                workspace.workspace_volume(controller, None)
+
+    def test_readonly_task_guard_blocks_pending_running_unknown_and_corrupt_database(self):
+        for status in ('pending', 'running', 'unknown', 'completed', 'failed', 'cancelled'):
+            with self.volume_fixture() as (controller, root, value, api, calls):
+                database = root / 'database.db'
+                with sqlite3.connect(database) as connection:
+                    connection.execute('CREATE TABLE registration_tasks (status TEXT, result TEXT)')
+                    connection.execute('INSERT INTO registration_tasks VALUES (?,?)', (status, 'PRIVATE_SENTINEL'))
+                original = database.read_bytes()
+                if status in ('completed', 'failed', 'cancelled'):
+                    workspace.workspace_idle(controller, None)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'TASK_ACTIVE'):
+                        workspace.workspace_idle(controller, None)
+                self.assertEqual(database.read_bytes(), original)
+                self.assertNotIn('PRIVATE_SENTINEL', json.dumps(calls))
+        with self.volume_fixture() as (controller, root, value, api, calls):
+            (root / 'database.db').write_bytes(b'corrupt fixture')
+            with self.assertRaisesRegex(RuntimeError, 'TASK_STATE_UNAVAILABLE'):
+                workspace.workspace_idle(controller, None)
+
+    def test_offline_acceptance_cleans_only_new_run_volume_on_pass_and_fail(self):
+        for passing in (True, False):
+            calls = []
+            result = {key: value for key, value in workspace_proof()['acceptance'].items() if key != 'temporaryVolumeRemoved'}
+            def run(*args, **kwargs):
+                calls.append(args)
+                if args[:3] == ('docker', 'volume', 'ls'): return ''
+                if args[:3] == ('docker', 'volume', 'inspect'):
+                    return json.dumps([{'Name': 'id-workspace-acceptance-123-1', 'Labels': {'id-business-v2.acceptance': '123-1'}}])
+                if args[:2] == ('docker', 'run'):
+                    if not passing: raise RuntimeError('fixture acceptance failed')
+                    return json.dumps(result)
+                return ''
+            controller = SimpleNamespace(require=d.require, run=run)
+            if passing:
+                self.assertTrue(workspace.workspace_acceptance(controller, 'fixture-image', '123', '1')['temporaryVolumeRemoved'])
+            else:
+                with self.assertRaises(RuntimeError): workspace.workspace_acceptance(controller, 'fixture-image', '123', '1')
+            removals = [args for args in calls if args[:3] == ('docker', 'volume', 'rm')]
+            self.assertEqual(removals, [('docker', 'volume', 'rm', 'id-workspace-acceptance-123-1')])
+            launch = next(args for args in calls if args[:2] == ('docker', 'run'))
+            self.assertIn('none', launch); self.assertIn('--read-only', launch)
+            self.assertNotIn('auto_registration_data', removals[0][-1])
+
+    def test_success_switches_admin_api_caddy_preserves_workers_mysql_and_volume(self):
+        code, result, controller, manifest, _ = ReleaseFailureTests().run_release(selected_scope=workspace)
+        self.assertEqual(code, 0)
+        self.assertEqual([call.args[-1] for call in controller.compose.call_args_list], ['admin', 'api', 'caddy'])
+        self.assertTrue(all('--no-deps' in call.args for call in controller.compose.call_args_list))
+        self.assertEqual(manifest['servicesUpdated'], ['api', 'admin', 'caddy'])
+        self.assertEqual(manifest['newMigrations'], []); self.assertFalse(manifest['migrationApplied'])
+        self.assertFalse(manifest['apiWorkspacePublication']['volumeDeletionPerformed'])
+        self.assertEqual(manifest['images']['auto-registration']['sourceCommit'], OLD)
+        self.assertEqual(len([args for args in controller.commands if args[:2] == ('docker', 'pull')]), 2)
+        self.assertFalse(any(args[:3] == ('docker', 'volume', 'rm') for args in controller.commands))
+        controller.rollback_service.assert_not_called()
+
+    def test_failure_restores_three_only_and_active_new_task_blocks_api_rollback(self):
+        code, result, controller, manifest, _ = ReleaseFailureTests().run_release(selected_scope=workspace, fail_at='caddy-health')
+        self.assertEqual(code, 1); self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_FAILED_RESTORED')
+        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list], ['caddy', 'api', 'admin'])
+        self.assertFalse(result['volumeDeletionPerformed'])
+        code, result, controller, manifest, _ = ReleaseFailureTests().run_release(selected_scope=workspace, workspace_busy=True)
+        self.assertEqual(code, 1); self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_PARTIAL_RECOVERY_REQUIRED')
+        self.assertEqual(result['rollback']['api'], 'BLOCKED_OR_FAILED')
+        self.assertEqual([call.args[2] for call in controller.rollback_service.call_args_list], ['admin'])
+        self.assertFalse(result['volumeDeletionPerformed'])
+
+    def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
+        commands = '\n'.join(transport.parameters(COMMIT, OLD, 'preflight', 'API_ADMIN_WORKSPACE')['commands'])
+        self.assertEqual(commands.count('sha256sum -c -'), 2)
+        self.assertIn('--api-workspace-preflight', commands)
+        script = ROOT / 'scripts/production-release/validate-release-selection.sh'
+        for operation in ('verify_api_workspace', 'release_api_workspace'):
+            base = {'RELEASE_OPERATION': operation, 'HISTORICAL_EXCEPTION': 'none'}
+            self.assertEqual(subprocess.run(['bash', str(script)], env=base, capture_output=True).returncode, 0)
+            for key in ('REUSE_IMAGE_RUN', 'ORDER_ARCHIVE_SEAL_SHA256', 'POST_CLEANUP_SEAL_SHA256',
+                        'RELEASE_BROWSER_CACHE_IMAGE', 'CACHE_PLAN_SHA256', 'DIAGNOSTIC_COMMAND_ID'):
+                self.assertNotEqual(subprocess.run(['bash', str(script)], env={**base, key: 'fixture'}, capture_output=True).returncode, 0)
+            self.assertNotEqual(subprocess.run(['bash', str(script)], env={**base, 'HISTORICAL_EXCEPTION': 'historical-finance-20261005'}, capture_output=True).returncode, 0)
+
+
+    def test_workspace_independent_receipt_binds_exact_proof_volume_and_actual_health(self):
+        value = workspace_proof()
+        receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFIED', 'commit': COMMIT, 'sourceTree': TREE,
+            'buildProofSha256': workspace.fingerprint(value), 'servicesUpdated': list(workspace.UPDATED),
+            'preservedServiceCount': 4, 'runningImagesAndContentMatched': True, 'environmentUnchanged': True,
+            'workspaceVolume': {'name': 'fixture_auto_registration_data', 'status': 'PRESENT', 'identitySha256': '6' * 64},
+            'volumePreserved': True, 'volumeDeletionPerformed': False, 'registrationHealthChecked': True,
+            'offlineAcceptance': value['acceptance'],
+            'services': {name: {'image': row['imageId'], 'reference': row['reference']} for name, row in value['images'].items()}}
+        with patch.object(Path, 'read_text', return_value=json.dumps(value)):
+            transport.validate_receipt(receipt, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
+            for field, changed in [('preservedServiceCount', 5), ('registrationHealthChecked', False),
+                ('volumeDeletionPerformed', True), ('workspaceVolume', {}), ('offlineAcceptance', {})]:
+                with self.subTest(field=field), self.assertRaises(RuntimeError):
+                    transport.validate_receipt({**receipt, field: changed}, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
+
+    def test_workspace_dispatch_uses_only_new_scope_and_exact_runner_proof(self):
+        text = (ROOT / 'scripts/production-release/dispatch.sh').read_text()
+        program = text.split('python3 - "$parameters_file" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
+        environment = {'RELEASE_COMMIT': COMMIT, 'SOURCE_TREE': TREE, 'EXPECTED_CURRENT': OLD,
+            'RELEASE_REPOSITORY': REPOSITORY, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
+            'QUALITY_RUN_ID': '456', 'RELEASE_OPERATION': 'release_api_workspace', 'HISTORICAL_EXCEPTION': 'none'}
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.dict(os.environ, environment, clear=True), \
+             patch.object(sys, 'argv', ['generate', str(Path(temporary) / 'parameters.json')]), \
+             patch.object(Path, 'read_bytes', return_value=json.dumps(workspace_proof()).encode()):
+            exec(compile(program, 'workspace-dispatch', 'exec'), {'__name__': '__test__'})
+            commands = '\n'.join(json.loads((Path(temporary) / 'parameters.json').read_text())['commands'])
+        self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
+        self.assertNotIn('--image-commit', commands)
+        self.assertNotIn('--historical-', commands)
+        self.assertEqual(commands.count('sha256sum -c -'), 2)
+
+    def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
+        with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
+            for name in ('MIGRATION_SUCCESSOR_COMMIT', 'MIGRATION_SUCCESSOR_MANIFEST_SHA', 'MIGRATION_SUCCESSOR_PROOF_SHA'):
+                stack.enter_context(patch.object(workspace, name, getattr(scope, name)))
+            context = workspace.migration_successor_origin(controller, current)
+            self.assertEqual(context['migrationState']['status'], 'APPLIED')
+            workspace.migration_successor_guard(controller, current, context)
+            task.return_value = {**migration_task(), 'jobHmac': '8' * 64}
+            with self.assertRaises(RuntimeError): workspace.migration_successor_guard(controller, current, context)
+            handoff.assert_not_called()
+
+    def test_workspace_health_fetches_running_api_not_a_second_fixture_worker(self):
+        controller = SimpleNamespace(require=d.require, compose=MagicMock(return_value='{"ready":true}'))
+        workspace.workspace_health(controller, ROOT)
+        arguments = controller.compose.call_args.args
+        self.assertIn('exec', arguments); self.assertIn('api', arguments)
+        self.assertIn('http://127.0.0.1:3000/api/health/ready', arguments[-1])
+        self.assertNotIn('workspace.py', arguments[-1])
+        controller.compose.return_value = '{"ready":false}'
+        with self.assertRaisesRegex(RuntimeError, 'HEALTH_FAILED'): workspace.workspace_health(controller, ROOT)
 
 
 if __name__ == '__main__':

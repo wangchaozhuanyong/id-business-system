@@ -1388,6 +1388,7 @@ export const v2TableSchemas = {
 } as const;
 
 export const v2TablesByFeature = {
+  'auto-registration': [],
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
   'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],

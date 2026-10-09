@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(32);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(33);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,16 +58,29 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(32);
+    expect(v2FeatureRegistry).toHaveLength(33);
   });
 
-  it('does not expose removed registration routes or navigation', () => {
-    expect(getV2RuntimeModuleDefinition('auto-registration')).toBeUndefined();
+  it('keeps the removed registration names module retired', () => {
     expect(getV2RuntimeModuleDefinition('registration-names')).toBeUndefined();
     expect(
-      v2FeatureRegistry.some((feature) => feature.route.startsWith('/v2/auto-registration'))
+      v2FeatureRegistry.some((feature) => feature.route === '/v2/auto-registration/names')
     ).toBe(false);
-    expect(v2NavigationSections.some((section) => section.key === 'auto-registration')).toBe(false);
+  });
+
+  it('registers the new registration workspace as an administrator-only main navigation', () => {
+    expect(getV2RuntimeModuleDefinition('auto-registration')).toMatchObject({
+      route: '/v2/auto-registration',
+      title: '自动注册',
+      group: '自动注册',
+      kind: 'form',
+      requiredRoles: ['admin']
+    });
+    const section = v2NavigationSections.find((item) => item.key === 'auto-registration');
+    expect(section?.items.map((item) => item.key)).toEqual(['auto-registration']);
+    expect(tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))).toEqual(
+      []
+    );
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {

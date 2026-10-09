@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import tarfile
@@ -15,16 +16,25 @@ import time
 import urllib.request
 
 SCOPE = globals().get('SCOPE', 'API_ADMIN')
-if SCOPE not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION'):
+if SCOPE not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE'):
     raise ValueError('API_ADMIN_SCOPE_CONFLICT')
 REGISTRATION = SCOPE == 'API_REGISTRATION'
 MIGRATION_MODE = SCOPE == 'API_ADMIN_MIGRATION'
-UPDATED = ('api', 'auto-registration') if REGISTRATION else ('api', 'admin')
-IMAGE_SERVICES = (*UPDATED, 'migrate') if MIGRATION_MODE else UPDATED
-SWITCH_ORDER = ('api', 'auto-registration') if REGISTRATION else ('admin', 'api')
-PREFIX = SCOPE.lower().replace('_', '-')
+WORKSPACE = SCOPE == 'API_ADMIN_WORKSPACE'
+UPDATED = ('api', 'auto-registration') if REGISTRATION else ('api', 'admin', 'caddy') if WORKSPACE else ('api', 'admin')
+IMAGE_SERVICES = (*UPDATED, 'migrate') if MIGRATION_MODE else ('api', 'admin') if WORKSPACE else UPDATED
+SWITCH_ORDER = ('api', 'auto-registration') if REGISTRATION else ('admin', 'api', 'caddy') if WORKSPACE else ('admin', 'api')
+PREFIX = 'api-workspace' if WORKSPACE else SCOPE.lower().replace('_', '-')
 CONFIG_FILES = ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
                 'apps/api/prisma-mysql/schema.prisma')
+WORKSPACE_VOLUME = 'auto_registration_data'
+WORKSPACE_DIRECTORY = '/app/.runtime/auto-registration'
+WORKSPACE_CADDY_BEFORE = 'f8b230bba46136c27651a0df8b7d6fd7fc4f13a47f7db48d0ff0a436fcfe37e0'
+WORKSPACE_CADDY_AFTER = 'f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674'
+WORKSPACE_API_ROOTS = ('/app/apps/api/dist', '/app/packages/shared/dist',
+    '/app/apps/api/src/id-business-v2/auto-registration', '/opt/id-registration/venv',
+    '/opt/id-registration/dependency-audit.json',
+    '/app/apps/admin/src/v2/styles/base.css')
 PROOF_FILE = PREFIX + '-build-proof.json'
 STATE_FILE = PREFIX + '-preservation.json'
 FAILURE_FILE = PREFIX + '-failure.json'
@@ -89,6 +99,38 @@ MIGRATION_IDENTITY = {
 MIGRATION_SUCCESSOR_COMMIT = '23c5841b9b7e60be715250cbb985fc0966c0bce3'
 MIGRATION_SUCCESSOR_MANIFEST_SHA = '117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639'
 MIGRATION_SUCCESSOR_PROOF_SHA = '6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c'
+WORKSPACE_DIAGNOSTIC_STEPS = frozenset(('NOT_STARTED', 'CURRENT_PROOF', 'CURRENT_RECORD',
+    'RUNTIME_IMAGE', 'RUNTIME_CONTENT', 'ORIGIN_PROOF', 'ORIGIN_RECORD', 'ORIGIN_CONFIG',
+    'ORIGIN_AUDIT', 'ORIGIN_BACKUP', 'ORIGIN_SOURCE', 'MIGRATION_SCHEMA', 'MIGRATION_IMAGE',
+    'MIGRATION_CONTENT', 'TASK_IDENTITY', 'JOBS_IDLE', 'WINDOW_STATE'))
+WORKSPACE_DIAGNOSTIC_PHASES = frozenset(('MANIFEST', 'SNAPSHOT', 'IMAGES', 'PROJECTION', 'JOBS'))
+WORKSPACE_DIAGNOSTIC_ERRORS = frozenset(('RuntimeError', 'ValueError', 'TypeError', 'KeyError',
+    'FileNotFoundError', 'PermissionError', 'OSError', 'JSONDecodeError', 'OTHER'))
+
+
+class WorkspaceBaselineError(RuntimeError):
+    def __init__(self, code, diagnostic):
+        super().__init__(code)
+        self.workspaceDiagnostic = diagnostic
+
+
+def workspace_probe_step(d, step, service='none'):
+    diagnostic = getattr(d, '_workspaceBaselineDiagnostic', None)
+    if (isinstance(diagnostic, dict) and step in WORKSPACE_DIAGNOSTIC_STEPS
+            and service in ('none', 'api', 'admin', 'migrate')):
+        diagnostic.update(step=step, service=service, scope=SCOPE)
+
+
+def valid_workspace_diagnostic(value):
+    return (isinstance(value, dict) and set(value) == {'phase', 'step', 'service', 'scope',
+                'errorType', 'rawOutputSuppressed'}
+            and all(type(value[name]) is str for name in ('phase', 'step', 'service', 'scope', 'errorType'))
+            and value['phase'] in WORKSPACE_DIAGNOSTIC_PHASES
+            and value['step'] in WORKSPACE_DIAGNOSTIC_STEPS
+            and value['service'] in ('none', 'api', 'admin', 'migrate')
+            and value['scope'] in ('API_ADMIN', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE')
+            and value['errorType'] in WORKSPACE_DIAGNOSTIC_ERRORS
+            and value['rawOutputSuppressed'] is True)
 
 
 def image_service(service):
@@ -183,6 +225,150 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def workspace_configuration(d, previous, candidate):
+    """Only the reviewed mount and edge route may differ; no YAML reserialization."""
+    d.require(WORKSPACE, 'API_ADMIN_SCOPE_CONFLICT')
+    old = (previous / CONFIG_FILES[0]).read_bytes()
+    new = (candidate / CONFIG_FILES[0]).read_bytes()
+    mount = b'    volumes:\n      - auto_registration_data:/app/.runtime/auto-registration\n'
+    volume = b'  auto_registration_data:\n'
+    api = new.split(b'  api:\n', 1)
+    d.require(len(api) == 2 and mount in api[1].split(b'  admin:\n', 1)[0]
+              and new.count(mount) == 1 and new.count(volume) == 1
+              and b'volumes:\n  mysql_data:\n  auto_registration_data:\n  caddy_data:\n' in new,
+              'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
+    normalized = new.replace(mount, b'', 1).replace(volume, b'', 1)
+    d.require(old in (new, normalized), 'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
+    before = hashlib.sha256((previous / CONFIG_FILES[1]).read_bytes()).hexdigest()
+    after = hashlib.sha256((candidate / CONFIG_FILES[1]).read_bytes()).hexdigest()
+    d.require(before in (WORKSPACE_CADDY_BEFORE, WORKSPACE_CADDY_AFTER)
+              and after == WORKSPACE_CADDY_AFTER, 'API_ADMIN_WORKSPACE_EDGE_CHANGED')
+    return {'composeSha256': hashlib.sha256(new).hexdigest(), 'caddySha256': after,
+            'volume': WORKSPACE_VOLUME, 'containerDirectory': WORKSPACE_DIRECTORY}
+
+
+def workspace_present(directory, metadata=None):
+    path = directory / CONFIG_FILES[0]
+    configured = path.is_file() and (b'auto_registration_data:/app/.runtime/auto-registration' in path.read_bytes()
+                                    or re.search(rb'(?m)^  auto_registration_data:\s*$', path.read_bytes()) is not None)
+    mounted = any(m.get('Destination') == WORKSPACE_DIRECTORY for m in (metadata or {}).get('Mounts', []))
+    return bool(configured or mounted)
+
+
+def workspace_existing(d, directory):
+    """Include an orphaned volume retained by rollback, even with old configuration."""
+    state = d.service_state(directory, 'api', include_container_id=True)
+    api = json.loads(d.run('docker', 'inspect', state['containerId']))[0]
+    if workspace_present(directory, api):
+        return True
+    project = api.get('Config', {}).get('Labels', {}).get('com.docker.compose.project')
+    d.require(isinstance(project, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', project),
+              'API_ADMIN_WORKSPACE_PROJECT_INVALID')
+    name = project + '_' + WORKSPACE_VOLUME
+    found = d.run('docker', 'volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}')
+    d.require(found in ('', name), 'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
+    return bool(found)
+
+
+def workspace_volume(d, directory, *, empty=False, attached=False):
+    """Read volume identity only; SQLite values and logs never enter the receipt."""
+    state = d.service_state(directory, 'api', include_container_id=True)
+    api = json.loads(d.run('docker', 'inspect', state['containerId']))[0]
+    project = api.get('Config', {}).get('Labels', {}).get('com.docker.compose.project')
+    d.require(isinstance(project, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', project),
+              'API_ADMIN_WORKSPACE_PROJECT_INVALID')
+    name = project + '_' + WORKSPACE_VOLUME
+    found = d.run('docker', 'volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}')
+    if not found:
+        d.require(not attached, 'API_ADMIN_WORKSPACE_VOLUME_MISSING')
+        return {'name': name, 'status': 'ABSENT', 'identitySha256': None}
+    d.require(found == name, 'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
+    rows = json.loads(d.run('docker', 'volume', 'inspect', name))
+    d.require(isinstance(rows, list) and len(rows) == 1, 'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
+    value = rows[0]
+    labels = value.get('Labels') or {}
+    d.require(value.get('Name') == name and value.get('Driver') == 'local' and value.get('Scope') == 'local'
+              and value.get('Options') in (None, {})
+              and labels.get('com.docker.compose.project') == project
+              and labels.get('com.docker.compose.volume') == WORKSPACE_VOLUME,
+              'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
+    root = Path(value.get('Mountpoint', ''))
+    d.require(root.is_absolute() and root.resolve() == root and root.is_dir() and not root.is_symlink(),
+              'API_ADMIN_WORKSPACE_VOLUME_PATH_INVALID')
+    if empty:
+        d.require(not any(root.iterdir()), 'API_ADMIN_WORKSPACE_SQLITE_BACKUP_REQUIRED')
+    if attached:
+        mounts = [m for m in api.get('Mounts', []) if m.get('Destination') == WORKSPACE_DIRECTORY]
+        d.require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
+                  and mounts[0].get('Name') == name and mounts[0].get('RW') is True,
+                  'API_ADMIN_WORKSPACE_MOUNT_CHANGED')
+    identity = {n: value.get(n) for n in ('Name', 'Driver', 'Scope', 'Mountpoint', 'Labels', 'CreatedAt', 'Options')}
+    return {'name': name, 'status': 'PRESENT', 'identitySha256': fingerprint(identity)}
+
+
+def workspace_idle(d, directory):
+    """Fail closed before stopping a worker; read only the controlled task statuses."""
+    identity = workspace_volume(d, directory)
+    if identity['status'] == 'ABSENT':
+        return identity
+    value = json.loads(d.run('docker', 'volume', 'inspect', identity['name']))[0]
+    root = Path(value['Mountpoint'])
+    database = root / 'database.db'
+    if not database.exists():
+        d.require(not any(root.iterdir()), 'API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE')
+        return identity
+    d.require(database.is_file() and not database.is_symlink()
+              and all(not (root / ('database.db' + suffix)).is_symlink() for suffix in ('-wal', '-shm', '-journal')),
+              'API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE')
+    try:
+        with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=2) as connection:
+            connection.execute('PRAGMA query_only = ON')
+            rows = connection.execute('SELECT status, COUNT(*) FROM registration_tasks GROUP BY status').fetchall()
+        d.require(all(status in ('pending', 'running', 'completed', 'failed', 'cancelled')
+                      and type(count) is int and count >= 0 for status, count in rows)
+                  and sum(count for status, count in rows if status in ('pending', 'running')) == 0,
+                  'API_ADMIN_WORKSPACE_TASK_ACTIVE')
+    except sqlite3.Error:
+        raise RuntimeError('API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE') from None
+    return identity
+
+
+def workspace_acceptance(d, reference, run_id, attempt):
+    checks = ['private-health', 'packaged-resources', 'private-sqlite', 'encrypted-storage',
+              'restart-persistence', 'wrong-key-rejected']
+    name = 'id-workspace-acceptance-' + run_id + '-' + attempt
+    d.require(re.fullmatch(r'id-workspace-acceptance-[1-9][0-9]*-[1-9][0-9]*', name)
+              and not d.run('docker', 'volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}'),
+              'API_ADMIN_WORKSPACE_ACCEPTANCE_VOLUME_EXISTS')
+    d.run('docker', 'volume', 'create', '--label', 'id-business-v2.acceptance=' + run_id + '-' + attempt, name)
+    try:
+        output = d.run('docker', 'run', '--rm', '--network', 'none', '--read-only',
+            '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',
+            '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=64m', '--mount',
+            'type=volume,source=' + name + ',target=' + WORKSPACE_DIRECTORY,
+            '--entrypoint', '/opt/id-registration/venv/bin/python', reference, '-B',
+            '/app/apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py', timeout=180)
+        result = json.loads(output)
+        d.require(result == {'status': 'PASS', 'checks': checks, 'businessActions': 0},
+                  'API_ADMIN_WORKSPACE_ACCEPTANCE_FAILED')
+    finally:
+        value = json.loads(d.run('docker', 'volume', 'inspect', name))[0]
+        d.require(value.get('Name') == name and value.get('Labels', {}).get('id-business-v2.acceptance') == run_id + '-' + attempt,
+                  'API_ADMIN_WORKSPACE_ACCEPTANCE_VOLUME_CHANGED')
+        d.run('docker', 'volume', 'rm', name)
+    return {**result, 'temporaryVolumeRemoved': True}
+
+
+def workspace_health(d, directory):
+    # The production readiness handler calls this API process's real singleton
+    # worker health, including encrypted SQLite and packaged-resource checks.
+    output = d.compose(directory, 'exec', '-T', 'api', 'node', '-e',
+        "fetch('http://127.0.0.1:3000/api/health/ready',{signal:AbortSignal.timeout(10000)})"
+        ".then(r=>{if(!r.ok)throw Error();console.log(JSON.stringify({ready:true}))})"
+        ".catch(()=>process.exit(1))", timeout=30)
+    d.require(output == '{"ready":true}', 'API_ADMIN_WORKSPACE_HEALTH_FAILED')
+
+
 def migration_files(d, directory):
     root = directory / MIGRATION_ROOT
     paths = list(root.rglob('*'))
@@ -217,6 +403,7 @@ def migration_source_check(d, directory=None, *, candidate=True):
 
 
 def migration_database_state(d, directory):
+    workspace_probe_step(d, 'MIGRATION_SCHEMA')
     migration_source_check(d, directory, candidate=False)
     expected = {n.split('/')[0]: digest for n, digest in migration_files(d, directory).items() if n.endswith('/migration.sql')}
     expected[MIGRATION_NAME] = MIGRATION_IDENTITY['sha256']
@@ -273,6 +460,7 @@ def migration_task_guard(d, directory, task, guards):
     d.require(guards.get('registrationWindowRetained') is True
               and jobs_idle(d, directory) == guards and registration_task(d, directory) == task,
               'API_ADMIN_REGISTRATION_TASK_CHANGED')
+    workspace_probe_step(d, 'WINDOW_STATE')
     registration_private(d, directory, retained=guards['registrationWindowRetained'])
 
 
@@ -282,7 +470,7 @@ def migration_successor_marker(context):
 
 
 def migration_successor_origin(d, directory):
-    d.require(SCOPE == 'API_ADMIN' and directory.parent == d.BASE / 'releases'
+    d.require(SCOPE in ('API_ADMIN', 'API_ADMIN_WORKSPACE') and directory.parent == d.BASE / 'releases'
               and not directory.is_symlink(), 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
     raw = (directory / 'release-manifest.json').read_bytes()
     manifest = json.loads(raw)
@@ -310,7 +498,7 @@ def migration_successor_origin(d, directory):
 def migration_successor_guard(d, directory, context):
     fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256',
               'migration', 'migrationState', 'task', 'guards'}
-    d.require(SCOPE == 'API_ADMIN' and isinstance(context, dict) and set(context) == fields
+    d.require(SCOPE in ('API_ADMIN', 'API_ADMIN_WORKSPACE') and isinstance(context, dict) and set(context) == fields
               and type(context['version']) is int and context['version'] == 1 and context['commit'] == MIGRATION_SUCCESSOR_COMMIT
               and context['manifestSha256'] == MIGRATION_SUCCESSOR_MANIFEST_SHA
               and context['buildProofSha256'] == MIGRATION_SUCCESSOR_PROOF_SHA
@@ -322,33 +510,41 @@ def migration_successor_guard(d, directory, context):
               == MIGRATION_SUCCESSOR_MANIFEST_SHA, 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
     original, _ = d.api_admin_scope('API_ADMIN_MIGRATION')
     source_manifest = json.loads((source / 'release-manifest.json').read_text())
+    workspace_probe_step(d, 'ORIGIN_PROOF')
     proof = original.validate_proof(d, json.loads((source / original.PROOF_FILE).read_text()),
                                    MIGRATION_SUCCESSOR_COMMIT, source_manifest['sourceTree'])
+    workspace_probe_step(d, 'ORIGIN_RECORD')
     original_record = json.loads((source / original.STATE_FILE).read_text())
     d.require(fingerprint(proof) == MIGRATION_SUCCESSOR_PROOF_SHA
               and context['task'] == original_record['registrationTask'] == original.MIGRATION_TASK
               and context['guards'] == original_record['registrationGuards'],
               'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
     predecessor = Path(source_manifest['previousRelease'])
+    workspace_probe_step(d, 'ORIGIN_CONFIG')
     d.require(predecessor.parent == d.BASE / 'releases' and predecessor.is_dir() and not predecessor.is_symlink()
               and original.configuration_hashes(source) == original_record['configurationAfter']
               and original.configuration_hashes(predecessor) == original_record['configurationBefore']
               and hashlib.sha256((source / '.env.aws.production').read_bytes()).hexdigest()
               == original_record['environmentSha256'], 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    workspace_probe_step(d, 'ORIGIN_AUDIT')
     d.require(original.audit_receipt(d, source / 'before-audit.json') == source_manifest['dataAuditBefore']
               and original.audit_receipt(d, source / 'after-audit.json') == source_manifest['dataAuditAfter']
               and source_manifest['dataAuditBefore']['checksSha256'] == source_manifest['dataAuditAfter']['checksSha256'],
               'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    workspace_probe_step(d, 'ORIGIN_BACKUP')
     backup = json.loads((source / 'backup-verification.json').read_text())
     d.require(backup.get('name') == source_manifest['backupBeforeRelease'] and backup.get('s3Verified') is True
               and type(backup.get('size')) is int and backup['size'] > 0
               and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')), 'API_ADMIN_MIGRATION_BACKUP_CHANGED')
+    workspace_probe_step(d, 'ORIGIN_SOURCE')
     original.migration_source_check(d, source)
     original.migration_source_check(d, directory)
+    workspace_probe_step(d, 'MIGRATION_SCHEMA')
     state = original.migration_database_state(d, directory)
     d.require(state['status'] == 'APPLIED' and state == context['migrationState']
               and all(original_record['migration'][name] == state[name] for name in state),
               'API_ADMIN_MIGRATION_PRESERVATION_CHANGED')
+    workspace_probe_step(d, 'MIGRATION_IMAGE', 'migrate')
     original.verify_migration_image(d, directory, proof)
     original.migration_task_guard(d, directory, context['task'], context['guards'])
 
@@ -393,6 +589,7 @@ def migration_content(d, directory):
 
 
 def verify_migration_image(d, directory, proof, *, inspect_content=False):
+    workspace_probe_step(d, 'MIGRATION_IMAGE', 'migrate')
     row = proof['images']['migrate']
     override = json.loads((directory / 'compose.release.json').read_text())
     d.require(override['services']['migrate'] == {'image': row['reference'], 'pull_policy': 'never'},
@@ -403,6 +600,7 @@ def verify_migration_image(d, directory, proof, *, inspect_content=False):
               and labels.get('org.opencontainers.image.revision') == proof['commit']
               and labels.get('id-business-v2.source-tree') == proof['sourceTree'],
               'API_ADMIN_MIGRATION_IMAGE_CHANGED')
+    workspace_probe_step(d, 'MIGRATION_CONTENT', 'migrate')
     expected = migration_content(d, directory)
     d.require({k: row[k] for k in ('fileCount', 'sha256')} == expected,
               'API_ADMIN_MIGRATION_IMAGE_CONTENT_CHANGED')
@@ -414,7 +612,10 @@ def verify_migration_image(d, directory, proof, *, inspect_content=False):
 
 def content_command(service):
     roots = '/app/apps/api/dist /app/packages/shared/dist' if service == 'api' else '/app/apps/api/prisma-mysql' if service == 'migrate' else '/app' if service == 'auto-registration' else '/usr/share/nginx/html'
-    return ('set -eu; export LC_ALL=C; for p in ' + roots + '; do test -d "$p"; done; '
+    if WORKSPACE and service == 'api':
+        roots = ' '.join(WORKSPACE_API_ROOTS)
+    test = '-e' if WORKSPACE and service == 'api' else '-d'
+    return ('set -eu; export LC_ALL=C; for p in ' + roots + '; do test ' + test + ' "$p"; done; '
             'files="$(find ' + roots + ' -type f -exec sha256sum {} +)"; '
             "printf '%s\\n' \"$files\" | sort")
 
@@ -422,6 +623,8 @@ def content_command(service):
 def content_summary(d, service, output):
     lines = output.splitlines()
     prefixes = ('/app/apps/api/dist/', '/app/packages/shared/dist/') if service == 'api' else ('/app/apps/api/prisma-mysql/',) if service == 'migrate' else ('/app/',) if service == 'auto-registration' else ('/usr/share/nginx/html/',)
+    if WORKSPACE and service == 'api':
+        prefixes = tuple(n if n.endswith(('.css', '.json')) else n + '/' for n in WORKSPACE_API_ROOTS)
     d.require(0 < len(lines) < 30000 and len(output) < 8 * 1024 * 1024
               and all(re.fullmatch(r'[a-f0-9]{64}  /[^\r\n]+', line)
                       and line[66:].startswith(prefixes) for line in lines), 'API_ADMIN_CONTENT_INVALID')
@@ -435,6 +638,9 @@ def build_proof(d):
     result = {'version': 1, 'commit': commit, 'sourceTree': tree, 'images': {}}
     if MIGRATION_MODE:
         result.update(scope=SCOPE, migration=migration_source_check(d))
+    if WORKSPACE:
+        # This exact fixed configuration is bound to the runner's Git tree.
+        result.update(scope=SCOPE, configuration=workspace_configuration(d, Path.cwd(), Path.cwd()))
     if REGISTRATION:
         projection = json.loads(Path('.deploy/production-release/api-registration-build-projection.json').read_text())
         validate_worker_projection(d, projection['workerProjection'])
@@ -470,6 +676,9 @@ def build_proof(d):
             expected = worker_content(result['workerProjection'])
             d.require(content == expected, 'API_ADMIN_REGISTRATION_CONTENT_CHANGED')
         result['images'][service] = {'reference': reference, 'imageId': metadata['Id'], **content}
+    if WORKSPACE:
+        result['acceptance'] = workspace_acceptance(d, result['images']['api']['reference'],
+                                                    os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'])
     target = Path('.deploy/production-release') / PROOF_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
@@ -477,13 +686,24 @@ def build_proof(d):
 
 
 def validate_proof(d, value, commit, tree, repository=None, run_id=None, attempt=None):
-    fields = {'version', 'commit', 'sourceTree', 'images'} | ({'scope', 'workerProjection', 'workerProjectionSha256'} if REGISTRATION else {'scope', 'migration'} if MIGRATION_MODE else set())
+    fields = {'version', 'commit', 'sourceTree', 'images'} | ({'scope', 'workerProjection', 'workerProjectionSha256'} if REGISTRATION else {'scope', 'migration'} if MIGRATION_MODE else {'scope', 'configuration', 'acceptance'} if WORKSPACE else set())
     d.require(isinstance(value, dict) and set(value) == fields
               and value['version'] == 1 and value['commit'] == commit and value['sourceTree'] == tree
               and set(value['images']) == set(IMAGE_SERVICES), 'API_ADMIN_BUILD_PROOF_INVALID')
     if MIGRATION_MODE:
         d.require(value['scope'] == SCOPE and value['migration'] == MIGRATION_IDENTITY,
                   'API_ADMIN_MIGRATION_BUILD_PROOF_CHANGED')
+    if WORKSPACE:
+        config = value['configuration']
+        d.require(value['scope'] == SCOPE and isinstance(config, dict)
+                  and set(config) == {'composeSha256', 'caddySha256', 'volume', 'containerDirectory'}
+                  and re.fullmatch(r'[a-f0-9]{64}', config['composeSha256'])
+                  and config['caddySha256'] == WORKSPACE_CADDY_AFTER
+                  and config['volume'] == WORKSPACE_VOLUME and config['containerDirectory'] == WORKSPACE_DIRECTORY
+                  and value['acceptance'] == {'status': 'PASS', 'checks': ['private-health', 'packaged-resources',
+                      'private-sqlite', 'encrypted-storage', 'restart-persistence', 'wrong-key-rejected'],
+                      'businessActions': 0, 'temporaryVolumeRemoved': True},
+                  'API_ADMIN_WORKSPACE_BUILD_PROOF_CHANGED')
     for service, row in value['images'].items():
         d.require(set(row) == {'reference', 'imageId', 'fileCount', 'sha256'}
                   and re.fullmatch(r'sha256:[a-f0-9]{64}', row['imageId'])
@@ -546,6 +766,7 @@ def snapshot(d, directory):
 
 
 def jobs_idle(d, directory, *, allow_retained=False):
+    workspace_probe_step(d, 'JOBS_IDLE')
     d.assert_no_active_recharge(directory)
     runtime = d.registration_runtime_state(directory)
     d.require(runtime.get('supported') is True and runtime.get('registrationBusy') is False
@@ -665,6 +886,7 @@ except BaseException:
 
 
 def registration_task(d, directory):
+    workspace_probe_step(d, 'TASK_IDENTITY')
     code = TASK_SOURCE.replace('__TASK__', json.dumps(TASK_ID)).replace('__ATTEMPT__', str(TASK_ATTEMPT)).replace('__BINDING__', json.dumps(TASK_BINDING))
     code = code.replace('__MIGRATION__', json.dumps(MIGRATION_MODE)).replace('__OBSERVED__', json.dumps(MIGRATION_TASK if MIGRATION_MODE else None))
     value = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', code, timeout=40))
@@ -685,6 +907,7 @@ def registration_task(d, directory):
 
 
 def registration_private(d, directory, *, close=False, retained=True):
+    workspace_probe_step(d, 'WINDOW_STATE')
     d.require(not MIGRATION_MODE or (close is False and retained is True), 'API_ADMIN_SCOPE_CONFLICT')
     code = PRIVATE_SOURCE.replace('__TASK__', TASK_ID).replace('__ATTEMPT__', str(TASK_ATTEMPT))
     code = code.replace('__CANCELLED__', repr(not retained)).replace('__RETAINED__', repr(retained)).replace('__CLOSE__', repr(close))
@@ -1345,6 +1568,10 @@ def registration_native_baseline(d, previous, manifest, states, raw):
 
 def baseline(d, expected, *, check_jobs=True):
     stage = 'MANIFEST'
+    diagnostic = {'step': 'NOT_STARTED', 'service': 'none', 'scope': SCOPE} if WORKSPACE else None
+    prior_diagnostic = getattr(d, '_workspaceBaselineDiagnostic', None)
+    if WORKSPACE:
+        d._workspaceBaselineDiagnostic = diagnostic
     try:
         previous = (d.BASE / 'current').resolve()
         d.require(previous.parent == d.BASE / 'releases', 'API_ADMIN_BASELINE_PATH_INVALID')
@@ -1353,6 +1580,8 @@ def baseline(d, expected, *, check_jobs=True):
         d.require(manifest.get('commit') == expected, 'API_ADMIN_BASELINE_CHANGED')
         stage = 'SNAPSHOT'
         states = snapshot(d, previous)
+        if not WORKSPACE:
+            d.require(not workspace_existing(d, previous), 'API_ADMIN_WORKSPACE_SCOPE_REQUIRED')
         stage = 'IMAGES'
         for service in d.SERVICES:
             row = manifest.get('images', {}).get(service, {})
@@ -1366,7 +1595,7 @@ def baseline(d, expected, *, check_jobs=True):
         stage = 'PROJECTION'
         migration_origin = None
         if manifest.get('apiAdminMigrationPublication'):
-            if SCOPE == 'API_ADMIN':
+            if SCOPE in ('API_ADMIN', 'API_ADMIN_WORKSPACE'):
                 migration_origin = migration_successor_origin(d, previous)
                 source['kind'] = 'VERIFIED_MIGRATION_API_ADMIN_ORIGIN'
             else:
@@ -1398,11 +1627,30 @@ def baseline(d, expected, *, check_jobs=True):
             source['kind'] = 'API_REGISTRATION_BUILD_PROVEN'
         elif REGISTRATION or MIGRATION_MODE:
             source.update(registration_native_baseline(d, previous, manifest, states, raw))
-        elif manifest.get('apiAdminPublication'):
-            proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
-            verify_running(d, previous, proof)
-            source['kind'] = 'API_ADMIN_BUILD_PROVEN'
-            record = json.loads((previous / STATE_FILE).read_text())
+        elif manifest.get('apiAdminPublication') or manifest.get('apiWorkspacePublication'):
+            workspace_probe_step(d, 'CURRENT_PROOF')
+            if manifest.get('apiWorkspacePublication'):
+                d.require(WORKSPACE and not manifest.get('apiAdminPublication'), 'API_ADMIN_SCOPE_CONFLICT')
+                proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
+                verify_running(d, previous, proof)
+                workspace_probe_step(d, 'CURRENT_RECORD')
+                record = json.loads((previous / STATE_FILE).read_text())
+                d.require(manifest['apiWorkspacePublication'] == {'version': 1, 'scope': SCOPE,
+                    'buildProofSha256': fingerprint(proof), 'workersPublished': False, 'cacheStatus': 'SKIPPED',
+                    'configurationChanged': True, 'volume': record.get('workspaceVolumeAfter'),
+                    'volumeDeletionPerformed': False}, 'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
+            elif WORKSPACE:
+                original, _ = d.api_admin_scope()
+                proof = original.validate_proof(d, json.loads((previous / original.PROOF_FILE).read_text()), expected, manifest['sourceTree'])
+                original.verify_running(d, previous, proof)
+                workspace_probe_step(d, 'CURRENT_RECORD')
+                record = json.loads((previous / original.STATE_FILE).read_text())
+            else:
+                proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
+                verify_running(d, previous, proof)
+                workspace_probe_step(d, 'CURRENT_RECORD')
+                record = json.loads((previous / STATE_FILE).read_text())
+            source['kind'] = 'API_WORKSPACE_BUILD_PROVEN' if manifest.get('apiWorkspacePublication') else 'API_ADMIN_BUILD_PROVEN'
             predecessor = Path(manifest.get('previousRelease', ''))
             predecessor_origin = None
             if predecessor.parent == d.BASE / 'releases' and (predecessor / 'release-manifest.json').is_file():
@@ -1474,6 +1722,8 @@ def baseline(d, expected, *, check_jobs=True):
             d.require(free_bytes > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         stage = 'JOBS'
         guards = jobs_idle(d, previous) if check_jobs else None
+        workspace_state = workspace_volume(d, previous, empty=check_jobs,
+                                            attached=bool(manifest.get('apiWorkspacePublication'))) if WORKSPACE else None
         if REGISTRATION and check_jobs:
             require_registration_handoff(d, previous, manifest)
         migration_state = migration_database_state(d, previous) if MIGRATION_MODE else None
@@ -1488,16 +1738,31 @@ def baseline(d, expected, *, check_jobs=True):
             evidence['migrationState'] = migration_state
         if migration_origin is not None:
             evidence['migrationOrigin'] = migration_origin
+        if WORKSPACE:
+            evidence['workspaceVolume'] = workspace_state
         return previous, manifest, states, evidence
     except Exception as error:
         code = str(error)
         if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
             code = f'API_ADMIN_BASELINE_{stage}_FAILED'
+        if WORKSPACE:
+            error_type = type(error).__name__
+            diagnostic.update(phase=stage,
+                errorType=error_type if error_type in WORKSPACE_DIAGNOSTIC_ERRORS else 'OTHER',
+                rawOutputSuppressed=True)
+            raise WorkspaceBaselineError(code, diagnostic) from None
         raise RuntimeError(code) from None
+    finally:
+        if WORKSPACE:
+            if prior_diagnostic is None:
+                del d._workspaceBaselineDiagnostic
+            else:
+                d._workspaceBaselineDiagnostic = prior_diagnostic
 
 
 def verify_running(d, directory, proof):
-    for service in UPDATED:
+    for service in IMAGE_SERVICES if WORKSPACE else UPDATED:
+        workspace_probe_step(d, 'RUNTIME_IMAGE', service)
         expected = proof['images'][service]
         state = d.service_state(directory, service)
         image = json.loads(d.run('docker', 'image', 'inspect', state['image']))[0]
@@ -1507,6 +1772,7 @@ def verify_running(d, directory, proof):
                   and labels.get('org.opencontainers.image.revision') == proof['commit']
                   and labels.get('id-business-v2.source-tree') == proof['sourceTree'],
                   'API_ADMIN_RUNNING_IMAGE_CHANGED')
+        workspace_probe_step(d, 'RUNTIME_CONTENT', service)
         measured = content_summary(d, service, d.compose(directory, 'exec', '-T', service,
             '/bin/sh', '-c', content_command(service)))
         d.require(measured == {key: expected[key] for key in ('fileCount', 'sha256')},
@@ -1527,9 +1793,13 @@ def require_preserved(d, previous, release, before, environment, *, all_services
               and (release / '.env.aws.production').read_bytes() == environment,
               'API_ADMIN_ENVIRONMENT_CHANGED')
     for name in CONFIG_FILES:
+        if WORKSPACE and name in CONFIG_FILES[:2]:
+            continue
         if MIGRATION_MODE and name == MIGRATION_SCHEMA:
             continue
         d.require((previous / name).read_bytes() == (release / name).read_bytes(), 'API_ADMIN_CONFIG_OR_SCHEMA_CHANGED')
+    if WORKSPACE:
+        workspace_configuration(d, previous, release)
     if MIGRATION_MODE:
         migration_source_check(d, previous, candidate=False)
         migration_source_check(d, release)
@@ -1539,6 +1809,10 @@ def require_preserved(d, previous, release, before, environment, *, all_services
     states = snapshot(d, previous)
     d.require(all(states[name] == before[name] for name in before if all_services or name not in UPDATED),
               'API_ADMIN_PRESERVED_CONTAINER_CHANGED')
+    if WORKSPACE:
+        d.require(all(states['caddy'][name] == before['caddy'][name]
+                      for name in ('image', 'reference', 'environmentSha256')),
+                  'API_ADMIN_WORKSPACE_CADDY_IMAGE_CHANGED')
     old = json.loads((previous / 'compose.release.json').read_text())
     new = json.loads((release / 'compose.release.json').read_text())
     d.require(set(old) == set(new) == {'services'} and set(old['services']) == set(new['services'])
@@ -1600,6 +1874,15 @@ def readback(d, expected, *, check_task=True):
               and configuration_hashes(previous) == record['configurationAfter']
               and configuration_hashes(origin) == record['configurationBefore'], 'API_ADMIN_READBACK_CONFIG_CHANGED')
     require_preserved(d, origin, previous, record['before'], (previous / '.env.aws.production').read_bytes())
+    workspace = {}
+    if WORKSPACE:
+        volume = workspace_volume(d, previous, attached=True)
+        d.require(volume == record.get('workspaceVolumeAfter')
+                  and proof['configuration'] == workspace_configuration(d, origin, previous),
+                  'API_ADMIN_WORKSPACE_READBACK_CHANGED')
+        workspace_health(d, previous)
+        workspace = {'workspaceVolume': volume, 'volumePreserved': True, 'volumeDeletionPerformed': False,
+                     'offlineAcceptance': proof['acceptance'], 'registrationHealthChecked': True}
     d.require(audit_receipt(d, previous / 'before-audit.json') == manifest['dataAuditBefore']
               and audit_receipt(d, previous / 'after-audit.json') == manifest['dataAuditAfter']
               and manifest['dataAuditBefore']['checksSha256'] == manifest['dataAuditAfter']['checksSha256'],
@@ -1644,9 +1927,9 @@ def readback(d, expected, *, check_task=True):
                      'taskHmacMatched': True, 'windowPreserved': True,
                      'registrationWindowRetained': record['registrationGuards']['registrationWindowRetained']}
     return {'status': SCOPE + '_VERIFIED', 'commit': expected, 'sourceTree': proof['sourceTree'],
-            'servicesUpdated': list(UPDATED), 'preservedServiceCount': 5,
+            'servicesUpdated': list(UPDATED), 'preservedServiceCount': 4 if WORKSPACE else 5,
             'runningImagesAndContentMatched': True, 'buildProofSha256': fingerprint(proof),
-            'environmentUnchanged': True, 'services': states, **migration}
+            'environmentUnchanged': True, 'services': states, **migration, **workspace}
 
 
 def release(d, args):
@@ -1673,6 +1956,9 @@ def _release_locked(d, args):
         and not (REGISTRATION and getattr(args, 'api_admin_only', False))
         and not (not REGISTRATION and getattr(args, 'api_registration_only', False))
         and not (MIGRATION_MODE and getattr(args, 'api_admin_only', False))
+        and not (WORKSPACE and any((getattr(args, 'api_admin_only', False),
+                                   getattr(args, 'api_registration_only', False))))
+        and (getattr(args, 'api_workspace_only', False) is WORKSPACE)
         and (getattr(args, 'api_admin_migration_only', False) is MIGRATION_MODE), 'API_ADMIN_SCOPE_CONFLICT')
     d.require(all(re.fullmatch(r'[a-f0-9]{40}', value or '') for value in
                   (args.commit, args.source_tree, args.expected_current))
@@ -1715,6 +2001,8 @@ def _release_locked(d, args):
             item.rename(target / item.name)
         extracted.rmdir()
         d.require(source_tree(d, target) == args.source_tree, 'API_ADMIN_SOURCE_TREE_CHANGED')
+        if not WORKSPACE:
+            d.require(not workspace_present(target), 'API_ADMIN_WORKSPACE_SCOPE_REQUIRED')
         if MIGRATION_MODE:
             migration_source_check(d, target)
         if REGISTRATION:
@@ -1730,6 +2018,14 @@ def _release_locked(d, args):
             override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
         require_preserved(d, previous, target, before, environment, all_services=True)
+        if WORKSPACE:
+            d.require(proof['configuration'] == workspace_configuration(d, previous, target),
+                      'API_ADMIN_WORKSPACE_CONFIG_PROOF_CHANGED')
+            # Validate without mounting Caddy's live certificate/config volumes.
+            d.run('docker', 'run', '--rm', '--network', 'none', '--read-only',
+                '--mount', 'type=bind,source=' + str(target / CONFIG_FILES[1]) + ',target=/etc/caddy/Caddyfile,readonly',
+                '--env', 'APP_DOMAIN=workspace-acceptance.local', '--entrypoint', 'caddy',
+                before['caddy']['image'], 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
         if retained_origin is not None:
             migration_successor_guard(d, target, retained_origin)
         step = 'images'
@@ -1762,6 +2058,8 @@ def _release_locked(d, args):
                   'API_ADMIN_BASELINE_MOVED')
         require_preserved(d, previous, target, before, environment, all_services=True)
         jobs_idle(d, previous)
+        if WORKSPACE:
+            workspace_volume(d, previous, empty=True)
         if retained_origin is not None:
             migration_successor_guard(d, target, retained_origin)
         if MIGRATION_MODE:
@@ -1780,9 +2078,13 @@ def _release_locked(d, args):
                 migration_task_guard(d, previous, original_task, evidence['guards'])
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
+                if WORKSPACE:
+                    workspace_volume(d, previous, empty=True)
                 if REGISTRATION:
                     require_registration_handoff(d, previous, old)
                     d.require(registration_task(d, previous) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
+            if WORKSPACE and name == 'caddy':
+                workspace_idle(d, target)
             changed.append(name)
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name, timeout=300)
             d.wait_healthy(target, name)
@@ -1795,6 +2097,10 @@ def _release_locked(d, args):
         for suffix in ('/api/health/ready', '/'):
             with urllib.request.urlopen(public + suffix, timeout=20) as response:
                 d.require(response.status == 200, 'API_ADMIN_PUBLIC_HEALTH_FAILED')
+                if WORKSPACE and suffix == '/':
+                    policy = re.search(r'Content-Security-Policy "([^"]+)"', (target / CONFIG_FILES[1]).read_text())
+                    d.require(policy is not None and response.headers.get('Content-Security-Policy') == policy.group(1),
+                              'API_ADMIN_WORKSPACE_PUBLIC_EDGE_CHANGED')
         after = require_preserved(d, previous, target, before, environment)
         record = {'before': before, 'after': after, 'environmentSha256': evidence['environmentSha256'],
                   'baselineEvidence': evidence, 'buildProofSha256': fingerprint(proof),
@@ -1808,6 +2114,9 @@ def _release_locked(d, args):
         if retained_origin is not None:
             migration_successor_guard(d, target, retained_origin)
             record['migrationOrigin'] = retained_origin
+        if WORKSPACE:
+            record.update(workspaceVolumeBefore=evidence['workspaceVolume'],
+                          workspaceVolumeAfter=workspace_volume(d, target, attached=True))
         (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
         (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
         manifest = {'images': old['images'],
@@ -1826,9 +2135,10 @@ def _release_locked(d, args):
             dataAuditBefore=first, dataAuditAfter=second,
             databaseGrants={'status': 'SKIPPED', 'reason': 'API_ADMIN_EXISTING_TABLE_COLUMN_INDEX' if MIGRATION_MODE else 'API_ADMIN_UNCHANGED_SCHEMA'},
             rollback={'release': str(previous), 'images': {name: before[name]['image'] for name in UPDATED}, 'servicesAdded': []},
-            **{'apiAdminMigrationPublication' if MIGRATION_MODE else 'apiRegistrationPublication' if REGISTRATION else 'apiAdminPublication':
+            **{'apiAdminMigrationPublication' if MIGRATION_MODE else 'apiRegistrationPublication' if REGISTRATION else 'apiWorkspacePublication' if WORKSPACE else 'apiAdminPublication':
                 {'version': 1, 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
-                 'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': False,
+                 'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': WORKSPACE,
+                 **({'volume': record['workspaceVolumeAfter'], 'volumeDeletionPerformed': False} if WORKSPACE else {}),
                  **({'schemaChanged': True, 'migration': dict(MIGRATION_IDENTITY)} if MIGRATION_MODE else {})}})
         if MIGRATION_MODE:
             manifest['migrationPerformed'] = migration_result['performed']
@@ -1858,6 +2168,8 @@ def _release_locked(d, args):
                     migration_successor_guard(d, target, retained_origin)
                 if name == 'api' or REGISTRATION or MIGRATION_MODE:
                     jobs_idle(d, target)
+                    if WORKSPACE:
+                        workspace_idle(d, target)
                 if MIGRATION_MODE:
                     d.require(jobs_idle(d, target) == evidence['guards'], 'API_ADMIN_REGISTRATION_TASK_CHANGED')
                     registration_private(d, target, retained=evidence['guards']['registrationWindowRetained'])
@@ -1904,6 +2216,8 @@ def _release_locked(d, args):
                   'servicesAttempted': changed, 'rollback': rollback, 'actualServices': actual,
                   'candidateCommit': args.commit, 'previousCommit': args.expected_current,
                   'currentPointsToCandidate': (d.BASE / 'current').resolve() == target}
+        if WORKSPACE:
+            result.update(volumeDeletionPerformed=False, sqliteBackupStatus='FIRST_EMPTY_VOLUME_ONLY')
         result['receiptPersisted'] = True
         if MIGRATION_MODE:
             result.update(migration=migration_result,

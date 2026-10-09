@@ -2,10 +2,18 @@
 	encode zstd gzip
 	# Caddy is the public edge. Its reverse proxy ignores caller-supplied
 	# X-Forwarded-* values by default and emits the direct client address.
-	reverse_proxy admin:80
+	@registrationWorkspace path /api/id-business-v2/auto-registration/workspace /api/id-business-v2/auto-registration/workspace/*
+	handle @registrationWorkspace {
+		# Preserve the authenticated workspace's own frame and inline-script policy.
+		reverse_proxy api:3000 {
+			flush_interval -1
+		}
+	}
 
-	header {
-		Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+	handle {
+	  reverse_proxy admin:80
+	  header {
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'self'; img-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
 		Cross-Origin-Opener-Policy same-origin
 		Cross-Origin-Resource-Policy same-origin
 		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()"
@@ -14,5 +22,6 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		-Server
+	  }
 	}
 }

@@ -17,6 +17,7 @@ import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorator
 import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 import { readBrowserSessionToken } from './browser-session-cookie';
+import { resolveRegistrationWorkspaceSession } from './registration-workspace-session';
 
 interface RequestWithAuthHeader {
   method?: string;
@@ -53,14 +54,19 @@ export class JwtAuthGuard implements CanActivate {
     );
     const request = context.switchToHttp().getRequest<RequestWithAuthHeader>();
     const authStartedAt = performance.now();
-    const token = this.extractToken(request);
-    if (!token) {
+    const credentials = this.extractCredentials(request);
+    if (!credentials) {
       recordServerAuthTiming(request, performance.now() - authStartedAt);
       throw authHttpError(HttpStatus.UNAUTHORIZED, 'AUTH_MISSING', '请先登录后再操作。');
     }
 
     try {
-      await this.activateLocalSession(request, token, allowDuringPasswordReset);
+      await this.activateLocalSession(
+        request,
+        credentials.token,
+        allowDuringPasswordReset,
+        credentials.workspaceUserId
+      );
       this.availabilityMonitor.recordAvailable();
       return true;
     } catch (error) {
@@ -81,9 +87,13 @@ export class JwtAuthGuard implements CanActivate {
   private async activateLocalSession(
     request: RequestWithAuthHeader,
     token: string,
-    allowDuringPasswordReset: boolean | undefined
+    allowDuringPasswordReset: boolean | undefined,
+    workspaceUserId?: string
   ) {
     const payload = await this.verifyLocalToken(token);
+    if (workspaceUserId !== undefined && payload.sub !== workspaceUserId) {
+      throw authHttpError(HttpStatus.UNAUTHORIZED, 'AUTH_INVALID', '登录状态无效，请重新登录。');
+    }
     const active = await this.checkActiveSession(() =>
       this.securityService.isAccessTokenActive(token)
     );
@@ -161,15 +171,20 @@ export class JwtAuthGuard implements CanActivate {
     }
   }
 
-  private extractToken(request: RequestWithAuthHeader) {
+  private extractCredentials(request: RequestWithAuthHeader) {
     const [type, token] = request.headers.authorization?.split(' ') ?? [];
-    if (type === 'Bearer' && token) return token;
+    if (type === 'Bearer' && token) return { token };
     const browserSessionToken = readBrowserSessionToken(request);
-    if (browserSessionToken) return browserSessionToken;
+    if (browserSessionToken) return { token: browserSessionToken };
+    const workspaceSession = resolveRegistrationWorkspaceSession(request);
+    if (workspaceSession) {
+      return { token: workspaceSession.accessToken, workspaceUserId: workspaceSession.userId };
+    }
     if (!request.originalUrl?.startsWith('/api/realtime/events')) return undefined;
 
     const queryToken = request.query?.accessToken;
-    return Array.isArray(queryToken) ? queryToken[0] : queryToken;
+    const realtimeToken = Array.isArray(queryToken) ? queryToken[0] : queryToken;
+    return realtimeToken ? { token: realtimeToken } : undefined;
   }
 
   private assertPasswordResetAccess(
