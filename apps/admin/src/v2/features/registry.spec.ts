@@ -78,9 +78,11 @@ describe('V2 feature registry', () => {
     });
     const section = v2NavigationSections.find((item) => item.key === 'auto-registration');
     expect(section?.items.map((item) => item.key)).toEqual(['auto-registration']);
-    expect(tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))).toEqual(
-      []
-    );
+    expect(
+      tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))?.map(
+        (item) => item.id
+      )
+    ).toEqual(['auto-registration.apple-mailboxes']);
   });
 
   it('registers all fifteen online recharge pages immediately after automatic recharge', () => {
