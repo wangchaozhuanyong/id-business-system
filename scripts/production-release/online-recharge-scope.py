@@ -6,6 +6,7 @@ inside those controllers and does not run when imported. Production callers must
 select this scope explicitly. Its first predecessor is the approved main SHA.
 """
 import base64
+import copy
 from contextlib import closing
 import gzip
 import hashlib
@@ -629,8 +630,17 @@ def restored_origin(d, previous, context):
         for row in proof['images'].values():
             inspect_image(d, row, RESTORED_COMMIT, RESTORED_TREE)
     historical_guard(d, previous, evidence, source)
+    workspace_record = previous / legacy(d).STATE_FILE
+    d.require(workspace_record.is_file() and not workspace_record.is_symlink()
+              and file_digest(workspace_record) == evidence['workspaceOriginFiles'].get(legacy(d).STATE_FILE),
+              'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+    workspace = closed_recovery_json(d, workspace_record.read_bytes())
+    anchors = {n: {'oldBeforeContainerId': workspace.get('before', {}).get(n, {}).get('containerId'),
+                   'candidateAfterContainerId': after[n]['containerId']} for n in ('api', 'admin')}
+    d.require(all(re.fullmatch(r'[a-f0-9]{64}', v or '') for row in anchors.values() for v in row.values()),
+              'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
     return {'source': source, 'manifestSha256': file_digest(source / 'release-manifest.json'),
-            'recordSha256': file_digest(source / STATE_FILE)}
+            'recordSha256': file_digest(source / STATE_FILE), 'configurationAnchors': anchors}
 
 
 def release_recovery(d, previous):
@@ -643,6 +653,26 @@ def release_recovery(d, previous):
 def recovery_services(d, states, context):
     original = context['policy']['preflight']['services']
     d.require(set(states) == set(original), 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
+    if getattr(d, '_onlineRechargeProjectionDiagnostic', False):
+        diff = {n: [k for k in SERVICE_IDENTITY_KEYS if states[n].get(k) != original[n][k]] for n in original}
+        matched = {n: False for n in ('api', 'admin')}
+        restored = context.get('restored')
+        if restored is not None and 'configurationAnchors' in restored:
+            for name in matched:
+                try:
+                    raw = d.run('docker', 'inspect', states[name]['containerId'])
+                    d.require(isinstance(raw, str) and len(raw.encode()) <= 1024 * 1024,
+                              'ONLINE_RECHARGE_CONTAINER_CHANGED')
+                    metadata = json.loads(raw)
+                    d.require(isinstance(metadata, list) and len(metadata) == 1,
+                              'ONLINE_RECHARGE_CONTAINER_CHANGED')
+                    restored_configuration_projection(d, name, metadata[0], states[name], original[name],
+                                                      restored['configurationAnchors'][name])
+                    matched[name] = True
+                except Exception:
+                    # Only a boolean leaves this probe; Docker data and errors remain private.
+                    pass
+        d._onlineRechargeIdentityDiagnostic = {'identityDiff': diff, 'restoredProjectionMatch': matched}
     for name, row in states.items():
         keys = SERVICE_IDENTITY_KEYS
         if context.get('restored') is not None and name in ('api', 'admin'):
@@ -651,6 +681,65 @@ def recovery_services(d, states, context):
                       'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
         d.require({k: row[k] for k in keys} == {k: original[name][k] for k in keys},
                   'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
+
+
+def restored_configuration_projection(d, service, metadata, actual, original, anchors):
+    """Diagnostic only: uniquely reconstruct two native identity fields in memory.
+
+    No caller uses this projection to authorize publication. Every other byte in
+    Config, HostConfig and destination-sorted complete Mounts must match the
+    original sealed configuration hash, including environment and all labels.
+    """
+    code = 'ONLINE_RECHARGE_CONTAINER_CHANGED'
+    d.require(service in ('api', 'admin') and isinstance(metadata, dict)
+              and all(isinstance(row, dict) and set(row) == set(SERVICE_IDENTITY_KEYS)
+                      and all(isinstance(row[k], str) and re.fullmatch(r'[a-f0-9]{64}', row[k]) for k in
+                              ('containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))
+                      for row in (actual, original))
+              and isinstance(anchors, dict) and set(anchors) == {'oldBeforeContainerId', 'candidateAfterContainerId'}
+              and all(isinstance(v, str) and re.fullmatch(r'[a-f0-9]{64}', v) for v in anchors.values())
+              and all(actual[k] == original[k] for k in ('status', 'health', 'image', 'reference', 'environmentSha256')),
+              code)
+    config, host, mounts, state = (metadata.get(k) for k in ('Config', 'HostConfig', 'Mounts', 'State'))
+    d.require(isinstance(config, dict) and isinstance(host, dict) and isinstance(state, dict)
+              and isinstance(mounts, list) and all(isinstance(m, dict) and isinstance(m.get('Destination'), str)
+                  and m['Destination'].startswith('/') for m in mounts)
+              and len({m['Destination'] for m in mounts}) == len(mounts)
+              and isinstance(config.get('Env'), list) and bool(config['Env'])
+              and all(isinstance(v, str) for v in config['Env'])
+              and isinstance(state.get('StartedAt'), str) and 0 < len(state['StartedAt']) <= 100
+              and metadata.get('Id') == actual['containerId'] and metadata.get('Image') == actual['image']
+              and config.get('Image') == actual['reference'] and state.get('Status') == actual['status']
+              and (state.get('Health') or {}).get('Status') == actual['health']
+              and hashlib.sha256(state['StartedAt'].encode()).hexdigest() == actual['startedAtSha256']
+              and fingerprint(sorted(config['Env'])) == actual['environmentSha256']
+              and config.get('Hostname') == actual['containerId'][:12], code)
+    configuration = {'Config': config, 'HostConfig': host, 'Mounts': sorted(mounts, key=lambda m: m['Destination'])}
+    raw_sha = fingerprint(configuration)
+    d.require(raw_sha == actual['configurationSha256'], code)
+    labels = config.get('Labels')
+    d.require(isinstance(labels, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in labels.items())
+              and labels.get('com.docker.compose.service') == service
+              and labels.get('com.docker.compose.container-number') == '1'
+              and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', labels.get('com.docker.compose.project', '')), code)
+    project = labels['com.docker.compose.project']
+    names = tuple(separator.join((project, service, '1')) for separator in ('-', '_'))
+    d.require(isinstance(metadata.get('Name'), str) and metadata['Name'] in tuple('/' + n for n in names), code)
+    stable_name = metadata['Name'][1:]
+    replace_key = 'com.docker.compose.replace'
+    d.require(labels.get(replace_key) in (anchors['candidateAfterContainerId'], stable_name), code)
+    projected = copy.deepcopy(configuration)
+    projected['Config']['Hostname'] = original['containerId'][:12]
+    matches = []
+    for replacement in (anchors['oldBeforeContainerId'], stable_name, None):
+        if replacement is None:
+            projected['Config']['Labels'].pop(replace_key, None)
+        else:
+            projected['Config']['Labels'][replace_key] = replacement
+        if fingerprint(projected) == original['configurationSha256']:
+            matches.append(replacement)
+    d.require(len(matches) == 1, code)
+    return {'rawSha256': raw_sha, 'projectedSha256': original['configurationSha256']}
 
 
 def recovery_backups(d, source, previous, *, commit=RECOVERY_COMMIT, manifest=None, record=None):
@@ -1338,6 +1427,8 @@ def projection_diagnostic(d, expected):
     This diagnostic does not authorize or relax the failed gate.
     """
     d.require(expected == BASELINE_COMMIT, 'ONLINE_RECHARGE_BASELINE_NOT_APPROVED')
+    d._onlineRechargeIdentityDiagnostic = None
+    d._onlineRechargeProjectionDiagnostic = True
     try:
         baseline(d, expected)
         return {'status': 'ONLINE_RECHARGE_PROJECTION_DIAGNOSTIC', 'commit': expected,
@@ -1365,14 +1456,22 @@ def projection_diagnostic(d, expected):
             ('check_registration_followup_deployment', 'RETAINED_PROFILE_ORIGIN'),
         )
         phase = next((label for name, label in phases if name in names), 'BASELINE_PROJECTION')
-        return {'status': 'ONLINE_RECHARGE_PROJECTION_DIAGNOSTIC', 'commit': expected,
-                'baselineConfirmed': False, 'gateCode': safe_code(error), 'reason': phase,
-                'causeType': kind, 'rawOutputSuppressed': True}
+        result = {'status': 'ONLINE_RECHARGE_PROJECTION_DIAGNOSTIC', 'commit': expected,
+                  'baselineConfirmed': False, 'gateCode': safe_code(error), 'reason': phase,
+                  'causeType': kind, 'rawOutputSuppressed': True}
+        if (result['gateCode'] == 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED'
+                and phase == 'BASELINE_PROJECTION' and d._onlineRechargeIdentityDiagnostic is not None):
+            result.update(d._onlineRechargeIdentityDiagnostic)
+        return validate_diagnostic(d, result, expected)
+    finally:
+        d._onlineRechargeProjectionDiagnostic = False
+        d._onlineRechargeIdentityDiagnostic = None
 
 
 def validate_diagnostic(d, value, expected):
     passed = {'status', 'commit', 'baselineConfirmed', 'reason', 'rawOutputSuppressed'}
     failed = passed | {'gateCode', 'causeType'}
+    details = {'identityDiff', 'restoredProjectionMatch'}
     reasons = {'HISTORICAL_MIGRATION_ORIGIN', 'PUBLISHED_IMAGE_CONTENT', 'PUBLISHED_BUILD_PROOF',
                'LEGACY_API_PROJECTION_LABELS', 'LEGACY_API_PROJECTION_SOURCE', 'LEGACY_PROFILE_SCHEMA',
                'RETAINED_PROFILE_ORIGIN', 'BASELINE_PROJECTION'}
@@ -1384,10 +1483,22 @@ def validate_diagnostic(d, value, expected):
               and type(value.get('baselineConfirmed')) is bool,
               'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
     d.require((value['baselineConfirmed'] and set(value) == passed and value.get('reason') == 'BASELINE_GATE_PASSED')
-              or (not value['baselineConfirmed'] and set(value) == failed and value.get('reason') in reasons
-                  and value.get('causeType') in kinds
+              or (not value['baselineConfirmed'] and set(value) in (failed, failed | details)
+                  and isinstance(value.get('reason'), str) and value['reason'] in reasons
+                  and isinstance(value.get('causeType'), str) and value['causeType'] in kinds
+                  and isinstance(value.get('gateCode'), str)
                   and re.fullmatch(r'(?:ONLINE_RECHARGE|API_ADMIN)_[A-Z0-9_]+', value.get('gateCode', ''))),
               'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
+    if set(value) == failed | details:
+        diff, matches = value['identityDiff'], value['restoredProjectionMatch']
+        d.require(value['reason'] == 'BASELINE_PROJECTION'
+                  and value['gateCode'] == 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED'
+                  and isinstance(diff, dict) and set(diff) == set((*PRESERVED, 'api', 'admin'))
+                  and all(isinstance(fields, list) and len(fields) <= len(SERVICE_IDENTITY_KEYS)
+                          and all(isinstance(k, str) and k in SERVICE_IDENTITY_KEYS for k in fields)
+                          and fields == [k for k in SERVICE_IDENTITY_KEYS if k in fields] for fields in diff.values())
+                  and isinstance(matches, dict) and set(matches) == {'api', 'admin'}
+                  and all(type(v) is bool for v in matches.values()), 'ONLINE_RECHARGE_DIAGNOSTIC_RECEIPT_INVALID')
     return {k: value[k] for k in sorted(value)}
 
 
