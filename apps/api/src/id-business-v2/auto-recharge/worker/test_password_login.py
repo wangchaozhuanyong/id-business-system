@@ -21,7 +21,8 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         page.goto = AsyncMock()
         email_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
         password_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
-        code_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        code_field = MagicMock(fill=AsyncMock(), press=AsyncMock(),
+                               input_value=AsyncMock(return_value="123456"))
         target = BrowserCredential("", "account_fixture", "user_fixture")
         identity = {"account_matched": True, "current_plan": "free"}
         code_receiver = AsyncMock(return_value="123456")
@@ -52,6 +53,124 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
                 await login.login_with_password(
                     page, "test@example.invalid", "local-password", AsyncMock(), human_wait, MagicMock())
         self.assertEqual(stopped.exception.report["reason"], "official_login_not_verified")
+        human_wait.assert_awaited_once()
+
+    async def test_bitbrowser_email_challenge_never_requests_or_fills_totp(self):
+        page = MagicMock(url="https://auth.openai.com/u/email-verification")
+        email_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        password_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        code_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        code_field.locator.return_value = MagicMock(
+            count=AsyncMock(return_value=1), inner_text=AsyncMock(return_value="Check your inbox"))
+        target = BrowserCredential("", "account_fixture", "user_fixture")
+        identity = {"account_matched": True, "current_plan": "free"}
+        code_receiver = AsyncMock(return_value="123456")
+        human_wait = AsyncMock()
+        with (patch.object(login, "official_identity", new=AsyncMock(
+                side_effect=[None, None, None, (target, identity)])),
+              patch.object(login, "wait_for_input", new=AsyncMock(
+                side_effect=[email_field, password_field])),
+              patch.object(login, "unique_visible", new=AsyncMock(return_value=code_field))):
+            result = await login.login_with_password(
+                page, "test@example.invalid", "local-password", code_receiver,
+                human_wait, MagicMock(), initial_loaded=True)
+        self.assertEqual(result, (target, identity))
+        code_receiver.assert_not_awaited()
+        code_field.fill.assert_not_awaited()
+        code_field.press.assert_not_awaited()
+        human_wait.assert_awaited_once_with("verification_required", 1800)
+
+    async def test_totp_challenge_changed_while_filling_never_submits(self):
+        page = MagicMock(url="https://auth.openai.com/u/mfa-otp-challenge")
+        email_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        password_field = MagicMock(fill=AsyncMock(), press=AsyncMock())
+        form = MagicMock(count=AsyncMock(return_value=1),
+                         inner_text=AsyncMock(return_value="Use your authenticator app"))
+        async def change_challenge(_value):
+            page.url = "https://auth.openai.com/u/email-verification"
+            form.inner_text.return_value = "Check your inbox"
+        code_field = MagicMock(fill=AsyncMock(side_effect=change_challenge), press=AsyncMock(),
+                               input_value=AsyncMock(return_value="123456"))
+        code_field.locator.return_value = form
+        target = BrowserCredential("", "account_fixture", "user_fixture")
+        identity = {"account_matched": True, "current_plan": "free"}
+        human_wait = AsyncMock()
+        with (patch.object(login, "official_identity", new=AsyncMock(
+                side_effect=[None, None, None, (target, identity)])),
+              patch.object(login, "wait_for_input", new=AsyncMock(
+                side_effect=[email_field, password_field])),
+              patch.object(login, "unique_visible", new=AsyncMock(return_value=code_field))):
+            result = await login.login_with_password(
+                page, "test@example.invalid", "local-password", AsyncMock(return_value="123456"),
+                human_wait, MagicMock(), initial_loaded=True)
+        self.assertEqual(result, (target, identity))
+        self.assertEqual(code_field.fill.await_args_list[0].args, ("123456",))
+        self.assertEqual(code_field.fill.await_args_list[-1].args, ("",))
+        code_field.press.assert_not_awaited()
+        human_wait.assert_awaited_once_with("verification_required", 1800)
+
+    async def test_totp_input_changed_while_filling_is_cleared_without_submission(self):
+        page = MagicMock(url="https://auth.openai.com/u/mfa-otp-challenge")
+        fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+        fields[2].input_value = AsyncMock(return_value="654321")
+        target = BrowserCredential("", "account_fixture", "user_fixture")
+        identity = {"account_matched": True, "current_plan": "free"}
+        human_wait = AsyncMock()
+        with (patch.object(login, "official_identity", new=AsyncMock(
+                side_effect=[None, None, None, (target, identity)])),
+              patch.object(login, "wait_for_input", new=AsyncMock(side_effect=fields[:2])),
+              patch.object(login, "unique_visible", new=AsyncMock(return_value=fields[2]))):
+            result = await login.login_with_password(
+                page, "test@example.invalid", "local-password", AsyncMock(return_value="123456"),
+                human_wait, MagicMock(), initial_loaded=True)
+        self.assertEqual(result, (target, identity))
+        self.assertEqual(fields[2].fill.await_args_list[-1].args, ("",))
+        fields[2].press.assert_not_awaited()
+        human_wait.assert_awaited_once()
+
+    async def login_with_expiring_code(self, expiry_stage=None):
+        page = MagicMock(url="https://auth.openai.com/u/mfa-otp-challenge")
+        fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+        fields[2].input_value = AsyncMock(return_value="123456")
+        target = BrowserCredential("", "account_fixture", "user_fixture")
+        identity = {"account_matched": True, "current_plan": "free"}
+        supplied = {"code": "123456", "expiresAt": connector.datetime.fromtimestamp(
+            101, connector.timezone.utc).isoformat()}
+        human_wait = AsyncMock()
+        observed = [None, None, None, (target, identity)] if expiry_stage else [None, None, (target, identity)]
+        with (patch.object(login.time, "time", return_value=102 if expiry_stage == "received" else 100) as clock,
+              patch.object(login, "official_identity", new=AsyncMock(side_effect=observed)),
+              patch.object(login, "wait_for_input", new=AsyncMock(side_effect=fields[:2])),
+              patch.object(login, "unique_visible", new=AsyncMock(return_value=fields[2])),
+              patch.object(login.asyncio, "sleep", new=AsyncMock())):
+            if expiry_stage == "fill":
+                async def expire_during_fill(_value):
+                    clock.return_value = 102
+                fields[2].fill.side_effect = expire_during_fill
+            result = await login.login_with_password(
+                page, "test@example.invalid", "local-password", AsyncMock(return_value=supplied),
+                human_wait, MagicMock(), initial_loaded=True)
+        self.assertEqual(result, (target, identity))
+        self.assertEqual(supplied, {})
+        return fields[2], human_wait
+
+    async def test_current_automatic_code_with_expiry_is_filled_and_submitted_once(self):
+        field, human_wait = await self.login_with_expiring_code()
+        field.fill.assert_awaited_once_with("123456")
+        field.press.assert_awaited_once_with("Enter")
+        human_wait.assert_not_awaited()
+
+    async def test_code_already_expired_at_browser_receive_is_not_filled_or_submitted(self):
+        field, human_wait = await self.login_with_expiring_code("received")
+        self.assertTrue(all(call.args == ("",) for call in field.fill.await_args_list))
+        field.press.assert_not_awaited()
+        human_wait.assert_awaited_once()
+
+    async def test_code_expiring_while_filling_is_cleared_and_not_submitted(self):
+        field, human_wait = await self.login_with_expiring_code("fill")
+        self.assertEqual(field.fill.await_args_list[0].args, ("123456",))
+        self.assertEqual(field.fill.await_args_list[-1].args, ("",))
+        field.press.assert_not_awaited()
         human_wait.assert_awaited_once()
 
     async def test_official_email_mismatch_stops_before_account_binding(self):

@@ -439,11 +439,20 @@ class LocalJob:
         self.code_event.set()
         self.confirmation_event.set()
 
-    def signal_code(self, code):
+    def signal_code(self, code, expires_at=None):
         if (not self.waiting_for_code or self.done or self.login_code is not None
                 or not isinstance(code, str) or not re.fullmatch(r"[0-9]{6,8}", code)):
             raise Stop("login_code_not_requested")
-        self.login_code = code
+        if expires_at is not None:
+            expiry = browser_password_login.login_code_expiry(expires_at)
+            if time.time() >= expiry:
+                # Wake the original waiting flow so it can keep the window for a person.
+                self.login_code = {"code": "", "expiresAt": expires_at}
+                self.code_event.set()
+                raise Stop("login_code_expired", user_action_required=True)
+            self.login_code = {"code": code, "expiresAt": expires_at}
+        else:
+            self.login_code = code
         self.code_event.set()
 
     async def wait_for_code(self, seconds):
@@ -462,6 +471,12 @@ class LocalJob:
                 raise Stop("login_code_expired", user_action_required=True)
             code = self.login_code
             self.login_code = None
+            try:
+                browser_password_login.login_code_value(code)
+            except Stop:
+                if isinstance(code, dict):
+                    code.clear()
+                raise
             return code
         finally:
             self.waiting_for_code = False
@@ -973,10 +988,15 @@ class Handler(BaseHTTPRequestHandler):
                 job.signal_confirm(body["nonce"], body["quoteDigest"])
                 body.clear()
             elif match.group(2) == "code":
-                if not isinstance(body, dict) or set(body) != {"code"}:
+                if (not isinstance(body, dict) or set(body) not in (
+                        {"code"}, {"code", "expiresAt"})
+                        or ("expiresAt" in body and not isinstance(body["expiresAt"], str))):
                     raise Stop("invalid_login_code")
                 else:
-                    job.signal_code(body["code"])
+                    if "expiresAt" in body:
+                        job.signal_code(body["code"], body["expiresAt"])
+                    else:
+                        job.signal_code(body["code"])
                 body.clear()
             elif match.group(2) == "resume":
                 job.signal_resume()

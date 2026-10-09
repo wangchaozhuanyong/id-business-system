@@ -3,6 +3,7 @@ import type { V2RechargeBitBrowserOpenLaunch } from './contracts';
 import { rechargeApi } from './api';
 import { DirectBrowserError } from './bitbrowser-direct-api';
 import type { DirectLoginCredential } from './bitbrowser-direct-credential';
+import type { DirectLoginCode } from './bitbrowser-direct-login';
 
 export function useBitBrowserDirectOpen(
   refresh: () => Promise<unknown>,
@@ -14,7 +15,7 @@ export function useBitBrowserDirectOpen(
     done?: Promise<void>;
     endedRemotely: boolean;
   }>();
-  let codeRequest: { id: string; resolve: (code: string) => void } | undefined;
+  let codeRequest: { id: string; resolve: (code: DirectLoginCode) => void } | undefined;
   let disposed = false;
   const owns = (id: string) => activeTask.value?.id === id;
   const running = computed(() => Boolean(activeTask.value));
@@ -103,7 +104,7 @@ export function useBitBrowserDirectOpen(
               return result;
             },
             code: () =>
-              new Promise<string>((resolve, reject) => {
+              new Promise<DirectLoginCode>((resolve, reject) => {
                 if (task.controller.signal.aborted)
                   return reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
                 const abort = () => {
@@ -153,10 +154,10 @@ export function useBitBrowserDirectOpen(
       }
     })();
   }
-  function submitCode(id: string, code: string) {
+  function submitCode(id: string, code: string, expiresAt?: string) {
     if (!codeRequest || codeRequest.id !== id || !owns(id) || !/^[0-9]{6,8}$/.test(code))
       throw new Error('当前网页登录任务没有等待验证码，请检查原窗口');
-    codeRequest.resolve(code);
+    codeRequest.resolve(expiresAt === undefined ? code : { token: code, expiresAt });
   }
   async function cancel(id: string, endedRemotely = false) {
     if (!owns(id)) throw new Error('当前网页没有此登录任务，请刷新原任务核对');

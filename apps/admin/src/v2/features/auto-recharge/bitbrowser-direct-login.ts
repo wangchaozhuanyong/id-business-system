@@ -16,13 +16,15 @@ import {
   type inspectLoggedInPage
 } from './bitbrowser-login-page';
 import type { V2RechargeOwnedBrowserProfile } from '@apple-business/shared';
+import { isV2TotpCodeCurrent } from '@/v2/components/workspace/totp';
 
 import { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
 export { parseDirectCredential, type DirectLoginCredential } from './bitbrowser-direct-credential';
 
+export type DirectLoginCode = string | { token: string; expiresAt: string };
 export interface DirectLoginHooks {
   progress: (stage: string, extra?: Record<string, unknown>) => Promise<void>;
-  code: () => Promise<string>;
+  code: () => Promise<DirectLoginCode>;
   restore?: (accountKey: string) => Promise<{ ownedProfile?: V2RechargeOwnedBrowserProfile }>;
 }
 export function isLoginPaymentWrite(method: string, rawUrl: string) {
@@ -92,6 +94,7 @@ export async function runDirectLogin(
     | {
         kind: 'email' | 'password' | 'code';
         value: string;
+        expiresAt?: string;
         waitingForCode: boolean;
         failure?: { cause: unknown };
       }
@@ -755,7 +758,8 @@ export async function runDirectLogin(
             void hooks.code().then(
               (value) => {
                 if (pendingSubmission !== submission || signal.aborted) return;
-                submission.value = value;
+                submission.value = typeof value === 'string' ? value : value.token;
+                submission.expiresAt = typeof value === 'string' ? undefined : value.expiresAt;
                 submission.waitingForCode = false;
               },
               (cause: unknown) => {
@@ -773,28 +777,65 @@ export async function runDirectLogin(
         if (Date.now() >= deadline) throw new DirectBrowserError('official_login_not_verified');
         if (pendingSubmission.failure) throw pendingSubmission.failure.cause;
         if (!pendingSubmission.waitingForCode && Date.now() < automaticDeadline) {
-          const filled = await activeCdp.evaluate<LoginPageState>(
-            sessionId,
-            loginPageExpression(kind, pendingSubmission.value, { email: expected.email })
-          );
-          if (filled.kind === 'filled' && Date.now() < automaticDeadline) {
-            signal.throwIfAborted();
-            const confirmed = await activeCdp.evaluate<LoginPageState>(
+          if (
+            kind === 'code' &&
+            pendingSubmission.expiresAt !== undefined &&
+            !isV2TotpCodeCurrent(
+              pendingSubmission.value,
+              pendingSubmission.expiresAt,
+              Date.now() + 3000
+            )
+          ) {
+            pendingSubmission.value = '';
+            pendingSubmission = undefined;
+            submitted.add('code');
+            state = { kind: 'manual' };
+          } else {
+            const filled = await activeCdp.evaluate<LoginPageState>(
               sessionId,
-              loginPageExpression('submit', pendingSubmission.value, {
-                stage: kind,
-                email: expected.email
-              })
+              loginPageExpression(kind, pendingSubmission.value, { email: expected.email })
             );
-            if (confirmed.kind === 'submitted') {
-              submitted.add(kind);
-              pendingSubmission.value = '';
-              pendingSubmission = undefined;
-              if (kind === 'password') credential.login.password = '';
-              if (kind === 'code') await hooks.progress('login_code_submitted');
-            } else state = confirmed;
-          } else state = filled;
+            if (filled.kind === 'filled' && Date.now() < automaticDeadline) {
+              signal.throwIfAborted();
+              if (
+                kind === 'code' &&
+                pendingSubmission.expiresAt !== undefined &&
+                !isV2TotpCodeCurrent(
+                  pendingSubmission.value,
+                  pendingSubmission.expiresAt,
+                  Date.now() + 3000
+                )
+              ) {
+                pendingSubmission.value = '';
+                pendingSubmission = undefined;
+                submitted.add('code');
+                await activeCdp.evaluate(sessionId, loginPageExpression('clear'));
+                state = { kind: 'manual' };
+              } else {
+                const confirmed = await activeCdp.evaluate<LoginPageState>(
+                  sessionId,
+                  loginPageExpression('submit', pendingSubmission.value, {
+                    stage: kind,
+                    email: expected.email
+                  })
+                );
+                if (confirmed.kind === 'submitted') {
+                  submitted.add(kind);
+                  pendingSubmission.value = '';
+                  pendingSubmission = undefined;
+                  if (kind === 'password') credential.login.password = '';
+                  if (kind === 'code') await hooks.progress('login_code_submitted');
+                } else state = confirmed;
+              }
+            } else state = filled;
+          }
         }
+      }
+      if (state.kind === 'manual' && 'codeType' in state && pendingSubmission?.kind === 'code') {
+        // A code requested for one challenge must never survive a different challenge.
+        pendingSubmission.value = '';
+        pendingSubmission = undefined;
+        submitted.add('code');
       }
       if (!manualReported && (state?.kind === 'manual' || Date.now() >= automaticDeadline)) {
         enterManualWait();

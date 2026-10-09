@@ -23,7 +23,7 @@
           </div>
           <el-form
             ref="paymentFormRef"
-            name="chatgpt-auto-recharge"
+            name="recharge-entry-data"
             autocomplete="off"
             :model="details"
             :rules="rechargeRules"
@@ -31,6 +31,7 @@
             label-width="108px"
             require-asterisk-position="right"
             :disabled="formLocked"
+            @submit.prevent
           >
             <div class="recharge-mode-fields">
               <el-form-item label="操作模式" required>
@@ -55,10 +56,8 @@
                 :error="jsonError"
               >
                 <div class="recharge-json-row">
-                  <el-input
-                    type="password"
-                    show-password
-                    autocomplete="off"
+                  <RechargeSensitiveInput
+                    name="recharge-authorization-data"
                     :model-value="jsonInput"
                     :placeholder="
                       sessionJson
@@ -96,6 +95,8 @@
             <el-form-item v-if="operationMode === 'open_browser'" label="窗口名称" required>
               <el-input
                 v-model="windowName"
+                name="recharge-window-label"
+                autocomplete="off"
                 maxlength="80"
                 placeholder="输入本次比特浏览器窗口名称"
               />
@@ -105,6 +106,8 @@
               <el-form-item class="recharge-full-row" label="窗口名称" required>
                 <el-input
                   v-model="windowName"
+                  name="recharge-window-label"
+                  autocomplete="off"
                   maxlength="80"
                   placeholder="输入本次比特浏览器窗口名称"
                 />
@@ -246,10 +249,9 @@
               @submit.prevent="submitLoginCode"
             >
               <el-form-item label="一次性验证码" required>
-                <el-input
+                <RechargeSensitiveInput
                   v-model="loginCode"
-                  type="password"
-                  show-password
+                  name="recharge-verification-data"
                   inputmode="numeric"
                   autocomplete="one-time-code"
                   maxlength="8"
@@ -304,6 +306,7 @@ import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import RechargePasswordLoginFields from './RechargePasswordLoginFields.vue';
+import RechargeSensitiveInput from './RechargeSensitiveInput.vue';
 import RechargeSubmission from './RechargeSubmission.vue';
 import { rechargeRules } from './recharge-form';
 import RechargePageContext from './RechargePageContext.vue';

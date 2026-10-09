@@ -2,6 +2,8 @@
   <el-form-item label="已保存银行卡" :aria-busy="detailLoading || undefined">
     <el-select
       :model-value="value"
+      name="recharge-saved-card-entry"
+      autocomplete="off"
       clearable
       filterable
       placeholder="选择银行卡（可选）"
