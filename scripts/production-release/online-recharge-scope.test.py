@@ -2470,7 +2470,10 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
 
     def test_old_all_functions_classes_and_constants_remain_exact_ast(self):
         import ast
-        old = ast.parse(subprocess.check_output(['git', 'show', self.commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
+        # The preservation witness is the reviewed pre-capability baseline.
+        # HEAD is the fixture's producer archive and changes after committing.
+        old_commit = 'd8466a58cc577ed83189503f260a9c914fcac3be'
+        old = ast.parse(subprocess.check_output(['git', 'show', old_commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
         current = ast.parse((ROOT / 'scripts/production-release/online-recharge-scope.py').read_text())
         by_name = {n.name: n for n in current.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
         for node in old.body:
