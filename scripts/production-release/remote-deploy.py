@@ -732,6 +732,7 @@ API_ADMIN_BASELINE_MOVED API_ADMIN_BASELINE_PATH_INVALID API_ADMIN_BASELINE_POIN
 API_ADMIN_BASELINE_SERVICES_CHANGED API_ADMIN_BUILD_IMAGE_INVALID API_ADMIN_BUILD_LABEL_CHANGED
 API_ADMIN_BUILD_PROOF_INVALID API_ADMIN_BUILD_PROOF_TOO_LARGE API_ADMIN_BUILD_RUN_CHANGED
 API_ADMIN_BUILD_SOURCE_CHANGED API_ADMIN_CONFIG_OR_SCHEMA_CHANGED API_ADMIN_CONTAINER_CHANGED
+API_ADMIN_PENDING_ONLINE_BUILD_ORIGIN_CHANGED
 API_ADMIN_CONTAINER_MOUNTS_INVALID API_ADMIN_CONTENT_INVALID API_ADMIN_DISK_LOW API_ADMIN_DISK_LOW_BEFORE_PULL
 API_ADMIN_ECR_LOGIN_FAILED API_ADMIN_ENVIRONMENT_CHANGED API_ADMIN_EXECUTOR_SOURCE_CHANGED
 API_ADMIN_IMAGE_PROVENANCE_FAILED API_ADMIN_INPUT_INVALID API_ADMIN_MIGRATIONS_FORBIDDEN
@@ -12833,6 +12834,7 @@ def main():
     parser.add_argument('--expected-current', required=True)
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--run-attempt', required=True)
+    parser.add_argument('--api-workspace-preflight-sha256')
     parser.add_argument('--ci-run-id', required=True)
     parser.add_argument('--image-commit')
     parser.add_argument('--image-run-id')
@@ -12876,12 +12878,20 @@ def main():
     parser.add_argument('--registration-worker-94', action='store_true')
     parser.add_argument('--registration-worker-93', action='store_true')
     args = parser.parse_args()
+    require(args.api_workspace_preflight_sha256 is None or (
+        args.api_workspace_only and re.fullmatch('[a-f0-9]{64}', args.api_workspace_preflight_sha256)),
+        'API_ADMIN_SCOPE_CONFLICT')
     if args.online_recharge_only:
         scope, controller = online_recharge_scope()
         return scope.release(controller, args)
     require(not args.online_recharge_build_proof, 'ONLINE_RECHARGE_SCOPE_REQUIRED')
     if args.api_workspace_only:
         scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
+        controller._apiWorkspaceDeclarationEntry = 'STAGE'
+        controller._apiWorkspaceDeclarationProducer = {
+            'commit': args.commit, 'sourceTree': args.source_tree,
+            'workflowRunId': args.run_id, 'workflowRunAttempt': args.run_attempt}
+        controller._apiWorkspaceDeclarationPreflightSha256 = args.api_workspace_preflight_sha256
         return scope.release(controller, args)
     if args.api_admin_migration_only:
         scope, controller = api_admin_scope('API_ADMIN_MIGRATION')
@@ -13509,30 +13519,119 @@ def load_registration96():
     return namespace
 
 
+def api_workspace_receipt_output(value):
+    """Finite framing only; callers still perform full publication validation."""
+    namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-pending-receipt-wire.py')))
+    return namespace['receipt_output'](value, scope='API_ADMIN_WORKSPACE')
+
+
+def api_workspace_declaration_inventory(expected, producer):
+    """Report generation sources only; this never qualifies a publication."""
+    require(expected == '0a03fa28e6b844a18833d5c63f1de700f091fc64',
+            'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+    require(type(producer) is dict and set(producer) == {
+        'commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'}
+        and all(type(producer[n]) is str and re.fullmatch('[a-f0-9]{40}', producer[n])
+                for n in ('commit', 'sourceTree'))
+        and all(type(producer[n]) is str and re.fullmatch('[1-9][0-9]*', producer[n])
+                for n in ('workflowRunId', 'workflowRunAttempt')),
+            'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+    online, controller = online_recharge_scope()
+    previous = (BASE / 'current').resolve()
+    require(previous.parent == BASE / 'releases' and previous.is_dir()
+            and not previous.is_symlink(), 'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+    manifest = online.closed_recovery_json(controller, (previous / 'release-manifest.json').read_bytes())
+    require(manifest.get('commit') == expected, 'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+    # Use the unchanged fixed historical validators. The current API complete
+    # raw hash remains a failed gate; it is neither rewritten nor reclassified.
+    recovery = online.release_recovery(controller, previous)
+    require(type(recovery) is dict and type(recovery.get('restored')) is dict,
+            'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+
+    def bound_files():
+        names = ('release-manifest.json', 'compose.release.json', 'docker-compose.aws-mysql.yml',
+                 '.env.aws.production')
+        values = {}
+        for name in names:
+            path = previous / name
+            require(path.is_file() and not path.is_symlink() and path.stat().st_uid == os.geteuid()
+                    and path.stat().st_size <= 1024 * 1024,
+                    'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+            values[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return values
+
+    before_files = bound_files()
+    before = online.snapshot(controller, previous)
+    namespace = runpy.run_path(str(Path(__file__).with_name('online-recharge-declaration-measurement.py')))
+    measured = namespace['inventory'](controller, previous, services=before,
+        image_reference=before['api']['reference'], image_id=before['api']['image'])
+    namespace['validate_inventory'](measured)
+    require((BASE / 'current').resolve() == previous and bound_files() == before_files
+            and online.snapshot(controller, previous) == before,
+            'API_ADMIN_DECLARATION_INVENTORY_CHANGED')
+    return {'status': 'API_ADMIN_WORKSPACE_DECLARATION_INVENTORY', 'commit': expected,
+            'producer': producer, 'inventory': measured, 'authority': False,
+            'productionEligible': False, 'rawOutputSuppressed': True,
+            'stableServicesSha256': online.fingerprint(before),
+            'boundFilesSha256': online.fingerprint(before_files)}
+
+
 if __name__ == '__main__':
     try:
         reject_retired_registration_selection(sys.argv[1:])
     except RuntimeError as error:
         raise SystemExit(str(error)) from None
+    if sys.argv[1:2] == ['--api-workspace-declaration-inventory']:
+        try:
+            require(len(sys.argv) == 6 and sys.argv[2] == '--expected-current'
+                    and sys.argv[4] == '--inventory-producer' and len(sys.argv[5]) < 1024,
+                    'API_ADMIN_DECLARATION_INVENTORY_INVALID')
+            online, controller = online_recharge_scope()
+            producer = online.closed_recovery_json(controller, base64.b64decode(sys.argv[5], validate=True))
+            print(json.dumps(api_workspace_declaration_inventory(sys.argv[3], producer)))
+        except Exception:
+            print(json.dumps({'status': 'API_ADMIN_DECLARATION_INVENTORY_FAILED',
+                              'authority': False, 'productionEligible': False,
+                              'rawOutputSuppressed': True}))
+            raise SystemExit(1) from None
+        raise SystemExit(0)
     if '--api-workspace-only' in sys.argv[1:] and any(
             token.startswith('--') and token not in ('--api-workspace-only', '--api-admin-build-proof',
-                '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id')
+                '--commit', '--source-tree', '--repository', '--expected-current', '--run-id', '--run-attempt', '--ci-run-id',
+                '--api-workspace-preflight-sha256')
             for token in sys.argv[1:]):
         raise SystemExit('API_ADMIN_SCOPE_CONFLICT')
-    if sys.argv[1:2] and sys.argv[1] in ('--write-api-workspace-build-proof', '--api-workspace-preflight', '--api-workspace-readback'):
+    if sys.argv[1:2] and sys.argv[1] in ('--prepare-api-workspace-build', '--write-api-workspace-build-proof', '--api-workspace-preflight', '--api-workspace-readback'):
         try:
             scope, controller = api_admin_scope('API_ADMIN_WORKSPACE')
-            if sys.argv[1:] == ['--write-api-workspace-build-proof']:
+            if sys.argv[1:] == ['--prepare-api-workspace-build']:
+                result = scope.prepare_workspace_build(controller)
+                print(json.dumps({'status': 'API_ADMIN_WORKSPACE_CONTEXT_PROVEN', 'contextPath': result['contextPath']}))
+            elif sys.argv[1:] == ['--write-api-workspace-build-proof']:
                 scope.build_proof(controller)
             else:
-                require(len(sys.argv) == 4 and sys.argv[2] == '--expected-current'
+                require(len(sys.argv) in (4, 6) and sys.argv[2] == '--expected-current'
                         and re.fullmatch(r'[a-f0-9]{40}', sys.argv[3]), 'API_ADMIN_INPUT_INVALID')
+                controller._apiWorkspaceDeclarationEntry = (
+                    'READBACK' if sys.argv[1] == '--api-workspace-readback' else 'PREFLIGHT')
+                if len(sys.argv) == 6:
+                    require(sys.argv[4] == '--declaration-producer' and len(sys.argv[5]) < 1024,
+                            'API_ADMIN_INPUT_INVALID')
+                    online, _ = online_recharge_scope()
+                    producer = online.closed_recovery_json(controller, base64.b64decode(sys.argv[5], validate=True))
+                    require(type(producer) is dict and set(producer) == {
+                        'commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'}
+                        and all(type(producer[n]) is str and re.fullmatch('[a-f0-9]{40}', producer[n])
+                                for n in ('commit', 'sourceTree'))
+                        and all(type(producer[n]) is str and re.fullmatch('[1-9][0-9]*', producer[n])
+                                for n in ('workflowRunId', 'workflowRunAttempt')), 'API_ADMIN_INPUT_INVALID')
+                    controller._apiWorkspaceDeclarationProducer = producer
                 if sys.argv[1] == '--api-workspace-readback':
                     result = scope.readback(controller, sys.argv[3])
                 else:
                     previous, manifest, states, evidence = scope.baseline(controller, sys.argv[3])
                     result = {'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': sys.argv[3], 'services': states, **evidence}
-                print(json.dumps(result))
+                print(api_workspace_receipt_output(result))
         except Exception as error:
             message = str(error)
             code = message if re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', message) else 'API_ADMIN_READ_UNAVAILABLE'

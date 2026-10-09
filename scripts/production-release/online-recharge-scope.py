@@ -2198,3 +2198,622 @@ def _release_locked(d, args):
             result['receiptPersisted'] = False
         print(json.dumps(result))
         return 1
+
+
+# Pure v3 primitives only. No production caller or source authority is registered.
+DECLARATION_EQUIVALENCE_KIND = 'API_FIXED_DECLARATION_EQUIVALENCE'
+
+
+DECLARATION_EQUIVALENCE_VERSION = 3
+DECLARATION_EQUIVALENCE_MARKER_SHA256 = '8c6488af34870b662cc3733ec7b10958aa9e532e3e64638e372ea00b08855385'
+
+
+DECLARATION_EQUIVALENCE_SERVICES = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration')
+
+
+DECLARATION_EQUIVALENCE_STABLE_KEYS = ('status', 'health', 'image', 'reference', 'environmentSha256')
+
+
+DECLARATION_EQUIVALENCE_HELPERS = tuple('scripts/production-release/' + name for name in (
+    'remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py', 'api-admin-readonly.py'))
+
+
+DECLARATION_EQUIVALENCE_FIXED = {
+    'policySha256': '641fe690c62224eb3d22d69e94493e08b9a2a9309ce04c588627c4aaea7c8f35',
+    'workspaceCommit': '0a03fa28e6b844a18833d5c63f1de700f091fc64',
+    'firstFailedCommit': '28a3ba4ffd17d36001b1104c97394f5ae871d73d',
+    'secondFailedCommit': '296c096af7c4c79a8ffc2f57d9a15ea75684f431',
+    'firstFailureReceiptSha256': '1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a',
+    'secondFailureReceiptSha256': 'f04e9356221bc10a33c774ce9e692b40db6afa23fd2a3bde23caf096a4f07485',
+}
+
+
+DECLARATION_EQUIVALENCE_FIELDS = {'proof': ('kind', 'version', 'service', 'semantic', 'measurement'),
+ 'semantic': ('producer',
+              'fixedRecovery',
+              'historicalFiles',
+              'anchors',
+              'original',
+              'actual',
+              'sourceBindings',
+              'apiEquivalence',
+              'adminProjection',
+              'stableObservation'),
+ 'producer': ('commit',
+              'sourceTree',
+              'workflowRunId',
+              'workflowRunAttempt',
+              'archiveInventorySha256',
+              'helpers'),
+ 'historicalFiles': ('workspaceManifestBytesSha256',
+                     'workspaceRecordBytesSha256',
+                     'workspaceBuildProofBytesSha256',
+                     'restoredManifestBytesSha256',
+                     'restoredRecordBytesSha256',
+                     'restoredBuildProofBytesSha256'),
+ 'sourceBindings': ('configurationFilesSha256',
+                    'workspaceFilesSha256',
+                    'environmentFileSha256',
+                    'renderedDeclarationSha256',
+                    'normalizedModelSha256',
+                    'apiImageId',
+                    'apiImageReference',
+                    'apiDeclaredHash',
+                    'expectedEnvironmentSha256',
+                    'referenceEnvironmentSha256',
+                    'actualResourceSha256'),
+ 'apiEquivalence': ('rulesSha256',
+                    'oldRawConfigurationSha256',
+                    'actualRawConfigurationSha256',
+                    'normalizedActualSha256',
+                    'normalizedReferenceSha256'),
+ 'adminProjection': ('kind',
+                     'originalConfigurationSha256',
+                     'actualConfigurationSha256',
+                     'projectedConfigurationSha256',
+                     'helperSha256'),
+ 'stableObservation': ('snapshotSha256',
+                       'sourceFilesSha256',
+                       'workspaceVolumeSha256',
+                       'actualResourceSha256'),
+ 'measurement': ('purpose',
+                 'executionNonce',
+                 'sourceArchiveBytesSha256',
+                 'referenceRegistrySha256',
+                 'referenceRawConfigurationSha256',
+                 'referenceModelSha256',
+                 'engineVersionSha256',
+                 'composeVersionSha256',
+                 'neverStarted',
+                 'cleanupVerified',
+                 'realEnvironmentPersisted',
+                 'referenceCounts',
+                 'stableBefore',
+                 'stableAfter',
+                 'priorIndependentPreflightBytesSha256',
+                 'priorProofSha256'),
+ 'origin': ('version',
+            'scope',
+            'baselineRelease',
+            'baselineManifestSha256',
+            'migrationState',
+            'recoveryMarker',
+            'restoredOrigin',
+            'services',
+            'priorPublications',
+            'restoredConfigurationProof')}
+
+
+def _declaration_require(condition, unused=None):
+    if not condition:
+        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_PROOF_INVALID')
+
+
+def _declaration_exact(value, fields):
+    _declaration_require(type(value) is dict and set(value) == set(fields))
+    return value
+
+
+def _declaration_hash(value):
+    return type(value) is str and re.fullmatch('[a-f0-9]{64}', value) is not None
+
+
+def _declaration_states(value):
+    _declaration_exact(value, DECLARATION_EQUIVALENCE_SERVICES)
+    for name, row in value.items():
+        _declaration_exact(row, SERVICE_IDENTITY_KEYS)
+        _declaration_require(row['status'] == 'running' and (row['health'] in ('healthy', None)
+             if name == 'caddy' else row['health'] == 'healthy'))
+        _declaration_require(type(row['image']) is str and re.fullmatch('sha256:[a-f0-9]{64}', row['image'])
+             and type(row['reference']) is str
+             and re.fullmatch('[A-Za-z0-9][A-Za-z0-9:/@._-]{0,511}', row['reference'])
+             and all(_declaration_hash(row[k]) for k in SERVICE_IDENTITY_KEYS[-4:]))
+
+
+def validate_declaration_equivalence_proof(d, value):
+    """Pure structure only; measured source/Env/resources require a real entry."""
+    _declaration_exact(value, DECLARATION_EQUIVALENCE_FIELDS['proof'])
+    _declaration_require(value['kind'] == DECLARATION_EQUIVALENCE_KIND and type(value['version']) is int and value['version'] == DECLARATION_EQUIVALENCE_VERSION
+         and value['service'] == 'api', 'EQUIVALENCE_VERSION_INVALID')
+    s, m = value['semantic'], value['measurement']
+    _declaration_exact(s, DECLARATION_EQUIVALENCE_FIELDS['semantic'])
+    _declaration_exact(m, DECLARATION_EQUIVALENCE_FIELDS['measurement'])
+    producer = _declaration_exact(s['producer'], DECLARATION_EQUIVALENCE_FIELDS['producer'])
+    _declaration_require(all(type(producer[k]) is str and re.fullmatch('[a-f0-9]{40}', producer[k])
+             for k in ('commit', 'sourceTree'))
+         and all(type(producer[k]) is str and re.fullmatch('[1-9][0-9]*', producer[k])
+                 for k in ('workflowRunId', 'workflowRunAttempt'))
+         and _declaration_hash(producer['archiveInventorySha256']))
+    _declaration_require(all(_declaration_hash(v) for v in _declaration_exact(producer['helpers'], DECLARATION_EQUIVALENCE_HELPERS).values()))
+    fixed = _declaration_exact(s['fixedRecovery'], (*DECLARATION_EQUIVALENCE_FIXED, 'recoveryMarkerSha256'))
+    _declaration_require(all(fixed[k] == v for k, v in DECLARATION_EQUIVALENCE_FIXED.items())
+                         and fixed['recoveryMarkerSha256'] == DECLARATION_EQUIVALENCE_MARKER_SHA256)
+    _declaration_require(all(_declaration_hash(v) for v in _declaration_exact(s['historicalFiles'], DECLARATION_EQUIVALENCE_FIELDS['historicalFiles']).values()))
+    _declaration_exact(s['anchors'], ('api', 'admin'))
+    for row in s['anchors'].values():
+        _declaration_require(all(_declaration_hash(v) for v in _declaration_exact(row, ('oldBeforeContainerId', 'candidateAfterContainerId')).values()))
+    original, actual = s['original'], s['actual']
+    _declaration_states(original)
+    _declaration_states(actual)
+    _declaration_require(all(actual[n] == original[n] for n in PRESERVED), 'EQUIVALENCE_PRESERVATION_INVALID')
+    _declaration_require(all(actual[n][k] == original[n][k] for n in ('api', 'admin') for k in DECLARATION_EQUIVALENCE_STABLE_KEYS),
+         'EQUIVALENCE_PRESERVATION_INVALID')
+    source = _declaration_exact(s['sourceBindings'], DECLARATION_EQUIVALENCE_FIELDS['sourceBindings'])
+    _declaration_require(source['apiImageId'] == actual['api']['image']
+         and source['apiImageReference'] == actual['api']['reference']
+         and source['expectedEnvironmentSha256'] == actual['api']['environmentSha256']
+         and all(_declaration_hash(v) for k, v in source.items() if k not in ('apiImageId', 'apiImageReference')))
+    api = _declaration_exact(s['apiEquivalence'], DECLARATION_EQUIVALENCE_FIELDS['apiEquivalence'])
+    _declaration_require(all(_declaration_hash(v) for v in api.values())
+         and api['oldRawConfigurationSha256'] == original['api']['configurationSha256']
+         and api['actualRawConfigurationSha256'] == actual['api']['configurationSha256']
+         and api['normalizedActualSha256'] == api['normalizedReferenceSha256'])
+    admin = _declaration_exact(s['adminProjection'], DECLARATION_EQUIVALENCE_FIELDS['adminProjection'])
+    _declaration_require(admin['kind'] == 'ADMIN_OLD_COMPLETE_CONFIGURATION_MATCH'
+         and admin['originalConfigurationSha256'] == admin['projectedConfigurationSha256']
+             == original['admin']['configurationSha256']
+         and admin['actualConfigurationSha256'] == actual['admin']['configurationSha256']
+         and admin['helperSha256'] == producer['helpers'][DECLARATION_EQUIVALENCE_HELPERS[2]])
+    obs = _declaration_exact(s['stableObservation'], DECLARATION_EQUIVALENCE_FIELDS['stableObservation'])
+    _declaration_require(all(_declaration_hash(v) for v in obs.values()) and obs['snapshotSha256'] == fingerprint(actual)
+         and obs['actualResourceSha256'] == source['actualResourceSha256']
+         and m['stableBefore'] == m['stableAfter'] == obs)
+    _declaration_require(m['purpose'] in ('INDEPENDENT_PREFLIGHT', 'DEPLOYMENT_REMEASURE')
+         and type(m['executionNonce']) is str and re.fullmatch('[a-f0-9]{32}', m['executionNonce'])
+         and all(_declaration_hash(m[k]) for k in ('sourceArchiveBytesSha256', 'referenceRegistrySha256',
+             'referenceRawConfigurationSha256', 'referenceModelSha256', 'engineVersionSha256', 'composeVersionSha256'))
+         and m['neverStarted'] is True and m['cleanupVerified'] is True
+         and m['realEnvironmentPersisted'] is False
+         and _declaration_exact(m['referenceCounts'], ('containers', 'networks', 'volumes'))
+             == {'containers': 1, 'networks': 4, 'volumes': 1})
+    _declaration_require(all(type(v) is int for v in m['referenceCounts'].values()))
+    if m['purpose'] == 'INDEPENDENT_PREFLIGHT':
+        _declaration_require(m['priorIndependentPreflightBytesSha256'] is None and m['priorProofSha256'] is None)
+    else:
+        _declaration_require(_declaration_hash(m['priorIndependentPreflightBytesSha256']) and _declaration_hash(m['priorProofSha256']))
+    return value
+
+
+def declaration_equivalence_pair_seal(d, first, second, preflight_raw):
+    """Bind P1/P2 to exact full F_A bytes without prescribing its old schema."""
+    validate_declaration_equivalence_proof(d, first)
+    validate_declaration_equivalence_proof(d, second)
+    before = closed_recovery_json(d, preflight_raw)
+    _declaration_require(type(before) is dict and type(before.get('pendingOnlineMigrationOrigin')) is dict
+        and before['pendingOnlineMigrationOrigin'].get('restoredConfigurationProof') == first
+        and first['measurement']['purpose'] == 'INDEPENDENT_PREFLIGHT'
+        and second['measurement']['purpose'] == 'DEPLOYMENT_REMEASURE'
+        and first['semantic'] == second['semantic'])
+    producer = first['semantic']['producer']
+    _declaration_require(before.get('mode') == 'preflight'
+        and before.get('status') == 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED'
+        and before.get('commit') == BASELINE_COMMIT
+        and before.get('services') == first['semantic']['actual']
+        and before.get('releaseCandidateCommit') == producer['commit']
+        and before.get('workflowRunId') == producer['workflowRunId']
+        and before.get('workflowRunAttempt') == producer['workflowRunAttempt'])
+    one, two = first['measurement'], second['measurement']
+    raw_sha = hashlib.sha256(preflight_raw).hexdigest()
+    _declaration_require(two['priorIndependentPreflightBytesSha256'] == raw_sha
+        and two['priorProofSha256'] == fingerprint(first)
+        and all(one[k] == two[k] for k in ('engineVersionSha256', 'composeVersionSha256')))
+    return {'kind': DECLARATION_EQUIVALENCE_KIND, 'version': DECLARATION_EQUIVALENCE_VERSION,
+        'preflightBytesSha256': raw_sha, 'preflightProofSha256': fingerprint(first),
+        'deploymentProofSha256': fingerprint(second), 'semanticSha256': fingerprint(first['semantic'])}
+
+
+def declaration_equivalence_source_binding(d, value, *, producer, archive_bytes, historical_files):
+    """Consume actual byte inputs; caller must independently acquire their sources.
+
+    This does not grant provenance to a hash-only context or perform file I/O.
+    Existing fixed source/permission/manifest/run guards remain mandatory.
+    """
+    validate_declaration_equivalence_proof(d, value)
+    semantic = value['semantic']
+    _declaration_require(type(producer) is dict and producer == semantic['producer'])
+    inventory = archive_inventory(d, archive_bytes, producer['commit'], producer['sourceTree'])
+    _declaration_require(fingerprint(inventory) == producer['archiveInventorySha256']
+        and all(inventory.get(name, {}).get('sha256') == digest
+                for name, digest in producer['helpers'].items()))
+    fields = DECLARATION_EQUIVALENCE_FIELDS['historicalFiles']
+    _declaration_exact(historical_files, (*fields, 'firstFailure', 'secondFailure', 'recoveryPolicy'))
+    documents = {name: closed_recovery_json(d, raw) for name, raw in historical_files.items()}
+    _declaration_require(all(type(v) is dict for v in documents.values())
+        and fingerprint(documents['recoveryPolicy']) == RECOVERY_POLICY_SHA256
+        and documents['recoveryPolicy']['preflight']['services'] == semantic['original']
+        and fingerprint(recovery_marker(documents['recoveryPolicy']))
+            == semantic['fixedRecovery']['recoveryMarkerSha256']
+        and all(hashlib.sha256(historical_files[name]).hexdigest()
+        == semantic['historicalFiles'][name] for name in fields)
+        and fingerprint(documents['firstFailure']) == RECOVERY_FAILURE_SHA256
+        and fingerprint(documents['secondFailure']) == RESTORED_FAILURE_SHA256)
+    workspace = documents['workspaceRecordBytesSha256']
+    restored = documents['restoredRecordBytesSha256']
+    _declaration_require(type(workspace) is dict and type(restored) is dict
+        and type(workspace.get('before')) is dict and type(restored.get('after')) is dict
+        and all(type(workspace['before'].get(n)) is dict and type(restored['after'].get(n)) is dict
+                for n in ('api', 'admin'))
+        and workspace.get('after') == semantic['original']
+        and restored.get('before') == semantic['original']
+        and documents['workspaceManifestBytesSha256'].get('commit') == BASELINE_COMMIT
+        and documents['restoredManifestBytesSha256'].get('commit') == RESTORED_COMMIT
+        and documents['workspaceBuildProofBytesSha256'].get('commit') == BASELINE_COMMIT
+        and documents['restoredBuildProofBytesSha256'].get('commit') == RESTORED_COMMIT
+        and all(semantic['anchors'][name] == {
+            'oldBeforeContainerId': workspace.get('before', {}).get(name, {}).get('containerId'),
+            'candidateAfterContainerId': restored.get('after', {}).get(name, {}).get('containerId')}
+            for name in ('api', 'admin')))
+    return {'producer': copy.deepcopy(producer), 'historicalFiles': copy.deepcopy(semantic['historicalFiles']),
+            'proofSha256': fingerprint(value)}
+
+
+def declaration_equivalence_publication_binding(d, *, origin, second, preflight_raw, build_raw,
+        record_raw, manifest_raw, producer, archive_bytes, historical_files):
+    """Artifact seal only; caller must first run all original full validators.
+
+    This does not verify the ordinary workspace manifest/build-proof semantics,
+    acquire private files, or grant a successful status. The source adapter must
+    bind any separately executed measurement helper bytes to the same archive.
+    """
+    _declaration_exact(origin, DECLARATION_EQUIVALENCE_FIELDS['origin'])
+    _declaration_require(type(origin['version']) is int and origin['version'] == 2
+        and origin.get('scope') == 'PENDING_ONLINE_MIGRATION'
+        and origin.get('priorPublications') == [] and 'restoredConfigurationProof' in origin)
+    first = origin['restoredConfigurationProof']
+    declaration_equivalence_source_binding(d, first, producer=producer,
+        archive_bytes=archive_bytes, historical_files=historical_files)
+    seal = declaration_equivalence_pair_seal(d, first, second, preflight_raw)
+    before = closed_recovery_json(d, preflight_raw)
+    build, record, manifest = (closed_recovery_json(d, raw) for raw in (build_raw, record_raw, manifest_raw))
+    _declaration_require(all(type(v) is dict for v in (before, build, record, manifest))
+        and type(manifest.get('pendingOnlineMigration')) is dict
+        and type(origin.get('restoredOrigin')) is dict
+        and origin.get('baselineManifestSha256') == first['semantic']['historicalFiles']['workspaceManifestBytesSha256']
+        and fingerprint(origin.get('recoveryMarker')) == first['semantic']['fixedRecovery']['recoveryMarkerSha256']
+        and origin['restoredOrigin'].get('manifestSha256')
+            == first['semantic']['historicalFiles']['restoredManifestBytesSha256']
+        and origin['restoredOrigin'].get('recordSha256')
+            == first['semantic']['historicalFiles']['restoredRecordBytesSha256']
+        and before.get('pendingOnlineMigrationOrigin') == origin
+        and record.get('pendingOnlineMigrationOrigin') == origin
+        and record.get('pendingOnlineConfigurationMeasurement') == second
+        and record.get('before') == first['semantic']['actual'] == origin.get('services')
+        and build.get('commit') == manifest.get('commit') == producer['commit']
+        and build.get('sourceTree') == manifest.get('sourceTree') == producer['sourceTree']
+        and build.get('pendingOnlineOriginSha256') == fingerprint(origin)
+        and build.get('pendingOnlinePreflightSha256') == seal['preflightBytesSha256']
+        and build.get('declarationEquivalenceSeal') == {k: seal[k] for k in
+            ('kind', 'version', 'preflightProofSha256', 'semanticSha256')}
+        and manifest['pendingOnlineMigration'].get('originSha256') == fingerprint(origin)
+        and manifest['pendingOnlineMigration'].get('configurationEquivalenceSeal') == seal
+        and type(before.get('commandId')) is str
+        and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', before['commandId']))
+    _declaration_states(record.get('after'))
+    _declaration_require(all(record['after'][n] == record['before'][n] for n in PRESERVED))
+    return {'kind': DECLARATION_EQUIVALENCE_KIND, 'version': DECLARATION_EQUIVALENCE_VERSION,
+        'producer': copy.deepcopy(producer), 'preflightCommandId': before['commandId'],
+        'preflightBytesSha256': seal['preflightBytesSha256'],
+        'manifestBytesSha256': hashlib.sha256(manifest_raw).hexdigest(),
+        'recordBytesSha256': hashlib.sha256(record_raw).hexdigest(),
+        'buildProofBytesSha256': hashlib.sha256(build_raw).hexdigest(),
+        'buildProofCanonicalSha256': fingerprint(build),
+        'archiveInventorySha256': producer['archiveInventorySha256'],
+        'configurationEquivalenceSeal': seal, 'afterServices': copy.deepcopy(record['after']),
+        'configurationAfter': copy.deepcopy(record.get('configurationAfter'))}
+
+
+def declaration_equivalence_issuer_binding(d, publication, *, live_services, live_configuration, execution_producer):
+    """Require the issuer's actual new runtime/source measurements, never a bool."""
+    _declaration_exact(publication, ('kind', 'version', 'producer', 'preflightCommandId',
+        'preflightBytesSha256', 'manifestBytesSha256', 'recordBytesSha256', 'buildProofBytesSha256', 'buildProofCanonicalSha256',
+        'archiveInventorySha256', 'configurationEquivalenceSeal', 'afterServices', 'configurationAfter'))
+    _declaration_states(live_services)
+    _declaration_exact(live_configuration, ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
+                                          SCHEMA_FILE, 'compose.release.json'))
+    _declaration_require(execution_producer == publication['producer']
+        and live_services == publication['afterServices']
+        and all(_declaration_hash(v) for v in live_configuration.values())
+        and live_configuration == publication['configurationAfter'])
+    return {k: copy.deepcopy(v) for k, v in publication.items()
+            if k not in ('afterServices', 'configurationAfter')}
+
+
+def declaration_equivalence_receipt_binding(d, publication, invocation_raw, *, command_id, wire_decoder):
+    """Later cold requires an independently acquired ended SSM invocation.
+
+    Raw bytes must come from the trusted transport, not the release record.
+    This pure comparison cannot establish AWS/file-source authority itself or
+    replace the original full readback validator. Its seal is not a trust flag.
+    The decoder is independently bound to the producer archive by the caller;
+    framing is decoded without replacing the original invocation bytes.
+    """
+    invocation = closed_recovery_json(d, invocation_raw)
+    _declaration_require(type(invocation) is dict and invocation.get('Status') == 'Success'
+        and type(invocation.get('ResponseCode')) is int and invocation['ResponseCode'] == 0
+        and type(command_id) is str
+        and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id)
+        and invocation.get('CommandId') == command_id
+        and type(invocation.get('StandardOutputContent')) is str)
+    _declaration_require(callable(wire_decoder))
+    try:
+        result = wire_decoder(invocation['StandardOutputContent'], scope='API_ADMIN_WORKSPACE')
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_PROOF_INVALID') from None
+    seal_fields = ('kind', 'version', 'producer', 'preflightCommandId', 'preflightBytesSha256',
+        'manifestBytesSha256', 'recordBytesSha256', 'buildProofBytesSha256', 'buildProofCanonicalSha256',
+        'archiveInventorySha256', 'configurationEquivalenceSeal')
+    expected = {k: publication[k] for k in seal_fields}
+    _declaration_require(type(result) is dict
+        and result.get('status') == 'API_ADMIN_WORKSPACE_VERIFIED'
+        and result.get('declarationEquivalencePublication') == expected)
+    return {**expected, 'readbackCommandId': command_id}
+
+
+def declaration_equivalence_successor_preflight_binding(d, preflight_raw, *, initial_origin,
+        initial_publication, current_producer, current_services, current_archive_bytes,
+        initial_invocation_raw, initial_command_id, wire_decoder):
+    """Bind F_B to B's run and A.after while retaining P1_A; no P2_B."""
+    first = initial_origin.get('restoredConfigurationProof') if type(initial_origin) is dict else None
+    validate_declaration_equivalence_proof(d, first)
+    declaration_equivalence_receipt_binding(d, initial_publication, initial_invocation_raw,
+                                           command_id=initial_command_id, wire_decoder=wire_decoder)
+    before = closed_recovery_json(d, preflight_raw)
+    _declaration_require(type(before) is dict and type(current_producer) is dict
+        and set(current_producer) == set(first['semantic']['producer'])
+        and current_producer != first['semantic']['producer'])
+    _declaration_require(all(type(current_producer[k]) is str and re.fullmatch(r'[a-f0-9]{40}', current_producer[k])
+        for k in ('commit', 'sourceTree')) and all(type(current_producer[k]) is str
+        and re.fullmatch(r'[1-9][0-9]*', current_producer[k]) for k in ('workflowRunId', 'workflowRunAttempt')))
+    inventory = archive_inventory(d, current_archive_bytes, current_producer['commit'], current_producer['sourceTree'])
+    _declaration_exact(current_producer['helpers'], DECLARATION_EQUIVALENCE_HELPERS)
+    _declaration_require(fingerprint(inventory) == current_producer['archiveInventorySha256']
+        and all(inventory.get(n, {}).get('sha256') == v for n, v in current_producer['helpers'].items()))
+    context = before.get('pendingOnlineMigrationOrigin')
+    _declaration_require(type(context) is dict and set(context) == set(initial_origin)
+        and all(context[k] == initial_origin[k] for k in initial_origin
+                if k not in ('services', 'priorPublications'))
+        and type(context.get('priorPublications')) is list and len(context['priorPublications']) == 1)
+    prior = context['priorPublications'][0]
+    _declaration_exact(prior, ('release', 'commit', 'sourceTree', 'manifestSha256',
+                              'recordSha256', 'buildProofSha256'))
+    _declaration_states(current_services)
+    _declaration_require(current_services == initial_publication['afterServices'] == before.get('services')
+        == context.get('services') and before.get('mode') == 'preflight'
+        and before.get('status') == 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED'
+        and before.get('commit') == initial_publication['producer']['commit']
+        and before.get('releaseCandidateCommit') == current_producer['commit']
+        and before.get('workflowRunId') == current_producer['workflowRunId']
+        and before.get('workflowRunAttempt') == current_producer['workflowRunAttempt']
+        and prior['commit'] == initial_publication['producer']['commit']
+        and prior['sourceTree'] == initial_publication['producer']['sourceTree']
+        and prior['manifestSha256'] == initial_publication['manifestBytesSha256']
+        and prior['recordSha256'] == initial_publication['recordBytesSha256']
+        and prior['buildProofSha256'] == initial_publication['buildProofCanonicalSha256'])
+    return {'initialProofSha256': fingerprint(first), 'preflightBytesSha256': hashlib.sha256(preflight_raw).hexdigest(),
+            'currentProducer': copy.deepcopy(current_producer), 'currentServicesSha256': fingerprint(current_services)}
+
+
+def _declaration_source_bytes(path, *, limit=256 * 1024):
+    """Read one owned ordinary file without following a path or inode change."""
+    path = Path(path)
+    _declaration_require(path.is_absolute() and path.parent.resolve() == path.parent)
+    before = path.lstat()
+    _declaration_require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
+        and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) in (0o600, 0o644, 0o664)
+        and 0 < before.st_size <= limit)
+
+    def identity(row):
+        return (row.st_dev, row.st_ino, row.st_uid, row.st_gid, row.st_mode, row.st_nlink,
+                row.st_size, row.st_mtime_ns, row.st_ctime_ns)
+
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        _declaration_require(identity(os.fstat(stream.fileno())) == identity(before))
+        raw = stream.read(limit + 1)
+        _declaration_require(len(raw) == before.st_size and len(raw) <= limit
+            and identity(os.fstat(stream.fileno())) == identity(before)
+            and identity(path.lstat()) == identity(before))
+    return raw
+
+
+def declaration_equivalence_materials(d, directory, recovery, *, producer, phase):
+    """Acquire real source bytes for the trusted first/issuer/cold entry points.
+
+    LIVE verifies the executing helpers against the actual immutable archive.
+    COLD reads the old producer archive and stored historical files; it never
+    inspects a retired container. Neither phase grants authority to a proof or
+    replaces the caller's original historical/runtime/ended-command validators.
+    The phase is selected by that fixed entry, never by a proof/configuration.
+    """
+    _declaration_require(phase in ('LIVE', 'COLD'))
+    _declaration_exact(producer, ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'))
+    _declaration_require(all(type(producer[k]) is str and re.fullmatch('[a-f0-9]{40}', producer[k])
+        for k in ('commit', 'sourceTree')) and all(type(producer[k]) is str
+        and re.fullmatch('[1-9][0-9]*', producer[k]) for k in ('workflowRunId', 'workflowRunAttempt')))
+    directory = Path(directory)
+    root = d.BASE / 'releases'
+    _declaration_require(directory.parent == root and directory.is_dir()
+        and directory.resolve() == directory and not directory.is_symlink()
+        and re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + BASELINE_COMMIT[:12], directory.name)
+        and directory.stat().st_uid == os.geteuid()
+        and stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0)
+    _declaration_require(type(recovery) is dict and type(recovery.get('restored')) is dict
+        and fingerprint(recovery.get('policy')) == RECOVERY_POLICY_SHA256
+        and recovery.get('marker') == recovery_marker(recovery['policy']))
+    first, second = Path(recovery['source']), Path(recovery['restored']['source'])
+    for folder, commit in ((first, RECOVERY_COMMIT), (second, RESTORED_COMMIT)):
+        _declaration_require(folder.parent == root and folder.is_dir() and folder.resolve() == folder
+            and not folder.is_symlink() and folder.stat().st_uid == os.geteuid()
+            and stat.S_IMODE(folder.stat().st_mode) & 0o077 == 0
+            and re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + commit[:12], folder.name))
+    old = legacy(d)
+    paths = {
+        'workspaceManifestBytesSha256': directory / 'release-manifest.json',
+        'workspaceRecordBytesSha256': directory / old.STATE_FILE,
+        'workspaceBuildProofBytesSha256': directory / old.PROOF_FILE,
+        'restoredManifestBytesSha256': second / 'release-manifest.json',
+        'restoredRecordBytesSha256': second / STATE_FILE,
+        'restoredBuildProofBytesSha256': second / PROOF_FILE,
+        'firstFailure': first / FAILURE_FILE, 'secondFailure': second / FAILURE_FILE,
+        'recoveryPolicy': Path(__file__).with_name(RECOVERY_FILE)}
+    historical = {name: _declaration_source_bytes(path) for name, path in paths.items()}
+    documents = {name: closed_recovery_json(d, raw) for name, raw in historical.items()}
+    workspace_files = recovery['restored'].get('workspaceOriginFiles')
+    _declaration_require(type(workspace_files) is dict and all(
+        _declaration_hash(workspace_files.get(filename))
+        and hashlib.sha256(historical[name]).hexdigest() == workspace_files[filename]
+        for name, filename in (
+            ('workspaceManifestBytesSha256', 'release-manifest.json'),
+            ('workspaceRecordBytesSha256', old.STATE_FILE),
+            ('workspaceBuildProofBytesSha256', old.PROOF_FILE))))
+    _declaration_require(fingerprint(documents['recoveryPolicy']) == RECOVERY_POLICY_SHA256
+        and fingerprint(documents['firstFailure']) == RECOVERY_FAILURE_SHA256
+        and fingerprint(documents['secondFailure']) == RESTORED_FAILURE_SHA256
+        and documents['workspaceManifestBytesSha256'].get('commit') == BASELINE_COMMIT
+        and documents['workspaceBuildProofBytesSha256'].get('commit') == BASELINE_COMMIT
+        and documents['restoredManifestBytesSha256'].get('commit') == RESTORED_COMMIT
+        and documents['restoredBuildProofBytesSha256'].get('commit') == RESTORED_COMMIT
+        and documents['restoredBuildProofBytesSha256'] == recovery['policy']['restoredAttempt']['buildProof']
+        and fingerprint(documents['restoredBuildProofBytesSha256']) == RESTORED_PROOF_SHA256
+        and hashlib.sha256(historical['restoredManifestBytesSha256']).hexdigest()
+            == recovery['restored']['manifestSha256']
+        and hashlib.sha256(historical['restoredRecordBytesSha256']).hexdigest()
+            == recovery['restored']['recordSha256'])
+    key = (producer['commit'], producer['sourceTree'])
+    cache = getattr(d, '_declarationSourceArchiveCache', {})
+    raw = cache.get(key)
+    if raw is None:
+        url = ('https://github.com/wangchaozhuanyong/id-business-system/archive/'
+               + producer['commit'] + '.tar.gz')
+        with urllib.request.urlopen(url, timeout=60) as response:
+            raw = response.read(128 * 1024 * 1024 + 1)
+    inventory = archive_inventory(d, raw, producer['commit'], producer['sourceTree'])
+    names = (*DECLARATION_EQUIVALENCE_HELPERS,
+        'scripts/production-release/online-recharge-declaration-measurement.py',
+        'scripts/production-release/api-admin-pending-receipt-wire.py')
+    _declaration_require(all(n in inventory for n in names))
+    if phase == 'LIVE':
+        for name in names:
+            actual = _declaration_source_bytes(Path(__file__).with_name(Path(name).name),
+                limit=2 * 1024 * 1024 if name.endswith('/remote-deploy.py') else 1024 * 1024)
+            _declaration_require(hashlib.sha256(actual).hexdigest() == inventory[name]['sha256'])
+    # Cache bytes only after validating the entire tree. Every LIVE invocation
+    # still rechecks the executing bytes and all historical files above.
+    d._declarationSourceArchiveCache = {**cache, key: raw}
+    full_producer = {**producer, 'archiveInventorySha256': fingerprint(inventory),
+        'helpers': {n: inventory[n]['sha256'] for n in DECLARATION_EQUIVALENCE_HELPERS}}
+    return {'producer': full_producer, 'archive_bytes': raw, 'historical_files': historical}
+
+
+def _declaration_saved_artifact(d, producer, filename):
+    _declaration_exact(producer, ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'))
+    _declaration_require(all(type(producer[k]) is str and re.fullmatch('[a-f0-9]{40}', producer[k])
+        for k in ('commit', 'sourceTree')) and all(type(producer[k]) is str
+        and re.fullmatch('[1-9][0-9]*', producer[k]) for k in ('workflowRunId', 'workflowRunAttempt')))
+    _declaration_require(filename in ('api-workspace-preflight-result.json', 'api-workspace-readback-invocation.json'))
+    folder = d.BASE / '.staging' / ('api-workspace-preflight-' + producer['commit'] + '-'
+        + producer['workflowRunId'] + '-' + producer['workflowRunAttempt'])
+    _declaration_require(folder.is_dir() and folder.resolve() == folder and not folder.is_symlink()
+        and folder.stat().st_uid == os.geteuid() and stat.S_IMODE(folder.stat().st_mode) == 0o700)
+    path = folder / filename
+    _declaration_require(stat.S_IMODE(path.lstat().st_mode) == 0o600)
+    return _declaration_source_bytes(path, limit=65535)
+
+
+def declaration_equivalence_preflight_bytes(d, *, producer, expected_sha):
+    """Read the one transport-installed F_A/F_B, with exact original bytes."""
+    _declaration_require(_declaration_hash(expected_sha))
+    raw = _declaration_saved_artifact(d, producer, 'api-workspace-preflight-result.json')
+    _declaration_require(hashlib.sha256(raw).hexdigest() == expected_sha)
+    value = closed_recovery_json(d, raw)
+    _declaration_require(type(value) is dict and value.get('mode') == 'preflight'
+        and value.get('status') == 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED'
+        and value.get('releaseCandidateCommit') == producer['commit']
+        and value.get('workflowRunId') == producer['workflowRunId']
+        and value.get('workflowRunAttempt') == producer['workflowRunAttempt']
+        and type(value.get('commandId')) is str
+        and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['commandId']))
+    return raw
+
+
+def _declaration_instance_id():
+    """Get the current EC2 identity from IMDSv2, without ambient proxy routing."""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, message, headers, url):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    request = urllib.request.Request('http://169.254.169.254/latest/api/token',
+        method='PUT', headers={'X-aws-ec2-metadata-token-ttl-seconds': '60'})
+    with opener.open(request, timeout=3) as response:
+        token = response.read(4097)
+    _declaration_require(0 < len(token) <= 4096 and b'\n' not in token and b'\r' not in token)
+    request = urllib.request.Request('http://169.254.169.254/latest/meta-data/instance-id',
+        headers={'X-aws-ec2-metadata-token': token.decode('ascii')})
+    with opener.open(request, timeout=3) as response:
+        instance_id = response.read(129).decode('ascii')
+    _declaration_require(re.fullmatch('i-(?:[a-f0-9]{8}|[a-f0-9]{17})', instance_id))
+    return instance_id
+
+
+def declaration_equivalence_saved_invocation(d, *, producer):
+    """Read the immutable transport-installed ended Q invocation, without rewrite.
+
+    This file is installed only after trusted AWS transport/full validation.
+    The cold caller must still verify original publication files and the actual
+    finite decoder from that producer archive, then bind the decoded Q seal.
+    """
+    raw = _declaration_saved_artifact(d, producer, 'api-workspace-readback-invocation.json')
+    value = closed_recovery_json(d, raw)
+    _declaration_require(type(value) is dict and value.get('Status') == 'Success'
+        and type(value.get('ResponseCode')) is int and value['ResponseCode'] == 0
+        and value.get('StandardErrorContent') == ''
+        and type(value.get('StandardOutputContent')) is str
+        and type(value.get('CommandId')) is str
+        and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['CommandId']))
+    # The immutable file is installed by the fixed, fully validated AWS client.
+    # A cold reader still binds the ended command to this actual host. It never
+    # obtains host identity or completion metadata from a P/Q claim.
+    _declaration_require(value.get('InstanceId') == _declaration_instance_id()
+        and value.get('DocumentName') == 'AWS-RunShellScript'
+        and value.get('PluginName') == 'aws:runShellScript'
+        and type(value.get('ExecutionEndDateTime')) is str
+        and re.fullmatch('[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(?:Z|\\+00:00)', value['ExecutionEndDateTime']))
+    import datetime
+    ended = datetime.datetime.fromisoformat(value['ExecutionEndDateTime'].replace('Z', '+00:00'))
+    _declaration_require(ended.utcoffset() == datetime.timedelta(0)
+        and ended <= datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5))
+    return {'raw_bytes': raw, 'command_id': value['CommandId']}
+
+
+def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose, preflight_raw=None):
+    """Fixed formal entry remains closed until production generator review.
+
+    The inventory and LOCAL fixture cannot activate this entry. Actual P
+    construction will be added only after the real generator/resource sources
+    have been independently measured and frozen.
+    """
+    _declaration_require(purpose in ('INDEPENDENT_PREFLIGHT', 'DEPLOYMENT_REMEASURE'))
+    _declaration_require(preflight_raw is None if purpose == 'INDEPENDENT_PREFLIGHT'
+                         else type(preflight_raw) is bytes and 0 < len(preflight_raw) < 65536)
+    # There is no caller-provided registry, trusted boolean or fixture fallback.
+    raise RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')

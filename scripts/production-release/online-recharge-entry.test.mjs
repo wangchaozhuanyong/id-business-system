@@ -291,11 +291,11 @@ test('read-only and release transports seal controllers and recovery policy and 
   );
   assert.match(
     dispatch,
-    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
+    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py'\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
   );
   assert.match(
     dispatch,
-    /pinned\.extend\(\[f'curl [^\n]+\{sha\}\/scripts\/production-release\/\{name\} -o \{target_path\}',\n\s+f'echo "\{digest\} {2}\{target_path\}" \| sha256sum -c - >\/dev\/null'\]\)\n {4}commands\[2:3\] = pinned/
+    /pinned\.extend\(\[f'curl [^\n]+\{sha\}\/scripts\/production-release\/\{name\} -o \{target_path\}',\n\s+f'echo "\{digest\} {2}\{target_path\}" \| sha256sum -c - >\/dev\/null'\]\)\n {4}if workspace_transport:[\s\S]*\n {4}else:\n {8}commands\[2:3\] = pinned/
   );
   assert.equal((dispatch.match(/online-recharge-readonly\.py filter-deploy/g) || []).length, 2);
   assert.match(helper, /closed_json\(value\.get\('StandardOutputContent'/);
@@ -355,6 +355,92 @@ test('actual dispatch generator binds all four carriers before deployment and re
     rmSync(join(sourceDirectory, carriers.at(-1)));
     rmSync(parametersFile);
     assert.throws(invoke);
+    assert.throws(() => readFileSync(parametersFile));
+  });
+});
+
+test('workspace dispatch binds the original preflight and all eight carriers before producing bounded parameters', () => {
+  const dispatch = readFileSync(join(scripts, 'dispatch.sh'), 'utf8');
+  const generator = dispatch.split("<<'PY'\n")[1].split('\nPY\n')[0];
+  const carriers = [
+    'remote-deploy.py',
+    'api-admin-scope.py',
+    'online-recharge-scope.py',
+    'online-recharge-recovery.json',
+    'api-admin-pending-projection.py',
+    'api-admin-pending-receipt-wire.py',
+    'online-recharge-declaration-measurement.py',
+    'api-admin-readonly.py'
+  ];
+  fixture(({ env, folder, log }) => {
+    const sourceDirectory = join(folder, 'scripts/production-release');
+    const outputDirectory = join(folder, '.deploy/production-release');
+    mkdirSync(sourceDirectory, { recursive: true });
+    mkdirSync(outputDirectory, { recursive: true });
+    for (const name of carriers)
+      writeFileSync(join(sourceDirectory, name), readFileSync(join(scripts, name)));
+    const preflight = {
+      status: 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED',
+      mode: 'preflight',
+      releaseCandidateCommit: commit,
+      workflowRunId: env.GITHUB_RUN_ID,
+      workflowRunAttempt: env.GITHUB_RUN_ATTEMPT
+    };
+    const raw = JSON.stringify(preflight, null, 2) + '\n';
+    const sha = createHash('sha256').update(raw).digest('hex');
+    const proof = {
+      pendingOnlineProjection: { fixture: 'transport-only' },
+      pendingOnlinePreflightSha256: sha
+    };
+    const proofPath = join(outputDirectory, 'api-workspace-build-proof.json');
+    const preflightPath = join(outputDirectory, 'api-workspace-preflight-result.json');
+    writeFileSync(proofPath, JSON.stringify(proof));
+    writeFileSync(preflightPath, raw);
+    const parametersFile = join(folder, 'workspace-parameters.json');
+    const generationEnv = {
+      ...env,
+      PATH: process.env.PATH,
+      RELEASE_OPERATION: 'release_api_workspace'
+    };
+    for (const key of ['REUSE_IMAGE_COMMIT', 'REUSE_IMAGE_RUN_ID', 'REUSE_IMAGE_RUN_ATTEMPT'])
+      delete generationEnv[key];
+    const invoke = () =>
+      execFileSync('python3', ['-B', '-c', generator, parametersFile], {
+        cwd: folder,
+        env: generationEnv,
+        stdio: 'pipe'
+      });
+    invoke();
+    const paramsRaw = readFileSync(parametersFile);
+    const parameters = JSON.parse(paramsRaw);
+    assert.ok(paramsRaw.length < 20 * 1024);
+    assert.equal(parameters.commands.filter((line) => line.includes('sha256sum -c -')).length, 8);
+    assert.equal(parameters.commands.filter((line) => line.startsWith('curl ')).length, 8);
+    assert.match(
+      parameters.commands[2],
+      new RegExp(
+        `readonly release_controller_directory=/opt/id-business-v2/\\.staging/oidc-${commit}`
+      )
+    );
+    assert.ok(parameters.commands[2].endsWith(`${commit}/scripts/production-release`));
+    for (const name of carriers) {
+      const digest = createHash('sha256')
+        .update(readFileSync(join(scripts, name)))
+        .digest('hex');
+      assert.ok(
+        parameters.commands.some(
+          (line) =>
+            line ===
+            `echo "${digest}  $release_controller_directory/${name}" | sha256sum -c - >/dev/null`
+        )
+      );
+    }
+    assert.ok(parameters.commands.at(-1).includes(`--api-workspace-preflight-sha256 ${sha}`));
+    assert.equal(readFileSync(log, 'utf8'), '');
+    rmSync(parametersFile);
+    writeFileSync(preflightPath, JSON.stringify(preflight));
+    assert.throws(invoke);
+    assert.equal(readFileSync(log, 'utf8'), '');
     assert.throws(() => readFileSync(parametersFile));
   });
 });

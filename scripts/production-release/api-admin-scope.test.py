@@ -57,6 +57,30 @@ migration = load('api_admin_migration_scope', 'api-admin-scope.py', 'API_ADMIN_M
 workspace = load('api_workspace_scope', 'api-admin-scope.py', 'API_ADMIN_WORKSPACE')
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
+
+@contextmanager
+def tracked_online_source():
+    """Use real tracked bytes; ignored local executor installs are not source."""
+    paths = (*workspace.ONLINE_SOURCE_SEALS, workspace.MIGRATION_ROOT,
+             *workspace.CONFIG_FILES, workspace.MIGRATION_SEED,
+             'scripts/production-release/online-recharge-recovery.json')
+    names = subprocess.check_output(['git', 'ls-files', '-z', '--', *paths], cwd=ROOT)
+    with tempfile.TemporaryDirectory(prefix='tracked-online-source-', dir=RUNTIME) as temporary:
+        directory = Path(temporary)
+        for name in names.decode().split('\0'):
+            if not name:
+                continue
+            relative = Path(name)
+            if relative.is_absolute() or '..' in relative.parts:
+                raise RuntimeError('INVALID_TRACKED_FIXTURE')
+            original = ROOT / relative
+            if not original.is_file() or original.is_symlink():
+                raise RuntimeError('INVALID_TRACKED_FIXTURE')
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original.read_bytes())
+        yield directory
+
 # Workspace publication has its own reviewed historical Compose and edge seal.
 # New checkout services must not redefine that scope. Keep only its configuration
 # and auto-registration source structure, never a second copy of this repository.
@@ -1003,7 +1027,8 @@ class ReleaseFailureTests(unittest.TestCase):
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
                     migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
-                    workspace_initialized=False, workspace_stop_error=None, workspace_rollback_error=None, online_lifecycle=None):
+                    workspace_initialized=False, workspace_stop_error=None, workspace_rollback_error=None, online_lifecycle=None,
+                    pending_origin=None, pending_proof_origin_sha=None, pending_origin_after_build=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1029,6 +1054,16 @@ class ReleaseFailureTests(unittest.TestCase):
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
             candidate = migration_proof() if scope.MIGRATION_MODE else registration_proof() if scope.REGISTRATION else workspace_proof() if scope.WORKSPACE else proof()
+            if pending_origin is not None:
+                candidate['pendingOnlineProjection'] = {'fixture': 'separately-tested-projection'}
+                if pending_proof_origin_sha != 'MISSING':
+                    candidate['pendingOnlineOriginSha256'] = (scope.fingerprint(pending_origin)
+                        if pending_proof_origin_sha is None else pending_proof_origin_sha)
+                projection = scope.pending_projection()
+                stack.enter_context(patch.object(scope, 'pending_projection', return_value=SimpleNamespace(
+                    __file__=projection.__file__, validate_record=MagicMock())))
+                controller_projection = stack.enter_context(patch.object(scope, 'apply_pending_runtime_projection'))
+                stack.enter_context(patch.object(scope, 'pending_online_guard'))
             args = SimpleNamespace(admin_only=False, image_commit=None, image_run_id=None, image_run_attempt=None,
                 post_cleanup_seal_sha256=None, order_archive_seal_sha256=None, order_archive_prepared_images_sha256=None,
                 api_admin_build_proof=base64.b64encode(json.dumps(candidate).encode()).decode(), api_admin_migration_only=scope.MIGRATION_MODE,
@@ -1090,7 +1125,8 @@ class ReleaseFailureTests(unittest.TestCase):
                     runtime.compose(original, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name))
             archive_data = io.BytesIO()
             with tarfile.open(fileobj=archive_data, mode='w:gz') as archive:
-                for name in ('remote-deploy.py', 'api-admin-scope.py', *(('online-recharge-scope.py',) if online_lifecycle is not None else ())):
+                for name in ('remote-deploy.py', 'api-admin-scope.py', *(('online-recharge-scope.py',) if online_lifecycle is not None else ()),
+                             *(('api-admin-pending-projection.py',) if pending_origin is not None else ())):
                     path = Path(__file__).with_name(name)
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
@@ -1132,6 +1168,11 @@ class ReleaseFailureTests(unittest.TestCase):
             stack.enter_context(patch.object(scope, 'source_tree', return_value=TREE))
             stack.enter_context(patch.object(scope, 'configuration_hashes', return_value={'config': 'hash'}))
             evidence = {'manifestSha256': scope.hashlib.sha256(b'{}').hexdigest(), 'environmentSha256': 'env'}
+            if pending_origin is not None:
+                if pending_origin_after_build is not None:
+                    pending_origin = pending_origin_after_build
+                evidence.update(pendingOnlineMigrationOrigin=pending_origin, onlinePublished=False, migrationPerformed=False)
+                controller._pendingOnlineMigrationOrigin = pending_origin
             if scope.WORKSPACE:
                 evidence['workspaceVolume'] = {'name': 'fixture_auto_registration_data', 'status': 'ABSENT', 'identitySha256': None}
                 evidence['workspacePreparation'] = {'status': 'ABSENT', 'backupRequired': False}
@@ -1213,6 +1254,11 @@ class ReleaseFailureTests(unittest.TestCase):
             manifests = list((base / 'releases').glob('*/release-manifest.json'))
             new_manifest = next((json.loads(p.read_text()) for p in manifests if p.parent != previous), None)
             failure_files = list((base / 'releases').glob('*/' + scope.FAILURE_FILE))
+            if pending_origin is not None:
+                controller.pending_projection = controller_projection
+                controller.pending_build_proof = candidate
+                records = list((base / 'releases').glob('*/' + scope.STATE_FILE))
+                controller.pending_record = json.loads(records[-1].read_text()) if records else None
             return code, result, controller, new_manifest, bool(failure_files)
 
     def test_success_updates_only_api_admin_and_drops_historical_classification(self):
@@ -3372,7 +3418,9 @@ class WorkspaceScopeTests(unittest.TestCase):
 
     def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
         commands = '\n'.join(transport.parameters(COMMIT, OLD, 'preflight', 'API_ADMIN_WORKSPACE')['commands'])
-        self.assertEqual(commands.count('sha256sum -c -'), 4)
+        self.assertEqual(commands.count('sha256sum -c -'), 7)
+        for name in ('api-admin-readonly.py', 'api-admin-pending-receipt-wire.py'):
+            self.assertIn('/' + COMMIT + '/scripts/production-release/' + name, commands)
         self.assertIn('--api-workspace-preflight', commands)
         script = ROOT / 'scripts/production-release/validate-release-selection.sh'
         for operation in ('verify_api_workspace', 'release_api_workspace'):
@@ -3414,7 +3462,10 @@ class WorkspaceScopeTests(unittest.TestCase):
         self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
         self.assertNotIn('--image-commit', commands)
         self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 4)
+        self.assertEqual(commands.count('sha256sum -c -'), 8)
+        for name in ('api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
+                     'api-admin-readonly.py'):
+            self.assertIn('/' + name, commands)
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
@@ -3849,7 +3900,8 @@ class OnlineRecoveredOriginTests(unittest.TestCase):
     def test_fixed_policy_and_source_bytes_are_required_and_part_of_origin_seal(self):
         online, _ = d.online_recharge_scope()
         self.assertEqual(online.fingerprint(online.recovery_policy(d)), online.RECOVERY_POLICY_SHA256)
-        workspace.workspace_online_sources(d, ROOT)
+        with tracked_online_source() as directory:
+            workspace.workspace_online_sources(d, directory)
         self.assertIn('scripts/production-release/online-recharge-recovery.json', workspace.ONLINE_ORIGIN_FILES)
         with self.recovered() as (controller, original, failed, published, *_):
             path = published / 'scripts/production-release/online-recharge-recovery.json'
@@ -4253,7 +4305,8 @@ class OnlineSuccessorTests(unittest.TestCase):
 
     def test_fixed_online_source_and_migration_seals_match_reviewed_module(self):
         controller = SimpleNamespace(**vars(d))
-        workspace.workspace_online_sources(controller, ROOT)
+        with tracked_online_source() as directory:
+            workspace.workspace_online_sources(controller, directory)
         self.assertEqual(workspace.workspace_configuration(controller, ROOT, ROOT)['composeSha256'], workspace.ONLINE_COMPOSE_SEAL)
         # The old workspace contract must not normalize the online addition as
         # a first bootstrap; publication of online itself is never performed.
@@ -4304,9 +4357,22 @@ class OnlineSuccessorTests(unittest.TestCase):
             folders = (*workspace.ONLINE_SOURCE_SEALS, workspace.MIGRATION_ROOT)
             files = (*workspace.CONFIG_FILES, workspace.MIGRATION_SEED, *workspace.ONLINE_ADMISSION_FILES,
                      'scripts/production-release/online-recharge-recovery.json')
+            # The source seal covers an immutable tracked tree. Local ignored
+            # executor environments and caches must not enter this fixture.
+            archive = subprocess.check_output(['git', 'archive', 'HEAD', '--', *folders], cwd=ROOT)
             for directory in (previous, candidate):
-                for name in folders:
-                    target = directory / name; target.parent.mkdir(parents=True, exist_ok=True); shutil.copytree(ROOT / name, target)
+                with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as tracked:
+                    for member in tracked.getmembers():
+                        path = Path(member.name)
+                        self.assertFalse(path.is_absolute() or '..' in path.parts)
+                        self.assertTrue(member.isdir() or member.isfile())
+                        target = directory / path
+                        if member.isdir():
+                            target.mkdir(parents=True, exist_ok=True)
+                        else:
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(tracked.extractfile(member).read())
+                            target.chmod(member.mode)
                 for name in files:
                     target = directory / name; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes((ROOT / name).read_bytes())
                 (directory / '.env.aws.production').write_bytes(b'synthetic-only')
@@ -4357,6 +4423,65 @@ class OnlineSuccessorTests(unittest.TestCase):
         controller = SimpleNamespace(require=d.require, BASE=RUNTIME)
         with self.assertRaisesRegex(RuntimeError, 'ONLINE_ORIGIN_CHANGED'):
             workspace.workspace_online_origin(controller, ROOT, value)
+
+
+class WorkspaceDeclarationProofVersionTests(unittest.TestCase):
+    def declaration(self):
+        result = workspace_proof()
+        result.update(version=2, pendingOnlineProjection={'fixture': 'projection'},
+            pendingOnlineOriginSha256='1' * 64, pendingOnlinePreflightSha256='2' * 64,
+            declarationEquivalenceSeal={'kind': 'API_FIXED_DECLARATION_EQUIVALENCE', 'version': 3,
+                'preflightProofSha256': '3' * 64, 'semanticSha256': '4' * 64})
+        return result
+
+    def test_explicit_v2_preserves_original_image_configuration_and_acceptance_checks(self):
+        controller = SimpleNamespace(require=d.require)
+        helper = SimpleNamespace(validate_record=MagicMock())
+        value = self.declaration()
+        with patch.object(workspace, 'pending_projection', return_value=helper):
+            self.assertIs(workspace.validate_proof(controller, value, COMMIT, TREE), value)
+            helper.validate_record.assert_called_once_with(controller, value['pendingOnlineProjection'], COMMIT, TREE)
+            for mutate in ('acceptance', 'image', 'configuration', 'source', 'run'):
+                changed = copy.deepcopy(value)
+                if mutate == 'acceptance': changed['acceptance']['businessActions'] = 1
+                elif mutate == 'image': changed['images']['api']['imageId'] = 'not-an-image'
+                elif mutate == 'configuration': changed['configuration']['volume'] = 'other'
+                elif mutate == 'source': changed['sourceTree'] = '0' * 40
+                else: changed['images']['api']['reference'] = changed['images']['api']['reference'].replace('-123-', '-999-')
+                with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
+                    workspace.validate_proof(controller, changed, COMMIT, TREE, REPOSITORY, '123', '1')
+
+    def test_partial_unknown_or_wrong_version_declaration_seals_are_rejected(self):
+        controller = SimpleNamespace(require=d.require)
+        helper = SimpleNamespace(validate_record=MagicMock())
+        for mutate in ('missing-f', 'missing-seal', 'missing-projection', 'extra', 'outer-bool',
+                       'outer-three', 'seal-bool', 'seal-two', 'seal-extra', 'bad-kind', 'bad-f', 'bad-p', 'bad-semantic'):
+            value = self.declaration()
+            if mutate == 'missing-f': value.pop('pendingOnlinePreflightSha256')
+            elif mutate == 'missing-seal': value.pop('declarationEquivalenceSeal')
+            elif mutate == 'missing-projection':
+                value.pop('pendingOnlineProjection'); value.pop('pendingOnlineOriginSha256')
+            elif mutate == 'extra': value['sourceMeasured'] = True
+            elif mutate == 'outer-bool': value['version'] = True
+            elif mutate == 'outer-three': value['version'] = 3
+            elif mutate == 'seal-bool': value['declarationEquivalenceSeal']['version'] = True
+            elif mutate == 'seal-two': value['declarationEquivalenceSeal']['version'] = 2
+            elif mutate == 'seal-extra': value['declarationEquivalenceSeal']['authority'] = True
+            elif mutate == 'bad-kind': value['declarationEquivalenceSeal']['kind'] = 'OTHER'
+            elif mutate == 'bad-f': value['pendingOnlinePreflightSha256'] = 'hash-only'
+            elif mutate == 'bad-p': value['declarationEquivalenceSeal']['preflightProofSha256'] = 'hash-only'
+            else: value['declarationEquivalenceSeal']['semanticSha256'] = 'hash-only'
+            with self.subTest(mutate=mutate), patch.object(workspace, 'pending_projection', return_value=helper):
+                with self.assertRaises(RuntimeError): workspace.validate_proof(controller, value, COMMIT, TREE)
+
+    def test_v1_cannot_silently_admit_new_fields_or_other_scopes_v2(self):
+        value = self.declaration(); value['version'] = 1
+        controller = SimpleNamespace(require=d.require)
+        for consumer in (scope, registration, migration, workspace):
+            with self.subTest(scope=consumer.SCOPE), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BUILD_PROOF_INVALID$'):
+                consumer.validate_proof(controller, value, COMMIT, TREE)
+        ordinary = workspace_proof()
+        self.assertIs(workspace.validate_proof(controller, ordinary, COMMIT, TREE), ordinary)
 
 
 if __name__ == '__main__':

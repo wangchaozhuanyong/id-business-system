@@ -437,8 +437,13 @@ jobs:
         run: bash scripts/production-release/validate-release-selection.sh
 
       - name: Verify API Admin baseline and idle workers before building
+        id: api_admin_preflight
         if: inputs.operation == 'verify_api_workspace' || inputs.operation == 'release_api_workspace' || inputs.operation == 'verify_api_admin' || inputs.operation == 'release_api_admin' || inputs.operation == 'verify_api_admin_migration' || inputs.operation == 'release_api_admin_migration' || inputs.operation == 'verify_api_registration' || inputs.operation == 'release_api_registration'
         run: python3 -B scripts/production-release/api-admin-readonly.py preflight
+
+      - name: Inventory fixed restored API generation sources without qualifying a release
+        if: failure() && steps.api_admin_preflight.outcome == 'failure' && (inputs.operation == 'verify_api_workspace' || inputs.operation == 'release_api_workspace')
+        run: python3 -B scripts/production-release/api-workspace-declaration-readonly.py
 
       - name: Hand off the bound completed registration window once
         if: inputs.operation == 'handoff_api_registration'
