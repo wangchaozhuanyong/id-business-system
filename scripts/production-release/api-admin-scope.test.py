@@ -2891,6 +2891,99 @@ class MigrationSuccessorTests(unittest.TestCase):
 
 
 
+class WorkspaceDiagnosticTests(unittest.TestCase):
+    def test_current_api_admin_image_and_content_failures_have_bounded_steps_and_preserve_gate(self):
+        for service in ('api', 'admin'):
+            for step in ('RUNTIME_IMAGE', 'RUNTIME_CONTENT'):
+                with self.subTest(service=service, step=step), tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+                    base = Path(temporary); current = base / 'releases/current'; current.mkdir(parents=True)
+                    (base / 'current').symlink_to(current)
+                    candidate = proof(); before = states()
+                    content = {'api': '1' * 64 + '  /app/apps/api/dist/main.js',
+                        'admin': '2' * 64 + '  /usr/share/nginx/html/index.html'}
+                    for name, row in candidate['images'].items():
+                        before[name].update(image=row['imageId'], reference=row['reference'])
+                        row.update(scope.content_summary(d, name, content[name]))
+                    manifest = {'commit': COMMIT, 'sourceTree': TREE, 'apiAdminPublication': {'version': 1},
+                        'images': {name: {'reference': row['reference'], 'digest': row['image'], 'sourceCommit': COMMIT}
+                            for name, row in before.items() if name in d.SERVICES}}
+                    (current / 'release-manifest.json').write_text(json.dumps(manifest))
+                    (current / scope.PROOF_FILE).write_text(json.dumps(candidate))
+                    controller = SimpleNamespace(**vars(d)); controller.BASE = base
+                    controller.api_admin_scope = MagicMock(return_value=(scope, controller))
+                    controller.service_state = lambda _directory, name, **kwargs: before[name]
+                    inspections = 0
+                    def inspect(*args, **kwargs):
+                        nonlocal inspections
+                        inspections += 1
+                        selected = next(name for name in scope.UPDATED if before[name]['image'] == args[-1])
+                        if inspections > 1 and selected == service and step == 'RUNTIME_IMAGE':
+                            raise RuntimeError('SENTINEL_PRIVATE_COMMAND_OUTPUT')
+                        return json.dumps([{'Id': before[selected]['image'], 'Architecture': 'amd64', 'Config': {'Labels': {
+                            'org.opencontainers.image.revision': COMMIT, 'id-business-v2.source-tree': TREE}}}])
+                    controller.run = inspect
+                    def compose(_directory, *args, **kwargs):
+                        if args[2] == service and step == 'RUNTIME_CONTENT':
+                            raise RuntimeError('SENTINEL_PRIVATE_COMMAND_OUTPUT')
+                        return content[args[2]]
+                    controller.compose = compose
+                    with patch.object(workspace, 'snapshot', return_value=before):
+                        with self.assertRaises(workspace.WorkspaceBaselineError) as failed:
+                            workspace.baseline(controller, COMMIT)
+                    diagnostic = failed.exception.workspaceDiagnostic
+                    self.assertEqual(str(failed.exception), 'API_ADMIN_BASELINE_PROJECTION_FAILED')
+                    self.assertEqual(diagnostic, {'phase': 'PROJECTION', 'step': step, 'scope': 'API_ADMIN',
+                        'service': service, 'errorType': 'RuntimeError', 'rawOutputSuppressed': True})
+                    self.assertTrue(workspace.valid_workspace_diagnostic(diagnostic))
+                    self.assertFalse(hasattr(controller, '_workspaceBaselineDiagnostic'))
+                    self.assertNotIn('SENTINEL', json.dumps(diagnostic))
+
+    def test_missing_retained_migration_image_is_identified_without_bypassing_origin_proof(self):
+        with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
+            for name in ('MIGRATION_SUCCESSOR_COMMIT', 'MIGRATION_SUCCESSOR_MANIFEST_SHA', 'MIGRATION_SUCCESSOR_PROOF_SHA'):
+                stack.enter_context(patch.object(workspace, name, getattr(scope, name)))
+            context = workspace.migration_successor_origin(controller, current)
+            controller._workspaceBaselineDiagnostic = {}
+            original = controller.run.side_effect
+            def inspect(*args, **kwargs):
+                if args[:3] == ('docker', 'image', 'inspect') and args[-1] == candidate['images']['migrate']['reference']:
+                    raise RuntimeError('SENTINEL_PRIVATE_IMAGE_ERROR')
+                return original(*args, **kwargs)
+            controller.run.side_effect = inspect
+            with self.assertRaisesRegex(RuntimeError, 'SENTINEL_PRIVATE_IMAGE_ERROR'):
+                workspace.migration_successor_guard(controller, current, context)
+            self.assertEqual(controller._workspaceBaselineDiagnostic,
+                {'step': 'MIGRATION_IMAGE', 'service': 'migrate', 'scope': 'API_ADMIN_MIGRATION'})
+            handoff.assert_not_called()
+
+    def test_schema_task_idle_and_window_calls_set_safe_steps_before_private_query_failure(self):
+        for name, step in [('migration_database_state', 'MIGRATION_SCHEMA'), ('registration_task', 'TASK_IDENTITY'),
+                ('jobs_idle', 'JOBS_IDLE'), ('registration_private', 'WINDOW_STATE')]:
+            with self.subTest(function=name):
+                controller = SimpleNamespace(**vars(d)); controller._workspaceBaselineDiagnostic = {}
+                controller.compose = MagicMock(side_effect=RuntimeError('SENTINEL_PRIVATE_QUERY_OUTPUT'))
+                controller.current_job_database = MagicMock(return_value='fixture_db')
+                with self.assertRaises(Exception):
+                    getattr(migration, name)(controller, ROOT)
+                self.assertEqual(controller._workspaceBaselineDiagnostic,
+                    {'step': step, 'service': 'none', 'scope': 'API_ADMIN_MIGRATION'})
+
+    def test_transport_only_preserves_exact_workspace_diagnostic_enums(self):
+        diagnostic = {'phase': 'PROJECTION', 'step': 'MIGRATION_IMAGE', 'service': 'migrate',
+            'scope': 'API_ADMIN_MIGRATION', 'errorType': 'RuntimeError', 'rawOutputSuppressed': True}
+        receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFICATION_FAILED', 'code': 'API_ADMIN_BASELINE_PROJECTION_FAILED',
+            'errorType': 'WorkspaceBaselineError', 'workspaceDiagnostic': diagnostic}
+        self.assertEqual(transport.safe_failure(receipt, 'API_ADMIN_WORKSPACE'), receipt)
+        for field, value in [('phase', 'SENTINEL'), ('step', []), ('service', 'secret-service'),
+                ('scope', 'OTHER'), ('errorType', 'PRIVATE_ERROR'), ('rawOutputSuppressed', False), ('extra', 'SENTINEL')]:
+            changed = {**diagnostic, field: value}
+            self.assertFalse(workspace.valid_workspace_diagnostic(changed))
+            self.assertNotIn('workspaceDiagnostic', transport.safe_failure(
+                {**receipt, 'workspaceDiagnostic': changed}, 'API_ADMIN_WORKSPACE'))
+        legacy = {**receipt, 'status': 'API_ADMIN_VERIFICATION_FAILED'}
+        self.assertNotIn('workspaceDiagnostic', transport.safe_failure(legacy))
+
+
 class WorkspaceScopeTests(unittest.TestCase):
     def test_existing_workspace_detection_includes_configuration_mount_and_retained_orphan_volume(self):
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:

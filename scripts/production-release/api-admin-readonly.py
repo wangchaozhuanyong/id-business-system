@@ -49,6 +49,13 @@ def safe_failure(receipt, scope='API_ADMIN'):
             and isinstance(receipt.get('code'), str) and re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', receipt['code'])
             and isinstance(receipt.get('errorType'), str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9]{0,63}', receipt['errorType'])):
         result = {key: receipt[key] for key in ('status', 'code', 'errorType')}
+        if scope == 'API_ADMIN_WORKSPACE':
+            import runpy
+            namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')),
+                init_globals={'SCOPE': scope})
+            workspace_diagnostic = receipt.get('workspaceDiagnostic')
+            if namespace['valid_workspace_diagnostic'](workspace_diagnostic):
+                result['workspaceDiagnostic'] = workspace_diagnostic
         diagnostic = receipt.get('privateDiagnostic')
         if (scope == 'API_REGISTRATION' and isinstance(diagnostic, dict)
                 and set(diagnostic) == {'confirmed', 'privatePostAttempted', 'failurePhase', 'privatePostHttpStatus',

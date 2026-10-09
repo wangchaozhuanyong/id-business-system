@@ -81,4 +81,7 @@ GitHub artifact：`api-workspace-evidence-<run>-<attempt>`，保存 runner 的
 `api-workspace-build-proof.json`、`api-workspace-preservation.json`、前后财务回执、
 MySQL 备份证明及 `release-manifest.json`；失败时另存 `api-workspace-failure.json`。
 独立 SSM 回读重新绑定本次 build proof、来源链、四个保留服务、卷身份和实际健康。
+WORKSPACE 预检失败时可增加 `workspaceDiagnostic`，仅包含阶段、步骤、服务、范围和异常类型的
+受控枚举。步骤区分当前 API/Admin 镜像与内容、原迁移镜像及内容、schema、任务、空闲及窗口。
+原门禁错误码照常保留；未知异常原文、命令输出、文件内容、环境和凭证均不进入诊断。
 正式上线后还须登录后台进行页面验收；健康和镜像证明不代表真实注册、邮箱、付款已执行。

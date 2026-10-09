@@ -99,6 +99,38 @@ MIGRATION_IDENTITY = {
 MIGRATION_SUCCESSOR_COMMIT = '23c5841b9b7e60be715250cbb985fc0966c0bce3'
 MIGRATION_SUCCESSOR_MANIFEST_SHA = '117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639'
 MIGRATION_SUCCESSOR_PROOF_SHA = '6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c'
+WORKSPACE_DIAGNOSTIC_STEPS = frozenset(('NOT_STARTED', 'CURRENT_PROOF', 'CURRENT_RECORD',
+    'RUNTIME_IMAGE', 'RUNTIME_CONTENT', 'ORIGIN_PROOF', 'ORIGIN_RECORD', 'ORIGIN_CONFIG',
+    'ORIGIN_AUDIT', 'ORIGIN_BACKUP', 'ORIGIN_SOURCE', 'MIGRATION_SCHEMA', 'MIGRATION_IMAGE',
+    'MIGRATION_CONTENT', 'TASK_IDENTITY', 'JOBS_IDLE', 'WINDOW_STATE'))
+WORKSPACE_DIAGNOSTIC_PHASES = frozenset(('MANIFEST', 'SNAPSHOT', 'IMAGES', 'PROJECTION', 'JOBS'))
+WORKSPACE_DIAGNOSTIC_ERRORS = frozenset(('RuntimeError', 'ValueError', 'TypeError', 'KeyError',
+    'FileNotFoundError', 'PermissionError', 'OSError', 'JSONDecodeError', 'OTHER'))
+
+
+class WorkspaceBaselineError(RuntimeError):
+    def __init__(self, code, diagnostic):
+        super().__init__(code)
+        self.workspaceDiagnostic = diagnostic
+
+
+def workspace_probe_step(d, step, service='none'):
+    diagnostic = getattr(d, '_workspaceBaselineDiagnostic', None)
+    if (isinstance(diagnostic, dict) and step in WORKSPACE_DIAGNOSTIC_STEPS
+            and service in ('none', 'api', 'admin', 'migrate')):
+        diagnostic.update(step=step, service=service, scope=SCOPE)
+
+
+def valid_workspace_diagnostic(value):
+    return (isinstance(value, dict) and set(value) == {'phase', 'step', 'service', 'scope',
+                'errorType', 'rawOutputSuppressed'}
+            and all(type(value[name]) is str for name in ('phase', 'step', 'service', 'scope', 'errorType'))
+            and value['phase'] in WORKSPACE_DIAGNOSTIC_PHASES
+            and value['step'] in WORKSPACE_DIAGNOSTIC_STEPS
+            and value['service'] in ('none', 'api', 'admin', 'migrate')
+            and value['scope'] in ('API_ADMIN', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE')
+            and value['errorType'] in WORKSPACE_DIAGNOSTIC_ERRORS
+            and value['rawOutputSuppressed'] is True)
 
 
 def image_service(service):
@@ -371,6 +403,7 @@ def migration_source_check(d, directory=None, *, candidate=True):
 
 
 def migration_database_state(d, directory):
+    workspace_probe_step(d, 'MIGRATION_SCHEMA')
     migration_source_check(d, directory, candidate=False)
     expected = {n.split('/')[0]: digest for n, digest in migration_files(d, directory).items() if n.endswith('/migration.sql')}
     expected[MIGRATION_NAME] = MIGRATION_IDENTITY['sha256']
@@ -427,6 +460,7 @@ def migration_task_guard(d, directory, task, guards):
     d.require(guards.get('registrationWindowRetained') is True
               and jobs_idle(d, directory) == guards and registration_task(d, directory) == task,
               'API_ADMIN_REGISTRATION_TASK_CHANGED')
+    workspace_probe_step(d, 'WINDOW_STATE')
     registration_private(d, directory, retained=guards['registrationWindowRetained'])
 
 
@@ -476,33 +510,41 @@ def migration_successor_guard(d, directory, context):
               == MIGRATION_SUCCESSOR_MANIFEST_SHA, 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
     original, _ = d.api_admin_scope('API_ADMIN_MIGRATION')
     source_manifest = json.loads((source / 'release-manifest.json').read_text())
+    workspace_probe_step(d, 'ORIGIN_PROOF')
     proof = original.validate_proof(d, json.loads((source / original.PROOF_FILE).read_text()),
                                    MIGRATION_SUCCESSOR_COMMIT, source_manifest['sourceTree'])
+    workspace_probe_step(d, 'ORIGIN_RECORD')
     original_record = json.loads((source / original.STATE_FILE).read_text())
     d.require(fingerprint(proof) == MIGRATION_SUCCESSOR_PROOF_SHA
               and context['task'] == original_record['registrationTask'] == original.MIGRATION_TASK
               and context['guards'] == original_record['registrationGuards'],
               'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
     predecessor = Path(source_manifest['previousRelease'])
+    workspace_probe_step(d, 'ORIGIN_CONFIG')
     d.require(predecessor.parent == d.BASE / 'releases' and predecessor.is_dir() and not predecessor.is_symlink()
               and original.configuration_hashes(source) == original_record['configurationAfter']
               and original.configuration_hashes(predecessor) == original_record['configurationBefore']
               and hashlib.sha256((source / '.env.aws.production').read_bytes()).hexdigest()
               == original_record['environmentSha256'], 'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    workspace_probe_step(d, 'ORIGIN_AUDIT')
     d.require(original.audit_receipt(d, source / 'before-audit.json') == source_manifest['dataAuditBefore']
               and original.audit_receipt(d, source / 'after-audit.json') == source_manifest['dataAuditAfter']
               and source_manifest['dataAuditBefore']['checksSha256'] == source_manifest['dataAuditAfter']['checksSha256'],
               'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
+    workspace_probe_step(d, 'ORIGIN_BACKUP')
     backup = json.loads((source / 'backup-verification.json').read_text())
     d.require(backup.get('name') == source_manifest['backupBeforeRelease'] and backup.get('s3Verified') is True
               and type(backup.get('size')) is int and backup['size'] > 0
               and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')), 'API_ADMIN_MIGRATION_BACKUP_CHANGED')
+    workspace_probe_step(d, 'ORIGIN_SOURCE')
     original.migration_source_check(d, source)
     original.migration_source_check(d, directory)
+    workspace_probe_step(d, 'MIGRATION_SCHEMA')
     state = original.migration_database_state(d, directory)
     d.require(state['status'] == 'APPLIED' and state == context['migrationState']
               and all(original_record['migration'][name] == state[name] for name in state),
               'API_ADMIN_MIGRATION_PRESERVATION_CHANGED')
+    workspace_probe_step(d, 'MIGRATION_IMAGE', 'migrate')
     original.verify_migration_image(d, directory, proof)
     original.migration_task_guard(d, directory, context['task'], context['guards'])
 
@@ -547,6 +589,7 @@ def migration_content(d, directory):
 
 
 def verify_migration_image(d, directory, proof, *, inspect_content=False):
+    workspace_probe_step(d, 'MIGRATION_IMAGE', 'migrate')
     row = proof['images']['migrate']
     override = json.loads((directory / 'compose.release.json').read_text())
     d.require(override['services']['migrate'] == {'image': row['reference'], 'pull_policy': 'never'},
@@ -557,6 +600,7 @@ def verify_migration_image(d, directory, proof, *, inspect_content=False):
               and labels.get('org.opencontainers.image.revision') == proof['commit']
               and labels.get('id-business-v2.source-tree') == proof['sourceTree'],
               'API_ADMIN_MIGRATION_IMAGE_CHANGED')
+    workspace_probe_step(d, 'MIGRATION_CONTENT', 'migrate')
     expected = migration_content(d, directory)
     d.require({k: row[k] for k in ('fileCount', 'sha256')} == expected,
               'API_ADMIN_MIGRATION_IMAGE_CONTENT_CHANGED')
@@ -722,6 +766,7 @@ def snapshot(d, directory):
 
 
 def jobs_idle(d, directory, *, allow_retained=False):
+    workspace_probe_step(d, 'JOBS_IDLE')
     d.assert_no_active_recharge(directory)
     runtime = d.registration_runtime_state(directory)
     d.require(runtime.get('supported') is True and runtime.get('registrationBusy') is False
@@ -841,6 +886,7 @@ except BaseException:
 
 
 def registration_task(d, directory):
+    workspace_probe_step(d, 'TASK_IDENTITY')
     code = TASK_SOURCE.replace('__TASK__', json.dumps(TASK_ID)).replace('__ATTEMPT__', str(TASK_ATTEMPT)).replace('__BINDING__', json.dumps(TASK_BINDING))
     code = code.replace('__MIGRATION__', json.dumps(MIGRATION_MODE)).replace('__OBSERVED__', json.dumps(MIGRATION_TASK if MIGRATION_MODE else None))
     value = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', code, timeout=40))
@@ -861,6 +907,7 @@ def registration_task(d, directory):
 
 
 def registration_private(d, directory, *, close=False, retained=True):
+    workspace_probe_step(d, 'WINDOW_STATE')
     d.require(not MIGRATION_MODE or (close is False and retained is True), 'API_ADMIN_SCOPE_CONFLICT')
     code = PRIVATE_SOURCE.replace('__TASK__', TASK_ID).replace('__ATTEMPT__', str(TASK_ATTEMPT))
     code = code.replace('__CANCELLED__', repr(not retained)).replace('__RETAINED__', repr(retained)).replace('__CLOSE__', repr(close))
@@ -1521,6 +1568,10 @@ def registration_native_baseline(d, previous, manifest, states, raw):
 
 def baseline(d, expected, *, check_jobs=True):
     stage = 'MANIFEST'
+    diagnostic = {'step': 'NOT_STARTED', 'service': 'none', 'scope': SCOPE} if WORKSPACE else None
+    prior_diagnostic = getattr(d, '_workspaceBaselineDiagnostic', None)
+    if WORKSPACE:
+        d._workspaceBaselineDiagnostic = diagnostic
     try:
         previous = (d.BASE / 'current').resolve()
         d.require(previous.parent == d.BASE / 'releases', 'API_ADMIN_BASELINE_PATH_INVALID')
@@ -1577,10 +1628,12 @@ def baseline(d, expected, *, check_jobs=True):
         elif REGISTRATION or MIGRATION_MODE:
             source.update(registration_native_baseline(d, previous, manifest, states, raw))
         elif manifest.get('apiAdminPublication') or manifest.get('apiWorkspacePublication'):
+            workspace_probe_step(d, 'CURRENT_PROOF')
             if manifest.get('apiWorkspacePublication'):
                 d.require(WORKSPACE and not manifest.get('apiAdminPublication'), 'API_ADMIN_SCOPE_CONFLICT')
                 proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
                 verify_running(d, previous, proof)
+                workspace_probe_step(d, 'CURRENT_RECORD')
                 record = json.loads((previous / STATE_FILE).read_text())
                 d.require(manifest['apiWorkspacePublication'] == {'version': 1, 'scope': SCOPE,
                     'buildProofSha256': fingerprint(proof), 'workersPublished': False, 'cacheStatus': 'SKIPPED',
@@ -1590,10 +1643,12 @@ def baseline(d, expected, *, check_jobs=True):
                 original, _ = d.api_admin_scope()
                 proof = original.validate_proof(d, json.loads((previous / original.PROOF_FILE).read_text()), expected, manifest['sourceTree'])
                 original.verify_running(d, previous, proof)
+                workspace_probe_step(d, 'CURRENT_RECORD')
                 record = json.loads((previous / original.STATE_FILE).read_text())
             else:
                 proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
                 verify_running(d, previous, proof)
+                workspace_probe_step(d, 'CURRENT_RECORD')
                 record = json.loads((previous / STATE_FILE).read_text())
             source['kind'] = 'API_WORKSPACE_BUILD_PROVEN' if manifest.get('apiWorkspacePublication') else 'API_ADMIN_BUILD_PROVEN'
             predecessor = Path(manifest.get('previousRelease', ''))
@@ -1690,11 +1745,24 @@ def baseline(d, expected, *, check_jobs=True):
         code = str(error)
         if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
             code = f'API_ADMIN_BASELINE_{stage}_FAILED'
+        if WORKSPACE:
+            error_type = type(error).__name__
+            diagnostic.update(phase=stage,
+                errorType=error_type if error_type in WORKSPACE_DIAGNOSTIC_ERRORS else 'OTHER',
+                rawOutputSuppressed=True)
+            raise WorkspaceBaselineError(code, diagnostic) from None
         raise RuntimeError(code) from None
+    finally:
+        if WORKSPACE:
+            if prior_diagnostic is None:
+                del d._workspaceBaselineDiagnostic
+            else:
+                d._workspaceBaselineDiagnostic = prior_diagnostic
 
 
 def verify_running(d, directory, proof):
     for service in IMAGE_SERVICES if WORKSPACE else UPDATED:
+        workspace_probe_step(d, 'RUNTIME_IMAGE', service)
         expected = proof['images'][service]
         state = d.service_state(directory, service)
         image = json.loads(d.run('docker', 'image', 'inspect', state['image']))[0]
@@ -1704,6 +1772,7 @@ def verify_running(d, directory, proof):
                   and labels.get('org.opencontainers.image.revision') == proof['commit']
                   and labels.get('id-business-v2.source-tree') == proof['sourceTree'],
                   'API_ADMIN_RUNNING_IMAGE_CHANGED')
+        workspace_probe_step(d, 'RUNTIME_CONTENT', service)
         measured = content_summary(d, service, d.compose(directory, 'exec', '-T', service,
             '/bin/sh', '-c', content_command(service)))
         d.require(measured == {key: expected[key] for key in ('fileCount', 'sha256')},

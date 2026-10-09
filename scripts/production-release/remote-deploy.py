@@ -13316,7 +13316,11 @@ if __name__ == '__main__':
         except Exception as error:
             message = str(error)
             code = message if re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', message) else 'API_ADMIN_READ_UNAVAILABLE'
-            print(json.dumps({'status': 'API_ADMIN_WORKSPACE_VERIFICATION_FAILED', 'code': code, 'errorType': type(error).__name__}))
+            result = {'status': 'API_ADMIN_WORKSPACE_VERIFICATION_FAILED', 'code': code, 'errorType': type(error).__name__}
+            diagnostic = getattr(error, 'workspaceDiagnostic', None)
+            if 'scope' in locals() and scope.valid_workspace_diagnostic(diagnostic):
+                result['workspaceDiagnostic'] = diagnostic
+            print(json.dumps(result))
             raise SystemExit(1) from None
         raise SystemExit(0)
     if '--api-admin-migration-only' in sys.argv[1:] and any(
