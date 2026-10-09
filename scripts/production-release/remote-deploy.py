@@ -895,7 +895,16 @@ def online_recharge_command_failure(data):
                     and type(migration['performed']) is bool
                     and migration['performed'] is (migration['status'] == 'APPLIED' and receipt['migrationAttempted']),
                     'ONLINE_RECHARGE_FAILURE_INVALID')
-        require(receipt['migrationAttempted'] is (receipt['step'] in ('migration', 'grants', 'switch', 'audit-after')),
+        late = receipt['step'] in ('migration', 'grants', 'switch', 'audit-after')
+        # This ended attempt retained the already sealed, fully verified migration.
+        # Only its exact command/candidate may explain a late failure without a new
+        # migrate invocation; all receipt, rollback and preservation checks above apply.
+        retained_migration = (command_id == 'ac5c9f85-e813-499c-8e90-92c1ce011bfa'
+            and receipt['candidateCommit'] == '296c096af7c4c79a8ffc2f57d9a15ea75684f431'
+            and late and receipt['migrationAttempted'] is False and migration.get('status') == 'APPLIED'
+            and migration.get('performed') is False and migration.get('schemaVerified') is True
+            and receipt['receiptPersisted'] is True)
+        require(receipt['migrationAttempted'] is late or retained_migration,
                 'ONLINE_RECHARGE_FAILURE_INVALID')
         return {name: receipt[name] for name in ('status', 'step', 'code', 'rollbackOk', 'servicesAttempted',
                 'candidateCommit', 'previousCommit')} | {'commandId': command_id,

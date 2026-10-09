@@ -591,6 +591,79 @@ class CommandFailureSummaryTests(unittest.TestCase):
         self.assertEqual(result['migration']['status'], 'APPLIED')
         self.assertTrue(result['migration']['performed'])
 
+    def retained_online_fixture(self, step='audit-after'):
+        receipt, invocation = self.online_fixture()
+        receipt.update(candidateCommit='296c096af7c4c79a8ffc2f57d9a15ea75684f431', step=step,
+                       code='ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED', migrationAttempted=False)
+        receipt['migration'].update(status='APPLIED', performed=False)
+        invocation['CommandId'] = 'ac5c9f85-e813-499c-8e90-92c1ce011bfa'
+        if step in ('switch', 'audit-after'):
+            attempted = ['admin', 'api', 'online-recharge'] if step == 'audit-after' else ['admin']
+            receipt.update(status='ONLINE_RECHARGE_FAILED_RESTORED', servicesAttempted=attempted,
+                           rollback={name: 'RESTORED' for name in attempted})
+        return receipt, invocation
+
+    def test_exact_recovery_attempt_can_report_late_failure_without_repeating_migration(self):
+        for step in ('migration', 'grants', 'switch', 'audit-after'):
+            receipt, invocation = self.retained_online_fixture(step)
+            with self.subTest(step=step), patch.dict(deployment.os.environ, DIAGNOSTIC_COMMAND_ID=invocation['CommandId']):
+                result = self.online_summary(receipt, invocation)
+                self.assertEqual(result['candidateCommit'], receipt['candidateCommit'])
+                self.assertEqual(result['step'], step)
+                self.assertEqual(result['commandId'], invocation['CommandId'])
+                self.assertEqual(result['migration']['status'], 'APPLIED')
+                self.assertFalse(result['migration']['performed'])
+                self.assertEqual(result['failureReceiptSha256'], hashlib.sha256(json.dumps(receipt,
+                    sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+                self.assertNotIn('fixture-sensitive', json.dumps(result))
+
+    def test_retained_migration_exception_is_bound_to_exact_candidate_and_ended_command(self):
+        receipt, invocation = self.retained_online_fixture()
+        for candidate in ('28a3ba4ffd17d36001b1104c97394f5ae871d73d', 'a' * 40):
+            with self.subTest(candidate=candidate):
+                self.assert_online_rejected({**receipt, 'candidateCommit': candidate}, invocation)
+        for command in ('ab33d2e0-6135-47ed-8f20-e2defd7c82cd', '00000000-0000-0000-0000-000000000000'):
+            with self.subTest(command=command):
+                self.assert_online_rejected(receipt, {**invocation, 'CommandId': command})
+        for status in ('Pending', 'InProgress', 'Success', 'Cancelled', 'TimedOut'):
+            with self.subTest(status=status):
+                self.assert_online_rejected(receipt, {**invocation, 'Status': status})
+        with patch.dict(deployment.os.environ, DIAGNOSTIC_COMMAND_ID='ab33d2e0-6135-47ed-8f20-e2defd7c82cd'):
+            self.assert_online_rejected(receipt, invocation)
+
+    def test_retained_migration_does_not_relax_migration_or_rollback_closure(self):
+        receipt, invocation = self.retained_online_fixture()
+        variants = []
+        for field, value in (('status', 'PENDING'), ('performed', True), ('performed', 0),
+                             ('schemaVerified', False), ('schemaVerified', 1), ('sha256', '0' * 64)):
+            value = {**receipt, 'migration': {**receipt['migration'], field: value}}
+            variants.append(value)
+        variants.extend(({**receipt, 'receiptPersisted': False}, {**receipt, 'migrationAttempted': 0},
+            {**receipt, 'migrationAttempted': True}, {**receipt, 'rollbackOk': False},
+            {**receipt, 'rollback': {}}, {**receipt, 'rollback': {'mysql': 'RESTORED'}},
+            {**receipt, 'servicesAttempted': ['api']}, {**receipt, 'currentPointsToCandidate': True},
+            {**receipt, 'inverseMigrationPerformed': True}, {**receipt, 'mediaVolumeDeleted': True},
+            {**receipt, 'rawSecret': 'fixture-sensitive-token'}))
+        for value in variants:
+            with self.subTest(fields=value):
+                self.assert_online_rejected(value, invocation)
+
+    def test_real_cli_projects_only_sealed_retained_failure_fields(self):
+        receipt, invocation = self.retained_online_fixture()
+        invocation['StandardOutputContent'] = json.dumps(receipt)
+        result = deployment.subprocess.run([deployment.sys.executable, '-B',
+            str(Path(__file__).with_name('remote-deploy.py')), '--summarize-command-result'],
+            input=json.dumps(invocation), capture_output=True, text=True, timeout=30,
+            env={**deployment.os.environ, 'DIAGNOSTIC_COMMAND_ID': invocation['CommandId']})
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, '')
+        self.assertEqual(len(result.stdout.splitlines()), 1)
+        self.assertNotIn('fixture-sensitive', result.stdout)
+        summary = json.loads(result.stdout.removeprefix('RELEASE_FAILURE_DIAGNOSTIC '))
+        self.assertEqual(summary['candidateCommit'], receipt['candidateCommit'])
+        self.assertEqual(summary['step'], 'audit-after')
+        self.assertFalse(summary['migration']['performed'])
+
     def test_online_failure_distinguishes_not_attempted_from_unverified_migration(self):
         receipt, invocation = self.online_fixture()
         receipt.update(step='source', migration={'status': 'NOT_ATTEMPTED', 'performed': False})
