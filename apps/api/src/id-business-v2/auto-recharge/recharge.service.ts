@@ -32,8 +32,8 @@ import {
 import { completeUnknownPaymentResolution } from './recharge-resolution';
 import {
   isBrowserProfileId,
-  staleProfile,
-  findOwnedRechargeBrowserProfile
+  rechargeCheckoutIdentifier,
+  staleProfile
 } from './recharge-job-helpers';
 import { sendRechargeWorkerRequest } from './recharge-worker-client';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
@@ -227,21 +227,64 @@ export class RechargeService {
           if (job.chatgptAccountId && this.bankAccounts) {
             await this.bankAccounts.assertOfficialAccount(tx, job.chatgptAccountId, accountKey);
           }
-          const finished = await this.repository.finishedJobsForAccount(
-            tx,
-            job.ownerId,
-            accountKey,
-            job.id
-          );
-          const staleProfiles = finished
-            .map((item) => staleProfile(item))
-            .filter((item): item is { sourceJobId: string; profileId: string } => Boolean(item));
-          await this.repository.updateJob(tx, id, { accountKey });
           const ownedProfile =
             job.action === 'bitbrowser'
-              ? findOwnedRechargeBrowserProfile(finished, job.ownerId, accountKey)
+              ? await this.repository.retainedProfileForAccount(tx, job.ownerId, accountKey, job.id)
               : undefined;
-          return { records, staleProfiles, ...(ownedProfile ? { ownedProfile } : {}) };
+          const finished =
+            job.action === 'bitbrowser'
+              ? []
+              : await this.repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
+          const currentResult = object(job.result);
+          const originalCheckoutIdentifier =
+            job.action === 'bitbrowser' &&
+            currentResult.mode !== 'open_browser' &&
+            currentResult.recheck_only !== true
+              ? this.repository.restoreCheckoutIdentifier(records, accountKey, job.plan, [
+                  rechargeCheckoutIdentifier(currentResult),
+                  await this.repository.originalCheckoutForAccount(
+                    tx,
+                    job.ownerId,
+                    accountKey,
+                    job.plan,
+                    job.id
+                  )
+                ])
+              : undefined;
+          if (
+            ownedProfile &&
+            isBrowserProfileId(currentResult.browser_profile_id) &&
+            currentResult.browser_profile_id !== ownedProfile.profileId
+          )
+            throw new ConflictException('本次任务已绑定另一比特窗口，不能覆盖原窗口');
+          const staleProfiles =
+            job.action === 'bitbrowser'
+              ? []
+              : finished
+                  .map((item) => staleProfile(item))
+                  .filter((item): item is { sourceJobId: string; profileId: string } =>
+                    Boolean(item)
+                  );
+          await this.repository.updateJob(tx, id, {
+            accountKey,
+            ...(ownedProfile || originalCheckoutIdentifier
+              ? {
+                  result: toV2JsonDocument({
+                    ...currentResult,
+                    ...(ownedProfile ? { browser_profile_id: ownedProfile.profileId } : {}),
+                    ...(originalCheckoutIdentifier
+                      ? { checkout_identifier: originalCheckoutIdentifier }
+                      : {})
+                  })
+                }
+              : {})
+          });
+          return {
+            records,
+            staleProfiles,
+            ...(ownedProfile ? { ownedProfile } : {}),
+            ...(originalCheckoutIdentifier ? { originalCheckoutIdentifier } : {})
+          };
         }
         if (input.type === 'stale_profile_cleanup') {
           if (
@@ -272,8 +315,17 @@ export class RechargeService {
             job.id
           );
           const byId = new Map(finished.map((item) => [item.id, item]));
+          const retained =
+            job.action === 'bitbrowser'
+              ? await this.repository.retainedProfileForAccount(tx, job.ownerId, accountKey, job.id)
+              : undefined;
           let updated = 0;
           for (const item of requested) {
+            if (
+              item.profileId === object(job.result).browser_profile_id ||
+              item.profileId === retained?.profileId
+            )
+              throw new ConflictException('原比特窗口必须保留，不能作为历史失败窗口清理');
             const source = byId.get(item.sourceJobId);
             const eligible = source ? staleProfile(source, true) : null;
             if (!source || !eligible || eligible.profileId !== item.profileId)
@@ -319,6 +371,18 @@ export class RechargeService {
           throw new ConflictException('已结束任务不能再写入执行事件');
         }
         const report = safeDocument(input.result);
+        if (job.action === 'bitbrowser') {
+          const originalProfileId = object(job.result).browser_profile_id;
+          if (isBrowserProfileId(originalProfileId)) {
+            if (
+              report.browser_profile_id !== undefined &&
+              report.browser_profile_id !== '' &&
+              report.browser_profile_id !== originalProfileId
+            )
+              throw new ConflictException('本次任务已绑定原比特窗口，不能更换窗口');
+            report.browser_profile_id = originalProfileId;
+          }
+        }
         await bindSavedChatgptAccount(tx, job, report, this.bankAccounts);
         const verifiedAt =
           input.type === 'progress'
@@ -331,7 +395,7 @@ export class RechargeService {
           if (report.status === 'awaiting_confirmation') {
             const quote = object(report.quote);
             const today = object(quote.today);
-            const limit = object(job.result);
+            const authorization = object(job.result);
             assertFinalQuote(quote as never, job.plan, report.quote_authority, report);
             if (
               !job.accountKey ||
@@ -341,13 +405,11 @@ export class RechargeService {
               !Number.isFinite(Date.parse(report.confirmation_expires_at)) ||
               Date.parse(report.confirmation_expires_at) <= Date.now() ||
               Date.parse(report.confirmation_expires_at) > Date.now() + 10 * 60000 ||
-              today.currency !== limit.locked_currency ||
+              today.currency !== authorization.locked_currency ||
               typeof today.amount_minor !== 'number' ||
-              today.amount_minor <= 0 ||
-              today.amount_minor > Number(limit.max_amount_minor) ||
-              !Number.isSafeInteger(limit.max_amount_minor)
+              today.amount_minor <= 0
             )
-              throw new ConflictException('本机官网报价未完整核实或超出付款上限');
+              throw new ConflictException('本机官网报价未完整核实');
             state = 'awaiting_confirmation';
             await this.audit.append(tx, {
               userId: job.ownerId,
@@ -394,25 +456,21 @@ export class RechargeService {
               ? serverQuoteConfirmationState(job.result, report)
               : 'awaiting_confirmation';
           if (job.action === 'server') {
-            const limit = object(job.result);
+            const authorization = object(job.result);
             const quote = object(report.quote);
             const today = object(quote.today);
             if (
               !hasOfficialRechargeQuote(report) ||
               quote.renewal_interval !== 'monthly' ||
-              today.currency !== limit.locked_currency ||
+              today.currency !== authorization.locked_currency ||
               typeof today.amount_minor !== 'number' ||
-              today.amount_minor <= 0 ||
-              today.amount_minor > Number(limit.max_amount_minor)
+              today.amount_minor <= 0
             )
-              throw new ConflictException('官网报价超出本次授权');
+              throw new ConflictException('官网身份或报价未完整核实');
             await this.audit.append(tx, {
               userId: job.ownerId,
               module: 'id_business_v2',
-              action:
-                object(job.result).manual_payment_confirmation === true
-                  ? 'id_business_v2.auto_recharge.server.quote_verified'
-                  : 'id_business_v2.auto_recharge.server.confirm',
+              action: 'id_business_v2.auto_recharge.server.quote_verified',
               objectType: 'recharge_job',
               objectId: id,
               afterData: {
@@ -420,10 +478,7 @@ export class RechargeService {
                 currency: String(today.currency),
                 amountMinor: today.amount_minor
               },
-              remark:
-                object(job.result).manual_payment_confirmation === true
-                  ? '官网报价在授权上限内，等待本人确认；尚未付款'
-                  : '官网报价在授权上限内，确认本次最多一次付款'
+              remark: '官网报价已核实，等待本人确认；尚未付款'
             });
           }
         }

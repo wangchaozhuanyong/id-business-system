@@ -56,13 +56,19 @@ const quote = {
 };
 
 describe('recharge input and durable evidence', () => {
-  it.each([null, 0, 1])('取消清理保留历史，只停用未发送确认的本套餐记录（%s）', async (sent) => {
+  it.each([null, 0, 1])('停止任务不能把未知付款标记改为可恢复（%s）', async (sent) => {
     const accountKey = 'a'.repeat(64);
     const checkout = {
       accountKey,
       ownerId: operator.id,
       fileKey: `${accountKey}.json`,
-      document: { checkout_identifier: 'cs_cancelled', payment_status: 'not_attempted' }
+      document: {
+        checkout_identifier: 'cs_cancelled',
+        checkout_outcome: 'created',
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        confirmation_requests_sent: 0
+      }
     };
     const payment = {
       accountKey,
@@ -90,27 +96,30 @@ describe('recharge input and durable evidence', () => {
       update: vi.fn()
     };
     const repository = new RechargeRepository({} as never);
-    const retired = await repository.retireCancelledCheckout(
+    const recoverable = await repository.inspectStoppedCheckout(
       { idBusinessV2RechargeRecord: records } as never,
       accountKey,
       'plus',
       operator.id
     );
-    expect(retired).toBe(sent === 0 ? 2 : 0);
-    expect(records.update).toHaveBeenCalledTimes(sent === 0 ? 2 : 0);
-    for (const [change] of records.update.mock.calls) {
-      expect(change.where.accountKey_fileKey.fileKey).not.toBe(unrelated.fileKey);
-      expect(change.data.document.cancelled_before_confirmation).toBe(true);
-      expect(change.data.revision).toEqual({ increment: 1 });
-    }
+    expect(recoverable).toBe(false);
+    expect(records.update).not.toHaveBeenCalled();
+    expect(payment.document.payment_status).toBe('unknown');
   });
 
-  it('无付款标记的取消结算自动停用，原订单及账单历史保留', async () => {
+  it('无付款标记时原订单可只读恢复，停止任务不改官网订单与版本', async () => {
     const accountKey = 'a'.repeat(64);
     const checkout = {
       ownerId: operator.id,
       fileKey: `${accountKey}.json`,
-      document: { checkout_identifier: 'cs_cancelled', payment_status: 'not_attempted' }
+      revision: 3,
+      document: {
+        checkout_identifier: 'cs_cancelled',
+        checkout_outcome: 'created',
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        confirmation_requests_sent: 0
+      }
     };
     const records = {
       findUnique: vi.fn().mockResolvedValue(checkout),
@@ -119,18 +128,49 @@ describe('recharge input and durable evidence', () => {
     };
     const repository = new RechargeRepository({} as never);
     expect(
-      await repository.retireCancelledCheckout(
+      await repository.inspectStoppedCheckout(
         { idBusinessV2RechargeRecord: records } as never,
         accountKey,
         'plus',
         operator.id
       )
-    ).toBe(1);
-    expect(records.update.mock.calls[0][0].data.document).toMatchObject({
-      checkout_identifier: 'cs_cancelled',
-      checkout_outcome: 'cancelled',
-      payment_attempted: false
-    });
+    ).toBe(true);
+    expect(records.update).not.toHaveBeenCalled();
+    expect(checkout.revision).toBe(3);
+    expect(checkout.document.checkout_outcome).toBe('created');
+    expect(checkout.document).not.toHaveProperty('cancelled_before_confirmation');
+  });
+
+  it.each([
+    { payment_attempted: undefined, confirmation_requests_sent: 0 },
+    { payment_attempted: false, confirmation_requests_sent: undefined },
+    { payment_attempted: false, confirmation_requests_sent: null },
+    { payment_attempted: false, confirmation_requests_sent: '0' }
+  ])('停止回执的可恢复性观察只认可明确未付款与整数0（%j）', async (facts) => {
+    const accountKey = 'a'.repeat(64);
+    const records = {
+      findUnique: vi.fn().mockResolvedValue({
+        ownerId: operator.id,
+        document: {
+          checkout_identifier: 'cs_original',
+          checkout_outcome: 'created',
+          payment_status: 'not_attempted',
+          ...facts
+        }
+      }),
+      findMany: vi.fn(),
+      update: vi.fn()
+    };
+    const repository = new RechargeRepository({} as never);
+    await expect(
+      repository.inspectStoppedCheckout(
+        { idBusinessV2RechargeRecord: records } as never,
+        accountKey,
+        'plus',
+        operator.id
+      )
+    ).resolves.toBe(false);
+    expect(records.update).not.toHaveBeenCalled();
   });
   it('只保留范围内的会话进度与脱敏错误', () => {
     const progress = {
@@ -153,7 +193,7 @@ describe('recharge input and durable evidence', () => {
     );
     expect(
       safeDocument({
-        session_attempt: 4,
+        session_attempt: 11,
         session_attempt_limit: 0,
         session_elapsed_seconds: -1,
         session_wait_seconds: 601,
@@ -173,7 +213,7 @@ describe('recharge input and durable evidence', () => {
         proxy_attempt: 10,
         proxy_attempt_limit: 10,
         proxy_wait_seconds: 20,
-        session_attempt: 4,
+        session_attempt: 11,
         session_wait_seconds: 20,
         proxyUrl: 'private',
         proxyPassword: 'private'
@@ -188,6 +228,18 @@ describe('recharge input and durable evidence', () => {
       expect(safeDocument({ proxy_attempt_limit: value })).toEqual({});
     for (const value of [19, 21, '20'])
       expect(safeDocument({ proxy_wait_seconds: value })).toEqual({});
+  });
+  it('同窗口会话尝试只保留包含首次在内的1至10次受控进度', () => {
+    for (const value of [1, 4, 10])
+      expect(safeDocument({ session_attempt: value, session_attempt_limit: value })).toEqual({
+        session_attempt: value,
+        session_attempt_limit: value
+      });
+    for (const value of [0, 11, 1.5, '10'])
+      expect(safeDocument({ session_attempt: value, session_attempt_limit: value })).toEqual({});
+    for (const step of ['page_ui_sync', 'proxy_probe', 'proxy_home'])
+      expect(safeDocument({ session_step: step })).toEqual({ session_step: step });
+    expect(safeDocument({ session_step: 'arbitrary-secret' })).toEqual({});
   });
   it('只保留受控的付款失败原因', () => {
     expect(safeDocument({ payment_failure_reason: 'insufficient_funds' })).toEqual({
@@ -274,40 +326,48 @@ describe('recharge input and durable evidence', () => {
       validateDetailsSubmission({ addressId, details: { ...paymentDetails, extra: 'private' } })
     ).toThrow();
   });
-  it.each(['go', 'plus', 'pro-500'])('%s 服务器任务必须限定单次付款与上限', (plan) => {
-    const server = {
-      ...prepareInput(),
-      plan,
-      action: 'server',
-      lockedCurrency: 'MYR',
-      maxAmount: '100.00',
-      authorizeSinglePayment: true,
-      proxyId: id,
-      proxyCountryCode: 'MY'
-    };
-    expect(() => validateStart(server)).not.toThrow();
-    expect(() => validateStart({ ...server, maxAmount: undefined })).not.toThrow();
-    expect(() => validateStart({ ...server, authorizeSinglePayment: false })).toThrow();
-    expect(() => validateStart({ ...server, maxAmount: '0' })).toThrow();
-    expect(() => validateStart({ ...server, proxy: { host: '127.0.0.1' } })).toThrow();
-    expect(() => validateStart({ ...server, proxyCountryCode: 'US' })).not.toThrow();
-    expect(() => validateStart({ ...server, proxyCountryCode: undefined })).toThrow();
-    expect(() => validateStart({ ...server, proxyId: id, proxyCountryCode: 'usa' })).toThrow();
-    expect(() => validateStart({ ...server, safety: { maxAmountMinor: 999999 } })).toThrow();
-    const manual = {
-      ...server,
-      sessionJson: undefined,
-      addressId: undefined,
-      manualAddress: true,
-      login: { email: paymentDetails.email, password: 'synthetic-password' }
-    };
-    expect(() => validateStart(manual)).not.toThrow();
-    expect(() => validateStart({ ...manual, sessionJson: '{}' })).toThrow('请选择一种');
-    expect(() =>
-      validateStart({ ...manual, login: undefined, chatgptAccountId: id })
-    ).not.toThrow();
-    expect(() => validateStart({ ...manual, details: { ...paymentDetails, city: '' } })).toThrow();
-  });
+  it.each(['go', 'plus', 'pro-500'])(
+    '%s 服务器任务保留币种、单次授权与人工确认，不需上限',
+    (plan) => {
+      const server = {
+        ...prepareInput(),
+        plan,
+        action: 'server',
+        lockedCurrency: 'MYR',
+        authorizeSinglePayment: true,
+        proxyId: id,
+        proxyCountryCode: 'MY'
+      };
+      expect(() => validateStart(server)).not.toThrow();
+      expect(validateStart(server)).toMatchObject({ manualPaymentConfirmation: true });
+      expect(validateStart({ ...server, maxAmount: '0' })).not.toHaveProperty('maxAmount');
+      expect(validateStart({ ...server, maxAmount: { legacy: true } })).not.toHaveProperty(
+        'maxAmount'
+      );
+      expect(() => validateStart({ ...server, authorizeSinglePayment: false })).toThrow();
+      expect(() => validateStart({ ...server, manualPaymentConfirmation: false })).toThrow();
+      expect(() => validateStart({ ...server, proxy: { host: '127.0.0.1' } })).toThrow();
+      expect(() => validateStart({ ...server, proxyCountryCode: 'US' })).not.toThrow();
+      expect(() => validateStart({ ...server, proxyCountryCode: undefined })).toThrow();
+      expect(() => validateStart({ ...server, proxyId: id, proxyCountryCode: 'usa' })).toThrow();
+      expect(() => validateStart({ ...server, safety: { maxAmountMinor: 999999 } })).toThrow();
+      const manual = {
+        ...server,
+        sessionJson: undefined,
+        addressId: undefined,
+        manualAddress: true,
+        login: { email: paymentDetails.email, password: 'synthetic-password' }
+      };
+      expect(() => validateStart(manual)).not.toThrow();
+      expect(() => validateStart({ ...manual, sessionJson: '{}' })).toThrow('请选择一种');
+      expect(() =>
+        validateStart({ ...manual, login: undefined, chatgptAccountId: id })
+      ).not.toThrow();
+      expect(() =>
+        validateStart({ ...manual, details: { ...paymentDetails, city: '' } })
+      ).toThrow();
+    }
+  );
   it('refuses stale durable record writes', async () => {
     const previous = { revision: 2, ownerId: 'admin-test' };
     const tx = {
@@ -706,7 +766,7 @@ describe('single worker dispatch and confirmation', () => {
       status: 'session_ready'
     });
   });
-  it('恢复时只返回同操作人同账号且付款前失败的历史窗口，并幂等记录清理', async () => {
+  it('恢复时保留同操作人同账号的失败窗口，不再将原窗口交给自动清理', async () => {
     const accountKey = 'a'.repeat(64);
     const sourceJobId = '33333333-3333-4333-8333-333333333333';
     const profileId = 'b'.repeat(32);
@@ -722,6 +782,8 @@ describe('single worker dispatch and confirmation', () => {
       id: sourceJobId,
       ownerId: operator.id,
       accountKey,
+      action: 'bitbrowser',
+      plan: 'plus',
       state: 'finished',
       result: {
         reason: 'actual_quote_unknown',
@@ -741,7 +803,8 @@ describe('single worker dispatch and confirmation', () => {
     tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([stale, unsafe]);
     await expect(service.callback(id, { type: 'restore', accountKey })).resolves.toEqual({
       records: [],
-      staleProfiles: [{ sourceJobId, profileId }]
+      staleProfiles: [],
+      ownedProfile: { sourceJobId, profileId, accountKey }
     });
 
     current.accountKey = accountKey;
@@ -752,22 +815,9 @@ describe('single worker dispatch and confirmation', () => {
         accountKey,
         profiles: [{ sourceJobId, profileId }]
       })
-    ).resolves.toEqual({ ok: true, updated: 1 });
-    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith({
-      where: { id: sourceJobId },
-      data: {
-        result: expect.objectContaining({
-          browser_cleanup_status: 'completed',
-          stale_cleanup_job_id: id
-        })
-      }
-    });
-    expect(audit.append).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({
-        action: 'id_business_v2.auto_recharge.stale_browser_cleanup',
-        objectId: id
-      })
+    ).rejects.toThrow('原比特窗口必须保留');
+    expect(tx.idBusinessV2RechargeJob.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: sourceJobId } })
     );
 
     tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([
@@ -779,7 +829,7 @@ describe('single worker dispatch and confirmation', () => {
         accountKey,
         profiles: [{ sourceJobId, profileId }]
       })
-    ).resolves.toEqual({ ok: true, updated: 0 });
+    ).rejects.toThrow('原比特浏览器资料已被删除');
   });
   it('停用服务器创建、资料提交和付款确认，不发出任何远程写请求', async () => {
     await expect(service.start(input(), operator)).rejects.toThrow('服务器充值已停用');
@@ -1210,7 +1260,7 @@ describe('single worker dispatch and confirmation', () => {
     resolveRecords.mockRestore();
   });
 
-  it('停止确认回调先停用取消结算，再结束任务并写审计', async () => {
+  it('停止确认回调保留原单，只结束任务与确认凭据并写审计', async () => {
     active.mockResolvedValue({
       id,
       ownerId: operator.id,
@@ -1220,7 +1270,7 @@ describe('single worker dispatch and confirmation', () => {
       state: 'running',
       result: { status: 'cancelling' }
     } as never);
-    const retire = vi.spyOn(repository, 'retireCancelledCheckout').mockResolvedValueOnce(1);
+    const inspect = vi.spyOn(repository, 'inspectStoppedCheckout').mockResolvedValueOnce(true);
     await service.callback(id, {
       type: 'finished',
       result: {
@@ -1228,10 +1278,10 @@ describe('single worker dispatch and confirmation', () => {
         cancellation_confirmed: true,
         payment_requests_sent: 0,
         payment_attempted: false,
-        browser_cleanup_status: 'completed'
+        browser_cleanup_status: 'not_needed'
       }
     });
-    expect(retire).toHaveBeenCalledWith(tx, 'a'.repeat(64), 'plus', operator.id);
+    expect(inspect).toHaveBeenCalledWith(tx, 'a'.repeat(64), 'plus', operator.id);
     expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ state: 'finished', nonceHash: null })
@@ -1241,36 +1291,41 @@ describe('single worker dispatch and confirmation', () => {
       tx,
       expect.objectContaining({
         action: 'id_business_v2.auto_recharge.bitbrowser.cancel',
-        afterData: { retiredRecords: 1, browserCleanup: 'completed' }
+        afterData: { checkoutReadOnlyRecoverable: true, browserCleanup: 'not_needed' }
       })
     );
   });
 
   it.each([
     ['flow', false, true],
-    ['bitbrowser', false, true],
+    ['quote', false, true],
+    ['server', false, true],
+    ['bitbrowser', false, false],
     ['bitbrowser', true, false]
-  ])('旧结算替换仅开放给自动执行，复查保持只读（%s/%s）', async (action, recheckOnly, allowed) => {
-    active.mockResolvedValue({
-      id,
-      ownerId: operator.id,
-      accountKey: 'a'.repeat(64),
-      plan: 'plus',
-      action,
-      state: 'running',
-      result: { recheck_only: recheckOnly }
-    } as never);
-    const save = vi.spyOn(repository, 'saveRecord').mockResolvedValueOnce({ revision: 2 });
-    await service.callback(id, {
-      type: 'ledger',
-      accountKey: 'a'.repeat(64),
-      fileKey: `${'a'.repeat(64)}.json`,
-      revision: 1,
-      document: { status: 'checkout_attempted' }
-    });
-    expect(save).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({ allowCheckoutReplacement: allowed })
-    );
-  });
+  ])(
+    '比特原单与复查禁止替换，其他操作保留既有合同（%s/%s）',
+    async (action, recheckOnly, allowed) => {
+      active.mockResolvedValue({
+        id,
+        ownerId: operator.id,
+        accountKey: 'a'.repeat(64),
+        plan: 'plus',
+        action,
+        state: 'running',
+        result: { recheck_only: recheckOnly }
+      } as never);
+      const save = vi.spyOn(repository, 'saveRecord').mockResolvedValueOnce({ revision: 2 });
+      await service.callback(id, {
+        type: 'ledger',
+        accountKey: 'a'.repeat(64),
+        fileKey: `${'a'.repeat(64)}.json`,
+        revision: 1,
+        document: { status: 'checkout_attempted' }
+      });
+      expect(save).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({ allowCheckoutReplacement: allowed })
+      );
+    }
+  );
 });

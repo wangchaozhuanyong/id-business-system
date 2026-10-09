@@ -87,7 +87,6 @@ suite('recharge real MySQL restart and concurrency', () => {
       addressId,
       windowName: '本地合成充值',
       lockedCurrency: 'USD',
-      maxAmount: '30.00',
       authorizeSinglePayment: true
     };
     await expect(service.start(input, operator)).rejects.toThrow('服务器充值已停用');

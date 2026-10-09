@@ -38,20 +38,6 @@ export class RechargeController {
   updateServerProxySettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.settings.updateServerProxySettings(input, operator);
   }
-  @Get('payment-caps')
-  @Header('Cache-Control', 'no-store')
-  paymentCaps() {
-    return this.settings.paymentCaps();
-  }
-  @Put('payment-caps/:plan/:currencyCode')
-  updatePaymentCap(
-    @Param('plan') plan: string,
-    @Param('currencyCode') currencyCode: string,
-    @Body() input: unknown,
-    @CurrentUser() operator: AuthenticatedUser
-  ) {
-    return this.settings.updatePaymentCap(plan, currencyCode, input, operator);
-  }
   @Put('bitbrowser-settings')
   updateBitBrowserSettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.settings.update(input, operator);

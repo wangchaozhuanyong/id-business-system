@@ -137,6 +137,23 @@ class CoreTests(unittest.TestCase):
             c.parse_credential(fixture(expired=True))
         self.assertEqual(c.parse_browser_credential(fixture(expired=True)).account_id, "synthetic-account")
 
+    def test_official_expiry_report_contains_timing_but_no_credentials(self):
+        with patch.object(c.time, "time", return_value=1800000000):
+            raw = fixture(expired=True)
+            target = c.parse_browser_credential(raw)
+            with self.assertRaises(c.Stop) as caught:
+                c.verify_official_session(json.loads(raw), target)
+        report = caught.exception.report
+        self.assertEqual(report["reason"], "access_token_expired")
+        self.assertEqual(report["access_token_expires_at"], 1799999990)
+        self.assertEqual(report["credential_checked_at"], 1800000000)
+        self.assertEqual(report["access_token_seconds_remaining"], -10)
+        self.assertTrue(report["official_session_user_present"])
+        self.assertTrue(report["official_session_access_token_present"])
+        serialized = json.dumps(report)
+        for secret in (target.old_token, target.session_token, target.account_id, target.user_id):
+            self.assertNotIn(secret, serialized)
+
     def test_invalid_conflicting_inputs(self):
         data = json.loads(fixture())
         for raw in (b"{}", b"[]", b'{}{}', b'{"sessionToken":"a","sessionToken":"b"}',
@@ -353,6 +370,37 @@ class LedgerGuardTests(unittest.TestCase):
                     "https://api.stripe.com/v1/payment_methods"):
             self.assertEqual(guard.classify("POST", url), "payment")
         self.assertEqual(guard.classify("POST", "https://unknown.example/execute"), "unknown_write")
+
+    def test_session_diagnostics_preserve_write_and_payment_blocking(self):
+        async def exercise():
+            guard = NetworkGuard(self.target)
+            requests = (
+                ("GET", "https://chatgpt.com/api/auth/session", False),
+                ("POST", "https://chatgpt.com/api/auth/session", True),
+                ("POST", "https://chatgpt.com/backend-api/payments/checkout/confirm", True),
+                ("POST", "https://unknown.example/api/auth/session", True),
+            )
+            for method, url, blocked in requests:
+                route = AsyncMock()
+                route.request.method = method
+                route.request.url = url
+                route.request.post_data = None
+                route.request.headers = {}
+                with patch.object(guard, "route_hcaptcha", return_value=False):
+                    await guard.route(route)
+                if blocked:
+                    route.abort.assert_awaited_once_with("blockedbyclient")
+                    route.fallback.assert_not_awaited()
+                else:
+                    route.fallback.assert_awaited_once()
+                    route.abort.assert_not_awaited()
+            result = guard.summary()
+            self.assertEqual(result["auth_session_writes_blocked"], 1)
+            self.assertEqual(result["other_writes_blocked"], 2)
+            self.assertEqual(result["payment_requests_blocked"], 1)
+            self.assertEqual(result["payment_requests_sent"], 0)
+            self.assertEqual(result["checkout_requests_sent"], 0)
+        asyncio.run(exercise())
 
     def test_only_verified_original_checkout_initialization_is_allowed(self):
         guard = NetworkGuard(self.target)

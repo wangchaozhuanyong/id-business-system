@@ -443,6 +443,13 @@ class Job:
     def confirm(self, quote, last4):
         if self.cancelled or self.done:
             raise Stop("operation_cancelled")
+        if self.confirmed or self.waiting_confirmation:
+            raise Stop("confirmation_already_consumed")
+        if self.payload.get("action") == "server":
+            try:
+                payment_state.quote_digest(quote)
+            except Stop:
+                raise Stop("payment_quote_outside_authorization") from None
         upgrade = quote.get("operation") == "subscription_upgrade"
         operation = ({"operation": "subscription_upgrade", "upgrade_identifier": quote.get("upgrade_identifier"),
                       "current_plan_before": "plus", "target_plan": quote["plan"]}
@@ -464,16 +471,9 @@ class Job:
                     not all(isinstance(item, dict) for item in (today, tax, renewal)) or
                     {item.get("currency") for item in (today, tax, renewal)} != {safety.get("lockedCurrency")} or
                     type(today.get("amount_minor")) is not int or
-                    today["amount_minor"] > safety.get("maxAmountMinor", 0) or
-                    today["amount_minor"] <= 0):
+                    today["amount_minor"] <= 0 or tax["amount_minor"] < 0 or
+                    renewal["amount_minor"] <= 0):
                 raise Stop("payment_quote_outside_authorization")
-            if self.payload.get('manualPaymentConfirmation') is not True:
-                callback(self.id, {"type": "confirmation", "result": {
-                    "status": "confirming", "stage": "payment_ready", "quote": quote,
-                    "quote_authority": authority, **operation,
-                    "nonce": self.nonce, "card_last4": last4}})
-                self.confirmed = True
-                return True
         self.waiting_confirmation = True
         callback(self.id, {"type": "confirmation", "result": {
             "status": "awaiting_confirmation", "stage": "payment_ready", "quote": quote,

@@ -120,11 +120,6 @@
                 "
                 @retry="bankCurrenciesQuery.refresh"
               />
-              <el-form-item label="最高付款" required>
-                <el-input v-model="maxAmount" inputmode="decimal" maxlength="12">
-                  <template #append>{{ lockedCurrency }}</template>
-                </el-input>
-              </el-form-item>
               <V2RechargeProxySelect
                 v-if="availableProxyCountries.length || proxyCountriesQuery.error.value"
                 v-model:country-code="selectedProxyCountryCode"
@@ -366,7 +361,6 @@ const {
   availableProxies,
   proxyCountriesQuery,
   proxiesQuery,
-  maxAmount,
   authorizeSinglePayment,
   details,
   busy,

@@ -49,8 +49,6 @@ def payload():
         },
         "safety": {
             "lockedCurrency": "USD",
-            "maxAmount": "30.00",
-            "maxAmountMinor": 3000,
             "authorizeSinglePayment": True,
             "manualPaymentConfirmation": True,
         },
@@ -92,6 +90,42 @@ def resolution_payload():
 
 
 class BitBrowserConnectorTests(unittest.TestCase):
+    def test_restore_binds_only_valid_callback_original_checkout_and_never_changes_it(self):
+        from types import SimpleNamespace
+        for checkout_id in ('oaics_existing', 'cs_existing'):
+            with self.subTest(checkout_id=checkout_id):
+                job = connector.LocalJob(payload())
+                job.callback.send = MagicMock(return_value={
+                    'records': [], 'originalCheckoutIdentifier': checkout_id})
+                job.restore_account(SimpleNamespace(account_id='fixture-account'))
+                self.assertEqual(job.original_checkout_identifier, checkout_id)
+                job.callback.send.return_value = {'records': [], 'originalCheckoutIdentifier': 'oaics_other'}
+                with self.assertRaises(Stop) as stopped:
+                    job.restore_account(SimpleNamespace(account_id='fixture-account'))
+                self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+                self.assertEqual(job.original_checkout_identifier, checkout_id)
+
+    def test_restore_rejects_malformed_original_checkout_before_writing_records(self):
+        from types import SimpleNamespace
+        for checkout_id in ('upgrade_existing', 'oaics_', 'oaics_private?token=fixture',
+                            'cs_' + 'x' * 201, 123, {}, True):
+            with self.subTest(checkout_id=type(checkout_id).__name__):
+                job = connector.LocalJob(payload())
+                job.callback.send = MagicMock(return_value={
+                    'records': [], 'originalCheckoutIdentifier': checkout_id})
+                with patch.object(connector, 'write_json') as write, self.assertRaises(Stop) as stopped:
+                    job.restore_account(SimpleNamespace(account_id='fixture-account'))
+                self.assertEqual(stopped.exception.report['reason'], 'durable_state_unavailable')
+                self.assertIsNone(job.original_checkout_identifier)
+                write.assert_not_called()
+
+    def test_restore_does_not_accept_original_checkout_from_launch_payload(self):
+        value = {**payload(), 'originalCheckoutIdentifier': 'oaics_forged'}
+        with self.assertRaises(Stop):
+            connector.validate_payload(value)
+        job = connector.LocalJob(payload())
+        self.assertIsNone(job.original_checkout_identifier)
+
     def test_official_cleanup_acknowledgements_allow_strings_but_reads_stay_strict(self):
         client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
         with patch.object(connector, "build_opener") as opener:
@@ -116,9 +150,24 @@ class BitBrowserConnectorTests(unittest.TestCase):
                 {"extra": "field"},
                 {"details": {**value["details"], "number": "123"}},
                 {"address": {**value["address"], "country": "invalid"}},
-                {"safety": {**value["safety"], "maxAmountMinor": 2000}}):
+                {"safety": {**value["safety"], "manualPaymentConfirmation": False}},
+                {"safety": {**value["safety"], "lockedCurrency": "INVALID"}},
+                {"safety": {**value["safety"], "unknown": True}}):
             with self.subTest(change=change), self.assertRaises(Stop):
                 connector.validate_payload({**value, **change})
+
+    def test_launch_needs_no_payment_cap_and_ignores_legacy_cap_values(self):
+        value = payload()
+        self.assertNotIn('maxAmount', value['safety'])
+        self.assertNotIn('maxAmountMinor', value['safety'])
+        self.assertIs(connector.validate_payload(value), value)
+        for legacy in ({'maxAmount': '1.00', 'maxAmountMinor': 1},
+                       {'maxAmount': None, 'maxAmountMinor': -1},
+                       {'maxAmount': 'unused'}, {'maxAmountMinor': False}):
+            with self.subTest(legacy=list(legacy)):
+                changed = {**value, 'safety': {**value['safety'], **legacy}}
+                self.assertIs(connector.validate_payload(changed), changed)
+        self.assertNotIn('max_amount', connector.public_result({'max_amount': '1.00'}))
 
     def test_recheck_payload_contains_no_card_address_or_payment_authorization(self):
         value = payload()
@@ -227,7 +276,8 @@ class BitBrowserConnectorTests(unittest.TestCase):
 
         self.assertEqual(profile_id, "b" * 32)
         body = calls[2][1]
-        self.assertEqual(body["url"], "https://chatgpt.com")
+        self.assertEqual(body["url"], "about:blank")
+        self.assertEqual(body["platform"], "")
         self.assertEqual(body["name"], "申请gpt-001")
         self.assertEqual(body["remark"], "申请gpt")
         self.assertEqual(body["proxyMethod"], 3)
@@ -288,10 +338,12 @@ class BitBrowserConnectorTests(unittest.TestCase):
             job.confirm({**quote, "tax": None}, "4444")
 
     def test_actual_confirmation_waits_and_nonce_is_single_use_quote_bound(self):
-        job = connector.LocalJob(payload())
+        value = payload()
+        value['safety'].update(maxAmount='30.00', maxAmountMinor=3000)
+        job = connector.LocalJob(value)
         job.account_key = "c" * 64
         job.callback.send = MagicMock(return_value={})
-        amount = {"currency": "USD", "amount_minor": 2000, "amount": "20.00"}
+        amount = {"currency": "USD", "amount_minor": 4000, "amount": "40.00"}
         quote = {"plan": "plus", "today": amount, "renewal": amount,
                  "tax": {"currency": "USD", "amount_minor": 0, "amount": "0.00"},
                  "renewal_interval": "monthly"}
@@ -315,6 +367,8 @@ class BitBrowserConnectorTests(unittest.TestCase):
         job.signal_confirm(state["nonce"], state["quote_digest"])
         thread.join(1)
         self.assertEqual(outcome, [True])
+        self.assertFalse(job.payment_request_sent)
+        self.assertEqual(job.state()['result']['payment_requests_sent'], 0)
         with self.assertRaises(Stop):
             job.signal_confirm(state["nonce"], state["quote_digest"])
         with self.assertRaises(Stop):
@@ -489,6 +543,34 @@ assert bitbrowser_connector.Registry('recharge').role == 'recharge'
                 "details": {"cvc": "123"},
             }),
             {"status": "blocked"})
+
+    def test_public_result_preserves_bounded_session_diagnostics(self):
+        diagnostics = {
+            "session_cookie_sent": True,
+            "session_cookie_format": "chunked",
+            "official_session_http_status": 200,
+            "official_session_user_present": True,
+            "official_session_access_token_present": True,
+            "access_token_expires_at": 1799999990,
+            "credential_checked_at": 1800000000,
+            "access_token_seconds_remaining": -10,
+            "auth_session_writes_blocked": 0,
+        }
+        self.assertEqual(connector.public_result({**diagnostics, "cookie": "private",
+                         "accessToken": "private"}), diagnostics)
+
+    def test_public_session_diagnostics_reject_arbitrary_secret_values(self):
+        for value in ("private", {"token": "private"}, ["private"], None):
+            with self.subTest(value_type=type(value).__name__):
+                self.assertEqual(connector.public_result({
+                    key: value for key in (
+                        "session_cookie_sent", "official_session_user_present",
+                        "official_session_access_token_present", "official_session_http_status",
+                        "access_token_expires_at", "credential_checked_at",
+                        "access_token_seconds_remaining", "auth_session_writes_blocked",
+                        "session_cookie_format")}), {})
+        self.assertEqual(connector.public_result({"official_session_http_status": True,
+                         "auth_session_writes_blocked": -1, "credential_checked_at": 0}), {})
 
 
 if __name__ == "__main__":

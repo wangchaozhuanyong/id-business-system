@@ -142,16 +142,17 @@ class ProStateTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 ledger.assert_unattempted()
 
-    def test_server_500_confirmation_enforces_plan_currency_and_actual_cap(self):
+    def test_server_500_confirmation_enforces_plan_currency_and_complete_quote_without_cap(self):
         import server
         quote = {**pro_quote(), 'plan': 'pro-500'}
-        safety = {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 42000}
+        safety = {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 1}
         with patch.object(server, 'callback') as callback:
             job = server.Job('synthetic-job', {'action': 'server', 'plan': 'pro-500', 'safety': safety})
-            self.assertTrue(job.confirm(quote, '4242'))
+            with patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)):
+                self.assertTrue(job.confirm(quote, '4242'))
             self.assertEqual(callback.call_args[0][1]['result']['quote']['plan'], 'pro-500')
             for changed_quote, changed_safety in ((pro_quote(20), safety),
-                    (quote, {**safety, 'maxAmountMinor': 41999}),
+                    ({**quote, 'today': {**quote['today'], 'amount_minor': 41999}}, safety),
                     (quote, {**safety, 'lockedCurrency': 'USD'}),
                     (quote, {**safety, 'authorizeSinglePayment': False})):
                 callback.reset_mock()
@@ -548,6 +549,8 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(body['revision'], records.get(key, {}).get('revision', 0))
                 records[key] = {'revision': body['revision'] + 1, 'document': body['document']}
                 return {'revision': records[key]['revision']}
+            if body['type'] == 'confirmation':
+                job.signal(body['result']['nonce'])
             return {'ok': True}
         original = attempt_ledger.atomic_json
         def durable(path, document):

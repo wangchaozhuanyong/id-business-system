@@ -8,7 +8,7 @@
     :description="
       serverMode
         ? '每次服务器任务使用已保存的代理配置。'
-        : '保存后用于后续新建窗口；正在执行的窗口保持原配置。'
+        : '保存后用于后续任务；正在执行的窗口保持原配置。'
     "
     size="min(860px, 96vw)"
     confirm-text="保存设置"
@@ -83,27 +83,29 @@
             <span class="recharge-settings-hint">分钟；页面加载和账号核对共用这段时间。</span>
           </el-form-item>
           <el-form-item
-            v-if="!directMode && !registration"
-            label="最多重建次数"
+            v-if="!registration"
+            label="网络恢复次数"
             prop="browserOptions.sessionRetryLimit"
             required
           >
             <el-input-number
               v-model="settingsForm.browserOptions.sessionRetryLimit"
-              aria-label="最多重建次数"
+              aria-label="网络恢复次数"
               :min="0"
-              :max="2"
+              :max="9"
               :precision="0"
             />
-            <span class="recharge-settings-hint">次；0 表示不重建，2 表示最多尝试 3 个窗口。</span>
+            <span class="recharge-settings-hint"
+              >次；0 表示不自动恢复，9 表示原窗口最多尝试 10 次，包含首次。</span
+            >
           </el-form-item>
           <p class="recharge-settings-note">
             {{
               registration
                 ? '注册遇到超时、验证或未知页面时保留原窗口；请处理后继续原任务，不自动删除原窗口。'
                 : directMode
-                  ? '自动步骤超过等待时间或遇到真人验证时保留当前窗口，请在官网手动处理；网页会继续核对登录结果，不自动重建窗口。'
-                  : '加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。'
+                  ? 'JSON 登录会核对账号及页面登录状态；确认网络故障后重新打开原窗口提取代理。真人验证需要手动处理，原窗口资料保留。'
+                  : '确认网络故障后关闭并重新打开原窗口提取代理，不删除或新建窗口。已有订单只恢复原单核价；真人验证需要手动处理。'
             }}
           </p>
         </fieldset>

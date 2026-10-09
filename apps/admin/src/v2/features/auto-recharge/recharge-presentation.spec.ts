@@ -28,6 +28,18 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('付款核验展示官网币种和报价，旧金额限制错误不再提示设置上限', () => {
+    expect(statusLabel('payment_guard_passed')).toBe('币种和官网报价已核对');
+    for (const reason of [
+      'payment_amount_over_limit',
+      'invalid_payment_amount',
+      'invalid_payment_limit'
+    ]) {
+      expect(failureReasonLabel(reason)).not.toContain('上限');
+      expect(failureReasonLabel(reason)).not.toContain('最高付款');
+      expect(failureReasonLabel(reason)).not.toMatch(/^[a-z_]+$/);
+    }
+  });
   it('升级前 Go 与官网最终 Plus 分开，不把历史套餐当作当前套餐', () => {
     expect(
       officialCurrentPlanLabel(
@@ -275,7 +287,8 @@ describe('recharge stage presentation', () => {
   });
   it('加载重试与底层错误显示中文，不显示内部异常原文', () => {
     expect(statusLabel('session_load_timeout')).toContain('等待时间');
-    expect(statusLabel('bitbrowser_profile_rebuilding')).toContain('重新创建');
+    expect(statusLabel('bitbrowser_profile_rebuilding')).toContain('原窗口');
+    expect(statusLabel('bitbrowser_profile_rebuilding')).not.toContain('创建');
     expect(browserFailureLabel('TimeoutError')).toBe('等待超时');
     expect(browserFailureLabel('Error', 'net::ERR_PROXY_CONNECTION_FAILED')).toBe('代理连接失败');
     expect(browserFailureLabel('private=secret', 'private=secret')).toBe('浏览器操作异常');

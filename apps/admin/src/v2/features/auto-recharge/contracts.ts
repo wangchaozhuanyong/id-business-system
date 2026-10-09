@@ -4,7 +4,6 @@ export type {
   V2RechargeHandoffCommand,
   V2RechargeJob,
   V2RechargePlan,
-  V2RechargePaymentCap,
   V2RechargeAction,
   V2RechargeDetails,
   V2RechargeDetailsSubmission,

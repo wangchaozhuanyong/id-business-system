@@ -147,9 +147,26 @@ class BrowserOptionsTests(unittest.TestCase):
         self.assertEqual(validate_options(legacy), DEFAULTS)
         for changes in ({'sessionWaitMinutes': 0}, {'sessionWaitMinutes': 11},
                         {'sessionWaitMinutes': 1.5}, {'sessionRetryLimit': -1},
-                        {'sessionRetryLimit': 3}, {'sessionRetryLimit': True}):
+                        {'sessionRetryLimit': 10}, {'sessionRetryLimit': True}):
             with self.subTest(changes=changes), self.assertRaises(Stop):
                 validate_options({**DEFAULTS, **changes})
+
+    def test_retry_limit_defaults_to_ten_attempts_and_preserves_explicit_saved_limit(self):
+        from bitbrowser_options import validate_options
+        self.assertEqual(validate_options(None)['sessionRetryLimit'], 9)
+        self.assertEqual(validate_options({**DEFAULTS, 'sessionRetryLimit': 2})['sessionRetryLimit'], 2)
+        for limit in (0, 9):
+            self.assertEqual(validate_options({**DEFAULTS, 'sessionRetryLimit': limit})['sessionRetryLimit'], limit)
+
+    def test_expected_country_is_optional_and_never_uses_billing_country(self):
+        value = payload()
+        connector.validate_payload(value)
+        value['bitBrowser']['expectedCountryCode'] = 'PH'
+        connector.validate_payload(value)
+        for country in ('ph', 'Philippines', '', 123):
+            value['bitBrowser']['expectedCountryCode'] = country
+            with self.subTest(country=country), self.assertRaises(Stop):
+                connector.validate_payload(value)
 
     def test_old_sync_settings_cannot_enable_login_state_upload(self):
         value = payload()

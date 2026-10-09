@@ -45,14 +45,13 @@ CALLBACK_PATH = re.compile(r"/api/id-business-v2/auto-recharge/local/" + JOB_ID_
 SUPPORTED_CURRENCIES = set(
     "USD MYR PHP CLP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN "
     "AED SAR ZAR NZD CHF SEK NOK DKK PLN TRY".split())
-ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW", "VND", "CLP"}
 SAFE_PUBLIC_KEYS = set(
     "status reason stage session_status account_matched current_plan current_tier target_plan "
     "checkout_status checkout_identifier subscription_status payment_status payment_outcome "
     "payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent "
     "payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code "
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
-    "quote_authority browser_profile_id locked_currency max_amount user_action_required "
+    "quote_authority browser_profile_id locked_currency user_action_required "
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
     "session_elapsed_seconds session_wait_seconds session_step session_phase session_refresh_count cancellation_confirmed browser_cleanup_status "
     "quote_elapsed_seconds quote_wait_seconds quote_refresh_count page_state stale_profiles_cleaned "
@@ -89,7 +88,24 @@ def callback_url(value, job_id):
 
 
 def public_result(value):
-    return {key: item for key, item in value.items() if key in SAFE_PUBLIC_KEYS}
+    result = {key: item for key, item in value.items() if key in SAFE_PUBLIC_KEYS}
+    # Keep bounded session diagnostics without exposing Cookie/JWT values.
+    for key in ("session_cookie_sent", "official_session_user_present",
+                "official_session_access_token_present"):
+        if type(value.get(key)) is bool:
+            result[key] = value[key]
+    for key, minimum, maximum in (
+            ("official_session_http_status", 100, 599),
+            ("access_token_expires_at", 1, 253402300799),
+            ("credential_checked_at", 1, 253402300799),
+            ("access_token_seconds_remaining", -253402300799, 253402300799),
+            ("auth_session_writes_blocked", 0, 1000000)):
+        if type(value.get(key)) is int and minimum <= value[key] <= maximum:
+            result[key] = value[key]
+    cookie_format = value.get("session_cookie_format")
+    if isinstance(cookie_format, str) and cookie_format in {"absent", "single", "chunked"}:
+        result["session_cookie_format"] = cookie_format
+    return result
 
 
 class CallbackClient:
@@ -121,8 +137,24 @@ class BitBrowserClient:
             raise Stop("bitbrowser_api_token_invalid")
         self.token = token
         self.profile_fingerprints = {}
+        self.deadline = None
+        self.operation_lock = threading.Lock()
 
     def post(self, path, body):
+        def remaining():
+            seconds = 30 if self.deadline is None else min(30, self.deadline - time.monotonic())
+            if seconds <= 0:
+                raise Stop("bitbrowser_recovery_timeout")
+            return seconds
+
+        if not self.operation_lock.acquire(timeout=remaining()):
+            raise Stop("bitbrowser_local_api_unavailable")
+        try:
+            return self._post(path, body, remaining())
+        finally:
+            self.operation_lock.release()
+
+    def _post(self, path, body, timeout):
         request = Request(
             self.base_url + path,
             data=json.dumps(body, separators=(",", ":")).encode(),
@@ -130,7 +162,7 @@ class BitBrowserClient:
             method="POST",
         )
         try:
-            with build_opener(NoRedirect).open(request, timeout=30) as response:
+            with build_opener(NoRedirect).open(request, timeout=timeout) as response:
                 result = json.loads(response.read(MAX_BODY), object_pairs_hook=unique_object)
         except Exception:
             raise Stop("bitbrowser_local_api_unavailable", stage=path.strip("/").replace("/", "_")) from None
@@ -151,9 +183,13 @@ class BitBrowserClient:
         tag_id = bitbrowser_catalog.selected_id(catalog["tags"], settings["tagName"], "tag")
         data = self.post("/browser/update", {
             "groupId": group_id,
-            "platform": "https://chatgpt.com",
+            # BitBrowser opens the platform URL as well as the extra URL.
+            # Leave it empty so no anonymous official tab can race injection.
+            "platform": "",
             "platformIcon": "chatgpt.com",
-            "url": "https://chatgpt.com",
+            # The workflow installs its guard and session cookies before the
+            # first official navigation; an anonymous startup can race them.
+            "url": "about:blank",
             "name": window_name,
             "remark": settings["tagName"],
             "userName": "",
@@ -195,7 +231,7 @@ class BitBrowserClient:
                 return result
         raise Stop("bitbrowser_catalog_limit")
 
-    def open_profile(self, profile_id):
+    def open_profile(self, profile_id, *, extract_ip=False):
         # Verify the saved settings before a browser can receive a login session.
         detail = self.post("/browser/detail", {"id": profile_id})
         if (not isinstance(detail, dict) or detail.get("id") != profile_id
@@ -206,7 +242,8 @@ class BitBrowserClient:
         expected = self.profile_fingerprints.get(profile_id)
         if expected is not None:
             bitbrowser_options.verify_profile_configuration(detail, expected)
-        data = self.post("/browser/open", {"id": profile_id, "queue": True})
+        data = self.post("/browser/open", {"id": profile_id, "queue": True,
+                                           **({"extractIp": True} if extract_ip else {})})
         if expected is not None:
             bitbrowser_options.verify_profile_configuration(detail, expected, data)
         endpoint = (data.get("ws") or data.get("http")) if isinstance(data, dict) else None
@@ -288,11 +325,15 @@ def validate_payload(value):
         raise Stop("invalid_connector_payload")
     required_bit = {"localApiUrl", "localApiToken", "groupName", "tagName", "proxyType"}
     if (not required_bit.issubset(bit_browser) or
-            set(bit_browser) - required_bit - {"dynamicProxyUrl", "browserOptions", "staticProxyCredentials"}):
+            set(bit_browser) - required_bit - {"dynamicProxyUrl", "browserOptions", "staticProxyCredentials", "expectedCountryCode"}):
         raise Stop("invalid_bitbrowser_configuration")
     if any(not isinstance(bit_browser.get(key), str) or not bit_browser[key] for key in required_bit):
         raise Stop("invalid_bitbrowser_configuration")
     if bit_browser["proxyType"] not in {"http", "https", "socks5"}:
+        raise Stop("invalid_bitbrowser_configuration")
+    if "expectedCountryCode" in bit_browser and (
+            not isinstance(bit_browser["expectedCountryCode"], str)
+            or not re.fullmatch(r"[A-Z]{2}", bit_browser["expectedCountryCode"])):
         raise Stop("invalid_bitbrowser_configuration")
     bitbrowser_options.validate_browser_settings(bit_browser)
     if mode in ("recheck", "open_browser"):
@@ -310,25 +351,16 @@ def validate_payload(value):
     if (set(address) - {"line2"} != {"id", "line1", "country", "city", "state", "postalCode"}
             or "line2" in address and (not isinstance(address["line2"], str) or len(address["line2"]) > 180)):
         raise Stop("invalid_connector_payload")
-    if set(safety) != {
-            "lockedCurrency", "maxAmount", "maxAmountMinor", "authorizeSinglePayment", "manualPaymentConfirmation"}:
+    if set(safety) - {"maxAmount", "maxAmountMinor"} != {
+            "lockedCurrency", "authorizeSinglePayment", "manualPaymentConfirmation"}:
         raise Stop("invalid_payment_authorization")
     if safety.get("manualPaymentConfirmation") is not True:
         raise Stop("local_payment_confirmation_required")
     if safety.get("authorizeSinglePayment") is not True:
         raise Stop("invalid_payment_authorization")
-    if type(safety.get("maxAmountMinor")) is not int or safety["maxAmountMinor"] <= 0:
-        raise Stop("invalid_payment_limit")
     currency = safety.get("lockedCurrency")
     if not isinstance(currency, str) or currency not in SUPPORTED_CURRENCIES:
         raise Stop("invalid_locked_currency")
-    places = 0 if currency in ZERO_DECIMAL_CURRENCIES else 2
-    maximum = safety.get("maxAmount")
-    pattern = r"\d{1,9}" if places == 0 else r"\d{1,9}\.\d{2}"
-    if not isinstance(maximum, str) or not re.fullmatch(pattern, maximum):
-        raise Stop("invalid_payment_limit")
-    if int(Decimal(maximum) * (10 ** places)) != safety["maxAmountMinor"]:
-        raise Stop("invalid_payment_limit")
     candidate = {
         **details,
         "country": address["country"],
@@ -384,6 +416,7 @@ class LocalJob:
         self.stale_profiles = []
         self.stale_profiles_cleaned = 0
         self.checkout_replacement_performed = False
+        self.original_checkout_identifier = None
         self.confirmation_lock = threading.Lock()
         self.confirmation_event = threading.Event()
         self.pending_confirmation = None
@@ -535,9 +568,6 @@ class LocalJob:
             raise Stop("payment_currency_mismatch", locked_currency=safety["lockedCurrency"])
         if not isinstance(today.get("amount_minor"), int) or today["amount_minor"] <= 0:
             raise Stop("payment_quote_incomplete")
-        if today["amount_minor"] > safety["maxAmountMinor"]:
-            raise Stop("payment_amount_over_limit", locked_currency=safety["lockedCurrency"],
-                       max_amount=safety["maxAmount"])
         try:
             if Decimal(today["amount"]) <= 0 or Decimal(tax["amount"]) < 0 \
                     or Decimal(renewal["amount"]) <= 0:
@@ -648,6 +678,13 @@ class LocalJob:
         stale_profiles = initial.get("staleProfiles", [])
         if not isinstance(records, list) or not isinstance(stale_profiles, list) or len(stale_profiles) > 30:
             raise Stop("durable_state_unavailable")
+        original_checkout = initial.get("originalCheckoutIdentifier")
+        if original_checkout is not None:
+            if (not isinstance(original_checkout, str)
+                    or not re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", original_checkout)
+                    or self.original_checkout_identifier is not None
+                    and self.original_checkout_identifier != original_checkout):
+                raise Stop("durable_state_unavailable")
         seen_sources, seen_profiles = set(), set()
         for value in stale_profiles:
             if (not isinstance(value, dict) or set(value) != {"sourceJobId", "profileId"}
@@ -674,6 +711,8 @@ class LocalJob:
             path.parent.mkdir(parents=True, exist_ok=True)
             write_json(path, record["document"], exclusive=True)
             self.revisions[record["fileKey"]] = record["revision"]
+        if original_checkout is not None:
+            self.original_checkout_identifier = original_checkout
 
     async def execute(self):
         if self.payload["mode"] == "resolve_unknown_payment":
@@ -790,7 +829,6 @@ class LocalJob:
             **result,
             "browser_profile_id": self.profile_id or result.get("browser_profile_id", ""),
             "locked_currency": self.payload.get("safety", {}).get("lockedCurrency"),
-            "max_amount": self.payload.get("safety", {}).get("maxAmount"),
         }
         self.result = public_result(result)
         if not self.resolution_committed:
@@ -883,7 +921,7 @@ class Handler(BaseHTTPRequestHandler):
                             "same-window-page-refresh", "password-login", "login-code"]
             capabilities += ["manual-payment-confirmation", "recharge-process-isolation",
                              "payment-unknown-resolution", "prepayment-page-recovery",
-                             "stale-owned-profile-cleanup"]
+                             "stale-owned-profile-cleanup", "same-profile-proxy-recovery", "json-page-ready"]
             return self.reply(200, {"ok": True, "version": 4,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "role": REGISTRY.role, "capabilities": capabilities,

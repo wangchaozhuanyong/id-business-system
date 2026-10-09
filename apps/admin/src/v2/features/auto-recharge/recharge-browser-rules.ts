@@ -75,8 +75,8 @@ export function browserOptionRules(form: BitBrowserSettingsForm): FormRules {
         required: true,
         type: 'integer',
         min: 0,
-        max: 2,
-        message: '重建次数应为 0 至 2 的整数',
+        max: 9,
+        message: '网络恢复次数应为 0 至 9 的整数',
         trigger: 'change'
       }
     ],

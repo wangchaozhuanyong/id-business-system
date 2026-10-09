@@ -91,6 +91,8 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
         with (patch.object(login, "login_with_password", new=AsyncMock(return_value=(
                 target, {"current_plan": "free"}))) as sign_in,
               patch.object(login, "clear_visible_secrets", new=AsyncMock()) as clear,
+              patch("browser_checkout.prepare_proxy_in_context", new=AsyncMock(
+                  return_value={"country": "US"})),
               patch.object(bitbrowser_retry, "cleanup_stale_profiles", new=AsyncMock()),
               patch.object(bitbrowser_retry, "cancellable_flow", new=AsyncMock(return_value={
                   "status": "payment_cancelled", "payment_requests_sent": 0})) as payment):
@@ -121,9 +123,9 @@ class PasswordLoginTests(unittest.IsolatedAsyncioTestCase):
             with (self.subTest(version=version),
                   patch.object(login, "login_with_password", new=AsyncMock()) as sign_in,
                   patch.object(bitbrowser_retry, "cancellable_flow", new=AsyncMock()) as payment):
-                with self.assertRaises(Stop) as stopped:
-                    await bitbrowser_retry._execute_profiles(job, client, None, playwright, set())
-            self.assertEqual(stopped.exception.report["reason"], reason)
+                result = await bitbrowser_retry._execute_profiles(job, client, None, playwright, set())
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason"], reason)
             sign_in.assert_not_awaited()
             payment.assert_not_awaited()
             job.restore_account.assert_not_called()

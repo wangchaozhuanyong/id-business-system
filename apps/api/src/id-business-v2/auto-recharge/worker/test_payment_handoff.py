@@ -45,10 +45,11 @@ class CommandsAndConfirmationTests(unittest.TestCase):
     def job(self, manual=True):
         return server.Job('synthetic', {'action': 'server', 'plan': 'plus',
             'manualPaymentConfirmation': manual, 'safety': {'authorizeSinglePayment': True,
-            'lockedCurrency': 'MYR', 'maxAmountMinor': 9250}})
+            'lockedCurrency': 'MYR'}})
 
     def test_manual_confirmation_waits_for_current_nonce_once_after_quote(self):
         job = self.job()
+        job.payload['safety'].update(maxAmount='1.00', maxAmountMinor=1)
         received, values = [], []
         with patch.object(server, 'callback', side_effect=lambda _, body: received.append(body)):
             thread = threading.Thread(target=lambda: values.append(job.confirm(quote(), '0000')))
@@ -67,21 +68,46 @@ class CommandsAndConfirmationTests(unittest.TestCase):
             thread.join(2)
         self.assertEqual(values, [True])
         self.assertFalse(job.waiting_confirmation)
+        with self.assertRaises(Stop):
+            job.confirm(quote(), '0000')
 
-    def test_auto_confirmation_and_manual_cancel_timeout_preserve_safety(self):
-        for manual in (False, True):
-            job = self.job(manual)
-            with patch.object(server, 'callback'), patch.object(job.confirm_event, 'wait', return_value=False):
-                self.assertEqual(job.confirm(quote(), '0000'), not manual)
+    def test_legacy_false_missing_or_true_flag_never_auto_confirms_and_cancel_still_stops(self):
+        for manual in (False, True, None):
+            job = self.job(True if manual is None else manual)
+            if manual is None:
+                job.payload.pop('manualPaymentConfirmation')
+            with patch.object(server, 'callback') as callback, patch.object(job.confirm_event, 'wait', return_value=False) as wait:
+                self.assertFalse(job.confirm(quote(), '0000'))
+                wait.assert_called_once_with(300)
+                self.assertEqual(callback.call_args.args[1]['result']['status'], 'awaiting_confirmation')
+                self.assertFalse(job.confirmed)
             self.assertFalse(job.waiting_confirmation)
         job = self.job()
         with patch.object(server, 'callback'), patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(cancel=True)):
             self.assertFalse(job.confirm(quote(), '0000'))
         job = self.job()
-        job.payload['safety']['maxAmountMinor'] = 9249
-        with patch.object(server, 'callback') as callback, self.assertRaises(Stop):
-            job.confirm(quote(), '0000')
-        callback.assert_not_called()
+        job.payload['safety'].update(maxAmount='1.00', maxAmountMinor=1)
+        with patch.object(server, 'callback') as callback, patch.object(job.confirm_event, 'wait', return_value=False) as wait:
+            self.assertFalse(job.confirm(quote(), '0000'))
+            wait.assert_called_once_with(300)
+            self.assertEqual(callback.call_args.args[1]['result']['quote']['today']['amount_minor'], 9250)
+            self.assertEqual(callback.call_args.args[1]['result']['status'], 'awaiting_confirmation')
+            self.assertFalse(job.confirmed)
+
+    def test_server_bad_quote_or_currency_stops_before_manual_confirmation(self):
+        good = quote()
+        for changed in ({**good, 'tax': None},
+                        {**good, 'renewal': {**good['renewal'], 'amount': '0.00', 'amount_minor': 0}},
+                        {**good, 'today': {**good['today'], 'amount_minor': 9251}},
+                        {**good, 'tax': {**good['tax'], 'currency': 'USD'}},
+                        {**good, 'renewal_interval': None}):
+            with self.subTest(changed=list(changed)):
+                job = self.job()
+                with patch.object(server, 'callback') as callback, self.assertRaises(Stop) as stopped:
+                    job.confirm(changed, '0000')
+                self.assertEqual(stopped.exception.report['reason'], 'payment_quote_outside_authorization')
+                callback.assert_not_called()
+                self.assertFalse(job.confirmed)
 
     def test_manual_flag_is_optional_strict_server_boolean(self):
         server.Job('test', {'action': 'server'})
@@ -573,6 +599,7 @@ class FlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     'amount_total': 9250, 'currency': 'myr'}))
             bridge = AsyncMock(side_effect=human_action)
             with patch.object(server, 'callback'), patch.object(job, 'await_handoff', bridge), \
+                    patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)), \
                     patch('pay.challenge_frames', AsyncMock(return_value=[object()])):
                 result = await fixture_browser.flow(confirmer=job.confirm)
             bridge.assert_awaited_once()
@@ -632,6 +659,7 @@ class FlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 'inspect_upgrade': AsyncMock(side_effect=inspect)}.items():
                 patches.enter_context(patch('subscription_upgrade.' + name, replacement))
             patches.enter_context(patch.object(server, 'callback'))
+            patches.enter_context(patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)))
             patches.enter_context(patch.object(job, 'await_handoff', bridge))
             patches.enter_context(patch('payment_handoff.challenge_frames', AsyncMock(return_value=[object()])))
             result = await run_upgrade_in_context(page, target, Path(directory), 'pro-20x',

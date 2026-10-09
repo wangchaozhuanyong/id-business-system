@@ -40,7 +40,7 @@ function harness() {
     accountKey: 'd'.repeat(64),
     nonceHash: hash(agentToken),
     leaseUntil: new Date(Date.now() + 600000),
-    result: { locked_currency: 'USD', max_amount_minor: 3000, manual_payment_confirmation: true }
+    result: { locked_currency: 'USD', manual_payment_confirmation: true }
   };
   const repository = {
     lock: vi.fn(),
@@ -95,11 +95,13 @@ describe('本机人工确认与 API 记录的权限边界', () => {
     { quote_digest: 'invalid' },
     { quote_digest: undefined },
     { quote: { ...quote, today: { ...money, currency: 'PHP' } } },
-    { quote: { ...quote, today: { ...money, amount: '40.00', amount_minor: 4000 } } },
+    { quote: { ...quote, today: { ...money, amount: '0.00', amount_minor: 0 } } },
+    { quote: { ...quote, tax: null } },
+    { quote: { ...quote, renewal: null } },
     { confirmation_expires_at: new Date(0).toISOString() },
     { confirmation_expires_at: 'invalid' },
     { confirmation_expires_at: new Date(Date.now() + 11 * 60000).toISOString() }
-  ])('身份、报价绑定、时间或上限不足时不能进入等待付款确认 %j', async (patch) => {
+  ])('身份、完整报价绑定或时间不足时不能进入等待付款确认 %j', async (patch) => {
     const { local, job, repository } = harness();
     await expect(
       local.callback(id, agentToken, { type: 'progress', result: { ...result(), ...patch } })
@@ -107,6 +109,24 @@ describe('本机人工确认与 API 记录的权限边界', () => {
     expect(job.state).toBe('running');
     expect(job.nonceHash).toBe(hash(agentToken));
     expect(repository.updateJob).not.toHaveBeenCalled();
+  });
+
+  it('超过旧金额上限的完整报价仍仅等待人工确认，不触发付款', async () => {
+    const { local, job, audit } = harness();
+    Object.assign(job.result, { max_amount_minor: 3000, max_amount: '30.00' });
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    await local.callback(id, agentToken, {
+      type: 'progress',
+      result: {
+        ...result(),
+        quote: { ...quote, today: { ...money, amount: '40000.00', amount_minor: 4000000 } }
+      }
+    });
+    expect(job.state).toBe('awaiting_confirmation');
+    expect(job.result).toMatchObject({ quote: { today: { amount_minor: 4000000 } } });
+    expect(audit.append).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
   });
   it('同套餐核验以未付款终态结束，不制造新成功订单或单次授权', async () => {
     const { local, job } = harness();
