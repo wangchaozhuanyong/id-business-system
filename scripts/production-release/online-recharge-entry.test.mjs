@@ -291,7 +291,7 @@ test('read-only and release transports seal controllers and recovery policy and 
   );
   assert.match(
     dispatch,
-    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
+    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py',\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
   );
   assert.match(
     dispatch,
