@@ -92,8 +92,10 @@ function listSourceFiles(relativeDirectory) {
   const walk = (directory) => {
     for (const entry of readdirSync(path.join(root, directory), { withFileTypes: true })) {
       const relativePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) walk(relativePath);
-      else if (/\.(?:ts|vue)$/u.test(entry.name) && !entry.name.endsWith('.spec.ts')) {
+      if (entry.isDirectory()) {
+        // Installed dependencies remain outside business source at every nesting depth.
+        if (entry.name !== 'node_modules') walk(relativePath);
+      } else if (/\.(?:ts|vue)$/u.test(entry.name) && !entry.name.endsWith('.spec.ts')) {
         files.push(relativePath);
       }
     }

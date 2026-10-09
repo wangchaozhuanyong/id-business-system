@@ -137,6 +137,7 @@ if (part === 'guards') {
     '--test',
     'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-check.test.mjs',
+    'scripts/check-cloud-independence.test.mjs',
     'scripts/check-v2-prisma-runtime-boundary.test.mjs',
     'scripts/check-v2-module-architecture.test.mjs',
     'scripts/ci-recharge-precision.test.mjs',

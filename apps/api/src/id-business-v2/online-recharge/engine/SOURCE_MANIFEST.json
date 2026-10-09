@@ -7,7 +7,7 @@
     "旧MySQL实现/SQL/schema/reset与部署脚本",
     "原始截图录像/求解器机密文件"
   ],
-  "dependencyLockPreserved": true,
+  "dependencyLockPreserved": false,
   "files": [
     {
       "path": ".dockerignore",
@@ -56,7 +56,7 @@
       "originalSha256": null,
       "adaptedSha256": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
       "changed": true,
-      "reason": "Pin Node image digest, original Node/Chromium lock and validated independent CPU-only Python lock; non-root, private health, signal forwarding and transient profiles."
+      "reason": "Pin Node image digest, original Chromium and Node lock except documented ws security patch, validated independent CPU-only Python lock; non-root, private health, signal forwarding and transient profiles."
     },
     {
       "path": "healthcheck.cjs",
@@ -89,9 +89,9 @@
     {
       "path": "README.md",
       "originalSha256": null,
-      "adaptedSha256": "1ef572faa28da7d5d4e4833fb7fc34cf6b16cf04b51dbf50bd8ec397804dcd69",
+      "adaptedSha256": "920e45b462d434319202f460fe8f0095ed68df476ebb0e748f0608eb68ae90ff",
       "changed": true,
-      "reason": "Document locked Python runtime, measured offline Linux image compatibility, private networking, bounded shutdown and transient secrets versus persisted masked media/model cache; distinguish image and business proof."
+      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance."
     },
     {
       "path": "requirements-hcaptcha.lock.txt",
@@ -306,16 +306,16 @@
     {
       "path": "upstream/package-lock.json",
       "originalSha256": "0832ac4b0d289e1aa6d23f26269b2c9b91c7cb3ab1c9f7b2d4c44ed00dc9d109",
-      "adaptedSha256": "0832ac4b0d289e1aa6d23f26269b2c9b91c7cb3ab1c9f7b2d4c44ed00dc9d109",
-      "changed": false,
-      "reason": "冻结原版保持不变。"
+      "adaptedSha256": "4f43bd0c45af37e39bd0a5299ffb9d92c9ec280753630bde226de72173936764",
+      "changed": true,
+      "reason": "Original lock preserved except direct ws pin and ws package version, official tarball URL and integrity for necessary ws8.21.0 security fix; all other entries unchanged."
     },
     {
       "path": "upstream/package.json",
       "originalSha256": "120600fa54537e83ac54ba039e4331dd079194894828eef0f05577cbd1c65b46",
-      "adaptedSha256": "ff13c2cb43e58318d101532119f5ac1863616cd939b0e0b53f303f9d1f68ac8b",
+      "adaptedSha256": "c9e583278c4bf5979fd756fdaf871fd66fe66cbf17ec429575416204f732bb48",
       "changed": true,
-      "reason": "仅运行入口改独立worker；依赖声明和原lock保持不升级。"
+      "reason": "Keep independent worker entry and prior adaptations; only ws dependency changes to exact8.21.0 for necessary published security fixes."
     },
     {
       "path": "upstream/payment-retry.js",
@@ -435,6 +435,20 @@
       "adaptedSha256": "464f1c1c0d41b00da1b3e08d376376dabe455d24c4f301ca6abf00792f1b93c6",
       "changed": true,
       "reason": "Native independent worker with private health, bounded signal shutdown, outcome transaction completion and lease-safe interrupted jobs; browser/solver transient data never enters persisted media/model volume."
+    }
+  ],
+  "dependencySecurityPatches": [
+    {
+      "package": "ws",
+      "originalVersion": "8.20.0",
+      "adaptedVersion": "8.21.0",
+      "exactPin": true,
+      "reason": "Necessary targeted fix for GHSA-96hv-2xvq-fx4p and inherited GHSA-58qx-3vcg-4xpx fix; no upstream revision, other dependency, browser or payment behavior upgrade.",
+      "advisories": [
+        "https://github.com/websockets/ws/security/advisories/GHSA-96hv-2xvq-fx4p",
+        "https://github.com/websockets/ws/security/advisories/GHSA-58qx-3vcg-4xpx"
+      ],
+      "otherLockEntriesPreserved": true
     }
   ]
 }

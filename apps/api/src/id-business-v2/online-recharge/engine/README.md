@@ -4,7 +4,7 @@
 
 ## 运行
 
-需要 Node.js 22、原 lock 对应的 Chromium、ffmpeg，以及启用 hCaptcha 时 `requirements-hcaptcha.lock.txt` 中的独立 Python 环境。原 Node 包锁和上游 `requirements-hcaptcha.txt` 保持不变。安装命令只安装 Node 包，不执行安装脚本或下载浏览器：
+需要 Node.js 22、冻结浏览器版本对应的 Chromium、ffmpeg，以及启用 hCaptcha 时 `requirements-hcaptcha.lock.txt` 中的独立 Python 环境。Node 包锁以原版为基础，只将 `ws 8.20.0` 定向修补并精确固定为 `8.21.0`；其余依赖版本、Playwright／Chromium 和上游 `requirements-hcaptcha.txt` 保持不变。安装命令只安装 Node 包，不执行安装脚本或下载浏览器：
 
 ```sh
 npm ci --prefix upstream --ignore-scripts --no-audit --no-fund
@@ -67,10 +67,18 @@ RPC 请求为 `{method,args}`，带 `x-online-recharge-worker`；任务与资源
 
 本地验证包含原 18 测试、付款误判/原子租约/临时安全码/未知结果/真实金额/原三卡重试回归，以及完全隔离的合成 Chromium 像素遮罩和 WebM 编码检查。合成页面没有外部路由，全部外网请求在 context 层拒绝。它验证媒体接口，不代表真实充值或反机器人求解验证。
 
-`Dockerfile` 以官方 Node 22 的固定多架构 digest 构建；Node 包和 Chromium 使用原 `upstream/package-lock.json`，调用已安装的 Playwright CLI，不临时下载另一份 CLI。独立 `requirements-hcaptcha.lock.txt` 固定 Linux amd64 实际解析且成功导入的 43 个 Python 包，Torch 为 CPU 版，不携带 NVIDIA 依赖；原 `upstream/requirements-hcaptcha.txt` 不改写。原 Node Playwright 为 1.59.1，而 PyPI 的对应 Python 驱动只有 1.59.0；实际无外网 CDP 附着检查验证两者兼容。镜像构建执行 `pip check` 和 CLIPModel／CLIPProcessor 等必需模块导入，在 `/opt/solver-venv/requirements.resolved.txt`、`node-version.txt`、`browser-versions.json` 保存实际清单。最终发布必须固定该镜像 digest。
+`Dockerfile` 以官方 Node 22 的固定多架构 digest 构建；Node 包和 Chromium 使用仅包含上述 `ws` 安全补丁的 `upstream/package-lock.json`，调用已安装的 Playwright CLI，不临时下载另一份 CLI。独立 `requirements-hcaptcha.lock.txt` 固定 Linux amd64 实际解析且成功导入的 43 个 Python 包，Torch 为 CPU 版，不携带 NVIDIA 依赖；原 `upstream/requirements-hcaptcha.txt` 不改写。原 Node Playwright 为 1.59.1，而 PyPI 的对应 Python 驱动只有 1.59.0；实际无外网 CDP 附着检查验证两者兼容。镜像构建执行 `pip check` 和 CLIPModel／CLIPProcessor 等必需模块导入，在 `/opt/solver-venv/requirements.resolved.txt`、`node-version.txt`、`browser-versions.json` 保存实际清单。最终发布必须固定该镜像 digest。
 
 API 与执行器需共享 API 的网络命名空间，RPC 和 CVC 都走 `127.0.0.1`，不要发布安全码端口或 CDP 端口。执行器不取得数据库凭据。镜像内 `tini` 转发进程组信号；`SIGTERM`／`SIGINT` 停止领取，清理临时凭据并等待完整任务收尾，最长 20 秒后退出，未确认付款交由后端租约恢复为待核对。已退出子进程仍等待记录事务，避免关停卡在迟到注册的 `exit` 事件上。容器 `stop_grace_period` 应至少 30 秒。
 
 生产挂载只写运行卷 `/workspace/engine/runtime`，其中脱敏媒体使用 `media/`，CLIP 模型缓存使用 `cache/huggingface/`；浏览器 Cookie、Session、profile 和验证码临时文件走 `/tmp` 易失卷。运行镜像可设为只读，用户为 `node`，丢弃所有 Linux capabilities 并启用 `no-new-privileges`。建议以 2 GiB 内存、512 进程、512 MiB `/tmp` 与 512 MiB `/dev/shm` 起步，实际并发仍按后台原配置，后续依据测量调整资源上限；这些建议尚未做生产负载验证。
 
 实际 Linux amd64 镜像已构建并以 `verify-image-runtime.cjs` 验收：无外网、非 root、只读镜像、易失 `/tmp` 下启动 headful Chromium，Python 驱动通过本机 CDP 读取合成文字，检查 CPU Torch／CLIP 导入、完整依赖与锁一致、私有健康和正常退出。验收脚本只使用合成数据，模型权重不下载；输出路径必须显式指定在所属项目 `.runtime/`。镜像验收不代表生产部署、真实充值、真实验证码求解或生产并发负载已通过。
+
+## ws 安全补丁
+
+原 `ws 8.20.0` 受到[小片段内存耗尽拒绝服务公告](https://github.com/websockets/ws/security/advisories/GHSA-96hv-2xvq-fx4p)和[关闭帧内存披露公告](https://github.com/websockets/ws/security/advisories/GHSA-58qx-3vcg-4xpx)影响。`8.21.0` 修复前者，并包含 `8.20.1` 对后者的修复。ID API 与本执行器均精确使用 `8.21.0`，Puppeteer 复用同一修补版本；没有升级上游提交、其他依赖、浏览器或付款逻辑。来源清单保留原锁摘要与修补后摘要，`dependencyLockPreserved=false` 表示锁文件确有必要安全变更。
+
+关闭安装脚本的实际安装后，根 `npm run audit:high` 通过且报告 0 项；上游全量审计仍报告 24 个包条目（18 high、1 critical、5 moderate），只有 `ws` 条目消失，其余条目与修补前完全相同。API 授权等 19 项、真实 Nginx/WebSocket 合成网关 9 项、原版 18 项通过。执行器首次 46 项中 45 项通过，媒体项因指定的本机 ffmpeg 路径不存在而失败；改用已安装的 ffmpeg／ffprobe，仅补验该项通过，等价覆盖全部 46 项。没有进行漏洞攻击或真实业务测试。
+
+剩余 critical 为未迁移的原 Express → proxy-addr 链；实际 HTTP／SOCKS 路径仍保留有条件的依赖风险，例如恶意上游重定向结合环境代理设置。公共 Session 不控制请求地址／选项，代理仅接受管理员配置的 HTTP(S)／SOCKS5；这些源码边界判断不能代替生产环境或攻击验证。精确包名、依赖链、触发前提与日志保存在项目 `.runtime/online-recharge-release-20261009/build/source-review-ws-security/`。不把本次定向补丁表述为全上游安全通过。旧镜像验收发生在该补丁前，修补后的镜像需要重新构建与验收，不能沿用旧镜像摘要作为修补后的运行证明。
