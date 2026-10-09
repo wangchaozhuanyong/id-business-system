@@ -230,7 +230,11 @@ class IdentityTests(unittest.TestCase):
         alternate = self.root / 'alternate-config'
         original.rename(alternate)
         original.symlink_to(alternate, target_is_directory=True)
-        self.reject('PATH_INVALID')
+        # Linux symlink mode 0777 rejects at the permission check; platforms
+        # with a stricter link mode reach the directory-type check instead.
+        with patch.object(self.reader, 'read', wraps=self.reader.read) as read:
+            self.reject()
+        self.assertNotIn(m.CONFIG, [call.args[0] for call in read.call_args_list])
 
     def test_proc_directory_symlink_rejected(self):
         original = self.root / 'proc/321'
