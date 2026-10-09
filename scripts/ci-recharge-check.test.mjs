@@ -306,13 +306,21 @@ test('API Admin control edits execute their suite in both CI entry points', () =
     for (const path of [
       'scripts/production-release/api-admin-scope.py',
       'scripts/production-release/api-admin-readonly.py',
-      'scripts/production-release/api-admin-scope.test.py'
+      'scripts/production-release/api-admin-scope.test.py',
+      'scripts/production-release/api-admin-readonly.test.py'
     ]) {
       const calls = recordGuardCommands('ci-only', [path], part);
       assert.equal(
         calls.filter(
           (call) =>
             call.join(' ') === 'python3 -B scripts/production-release/api-admin-scope.test.py'
+        ).length,
+        1
+      );
+      assert.equal(
+        calls.filter(
+          (call) =>
+            call.join(' ') === 'python3 -B scripts/production-release/api-admin-readonly.test.py'
         ).length,
         1
       );

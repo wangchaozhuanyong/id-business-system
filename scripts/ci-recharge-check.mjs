@@ -206,8 +206,10 @@ if (part === 'guards') {
         path === '.github/workflows/production-release.yml' ||
         path === 'scripts/ci-recharge-check.mjs'
     )
-  )
+  ) {
     run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
+    run('python3', ['-B', 'scripts/production-release/api-admin-readonly.test.py']);
+  }
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
@@ -328,8 +330,10 @@ if (part === 'guards') {
         path === '.github/workflows/production-release.yml' ||
         path === 'scripts/ci-recharge-check.mjs'
     )
-  )
+  ) {
     run('python3', ['-B', 'scripts/production-release/api-admin-scope.test.py']);
+    run('python3', ['-B', 'scripts/production-release/api-admin-readonly.test.py']);
+  }
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
@@ -417,6 +421,7 @@ if (part === 'guards') {
       'test_owned_recharge_profile',
       'test_connector_health',
       'test_session_retry',
+      'test_bitbrowser_readiness',
       fullPro ? 'test_pro' : 'test_pro.ProMenuDiagnosticsTests',
       'test_server',
       'test_worker_isolation',

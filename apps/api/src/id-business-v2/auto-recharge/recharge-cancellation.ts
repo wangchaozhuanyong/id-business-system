@@ -5,8 +5,7 @@ import { object } from './recharge-validation';
 
 export function canReplaceCheckout(job: Pick<IdBusinessV2RechargeJob, 'action' | 'result'>) {
   return (
-    ['quote', 'flow', 'bitbrowser', 'server'].includes(job.action) &&
-    object(job.result).recheck_only !== true
+    ['quote', 'flow', 'server'].includes(job.action) && object(job.result).recheck_only !== true
   );
 }
 
@@ -26,7 +25,7 @@ export async function completeCancellation(
     object(job.result).recheck_only === true
   )
     return;
-  const retired = await repository.retireCancelledCheckout(
+  const checkoutReadOnlyRecoverable = await repository.inspectStoppedCheckout(
     tx,
     job.accountKey,
     job.plan,
@@ -39,10 +38,10 @@ export async function completeCancellation(
     objectType: 'recharge_job',
     objectId: job.id,
     afterData: {
-      retiredRecords: retired,
+      checkoutReadOnlyRecoverable,
       browserCleanup:
         typeof report.browser_cleanup_status === 'string' ? report.browser_cleanup_status : null
     },
-    remark: '连接器确认停止；停用未付款的取消结算，保留原始记录'
+    remark: '仅停止本次任务并撤销确认；未证明官网订单取消，保留原订单及付款事实'
   });
 }

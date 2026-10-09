@@ -8,7 +8,7 @@ from checkout_core import Stop
 
 class SessionBudget:
     def __init__(self, seconds, *, cancelled=lambda: False, report=lambda **details: None,
-                 clock=time.monotonic, phase=None):
+                 clock=time.monotonic, phase=None, parent=None):
         self.seconds = seconds
         self.cancelled = cancelled
         self.report = report
@@ -19,10 +19,15 @@ class SessionBudget:
         self.phase = phase if phase in {"initial_login", "subscription_check", "checkout_check"} else None
         self.refresh_count = 0
         self.last_report = float("-inf")
+        self.parent = parent
+        self.human_pause_started = None
+        self.human_pause_depth = 0
 
     @property
     def elapsed(self):
-        return max(0, self.clock() - self.started - self.paused)
+        now = self.clock()
+        active_pause = max(0, now - self.human_pause_started) if self.human_pause_started is not None else 0
+        return max(0, now - self.started - self.paused - active_pause)
 
     def check_cancelled(self):
         if self.cancelled():
@@ -38,7 +43,8 @@ class SessionBudget:
         remaining = self.seconds - self.elapsed
         if remaining <= 0:
             raise Stop("session_load_timeout", error_type="TimeoutError")
-        return max(1, int(remaining * 1000))
+        remaining_ms = max(1, int(remaining * 1000))
+        return min(remaining_ms, self.parent.remaining_ms()) if self.parent else remaining_ms
 
     async def run(self, operation, step):
         self.step = step
@@ -64,16 +70,27 @@ class SessionBudget:
             await asyncio.gather(task, return_exceptions=True)
 
     async def human_wait(self, operation):
-        started = self.clock()
+        budgets = []
+        current = self
+        while current:
+            if current.human_pause_depth == 0:
+                current.human_pause_started = current.clock()
+            current.human_pause_depth += 1
+            budgets.append(current)
+            current = current.parent
         try:
             return await operation()
         finally:
-            self.paused += self.clock() - started
+            for current in reversed(budgets):
+                current.human_pause_depth -= 1
+                if current.human_pause_depth == 0:
+                    current.paused += max(0, current.clock() - current.human_pause_started)
+                    current.human_pause_started = None
 
     def restart(self, *, report=None, phase=None):
         """同一窗口的新阶段使用独立预算，并沿用取消信号。"""
         return SessionBudget(self.seconds, cancelled=self.cancelled, report=report or self.report,
-                             clock=self.clock, phase=phase or self.phase)
+                             clock=self.clock, phase=phase or self.phase, parent=self.parent)
 
 
 RETRYABLE_NETWORK_CODES = {

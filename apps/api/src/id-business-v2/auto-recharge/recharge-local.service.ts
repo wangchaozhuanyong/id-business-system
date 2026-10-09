@@ -24,7 +24,6 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
 import { hash, object, uuidPattern } from './recharge-validation';
-import { findOwnedRechargeBrowserProfile } from './recharge-job-helpers';
 import { rechargeUpgradeRecheckBinding } from './recharge-upgrade-protocol';
 import {
   persistLocalPaymentFacts,
@@ -109,11 +108,16 @@ export class RechargeLocalService {
           input.cardId && this.names
             ? await this.names.localCard(tx, input.cardId, input.billingName!, input.lockedCurrency)
             : null;
+        const accountKey = account?.officialAccountKey;
+        const ownedProfile = accountKey
+          ? await this.repository.retainedProfileForAccount(tx, operator.id, accountKey, input.id)
+          : undefined;
         const job = await this.repository.createJob(tx, {
           cardId: card?.id ?? null,
           billingNameEncrypted: card ? this.encryption?.encrypt(input.billingName) : null,
           id: input.id,
           ownerId: operator.id,
+          ...(ownedProfile ? { accountKey: ownedProfile.accountKey } : {}),
           proxyId: selectedProxy?.id ?? null,
           chatgptAccountId: account?.id ?? null,
           expectedEmailEncrypted:
@@ -129,10 +133,9 @@ export class RechargeLocalService {
             addressId: address.id,
             window_name: input.windowName,
             locked_currency: input.lockedCurrency,
-            max_amount: input.maxAmount,
-            max_amount_minor: input.maxAmountMinor,
             manual_payment_confirmation: true,
-            payment_requests_sent: 0
+            payment_requests_sent: 0,
+            ...(ownedProfile ? { browser_profile_id: ownedProfile.profileId } : {})
           })
         });
         await this.audit.append(tx, {
@@ -146,7 +149,6 @@ export class RechargeLocalService {
             addressId: address.id,
             windowName: input.windowName,
             lockedCurrency: input.lockedCurrency,
-            maxAmount: input.maxAmount,
             authorizeSinglePayment: true,
             chatgptAccountId: account?.id ?? null,
             useSavedCredentials: input.useSavedCredentials,
@@ -154,18 +156,6 @@ export class RechargeLocalService {
           },
           remark: '创建本机比特浏览器单次充值任务'
         });
-        const ownedProfile = account?.officialAccountKey
-          ? findOwnedRechargeBrowserProfile(
-              await this.repository.finishedJobsForAccount(
-                tx,
-                operator.id,
-                account.officialAccountKey,
-                input.id
-              ),
-              operator.id,
-              account.officialAccountKey
-            )
-          : undefined;
         return { job, address, account, ownedProfile };
       },
       {
@@ -189,6 +179,7 @@ export class RechargeLocalService {
       bitBrowser: {
         ...localBitBrowserLaunchOptions(runtime),
         proxyType: selectedProxy?.type ?? runtime.proxyType,
+        ...(selectedProxy ? { expectedCountryCode: selectedProxy.countryCode } : {}),
         dynamicProxyUrl:
           selectedProxy?.mode === 'dynamic'
             ? selectedProxy.extractionUrl
@@ -223,8 +214,6 @@ export class RechargeLocalService {
       },
       safety: {
         lockedCurrency: input.lockedCurrency,
-        maxAmount: input.maxAmount,
-        maxAmountMinor: input.maxAmountMinor,
         authorizeSinglePayment: true,
         manualPaymentConfirmation: true
       }

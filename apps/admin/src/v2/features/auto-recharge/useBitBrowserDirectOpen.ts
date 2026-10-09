@@ -56,7 +56,14 @@ export function useBitBrowserDirectOpen(
           ...(profileId ? { browser_profile_id: profileId } : {})
         }
       });
-      if (!disposed) await refresh();
+      if (!disposed) {
+        try {
+          await refresh();
+        } catch {
+          if (!disposed && !task.endedRemotely)
+            reportError('执行状态已保存，但页面刷新失败，请刷新原任务核对。');
+        }
+      }
     };
     try {
       await callback('progress', {
@@ -83,6 +90,17 @@ export function useBitBrowserDirectOpen(
             progress: async (stage, extra = {}) => {
               if (extra.browser_profile_id) profileId = extra.browser_profile_id;
               await callback('progress', { status: 'running', stage, ...extra });
+            },
+            restore: async (accountKey) => {
+              if (task.controller.signal.aborted || task.endedRemotely)
+                throw new DirectBrowserError('bitbrowser_direct_cancelled');
+              const result = await rechargeApi.directBrowserCallback(launch.id, launch.agentToken, {
+                type: 'restore',
+                accountKey
+              });
+              if (task.controller.signal.aborted || task.endedRemotely)
+                throw new DirectBrowserError('bitbrowser_direct_cancelled');
+              return result;
             },
             code: () =>
               new Promise<string>((resolve, reject) => {
@@ -119,6 +137,9 @@ export function useBitBrowserDirectOpen(
             status: cancelled ? 'cancelled' : 'blocked',
             stage: 'session_restore',
             reason,
+            account_matched: reason === 'official_login_page_not_ready',
+            session_status:
+              reason === 'official_login_page_not_ready' ? 'restored' : 'not_verified',
             ...(cancelled ? { cancellation_confirmed: true } : {})
           });
         } catch {

@@ -109,6 +109,8 @@ export function requireConnectorHealth(result: Record<string, unknown>) {
       'browser-options',
       'browser-profile-v2',
       'session-load-retry',
+      'same-profile-proxy-recovery',
+      'json-page-ready',
       'same-window-page-refresh',
       'payment-unknown-resolution',
       'prepayment-page-recovery',

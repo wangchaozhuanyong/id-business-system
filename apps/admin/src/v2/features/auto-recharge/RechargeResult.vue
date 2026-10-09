@@ -91,10 +91,8 @@
         <dd v-if="job.result.browser_profile_id">{{ job.result.browser_profile_id }}</dd>
         <dt v-if="job.result.window_name">窗口名称</dt>
         <dd v-if="job.result.window_name">{{ job.result.window_name }}</dd>
-        <dt v-if="job.result.locked_currency">付款保护</dt>
-        <dd v-if="job.result.locked_currency">
-          锁定 {{ job.result.locked_currency }}，最高 {{ job.result.max_amount }}
-        </dd>
+        <dt v-if="job.result.locked_currency">付款币种</dt>
+        <dd v-if="job.result.locked_currency">{{ job.result.locked_currency }}</dd>
         <dt>付款状态</dt>
         <dd>{{ paymentStatusLabel(job) }}</dd>
         <dt>开通状态</dt>

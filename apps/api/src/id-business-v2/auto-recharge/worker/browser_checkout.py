@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from decimal import Decimal, InvalidOperation
 import json
 import os
@@ -15,13 +15,33 @@ import time
 from urllib.parse import urlsplit
 
 from attempt_ledger import AttemptLedger, existing_checkout
-from browser_session import retryable_page_load_error, session_failure
+from browser_session import (NETWORK_CODE_PATTERN, SessionBudget,
+                             retryable_page_load_error, session_failure)
 from checkout_core import (ACCOUNT_PATH, CHECKOUT_PATH, MAX_BYTES, ROOT, BrowserCredential,
                            Stop, account_plan, checkout_result, parse_credential, response_json,
                            safe_text, session_cookies, verify_official_session)
 from plans import PLANS, PRO_GROUP, checkout_option_plan, checkout_text_plan, plan_spec, text_tiers, official_subscription, subscription_transition
 
 ORIGIN = "https://chatgpt.com"
+
+
+async def install_session_cookies(context, target, *, budget=None):
+    """Replace only official session-token fragments; preserve every other cookie."""
+    async def install():
+        await context.clear_cookies(
+            name=re.compile(r"^__Secure-next-auth\.session-token(?:\.\d+)?$"),
+            domain=re.compile(r"^\.?chatgpt\.com$"))
+        if budget:
+            budget.check_cancelled()
+        await context.add_cookies(session_cookies(target))
+    if budget:
+        await budget.run(install, "session_cookie")
+    else:
+        await install()
+
+
+SESSION_REFRESH_PATH = ("/api/auth/session?refresh=true&reason=token_expired&method=GET"
+                        "&path=%2Fapi%2Fauth%2Fsession")
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 CURRENCIES = {"USD": 2, "MYR": 2, "PHP": 2, "CLP": 0, "EUR": 2, "GBP": 2, "AUD": 2, "CAD": 2,
               "JPY": 0, "KRW": 0, "SGD": 2, "INR": 2, "IDR": 2, "THB": 2, "VND": 0,
@@ -90,6 +110,25 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
     if isinstance(entity, str) and guard.checkout_id:
         expected_url = f"{ORIGIN}/checkout/{entity}/{guard.checkout_id}"
 
+    async def read_quote_operation(operation, step):
+        try:
+            if quote_budget:
+                return await quote_budget.run(operation, step)
+            remaining = wait_seconds - elapsed()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            value = await asyncio.wait_for(operation(), timeout=remaining)
+            if elapsed() >= wait_seconds:
+                raise asyncio.TimeoutError()
+            return value
+        except (asyncio.TimeoutError, Stop) as exc:
+            if isinstance(exc, Stop) and exc.report.get("reason") != "session_load_timeout":
+                raise
+            raise Stop("checkout_page_load_timeout",
+                       quote_elapsed_seconds=min(int(elapsed()), int(wait_seconds)),
+                       quote_wait_seconds=int(wait_seconds), quote_refresh_count=refresh_count,
+                       page_state="loading") from None
+
     async def refresh_page(reason):
         nonlocal refresh_count
         progress("quote_page_refreshing", quote_elapsed_seconds=int(elapsed()),
@@ -144,8 +183,9 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
     while elapsed() < wait_seconds:
         cancelled()
         try:
-            quote_text = await page.locator("body").inner_text()
-            title = await page.title()
+            quote_text = await read_quote_operation(
+                lambda: page.locator("body").inner_text(), "quote_text")
+            title = await read_quote_operation(page.title, "quote_title")
         except Exception as exc:
             code = PAGE_NETWORK_ERROR.search(str(exc))
             if refresh_count == 0 and (code or retryable_page_load_error(exc)):
@@ -158,7 +198,8 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
                            quote_refresh_count=refresh_count, page_state="network_error") from None
             raise
         observed_text = title + "\n" + quote_text
-        quote = await quote_from_page(page, guard.result.get("returned_currency"))
+        quote = await read_quote_operation(
+            lambda: quote_from_page(page, guard.result.get("returned_currency")), "quote_read")
         page_state = checkout_page_state(page.url, observed_text, quote, guard.checkout_id)
         now = elapsed()
         if now - last_report >= 10:
@@ -189,7 +230,13 @@ async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_
         if refresh_count == 0 and now >= refresh_at:
             await refresh_page("checkout_page_incomplete")
             continue
-        await asyncio.sleep(.3)
+        try:
+            await read_quote_operation(
+                lambda: asyncio.sleep(min(.3, max(.001, wait_seconds - elapsed()))), "quote_wait")
+        except Stop as exc:
+            if exc.report.get("reason") != "checkout_page_load_timeout":
+                raise
+            break
     return quote, quote_text, {
         "quote_elapsed_seconds": min(int(elapsed()), int(wait_seconds)),
         "quote_wait_seconds": int(wait_seconds),
@@ -221,7 +268,7 @@ async def restore_session_with_refresh(page, target, wait_seconds, budget):
             if type(status) is int and status >= 400:
                 raise Stop("verification_required" if status == 403 else "http_error",
                            http_status=status, user_action_required=status == 403)
-            return await check_session(page, target, wait_seconds, budget)
+            return await check_session(page, target, wait_seconds, budget, initial_restore=True)
         except Exception as exc:
             if load_attempt or not retryable_page_load_error(exc):
                 raise
@@ -394,6 +441,7 @@ class NetworkGuard:
         self.blocked_duplicates = 0
         self.blocked_payment_requests = 0
         self.blocked_unknown_writes = 0
+        self.auth_session_writes_blocked = 0
         self.request_object = None
         self.result = None
         self.error = None
@@ -515,6 +563,8 @@ class NetworkGuard:
         else:
             self.blocked_unknown_writes += 1
             parts = urlsplit(request.url)
+            if parts.hostname == "chatgpt.com" and parts.path == "/api/auth/session":
+                self.auth_session_writes_blocked += 1
             if parts.hostname == "chatgpt.com" and parts.path.startswith(("/api/", "/backend-api/")):
                 path = re.sub(r"/[A-Za-z0-9_-]{20,}", "/[id]", parts.path)
                 path = safe_text(path)
@@ -560,6 +610,7 @@ class NetworkGuard:
         return {"target_plan": self.target_plan, "checkout_requests_sent": self.sent, "duplicate_requests_blocked": self.blocked_duplicates,
                 "payment_requests_sent": 0, "payment_requests_blocked": self.blocked_payment_requests,
                 "other_writes_blocked": self.blocked_unknown_writes, "payment_status": "not_attempted",
+                "auth_session_writes_blocked": self.auth_session_writes_blocked,
                 "blocked_official_write_paths": dict(self.blocked_official_paths),
                 "blocked_payment_related_paths": dict(self.blocked_payment_paths),
                 "checkout_initializations_allowed": self.checkout_initializations_allowed,
@@ -573,14 +624,63 @@ class NetworkGuard:
         return "unknown" if self.sent else "not_attempted"
 
 
-async def browser_read(page, path, credential=None, budget=None):
+@contextmanager
+def observe_critical_read_failure(page, path):
+    """Only failures of this main-frame official identity read can prove proxy trouble."""
+    observation, pending, attached = {}, set(), []
+    expected = urlsplit(path)
+    active = True
+    def matches(request):
+        try:
+            location = urlsplit(request.url)
+            return bool(active and request.method == "GET"
+                        and location.scheme == "https" and location.netloc == "chatgpt.com"
+                        and location.path == expected.path and location.query == expected.query
+                        and request.frame is page.main_frame)
+        except Exception:
+            return False
+    def requested(request):
+        if matches(request):
+            pending.add(id(request))
+    def failed(request):
+        if id(request) not in pending or not matches(request):
+            return
+        try:
+            failure = request.failure
+            code = NETWORK_CODE_PATTERN.search(failure) if isinstance(failure, str) else None
+            if code:
+                observation["browser_error_code"] = code.group(0)
+        except Exception:
+            pass
+    try:
+        if (expected.path in {"/api/auth/session", ACCOUNT_PATH}
+                and callable(getattr(page, "on", None))
+                and callable(getattr(page, "remove_listener", None))):
+            for name, handler in (("request", requested), ("requestfailed", failed)):
+                page.on(name, handler)
+                attached.append((name, handler))
+        yield observation
+    finally:
+        active = False
+        for name, handler in attached:
+            try:
+                page.remove_listener(name, handler)
+            except Exception:
+                pass
+
+
+async def browser_read(page, path, credential=None, budget=None, *, timeout_ms=None):
     if urlsplit(page.url).hostname != "chatgpt.com":
         raise Stop("json_session_not_restored", session_status="new_authorized_json_required")
     headers = {"Accept": "application/json"}
     if credential:
         headers.update({"Authorization": "Bearer " + credential.token, "chatgpt-account-id": credential.account_id})
+    read_timeout_ms = budget.remaining_ms() if budget else 25000
+    if timeout_ms is not None:
+        read_timeout_ms = min(read_timeout_ms, timeout_ms)
     # 页面同源请求；不跳转到会显示 Token 的 session JSON 页面。
-    result = await page.evaluate("""async ({path, headers, limit, timeoutMs, boundedSession}) => {
+    with observe_critical_read_failure(page, path) as observed:
+        result = await page.evaluate("""async ({path, headers, limit, timeoutMs, boundedSession}) => {
         const control = new AbortController();
         const timer = setTimeout(() => control.abort(), timeoutMs);
         try {
@@ -598,10 +698,13 @@ async def browser_read(page, path, credential=None, budget=None):
             if (!boundedSession) throw error;
             return {read_error: error.name === "AbortError" ? "timeout" : "network"};
         } finally { clearTimeout(timer); }
-    }""", {"path": path, "headers": headers, "limit": MAX_BYTES,
-             "timeoutMs": budget.remaining_ms() if budget else 25000, "boundedSession": bool(budget)})
+        }""", {"path": path, "headers": headers, "limit": MAX_BYTES,
+                 "timeoutMs": read_timeout_ms, "boundedSession": bool(budget)})
     if result.get("read_error"):
-        raise Stop("session_load_timeout" if result["read_error"] == "timeout" else "session_network_error")
+        code = observed.get("browser_error_code")
+        reason = ("session_network_error" if code or result["read_error"] != "timeout"
+                  else "session_load_timeout")
+        raise Stop(reason, **({"browser_error_code": code} if code else {}))
     if result["raw"] is None:
         raise Stop("response_too_large")
     return response_json(result["status"], result["headers"], result["raw"].encode(), credential.token if credential else "")
@@ -621,22 +724,63 @@ async def wait_for_user(reason, seconds):
     raise Stop(reason, user_action_required=True, wait_expired=True)
 
 
-async def check_session(page, target, wait_seconds=0, budget=None):
+async def wait_for_refreshed_session(page, target, budget, expired):
+    """Use the official refresh GET once, then observe within the original deadline."""
+    deadline = budget.clock() + 15
+    refresh_sent = False
+    while budget.clock() < deadline:
+        session = {}
+        try:
+            await budget.run(lambda: asyncio.sleep(min(1, deadline - budget.clock())), "session_read")
+            remaining = deadline - budget.clock()
+            if remaining <= 0:
+                break
+            path = "/api/auth/session" if refresh_sent else SESSION_REFRESH_PATH
+            refresh_sent = True
+            session = await budget.run(lambda: asyncio.wait_for(
+                browser_read(page, path, budget=budget, timeout_ms=max(1, int(remaining * 1000))),
+                timeout=remaining), "session_read")
+            if budget.clock() > deadline:
+                break
+            return verify_official_session(session, target)
+        except Stop as exc:
+            if exc.report.get("reason") == "access_token_expired" and not session.get("error"):
+                expired = exc
+                continue
+            if exc.report.get("reason") == "session_load_timeout":
+                break
+            raise
+        except asyncio.TimeoutError:
+            break
+    # An expired session never becomes a network-retry trigger or a verified login.
+    raise expired
+
+
+async def check_session(page, target, wait_seconds=0, budget=None, *, initial_restore=False):
     async def read(operation, step):
         return await budget.run(operation, step) if budget else await operation()
+    refresh_waiting = False
     for attempt in range(2):
         try:
             title = await read(page.title, "page_title")
             if re.search(r"Just a moment|Verify.*human|安全验证|请稍候", title, re.I):
                 raise Stop("verification_required", challenge_observed=True)
             session = await read(lambda: browser_read(page, "/api/auth/session", budget=budget), "session_read")
-            refreshed = verify_official_session(session, target)
+            try:
+                refreshed = verify_official_session(session, target)
+            except Stop as exc:
+                if (exc.report.get("reason") != "access_token_expired" or not initial_restore
+                        or session.get("error") or not budget
+                        or not getattr(target, "session_token", None) or refresh_waiting):
+                    raise
+                refresh_waiting = True
+                refreshed = await wait_for_refreshed_session(page, target, budget, exc)
             account = await read(lambda: browser_read(page, ACCOUNT_PATH, refreshed, budget), "account_read")
             subscription = official_subscription(account, target.account_id)
             return refreshed, {"session_status": "restored", "account_matched": True, **subscription,
                                "credential_refreshed": refreshed.token != target.old_token}
         except Stop as exc:
-            if exc.report["reason"] == "verification_required" and attempt == 0:
+            if exc.report["reason"] == "verification_required" and attempt == 0 and not refresh_waiting:
                 if budget:
                     await budget.human_wait(lambda: wait_for_user("verification_required", wait_seconds))
                 else:
@@ -674,6 +818,98 @@ async def observe_page_network(page, budget=None):
         failure = session_failure(exc)
         raise Stop("proxy_network_unconfirmed", error_type=failure["error_type"],
                    browser_error_code=failure.get("browser_error_code")) from None
+
+
+async def prepare_proxy_in_context(context, expected_country=None, *, budget):
+    """原窗口内的只读连通性检测，出口与首页共用二十秒预算。"""
+    probe = SessionBudget(20, cancelled=budget.cancelled, report=budget.report, parent=budget)
+    guard = NetworkGuard(None)
+    guard.operation_cancelled = budget.cancelled
+    await probe.run(lambda: context.route("**/*", guard.route), "proxy_probe")
+    try:
+        page = next((item for item in context.pages if item.url == "about:blank"
+                     or urlsplit(item.url).hostname == "chatgpt.com"), None)
+        page = page or await probe.run(context.new_page, "proxy_probe")
+        response = await probe.run(lambda: page.goto(
+            ORIGIN + "/cdn-cgi/trace", wait_until="commit", timeout=0), "proxy_probe")
+        status = getattr(response, "status", None)
+        if status == 403:
+            raise Stop("verification_required", http_status=403, user_action_required=True)
+        if type(status) is int and status >= 400:
+            raise Stop("http_error", http_status=status)
+        network = await observe_page_network(page, probe)
+        if not ipaddress.ip_address(network["ip"]).is_global:
+            raise Stop("proxy_network_unconfirmed")
+        if expected_country and network["country"] != expected_country:
+            raise Stop("proxy_country_mismatch", network=network)
+        response = await probe.run(lambda: page.goto(
+            ORIGIN + "/", wait_until="commit", timeout=0), "proxy_home")
+        status = getattr(response, "status", None)
+        if status == 403:
+            raise Stop("verification_required", http_status=403, user_action_required=True)
+        if type(status) is int and status >= 400:
+            raise Stop("http_error", http_status=status)
+        title = await probe.run(page.title, "proxy_home")
+        if re.search(r"Just a moment|Verify.*human|安全验证|请稍候", title, re.I):
+            raise Stop("verification_required", user_action_required=True)
+        return network
+    except Stop as exc:
+        if exc.report.get("reason") == "session_load_timeout":
+            raise Stop("proxy_prepare_timeout", error_type="TimeoutError") from None
+        raise
+    except Exception as exc:
+        failure = session_failure(exc)
+        reason = ("proxy_prepare_timeout" if failure["reason"] == "session_load_timeout"
+                  else "proxy_network_error" if failure.get("browser_error_code")
+                  else "proxy_network_unconfirmed")
+        raise Stop(reason, **{key: failure[key] for key in ("error_type", "browser_error_code")
+                             if key in failure}) from None
+    finally:
+        # Route removal cannot extend an exhausted preparation phase indefinitely.
+        try:
+            await asyncio.wait_for(context.unroute("**/*", guard.route), timeout=5)
+        except Exception:
+            raise Stop("bitbrowser_guard_cleanup_unverified") from None
+
+
+async def synchronize_login_page(page, target, identity, *, budget):
+    """身份核对和官网应用呈现分别验收；同一标签页最多同步刷新一次。"""
+    ui_started = budget.clock()
+    refreshed_once = False
+    while True:
+        try:
+            budget.remaining_ms()
+            refreshed, identity = await check_session(page, target, budget=budget)
+            ready = await budget.run(lambda: page.evaluate("""() => {
+                if (location.protocol !== 'https:' || location.hostname !== 'chatgpt.com') return false;
+                return Array.from(document.querySelectorAll(
+                    '[data-testid="accounts-profile-button"][role="button"][aria-haspopup="menu"]'
+                )).some(node => node.getClientRects().length &&
+                    getComputedStyle(node).visibility !== 'hidden' &&
+                    getComputedStyle(node).display !== 'none' &&
+                    !node.matches(':disabled,[aria-disabled="true"]'));
+            }"""), "page_ui_sync")
+            if ready:
+                return BrowserCredential("", target.account_id, target.user_id, refreshed.token), identity
+            if not refreshed_once and budget.clock() - ui_started >= 10:
+                refreshed_once = True
+                budget.refresh_count += 1
+                progress("session_page_refreshing", session_step="page_ui_sync", account_matched=True)
+                response = await budget.run(lambda: page.reload(
+                    wait_until="commit", timeout=0), "page_ui_sync")
+                status = getattr(response, "status", None)
+                if status == 403:
+                    raise Stop("verification_required", http_status=403, user_action_required=True)
+                if type(status) is int and status >= 400:
+                    raise Stop("http_error", http_status=status)
+                continue
+            await budget.run(lambda: asyncio.sleep(0.5), "page_ui_sync")
+        except Stop as exc:
+            if (exc.report.get("reason") == "session_load_timeout"
+                    and (budget.step == "page_ui_sync" or budget.elapsed >= budget.seconds)):
+                raise Stop("official_login_page_not_ready", account_matched=True,
+                           **budget.snapshot()) from None
+            raise
 
 
 async def select_plan(page, target_plan):
@@ -725,7 +961,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     result = None
     try:
         if getattr(target, "session_token", None):
-            await context.add_cookies(session_cookies(target))
+            await install_session_cookies(context, target, budget=session_budget)
         progress(stage, account_matched=False, session_status="not_verified",
                  **(session_budget.snapshot() if session_budget else {}))
         if session_budget:

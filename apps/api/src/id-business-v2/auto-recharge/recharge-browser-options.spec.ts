@@ -94,6 +94,13 @@ describe('窗口配置校验', () => {
     expect(
       validateBrowserOptions({ ...legacy, sessionWaitMinutes: 10, sessionRetryLimit: 0 })
     ).toMatchObject({ sessionWaitMinutes: 10, sessionRetryLimit: 0 });
+    expect(V2_RECHARGE_BROWSER_DEFAULTS.sessionRetryLimit).toBe(9);
+    expect(validateBrowserOptions({ ...legacy, sessionRetryLimit: 9 })).toMatchObject({
+      sessionRetryLimit: 9
+    });
+    expect(validateBrowserOptions({ ...legacy, sessionRetryLimit: 2 })).toMatchObject({
+      sessionRetryLimit: 2
+    });
   });
   it('旧 Mac JSON 归一为 Windows 11，保留代理、地区且不修改原记录', () => {
     const legacy = { ...staticOptions, os: 'MacIntel', language: 'en-US' } as Record<
@@ -131,7 +138,8 @@ describe('窗口配置校验', () => {
     { sessionWaitMinutes: 11 },
     { sessionWaitMinutes: 1.5 },
     { sessionRetryLimit: -1 },
-    { sessionRetryLimit: 3 },
+    { sessionRetryLimit: 10 },
+    { sessionRetryLimit: 1.5 },
     { sessionRetryLimit: true },
     { coreVersion: 'latest' },
     { coreVersion: 152 },

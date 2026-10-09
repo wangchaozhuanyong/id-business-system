@@ -183,7 +183,8 @@ class UpgradeStateTests(unittest.TestCase):
             'action': 'server', 'plan': 'pro-20x', 'safety': {
                 'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 40000}})
         with patch.object(server, 'callback') as callback:
-            self.assertTrue(job.confirm(quote, '4242'))
+            with patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)):
+                self.assertTrue(job.confirm(quote, '4242'))
         report = callback.call_args[0][1]['result']
         self.assertEqual(report['operation'], 'subscription_upgrade')
         self.assertEqual(report['current_plan_before'], 'plus')
@@ -905,13 +906,13 @@ class UpgradeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.updates, 1)
         self.assertFalse(self.other_writes)
 
-    async def test_changed_card_quote_above_authorized_cap_never_updates(self):
+    async def test_changed_card_quote_can_be_declined_by_human_before_upgrade(self):
         self.non_default_card = self.card_reprices = True
         observed = []
-        def capped(quote, _last4):
+        def declined(quote, _last4):
             observed.append(quote['today']['amount_minor'])
-            return quote['today']['amount_minor'] <= 40000
-        result = await self.flow(confirmer=capped)
+            return False
+        result = await self.flow(confirmer=declined)
         self.assertEqual(result['status'], 'payment_cancelled', result)
         self.assertEqual(observed, [41000])
         self.assertEqual(self.updates, 0)

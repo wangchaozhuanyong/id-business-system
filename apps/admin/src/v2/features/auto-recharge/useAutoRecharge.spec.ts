@@ -11,7 +11,7 @@ import type {
 import type { BankChatgptAccount } from './bank-recharge-api';
 import { RechargeConnectorError } from './connector-transport';
 import { useAutoRecharge } from './useAutoRecharge';
-import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
+import { clearV2SessionDrafts, useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 
 const mock = vi.hoisted(() => ({
   jobsQuery: {} as Record<string, unknown>,
@@ -22,7 +22,6 @@ const mock = vi.hoisted(() => ({
   totpQuery: {} as Record<string, unknown>,
   bankAccountsQuery: {} as Record<string, unknown>,
   bankCurrenciesQuery: {} as Record<string, unknown>,
-  paymentCapsQuery: {} as Record<string, unknown>,
   paymentCardsQuery: {} as Record<string, unknown>,
   proxyCountriesQuery: {} as Record<string, unknown>,
   proxiesQuery: {} as Record<string, unknown>,
@@ -100,7 +99,6 @@ vi.mock('@/v2/composables/useV2Query', () => ({
     if (options.key === 'auto-recharge-saved-totp-accounts') return mock.totpQuery;
     if (options.moduleKey === 'chatgpt-accounts') return mock.bankAccountsQuery;
     if (options.moduleKey === 'bank-recharge-orders') return mock.bankCurrenciesQuery;
-    if (options.key === 'auto-recharge-payment-caps') return mock.paymentCapsQuery;
     if (options.moduleKey === 'bank-recharge-cards') return mock.paymentCardsQuery;
     if (options.moduleKey === 'recharge-proxies')
       return options.key === 'auto-recharge-proxy-countries'
@@ -123,8 +121,6 @@ vi.mock('./api', () => ({
     updateServerProxySettings: mock.updateServerProxySettings,
     startBitBrowser: mock.startBitBrowser,
     startServer: mock.startServer,
-    listPaymentCaps: vi.fn(),
-    updatePaymentCap: vi.fn(),
     recheckServer: mock.recheckServer,
     cancelServer: mock.cancelServer,
     startBitBrowserOpen: mock.startBitBrowserOpen,
@@ -219,8 +215,6 @@ const launch: V2RechargeBitBrowserLaunch = {
   },
   safety: {
     lockedCurrency: 'USD',
-    maxAmount: '30.00',
-    maxAmountMinor: 3000,
     authorizeSinglePayment: true,
     manualPaymentConfirmation: true
   }
@@ -318,9 +312,6 @@ beforeEach(() => {
   mock.totpQuery = queryResult(savedTotp);
   mock.bankAccountsQuery = queryResult(bankAccounts);
   mock.bankCurrenciesQuery = queryResult(bankCurrencies);
-  mock.paymentCapsQuery = queryResult(
-    ref({ items: [{ plan: 'plus', currencyCode: 'PHP', maxAmount: '1500' }] })
-  );
   mock.paymentCardsQuery = queryResult(ref({ items: [] }));
   mock.proxyCountriesQuery = queryResult(ref({ items: [] }));
   mock.proxiesQuery = {
@@ -469,17 +460,17 @@ describe('比特浏览器充值入口', () => {
     flow.updateJsonInput('not-json');
     expect(flow.sessionJson.value).toBe('');
   });
-  it('单次付款授权和安全码必须本次填写，金额格式错误阻止启动', () => {
+  it('单次付款授权和安全码必须本次填写，不需要填写最高付款金额', () => {
     fillForm();
     expect(flow.canStart.value).toBe(true);
+    expect(flow).not.toHaveProperty('maxAmount');
     flow.authorizeSinglePayment.value = false;
     expect(flow.canStart.value).toBe(false);
     flow.authorizeSinglePayment.value = true;
     flow.details.value.cvc = '';
     expect(flow.canStart.value).toBe(false);
     flow.details.value.cvc = '123';
-    flow.maxAmount.value = '30.001';
-    expect(flow.canStart.value).toBe(false);
+    expect(flow.canStart.value).toBe(true);
   });
   it('启动仅调用本机路径；服务器任务只收到资料引用，秘密只交本机', async () => {
     fillForm();
@@ -489,13 +480,33 @@ describe('比特浏览器充值入口', () => {
     expect(input).toMatchObject({ manualPaymentConfirmation: true, authorizeSinglePayment: true });
     expect(input).not.toHaveProperty('sessionJson');
     expect(input).not.toHaveProperty('details');
+    expect(input).not.toHaveProperty('maxAmount');
+    expect(input).not.toHaveProperty('maxAmountMinor');
     expect(JSON.stringify(input)).not.toContain('5555555555554444');
     expect(mock.connectorStart.mock.calls[0]![2]).toMatchObject({
       sessionJson: sessionJson(),
       details: { cvc: '123' },
       safety: { manualPaymentConfirmation: true }
     });
+    expect(mock.connectorStart.mock.calls[0]![2].safety).toEqual({
+      lockedCurrency: 'USD',
+      authorizeSinglePayment: true,
+      manualPaymentConfirmation: true
+    });
     expect(mock.startServer).not.toHaveBeenCalled();
+  });
+  it('旧启动回执的金额限制字段不再传给本机，币种和人工确认保护保留', async () => {
+    mock.startBitBrowser.mockResolvedValue({
+      ...launch,
+      safety: { ...launch.safety, maxAmount: '0.01', maxAmountMinor: 1 }
+    });
+    fillForm();
+    await flow.start();
+    expect(mock.connectorStart.mock.calls[0]![2].safety).toEqual({
+      lockedCurrency: 'USD',
+      authorizeSinglePayment: true,
+      manualPaymentConfirmation: true
+    });
   });
   it('账号密码只选择资料库账号，并使用受控 savedLogin，保留同账号 2FA', async () => {
     fillForm();
@@ -706,6 +717,23 @@ describe('比特浏览器充值入口', () => {
     expect(flow.windowName.value).toBe('申请gpt-001');
     expect(flow.details.value.cvc).toBe('');
     expect(flow.authorizeSinglePayment.value).toBe(false);
+  });
+  it('旧草稿的最高金额不再恢复或阻止启动，安全码和当次授权仍重新填写', () => {
+    fillForm();
+    const legacy = scope.run(() =>
+      useV2FormDraft('auto-recharge-form', () => ({ maxAmount: '30.00' }))
+    )!;
+    legacy.open('new');
+    legacy.form.maxAmount = '30.001';
+    scope.stop();
+    scope = effectScope();
+    mock.queryIndex = 0;
+    flow = scope.run(useAutoRecharge)!;
+    expect(flow).not.toHaveProperty('maxAmount');
+    expect(flow.details.value.cvc).toBe('');
+    expect(flow.authorizeSinglePayment.value).toBe(false);
+    fillForm();
+    expect(flow.canStart.value).toBe(true);
   });
   it('辅助登录不创建付款任务或传安全码', async () => {
     flow.operationMode.value = 'open_browser';

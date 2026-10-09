@@ -26,36 +26,40 @@ const startInput = () => ({
   addressId,
   windowName: '申请gpt-001',
   lockedCurrency: 'USD',
-  maxAmount: '30.00',
   authorizeSinglePayment: true
 });
 
 describe('比特浏览器充值输入边界', () => {
-  it('将付款上限精确转为最小货币单位', () => {
-    expect(validateRechargeBitBrowserStart(startInput())).toMatchObject({
+  it('无需最高金额，保留锁定币种及单次授权且不产生替代上限', () => {
+    const result = validateRechargeBitBrowserStart(startInput());
+    expect(result).toMatchObject({
       lockedCurrency: 'USD',
-      maxAmount: '30.00',
-      maxAmountMinor: 3000,
       authorizeSinglePayment: true
     });
+    expect(result).not.toHaveProperty('maxAmount');
+    expect(result).not.toHaveProperty('maxAmountMinor');
     expect(
       validateRechargeBitBrowserStart({
         ...startInput(),
-        lockedCurrency: 'JPY',
-        maxAmount: '3000'
+        lockedCurrency: 'JPY'
       })
-    ).toMatchObject({ maxAmountMinor: 3000 });
+    ).toMatchObject({ lockedCurrency: 'JPY' });
   });
 
-  it('拒绝未授权、错误币种精度和任何卡资料字段', () => {
+  it.each(['0', '30.001', 'invalid', null, 0])('旧客户端的最高金额直接忽略 %j', (maxAmount) => {
+    const result = validateRechargeBitBrowserStart({ ...startInput(), maxAmount });
+    expect(result).not.toHaveProperty('maxAmount');
+    expect(result).not.toHaveProperty('maxAmountMinor');
+  });
+
+  it('拒绝未授权、错误币种和任何卡资料字段', () => {
     expect(() =>
       validateRechargeBitBrowserStart({ ...startInput(), authorizeSinglePayment: false })
     ).toThrow();
     expect(() =>
       validateRechargeBitBrowserStart({
         ...startInput(),
-        lockedCurrency: 'JPY',
-        maxAmount: '30.00'
+        lockedCurrency: 'invalid'
       })
     ).toThrow();
     expect(() =>
@@ -264,12 +268,18 @@ describe('本机任务持久化边界', () => {
           addressId,
           window_name: '申请gpt-001',
           locked_currency: 'USD',
-          max_amount: '30.00',
           payment_requests_sent: 0
         })
       })
     );
     expect(JSON.stringify(repository.createJob.mock.calls)).not.toContain('proxy.example');
+    expect(repository.createJob.mock.calls[0][1].result).not.toHaveProperty('max_amount');
+    expect(repository.createJob.mock.calls[0][1].result).not.toHaveProperty('max_amount_minor');
+    expect(result.safety).toEqual({
+      lockedCurrency: 'USD',
+      authorizeSinglePayment: true,
+      manualPaymentConfirmation: true
+    });
     expect(result).toMatchObject({
       connectorToken: 'c'.repeat(64),
       bitBrowser: {

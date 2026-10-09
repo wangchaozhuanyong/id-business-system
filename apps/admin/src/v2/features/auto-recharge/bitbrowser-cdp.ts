@@ -73,15 +73,23 @@ export class BrowserCdp {
       );
     });
   }
-  command(method: string, params: Document = {}, sessionId?: string): Promise<Document> {
+  command(
+    method: string,
+    params: Document = {},
+    sessionId?: string,
+    timeoutMs = 15_000
+  ): Promise<Document> {
     return new Promise((resolve, reject) => {
       if (this.signal.aborted || this.socket.readyState !== WebSocket.OPEN)
         return reject(new DirectBrowserError('bitbrowser_direct_cancelled'));
       const id = ++this.sequence;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new DirectBrowserError('bitbrowser_direct_command_failed'));
-      }, 15_000);
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(id);
+          reject(new DirectBrowserError('bitbrowser_direct_command_failed'));
+        },
+        Math.max(1, Math.min(30_000, timeoutMs))
+      );
       this.pending.set(id, { resolve, reject, cleanup: () => clearTimeout(timer) });
       try {
         this.socket.send(
@@ -92,11 +100,12 @@ export class BrowserCdp {
       }
     });
   }
-  async evaluate<T>(sessionId: string, expression: string): Promise<T> {
+  async evaluate<T>(sessionId: string, expression: string, timeoutMs = 15_000): Promise<T> {
     const result = await this.command(
       'Runtime.evaluate',
       { expression, awaitPromise: true, returnByValue: true },
-      sessionId
+      sessionId,
+      timeoutMs
     );
     if (result.exceptionDetails) throw new DirectBrowserError('bitbrowser_direct_command_failed');
     return (result.result as Document)?.value as T;

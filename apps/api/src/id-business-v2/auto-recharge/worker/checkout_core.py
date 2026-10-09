@@ -77,8 +77,12 @@ def parse_credential(raw: bytes, *, allow_expired=False) -> Credential:
                 raise Stop("json_email_mismatch")
     except (ValueError, TypeError, KeyError, RecursionError):
         raise Stop("invalid_json_or_access_token") from None
-    if not allow_expired and exp <= time.time() + 30:
-        raise Stop("access_token_expired")
+    checked_at = time.time()
+    if not allow_expired and exp <= checked_at + 30:
+        # Only timestamps leave this boundary; never include the JWT or claims.
+        raise Stop("access_token_expired", access_token_expires_at=exp,
+                   credential_checked_at=int(checked_at),
+                   access_token_seconds_remaining=exp - int(checked_at))
     # 只解码声明；由接下来的 ChatGPT 账户接口验证凭据和目标账户。
     return Credential(token, aid, exp)
 
@@ -258,13 +262,26 @@ def session_cookies(credential: BrowserCredential) -> list[dict]:
 
 def verify_official_session(data: dict, target: BrowserCredential) -> Credential:
     user = data.get("user")
+    session_error = data.get("error")
+    if session_error:
+        # The official client rejects session errors even when user/token remain.
+        # Never copy the error value into public reports or logs.
+        raise Stop("access_token_expired" if session_error == "RefreshAccessTokenError"
+                   else "json_session_not_restored", session_status="new_authorized_json_required",
+                   official_session_user_present=bool(isinstance(user, dict) and user.get("id")),
+                   official_session_access_token_present=bool(data.get("accessToken")))
     if not isinstance(user, dict) or not user.get("id") or not data.get("accessToken"):
         raise Stop("json_session_not_restored", session_status="new_authorized_json_required",
                    official_session_user_present=bool(isinstance(user, dict) and user.get("id")),
                    official_session_access_token_present=bool(data.get("accessToken")))
     if user["id"] != target.user_id:
         raise Stop("official_user_mismatch", account_matched=False)
-    refreshed = parse_credential(json.dumps(data).encode())
+    try:
+        refreshed = parse_credential(json.dumps(data).encode())
+    except Stop as exc:
+        exc.report.update(official_session_user_present=True,
+                          official_session_access_token_present=True)
+        raise
     if refreshed.account_id != target.account_id:
         raise Stop("official_account_mismatch", account_matched=False)
     return refreshed

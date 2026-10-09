@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PATH_METADATA } from '@nestjs/common/constants';
+import { RechargeController } from './recharge.controller';
 import { RechargeSettingsService } from './recharge-settings.service';
+import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
+import { safeDocument } from './recharge-validation';
 
 const operator = {
   id: 'admin-test',
@@ -9,60 +13,53 @@ const operator = {
   permissions: []
 };
 
-function fixture() {
-  const repository = {
-    listPaymentCaps: vi.fn().mockResolvedValue([]),
-    paymentCap: vi.fn().mockResolvedValue(null),
-    currencyForCap: vi.fn().mockResolvedValue({ code: 'PHP', active: true, minorUnits: 2 }),
-    upsertPaymentCap: vi.fn().mockImplementation(async (_tx, plan, currencyCode, maxAmount) => ({
-      plan,
-      currencyCode,
-      maxAmount: { toString: () => maxAmount }
-    }))
-  };
-  const audit = { append: vi.fn() };
-  const transactions = {
-    execute: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({}))
-  };
-  const service = new RechargeSettingsService(
-    repository as never,
-    {} as never,
-    transactions as never,
-    audit as never,
-    {} as never
-  );
-  return { service, repository, audit };
-}
-
-describe('server payment safety cap', () => {
-  it.each(['go', 'plus'])('blocks an unconfigured %s plan and currency', async (plan) => {
-    const { service } = fixture();
-    await expect(service.requirePaymentCap({} as never, plan, 'PHP')).rejects.toThrow(
-      '请先在服务器设置中配置'
-    );
+describe('付款金额上限退役合同', () => {
+  it('不再注册金额上限的读取或写入路由', () => {
+    const paths = Object.getOwnPropertyNames(RechargeController.prototype)
+      .filter((key) => key !== 'constructor')
+      .map((key) =>
+        Reflect.getMetadata(PATH_METADATA, Reflect.get(RechargeController.prototype, key))
+      );
+    expect(paths).not.toContain('payment-caps');
+    expect(paths).not.toContain('payment-caps/:plan/:currencyCode');
+    expect(RechargeSettingsService.prototype).not.toHaveProperty('requirePaymentCap');
+    expect(RechargeSettingsService.prototype).not.toHaveProperty('updatePaymentCap');
+    expect(RechargeSettingsRepository.prototype).not.toHaveProperty('upsertPaymentCap');
   });
 
-  it.each(['go', 'plus'])('saves an exact decimal %s cap and audits the change', async (plan) => {
-    const { service, repository, audit } = fixture();
-    await expect(
-      service.updatePaymentCap(plan, 'PHP', { maxAmount: '1500.00' }, operator)
-    ).resolves.toEqual({ plan, currencyCode: 'PHP', maxAmount: '1500' });
-    expect(repository.upsertPaymentCap).toHaveBeenCalledWith({}, plan, 'PHP', '1500', operator.id);
-    expect(audit.append).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        action: 'id_business_v2.auto_recharge.payment_cap.update',
-        afterData: { maxAmount: '1500' }
+  it('读取现有连接设置不访问或删除历史金额上限数据', async () => {
+    const legacy = {
+      findMany: vi.fn(),
+      findUnique: vi.fn(),
+      upsert: vi.fn(),
+      deleteMany: vi.fn()
+    };
+    const settings = { findUnique: vi.fn().mockResolvedValue(null) };
+    const repository = new RechargeSettingsRepository({
+      idBusinessV2RechargeBrowserSetting: settings,
+      idBusinessV2RechargePaymentCap: legacy
+    } as never);
+    const service = new RechargeSettingsService(
+      repository,
+      { decrypt: vi.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+    await service.get(operator);
+    expect(settings.findUnique).toHaveBeenCalledWith({ where: { ownerId: operator.id } });
+    for (const query of Object.values(legacy)) expect(query).not.toHaveBeenCalled();
+  });
+
+  it('新执行回执不保存旧金额上限，仍保存币种与付款事实', () => {
+    expect(
+      safeDocument({
+        locked_currency: 'PHP',
+        max_amount: '1000.00',
+        max_amount_minor: 100000,
+        payment_requests_sent: 0,
+        payment_attempted: false
       })
-    );
-  });
-
-  it('rejects an amount with more decimal places than the currency allows', async () => {
-    const { service, repository } = fixture();
-    repository.currencyForCap.mockResolvedValue({ code: 'JPY', active: true, minorUnits: 0 });
-    await expect(
-      service.updatePaymentCap('plus', 'JPY', { maxAmount: '30.01' }, operator)
-    ).rejects.toThrow('精度不匹配');
-    expect(repository.upsertPaymentCap).not.toHaveBeenCalled();
+    ).toEqual({ locked_currency: 'PHP', payment_requests_sent: 0, payment_attempted: false });
   });
 });

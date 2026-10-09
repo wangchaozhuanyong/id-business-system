@@ -129,13 +129,14 @@ class GoStateTests(unittest.TestCase):
     def test_server_go_confirmation_keeps_currency_amount_and_authorization_guards(self):
         import server
         quote = go_quote()
-        safety = {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 2400}
+        safety = {'authorizeSinglePayment': True, 'lockedCurrency': 'MYR', 'maxAmountMinor': 1}
         with patch.object(server, 'callback') as callback:
             job = server.Job('synthetic-job', {'action': 'server', 'plan': 'go', 'safety': safety})
-            self.assertTrue(job.confirm(quote, '4242'))
+            with patch.object(job.confirm_event, 'wait', side_effect=lambda _: job.signal(job.nonce)):
+                self.assertTrue(job.confirm(quote, '4242'))
             self.assertEqual(callback.call_args.args[1]['result']['quote']['plan'], 'go')
             for changed_quote, changed_safety in (({**quote, 'plan': 'plus'}, safety),
-                    (quote, {**safety, 'maxAmountMinor': 2399}),
+                    ({**quote, 'today': {**quote['today'], 'amount_minor': 2399}}, safety),
                     (quote, {**safety, 'lockedCurrency': 'USD'}),
                     (quote, {**safety, 'authorizeSinglePayment': False})):
                 callback.reset_mock()

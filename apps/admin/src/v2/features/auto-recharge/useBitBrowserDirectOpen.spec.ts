@@ -26,6 +26,38 @@ beforeEach(() => {
   mock.callback.mockResolvedValue({ ok: true });
 });
 describe('网页直连登录任务生命周期', () => {
+  it('通过原任务授权回调取得归属证明，再把原窗口编号写回执行状态', async () => {
+    const ownedProfile = {
+      sourceJobId: 'source-job',
+      profileId: 'a'.repeat(32),
+      accountKey: 'c'.repeat(64)
+    };
+    mock.callback.mockImplementation(async (_id, _token, input) =>
+      input.type === 'restore' ? { ownedProfile, records: [], staleProfiles: [] } : { ok: true }
+    );
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      const restored = await hooks.restore(ownedProfile.accountKey);
+      expect(restored.ownedProfile).toEqual(ownedProfile);
+      await hooks.progress('owned_profile_check', {
+        browser_profile_id: restored.ownedProfile.profileId
+      });
+      return { status: 'session_ready', account_matched: true };
+    });
+    const scope = effectScope();
+    const controller = scope.run(() => useBitBrowserDirectOpen(async () => undefined, vi.fn()))!;
+    await controller.start(launch(), { sessionJson: 'fixture-json' }, '窗口');
+    await vi.waitFor(() => expect(controller.running.value).toBe(false));
+    expect(mock.callback.mock.calls.find(([, , input]) => input.type === 'restore')).toEqual([
+      'job-fixture',
+      'fixture-only-agent',
+      { type: 'restore', accountKey: ownedProfile.accountKey }
+    ]);
+    expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
+      type: 'finished',
+      result: { browser_profile_id: ownedProfile.profileId, payment_requests_sent: 0 }
+    });
+    scope.stop();
+  });
   it('验证码绑定当前任务且只接收一次，结果写入后清除临时凭据', async () => {
     const scope = effectScope();
     const errors: string[] = [];
@@ -110,6 +142,60 @@ describe('网页直连登录任务生命周期', () => {
 afterEach(() => vi.resetAllMocks());
 
 describe('仅登录窗口控制器收尾', () => {
+  it('成功结果已保存后刷新失败，不回传矛盾失败结果或误报浏览器执行失败', async () => {
+    mock.run.mockResolvedValue({ status: 'session_ready', account_matched: true });
+    const refresh = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('fixture-refresh-unavailable'));
+    const scope = effectScope();
+    const error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(refresh, error))!;
+    const current = launch();
+    const credential = { sessionJson: 'fixture-json' };
+    await flow.start(current, credential, '测试窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    const finished = mock.callback.mock.calls.filter(([, , input]) => input.type === 'finished');
+    expect(finished).toHaveLength(1);
+    expect(finished[0]?.[2]).toMatchObject({
+      type: 'finished',
+      result: { status: 'session_ready', account_matched: true, payment_requests_sent: 0 }
+    });
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      '执行状态已保存，但页面刷新失败，请刷新原任务核对。'
+    );
+    expect(credential.sessionJson).toBe('');
+    expect(current.agentToken).toBe('');
+    expect(current.bitBrowser.localApiToken).toBe('');
+    scope.stop();
+  });
+
+  it('已确认的开始事件刷新失败时继续原任务，后续状态仍通过授权回调保存', async () => {
+    mock.run.mockResolvedValue({ status: 'session_ready', account_matched: true });
+    const refresh = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('fixture-refresh-unavailable'))
+      .mockResolvedValueOnce(undefined);
+    const scope = effectScope();
+    const error = vi.fn();
+    const flow = scope.run(() => useBitBrowserDirectOpen(refresh, error))!;
+    await flow.start(launch(), { sessionJson: 'fixture-json' }, '测试窗口');
+    await vi.waitFor(() => expect(flow.running.value).toBe(false));
+    expect(mock.run).toHaveBeenCalledOnce();
+    expect(mock.callback.mock.calls.map(([, , input]) => input.type)).toEqual([
+      'progress',
+      'finished'
+    ]);
+    expect(mock.callback.mock.calls.at(-1)?.[2]).toMatchObject({
+      type: 'finished',
+      result: { status: 'session_ready', account_matched: true }
+    });
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      '执行状态已保存，但页面刷新失败，请刷新原任务核对。'
+    );
+    scope.stop();
+  });
+
   it('登录失败且终态保存失败后响应式释放控制器，可重新操作', async () => {
     mock.callback.mockResolvedValueOnce({ ok: true }).mockRejectedValue(new Error('离线'));
     mock.run.mockRejectedValue(new DirectBrowserError('official_login_not_verified'));

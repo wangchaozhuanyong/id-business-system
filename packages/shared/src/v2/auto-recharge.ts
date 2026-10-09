@@ -27,11 +27,6 @@ export const V2_BANK_RECHARGE_PLANS = [
   'enterprise',
   'edu'
 ] as const;
-export interface V2RechargePaymentCap {
-  plan: V2RechargePlan;
-  currencyCode: string;
-  maxAmount: string;
-}
 export type V2RechargeAction =
   | 'check'
   | 'quote'
@@ -71,7 +66,15 @@ export interface V2RechargeResult {
   session_elapsed_seconds?: number;
   session_wait_seconds?: number;
   session_refresh_count?: number;
-  session_step?: 'page_load' | 'page_title' | 'page_refresh' | 'session_read' | 'account_read';
+  session_step?:
+    | 'page_load'
+    | 'page_title'
+    | 'page_refresh'
+    | 'session_read'
+    | 'account_read'
+    | 'page_ui_sync'
+    | 'proxy_probe'
+    | 'proxy_home';
   session_phase?: 'initial_login' | 'subscription_check' | 'checkout_check';
   /** API核实身份和出口后记录；仅用于展示，不作为当前付款授权。 */
   first_session_verified_at?: string;
@@ -152,7 +155,6 @@ export interface V2RechargeResult {
   browser_profile_id?: string;
   window_name?: string;
   locked_currency?: string;
-  max_amount?: string;
   user_action_required?: boolean;
   manual_payment_confirmation?: boolean;
   handoff_available?: boolean;
@@ -204,9 +206,8 @@ export interface V2RechargeStart {
   manualAddress?: true;
   details?: V2RechargeDetails;
   lockedCurrency?: string;
-  maxAmount?: string;
   authorizeSinglePayment?: true;
-  manualPaymentConfirmation?: boolean;
+  manualPaymentConfirmation?: true;
   proxyId?: string;
   proxyCountryCode?: string;
 }
@@ -282,7 +283,7 @@ export interface V2RechargeBrowserOptions {
 
 export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = {
   sessionWaitMinutes: 2,
-  sessionRetryLimit: 2,
+  sessionRetryLimit: 9,
   proxyMode: 'dynamic',
   staticHost: '',
   staticPort: 8080,
@@ -405,7 +406,6 @@ export interface V2RechargeBitBrowserStart {
   addressId: string;
   windowName: string;
   lockedCurrency: string;
-  maxAmount: string;
   authorizeSinglePayment: true;
   proxyId?: string;
   proxyCountryCode?: string;
@@ -422,11 +422,19 @@ export interface V2RechargeBitBrowserRecheckStart {
   windowName: string;
 }
 
-/** 已有成功充值窗口的归属证明；复用前仍须在官网核对当前账号。 */
+/** 已有目标窗口的归属证明；不代表已登录，复用前仍须在官网核对当前账号。 */
 export interface V2RechargeOwnedBrowserProfile {
   sourceJobId: string;
   profileId: string;
   accountKey: string;
+}
+
+export interface V2RechargeBrowserRestore {
+  records: unknown[];
+  staleProfiles: { sourceJobId: string; profileId: string }[];
+  ownedProfile?: V2RechargeOwnedBrowserProfile;
+  /** 仅恢复同账号同套餐原结算；存在历史编号但持久化原单缺失时服务端拒绝恢复。 */
+  originalCheckoutIdentifier?: string;
 }
 
 export interface V2RechargeBitBrowserLaunch {
@@ -443,6 +451,7 @@ export interface V2RechargeBitBrowserLaunch {
     groupName: string;
     tagName: string;
     proxyType: 'http' | 'https' | 'socks5';
+    expectedCountryCode?: string;
     dynamicProxyUrl: string;
     browserOptions?: V2RechargeBrowserOptions;
     staticProxyCredentials?: V2RechargeStaticProxyCredentials;
@@ -453,8 +462,6 @@ export interface V2RechargeBitBrowserLaunch {
   >;
   safety: {
     lockedCurrency: string;
-    maxAmount: string;
-    maxAmountMinor: number;
     authorizeSinglePayment: true;
     manualPaymentConfirmation: true;
   };

@@ -150,7 +150,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     lockedCurrency: 'PHP',
     selectedProxyCountryCode: '',
     selectedProxyId: '',
-    maxAmount: '30.00',
     details: emptyDetails()
   }));
   formDraft.open('new');
@@ -161,6 +160,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   formDraft.form.addressSource = 'library';
   delete restored.loginEmail;
   delete restored.loginPassword;
+  delete restored.maxAmount;
   const {
     operationMode,
     loginMethod,
@@ -178,8 +178,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     windowName,
     lockedCurrency,
     selectedProxyCountryCode,
-    selectedProxyId,
-    maxAmount
+    selectedProxyId
   } = toRefs(formDraft.form);
   const paymentDetails = reactive({ ...toRefs(formDraft.form.details), cvc: ref('') });
   const details = computed<V2RechargeDetails>({
@@ -470,7 +469,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value) &&
         proxySelectionReady.value &&
         !loginCountryRestriction.value &&
-        /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value) &&
         !nameMatch.error.value &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
@@ -665,7 +663,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
     if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
-    return '补齐银行卡、账单地址与付款上限，核价后等待你确认本次付款。';
+    return '补齐银行卡与账单地址，核实官网币种和金额后等待你确认本次付款。';
   });
 
   watch(loginMethod, () => {
@@ -922,7 +920,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         ...(selectedProxyId.value
           ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
           : {}),
-        maxAmount: maxAmount.value,
         cardId: paymentCard.cardId,
         billingName: details.value.name,
         expectedEmail: details.value.email,
@@ -957,7 +954,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         details: payment,
         address: launch.address,
         bitBrowser: launch.bitBrowser,
-        safety: launch.safety,
+        safety: {
+          lockedCurrency: launch.safety.lockedCurrency,
+          authorizeSinglePayment: launch.safety.authorizeSinglePayment,
+          manualPaymentConfirmation: launch.safety.manualPaymentConfirmation
+        },
         ...(launch.ownedProfile ? { ownedProfile: launch.ownedProfile } : {}),
         callbackUrl: rechargeCallbackUrl(id),
         agentToken: launch.agentToken,
@@ -1430,7 +1431,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     availableProxies,
     proxyCountriesQuery,
     proxiesQuery,
-    maxAmount,
     authorizeSinglePayment,
     details,
     busy,

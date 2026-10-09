@@ -20,35 +20,16 @@ const hasControlCharacter = (value: string) =>
     return code <= 31 || code === 127;
   });
 
-export function amountMinor(value: unknown, currency: string) {
-  if (typeof value !== 'string' || !/^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(value)) {
-    throw new BadRequestException('最高付款金额格式无效');
-  }
-  const places = zeroDecimalCurrencies.has(currency) ? 0 : 2;
-  const [whole, fraction = ''] = value.split('.');
-  if ((places === 0 && fraction) || fraction.length > places) {
-    throw new BadRequestException('最高付款金额与币种精度不一致');
-  }
-  const padded = fraction.padEnd(places, '0');
-  const minor = BigInt(whole!) * 10n ** BigInt(places) + BigInt(padded || '0');
-  if (minor <= 0n || minor > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new BadRequestException('最高付款金额必须大于 0');
-  }
-  return {
-    amount: places ? `${whole}.${padded}` : whole!,
-    amountMinor: Number(minor)
-  };
-}
-
 export function validateRechargeBitBrowserStart(value: unknown) {
-  const input = object(value);
+  const input = { ...object(value) };
+  // 兼容旧客户端；历史上限不参与本次授权，也不进入新任务。
+  delete input.maxAmount;
   const allowedKeys = new Set([
     'id',
     'plan',
     'addressId',
     'windowName',
     'lockedCurrency',
-    'maxAmount',
     'authorizeSinglePayment',
     'cardId',
     'billingName',
@@ -91,7 +72,6 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   if (!supportedCurrencies.has(lockedCurrency)) {
     throw new BadRequestException('锁定币种不受支持');
   }
-  const maximum = amountMinor(input.maxAmount, lockedCurrency);
   if (
     input.chatgptAccountId !== undefined &&
     (typeof input.chatgptAccountId !== 'string' || !uuidPattern.test(input.chatgptAccountId))
@@ -129,8 +109,6 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     addressId: input.addressId,
     windowName,
     lockedCurrency,
-    maxAmount: maximum.amount,
-    maxAmountMinor: maximum.amountMinor,
     chatgptAccountId: input.chatgptAccountId as string | undefined,
     useSavedCredentials: input.useSavedCredentials === true,
     expectedEmail: input.expectedEmail as string | undefined,
@@ -139,7 +117,6 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     authorizeSinglePayment: true,
     manualPaymentConfirmation: true
   } as V2RechargeBitBrowserStart & {
-    maxAmountMinor: number;
     chatgptAccountId?: string;
     useSavedCredentials: boolean;
     expectedEmail?: string;

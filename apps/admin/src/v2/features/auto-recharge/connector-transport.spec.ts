@@ -15,6 +15,8 @@ const health = {
     'browser-options',
     'browser-profile-v2',
     'session-load-retry',
+    'same-profile-proxy-recovery',
+    'json-page-ready',
     'same-window-page-refresh',
     'payment-unknown-resolution',
     'prepayment-page-recovery',
@@ -72,6 +74,17 @@ describe('本机连接错误识别', () => {
       requireConnectorHealth({ ...health, capabilities: ['browser-catalog', 'browser-options'] })
     ).toThrow('版本过旧');
   });
+  it.each(['same-profile-proxy-recovery', 'json-page-ready'])(
+    '缺少%s能力时拒绝旧助手，不能回退到删除窗口逻辑',
+    (capability) => {
+      expect(() =>
+        requireConnectorHealth({
+          ...health,
+          capabilities: health.capabilities.filter((item) => item !== capability)
+        })
+      ).toThrow('版本过旧');
+    }
+  );
   it('取消检测不会报成服务不可达', async () => {
     const control = new AbortController();
     control.abort();

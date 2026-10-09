@@ -103,9 +103,11 @@ export function mergeRechargeCallbackResult(
     ...mergeRechargePaymentFacts(previous, workerReport),
     ...(firstVerifiedAt ? { first_session_verified_at: firstVerifiedAt } : {}),
     ...loginMail,
-    ...(Object.hasOwn(previous, 'manual_payment_confirmation')
-      ? { manual_payment_confirmation: previous.manual_payment_confirmation }
-      : {}),
+    ...(job.action === 'server'
+      ? { manual_payment_confirmation: true }
+      : Object.hasOwn(previous, 'manual_payment_confirmation')
+        ? { manual_payment_confirmation: previous.manual_payment_confirmation }
+        : {}),
     ...(previous.manual_confirmation_accepted === true
       ? { manual_confirmation_accepted: true }
       : {}),

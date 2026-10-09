@@ -70,8 +70,7 @@ const makeJob = () => ({
     handoff_expires_at: frame().expiresAt,
     manual_payment_confirmation: true,
     account_matched: true,
-    locked_currency: 'USD',
-    max_amount_minor: 3000
+    locked_currency: 'USD'
   } as Record<string, unknown>
 });
 
@@ -221,14 +220,15 @@ describe('人工付款确认与当前任务状态', () => {
     expect(audit.append).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
-  it('开启时服务器报价回执进入人工确认，关闭及旧记录沿用自动确认', async () => {
+  it('服务器报价始终进入人工确认，旧关闭或缺失标记不能触发自动付款', async () => {
     for (const mode of [true, false, undefined]) {
       const { service, job } = harness();
       job.state = 'running';
       if (mode === undefined) delete job.result.manual_payment_confirmation;
       else job.result.manual_payment_confirmation = mode;
       await service.callback(id, { type: 'confirmation', result: report() });
-      expect(job.state).toBe(mode === true ? 'awaiting_confirmation' : 'confirming');
+      expect(job.state).toBe('awaiting_confirmation');
+      expect(job.result.manual_payment_confirmation).toBe(true);
       expect(job.nonceHash).toBe(hash(report().nonce));
     }
   });
@@ -322,7 +322,7 @@ describe('人工付款确认与当前任务状态', () => {
     expect(job.result).toEqual(original);
     expect(job.state).toBe('awaiting_human_verification');
   });
-  it('执行器不能切换人工开关、清除确认事实或伪造开启旧任务', () => {
+  it('执行器不能取消人工确认或清除确认事实，旧记录也明确转人工模式', () => {
     const job = makeJob();
     job.result.manual_confirmation_accepted = true;
     expect(
@@ -334,6 +334,25 @@ describe('人工付款确认与当前任务状态', () => {
     delete job.result.manual_payment_confirmation;
     expect(
       mergeRechargeCallbackResult(job as never, { manual_payment_confirmation: true })
-    ).not.toHaveProperty('manual_payment_confirmation');
+    ).toMatchObject({ manual_payment_confirmation: true });
+  });
+
+  it('服务器完整报价超过旧上限仍只等待人工确认，不发付款请求', async () => {
+    const { service, job } = harness();
+    job.state = 'running';
+    job.result.max_amount_minor = 3000;
+    const actualQuote = {
+      ...quote,
+      today: { ...money, amount: '40000.00', amount_minor: 4000000 }
+    };
+    const nonce = confirmationNonce(id, actualQuote, 'x'.repeat(64));
+    await service.callback(id, {
+      type: 'confirmation',
+      result: { ...report(), quote: actualQuote, nonce }
+    });
+    expect(job.state).toBe('awaiting_confirmation');
+    expect(job.nonceHash).toBe(hash(nonce));
+    expect(job.result).toMatchObject({ quote: { today: { amount_minor: 4000000 } } });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
