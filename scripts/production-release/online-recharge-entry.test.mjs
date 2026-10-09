@@ -289,9 +289,14 @@ test('read-only and release transports seal controllers and recovery policy and 
     dispatch,
     /if online_recharge:[\s\S]*--online-recharge-only --online-recharge-build-proof/
   );
-  assert.match(dispatch, /remote-deploy\.py', 'api-admin-scope\.py', 'online-recharge-scope\.py/);
-  assert.match(dispatch, /online-recharge-scope\.py', 'online-recharge-recovery\.json'/);
-  assert.match(dispatch, /sha256sum -c - >\/dev\/null/);
+  assert.match(
+    dispatch,
+    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n    if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n        controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n    for name in controllers:\n        digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
+  );
+  assert.match(
+    dispatch,
+    /pinned\.extend\(\[f'curl [^\n]+\{sha\}\/scripts\/production-release\/\{name\} -o \{target_path\}',\n\s+f'echo "\{digest\}  \{target_path\}" \| sha256sum -c - >\/dev\/null'\]\)\n    commands\[2:3\] = pinned/
+  );
   assert.equal((dispatch.match(/online-recharge-readonly\.py filter-deploy/g) || []).length, 2);
   assert.match(helper, /closed_json\(value\.get\('StandardOutputContent'/);
   assert.match(helper, /validate_proof\(controller, proof, commit/);

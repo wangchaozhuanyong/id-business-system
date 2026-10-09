@@ -196,16 +196,21 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
     if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE') and mode == 'preflight':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
-        if expected == namespace['MIGRATION_SUCCESSOR_COMMIT'] or receipt.get('migrationOrigin') is not None:
+        online_workspace = (scope == 'API_ADMIN_WORKSPACE'
+            and validate_online_workspace_receipt(namespace, receipt, expected, mode))
+        services = {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'}
+        if online_workspace:
+            services.add('online-recharge')
+        # This finite online origin inherits the fixed bootstrap's migration.
+        # Removing either origin must not select a less restrictive reader.
+        if online_workspace or expected == namespace['MIGRATION_SUCCESSOR_COMMIT'] or receipt.get('migrationOrigin') is not None:
             validate_migration_origin(namespace, receipt.get('migrationOrigin'))
             if (type(receipt.get('freeBytes')) is not int or receipt['freeBytes'] <= 6 * 1024**3
                     or receipt.get('guards') != receipt['migrationOrigin']['guards']
-                    or set(receipt.get('services', {})) != {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'}
+                    or set(receipt.get('services', {})) != services
                     or any(not isinstance(row, dict) or row.get('status') != 'running'
                            for row in receipt['services'].values())):
                 raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
-        if scope == 'API_ADMIN_WORKSPACE':
-            validate_online_workspace_receipt(namespace, receipt, expected, mode)
     if scope == 'API_ADMIN_MIGRATION' and mode == 'preflight':
         import runpy
         namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')), init_globals={'SCOPE': scope})
@@ -274,7 +279,7 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
             before_file = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
             before = json.loads(before_file.read_text()) if before_file.is_file() else {}
             context = before.get('migrationOrigin')
-            if context is not None or receipt.get('preservedMigrationOrigin') is not None:
+            if online_workspace or context is not None or receipt.get('preservedMigrationOrigin') is not None:
                 marker = validate_migration_origin(namespace, context)
                 if (before.get('status') != scope + '_BASELINE_VERIFIED'
                         or before.get('mode') != 'preflight'
