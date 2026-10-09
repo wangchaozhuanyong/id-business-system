@@ -417,6 +417,7 @@ if (part === 'guards') {
       'test_owned_recharge_profile',
       'test_connector_health',
       'test_session_retry',
+      'test_bitbrowser_readiness',
       fullPro ? 'test_pro' : 'test_pro.ProMenuDiagnosticsTests',
       'test_server',
       'test_worker_isolation',

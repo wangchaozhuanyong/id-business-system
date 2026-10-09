@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import sqlite3
 import stat
@@ -14,6 +15,7 @@ import subprocess
 import tarfile
 import time
 import urllib.request
+from urllib.parse import urlsplit
 
 SCOPE = globals().get('SCOPE', 'API_ADMIN')
 if SCOPE not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE'):
@@ -29,6 +31,11 @@ CONFIG_FILES = ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
                 'apps/api/prisma-mysql/schema.prisma')
 WORKSPACE_VOLUME = 'auto_registration_data'
 WORKSPACE_DIRECTORY = '/app/.runtime/auto-registration'
+WORKSPACE_BOOTSTRAP_COMMIT = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+WORKSPACE_BACKUP_FILE = 'workspace-sqlite-backup.enc'
+WORKSPACE_BACKUP_RECEIPT = 'workspace-sqlite-backup.json'
+WORKSPACE_BUSINESS_TABLES = ('accounts', 'email_services', 'registration_tasks', 'proxies',
+                            'cpa_services', 'sub2api_services', 'tm_services')
 WORKSPACE_CADDY_BEFORE = 'f8b230bba46136c27651a0df8b7d6fd7fc4f13a47f7db48d0ff0a436fcfe37e0'
 WORKSPACE_CADDY_AFTER = 'f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674'
 WORKSPACE_API_ROOTS = ('/app/apps/api/dist', '/app/packages/shared/dist',
@@ -247,6 +254,15 @@ def workspace_configuration(d, previous, candidate):
             'volume': WORKSPACE_VOLUME, 'containerDirectory': WORKSPACE_DIRECTORY}
 
 
+def workspace_public_origin(d, directory):
+    value = urlsplit(d.environment_values(directory / '.env.aws.production')['APP_PUBLIC_URL'])
+    d.require(value.scheme == 'https' and value.hostname and not value.username and not value.password
+              and not value.query and not value.fragment and value.path in ('', '/')
+              and re.fullmatch(r'[A-Za-z0-9.-]{1,253}', value.hostname)
+              and (value.port is None or 1 <= value.port <= 65535), 'API_ADMIN_WORKSPACE_PUBLIC_ORIGIN_INVALID')
+    return 'https://' + value.hostname + (':' + str(value.port) if value.port is not None else '')
+
+
 def workspace_present(directory, metadata=None):
     path = directory / CONFIG_FILES[0]
     configured = path.is_file() and (b'auto_registration_data:/app/.runtime/auto-registration' in path.read_bytes()
@@ -270,10 +286,13 @@ def workspace_existing(d, directory):
     return bool(found)
 
 
-def workspace_volume(d, directory, *, empty=False, attached=False):
+def workspace_volume(d, directory, *, empty=False, attached=False, api_metadata=None):
     """Read volume identity only; SQLite values and logs never enter the receipt."""
-    state = d.service_state(directory, 'api', include_container_id=True)
-    api = json.loads(d.run('docker', 'inspect', state['containerId']))[0]
+    if api_metadata is None:
+        state = d.service_state(directory, 'api', include_container_id=True)
+        api = json.loads(d.run('docker', 'inspect', state['containerId']))[0]
+    else:
+        api = api_metadata
     project = api.get('Config', {}).get('Labels', {}).get('com.docker.compose.project')
     d.require(isinstance(project, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', project),
               'API_ADMIN_WORKSPACE_PROJECT_INVALID')
@@ -331,6 +350,382 @@ def workspace_idle(d, directory):
     except sqlite3.Error:
         raise RuntimeError('API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE') from None
     return identity
+
+
+def workspace_origin(d, directory, volume):
+    """Only the verified first ABSENT -> PRESENT publication admits this path."""
+    manifest = json.loads((directory / 'release-manifest.json').read_text())
+    record = json.loads((directory / STATE_FILE).read_text())
+    if manifest.get('commit') == WORKSPACE_BOOTSTRAP_COMMIT:
+        before = record.get('workspaceVolumeBefore', {})
+        d.require(before == {'name': volume['name'], 'status': 'ABSENT', 'identitySha256': None}
+                  and record.get('workspaceVolumeAfter') == volume,
+                  'API_ADMIN_WORKSPACE_UNUSED_ORIGIN_REQUIRED')
+        return {'release': str(directory), 'commit': WORKSPACE_BOOTSTRAP_COMMIT,
+                'recordSha256': fingerprint(record), 'volume': volume}
+    origin = record.get('workspaceVolumeOrigin', {})
+    d.require(isinstance(origin, dict) and set(origin) == {'release', 'commit', 'recordSha256', 'volume'}
+              and origin.get('commit') == WORKSPACE_BOOTSTRAP_COMMIT and origin.get('volume') == volume,
+              'API_ADMIN_WORKSPACE_UNUSED_ORIGIN_REQUIRED')
+    path = Path(origin['release'])
+    d.require(path.parent == d.BASE / 'releases' and not path.is_symlink()
+              and path.name.endswith('-' + WORKSPACE_BOOTSTRAP_COMMIT[:12]),
+              'API_ADMIN_WORKSPACE_UNUSED_ORIGIN_REQUIRED')
+    d.require(workspace_origin(d, path, volume) == origin, 'API_ADMIN_WORKSPACE_UNUSED_ORIGIN_REQUIRED')
+    return origin
+
+
+def workspace_empty_business(d, database):
+    """No data values are read; completed/deleted-looking task history is insufficient."""
+    d.require(database.is_file() and not database.is_symlink()
+              and database.stat().st_size < 16 * 1024**2
+              and all(not Path(str(database) + suffix).is_symlink() for suffix in ('-wal', '-shm', '-journal')),
+              'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
+    try:
+        with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=2) as connection:
+            connection.execute('PRAGMA query_only=ON')
+            names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            d.require(set(WORKSPACE_BUSINESS_TABLES) <= names
+                      and names <= set(WORKSPACE_BUSINESS_TABLES) | {'settings', 'sqlite_sequence'},
+                      'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
+            counts = [connection.execute('SELECT COUNT(*) FROM "' + name + '"').fetchone()[0]
+                      for name in WORKSPACE_BUSINESS_TABLES]
+            d.require(counts == [0] * len(WORKSPACE_BUSINESS_TABLES), 'API_ADMIN_WORKSPACE_ALREADY_USED')
+            d.require(connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)],
+                      'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
+    except sqlite3.Error:
+        raise RuntimeError('API_ADMIN_WORKSPACE_UNUSED_REQUIRED') from None
+
+
+WORKSPACE_AUDIT_QUERY = ("SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'auditCount',"
+    "(SELECT COUNT(*) FROM audit_logs WHERE module=CONVERT(0xe887aae58aa8e6b3a8e5868c USING utf8mb4)))")
+
+
+def workspace_audit_probe(d, directory):
+    database = d.current_job_database(directory)
+    d.require(re.fullmatch(r'[a-zA-Z0-9_]{1,64}', database or ''), 'API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
+    # No log bodies, identity fields or credentials leave MySQL.
+    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+        'mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+        '"$MYSQL_DATABASE" -e "' + WORKSPACE_AUDIT_QUERY + '"', timeout=15)
+    value = json.loads(raw)
+    d.require(isinstance(value, dict) and set(value) == {'connectionId', 'auditCount'}
+              and type(value['connectionId']) is int and value['connectionId'] > 0
+              and type(value['auditCount']) is int and value['auditCount'] == 0,
+              'API_ADMIN_WORKSPACE_ALREADY_USED')
+    return {'auditCount': 0}
+
+
+def workspace_audit_protection(d, directory):
+    """Inspect only immutable trigger definitions, never audit contents."""
+    files = (('DELETE', '20261002123500_routine_audit_retention_exception'),
+             ('UPDATE', '20260830182500_mysql_trigger_service_definers'))
+    expected = {}
+    for event, migration in files:
+        raw = (directory / MIGRATION_ROOT / migration / 'migration.sql').read_text()
+        name = 'idv2_audit_log_no_' + ('delete' if event == 'DELETE' else 'update')
+        body = raw.split('CREATE TRIGGER `' + name + '`', 1)[1].split('FOR EACH ROW', 1)[1]
+        body = body.split('END;', 1)[0] + 'END' if event == 'DELETE' else body.split(';', 1)[0]
+        expected[event] = ' '.join(body.split()).rstrip(';')
+    database = d.current_job_database(directory)
+    query = ("SELECT JSON_ARRAYAGG(JSON_OBJECT('event',EVENT_MANIPULATION,'timing',ACTION_TIMING,"
+        "'statement',ACTION_STATEMENT)) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() "
+        "AND EVENT_OBJECT_TABLE='audit_logs'")
+    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+        'mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+        '"$MYSQL_DATABASE" -e "' + query + '"', timeout=15)
+    rows = json.loads(raw)
+    d.require(isinstance(rows, list) and len(rows) == 2
+              and all(isinstance(row, dict) and set(row) == {'event', 'timing', 'statement'}
+                      and row['timing'] == 'BEFORE' and isinstance(row['statement'], str) for row in rows)
+              and {row['event']: ' '.join(row['statement'].split()).rstrip(';') for row in rows} == expected,
+              'API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN')
+    return fingerprint(expected)
+
+
+def workspace_database_identity(d, directory, identity=None):
+    """Reuse only an identity measured live before stop, with unchanged MySQL/env."""
+    environment = hashlib.sha256((directory / '.env.aws.production').read_bytes()).hexdigest()
+    mysql = d.service_state(directory, 'mysql', include_container_id=True, include_environment_hash=True)
+    if identity is None:
+        return {'database': d.current_job_database(directory), 'environmentSha256': environment, 'mysql': mysql}
+    d.require(WORKSPACE and isinstance(identity, dict)
+              and set(identity) == {'database', 'environmentSha256', 'mysql'}
+              and re.fullmatch(r'[A-Za-z0-9_]{1,64}', identity['database'] or '')
+              and identity['environmentSha256'] == environment and identity['mysql'] == mysql
+              and mysql.get('status') == 'running' and mysql.get('health') == 'healthy',
+              'API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
+    return identity
+
+
+class WorkspacePipe:
+    """Bounded private control transport; stderr and unsafe payloads stay suppressed."""
+    def __init__(self, command, deadline):
+        self.deadline = deadline
+        self.buffer = b''
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL)
+
+    def send(self, value):
+        if self.process.poll() is not None or time.monotonic() >= self.deadline:
+            raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_LOST')
+        try:
+            self.process.stdin.write(value.encode()); self.process.stdin.flush()
+        except (OSError, BrokenPipeError):
+            raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_LOST') from None
+
+    def read(self, timeout=12, limit=24 * 1024**2):
+        end = min(self.deadline, time.monotonic() + timeout)
+        while b'\n' not in self.buffer:
+            remaining = end - time.monotonic()
+            if remaining <= 0 or not select.select([self.process.stdout], [], [], remaining)[0]:
+                raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk or len(self.buffer) + len(chunk) > limit:
+                raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_LOST')
+            self.buffer += chunk
+        raw, self.buffer = self.buffer.split(b'\n', 1)
+        return json.loads(raw)
+
+    def close(self):
+        if self.process.poll() is None:
+            self.process.stdin.close()
+            try: self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                try: self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill(); self.process.wait(timeout=3)
+        self.process.stdout.close()
+
+
+class WorkspaceAuditBarrier:
+    def __init__(self, d, directory, database_identity=None):
+        self.d, self.directory, self.pipe, self.connection_id = d, directory, None, None
+        self.database_identity = database_identity
+
+    def __enter__(self):
+        database = (workspace_database_identity(self.d, self.directory, self.database_identity)['database']
+                    if self.database_identity is not None else self.d.current_job_database(self.directory))
+        self.d.require(re.fullmatch(r'[a-zA-Z0-9_]{1,64}', database or ''),
+                       'API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
+        state = self.d.service_state(self.directory, 'mysql', include_container_id=True)
+        self.pipe = WorkspacePipe(['docker', 'exec', '-i', '-e', 'MYSQL_DATABASE=' + database,
+            state['containerId'], 'sh', '-c',
+            'exec mysql --batch --skip-column-names --unbuffered --skip-reconnect -u root '
+            '--password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'], time.monotonic() + 75)
+        try:
+            # Read lock blocks every future forward: all mutations await their durable audit first.
+            self.pipe.send('SET SESSION lock_wait_timeout=10; SET SESSION wait_timeout=75; '
+                           'LOCK TABLES audit_logs READ; ' + WORKSPACE_AUDIT_QUERY + ';\n')
+            value = self.pipe.read(limit=4096)
+            self.connection_id = value.get('connectionId')
+            self.check(value)
+            return self
+        except Exception:
+            self.pipe.close(); raise
+
+    def check(self, value=None):
+        if value is None:
+            self.pipe.send(WORKSPACE_AUDIT_QUERY + ';\n')
+            value = self.pipe.read(limit=4096)
+        self.d.require(type(self.connection_id) is int and self.connection_id > 0
+                       and value == {'connectionId': self.connection_id, 'auditCount': 0}
+                       and self.pipe.process.poll() is None,
+                       'API_ADMIN_WORKSPACE_AUDIT_GUARD_LOST')
+
+    def __exit__(self, *unused):
+        self.pipe.close()
+
+
+# Executed using the OLD API's already installed Python/cryptography. The key stays
+# in its existing environment. Plaintext is SQLite memory only, never host stdout/disk.
+WORKSPACE_BACKUP_SOURCE = r'''
+import base64, hashlib, json, os, signal, sqlite3, sys, time
+from pathlib import Path
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+def check(value):
+    if not value: raise RuntimeError('workspace backup refused')
+def backup(database, field_key, aad):
+    end=time.monotonic()+12
+    connection=sqlite3.connect(database, timeout=2)
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        memory=sqlite3.connect(':memory:')
+        with sqlite3.connect(Path(database).as_uri()+'?mode=ro',uri=True,timeout=2) as reader:
+            def progress(*unused): check(time.monotonic()<end)
+            reader.backup(memory, pages=32, progress=progress, sleep=0.05)
+        tables=('accounts','email_services','registration_tasks','proxies','cpa_services','sub2api_services','tm_services')
+        names={r[0] for r in memory.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        check(set(tables)<=names and names<=set(tables)|{'settings','sqlite_sequence'})
+        check(all(memory.execute('SELECT COUNT(*) FROM "'+name+'"').fetchone()[0]==0 for name in tables))
+        check(memory.execute('PRAGMA integrity_check').fetchall()==[('ok',)])
+        plain=memory.serialize(); check(0<len(plain)<16*1024**2)
+        # The online backup contains every committed WAL page. Its standalone
+        # in-memory restore has no external WAL; change only the two format flags.
+        check(plain[:16]==b'SQLite format 3\0' and plain[18] in (1,2) and plain[19] in (1,2))
+        plain=plain[:18]+b'\x01\x01'+plain[20:]
+        key=hashlib.sha256(b'id-auto-registration-backup-v1\0'+field_key.encode()).digest()
+        nonce=os.urandom(12); cipher=AESGCM(key)
+        packed=b'IDWSBK1\0'+nonce+cipher.encrypt(nonce,plain,aad)
+        restored=cipher.decrypt(packed[8:20],packed[20:],aad)
+        verification=sqlite3.connect(':memory:'); verification.deserialize(restored)
+        check(verification.execute('PRAGMA integrity_check').fetchall()==[('ok',)])
+        check(hashlib.sha256(restored).digest()==hashlib.sha256(plain).digest())
+        verification.close(); memory.close()
+        return connection, {'databaseSha256':hashlib.sha256(plain).hexdigest(),
+            'ciphertextSha256':hashlib.sha256(packed).hexdigest(),'ciphertextBytes':len(packed),
+            'aadSha256':hashlib.sha256(aad).hexdigest(),'integrityVerified':True,'restoreVerified':True,
+            'ciphertext':base64.b64encode(packed).decode()}
+    except BaseException:
+        connection.close(); raise
+def main():
+    signal.alarm(70)
+    request=json.loads(sys.stdin.readline()); database=Path('/app/.runtime/auto-registration/database.db')
+    check(database.is_file() and not database.is_symlink() and database.stat().st_size<16*1024**2)
+    check(all(not Path(str(database)+suffix).is_symlink() for suffix in ('-wal','-shm','-journal')))
+    key=os.environ['FIELD_ENCRYPTION_KEY']; check(len(key)>=32)
+    connection,receipt=backup(str(database),key,request['aad'].encode())
+    try:
+        print(json.dumps(receipt),flush=True)
+        for line in sys.stdin:
+            check(json.loads(line)=={'check':True})
+            print('{"held":true}',flush=True)
+    finally:
+        connection.close()
+if __name__=='__main__':
+    try: main()
+    except BaseException: sys.exit(1)
+'''
+
+
+def workspace_prepare(d, directory, identity):
+    if identity['status'] == 'ABSENT':
+        return {'status': 'ABSENT', 'backupRequired': False}
+    value = json.loads(d.run('docker', 'volume', 'inspect', identity['name']))[0]
+    root = Path(value['Mountpoint'])
+    if not any(root.iterdir()):
+        return {'status': 'EMPTY', 'backupRequired': False}
+    origin = workspace_origin(d, directory, identity)
+    workspace_audit_protection(d, directory)
+    workspace_audit_probe(d, directory)
+    workspace_empty_business(d, root / 'database.db')
+    return {'status': 'INITIALIZED_UNUSED', 'backupRequired': True, 'origin': origin}
+
+
+def workspace_backup_receipt(d, directory, record):
+    path = directory / WORKSPACE_BACKUP_RECEIPT
+    d.require(path.is_file() and not path.is_symlink() and path.stat().st_size < 16384,
+              'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_REQUIRED')
+    value = json.loads(path.read_text())
+    d.require(isinstance(value, dict) and value == record.get('workspaceBackup')
+              and type(value.get('version')) is int and value['version'] == 1
+              and value.get('databaseRestored') is False,
+              'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+    if value.get('status') == 'NOT_REQUIRED_EMPTY':
+        d.require(set(value) == {'version', 'status', 'volumeBefore', 'databaseRestored'}
+                  and value['volumeBefore'] == record.get('workspaceVolumeBefore')
+                  and record.get('workspacePreparation', {}).get('status') in ('ABSENT', 'EMPTY'),
+                  'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+        return value
+    fields = {'version', 'status', 'algorithm', 'volume', 'origin', 'auditCount', 'businessRows',
+        'admissionGuard', 'databaseRestored', 'databaseSha256', 'ciphertextSha256', 'ciphertextBytes',
+        'aadSha256', 'integrityVerified', 'restoreVerified'}
+    cipher = directory / WORKSPACE_BACKUP_FILE
+    d.require(set(value) == fields and value['status'] == 'ENCRYPTED_VERIFIED'
+              and value['algorithm'] == 'AES-256-GCM' and value['admissionGuard'] == 'MYSQL_AUDIT_READ_LOCK'
+              and value['auditCount'] == 0 and type(value['auditCount']) is int
+              and value['businessRows'] == 0 and type(value['businessRows']) is int
+              and value['integrityVerified'] is True and value['restoreVerified'] is True
+              and value['volume'] == record.get('workspaceVolumeBefore') == record.get('workspaceVolumeAfter')
+              and value['origin'] == record.get('workspaceVolumeOrigin')
+              and cipher.is_file() and not cipher.is_symlink() and cipher.stat().st_size < 16*1024**2+64
+              and type(value['ciphertextBytes']) is int and 28 < value['ciphertextBytes'] == cipher.stat().st_size
+              and all(re.fullmatch(r'[a-f0-9]{64}', value[name] or '')
+                      for name in ('databaseSha256', 'ciphertextSha256', 'aadSha256')),
+              'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+    packed = cipher.read_bytes()
+    aad = json.dumps({'volume': value['volume'], 'origin': value['origin'],
+                     'release': str(directory)}, sort_keys=True, separators=(',', ':'))
+    d.require(packed.startswith(b'IDWSBK1\0') and hashlib.sha256(packed).hexdigest() == value['ciphertextSha256']
+              and hashlib.sha256(aad.encode()).hexdigest() == value['aadSha256']
+              and workspace_origin(d, directory, value['volume']) == value['origin'],
+              'API_ADMIN_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+    return value
+
+
+def workspace_backup_stop(d, previous, target, identity, preparation, changed):
+    """Audit admission stays blocked until Docker confirms every old process exited."""
+    d.require(preparation.get('status') == 'INITIALIZED_UNUSED', 'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
+    state = d.service_state(previous, 'api', include_container_id=True)
+    pipe = None
+    with WorkspaceAuditBarrier(d, previous) as audit:
+        try:
+            d.require(workspace_volume(d, previous, attached=True) == identity,
+                      'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
+            aad = json.dumps({'volume': identity, 'origin': preparation['origin'],
+                             'release': str(target)}, sort_keys=True, separators=(',', ':'))
+            pipe = WorkspacePipe(['docker', 'exec', '-i', state['containerId'],
+                '/opt/id-registration/venv/bin/python', '-u', '-B', '-c', WORKSPACE_BACKUP_SOURCE],
+                time.monotonic() + 65)
+            pipe.send(json.dumps({'aad': aad}) + '\n')
+            receipt = pipe.read(timeout=18)
+            d.require(isinstance(receipt, dict) and set(receipt) == {'databaseSha256', 'ciphertextSha256',
+                'ciphertextBytes', 'aadSha256', 'integrityVerified', 'restoreVerified', 'ciphertext'},
+                'API_ADMIN_WORKSPACE_BACKUP_FAILED')
+            packed = base64.b64decode(receipt.pop('ciphertext'), validate=True)
+            d.require(packed.startswith(b'IDWSBK1\0') and 28 < len(packed) < 16*1024**2+64
+                      and receipt['ciphertextBytes'] == len(packed)
+                      and receipt['ciphertextSha256'] == hashlib.sha256(packed).hexdigest()
+                      and receipt['aadSha256'] == hashlib.sha256(aad.encode()).hexdigest()
+                      and receipt['integrityVerified'] is True and receipt['restoreVerified'] is True
+                      and re.fullmatch(r'[a-f0-9]{64}', receipt['databaseSha256']),
+                      'API_ADMIN_WORKSPACE_BACKUP_FAILED')
+            receipt.update(version=1, status='ENCRYPTED_VERIFIED', algorithm='AES-256-GCM',
+                volume=identity, origin=preparation['origin'], auditCount=0, businessRows=0,
+                admissionGuard='MYSQL_AUDIT_READ_LOCK', databaseRestored=False)
+            (target / WORKSPACE_BACKUP_FILE).write_bytes(packed)
+            (target / WORKSPACE_BACKUP_RECEIPT).write_text(json.dumps(receipt, indent=2) + '\n')
+            audit.check(); pipe.send('{"check":true}\n')
+            d.require(pipe.read(timeout=5, limit=4096) == {'held': True}, 'API_ADMIN_WORKSPACE_GUARD_LOST')
+            # Mark attempted before stop, so any stop failure restores the old API.
+            changed.append('api')
+            d.compose(previous, 'stop', '--timeout', '25', 'api', timeout=35)
+            metadata = json.loads(d.run('docker', 'inspect', state['containerId'], timeout=5))[0]
+            d.require(metadata.get('Id') == state['containerId'] and metadata.get('State', {}).get('Running') is False
+                      and metadata['State'].get('Pid') == 0, 'API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
+            audit.check()
+            return receipt
+        finally:
+            if pipe is not None: pipe.close()
+
+
+def workspace_api_metadata(d, directory):
+    """Compose's normal ps omits stopped containers; read the selected project's sole API."""
+    identifier = d.compose(directory, 'ps', '--all', '-q', 'api', timeout=10)
+    d.require(isinstance(identifier, str) and re.fullmatch(r'[a-f0-9]{64}', identifier),
+              'API_ADMIN_WORKSPACE_API_CONTAINER_UNAVAILABLE')
+    rows = json.loads(d.run('docker', 'inspect', identifier, timeout=5))
+    d.require(isinstance(rows, list) and len(rows) == 1 and rows[0].get('Id') == identifier
+              and rows[0].get('Config', {}).get('Labels', {}).get('com.docker.compose.service') == 'api'
+              and type(rows[0].get('State', {}).get('Running')) is bool,
+              'API_ADMIN_WORKSPACE_API_CONTAINER_UNAVAILABLE')
+    return rows[0]
+
+
+def workspace_rollback_stop(d, directory, database_identity=None):
+    """Do not interrupt a new accepted task, even when its SQLite row is absent."""
+    with WorkspaceAuditBarrier(d, directory, database_identity) as audit:
+        api = workspace_api_metadata(d, directory)
+        volume = workspace_volume(d, directory, attached=True, api_metadata=api)
+        info = json.loads(d.run('docker', 'volume', 'inspect', volume['name']))[0]
+        workspace_empty_business(d, Path(info['Mountpoint']) / 'database.db')
+        audit.check()
+        d.compose(directory, 'stop', '--timeout', '25', 'api', timeout=35)
+        metadata = json.loads(d.run('docker', 'inspect', api['Id'], timeout=5))[0]
+        d.require(metadata.get('Id') == api['Id'] and metadata.get('State', {}).get('Running') is False
+                  and metadata['State'].get('Pid') == 0, 'API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
+        audit.check()
 
 
 def workspace_acceptance(d, reference, run_id, attempt):
@@ -765,13 +1160,22 @@ def snapshot(d, directory):
     return states
 
 
-def jobs_idle(d, directory, *, allow_retained=False):
+def jobs_idle(d, directory, *, allow_retained=False, database_identity=None):
     workspace_probe_step(d, 'JOBS_IDLE')
-    d.assert_no_active_recharge(directory)
+    if database_identity is None:
+        d.assert_no_active_recharge(directory)
+        database = d.current_job_database(directory)
+    else:
+        database = workspace_database_identity(d, directory, database_identity)['database']
+        # Same lease predicate as the running-API path, without launching a stopped API.
+        count = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+            'mysql --batch --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+            '"$MYSQL_DATABASE" -e "SELECT COUNT(*) FROM id_business_v2_recharge_jobs '
+            'WHERE state <> 0x66696e6973686564 AND lease_until > UTC_TIMESTAMP(6)"')
+        d.require(count == '0', 'API_ADMIN_RECHARGE_LEASE_ACTIVE')
     runtime = d.registration_runtime_state(directory)
     d.require(runtime.get('supported') is True and runtime.get('registrationBusy') is False
               and type(runtime.get('registrationWindowRetained')) is bool, 'API_ADMIN_REGISTRATION_BUSY')
-    database = d.current_job_database(directory)
     count = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
         'mysql --batch --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
         '"$MYSQL_DATABASE" -e "SELECT COUNT(*) FROM id_business_v2_registration_jobs '
@@ -1635,10 +2039,18 @@ def baseline(d, expected, *, check_jobs=True):
                 verify_running(d, previous, proof)
                 workspace_probe_step(d, 'CURRENT_RECORD')
                 record = json.loads((previous / STATE_FILE).read_text())
-                d.require(manifest['apiWorkspacePublication'] == {'version': 1, 'scope': SCOPE,
+                publication = manifest['apiWorkspacePublication']
+                version = publication.get('version')
+                d.require(version in (1, 2) and type(version) is int
+                          and (version == 2 or expected == WORKSPACE_BOOTSTRAP_COMMIT),
+                          'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
+                receipt = workspace_backup_receipt(d, previous, record) if version == 2 else None
+                d.require(publication == {'version': version, 'scope': SCOPE,
                     'buildProofSha256': fingerprint(proof), 'workersPublished': False, 'cacheStatus': 'SKIPPED',
                     'configurationChanged': True, 'volume': record.get('workspaceVolumeAfter'),
-                    'volumeDeletionPerformed': False}, 'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
+                    'volumeDeletionPerformed': False,
+                    **({'workspaceBackupSha256': fingerprint(receipt)} if version == 2 else {})},
+                    'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
             elif WORKSPACE:
                 original, _ = d.api_admin_scope()
                 proof = original.validate_proof(d, json.loads((previous / original.PROOF_FILE).read_text()), expected, manifest['sourceTree'])
@@ -1722,8 +2134,9 @@ def baseline(d, expected, *, check_jobs=True):
             d.require(free_bytes > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         stage = 'JOBS'
         guards = jobs_idle(d, previous) if check_jobs else None
-        workspace_state = workspace_volume(d, previous, empty=check_jobs,
+        workspace_state = workspace_volume(d, previous,
                                             attached=bool(manifest.get('apiWorkspacePublication'))) if WORKSPACE else None
+        preparation = workspace_prepare(d, previous, workspace_state) if WORKSPACE and check_jobs else None
         if REGISTRATION and check_jobs:
             require_registration_handoff(d, previous, manifest)
         migration_state = migration_database_state(d, previous) if MIGRATION_MODE else None
@@ -1740,6 +2153,8 @@ def baseline(d, expected, *, check_jobs=True):
             evidence['migrationOrigin'] = migration_origin
         if WORKSPACE:
             evidence['workspaceVolume'] = workspace_state
+            if check_jobs:
+                evidence['workspacePreparation'] = preparation
         return previous, manifest, states, evidence
     except Exception as error:
         code = str(error)
@@ -1882,7 +2297,11 @@ def readback(d, expected, *, check_task=True):
                   'API_ADMIN_WORKSPACE_READBACK_CHANGED')
         workspace_health(d, previous)
         workspace = {'workspaceVolume': volume, 'volumePreserved': True, 'volumeDeletionPerformed': False,
-                     'offlineAcceptance': proof['acceptance'], 'registrationHealthChecked': True}
+                     'offlineAcceptance': proof['acceptance'], 'registrationHealthChecked': True,
+                     'publicOrigin': workspace_public_origin(d, previous)}
+        if manifest['apiWorkspacePublication'].get('version') == 2:
+            receipt = workspace_backup_receipt(d, previous, record)
+            workspace.update(workspaceBackup=receipt, workspaceBackupVerified=True)
     d.require(audit_receipt(d, previous / 'before-audit.json') == manifest['dataAuditBefore']
               and audit_receipt(d, previous / 'after-audit.json') == manifest['dataAuditAfter']
               and manifest['dataAuditBefore']['checksSha256'] == manifest['dataAuditAfter']['checksSha256'],
@@ -1986,6 +2405,8 @@ def _release_locked(d, args):
     d.require(not target.exists(), 'API_ADMIN_RELEASE_EXISTS')
     target.mkdir(mode=0o700)
     changed, step = [], 'source'
+    workspace_backup = None
+    workspace_database = None
     try:
         with urllib.request.urlopen(f'https://github.com/wangchaozhuanyong/id-business-system/archive/{args.commit}.tar.gz', timeout=60) as response:
             data = response.read(128 * 1024 * 1024 + 1)
@@ -2065,7 +2486,10 @@ def _release_locked(d, args):
         require_preserved(d, previous, target, before, environment, all_services=True)
         jobs_idle(d, previous)
         if WORKSPACE:
-            workspace_volume(d, previous, empty=True)
+            identity = workspace_volume(d, previous, attached=bool(old.get('apiWorkspacePublication')))
+            d.require(identity == evidence['workspaceVolume'], 'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
+            preparation = workspace_prepare(d, previous, identity)
+            d.require(preparation == evidence.get('workspacePreparation'), 'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
         if retained_origin is not None:
             migration_successor_guard(d, target, retained_origin)
         if MIGRATION_MODE:
@@ -2085,13 +2509,20 @@ def _release_locked(d, args):
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
                 if WORKSPACE:
-                    workspace_volume(d, previous, empty=True)
+                    if preparation['backupRequired']:
+                        workspace_database = workspace_database_identity(d, previous)
+                        step = 'workspace-backup-stop'
+                        workspace_backup = workspace_backup_stop(d, previous, target, identity, preparation, changed)
+                        step = 'switch'
+                    else:
+                        workspace_volume(d, previous, empty=True)
                 if REGISTRATION:
                     require_registration_handoff(d, previous, old)
                     d.require(registration_task(d, previous) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
             if WORKSPACE and name == 'caddy':
                 workspace_idle(d, target)
-            changed.append(name)
+            if name not in changed:
+                changed.append(name)
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name, timeout=300)
             d.wait_healthy(target, name)
         step = 'audit-after'
@@ -2122,7 +2553,15 @@ def _release_locked(d, args):
             record['migrationOrigin'] = retained_origin
         if WORKSPACE:
             record.update(workspaceVolumeBefore=evidence['workspaceVolume'],
-                          workspaceVolumeAfter=workspace_volume(d, target, attached=True))
+                          workspaceVolumeAfter=workspace_volume(d, target, attached=True),
+                          workspacePreparation=preparation)
+            if workspace_backup is None:
+                workspace_backup = {'version': 1, 'status': 'NOT_REQUIRED_EMPTY',
+                    'volumeBefore': evidence['workspaceVolume'], 'databaseRestored': False}
+                (target / WORKSPACE_BACKUP_RECEIPT).write_text(json.dumps(workspace_backup, indent=2) + '\n')
+            else:
+                record['workspaceVolumeOrigin'] = preparation['origin']
+            record['workspaceBackup'] = workspace_backup
         (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
         (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
         manifest = {'images': old['images'],
@@ -2142,9 +2581,10 @@ def _release_locked(d, args):
             databaseGrants={'status': 'SKIPPED', 'reason': 'API_ADMIN_EXISTING_TABLE_COLUMN_INDEX' if MIGRATION_MODE else 'API_ADMIN_UNCHANGED_SCHEMA'},
             rollback={'release': str(previous), 'images': {name: before[name]['image'] for name in UPDATED}, 'servicesAdded': []},
             **{'apiAdminMigrationPublication' if MIGRATION_MODE else 'apiRegistrationPublication' if REGISTRATION else 'apiWorkspacePublication' if WORKSPACE else 'apiAdminPublication':
-                {'version': 1, 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
+                {'version': 2 if WORKSPACE else 1, 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
                  'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': WORKSPACE,
-                 **({'volume': record['workspaceVolumeAfter'], 'volumeDeletionPerformed': False} if WORKSPACE else {}),
+                 **({'volume': record['workspaceVolumeAfter'], 'volumeDeletionPerformed': False,
+                     'workspaceBackupSha256': fingerprint(workspace_backup)} if WORKSPACE else {}),
                  **({'schemaChanged': True, 'migration': dict(MIGRATION_IDENTITY)} if MIGRATION_MODE else {})}})
         if MIGRATION_MODE:
             manifest['migrationPerformed'] = migration_result['performed']
@@ -2173,9 +2613,12 @@ def _release_locked(d, args):
                 if retained_origin is not None:
                     migration_successor_guard(d, target, retained_origin)
                 if name == 'api' or REGISTRATION or MIGRATION_MODE:
-                    jobs_idle(d, target)
+                    jobs_idle(d, target, **({'database_identity': workspace_database}
+                                           if WORKSPACE and workspace_database is not None else {}))
                     if WORKSPACE:
-                        workspace_idle(d, target)
+                        # Includes a failed old-API stop. Never infer safe recovery
+                        # from SQLite status alone after any stop was attempted.
+                        workspace_rollback_stop(d, target, workspace_database)
                 if MIGRATION_MODE:
                     d.require(jobs_idle(d, target) == evidence['guards'], 'API_ADMIN_REGISTRATION_TASK_CHANGED')
                     registration_private(d, target, retained=evidence['guards']['registrationWindowRetained'])
@@ -2223,7 +2666,8 @@ def _release_locked(d, args):
                   'candidateCommit': args.commit, 'previousCommit': args.expected_current,
                   'currentPointsToCandidate': (d.BASE / 'current').resolve() == target}
         if WORKSPACE:
-            result.update(volumeDeletionPerformed=False, sqliteBackupStatus='FIRST_EMPTY_VOLUME_ONLY')
+            result.update(volumeDeletionPerformed=False, sqliteBackupStatus=(workspace_backup or {}).get('status', 'NOT_COMPLETED'),
+                          sqliteRestorePerformed=False)
         result['receiptPersisted'] = True
         if MIGRATION_MODE:
             result.update(migration=migration_result,
