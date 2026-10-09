@@ -92,7 +92,8 @@ class WorkspaceStagingTests(unittest.TestCase):
         parameters = transport.parameters(COMMIT, PREVIOUS, 'preflight', 'API_ADMIN_WORKSPACE',
                                           declaration_producer=producer)
         self.assert_pinned(parameters['commands'], (*WORKSPACE_READONLY_CONTROLLERS,
-            'online-recharge-declaration-measurement.py'))
+            'online-recharge-declaration-measurement.py', 'online-recharge-daemon-identity.py',
+            'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py'))
         encoded = parameters['commands'][-1].split(' --declaration-producer ', 1)[1]
         self.assertEqual(json.loads(base64.b64decode(encoded, validate=True)), producer)
         self.assertLess(len(json.dumps(parameters).encode()), 48 * 1024)
@@ -437,7 +438,8 @@ raise SystemExit(1)
     def test_workspace_dispatch_pins_reader_but_cannot_select_online_initial_publication(self):
         parameters = self.dispatch_parameters('release_api_workspace')
         self.assert_pinned(parameters['commands'], (*WORKSPACE_READONLY_CONTROLLERS,
-                                                   'online-recharge-declaration-measurement.py'))
+            'online-recharge-declaration-measurement.py', 'online-recharge-daemon-identity.py',
+            'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py'))
         command = parameters['commands'][-1]
         self.assertIn('--api-workspace-only --api-admin-build-proof ', command)
         self.assertNotIn('--online-recharge-only', command)
@@ -455,6 +457,75 @@ raise SystemExit(1)
         self.assert_pinned(online['commands'], ONLINE_CONTROLLERS)
         self.assertIn('--online-recharge-only --online-recharge-build-proof ', online['commands'][-1])
         self.assertNotIn('--api-workspace-only', online['commands'][-1])
+
+
+class PendingDeclarationTransportTests(unittest.TestCase):
+    """Transport order only; complete declaration semantics have separate tests."""
+    def fixture(self, prior_count):
+        origin={'version':2,'services':{name:{'containerId':str(i)*64} for i,name in enumerate(
+            ('api','admin','mysql','caddy','media-resolver','auto-recharge','auto-registration'),1)},
+            'priorPublications':[{'commit':PREVIOUS}] if prior_count else []}
+        seal_key='successorConfigurationSeal' if prior_count else 'configurationEquivalenceSeal'
+        key='declarationEquivalenceSuccessorPublication' if prior_count else 'declarationEquivalencePublication'
+        marker={'originSha256':'d'*64}; summary={seal_key:{'checkedTransportFixture':'e'*64}}
+        fingerprint=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        trace=[]
+        def validate_summary(_d,value,context,**inputs):
+            trace.append((value,context,inputs));return value
+        namespace={'validate_pending_online_origin':lambda value:value,
+            'pending_online_marker':lambda value:marker,'pending_online_declaration_summary':validate_summary,
+            'pending_online_ended_failures':lambda value:[], 'fingerprint':fingerprint}
+        before={'status':'API_ADMIN_WORKSPACE_BASELINE_VERIFIED','mode':'preflight',
+            'releaseCandidateCommit':COMMIT,'commit':PREVIOUS,'workflowRunId':'123','workflowRunAttempt':'1',
+            'pendingOnlineMigrationOrigin':origin,'pendingOnlineEndedFailures':[]}
+        raw=(json.dumps(before,indent=2)+'\n\n').encode()
+        receipt={'pendingOnlineMigrationOrigin':origin,'preservedPendingOnlineMigration':{**marker,seal_key:summary[seal_key]},
+            'onlinePublished':False,'migrationPerformed':False,'services':copy.deepcopy(origin['services']),
+            'observedServiceCount':7,'servicesUpdated':['api','admin'],key:summary}
+        proof={'pendingOnlineProjection':{},'pendingOnlineOriginSha256':fingerprint(origin)}
+        env={'RELEASE_COMMIT':COMMIT,'SOURCE_TREE':TREE,'EXPECTED_CURRENT':PREVIOUS,
+            'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1'}
+        return SimpleNamespace(namespace=namespace,raw=raw,receipt=receipt,proof=proof,env=env,trace=trace,key=key,seal_key=seal_key)
+    def validate(self, fixture):
+        RUNTIME.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            previous=Path.cwd()
+            try:
+                os.chdir(temporary);target=Path('.deploy/production-release/api-workspace-preflight-result.json')
+                target.parent.mkdir(parents=True);target.write_bytes(fixture.raw)
+                with patch.dict(os.environ,fixture.env,clear=True):
+                    return transport.validate_pending_workspace_receipt(fixture.namespace,fixture.receipt,COMMIT,'readback',proof=fixture.proof)
+            finally:os.chdir(previous)
+    def test_initial_and_b_call_closed_summary_with_original_f_and_actual_producer(self):
+        for prior in (0,1):
+            with self.subTest(prior=prior):
+                f=self.fixture(prior);self.assertTrue(self.validate(f));self.assertEqual(len(f.trace),1)
+                value,origin,inputs=f.trace[0]
+                self.assertIs(value,f.receipt[f.key]);self.assertEqual(origin,f.receipt['pendingOnlineMigrationOrigin'])
+                self.assertEqual(inputs,{'producer':{'commit':COMMIT,'sourceTree':TREE,'workflowRunId':'123','workflowRunAttempt':'1'},
+                    'preflight_raw':f.raw,'build_proof_sha256':f.namespace['fingerprint'](f.proof)})
+    def test_missing_or_wrong_generation_summary_never_reaches_closed_validator(self):
+        for prior in (0,1):
+            for change in ('missing','both','wrong'):
+                f=self.fixture(prior);other='declarationEquivalencePublication' if prior else 'declarationEquivalenceSuccessorPublication'
+                if change!='both':f.receipt.pop(f.key)
+                if change!='missing':f.receipt[other]={}
+                with self.subTest(prior=prior,change=change),self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):
+                    self.validate(f)
+                self.assertEqual(f.trace,[])
+    def test_marker_and_late_run_drift_reject_after_summary_without_saving(self):
+        for prior in (0,1):
+            for change in ('marker','run'):
+                f=self.fixture(prior)
+                if change=='marker':f.receipt['preservedPendingOnlineMigration'][f.seal_key]={}
+                else:f.env['GITHUB_RUN_ID']='124'
+                with self.subTest(prior=prior,change=change),self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):
+                    self.validate(f)
+    def test_closed_summary_rejection_suppresses_raw_error(self):
+        f=self.fixture(1)
+        def fail(*args,**kwargs):raise RuntimeError('PRIVATE_TRANSPORT_TEST_VALUE')
+        f.namespace['pending_online_declaration_summary']=fail
+        with self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):self.validate(f)
 
 
 class WorkspaceSuccessorReceiptTests(unittest.TestCase):
@@ -616,6 +687,7 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         def read(path):
             return json.dumps(proof if path.name == self.namespace['PROOF_FILE'] else self.before)
         with patch.object(Path, 'is_file', return_value=True), patch.object(Path, 'read_text', read), \
+                patch.object(Path, 'read_bytes', lambda path:read(path).encode()), \
                 patch.dict(os.environ, self.environment, clear=True):
             self.assertEqual(transport.validate_receipt(receipt, COMMIT, 'readback',
                 'API_ADMIN_WORKSPACE'), receipt)
@@ -667,7 +739,9 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             def read(path):
                 return json.dumps(proof if path.name == self.namespace['PROOF_FILE'] else before)
             with self.subTest(label=label), patch.object(Path, 'is_file', return_value=True), \
-                    patch.object(Path, 'read_text', read), patch.dict(os.environ, self.environment, clear=True), \
+                    patch.object(Path, 'read_text', read), \
+                    patch.object(Path, 'read_bytes', lambda path:read(path).encode()), \
+                    patch.dict(os.environ, self.environment, clear=True), \
                     self.assertRaises(RuntimeError):
                 transport.validate_receipt(receipt, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
 

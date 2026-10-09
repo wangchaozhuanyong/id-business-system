@@ -503,7 +503,9 @@ if api_admin or online_recharge:
         controllers += ('online-recharge-scope.py', 'online-recharge-recovery.json')
     if os.environ.get('RELEASE_OPERATION') == 'release_api_workspace':
         controllers += ('api-admin-pending-projection.py', 'api-admin-pending-receipt-wire.py',
-                        'online-recharge-declaration-measurement.py', 'api-admin-readonly.py')
+                        'online-recharge-declaration-measurement.py', 'api-admin-readonly.py',
+                        'online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
+                        'online-recharge-daemon-socket.py')
     for name in controllers:
         digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
         if workspace_transport:

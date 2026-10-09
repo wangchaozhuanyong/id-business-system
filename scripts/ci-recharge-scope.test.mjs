@@ -1617,7 +1617,13 @@ test('pending online bridge control names are finite and preserve business scope
     'scripts/production-release/api-workspace-declaration-artifacts.py',
     'scripts/production-release/api-workspace-declaration-artifacts.test.py',
     'scripts/production-release/online-recharge-declaration-measurement.py',
-    'scripts/production-release/online-recharge-declaration-measurement.test.py'
+    'scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'scripts/production-release/online-recharge-daemon-identity.py',
+    'scripts/production-release/online-recharge-daemon-identity.test.py',
+    'scripts/production-release/online-recharge-daemon-listener.py',
+    'scripts/production-release/online-recharge-daemon-listener.test.py',
+    'scripts/production-release/online-recharge-daemon-socket.py',
+    'scripts/production-release/online-recharge-daemon-socket.test.py'
   ];
   for (const path of paths) {
     assert.equal(isCiOnly([path]), true);
