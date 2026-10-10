@@ -208,6 +208,65 @@ class QualificationTests(unittest.TestCase):
             with q._acquisition_context(self.d,self.session) as acquired:
                 outer=Path(acquired.runner.environment['DOCKER_CONFIG']);raise RuntimeError('SYNTHETIC_ONLY')
         self.assertFalse(outer.exists())
+    def test_context_missing_runtime_parent_bootstraps_and_cleans_only_client(self):
+        import stat
+        parent=self.base/'.runtime';parent.rmdir()
+        self.assertTrue(self.base.is_dir());self.assertFalse(parent.exists())
+        with q._acquisition_context(self.d,self.session) as acquired:
+            outer=Path(acquired.runner.environment['DOCKER_CONFIG'])
+            self.assertEqual(stat.S_IMODE(parent.stat().st_mode),0o700)
+            self.assertEqual(stat.S_IMODE(outer.parent.stat().st_mode),0o700)
+            self.assertEqual(stat.S_IMODE((outer/'config.json').stat().st_mode),0o600)
+            self.assertTrue((outer/'config.json').is_file())
+            acquired.assert_stable()
+        self.assertFalse(outer.exists())
+        self.assertTrue(parent.is_dir());self.assertTrue(self.directory.is_dir())
+        self.assertEqual(list((parent/'online-recharge-qualified-client').iterdir()),[])
+        self.no_create()
+    def test_context_existing_runtime_parent_and_root_preserve_original_modes(self):
+        import stat
+        parent=self.base/'.runtime';parent.chmod(0o755);original=parent.stat()
+        root=parent/'online-recharge-qualified-client'
+        for layout in ('parent_exists','client_root_exists'):
+            with self.subTest(layout=layout):
+                if layout=='client_root_exists':self.assertTrue(root.is_dir())
+                with q._acquisition_context(self.d,self.session) as acquired:
+                    outer=Path(acquired.runner.environment['DOCKER_CONFIG'])
+                    self.assertEqual(stat.S_IMODE(parent.stat().st_mode),0o755)
+                    self.assertEqual(stat.S_IMODE(root.stat().st_mode),0o700)
+                    self.assertEqual((parent.stat().st_dev,parent.stat().st_ino),(original.st_dev,original.st_ino))
+                    self.assertTrue((outer/'config.json').is_file())
+                self.assertFalse(outer.exists());self.assertEqual(list(root.iterdir()),[])
+        self.no_create()
+    def test_context_invalid_parent_or_client_root_is_never_repaired(self):
+        for layout in ('parent_file','parent_symlink','root_file','root_symlink','root_permissions'):
+            with self.subTest(layout=layout):
+                base=self.base/('invalid-'+layout);base.mkdir()
+                parent=base/'.runtime';root=parent/'online-recharge-qualified-client'
+                outside=base/'owned-target';outside.mkdir()
+                if layout=='parent_file':parent.write_bytes(b'CONTROL_ONLY_KEEP')
+                elif layout=='parent_symlink':parent.symlink_to(outside,target_is_directory=True)
+                else:
+                    parent.mkdir(mode=0o755)
+                    if layout=='root_file':root.write_bytes(b'CONTROL_ONLY_KEEP')
+                    elif layout=='root_symlink':root.symlink_to(outside,target_is_directory=True)
+                    else:root.mkdir(mode=0o777);root.chmod(0o777)
+                before={p.name:(p.lstat().st_dev,p.lstat().st_ino,p.lstat().st_mode) for p in base.iterdir()}
+                self.d.BASE=base;calls=len(self.d.calls)
+                try:
+                    with self.assertRaises((q.Rejected,OSError)):
+                        with q._acquisition_context(self.d,self.session):self.fail('QUALIFIED')
+                    self.assertEqual(before,{p.name:(p.lstat().st_dev,p.lstat().st_ino,p.lstat().st_mode) for p in base.iterdir()})
+                    self.assertEqual(self.d.calls[calls:],[]);self.assertIsNone(self.session.runner)
+                    self.assertEqual(list(outside.iterdir()),[])
+                    if layout in ('parent_file','root_file'):
+                        self.assertEqual((parent if layout=='parent_file' else root).read_bytes(),b'CONTROL_ONLY_KEEP')
+                    elif layout in ('parent_symlink','root_symlink'):
+                        self.assertTrue((parent if layout=='parent_symlink' else root).is_symlink())
+                    else:self.assertEqual(root.stat().st_mode & 0o777,0o777)
+                finally:self.d.BASE=self.base
+        self.no_create()
+
     def test_context_rules_cannot_mutate_fixed_profile(self):
         with q._acquisition_context(self.d,self.session) as acquired:
             first=acquired.reviewed_rules();first['spec']['defaultPools'].append({'base':'10.65.0.0/16','size':24})
@@ -646,7 +705,7 @@ class InternalQualificationDiagnosticTests(unittest.TestCase):
     def test_native_permissions_bound_collector_code(self):
         self.rejected('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED',patch.object(self.base,'native_permissions',side_effect=self.base.Rejected('CLI_SOURCE_CHANGED')))
     def test_native_tools_exact_os_error(self):
-        self.rejected('NATIVE_TOOLS','OS_ERROR',patch.object(self.q._Session,'native_tools',side_effect=FileNotFoundError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
+        self.rejected('NATIVE_TOOLS','FILE_NOT_FOUND_ERROR',patch.object(self.q._Session,'native_tools',side_effect=FileNotFoundError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
     def test_daemon_info_exact_type_error(self):
         self.rejected('DAEMON_INFO','TYPE_ERROR',patch.object(self.inventory,'read',side_effect=TypeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
     def test_stability_failure_before_yield(self):
@@ -712,6 +771,31 @@ class InternalQualificationDiagnosticTests(unittest.TestCase):
         self.assertIsNone(self.q._diagnostic_binding(SimpleNamespace(Rejected=Foreign,CODES=frozenset({'MATCH'}))))
         state=self.q._DiagnosticState();state.stage='FACTORY';state.capture(Foreign('PACKAGE_FILE_CHANGED'))
         self.assertEqual(state.first,('FACTORY','UNKNOWN'))
+
+    def test_client_directory_exact_file_error_kinds_without_secret_or_subclass_fallback(self):
+        class MissingSubclass(FileNotFoundError):
+            def __str__(self):raise AssertionError('STR_EXECUTED')
+            @property
+            def args(self):raise AssertionError('ARGS_EXECUTED')
+        class ExistingSubclass(FileExistsError):
+            def __str__(self):raise AssertionError('STR_EXECUTED')
+            @property
+            def args(self):raise AssertionError('ARGS_EXECUTED')
+        secret='SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED'
+        original=Path.mkdir
+        for error,code in ((FileNotFoundError(secret),'FILE_NOT_FOUND_ERROR'),
+                           (FileExistsError(secret),'FILE_EXISTS_ERROR'),
+                           (MissingSubclass(secret),'UNKNOWN'),
+                           (ExistingSubclass(secret),'UNKNOWN')):
+            with self.subTest(error_type=type(error).__name__):
+                def denied(path,*args,**kwargs):
+                    if path.name=='online-recharge-qualified-client':raise error
+                    return original(path,*args,**kwargs)
+                rejected=self.rejected('CLIENT_DIRECTORY',code,patch.object(Path,'mkdir',denied))
+                self.assertEqual(BaseException.args.__get__(rejected),('QUALIFIER_UNAVAILABLE',))
+                self.assertEqual(set(self.q.failure_diagnostic(rejected)),{'stage','code'})
+                self.assertNotIn(secret,json.dumps(self.q.failure_diagnostic(rejected)))
+
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
