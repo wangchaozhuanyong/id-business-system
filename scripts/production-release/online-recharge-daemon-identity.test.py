@@ -521,5 +521,108 @@ class IdentityTests(unittest.TestCase):
                 m.validate_runtime_identity(report)
 
 
+
+
+class ProcNetPathSealTests(unittest.TestCase):
+    fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns','st_nlink')
+    def setUp(self):
+        target=RUNTIME.parent/'proc-net-unix-reader-fix-0ecd2359'/'fixtures'
+        target.mkdir(parents=True,exist_ok=True)
+        self.temp=tempfile.TemporaryDirectory(prefix='owned-',dir=target);self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.leaf=self.root/'body'
+        self.leaf.write_bytes(b'\x7fELFLOCAL_PROC_NET_FIXTURE');self.leaf.chmod(0o755)
+        self.reader=m._Reader()
+        sandbox=m._Reader(str(self.root))
+        # Map only the private test FD source; production parent/nofollow code
+        # still executes unchanged, and no host /proc path is opened.
+        item=patch.object(self.reader,'parent',side_effect=lambda path:sandbox.parent('/body'))
+        item.start();self.addCleanup(item.stop)
+        item=patch.object(m,'_root_owned',side_effect=lambda value:value.st_uid==os.getuid())
+        item.start();self.addCleanup(item.stop)
+        self.open_flags=[];self.path_checks=0;self.file_fstats=0
+
+    def read(self,path='/proc/321/net/unix',*,root='/',executable=False,path_changes=None,fd_changes=None,limit=1024):
+        from types import SimpleNamespace
+        original_stat=os.stat;original_fstat=os.fstat;original_open=os.open
+        inode=original_stat(self.leaf).st_ino
+        self.reader.root=root
+        def changed(value,updates):
+            attrs={name:getattr(value,name) for name in self.fields}
+            attrs.update({name:attrs[name]+delta for name,delta in (updates or {}).items()})
+            return SimpleNamespace(**attrs)
+        def path_stat(path,*args,**kwargs):
+            value=original_stat(path,*args,**kwargs)
+            if path=='body' and kwargs.get('follow_symlinks') is False:
+                self.path_checks+=1
+                return changed(value,path_changes)
+            return value
+        def fd_stat(fd):
+            value=original_fstat(fd)
+            if value.st_ino==inode:
+                self.file_fstats+=1
+                if self.file_fstats==2:return changed(value,fd_changes)
+            return value
+        def opened(path,flags,*args,**kwargs):
+            if path=='body':self.open_flags.append(flags)
+            return original_open(path,flags,*args,**kwargs)
+        self.open_flags=[];self.path_checks=0;self.file_fstats=0
+        with patch.object(m.os,'stat',side_effect=path_stat),patch.object(m.os,'fstat',side_effect=fd_stat),patch.object(m.os,'open',side_effect=opened):
+            return self.reader.read(path,limit,executable=executable)
+
+    def reject(self,**kwargs):
+        with self.assertRaises(m.Rejected) as caught:self.read(**kwargs)
+        self.assertEqual(caught.exception.args,('RUNTIME_DRIFT',))
+
+    def test_strict_default_proc_net_timestamp_only_path_seal_and_nine_field_result(self):
+        for changes in ({'st_mtime_ns':1},{'st_ctime_ns':1},{'st_mtime_ns':1,'st_ctime_ns':1}):
+            with self.subTest(changedFields=tuple(changes)):
+                raw,seal=self.read(path_changes=changes)
+                self.assertEqual(raw,self.leaf.read_bytes())
+                self.assertEqual(len(seal['file']),9)
+                self.assertEqual(seal['file'],m.file_identity(self.leaf.stat()))
+                self.assertEqual(self.file_fstats,2);self.assertEqual(self.path_checks,1)
+                self.assertEqual(len(self.open_flags),1)
+                self.assertTrue(self.open_flags[0]&os.O_NOFOLLOW)
+                self.assertTrue(self.open_flags[0]&os.O_NONBLOCK)
+                self.assertTrue(self.open_flags[0]&os.O_CLOEXEC)
+
+    def test_strict_proc_net_other_seven_identity_fields_still_reject(self):
+        for name in self.fields:
+            if name in ('st_mtime_ns','st_ctime_ns'):continue
+            with self.subTest(changedField=name):self.reject(path_changes={name:1})
+
+    def test_strict_proc_net_descriptor_timestamp_change_still_rejects_before_path(self):
+        for name in ('st_mtime_ns','st_ctime_ns'):
+            with self.subTest(changedField=name):
+                self.reject(fd_changes={name:1})
+                self.assertEqual(self.path_checks,0)
+
+    def test_other_paths_executable_sandbox_and_noncanonical_pid_keep_full_identity(self):
+        for path in ('/proc/self/net/unix','/proc/0/net/unix','/proc/0321/net/unix',
+                     '/proc/321/net/unix/','/proc/321/net/unix.extra','/proc/321/net/tcp',
+                     '/proc/321/status','/usr/bin/systemctl'):
+            with self.subTest(pathRole=path):self.reject(path=path,path_changes={'st_mtime_ns':1,'st_ctime_ns':1})
+        for root in (str(self.root),'/./',Path('/')):
+            with self.subTest(rootType=type(root).__name__):self.reject(root=root,path_changes={'st_mtime_ns':1})
+        self.reject(executable=True,path_changes={'st_ctime_ns':1})
+        # Nonliteral falsey values do not broaden the fixed-role exception.
+        self.reject(executable=0,path_changes={'st_mtime_ns':1})
+
+    def test_strict_proc_net_retains_read_limits_ownership_modes_nlink_and_nofollow(self):
+        with self.assertRaises(m.Rejected) as caught:self.read(limit=3)
+        self.assertEqual(caught.exception.args,('PATH_INVALID',))
+        self.leaf.chmod(0o777)
+        with self.assertRaises(m.Rejected) as caught:self.read()
+        self.assertEqual(caught.exception.args,('PERMISSIONS_INVALID',));self.leaf.chmod(0o755)
+        with patch.object(m,'_root_owned',return_value=False):
+            with self.assertRaises(m.Rejected) as caught:self.read()
+        self.assertEqual(caught.exception.args,('PERMISSIONS_INVALID',))
+        linked=self.root/'hardlink';os.link(self.leaf,linked)
+        with self.assertRaises(m.Rejected) as caught:self.read()
+        self.assertEqual(caught.exception.args,('PATH_INVALID',));linked.unlink()
+        original=self.root/'original';self.leaf.rename(original);self.leaf.symlink_to(original)
+        with self.assertRaises(OSError):self.read()
+        self.assertTrue(self.open_flags[0]&os.O_NOFOLLOW)
+
 if __name__ == '__main__':
     unittest.main()

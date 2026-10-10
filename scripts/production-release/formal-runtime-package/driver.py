@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 PARENT_FORMAL_TABLE = '1d090ebf96ad9186587f78c99842fce4503abc1fa710f1e4b1be82fca310706e'
 FORMAL_TABLE = '6e67c5dd29b7535604460c54ad726120e4c288a71e5debb59361d52ffb523f79'
-PACKAGE_MANIFEST_SHA = '667a0de8fc6d6827a0b31e789ea9b8ba7ad8fda95ae2f991c8601b0d9cf047ad'
+PACKAGE_MANIFEST_SHA = '3e7214c1f0287424c53af85805cf2530effa1b2ee8c39c21abbe06e0bfd369b8'
 MAX_REGISTRY = 32768
 HEX = re.compile(r'[a-f0-9]{64}\Z')
 PRODUCER_KEYS = ('commit','sourceTree','workflowRunId','workflowRunAttempt')
@@ -651,6 +651,13 @@ def measure_declaration_equivalence(d,directory,recovery,*,producer:dict,purpose
     except Exception as error:
         bindings=getattr(caps,'_diagnostic_errors',()) if caps is not None else ()
         recorded=getattr(caps,'_diagnostic_failure',()) if caps is not None else ()
+        # The real qualifier wraps a body error only after the inner catch.
+        # Enrich that unknown body cause; preserve known and recorded failures.
+        if failure is not None and failure['code']=='UNKNOWN':
+            try:qualified_failure=_qualified_reason(error,caps)
+            except Exception:qualified_failure=None
+            if qualified_failure is not None and qualified_failure['code']!='UNKNOWN':
+                failure=qualified_failure
         if failure is None and recorded:failure=recorded[0]
         if failure is None:failure=_qualified_reason(error,caps)
         raise _rejected(error,stage,bindings,failure) from None

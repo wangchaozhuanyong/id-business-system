@@ -1228,4 +1228,142 @@ class SourceFilePermissionDriverTests(unittest.TestCase):
         self.assertIs(collected.source_file_permission_failure.__globals__,vars(collected))
         self.assertEqual(caps._diagnostic_failure,[])
 
+
+
+class QualifiedInnerUnknownDriverTests(unittest.TestCase):
+    # Reuse only fixture helpers, so selecting this class never runs DriverTests.
+    base_fd=DriverTests.base_fd
+    file_hashes=DriverTests.file_hashes
+    raw=DriverTests.raw
+    make_reader=DriverTests.make_reader
+    assert_stable=DriverTests.assert_stable
+    source_binding=DriverTests.source_binding
+    measure=DriverTests.measure
+    run_driver=DriverTests.run_driver
+    registry_path=DriverTests.registry_path
+    diagnostic_failure=DriverTests.diagnostic_failure
+    def setUp(self):
+        DriverTests.setUp(self)
+        package=m._local_package()
+        self.q=package.load_leaf('qualified.py')
+        self.inventory=load('inner_unknown_inventory',HERE.parent/'online-recharge-declaration-measurement.py')
+        self.collector=package.load_leaf('collector.py');self.collector._configure(self.inventory,DERIVE,package.contract)
+        self.identity=load('inner_unknown_identity',HERE.parent/'online-recharge-daemon-identity.py')
+        self.socket=load('inner_unknown_socket',HERE.parent/'online-recharge-daemon-socket.py')
+        self.listener=load('inner_unknown_listener',HERE.parent/'online-recharge-daemon-listener.py')
+        socket_path=HERE.parent/'online-recharge-daemon-socket.py'
+        external=SimpleNamespace(identity=self.identity,listener=self.listener,socket=self.socket,
+            paths={'online-recharge-daemon-socket.py':socket_path},
+            leaf_pins={'online-recharge-daemon-socket.py':hashlib.sha256(socket_path.read_bytes()).hexdigest()},
+            socket_bytes=socket_path.read_bytes(),assert_stable=lambda:None)
+        self.q._configure(external,DERIVE,lambda:self.collector)
+        self.caps.qualified=self.q
+        # Match the real driver bindings: socket exceptions are not yet wrapped.
+        self.caps._diagnostic_errors=[(self.q.Rejected,self.q.CODES),(self.inventory.Rejected,self.collector.ERROR_CODES)]
+        self.states=[];self.delivered=[];self.cleanup_error=None
+        @contextmanager
+        def inner(d,session):
+            # Only acquisition I/O/cleanup is synthetic. The public qualifier,
+            # actual _Session.runtime and its capture/wrapping remain real.
+            self.real_session=session;self.states.append(session._diagnostic_state)
+            self.q._stage(session,'YIELD')
+            try:yield self.session
+            except Exception as error:
+                self.delivered.append(error);self.q._capture(session,error);raise
+            finally:
+                self.exit_calls+=1
+                self.q._stage(session,'CLEANUP')
+                if self.cleanup_error is not None:
+                    self.q._capture(session,self.cleanup_error,cleanup=True)
+                    raise self.cleanup_error
+        item=patch.object(self.q,'_acquisition_context',inner);item.start();self.addCleanup(item.stop)
+        # This runs inside driver's real RULES body, before context unwinding.
+        self.session.assert_stable=lambda:self.real_session.runtime(self.controller)
+        self.original=self.socket.Rejected('RUNTIME_DRIFT')
+        item=patch.object(self.socket,'runtime_daemon_socket_binding',side_effect=self.original)
+        item.start();self.addCleanup(item.stop)
+
+    def assert_closed_failure(self,stage,code):
+        error=self.diagnostic_failure(stage,code,'ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.exit_calls,1);self.assertEqual(self.measure_calls,0)
+        self.assertEqual(self.material_calls,0)
+        self.assertEqual(BaseException.args.__get__(self.original),('RUNTIME_DRIFT',))
+        return error
+
+    def test_actual_rules_runtime_unknown_reaches_qualified_and_six_field_api(self):
+        self.assertEqual(m._reason(self.original,'RULES',self.caps._diagnostic_errors),{'stage':'RULES','code':'UNKNOWN'})
+        error=self.assert_closed_failure('RUNTIME_VFS','RUNTIME_DRIFT')
+        self.assertIs(self.delivered[0],self.original)
+        self.assertEqual(self.states[0].first,('RUNTIME_VFS','RUNTIME_DRIFT'))
+        self.assertIsNone(self.states[0].cleanup)
+        online=SimpleNamespace(**S)
+        function=S['measure_declaration_equivalence']
+        with patch.dict(function.__globals__,{'_declaration_runtime_driver':lambda:m}), \
+             patch.object(m,'measure_declaration_equivalence',side_effect=error):
+            with self.assertRaises(S['DeclarationDriverError']) as caught:
+                function(object(),Path('/LOCAL_ONLY'),{},producer={'LOCAL_SYNTHETIC_ONLY':True},purpose='INDEPENDENT_PREFLIGHT')
+        online_error=caught.exception
+        d=SimpleNamespace(_workspaceBaselineDiagnostic={'phase':'MANIFEST','step':'JOBS_IDLE','service':'none',
+            'scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True})
+        def require(ok,code):
+            if not ok:raise RuntimeError(code)
+        d.require=require
+        online.measure_declaration_equivalence=lambda *a,**k:(_ for _ in ()).throw(online_error)
+        api=W['_pending_online_declaration_measure']
+        with patch.dict(api.__globals__,{'pending_online_equivalence':lambda:online}):
+            with self.assertRaises(RuntimeError) as caught:
+                api(d,Path('/LOCAL_ONLY'),{},producer=self.p,purpose='INDEPENDENT_PREFLIGHT')
+        self.assertEqual(caught.exception.args,('API_ADMIN_PENDING_ONLINE_DRIVER_RUNTIME_DRIFT',))
+        self.assertEqual(set(d._workspaceBaselineDiagnostic),{'phase','step','service','scope','errorType','rawOutputSuppressed'})
+        self.assertEqual(d._workspaceBaselineDiagnostic['step'],'DECLARATION_RUNTIME_VFS')
+        self.assertTrue(W['valid_workspace_diagnostic'](d._workspaceBaselineDiagnostic))
+        self.assertNotIn(SENTINEL,json.dumps(d._workspaceBaselineDiagnostic))
+
+    def test_known_inner_first_survives_qualified_cleanup_failure(self):
+        known=m.Rejected('ROOT_SOURCE_CHANGED')
+        self.session.reviewed_rules=lambda:(_ for _ in ()).throw(known)
+        self.cleanup_error=PermissionError(SENTINEL)
+        with patch.object(self.q,'failure_diagnostic',side_effect=AssertionError('KNOWN_FIRST_MUST_NOT_QUERY_GETTER')):
+            self.assert_closed_failure('RULES','ROOT_SOURCE_CHANGED')
+        self.assertIs(self.delivered[0],known)
+        self.assertEqual(self.states[0].cleanup,('CLEANUP','PERMISSION_ERROR'))
+
+    def test_unknown_inner_uses_qualified_original_cleanup_priority(self):
+        self.cleanup_error=PermissionError(SENTINEL)
+        self.assert_closed_failure('CLEANUP','PERMISSION_ERROR')
+        self.assertEqual(self.states[0].first,('RUNTIME_VFS','RUNTIME_DRIFT'))
+        self.assertEqual(self.states[0].cleanup,('CLEANUP','PERMISSION_ERROR'))
+
+    def test_unknown_inner_invalid_throwing_missing_and_unknown_getters_fall_back(self):
+        values=(None,{'stage':'RUNTIME_VFS','code':'UNKNOWN'},
+                {'stage':'OUTSIDE','code':'RUNTIME_DRIFT'},
+                {'stage':'RUNTIME_VFS','code':SENTINEL},
+                {'stage':'RUNTIME_VFS','code':'RUNTIME_DRIFT','extra':SENTINEL})
+        cases=[('value',value) for value in values]+[('throws',None),('missing',None),('no_qualifier_class',None),('both_unknown',None)]
+        for kind,value in cases:
+            with self.subTest(kind=kind,valueType=type(value).__name__):
+                self.exit_calls=0;self.states=[];self.delivered=[]
+                if kind=='throws':item=patch.object(self.q,'failure_diagnostic',side_effect=RuntimeError(SENTINEL))
+                elif kind=='missing':item=patch.object(self.q,'failure_diagnostic',None)
+                elif kind=='no_qualifier_class':item=patch.object(self.caps,'qualified',SimpleNamespace(acquisition_session=self.q.acquisition_session))
+                elif kind=='both_unknown':
+                    class ForeignError(RuntimeError):pass
+                    self.session.reviewed_rules=lambda:(_ for _ in ()).throw(ForeignError(SENTINEL))
+                    item=patch.object(self.q,'failure_diagnostic',wraps=self.q.failure_diagnostic)
+                else:item=patch.object(self.q,'failure_diagnostic',return_value=value)
+                with item:self.assert_closed_failure('RULES','UNKNOWN')
+
+    def test_no_inner_failure_recorded_and_none_paths_preserve_original_behavior(self):
+        cases=([{'stage':'CONFIGURE','code':'UNKNOWN'}],
+               [{'stage':'CONFIGURE','code':'SOURCE_FILE_INVALID'}],[])
+        for recorded in cases:
+            with self.subTest(recorded=recorded):
+                self.caps._diagnostic_failure=recorded
+                with patch.object(self.q,'_reviewed_profile',side_effect=self.q.Rejected('SOURCE_NOT_MEASURED')):
+                    with self.assertRaises(m.Rejected) as caught:self.run_driver()
+                expected=recorded[0] if recorded else {'stage':'QUALIFIER_PROFILE','code':'SOURCE_NOT_MEASURED'}
+                self.assertEqual(m.failure_diagnostic(caught.exception),expected)
+                self.assertEqual(caught.exception.args,('ROOT_GENERATOR_SOURCE_UNMEASURED',))
+                self.assertFalse(self.registry_path().exists());self.assertEqual(self.exit_calls,0)
+
 if __name__=='__main__':unittest.main()
