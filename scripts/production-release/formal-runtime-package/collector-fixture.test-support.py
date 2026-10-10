@@ -87,7 +87,7 @@ def metadata(directory,api_model,nets,vol,project=PROJECT,owner=None,files=None)
     eps={}
     for i,(role,net) in enumerate(nets.items(),1):
         eps[net['Name']]={'Aliases':[project+'-api-1','api'],'DNSNames':None if ref else [project+'-api-1','api',cid[:12]],'DriverOpts':None,'EndpointID':'' if ref else str(i+4)*64,
-          'Gateway':'' if ref else '10.64.'+str(i)+'.1','GlobalIPv6Address':'','GlobalIPv6PrefixLen':0,
+          'Gateway':'' if ref or net['Internal'] else '10.64.'+str(i)+'.1','GlobalIPv6Address':'','GlobalIPv6PrefixLen':0,
           'IPAddress':'' if ref else '10.64.'+str(i)+'.2','IPAMConfig':None,'IPPrefixLen':0 if ref else 24,
           'IPv6Gateway':'','Links':None,'MacAddress':'' if ref else '02:00:00:00:00:0'+str(i),'NetworkID':'' if ref else net['Id']}
     return {'Id':cid,'Image':IMAGE,'Name':'/'+project+'-api-1','Created':'2026-10-10T00:00:00Z','RestartCount':0,

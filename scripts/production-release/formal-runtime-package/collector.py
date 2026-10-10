@@ -432,7 +432,7 @@ def actual_endpoints(meta, networks, services, spec):
         except (ValueError, TypeError): raise Rejected('ACTUAL_NETWORK_ADDRESS') from None
         check(address in subnet and address not in (subnet.network_address,subnet.broadcast_address)
               and type(endpoint.get('IPPrefixLen')) is int and endpoint['IPPrefixLen'] == subnet.prefixlen
-              and endpoint.get('Gateway') == str(subnet.network_address+1)
+              and endpoint.get('Gateway') == ('' if net['Internal'] else str(subnet.network_address+1))
               and endpoint.get('GlobalIPv6Address') == '' and type(endpoint.get('GlobalIPv6PrefixLen')) is int
               and endpoint['GlobalIPv6PrefixLen'] == 0
               and endpoint.get('IPv6Gateway') == '', 'ACTUAL_NETWORK_ADDRESS')
