@@ -1390,6 +1390,98 @@ class DeclarationEntryFoundation(unittest.TestCase):
             stack.enter_context(patch.object(s, 'snapshot', return_value=value['services']))
             yield controller, directory, value, module, recovery
 
+    def test_pending_baseline_earliest_failures_report_step_and_stop_later_checks(self):
+        stages = ('RECOVERY', 'SNAPSHOT', 'NATIVE', 'PERMISSION', 'RESOURCES', 'JOBS')
+        for index, stage in enumerate(stages):
+            with self.subTest(stage=stage), self.initial_fixture() as (controller, directory, value, module, recovery):
+                module.recovery_services = MagicMock()
+                calls = (s.pending_online_recovery, s.snapshot, module.recovery_services,
+                         module.verify_permission_seed, module.require_fresh_resources, module.jobs_idle)
+                calls[index].side_effect = RuntimeError('ONLINE_RECHARGE_SOURCE_INVALID')
+                before = (directory / 'release-manifest.json').read_bytes()
+                with patch.object(s, 'pending_online_declaration_initial_measure') as measure:
+                    with self.assertRaises(s.WorkspaceBaselineError) as failed:
+                        s.baseline(controller, online.BASELINE_COMMIT)
+                    measure.assert_not_called()
+                diagnostic = failed.exception.workspaceDiagnostic
+                self.assertEqual(str(failed.exception), 'API_ADMIN_PENDING_ONLINE_SOURCE_INVALID')
+                self.assertEqual(diagnostic['step'], 'PENDING_ONLINE_' + stage)
+                self.assertEqual(diagnostic['phase'], 'MANIFEST')
+                self.assertTrue(s.valid_workspace_diagnostic(diagnostic))
+                body = {'status': 'API_ADMIN_WORKSPACE_VERIFICATION_FAILED',
+                        'code': str(failed.exception), 'errorType': 'WorkspaceBaselineError',
+                        'workspaceDiagnostic': diagnostic}
+                self.assertEqual(t.safe_failure(body, scope='API_ADMIN_WORKSPACE'), body)
+                for call in calls[:index + 1]:
+                    call.assert_called_once()
+                for call in calls[index + 1:]:
+                    call.assert_not_called()
+                self.assertEqual((directory / 'release-manifest.json').read_bytes(), before)
+                self.assertEqual((controller.BASE / 'current').resolve(), directory)
+                self.assertFalse(hasattr(controller, '_workspaceBaselineDiagnostic'))
+
+    def test_pending_baseline_preserves_only_known_plain_single_argument_errors(self):
+        class Derived(RuntimeError):
+            pass
+        class DerivedText(str):
+            pass
+        class SpoofedArgument:
+            def __str__(self):
+                return 'ONLINE_RECHARGE_SOURCE_INVALID'
+            def __eq__(self, other):
+                return True
+        errors = [(RuntimeError(code), 'API_ADMIN_PENDING_ONLINE_' + code[len('ONLINE_RECHARGE_'):])
+                  for code in sorted(s.PENDING_ONLINE_BASELINE_FAILURE_CODES)]
+        errors += [(error, 'API_ADMIN_BASELINE_MANIFEST_FAILED') for error in (
+            RuntimeError('ONLINE_RECHARGE_SENTINEL_PRIVATE'),
+            RuntimeError('ONLINE_RECHARGE_WORKER_KEY'),
+            RuntimeError('ONLINE_RECHARGE_FAILED_RESTORED'),
+            RuntimeError('SENTINEL_PRIVATE_COMMAND_OUTPUT'),
+            RuntimeError('ONLINE_RECHARGE_SOURCE_INVALID', 'SENTINEL_PRIVATE'),
+            Derived('ONLINE_RECHARGE_SOURCE_INVALID'),
+            RuntimeError(DerivedText('ONLINE_RECHARGE_SOURCE_INVALID')),
+            RuntimeError(SpoofedArgument()),
+            ValueError('ONLINE_RECHARGE_SOURCE_INVALID'))]
+        for error, expected in errors:
+            with self.subTest(error=type(error).__name__, expected=expected), self.initial_fixture() as (controller, directory, value, module, recovery):
+                s.pending_online_recovery.side_effect = error
+                with self.assertRaises(s.WorkspaceBaselineError) as failed:
+                    s.baseline(controller, online.BASELINE_COMMIT)
+                self.assertEqual(str(failed.exception), expected)
+                self.assertEqual(failed.exception.workspaceDiagnostic['step'], 'PENDING_ONLINE_RECOVERY')
+                self.assertNotIn('SENTINEL', json.dumps(failed.exception.workspaceDiagnostic))
+                s.snapshot.assert_not_called()
+
+    def test_pending_failure_whitelist_contains_only_existing_error_emissions(self):
+        import ast
+        tree = ast.parse(Path(__file__).with_name('online-recharge-scope.py').read_bytes())
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        pending = {'release_recovery', 'recovery_services', 'verify_permission_seed', 'require_fresh_resources', 'jobs_idle'}
+        closure = set()
+        while pending:
+            name = pending.pop()
+            if name in closure or name not in functions:
+                continue
+            closure.add(name)
+            pending.update(call.func.id for call in ast.walk(functions[name])
+                           if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                           and call.func.id in functions)
+        emitted = set()
+        for name in closure:
+            for call in ast.walk(functions[name]):
+                if not isinstance(call, ast.Call):
+                    continue
+                argument = None
+                if isinstance(call.func, ast.Attribute) and call.func.attr == 'require' and len(call.args) > 1:
+                    argument = call.args[1]
+                elif isinstance(call.func, ast.Name) and call.func.id == 'RuntimeError' and call.args:
+                    argument = call.args[0]
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str) and argument.value.startswith('ONLINE_RECHARGE_'):
+                    emitted.add(argument.value)
+        self.assertEqual(s.PENDING_ONLINE_BASELINE_FAILURE_CODES, emitted)
+        self.assertNotIn('ONLINE_RECHARGE_WORKER_KEY', emitted)
+        self.assertNotIn('ONLINE_RECHARGE_FAILED_RESTORED', emitted)
+
     @patch('urllib.request.urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE'))
     def test_known_initial_mismatch_with_source1_still_cannot_create(self, archive):
         driver = online._declaration_runtime_driver()
