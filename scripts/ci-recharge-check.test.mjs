@@ -126,6 +126,42 @@ test('fixed source permission repair runs both dedicated suites in each control 
   }
 });
 
+test('historical backup recovery runs both dedicated suites only for exact control inputs', () => {
+  const suites = [
+    'scripts/production-release/online-recharge-backup-source-recovery.test.py',
+    'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py'
+  ];
+  const paths = [
+    'scripts/production-release/online-recharge-backup-source-recovery.py',
+    ...suites,
+    'scripts/production-release/online-recharge-backup-source-recovery-transport.py',
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of paths) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      for (const suite of suites)
+        assert.equal(
+          calls.filter((call) => JSON.stringify(call) === JSON.stringify(['python3', '-B', suite]))
+            .length,
+          1,
+          part + ': ' + path + ': ' + suite
+        );
+      assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+    }
+    for (const path of [
+      'docs/ONLINE_RECHARGE_RELEASE_20261009.md',
+      'scripts/production-release/online-recharge-backup-source-recovery.py.backup',
+      'scripts/production-release/online-recharge-backup-source-recovery-transport-other.py'
+    ]) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.ok(calls.every((call) => suites.every((suite) => !call.includes(suite))));
+    }
+  }
+});
+
 function recordOnlineEngineCommands(failBrowser = false) {
   const script = `
     import childProcess from 'node:child_process';
