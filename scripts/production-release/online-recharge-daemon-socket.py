@@ -51,6 +51,21 @@ def sha(raw):
 def digest(value):
     return sha(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
 
+# Runtime diagnostic-only candidate: fixed trusted dependencies, never str(error).
+CODES = CODES | frozenset(('SOCKET_BINDING_UNAVAILABLE', 'SOCKET_PATH_INVALID', 'SOCKET_PERMISSIONS_INVALID', 'PROC_ALIAS_INVALID', 'NAMESPACE_MISMATCH', 'LISTENER_INVALID', 'DAEMON_FD_MISSING', 'FD_INVALID', 'SOCKET_BINDING_DRIFT', 'BASE_SOURCE_UNMEASURED', 'BINDING_REPORT_INVALID', 'RUNTIME_UNAVAILABLE', 'SERVICE_INVALID', 'PATH_INVALID', 'PERMISSIONS_INVALID', 'PROCESS_INVALID', 'EXECUTABLE_INVALID', 'RUNTIME_DRIFT', 'CMDLINE_INVALID', 'CONFIG_INVALID', 'PACKAGE_INVALID', 'PACKAGE_DIGEST_UNSUPPORTED', 'PACKAGE_BINARY_MISMATCH', 'REPORT_INVALID'))
+DIAGNOSTIC_PHASES = frozenset(('START', 'SOURCE_LISTENER', 'SOURCE_IDENTITY', 'READER', 'IDENTITY_FIRST', 'OBSERVATION_FIRST', 'QUERY_FIRST', 'NODE_FIRST', 'IDENTITY_SECOND', 'OBSERVATION_SECOND', 'QUERY_SECOND', 'NODE_SECOND', 'STABILITY', 'LISTENER_REPORT', 'REPORT'))
+
+def _fixed_error_code(error, module, base):
+    owned = (Rejected,)
+    if module is not None:
+        owned += (module.Rejected,)
+    if base is not None:
+        owned += (base.Rejected,)
+    if type(error) not in owned:
+        return 'VFS_BINDING_UNAVAILABLE'
+    values = BaseException.args.__get__(error, type(error))
+    return values[0] if (type(values) is tuple and len(values) == 1 and type(values[0]) is str and values[0] in CODES) else 'VFS_BINDING_UNAVAILABLE'
+
 
 def _listener():
     path = Path(__file__).with_name('online-recharge-daemon-listener.py')
@@ -178,22 +193,38 @@ def listener_report(module, identity, observed):
 
 
 def runtime_daemon_socket_binding(d):
+    module = base = None
+    phase = 'START'
     try:
+        phase = 'SOURCE_LISTENER'
         module = _listener()
+        phase = 'SOURCE_IDENTITY'
         base = module._base()
+        phase = 'READER'
         reader = module._reader(base)
+        phase = 'IDENTITY_FIRST'
         identity = base.runtime_daemon_identity(d)
+        phase = 'OBSERVATION_FIRST'
         first = module.observation(d, base, reader, identity)
         inode = int(first['listener']['kernelInode'])
+        phase = 'QUERY_FIRST'
         one = kernel_query(inode)
+        phase = 'NODE_FIRST'
         check_node(first, one)
+        phase = 'IDENTITY_SECOND'
         final_identity = base.runtime_daemon_identity(d)
+        phase = 'OBSERVATION_SECOND'
         second = module.observation(d, base, reader, final_identity)
+        phase = 'QUERY_SECOND'
         two = kernel_query(inode, one['cookie'])
+        phase = 'NODE_SECOND'
         check_node(second, two)
+        phase = 'STABILITY'
         need(identity == final_identity and first == second and one == two and
              module.node(base, reader) == second['path'], 'VFS_DRIFT')
+        phase = 'LISTENER_REPORT'
         legacy = listener_report(module, identity, first)
+        phase = 'REPORT'
         return validate_binding({'version': 2, 'kind': 'DOCKERD_FIXED_UNIX_VFS_BINDING',
             'status': 'VFS_BOUND_TO_RUNTIME_DAEMON', 'authority': False, 'productionEligible': False,
             'proofConstructed': False, 'rawOutputSuppressed': True, 'unixHost': module.UNIX_HOST,
@@ -204,8 +235,10 @@ def runtime_daemon_socket_binding(d):
                 'vfsIdentitySha256': digest({'inode': one['vfsInode'], 'device': one['vfsDevice']}),
                 'nodeIdentitySha256': digest(first['path']['node']), 'responseIdentitySha256': digest(one)}})
     except Exception as error:
-        code = str(error) if isinstance(error, Rejected) else 'VFS_BINDING_UNAVAILABLE'
-        raise Rejected(code if code in CODES else 'VFS_BINDING_UNAVAILABLE') from None
+        code = _fixed_error_code(error, module, base)
+        result = Rejected(code)
+        result.diagnostic_phase = phase if phase in DIAGNOSTIC_PHASES else 'START'
+        raise result from None
 
 
 def validate_binding(value):

@@ -368,6 +368,7 @@ online_recharge = os.environ.get('RELEASE_OPERATION') == 'release_online_recharg
 api_admin = os.environ.get('RELEASE_OPERATION') in ('release_api_workspace', 'release_api_admin', 'release_api_admin_migration', 'release_api_registration')
 if api_admin:
     import base64
+    import shlex
     from pathlib import Path
     scope_name = {'release_api_workspace': 'api-workspace', 'release_api_registration': 'api-registration', 'release_api_admin_migration': 'api-admin-migration'}.get(os.environ['RELEASE_OPERATION'], 'api-admin')
     proof_raw = Path('.deploy/production-release/' + scope_name + '-build-proof.json').read_bytes()
@@ -376,12 +377,12 @@ if api_admin:
         import gzip
         proof_raw = json.dumps(proof, separators=(',', ':')).encode()
         assert len(proof_raw) < 65536
-        proof_arg = 'gzip:' + base64.b64encode(gzip.compress(proof_raw, mtime=0)).decode()
+        proof_arg = 'gzip85:' + base64.b85encode(gzip.compress(proof_raw, mtime=0)).decode('ascii')
         assert len(proof_arg) < 49152
     else:
         assert len(proof_raw) < 16384
         proof_arg = base64.b64encode(proof_raw).decode()
-    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + proof_arg
+    scope_flag = ' --' + scope_name + '-only --api-admin-build-proof ' + shlex.quote(proof_arg)
     if (os.environ['RELEASE_OPERATION'] == 'release_api_workspace'
             and proof.get('pendingOnlineProjection') is not None
             and proof.get('pendingOnlinePreflightSha256') is not None):
@@ -506,19 +507,17 @@ if api_admin or online_recharge:
                         'online-recharge-declaration-measurement.py', 'api-admin-readonly.py',
                         'online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
                         'online-recharge-daemon-socket.py')
-    for name in controllers:
-        digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
-        if workspace_transport:
-            pinned.extend([f'curl -fsSL --retry 3 --max-time 30 "$release_controller_url/{name}" -o "$release_controller_directory/{name}"',
-                           f'echo "{digest}  $release_controller_directory/{name}" | sha256sum -c - >/dev/null'])
-        else:
+    if workspace_transport:
+        import runpy
+        carrier = runpy.run_path('scripts/production-release/api-admin-readonly.py')['formal_runtime_commands']
+        commands[2:3] = carrier(controller_directory, sha,
+            Path('scripts/production-release/formal-runtime-package'), Path('scripts/production-release'))
+    else:
+        for name in controllers:
+            digest = hashlib.sha256(Path('scripts/production-release', name).read_bytes()).hexdigest()
             target_path = f'/opt/id-business-v2/.staging/oidc-{sha}/{name}'
             pinned.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{sha}/scripts/production-release/{name} -o {target_path}',
                            f'echo "{digest}  {target_path}" | sha256sum -c - >/dev/null'])
-    if workspace_transport:
-        commands[2:3] = ['readonly release_controller_directory=' + shlex.quote(controller_directory)
-                         + ' release_controller_url=' + shlex.quote(controller_url), *pinned]
-    else:
         commands[2:3] = pinned
 if online_recharge or history_policy == 'registration-worker-96-20261008':
     assert len(json.dumps({'commands': commands, 'executionTimeout': ['3600']}).encode('utf-8')) < 48 * 1024

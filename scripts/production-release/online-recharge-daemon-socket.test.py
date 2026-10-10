@@ -310,7 +310,10 @@ class VfsTests(unittest.TestCase):
 
     def test_runtime_mainpid_fd_still_required_with_vfs_match(self):
         self.fixture.fd.unlink()
-        self.reject('VFS_BINDING_UNAVAILABLE')
+        self.reject('DAEMON_FD_MISSING')
+        with self.assertRaises(m.Rejected) as raised:
+            self.collect()
+        self.assertEqual(raised.exception.diagnostic_phase, 'OBSERVATION_FIRST')
 
     def test_unavailable_kernel_protocol_permissions_timeout_are_static_failure(self):
         with patch.object(m, '_netlink_socket', side_effect=OSError(SENTINEL)):

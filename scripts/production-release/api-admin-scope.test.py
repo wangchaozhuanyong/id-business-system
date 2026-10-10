@@ -3449,24 +3449,42 @@ class WorkspaceScopeTests(unittest.TestCase):
                     transport.validate_receipt({**receipt, field: changed}, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
 
     def test_workspace_dispatch_uses_only_new_scope_and_exact_runner_proof(self):
+        import ast
+        import gzip
+        import shlex
         text = (ROOT / 'scripts/production-release/dispatch.sh').read_text()
         program = text.split('python3 - "$parameters_file" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
         environment = {'RELEASE_COMMIT': COMMIT, 'SOURCE_TREE': TREE, 'EXPECTED_CURRENT': OLD,
             'RELEASE_REPOSITORY': REPOSITORY, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
             'QUALITY_RUN_ID': '456', 'RELEASE_OPERATION': 'release_api_workspace', 'HISTORICAL_EXCEPTION': 'none'}
+        original_read = Path.read_bytes
+        def local_proof(path):
+            return json.dumps(workspace_proof()).encode() if path.name == 'api-workspace-build-proof.json' else original_read(path)
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.dict(os.environ, environment, clear=True), \
              patch.object(sys, 'argv', ['generate', str(Path(temporary) / 'parameters.json')]), \
-             patch.object(Path, 'read_bytes', return_value=json.dumps(workspace_proof()).encode()):
+             patch.object(Path, 'read_bytes', local_proof):
             exec(compile(program, 'workspace-dispatch', 'exec'), {'__name__': '__test__'})
-            commands = '\n'.join(json.loads((Path(temporary) / 'parameters.json').read_text())['commands'])
+            lines = json.loads((Path(temporary) / 'parameters.json').read_text())['commands']
+            commands = '\n'.join(lines)
         self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
         self.assertNotIn('--image-commit', commands)
         self.assertNotIn('--historical-', commands)
-        self.assertEqual(commands.count('sha256sum -c -'), 11)
-        for name in ('api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
-                     'api-admin-readonly.py', 'online-recharge-daemon-identity.py',
-                     'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py'):
-            self.assertIn('/' + name, commands)
+        self.assertEqual(commands.count('sha256sum -c -'), 0)
+        carrier = next(line for line in lines if line.startswith('python3 -B -c '))
+        bootstrap = ast.parse(shlex.split(carrier)[3])
+        payload = next(node.args[0].value for node in ast.walk(bootstrap)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'b85decode')
+        parsed = ast.parse(gzip.decompress(base64.b85decode(payload)).decode())
+        stores = [node for node in ast.walk(parsed) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == '_store_files']
+        self.assertEqual(len(stores), 2)
+        controllers, package = [ast.literal_eval(node.args[2]) for node in stores]
+        self.assertEqual(set(controllers), set(transport.FORMAL_RUNTIME_CONTROLLERS))
+        self.assertEqual(set(package), set(transport.FORMAL_RUNTIME_FILES))
+        for name, digest in controllers.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release' / name).read_bytes()).hexdigest())
+        for name, digest in package.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release/formal-runtime-package' / name).read_bytes()).hexdigest())
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):

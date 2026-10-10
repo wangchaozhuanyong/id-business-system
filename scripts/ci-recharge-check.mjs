@@ -222,8 +222,13 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-socket.test.py']);
     run('python3', [
       '-B',
+      'scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py'
+    ]);
+    run('python3', [
+      '-B',
       'scripts/production-release/api-workspace-declaration-artifacts.test.py'
     ]);
+    run('python3', ['-B', 'scripts/production-release/formal-runtime-package.test.py']);
   }
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
@@ -361,8 +366,13 @@ if (part === 'guards') {
     run('python3', ['-B', 'scripts/production-release/online-recharge-daemon-socket.test.py']);
     run('python3', [
       '-B',
+      'scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py'
+    ]);
+    run('python3', [
+      '-B',
       'scripts/production-release/api-workspace-declaration-artifacts.test.py'
     ]);
+    run('python3', ['-B', 'scripts/production-release/formal-runtime-package.test.py']);
   }
   if (
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))

@@ -2479,6 +2479,14 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
         for node in old.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 actual = copy.deepcopy(by_name[node.name])
+                if node.name == 'measure_declaration_equivalence':
+                    # This previously closed stub is the sole replaced entry.
+                    # Its ABI and two purpose/input guards remain exact; the
+                    # source-bound delegate is exercised below with table0.
+                    self.assertEqual(ast.dump(node.args), ast.dump(actual.args))
+                    self.assertEqual([ast.dump(n) for n in node.body[1:3]],
+                                     [ast.dump(n) for n in actual.body[1:3]])
+                    continue
                 if node.name == 'declaration_equivalence_materials':
                     # Only three fixed actually-executed capabilities are added;
                     # all historical/owner/path/version predicates stay exact.
@@ -2493,7 +2501,9 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
                     current_names.value = previous_names.value
                 self.assertEqual(ast.dump(node), ast.dump(actual))
         old_assigns = [ast.dump(n) for n in old.body if isinstance(n, ast.Assign)]
-        current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)]
+        current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)
+                           and not any(isinstance(t, ast.Name) and t.id == 'FORMAL_RUNTIME_DRIVER_SHA256'
+                                       for t in n.targets)]
         self.assertEqual(current_assigns[:len(old_assigns)], old_assigns)
 
 
@@ -2830,9 +2840,17 @@ class DeclarationEquivalenceMaterialsTests(unittest.TestCase):
 
     def test_formal_measurement_is_closed_before_source_or_runtime_authority(self):
         for purpose, raw in (('INDEPENDENT_PREFLIGHT', None), ('DEPLOYMENT_REMEASURE', b'{}')):
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+            # This test's synthetic helper directory has no trusted package.
+            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
                 scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
                     producer=self.producer, purpose=purpose, preflight_raw=raw)
+            with patch.object(scope, '__file__', str(ROOT / 'scripts/production-release/online-recharge-scope.py')):
+                # Native acquisition requires actual root; nonroot local/CI
+                # callers fail before the package's separately tested table0.
+                code = ('SOURCE_NOT_MEASURED' if os.geteuid() == 0 else 'DRIVER_UNAVAILABLE')
+                with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_' + code + '$'):
+                    scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
+                        producer=self.producer, purpose=purpose, preflight_raw=raw)
         self.d.run.assert_not_called(); self.download.assert_not_called()
 
 

@@ -2962,15 +2962,34 @@ def declaration_equivalence_saved_invocation(d, *, producer):
     return {'raw_bytes': raw, 'command_id': value['CommandId']}
 
 
-def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose, preflight_raw=None):
-    """Fixed formal entry remains closed until production generator review.
+FORMAL_RUNTIME_DRIVER_SHA256 = '4d6d8b4575cd1ea259942f75890093595fe54cbd44fc240f34ab7a895226336b'
 
-    The inventory and LOCAL fixture cannot activate this entry. Actual P
-    construction will be added only after the real generator/resource sources
-    have been independently measured and frozen.
-    """
+
+def _declaration_runtime_driver():
+    """Compile only captured fixed driver bytes; package binds the full archive."""
+    try:
+        import types
+        path = Path(__file__).with_name('formal-runtime-package') / 'driver.py'
+        raw = _declaration_source_bytes(path, limit=256 * 1024)
+        _declaration_require(hashlib.sha256(raw).hexdigest() == FORMAL_RUNTIME_DRIVER_SHA256)
+        module = types.ModuleType('_online_formal_runtime_driver')
+        module.__file__ = str(path)
+        exec(compile(raw, str(path), 'exec'), module.__dict__)
+        return module
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE') from None
+
+
+def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose, preflight_raw=None):
+    """Fixed source/runtime entry; unsupported sources fail before references."""
     _declaration_require(purpose in ('INDEPENDENT_PREFLIGHT', 'DEPLOYMENT_REMEASURE'))
     _declaration_require(preflight_raw is None if purpose == 'INDEPENDENT_PREFLIGHT'
                          else type(preflight_raw) is bytes and 0 < len(preflight_raw) < 65536)
-    # There is no caller-provided registry, trusted boolean or fixture fallback.
-    raise RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')
+    driver = _declaration_runtime_driver()
+    try:
+        return driver.measure_declaration_equivalence(d, directory, recovery,
+            producer=producer, purpose=purpose, preflight_raw=preflight_raw)
+    except Exception as error:
+        if isinstance(error, driver.Rejected) and str(error) == 'ROOT_GENERATOR_SOURCE_UNMEASURED':
+            raise RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED') from None
+        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE') from None

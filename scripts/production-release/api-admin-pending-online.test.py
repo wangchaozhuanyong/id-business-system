@@ -594,20 +594,35 @@ class FinitePublicationChain(unittest.TestCase):
 class BoundedProofTransport(unittest.TestCase):
     def test_only_pending_workspace_proof_uses_large_compressed_envelope(self):
         value = {'pendingOnlineProjection': {'inventory': 'a' * 33059}}
-        encoded = 'gzip:' + base64.b64encode(gzip.compress(json.dumps(value).encode(), mtime=0)).decode()
-        self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), encoded), value)
-        with patch.object(s, 'WORKSPACE', False), self.assertRaises(RuntimeError):
-            s.decode_build_proof(SimpleNamespace(require=need), encoded)
+        for prefix, encode in (('gzip:', base64.b64encode), ('gzip85:', base64.b85encode)):
+            encoded = prefix + encode(gzip.compress(json.dumps(value).encode(), mtime=0)).decode()
+            with self.subTest(prefix=prefix):
+                self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), encoded), value)
+                with patch.object(s, 'WORKSPACE', False), self.assertRaises(RuntimeError):
+                    s.decode_build_proof(SimpleNamespace(require=need), encoded)
         ordinary = base64.b64encode(json.dumps(value).encode()).decode()
         with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_BUILD_PROOF_TOO_LARGE'):
             s.decode_build_proof(SimpleNamespace(require=need), ordinary)
 
     def test_bomb_trailing_stream_and_missing_projection_are_rejected(self):
-        for value, tail in [({'pendingOnlineProjection': {'inventory': 'a' * 65536}}, b''), ({'version': 1}, b''),
-                            ({'pendingOnlineProjection': {}}, b'unsigned-extra-stream')]:
-            encoded = 'gzip:' + base64.b64encode(gzip.compress(json.dumps(value).encode(), mtime=0) + tail).decode()
-            with self.subTest(tail=bool(tail)), self.assertRaises(RuntimeError):
-                s.decode_build_proof(SimpleNamespace(require=need), encoded)
+        for prefix, encode in (('gzip:', base64.b64encode), ('gzip85:', base64.b85encode)):
+            for value, tail in [({'pendingOnlineProjection': {'inventory': 'a' * 65536}}, b''), ({'version': 1}, b''),
+                                ({'pendingOnlineProjection': {}}, b'unsigned-extra-stream')]:
+                encoded = prefix + encode(gzip.compress(json.dumps(value).encode(), mtime=0) + tail).decode()
+                with self.subTest(prefix=prefix, tail=bool(tail)), self.assertRaises(RuntimeError):
+                    s.decode_build_proof(SimpleNamespace(require=need), encoded)
+
+    def test_base85_canonical_invalid_and_shell_argument_boundaries(self):
+        import shlex
+        value = {'pendingOnlineProjection': {'inventory': {str(i): s.hashlib.sha256(str(i).encode()).hexdigest()
+                                                         for i in range(152)}}}
+        encoded = 'gzip85:' + base64.b85encode(gzip.compress(json.dumps(value).encode(), mtime=0)).decode('ascii')
+        self.assertEqual(shlex.split('python3 --api-admin-build-proof ' + shlex.quote(encoded)),
+                         ['python3', '--api-admin-build-proof', encoded])
+        self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), encoded), value)
+        for bad in ('gzip85:', 'gzip85:invalid~', encoded + ' ', encoded[:-1]):
+            with self.subTest(case=bad[:15]), self.assertRaises(Exception):
+                s.decode_build_proof(SimpleNamespace(require=need), bad)
 
     def test_real_dispatch_envelope_binds_unchanged_proof_and_fits_ssm_budget(self):
         value = {'pendingOnlineProjection': {'removedFiles': {('f' + str(i) + '.ts'):
@@ -632,13 +647,29 @@ class BoundedProofTransport(unittest.TestCase):
             encoded_parameters = (Path(temporary) / 'parameters.json').read_bytes()
         self.assertLess(len(encoded_parameters), 65536)
         commands = json.loads(encoded_parameters)['commands']
-        self.assertEqual(sum('sha256sum -c -' in command for command in commands), 11)
-        for name in ('api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
-                     'api-admin-readonly.py', 'online-recharge-daemon-identity.py',
-                     'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py'):
-            self.assertTrue(any(name in command for command in commands))
-        argument = next(command for command in commands if '--api-admin-build-proof ' in command).split('--api-admin-build-proof ', 1)[1].split()[0]
-        self.assertTrue(argument.startswith('gzip:'))
+        import shlex
+        import ast
+        self.assertLess(len(encoded_parameters), 20 * 1024)
+        self.assertEqual(sum('sha256sum -c -' in command for command in commands), 0)
+        carrier = next(command for command in commands if command.startswith('python3 -B -c '))
+        bootstrap = ast.parse(shlex.split(carrier)[3])
+        payload = next(node.args[0].value for node in ast.walk(bootstrap)
+                       if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                       and node.func.attr == 'b85decode')
+        program = ast.parse(gzip.decompress(base64.b85decode(payload)).decode())
+        stores = [node for node in ast.walk(program) if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Name) and node.func.id == '_store_files']
+        self.assertEqual(len(stores), 2)
+        controllers, package = [ast.literal_eval(node.args[2]) for node in stores]
+        self.assertEqual(set(controllers), set(t.FORMAL_RUNTIME_CONTROLLERS))
+        self.assertEqual(set(package), set(t.FORMAL_RUNTIME_FILES))
+        for name, digest in controllers.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release' / name).read_bytes()).hexdigest())
+        for name, digest in package.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release/formal-runtime-package' / name).read_bytes()).hexdigest())
+        arguments = shlex.split(next(command for command in commands if '--api-admin-build-proof ' in command))
+        argument = arguments[arguments.index('--api-admin-build-proof') + 1]
+        self.assertTrue(argument.startswith('gzip85:'))
         self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), argument), value)
 
 
@@ -1093,20 +1124,23 @@ class DeclarationConsumerBinding(unittest.TestCase):
         value = declaration_context()
         producer = {name: value['restoredConfigurationProof']['semantic']['producer'][name]
                     for name in ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')}
-        # Use the real frozen closed generator, not a success-producing fixture.
+        # Use the real source-bound entry. Actual nonroot local/CI calls fail
+        # before acquisition; table0 is tested separately inside the package.
         materials = MagicMock(side_effect=AssertionError('unmeasured source I/O'))
         helper = SimpleNamespace(measure_declaration_equivalence=online.measure_declaration_equivalence,
             declaration_equivalence_materials=materials,
             declaration_equivalence_source_binding=online.declaration_equivalence_source_binding)
         with patch.object(s, 'pending_online_equivalence', return_value=helper):
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+            with self.assertRaisesRegex(RuntimeError, '^' + ('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
+                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$'):
                 s.pending_online_declaration_initial_measure(controller, Path('/unused'), {}, producer=producer)
             materials.assert_not_called()
         with self.private_fixture() as (controller, before, output, projection):
             raw = output.joinpath('api-workspace-preflight-result.json').read_bytes()
             # Origin validation uses the actual pure module before the shared
             # measuring helper is selected; neither branch enables publication.
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+            with self.assertRaisesRegex(RuntimeError, '^' + ('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
+                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$'):
                 s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
                     producer=producer, origin=value, preflight_raw=raw)
             self.assert_no_image_reads(controller)
@@ -1356,7 +1390,8 @@ class DeclarationEntryFoundation(unittest.TestCase):
 
     def test_known_initial_mismatch_reaches_actual_closed_generator_before_any_create(self):
         with self.initial_fixture() as (controller, directory, value, module, recovery):
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+            with self.assertRaisesRegex(RuntimeError, '^' + ('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
+                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$'):
                 s.pending_online_first(controller, directory)
             module.verify_permission_seed.assert_called_once()
             module.require_fresh_resources.assert_called_once()
@@ -1373,7 +1408,8 @@ class DeclarationEntryFoundation(unittest.TestCase):
 
     def test_baseline_reports_only_the_exact_fixed_source_not_measured_literal(self):
         with self.initial_fixture() as (controller, directory, value, module, recovery):
-            with self.assertRaisesRegex(s.WorkspaceBaselineError, '^API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED$') as rejected:
+            with self.assertRaisesRegex(s.WorkspaceBaselineError, '^' + ('API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED'
+                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$') as rejected:
                 s.baseline(controller, online.BASELINE_COMMIT)
             self.assertEqual(rejected.exception.workspaceDiagnostic['phase'], 'MANIFEST')
             self.assertTrue(rejected.exception.workspaceDiagnostic['rawOutputSuppressed'])

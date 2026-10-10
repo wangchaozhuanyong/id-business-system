@@ -291,11 +291,11 @@ test('read-only and release transports seal controllers and recovery policy and 
   );
   assert.match(
     dispatch,
-    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py',\n {24}'online-recharge-daemon-identity\.py', 'online-recharge-daemon-listener\.py',\n {24}'online-recharge-daemon-socket\.py'\)\n {4}for name in controllers:\n {8}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
+    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py',\n {24}'online-recharge-daemon-identity\.py', 'online-recharge-daemon-listener\.py',\n {24}'online-recharge-daemon-socket\.py'\)\n {4}if workspace_transport:\n {8}import runpy\n {8}carrier = runpy\.run_path\('scripts\/production-release\/api-admin-readonly\.py'\)\['formal_runtime_commands'\]\n {8}commands\[2:3\] = carrier\(controller_directory, sha,\n {12}Path\('scripts\/production-release\/formal-runtime-package'\), Path\('scripts\/production-release'\)\)\n {4}else:\n {8}for name in controllers:\n {12}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
   );
   assert.match(
     dispatch,
-    /pinned\.extend\(\[f'curl [^\n]+\{sha\}\/scripts\/production-release\/\{name\} -o \{target_path\}',\n\s+f'echo "\{digest\} {2}\{target_path\}" \| sha256sum -c - >\/dev\/null'\]\)\n {4}if workspace_transport:[\s\S]*\n {4}else:\n {8}commands\[2:3\] = pinned/
+    / {12}target_path = f'\/opt\/id-business-v2\/\.staging\/oidc-\{sha\}\/\{name\}'\n {12}pinned\.extend\(\[f'curl [^\n]+\{sha\}\/scripts\/production-release\/\{name\} -o \{target_path\}',\n {27}f'echo "\{digest\} {2}\{target_path\}" \| sha256sum -c - >\/dev\/null'\]\)\n {8}commands\[2:3\] = pinned/
   );
   assert.equal((dispatch.match(/online-recharge-readonly\.py filter-deploy/g) || []).length, 2);
   assert.match(helper, /closed_json\(value\.get\('StandardOutputContent'/);
@@ -359,7 +359,7 @@ test('actual dispatch generator binds all four carriers before deployment and re
   });
 });
 
-test('workspace dispatch binds the original preflight and all eleven carriers before producing bounded parameters', () => {
+test('workspace dispatch binds the original preflight and exact twenty-one files before producing bounded parameters', () => {
   const dispatch = readFileSync(join(scripts, 'dispatch.sh'), 'utf8');
   const generator = dispatch.split("<<'PY'\n")[1].split('\nPY\n')[0];
   const carriers = [
@@ -368,20 +368,39 @@ test('workspace dispatch binds the original preflight and all eleven carriers be
     'online-recharge-scope.py',
     'online-recharge-recovery.json',
     'api-admin-pending-projection.py',
+    'api-admin-readonly.py',
     'api-admin-pending-receipt-wire.py',
     'online-recharge-declaration-measurement.py',
-    'api-admin-readonly.py',
     'online-recharge-daemon-identity.py',
     'online-recharge-daemon-listener.py',
     'online-recharge-daemon-socket.py'
   ];
+  const packageFiles = [
+    'driver.py',
+    'manifest.json',
+    'package_io.py',
+    'pure.py',
+    'collector.py',
+    'constructor.py',
+    'reader.py',
+    'qualified.py',
+    'contract.json',
+    'reviewed-source-table.json'
+  ];
   fixture(({ env, folder, log }) => {
     const sourceDirectory = join(folder, 'scripts/production-release');
+    const packageDirectory = join(sourceDirectory, 'formal-runtime-package');
     const outputDirectory = join(folder, '.deploy/production-release');
     mkdirSync(sourceDirectory, { recursive: true });
     mkdirSync(outputDirectory, { recursive: true });
     for (const name of carriers)
       writeFileSync(join(sourceDirectory, name), readFileSync(join(scripts, name)));
+    mkdirSync(packageDirectory);
+    for (const name of packageFiles)
+      writeFileSync(
+        join(packageDirectory, name),
+        readFileSync(join(scripts, 'formal-runtime-package', name))
+      );
     const preflight = {
       status: 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED',
       mode: 'preflight',
@@ -417,29 +436,100 @@ test('workspace dispatch binds the original preflight and all eleven carriers be
     const paramsRaw = readFileSync(parametersFile);
     const parameters = JSON.parse(paramsRaw);
     assert.ok(paramsRaw.length < 20 * 1024);
-    assert.equal(parameters.commands.filter((line) => line.includes('sha256sum -c -')).length, 11);
-    assert.equal(parameters.commands.filter((line) => line.startsWith('curl ')).length, 11);
-    assert.match(
-      parameters.commands[2],
-      new RegExp(
-        `readonly release_controller_directory=/opt/id-business-v2/\\.staging/oidc-${commit}`
+    assert.deepEqual(parameters.executionTimeout, ['3600']);
+    assert.equal(parameters.commands.length, 4);
+    assert.deepEqual(parameters.commands.slice(0, 2), [
+      'set -eu',
+      `mkdir -p /opt/id-business-v2/.staging/oidc-${commit}`
+    ]);
+    assert.equal(parameters.commands.filter((line) => line.includes('sha256sum -c -')).length, 0);
+    assert.equal(parameters.commands.filter((line) => line.startsWith('curl ')).length, 0);
+    const decoded = JSON.parse(
+      execFileSync(
+        'python3',
+        [
+          '-B',
+          '-c',
+          `import ast, base64, hashlib, inspect, json, runpy, shlex, sys, zlib
+from pathlib import Path
+command = shlex.split(sys.argv[1])
+assert len(command) == 4 and command[:3] == ['python3', '-B', '-c']
+wrapper = ast.parse(command[3])
+payload = next(n.args[0].value for n in ast.walk(wrapper)
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'b85decode')
+decoder = zlib.decompressobj(31)
+raw = decoder.decompress(base64.b85decode(payload), 16385)
+assert 0 < len(raw) <= 16384 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+code_sha = next(n.comparators[0].value for n in ast.walk(wrapper)
+    if isinstance(n, ast.Compare) and isinstance(n.left, ast.Call)
+    and isinstance(n.left.func, ast.Attribute) and n.left.func.attr == 'hexdigest')
+assert hashlib.sha256(raw).hexdigest() == code_sha
+program = ast.parse(raw)
+actual = runpy.run_path(str(Path(sys.argv[2]) / 'api-admin-readonly.py'))
+assert len(program.body) == 2 and isinstance(program.body[0], ast.FunctionDef) and isinstance(program.body[1], ast.Try)
+expected = ast.parse(inspect.getsource(actual['_store_files'])).body[0]
+assert ast.dump(program.body[0]) == ast.dump(expected)
+stores = program.body[1].body
+assert len(stores) == 2 and all(isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+    and isinstance(n.value.func, ast.Name) and n.value.func.id == '_store_files' for n in stores)
+assert [ast.literal_eval(n.value.args[1]) for n in stores] == [sys.argv[3]] * 2
+assert [ast.literal_eval(n.value.args[3]) for n in stores] == [False, True]
+pins = [ast.literal_eval(n.value.args[2]) for n in stores]
+assert list(pins[0]) == list(actual['FORMAL_RUNTIME_CONTROLLERS'])
+assert list(pins[1]) == list(actual['FORMAL_RUNTIME_FILES'])
+for branch, names in enumerate(pins):
+    source = Path(sys.argv[2]) / ('formal-runtime-package' if branch else '')
+    for name, digest in names.items():
+        assert hashlib.sha256((source / name).read_bytes()).hexdigest() == digest
+final = shlex.split(sys.argv[4])
+proof_arg = final[final.index('--api-admin-build-proof') + 1]
+assert proof_arg.startswith('gzip85:')
+proof_decoder = zlib.decompressobj(31)
+proof_raw = proof_decoder.decompress(base64.b85decode(proof_arg[7:]), 65536)
+assert 0 < len(proof_raw) < 65536 and proof_decoder.eof and not proof_decoder.unused_data and not proof_decoder.unconsumed_tail
+assert proof_raw == json.dumps(json.loads(Path(sys.argv[5]).read_bytes()), separators=(',', ':')).encode()
+print(json.dumps({'targets': [ast.literal_eval(n.value.args[0]) for n in stores],
+    'pins': pins, 'branches': [False, True], 'proof': json.loads(proof_raw)}))`,
+          parameters.commands[2],
+          sourceDirectory,
+          commit,
+          parameters.commands.at(-1),
+          proofPath
+        ],
+        { cwd: folder, env: generationEnv, encoding: 'utf8', timeout: 10000 }
       )
     );
-    assert.ok(parameters.commands[2].endsWith(`${commit}/scripts/production-release`));
-    for (const name of carriers) {
-      const digest = createHash('sha256')
-        .update(readFileSync(join(scripts, name)))
-        .digest('hex');
-      assert.ok(
-        parameters.commands.some(
-          (line) =>
-            line ===
-            `echo "${digest}  $release_controller_directory/${name}" | sha256sum -c - >/dev/null`
-        )
-      );
+    assert.deepEqual(decoded.targets, [
+      `/opt/id-business-v2/.staging/oidc-${commit}`,
+      `/opt/id-business-v2/.staging/oidc-${commit}/formal-runtime-package`
+    ]);
+    assert.deepEqual(decoded.branches, [false, true]);
+    assert.deepEqual(decoded.proof, proof);
+    for (const [index, names] of [carriers, packageFiles].entries()) {
+      assert.deepEqual(Object.keys(decoded.pins[index]), names);
+      for (const name of names) {
+        const source = index ? join(packageDirectory, name) : join(sourceDirectory, name);
+        assert.equal(
+          decoded.pins[index][name],
+          createHash('sha256').update(readFileSync(source)).digest('hex')
+        );
+      }
     }
     assert.ok(parameters.commands.at(-1).includes(`--api-workspace-preflight-sha256 ${sha}`));
     assert.equal(readFileSync(log, 'utf8'), '');
+    for (const source of [
+      join(packageDirectory, 'driver.py'),
+      join(sourceDirectory, 'online-recharge-recovery.json')
+    ]) {
+      const original = readFileSync(source);
+      rmSync(parametersFile);
+      rmSync(source);
+      assert.throws(invoke);
+      assert.throws(() => readFileSync(parametersFile));
+      writeFileSync(source, original);
+      invoke();
+      assert.equal(readFileSync(log, 'utf8'), '');
+    }
     rmSync(parametersFile);
     writeFileSync(preflightPath, JSON.stringify(preflight));
     assert.throws(invoke);

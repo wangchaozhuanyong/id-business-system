@@ -1,0 +1,101 @@
+{
+  "baselineCommit": "0a03fa28e6b844a18833d5c63f1de700f091fc64",
+  "fields": {
+    "adminProjection": [
+      "kind",
+      "originalConfigurationSha256",
+      "actualConfigurationSha256",
+      "projectedConfigurationSha256",
+      "helperSha256"
+    ],
+    "apiEquivalence": [
+      "rulesSha256",
+      "oldRawConfigurationSha256",
+      "actualRawConfigurationSha256",
+      "normalizedActualSha256",
+      "normalizedReferenceSha256"
+    ],
+    "historicalFiles": [
+      "workspaceManifestBytesSha256",
+      "workspaceRecordBytesSha256",
+      "workspaceBuildProofBytesSha256",
+      "restoredManifestBytesSha256",
+      "restoredRecordBytesSha256",
+      "restoredBuildProofBytesSha256"
+    ],
+    "measurement": [
+      "purpose",
+      "executionNonce",
+      "sourceArchiveBytesSha256",
+      "referenceRegistrySha256",
+      "referenceRawConfigurationSha256",
+      "referenceModelSha256",
+      "engineVersionSha256",
+      "composeVersionSha256",
+      "neverStarted",
+      "cleanupVerified",
+      "realEnvironmentPersisted",
+      "referenceCounts",
+      "stableBefore",
+      "stableAfter",
+      "priorIndependentPreflightBytesSha256",
+      "priorProofSha256"
+    ],
+    "origin": [
+      "version",
+      "scope",
+      "baselineRelease",
+      "baselineManifestSha256",
+      "migrationState",
+      "recoveryMarker",
+      "restoredOrigin",
+      "services",
+      "priorPublications",
+      "restoredConfigurationProof"
+    ],
+    "producer": [
+      "commit",
+      "sourceTree",
+      "workflowRunId",
+      "workflowRunAttempt",
+      "archiveInventorySha256",
+      "helpers"
+    ],
+    "proof": ["kind", "version", "service", "semantic", "measurement"],
+    "semantic": [
+      "producer",
+      "fixedRecovery",
+      "historicalFiles",
+      "anchors",
+      "original",
+      "actual",
+      "sourceBindings",
+      "apiEquivalence",
+      "adminProjection",
+      "stableObservation"
+    ],
+    "sourceBindings": [
+      "configurationFilesSha256",
+      "workspaceFilesSha256",
+      "environmentFileSha256",
+      "renderedDeclarationSha256",
+      "normalizedModelSha256",
+      "apiImageId",
+      "apiImageReference",
+      "apiDeclaredHash",
+      "expectedEnvironmentSha256",
+      "referenceEnvironmentSha256",
+      "actualResourceSha256"
+    ],
+    "stableObservation": [
+      "snapshotSha256",
+      "sourceFilesSha256",
+      "workspaceVolumeSha256",
+      "actualResourceSha256"
+    ]
+  },
+  "formalTableSha256": "6e67c5dd29b7535604460c54ad726120e4c288a71e5debb59361d52ffb523f79",
+  "kind": "FORMAL_RUNTIME_PACKAGE_CONTRACT",
+  "parentFormalTableSha256": "1d090ebf96ad9186587f78c99842fce4503abc1fa710f1e4b1be82fca310706e",
+  "version": 1
+}
