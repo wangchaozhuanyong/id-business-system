@@ -154,6 +154,178 @@ class CollectorTests(unittest.TestCase):
                 self.measure()
             self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_container)
         self.d.run=original_run
+    def test_managed_resource_hash_matches_independent_go_golden_preimages(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        goldens={
+            'default':'f15736d8669582e860d4b1b3f840fee87d26e9c1a39dc19c05c407f2eb013550',
+            'media-egress':'5e5f2edd57113e55960c687830f5c567e4c924b4b82393abee5c880380aecb2f',
+            'recharge-control':'384ff6825ef9654a6b41079119bc4d212fd0b42b7b3e53028609e0a884053678',
+            'registration-control':'f71d7517522d9336e10cd7a2e3736a9ce0df96f1e9d1dd285dc3bd8854311f0f'}
+        original_sha=a.sha;preimages=[]
+        def capture(raw):preimages.append(raw);return original_sha(raw)
+        for role,golden in goldens.items():
+            declaration={'name':'source_'+role,**({'internal':True} if role.endswith('control') else {})}
+            before=copy.deepcopy(declaration)
+            with patch.object(a,'sha',side_effect=capture):
+                self.assertEqual(a.managed_network_hash(declaration,role,'source',spec),golden)
+                self.assertEqual(a.managed_network_hash({**declaration,'ipam':{}},role,'source',spec),golden)
+            expected=('{{"name":"source_{}","ipam":{{}}{}}}'.format(
+                role,',"internal":true' if role.endswith('control') else '')).encode('ascii')
+            self.assertEqual(preimages[-2:],[expected,expected]);self.assertEqual(declaration,before)
+        declaration={'name':'source_'+a.VOLUME_KEY}
+        with patch.object(a,'sha',side_effect=capture):
+            self.assertEqual(a.managed_volume_hash(declaration,'source'),
+                '930228f5fe9d211c215db22a86fe1687e9b5d4292be276a0fb5a338714f7c9d8')
+        self.assertEqual(preimages[-1],b'{"name":"source_auto_registration_data","driver":"local"}')
+        self.assertNotEqual(original_sha(preimages[-1]),a.fingerprint({'name':declaration['name'],'driver':'local'}))
+    def test_managed_resource_hash_requires_exact_original_declarations(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        class Row(dict):pass
+        class Name(str):pass
+        for role in a.NETWORK_ROLES:
+            original={'name':FIX['PROJECT']+'_'+role,**({'internal':True} if role.endswith('control') else {})}
+            bad=[None,[],Row(original),{**original,'name':Name(original['name'])},
+                 {**original,'name':'OTHER_'+role},{**original,'ipam':{'config':[]}},
+                 {**original,'ipam':None},{**original,'ipam':Row()},
+                 {**original,'driver':'bridge'},{**original,'external':False},
+                 {**original,'aliases':[]},{**original,'UNKNOWN':{}},
+                 {**original,'internal':1 if role.endswith('control') else False}]
+            for row in bad:
+                with self.subTest(role=role,row=row),self.assertRaisesRegex(a.Rejected,'^SOURCE_NETWORK_DECLARATION$'):
+                    a.managed_network_hash(row,role,FIX['PROJECT'],spec)
+            for project,wrong_role in ((Name(FIX['PROJECT']),role),('../source',role),(FIX['PROJECT'],'UNKNOWN')):
+                with self.assertRaisesRegex(a.Rejected,'^SOURCE_NETWORK_DECLARATION$'):
+                    a.managed_network_hash(original,wrong_role,project,spec)
+        volume={'name':FIX['PROJECT']+'_'+a.VOLUME_KEY}
+        for row in (None,[],Row(volume),{**volume,'name':Name(volume['name'])},
+                    {'name':'OTHER_'+a.VOLUME_KEY},{**volume,'driver':'local'},
+                    {**volume,'external':False},{**volume,'UNKNOWN':{}}):
+            with self.subTest(row=row),self.assertRaisesRegex(a.Rejected,'^SOURCE_VOLUME_DECLARATION$'):
+                a.managed_volume_hash(row,FIX['PROJECT'])
+    def test_managed_network_four_labels_require_exact_hash_and_owner(self):
+        spec=FIX['policy']()
+        for role in a.NETWORK_ROLES:
+            declaration=self.d.source_model['networks'][role];net=copy.deepcopy(self.d.source_networks[role])
+            a.network_validate(net,role,FIX['PROJECT'],spec,declaration=declaration) # exact legacy three
+            net['Labels']['com.docker.compose.config-hash']=a.managed_network_hash(declaration,role,FIX['PROJECT'],spec)
+            original=copy.deepcopy(net)
+            a.network_validate(net,role,FIX['PROJECT'],spec,declaration=declaration)
+            self.assertEqual(net,original)
+            for key,value in (('com.docker.compose.config-hash','0'*64),('com.docker.compose.config-hash',None),
+                              ('com.docker.compose.project','OTHER'),('com.docker.compose.network','OTHER'),
+                              ('com.docker.compose.version','OTHER'),('UNKNOWN','CONTROL'),(a.OWNER_KEY,'CONTROL')):
+                bad=copy.deepcopy(original);bad['Labels'][key]=value
+                with self.subTest(role=role,key=key),self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                    a.network_validate(bad,role,FIX['PROJECT'],spec,declaration=declaration)
+            for key in ('com.docker.compose.project','com.docker.compose.network','com.docker.compose.version'):
+                bad=copy.deepcopy(original);del bad['Labels'][key]
+                with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                    a.network_validate(bad,role,FIX['PROJECT'],spec,declaration=declaration)
+            with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                a.network_validate(net,role,FIX['PROJECT'],spec) # no declaration cannot authorize fourth label
+    def test_managed_volume_four_labels_require_exact_hash_and_owner(self):
+        spec=FIX['policy']();declaration=self.d.source_model['volumes'][a.VOLUME_KEY]
+        vol=copy.deepcopy(self.d.source_volume)
+        a.volume_validate(vol,FIX['PROJECT'],spec,declaration=declaration)
+        vol['Labels']['com.docker.compose.config-hash']=a.managed_volume_hash(declaration,FIX['PROJECT'])
+        original=copy.deepcopy(vol);a.volume_validate(vol,FIX['PROJECT'],spec,declaration=declaration)
+        self.assertEqual(vol,original)
+        for key,value in (('com.docker.compose.config-hash','0'*64),('com.docker.compose.config-hash',''),
+                          ('com.docker.compose.project','OTHER'),('com.docker.compose.volume','OTHER'),
+                          ('com.docker.compose.version','OTHER'),('UNKNOWN','CONTROL'),(a.OWNER_KEY,'CONTROL')):
+            bad=copy.deepcopy(original);bad['Labels'][key]=value
+            with self.subTest(key=key),self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                a.volume_validate(bad,FIX['PROJECT'],spec,declaration=declaration)
+        for key in ('com.docker.compose.project','com.docker.compose.volume','com.docker.compose.version'):
+            bad=copy.deepcopy(original);del bad['Labels'][key]
+            with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                a.volume_validate(bad,FIX['PROJECT'],spec,declaration=declaration)
+        with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+            a.volume_validate(vol,FIX['PROJECT'],spec)
+    def test_managed_hash_does_not_relax_source_members_or_reference_owner(self):
+        spec=FIX['policy']();owner='1'*32
+        for role in a.NETWORK_ROLES:
+            net=copy.deepcopy(self.d.source_networks[role]);declaration=self.d.source_model['networks'][role]
+            net['Labels']['com.docker.compose.config-hash']=a.managed_network_hash(declaration,role,FIX['PROJECT'],spec)
+            net['Containers']=[]
+            with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                a.network_validate(net,role,FIX['PROJECT'],spec,declaration=declaration)
+            reference=FIX['network'](role,1,owner=owner)
+            a.network_validate(reference,role,FIX['PROJECT'],spec,reference=True,owner=owner)
+            for labels,members in (({a.OWNER_KEY:'OTHER'},{}),({**reference['Labels'],'com.docker.compose.config-hash':'0'*64},{}),
+                                   (reference['Labels'],{'9'*64:{}})):
+                bad=copy.deepcopy(reference);bad.update({'Labels':labels,'Containers':members})
+                with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+                    a.network_validate(bad,role,FIX['PROJECT'],spec,reference=True,owner=owner,declaration=declaration)
+        reference=FIX['volume'](owner=owner);a.volume_validate(reference,FIX['PROJECT'],spec,reference=True,owner=owner)
+        reference['Labels']['com.docker.compose.config-hash']='0'*64
+        with self.assertRaisesRegex(a.Rejected,'^RESOURCE_OWNER_OR_MEMBERS_INVALID$'):
+            a.volume_validate(reference,FIX['PROJECT'],spec,reference=True,owner=owner,
+                declaration=self.d.source_model['volumes'][a.VOLUME_KEY])
+        nets=copy.deepcopy(self.d.source_networks);nets['default']['Containers']['9'*64]={}
+        with self.assertRaisesRegex(a.Rejected,'^ACTUAL_NETWORK_ID_OR_MEMBERS$'):
+            a.actual_endpoints(self.d.actual,nets,self.d.services,spec)
+    def managed_labels_source(self,spec):
+        for role,net in self.d.source_networks.items():
+            net['Labels']['com.docker.compose.config-hash']=a.managed_network_hash(
+                self.d.source_model['networks'][role],role,FIX['PROJECT'],spec)
+        self.d.source_volume['Labels']['com.docker.compose.config-hash']=a.managed_volume_hash(
+            self.d.source_model['volumes'][a.VOLUME_KEY],FIX['PROJECT'])
+        self.raw=self.observed();self.d.seal['stabilitySha256']=a.fingerprint(D.observation(
+            self.raw,self.d.services,self.d.seal['files'],self.raw['actualResource']))
+    def test_four_label_source_complete_measurement_preserves_raw_model_and_resources(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        self.d.source_api.update({'command':None,'entrypoint':None})
+        self.empty_network_source({r:None for r in a.NETWORK_ROLES})
+        for row in self.d.source_model['networks'].values():row['ipam']={}
+        legacy_resource_hash=a.fingerprint(self.observed()['actualResource']);self.managed_labels_source(spec)
+        source=copy.deepcopy(self.d.source_model);resources=copy.deepcopy(self.raw['actualResource'])
+        original_run=self.d.run;reference_labels=[]
+        def run(*args,**kwargs):
+            raw=original_run(*args,**kwargs)
+            if args[0]==spec['composePath'] and 'config' in args and '--format' in args:
+                model=json.loads(raw)
+                for row in model['networks'].values():row['ipam']={}
+                return json.dumps(model)
+            if args[0]==spec['dockerPath'] and args[1:3]==('network','create'):
+                reference_labels.append(copy.deepcopy(list(self.d.created_networks.values())[-1]['Labels']))
+            if args[0]==spec['dockerPath'] and args[1:3]==('volume','create'):
+                reference_labels.append(copy.deepcopy(self.d.created_volume['Labels']))
+            return raw
+        self.d.run=run
+        with patch.dict(a.REVIEWED_GENERATORS,{('25.0.16','5.5.0'):spec}):
+            result=a.measure(self.d,self.directory,services=self.d.services,image_reference='source-api',
+                image_id=FIX['IMAGE'],source_seal=self.d.seal,stability_reader=self.read_stability)
+        self.assertEqual(self.calls,3);self.assertEqual(len(self.d.removed),6)
+        self.assertEqual(len(reference_labels),5);self.assertTrue(all(set(row)=={a.OWNER_KEY} for row in reference_labels))
+        self.assertEqual(self.d.source_model,source);self.assertEqual(self.observed()['actualResource'],resources)
+        self.assertEqual(result['facts']['source']['renderedDeclarationSha256'],a.fingerprint(source))
+        self.assertEqual(result['measured']['actualResourceSha256'],a.fingerprint(resources))
+        self.assertEqual(result['facts']['stableBefore']['actualResourceSha256'],a.fingerprint(resources))
+        self.assertNotEqual(result['measured']['actualResourceSha256'],legacy_resource_hash)
+        self.assertEqual(result['facts']['stableBefore'],result['facts']['stableAfter'])
+        root=self.validation_root(result);root['generatorRulesSha256']=a.fingerprint(spec)
+        C['validate_facts'](result['measured'],result['facts'],root)
+        self.assertFalse(result['measured']['authority']);self.assertFalse(result['measured']['productionEligible'])
+        self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
+    def test_managed_resource_label_drift_keeps_original_full_snapshot_refusal(self):
+        spec=FIX['policy']();self.managed_labels_source(spec);original_run=self.d.run
+        for kind in ('network','volume'):
+            self.managed_labels_source(spec);changed=False
+            def drift(*args,**kwargs):
+                nonlocal changed
+                raw=original_run(*args,**kwargs)
+                if not changed and args[0]==spec['dockerPath'] and args[1:3]==('network','create'):
+                    changed=True;target=self.d.source_networks['default'] if kind=='network' else self.d.source_volume
+                    target['Labels']['com.docker.compose.config-hash']='0'*64
+                return raw
+            self.d.run=drift
+            with self.subTest(kind=kind),self.assertRaisesRegex(a.Rejected,
+                    '^ACTUAL_'+('NETWORK' if kind=='network' else 'VOLUME')+'_INSPECT_CHANGED$'):
+                self.measure()
+            self.assertTrue(changed);self.assertFalse(self.d.created_networks)
+            self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
+        self.d.run=original_run
     def test_no_model_or_resource_digest_can_replace_normalized_source(self):
         result=self.measure();f=result['facts']
         self.assertNotEqual(f['source']['normalizedModelSha256'],f['source']['renderedDeclarationSha256'])

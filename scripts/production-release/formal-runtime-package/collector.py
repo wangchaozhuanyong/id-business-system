@@ -325,7 +325,33 @@ def ipam_rule(net, spec, *, reference=False):
     return subnet
 
 
-def network_validate(net, role, project, spec, *, reference=False, owner=None):
+def managed_network_hash(declaration, role, project, spec):
+    check(type(project) is str and frozen.RESOURCE_NAME.fullmatch(project)
+          and type(role) is str and role in NETWORK_ROLES, 'SOURCE_NETWORK_DECLARATION')
+    expected = {'name':project+'_'+role, **({'internal':True} if role.endswith('control') else {})}
+    check(type(declaration) is dict and type(declaration.get('name')) is str
+          and set(declaration) <= {'name','ipam','internal'}
+          and declaration in (expected, {**expected, **spec['renderedExternalNetworkExtra']})
+          and ('ipam' not in declaration or type(declaration['ipam']) is dict and declaration['ipam'] == {})
+          and ('internal' not in declaration or declaration['internal'] is True), 'SOURCE_NETWORK_DECLARATION')
+    # Compose 870908c NetworkHash marshals the compose-go NetworkConfig struct:
+    # Name precedes the always-present empty Ipam struct, then Internal. Docker's
+    # effective bridge driver and allocated IPAM are not part of this declaration.
+    value = {'name':declaration['name'], 'ipam':{}}
+    if role.endswith('control'): value['internal'] = True
+    return sha(json.dumps(value, separators=(',',':'), ensure_ascii=True).encode('ascii'))
+
+
+def managed_volume_hash(declaration, project):
+    check(type(project) is str and frozen.RESOURCE_NAME.fullmatch(project)
+          and type(declaration) is dict and type(declaration.get('name')) is str
+          and declaration == {'name':project+'_'+VOLUME_KEY}, 'SOURCE_VOLUME_DECLARATION')
+    # VolumeHash supplies the local default before marshaling Name, then Driver.
+    value = {'name':declaration['name'], 'driver':'local'}
+    return sha(json.dumps(value, separators=(',',':'), ensure_ascii=True).encode('ascii'))
+
+
+def network_validate(net, role, project, spec, *, reference=False, owner=None, declaration=None):
     check(isinstance(net, dict) and set(net) == set(spec['networkFields']) and frozen.HEX.fullmatch(net.get('Id',''))
           and net.get('Name') == project + '_' + role and isinstance(net.get('Created'), str)
           and 0 < len(net['Created']) <= 80, 'RESOURCE_SCHEMA_INVALID')
@@ -337,19 +363,25 @@ def network_validate(net, role, project, spec, *, reference=False, owner=None):
     else: check('EnableIPv4' not in net, 'RESOURCE_SCHEMA_INVALID')
     expected_labels = ({OWNER_KEY: owner} if reference else {'com.docker.compose.project':project,
         'com.docker.compose.network':role, 'com.docker.compose.version':spec['networkCreatorVersion']})
-    check(net['Labels'] == expected_labels and isinstance(net.get('Containers'), dict)
+    labels = [expected_labels]
+    if not reference and declaration is not None:
+        labels.append({**expected_labels, 'com.docker.compose.config-hash':managed_network_hash(declaration,role,project,spec)})
+    check(net['Labels'] in labels and isinstance(net.get('Containers'), dict)
           and (net['Containers'] == {} if reference else True), 'RESOURCE_OWNER_OR_MEMBERS_INVALID')
     return ipam_rule(net, spec, reference=reference)
 
 
-def volume_validate(vol, project, spec, *, reference=False, owner=None):
+def volume_validate(vol, project, spec, *, reference=False, owner=None, declaration=None):
     check(isinstance(vol, dict) and set(vol) == set(spec['volumeFields']) and vol['Name'] == project + '_' + VOLUME_KEY
           and vol['Driver'] == 'local' and vol['Scope'] == 'local' and vol['Options'] in (None, {})
           and isinstance(vol.get('CreatedAt'), str) and 0 < len(vol['CreatedAt']) <= 80
           and isinstance(vol.get('Mountpoint'), str) and vol['Mountpoint'].startswith('/'), 'RESOURCE_VOLUME_INVALID')
     labels = ({OWNER_KEY:owner} if reference else {'com.docker.compose.project':project,
               'com.docker.compose.volume':VOLUME_KEY,'com.docker.compose.version':spec['volumeCreatorVersion']})
-    check(vol['Labels'] == labels, 'RESOURCE_OWNER_OR_MEMBERS_INVALID')
+    expected_labels = [labels]
+    if not reference and declaration is not None:
+        expected_labels.append({**labels, 'com.docker.compose.config-hash':managed_volume_hash(declaration,project)})
+    check(vol['Labels'] in expected_labels, 'RESOURCE_OWNER_OR_MEMBERS_INVALID')
 
 
 def endpoint_dns_names(meta, aliases):
@@ -586,11 +618,11 @@ def prepare_source(d, directory, services, image_reference, image_id, source_sea
         check(isinstance(endpoint,dict) and frozen.HEX.fullmatch(endpoint.get('NetworkID','')), 'ACTUAL_NETWORK_ID_OR_MEMBERS')
         net = read_one(d,'network',endpoint['NetworkID'])
         check(net['Id'] == endpoint['NetworkID'],'ACTUAL_NETWORK_ID_OR_MEMBERS')
-        network_validate(net,role,project,spec);nets[role] = net
+        network_validate(net,role,project,spec,declaration=rendered);nets[role] = net
     actual_endpoints(actual,nets,services,spec)
     vol_declared = model.get('volumes',{}).get(VOLUME_KEY)
     check(vol_declared == {'name':project+'_'+VOLUME_KEY},'SOURCE_VOLUME_DECLARATION')
-    vol = read_one(d,'volume',vol_declared['name']);volume_validate(vol,project,spec)
+    vol = read_one(d,'volume',vol_declared['name']);volume_validate(vol,project,spec,declaration=vol_declared)
     pack = {'project':project,'directory':str(directory),'filesLabel':','.join(str(directory/n) for n in frozen.FILES[:2]),
         'envFile':str(directory/frozen.FILES[2]),'configHash':source_hash(d,directory),'metadata':actual,
         'api':api,'image':image,'imageReference':image_reference,'imageId':image_id,'networks':nets,
