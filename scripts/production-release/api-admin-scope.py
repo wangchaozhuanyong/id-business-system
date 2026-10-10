@@ -5793,3 +5793,141 @@ def online_after_bit_readback_origin(d, directory, *, expected_commit, producer)
         return bridge
     except Exception:
         raise RuntimeError(code) from None
+
+
+# This separate inventory observes the original reader's fixed metadata rules.
+# It never reads contents, repairs permissions, or grants a declaration/F.
+WORKSPACE_READER_FACT_LEAVES = (
+    ('COMPOSE', 'docker-compose.aws-mysql.yml'),
+    ('CADDY_CONFIG', 'deploy/caddy/Caddyfile.aws'),
+    ('MYSQL_SCHEMA', 'apps/api/prisma-mysql/schema.prisma'),
+    ('COMPOSE_RELEASE', 'compose.release.json'),
+    ('SOURCE_ENV', '.env.aws.production'),
+    ('RELEASE_MANIFEST', 'release-manifest.json'),
+    ('WORKSPACE_BUILD_PROOF', 'api-workspace-build-proof.json'),
+    ('WORKSPACE_PRESERVATION', 'api-workspace-preservation.json'),
+    ('BACKUP_VERIFICATION', 'backup-verification.json'),
+    ('BEFORE_AUDIT', 'before-audit.json'), ('AFTER_AUDIT', 'after-audit.json'))
+WORKSPACE_READER_FACT_PARENTS = (
+    ('DEPLOY', 'deploy'), ('CADDY_PARENT', 'deploy/caddy'),
+    ('APPS', 'apps'), ('API_PARENT', 'apps/api'),
+    ('PRISMA_PARENT', 'apps/api/prisma-mysql'))
+WORKSPACE_READER_FACT_ROLES = ('SOURCE_CHAIN', 'BASE', 'RELEASES', 'SOURCE',
+    *(r for r, _ in WORKSPACE_READER_FACT_PARENTS),
+    *(r for r, _ in WORKSPACE_READER_FACT_LEAVES))
+WORKSPACE_READER_FACT_PREDICATES = ('PATH_INVALID', 'MISSING', 'SYMLINK', 'TYPE',
+    'OWNER', 'WRITABLE', 'LINKS', 'SIZE', 'PRIVATE_MODE', 'IO_FAILURE',
+    'IDENTITY_CHANGED', 'DEPENDENCY_REJECTED')
+
+
+def validate_workspace_reader_facts(value):
+    code = 'API_ADMIN_DECLARATION_INVENTORY_INVALID'
+    def need(ok):
+        if not ok: raise RuntimeError(code)
+    need(type(value) is dict and set(value) == {'kind', 'version', 'status',
+        'authority', 'productionEligible', 'rawOutputSuppressed', 'rows'}
+        and type(value['kind']) is str and value['kind'] == 'API_WORKSPACE_READER_FACTS_DIAGNOSTIC'
+        and type(value['version']) is int and value['version'] == 1
+        and type(value['status']) is str and value['status'] == 'OBSERVED' and value['authority'] is False
+        and value['productionEligible'] is False and value['rawOutputSuppressed'] is True
+        and type(value['rows']) is list and len(value['rows']) == len(WORKSPACE_READER_FACT_ROLES))
+    for role, row in zip(WORKSPACE_READER_FACT_ROLES, value['rows']):
+        attributes = ({'OWNER', 'WRITABLE', 'LINKS', 'SIZE'}
+            | ({'PRIVATE_MODE'} if role == 'SOURCE_ENV' else set())) if role in {
+                r for r, _ in WORKSPACE_READER_FACT_LEAVES} else (
+                    set() if role == 'SOURCE_CHAIN' else {'OWNER', 'WRITABLE'})
+        need(type(row) is dict and set(row) == {'role', 'phase', 'status', 'predicates'}
+            and type(row['role']) is str and row['role'] == role
+            and type(row['phase']) is str and type(row['status']) is str
+            and type(row['predicates']) is list
+            and all(type(p) is str and p in WORKSPACE_READER_FACT_PREDICATES for p in row['predicates'])
+            and row['predicates'] == [p for p in WORKSPACE_READER_FACT_PREDICATES if p in row['predicates']])
+        need((row['status'] == 'MATCH' and row['phase'] == 'IDENTITY' and row['predicates'] == [])
+            or (row['status'] == 'NOT_MEASURED' and row['phase'] == 'OPEN'
+                and row['predicates'] == ['DEPENDENCY_REJECTED'])
+            or (row['status'] == 'REJECTED' and bool(row['predicates'])
+                and ((row['phase'] == 'OPEN' and set(row['predicates']) <=
+                      {'PATH_INVALID', 'MISSING', 'SYMLINK', 'TYPE', 'IO_FAILURE'})
+                     or (row['phase'] == 'ATTRIBUTES' and set(row['predicates']) <= attributes)
+                     or (row['phase'] == 'IDENTITY' and row['predicates'] == ['IDENTITY_CHANGED']))))
+    return value
+
+
+def workspace_reader_facts_inventory(directory, *, uid=0):
+    """Stat-only, no-follow observation of the reader's 11 exact source files.
+
+    A writable root-owned directory can be observed by held FD to diagnose its
+    exact fixed children. It is still REJECTED and never becomes an authority.
+    Wrong-owner directories are not traversed. No arbitrary path is returned.
+    """
+    rows = {role: {'role': role, 'phase': 'OPEN', 'status': 'NOT_MEASURED',
+                   'predicates': ['DEPENDENCY_REJECTED']} for role in WORKSPACE_READER_FACT_ROLES}
+    held = []; nodes = []; directories = {}
+    def row(role, phase, predicates):
+        rows[role] = {'role': role, 'phase': phase,
+                     'status': 'REJECTED' if predicates else 'MATCH',
+                     'predicates': predicates}
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+                info.st_size, info.st_nlink)
+    def open_node(parent, name, role, *, is_directory, owned=True, private=False):
+        try:
+            visible = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISLNK(visible.st_mode): row(role, 'OPEN', ['SYMLINK']); return None
+            correct = stat.S_ISDIR(visible.st_mode) if is_directory else stat.S_ISREG(visible.st_mode)
+            if not correct: row(role, 'OPEN', ['TYPE']); return None
+            flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if is_directory else os.O_NONBLOCK)
+            fd = os.open(name, flags, dir_fd=parent); held.append(fd)
+            info = os.fstat(fd)
+            if identity(info) != identity(visible): row(role, 'IDENTITY', ['IDENTITY_CHANGED']); return None
+            nodes.append((role, fd, parent, name, identity(info)))
+            predicates = []
+            if owned and info.st_uid != uid: predicates.append('OWNER')
+            if owned and stat.S_IMODE(info.st_mode) & 0o022: predicates.append('WRITABLE')
+            if not is_directory:
+                if info.st_nlink != 1: predicates.append('LINKS')
+                if info.st_size > 1024**2: predicates.append('SIZE')
+                if private and stat.S_IMODE(info.st_mode) not in (0o400, 0o600): predicates.append('PRIVATE_MODE')
+            row(role, 'ATTRIBUTES' if predicates else 'IDENTITY', predicates)
+            return fd if not (owned and info.st_uid != uid) else None
+        except FileNotFoundError: row(role, 'OPEN', ['MISSING'])
+        except OSError: row(role, 'OPEN', ['IO_FAILURE'])
+        return None
+    try:
+        directory = Path(directory)
+        if not (directory.is_absolute() and len(directory.parts) >= 4 and directory.resolve() == directory):
+            row('SOURCE_CHAIN', 'OPEN', ['PATH_INVALID'])
+        else:
+            fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW); held.append(fd)
+            root_identity = identity(os.fstat(fd))
+            protected = dict(zip(range(len(directory.parts)-3, len(directory.parts)), ('BASE', 'RELEASES', 'SOURCE')))
+            row('SOURCE_CHAIN', 'IDENTITY', [])
+            for index, part in enumerate(directory.parts[1:], 1):
+                role = protected.get(index, 'SOURCE_CHAIN')
+                fd = open_node(fd, part, role, is_directory=True, owned=index in protected)
+                if fd is None: break
+                if role == 'SOURCE': directories[''] = fd
+            if '' in directories:
+                for role, relative in WORKSPACE_READER_FACT_PARENTS:
+                    path = Path(relative); parent = directories.get(str(path.parent) if len(path.parts)>1 else '')
+                    if parent is not None:
+                        child = open_node(parent, path.name, role, is_directory=True)
+                        if child is not None: directories[relative] = child
+                for role, relative in WORKSPACE_READER_FACT_LEAVES:
+                    path = Path(relative); parent = directories.get(str(path.parent) if len(path.parts)>1 else '')
+                    if parent is not None:
+                        open_node(parent, path.name, role, is_directory=False, private=role == 'SOURCE_ENV')
+            for role, opened, parent, name, first in nodes:
+                try:
+                    if identity(os.fstat(opened)) != first or identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != first:
+                        row(role, 'IDENTITY', ['IDENTITY_CHANGED'])
+                except OSError: row(role, 'IDENTITY', ['IDENTITY_CHANGED'])
+            if identity(os.fstat(held[0])) != root_identity: row('SOURCE_CHAIN', 'IDENTITY', ['IDENTITY_CHANGED'])
+    except (OSError, ValueError, RuntimeError):
+        row('SOURCE_CHAIN', 'OPEN', ['IO_FAILURE'])
+    finally:
+        for fd in reversed(held): os.close(fd)
+    report = {'kind': 'API_WORKSPACE_READER_FACTS_DIAGNOSTIC', 'version': 1, 'status': 'OBSERVED',
+              'authority': False, 'productionEligible': False, 'rawOutputSuppressed': True,
+              'rows': [rows[role] for role in WORKSPACE_READER_FACT_ROLES]}
+    return validate_workspace_reader_facts(report)

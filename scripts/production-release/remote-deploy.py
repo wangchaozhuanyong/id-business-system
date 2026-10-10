@@ -13569,6 +13569,11 @@ def api_workspace_declaration_inventory(expected, producer):
     measured = namespace['inventory'](controller, previous, services=before,
         image_reference=before['api']['reference'], image_id=before['api']['image'])
     namespace['validate_inventory'](measured)
+    # Independent stat-only diagnostic; neither this nor generator inventory
+    # replaces the unchanged formal reader or grants a release qualification.
+    workspace = online.legacy(controller)
+    reader_facts = workspace.workspace_reader_facts_inventory(previous)
+    workspace.validate_workspace_reader_facts(reader_facts)
     require((BASE / 'current').resolve() == previous and bound_files() == before_files
             and online.snapshot(controller, previous) == before,
             'API_ADMIN_DECLARATION_INVENTORY_CHANGED')
@@ -13576,7 +13581,7 @@ def api_workspace_declaration_inventory(expected, producer):
             'producer': producer, 'inventory': measured, 'authority': False,
             'productionEligible': False, 'rawOutputSuppressed': True,
             'stableServicesSha256': online.fingerprint(before),
-            'boundFilesSha256': online.fingerprint(before_files)}
+            'boundFilesSha256': online.fingerprint(before_files), 'readerFacts': reader_facts}
 
 
 def online_pending_workspace_read_command(arguments):

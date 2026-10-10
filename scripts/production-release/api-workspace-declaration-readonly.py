@@ -22,7 +22,7 @@ HELPERS = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
            'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py')
 FIELDS = frozenset(('status', 'commit', 'producer', 'inventory', 'authority',
                     'productionEligible', 'rawOutputSuppressed',
-                    'stableServicesSha256', 'boundFilesSha256'))
+                    'stableServicesSha256', 'boundFilesSha256', 'readerFacts'))
 
 
 def require(ok):
@@ -65,6 +65,9 @@ def validate_receipt(value, producer, inventory_validator):
             and all(type(value[k]) is str and re.fullmatch('[a-f0-9]{64}', value[k])
                     for k in ('stableServicesSha256', 'boundFilesSha256')))
     inventory_validator(value['inventory'])
+    namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-scope.py')),
+                              init_globals={'SCOPE': 'API_ADMIN_WORKSPACE'})
+    namespace['validate_workspace_reader_facts'](value['readerFacts'])
     return value
 
 
