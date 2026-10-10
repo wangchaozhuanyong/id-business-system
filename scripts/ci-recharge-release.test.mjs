@@ -152,6 +152,7 @@ function guardCommands(
     failRetirement = false,
     failPrepared = false,
     failFormalPackage = false,
+    failBackupRetention = false,
     part = 'guards'
   } = {}
 ) {
@@ -167,7 +168,7 @@ function guardCommands(
           file === 'node'
             ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\nif [ "$TASK_FAIL_MAINTENANCE" = true ] && [ "$*" = "--test scripts/v2-release-maintenance-policy.test.mjs" ]; then exit 24; fi\nif [ "$TASK_FAIL_MAILBOX" = true ] && [ "$*" = "--test scripts/v2-release-mailbox-audit.test.mjs" ]; then exit 27; fi\nif [ "$TASK_FAIL_ARCHIVE_POLICY" = true ] && [ "$*" = "--test scripts/v2-order-archive-release-policy.test.mjs" ]; then exit 26; fi\n'
             : file === 'python3'
-              ? 'if [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\nif [ "$TASK_FAIL_FORMAL_PACKAGE" = true ] && [ "$*" = "-B scripts/production-release/formal-runtime-package.test.py" ]; then exit 28; fi\n'
+              ? 'if [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\nif [ "$TASK_FAIL_FORMAL_PACKAGE" = true ] && [ "$*" = "-B scripts/production-release/formal-runtime-package.test.py" ]; then exit 28; fi\nif [ "$TASK_FAIL_BACKUP_RETENTION" = true ]; then case "$*" in "-B scripts/backup-retention-protection.test.py"|"-B scripts/production-release/backup-retention-install.test.py") exit 29 ;; esac; fi\n'
               : ''
         }`,
         { mode: 0o755 }
@@ -187,7 +188,8 @@ function guardCommands(
           TASK_FAIL_ARCHIVE_POLICY: String(failArchivePolicy),
           TASK_FAIL_RETIREMENT: String(failRetirement),
           TASK_FAIL_PREPARED: String(failPrepared),
-          TASK_FAIL_FORMAL_PACKAGE: String(failFormalPackage)
+          TASK_FAIL_FORMAL_PACKAGE: String(failFormalPackage),
+          TASK_FAIL_BACKUP_RETENTION: String(failBackupRetention)
         },
         stdio: 'pipe'
       }
@@ -1255,6 +1257,7 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
             'diagnose_online_backup_source',
             'restore_online_backup_source',
             'repair_online_backup_parent_owner',
+            'install_backup_retention_protection',
             'verify_api_admin',
             'release_api_admin',
             'verify_api_admin_migration',
@@ -1639,7 +1642,10 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
     'python3 -B scripts/production-release/online-recharge-backup-source-recovery.test.py',
     'python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
-    'python3 -B scripts/production-release/online-recharge-backup-parent-owner-repair.test.py'
+    'python3 -B scripts/production-release/online-recharge-backup-parent-owner-repair.test.py',
+    'python3 -B scripts/backup-retention-protection.test.py',
+    'python3 -B scripts/production-release/backup-retention-install.test.py',
+    'node --test scripts/aws-mysql-backup.test.mjs'
   ]);
   const recharge = guardCommands(paths);
   for (const command of [
@@ -1654,7 +1660,6 @@ test('actual full-mode release controls preserve exact maintenance selection and
   for (const paths of [
     ['apps/api/src/id-business-v2/finance/example.ts'],
     ['docs/V2_TASKS.md'],
-    ['scripts/backup-aws-mysql.sh'],
     ['scripts/ci-recharge-check-other.mjs']
   ])
     assert.deepEqual(guardCommands(paths, { part: 'release-controls' }), [
@@ -1693,7 +1698,10 @@ test('actual full-mode release controls preserve exact maintenance selection and
             'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
             'python3 -B scripts/production-release/online-recharge-backup-source-recovery.test.py',
             'python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
-            'python3 -B scripts/production-release/online-recharge-backup-parent-owner-repair.test.py'
+            'python3 -B scripts/production-release/online-recharge-backup-parent-owner-repair.test.py',
+            'python3 -B scripts/backup-retention-protection.test.py',
+            'python3 -B scripts/production-release/backup-retention-install.test.py',
+            'node --test scripts/aws-mysql-backup.test.mjs'
           ]
         : [])
     ]);
@@ -1800,7 +1808,6 @@ test('maintenance and post-cleanup controls select guards and run their exact te
     );
   }
   for (const path of [
-    'scripts/backup-aws-mysql.sh',
     'scripts/verify-aws-mysql-backup.sh',
     'scripts/mysql-dump-restore-normalizer.sed',
     'scripts/aws-mysql-backup.test.mjs'
@@ -6128,4 +6135,67 @@ test('API Admin migration readonly commands reject malformed or extra inputs bef
     assert.equal(receipt.code, 'API_ADMIN_INPUT_INVALID');
     assert.equal(result.stderr, '');
   }
+});
+
+test('exact backup retention maintenance controls keep source checks and stop on failed tests', () => {
+  const paths = [
+    'scripts/backup-aws-mysql.sh',
+    'scripts/backup-retention-protection.py',
+    'scripts/backup-retention-protection.test.py',
+    'scripts/production-release/backup-retention-install.py',
+    'scripts/production-release/backup-retention-install.test.py'
+  ];
+  for (const path of paths) {
+    assert.equal(checkMode([path], '', ''), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+    for (const part of ['guards', 'release-controls']) {
+      const commands = guardCommands([path], { part });
+      for (const command of [
+        'python3 -B scripts/backup-retention-protection.test.py',
+        'python3 -B scripts/production-release/backup-retention-install.test.py',
+        'node --test scripts/aws-mysql-backup.test.mjs'
+      ])
+        assert.equal(commands.filter((value) => value === command).length, 1, path);
+      assert.equal(
+        commands.some((value) => value.startsWith('npm ')),
+        false
+      );
+      assert.throws(() => guardCommands([path], { part, failBackupRetention: true }));
+    }
+  }
+  for (const path of [
+    'scripts/backup-retention-protection-other.py',
+    'scripts/backup-retention-protection.py.backup',
+    'scripts/production-release/backup-retention-install.py.backup'
+  ])
+    assert.equal(checkMode([path], '', ''), 'full');
+  const name = 'Install the reviewed backup retention service entry';
+  const install = workflowSteps.find((step) => step.name === name);
+  assert.equal(install.if, "inputs.operation == 'install_backup_retention_protection'");
+  assert.equal(install.run, 'python3 -B scripts/production-release/backup-retention-install.py');
+  assert.ok(workflowInputs.operation.options.includes('install_backup_retention_protection'));
+  fixture(({ env }) => {
+    const good = {
+      ...env,
+      RELEASE_OPERATION: 'install_backup_retention_protection',
+      EXPECTED_CURRENT: '0a03fa28e6b844a18833d5c63f1de700f091fc64',
+      GITHUB_REF: 'refs/heads/main'
+    };
+    execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+      env: good
+    });
+    for (const override of [
+      { RELEASE_OPERATION: 'install_backup_retention_protection_other' },
+      { EXPECTED_CURRENT: 'c'.repeat(40) },
+      { REUSE_IMAGE_RUN: '123' },
+      { CACHE_PLAN_SHA256: 'd'.repeat(64) },
+      { HISTORICAL_EXCEPTION: 'unknown' }
+    ])
+      assert.throws(() =>
+        execFileSync('bash', ['scripts/production-release/validate-release-selection.sh'], {
+          env: { ...good, ...override },
+          stdio: 'pipe'
+        })
+      );
+  });
 });

@@ -72,6 +72,11 @@ function hasOnlineRechargeDeleteGrantProof(snapshot) {
 export const auditRetentionMigration =
   'apps/api/prisma-mysql/migrations/20261002123500_routine_audit_retention_exception/migration.sql';
 export const historicalReleaseControlPaths = Object.freeze([
+  'scripts/backup-aws-mysql.sh',
+  'scripts/backup-retention-protection.py',
+  'scripts/backup-retention-protection.test.py',
+  'scripts/production-release/backup-retention-install.py',
+  'scripts/production-release/backup-retention-install.test.py',
   'deploy/aws/registration-worker-b8-80-20261006.json',
   'deploy/aws/registration-worker-956-20261006.json',
   'deploy/aws/registration-worker-85-20261006.json',

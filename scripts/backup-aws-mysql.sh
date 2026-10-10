@@ -8,6 +8,8 @@ backup_directory="/opt/id-business-v2/backups/mysql"
 environment_file="${deployment_directory}/.env.aws.production"
 compose_file="${deployment_directory}/docker-compose.aws-mysql.yml"
 normalizer_script="${deployment_directory}/scripts/mysql-dump-restore-normalizer.sed"
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+retention_script="${script_directory}/backup-retention-protection.py"
 
 if [[ ! -f "${environment_file}" || ! -f "${compose_file}" ]]; then
   echo "AWS MySQL 生产部署文件不存在" >&2
@@ -15,6 +17,10 @@ if [[ ! -f "${environment_file}" || ! -f "${compose_file}" ]]; then
 fi
 if [[ ! -f "${normalizer_script}" ]]; then
   echo "MySQL 备份规范化规则不存在" >&2
+  exit 1
+fi
+if [[ ! -f "${retention_script}" || -L "${retention_script}" ]]; then
+  echo "MySQL 备份引用保护规则不存在" >&2
   exit 1
 fi
 
@@ -119,36 +125,8 @@ for required_command in aws docker gzip openssl stat flock python3; do
 done
 
 prune_local_backups() {
-  local -a backup_files
-  local total_bytes=0
-  local file
-  local file_size
-
-  mapfile -t backup_files < <(
-    find "${backup_directory}" -maxdepth 1 -type f -name 'id-business-v2-*.sql.gz' -print | sort
-  )
-
-  while ((${#backup_files[@]} > local_retention_count)); do
-    rm -f -- "${backup_files[0]}"
-    backup_files=("${backup_files[@]:1}")
-  done
-
-  for file in "${backup_files[@]}"; do
-    file_size="$(stat -c %s "${file}")"
-    total_bytes=$((total_bytes + file_size))
-  done
-
-  while ((total_bytes > local_max_bytes && ${#backup_files[@]} > 1)); do
-    file_size="$(stat -c %s "${backup_files[0]}")"
-    rm -f -- "${backup_files[0]}"
-    total_bytes=$((total_bytes - file_size))
-    backup_files=("${backup_files[@]:1}")
-  done
-
-  if ((total_bytes > local_max_bytes)); then
-    echo "最新备份已超过本机备份容量上限，请调整 MYSQL_BACKUP_LOCAL_MAX_BYTES" >&2
-    return 1
-  fi
+  python3 "${retention_script}" --apply --backup-lock-fd 9 \
+    --retention-count "${local_retention_count}" --max-bytes "${local_max_bytes}"
 }
 
 # 先清理既有超额备份，再检查空间，避免旧文件占满磁盘后任务无法自愈。
