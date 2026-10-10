@@ -1130,7 +1130,6 @@ test('maintenance continuation control is exact and preserves full compatibility
     'deploy/aws/historical-finance-20261005-maintenance-continuation-other.json',
     'scripts/lib/v2-data-integrity-audit.mjs',
     'scripts/v2-data-integrity-audit.test.mjs',
-    'scripts/backup-aws-mysql.sh',
     'scripts/aws-mysql-backup.test.mjs'
   ]) {
     assert.equal(isCiOnly([path]), false, path);
@@ -1658,4 +1657,23 @@ test('pending online bridge control names are finite and preserve business scope
     assert.equal(isCiOnly([unknown]), false);
     assert.equal(checkMode([unknown], schema, schema), 'full');
   }
+});
+
+test('reviewed backup retention leaf paths are control-only without widening neighboring source', () => {
+  const paths = [
+    'scripts/backup-aws-mysql.sh',
+    'scripts/backup-retention-protection.py',
+    'scripts/backup-retention-protection.test.py',
+    'scripts/production-release/backup-retention-install.py',
+    'scripts/production-release/backup-retention-install.test.py'
+  ];
+  assert.equal(checkMode(paths, '', ''), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  for (const path of [
+    'scripts/verify-aws-mysql-backup.sh',
+    'scripts/mysql-dump-restore-normalizer.sed',
+    'scripts/backup-retention-protection-other.py',
+    'scripts/production-release/backup-retention-install.py.backup'
+  ])
+    assert.equal(checkMode([path], '', ''), 'full');
 });

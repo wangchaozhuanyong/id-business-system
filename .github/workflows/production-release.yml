@@ -16,6 +16,7 @@ on:
           - diagnose_online_backup_source
           - restore_online_backup_source
           - repair_online_backup_parent_owner
+          - install_backup_retention_protection
           - verify_api_admin
           - verify_api_workspace
           - release_api_workspace
@@ -527,6 +528,13 @@ jobs:
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
           DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
         run: python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.py
+
+      - name: Install the reviewed backup retention service entry
+        if: inputs.operation == 'install_backup_retention_protection'
+        env:
+          CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
+          DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
+        run: python3 -B scripts/production-release/backup-retention-install.py
 
       - name: Verify build-only ECR target
         if: inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
@@ -2291,6 +2299,16 @@ jobs:
         with:
           name: online-backup-source-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/online-backup-source-recovery-result.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save only the backup retention installation safe receipt
+        if: always() && inputs.operation == 'install_backup_retention_protection'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backup-retention-install-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/backup-retention-install-result.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

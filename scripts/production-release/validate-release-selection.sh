@@ -278,6 +278,14 @@ validate_release_selection() {
     return 0
   fi
   local policy="${HISTORICAL_EXCEPTION:-none}"
+  if [[ "${RELEASE_OPERATION:-release}" == install_backup_retention_protection* ]]; then
+    [[ "${RELEASE_OPERATION:-release}" == install_backup_retention_protection ]] || return 1
+    [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
+    [[ "${EXPECTED_CURRENT:-}" == 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]] || return 1
+    [[ "${RELEASE_COMMIT:-}" =~ ^[a-f0-9]{40}$ && "${GITHUB_REF:-}" == refs/heads/main ]] || return 1
+    [[ -z "${REUSE_IMAGE_RUN:-}${REUSE_IMAGE_COMMIT:-}${REUSE_IMAGE_RUN_ID:-}${REUSE_IMAGE_RUN_ATTEMPT:-}${POST_CLEANUP_SEAL_SHA256:-}${ORDER_ARCHIVE_SEAL_SHA256:-}${ORDER_ARCHIVE_PREPARED_IMAGES_SHA256:-}${RELEASE_BROWSER_CACHE_IMAGE:-}${RELEASE_BROWSER_CACHE_IMAGE_ID:-}${CACHE_PLAN_SHA256:-}${DIAGNOSTIC_COMMAND_ID:-}" ]] || return 1
+    return 0
+  fi
   if [[ "${RELEASE_OPERATION:-release}" == diagnose_online_backup_source* || "${RELEASE_OPERATION:-release}" == restore_online_backup_source* || "${RELEASE_OPERATION:-release}" == repair_online_backup_parent_owner* ]]; then
     [[ "${RELEASE_OPERATION:-release}" == diagnose_online_backup_source || "${RELEASE_OPERATION:-release}" == restore_online_backup_source || "${RELEASE_OPERATION:-release}" == repair_online_backup_parent_owner ]] || return 1
     [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
