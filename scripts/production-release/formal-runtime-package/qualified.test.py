@@ -265,6 +265,65 @@ class QualificationTests(unittest.TestCase):
         self.runtime();changed=tools();changed['/usr/bin/rpm']['identity']['inode']=999
         self.cap.value['listenerBinding']['runtimeIdentity']['runtime']['collectionToolsSha256']=q.digest(changed)
         with patch.object(self.session,'collection_tools',return_value=changed),self.assertRaisesRegex(q.Rejected,'NATIVE_TOOL_CHANGED'):self.runtime()
+    def test_real_identity_reader_tuples_match_and_tool_drift_rejects(self):
+        # Real descriptor reads in an owned sandbox; only root ownership is
+        # privately adapted to this test UID. Production reader remains uid 0.
+        identity=external.identity
+        sandbox=self.base/'identity-reader';(sandbox/'usr/bin').mkdir(parents=True)
+        paths=('/usr/bin/systemctl','/usr/bin/rpm')
+        fixture={path:b'\x7fELFCONTROL_ONLY_IDENTITY_READER_'+path.encode() for path in paths}
+        for path,raw in fixture.items():
+            target=sandbox/path.lstrip('/');target.write_bytes(raw);target.chmod(0o755)
+        reader=identity._Reader(str(sandbox))
+        selected=profile();selected['reviewedCollectionToolSha256']={path:q.sha(raw) for path,raw in fixture.items()}
+        self.session=q._Session(a,selected,self.cap)
+        with patch.object(identity,'_root_owned',side_effect=lambda st:st.st_uid==os.getuid()), \
+             patch.object(identity,'_reader_factory',return_value=reader) as factory:
+            rows=self.session.collection_tools()
+            self.assertEqual(set(rows),set(paths))
+            self.assertTrue(all(type(row['identity']['file']) is tuple and len(row['identity']['file'])==9
+                and all(type(parent) is tuple and len(parent)==5 for parent in row['identity']['parents'])
+                for row in rows.values()))
+            # The strict pure JSON domain must keep rejecting the native tuples.
+            with self.assertRaisesRegex(q.Rejected,'^SOURCE_PROFILE_INVALID$'):q.digest(rows)
+            runtime=self.cap.value['listenerBinding']['runtimeIdentity']['runtime']
+            runtime['collectionToolsSha256']=identity.fingerprint(rows)
+            with self.subTest(boundary='real_reader_native_fingerprint'):
+                self.assertEqual(self.runtime(),self.cap.value)
+                self.assertEqual(self.runtime(),self.cap.value)
+                self.assertEqual(self.session.initial_collection_tools,rows)
+                self.assertGreaterEqual(factory.call_count,3)
+            with self.subTest(boundary='wrong_aggregate_hash'):
+                runtime['collectionToolsSha256']=q.digest(selected['reviewedCollectionToolSha256'])
+                with self.assertRaisesRegex(q.Rejected,'^NATIVE_TOOL_CHANGED$'):self.runtime()
+                runtime['collectionToolsSha256']=identity.fingerprint(rows)
+            target=sandbox/'usr/bin/rpm'
+            with self.subTest(boundary='changed_binary_bytes'):
+                target.write_bytes(fixture['/usr/bin/rpm']+b'CONTROL_ONLY_CHANGED')
+                with self.assertRaisesRegex(q.Rejected,'^NATIVE_TOOL_CHANGED$'):self.runtime()
+                target.write_bytes(fixture['/usr/bin/rpm']);target.chmod(0o755)
+            # Re-establish the local test baseline after the intentional write.
+            self.session.initial_collection_tools=None;self.session.initial_binding=None
+            before=self.session.collection_tools();runtime['collectionToolsSha256']=identity.fingerprint(before)
+            self.runtime()
+            with self.subTest(boundary='same_bytes_different_inode'):
+                saved=sandbox/'usr/bin/rpm.previous';target.rename(saved)
+                target.write_bytes(fixture['/usr/bin/rpm']);target.chmod(0o755)
+                after=self.session.collection_tools()
+                self.assertEqual(after['/usr/bin/rpm']['bytesSha256'],before['/usr/bin/rpm']['bytesSha256'])
+                self.assertNotEqual(after['/usr/bin/rpm']['identity']['file'],before['/usr/bin/rpm']['identity']['file'])
+                runtime['collectionToolsSha256']=identity.fingerprint(after)
+                with self.assertRaisesRegex(q.Rejected,'^NATIVE_TOOL_CHANGED$'):self.runtime()
+            with self.subTest(boundary='unsafe_tool_permissions'):
+                target.chmod(0o777)
+                with self.assertRaisesRegex(identity.Rejected,'^PERMISSIONS_INVALID$'):self.session.collection_tools()
+                target.chmod(0o755)
+            with self.subTest(boundary='missing_vfs_precedes_reader'):
+                self.session.capability=None;factory.reset_mock()
+                with self.assertRaisesRegex(q.Rejected,'^VFS_BOUND_CAPABILITY_REQUIRED$'):self.runtime()
+                factory.assert_not_called()
+            self.no_create()
+
     def test_socket_netns_process_drift(self):
         for path in ('socketNodeSha256','networkNamespaceSha256','listenerSha256','daemonFdSha256','observationSha256'):
             self.session.initial_binding=None;self.runtime();original=copy.deepcopy(self.cap.value)
@@ -473,5 +532,186 @@ class ReviewedSourceAdmissionTests(unittest.TestCase):
             driver.run.assert_not_called()
             self.assertEqual(list((base/'.runtime/online-recharge-qualified-client').iterdir()),[])
             self.assertFalse((base/'.runtime/online-recharge-declaration-measurement').exists())
+
+class InternalQualificationDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        from types import MethodType
+        from unittest.mock import Mock
+        self.q=load('internal_qualification_diagnostic',HERE/'qualified.py')
+        self.pure=pure;self.base=factory();self.inventory=self.base.frozen
+        self.identity=external.identity;self.listener=external.listener;self.socket=external.socket
+        self.package=load('internal_diagnostic_package',HERE/'package_io.py')
+        # Only a synthetic bound-method implementation is substituted. Its
+        # exception types/codes are the captured package module's exact globals.
+        exec('def synthetic_stable(self):\n    return None\n',self.package.__dict__)
+        stable=MethodType(self.package.synthetic_stable,object())
+        self.external=SimpleNamespace(identity=self.identity,listener=self.listener,socket=self.socket,
+            paths={'online-recharge-daemon-socket.py':HERE.parent/'online-recharge-daemon-socket.py'},
+            leaf_pins={'online-recharge-daemon-socket.py':hashlib.sha256((HERE.parent/'online-recharge-daemon-socket.py').read_bytes()).hexdigest()},
+            socket_bytes=(HERE.parent/'online-recharge-daemon-socket.py').read_bytes(),assert_stable=stable)
+        self.q._configure(self.external,self.pure,lambda:self.base)
+        self.q._SOURCE_TABLE_BYTES=(HERE/'reviewed-source-table.json').read_bytes()
+        self.profile=self.q._reviewed_profile()
+        self.sandbox=ROOT/'.runtime/online-recharge-release-20261009/build/qualified-internal-diagnostic-tests'
+        self.sandbox.mkdir(mode=0o700,parents=True,exist_ok=True)
+        self.temp=tempfile.TemporaryDirectory(dir=self.sandbox,prefix='owned-')
+        self.root=Path(self.temp.name);(self.root/'.runtime').mkdir(mode=0o700)
+        self.driver=SimpleNamespace(BASE=self.root,run=Mock(side_effect=AssertionError('ACTUAL_RUN_FORBIDDEN')))
+        self.tools={p:{'bytesSha256':h,'identity':{'inode':i,'uid':0}} for i,(p,h) in enumerate(self.profile['reviewedCollectionToolSha256'].items())}
+        # Existing valid synthetic VFS shape; no actual inventory or receipt is read.
+        self.report=copy.deepcopy(vfs_binding())
+        self.report['listenerBinding']['runtimeIdentity']['runtime']['collectionToolsSha256']=self.identity.fingerprint(self.tools)
+        self.patches=[patch.object(self.socket,'runtime_daemon_socket_binding',return_value=self.report),
+            patch.object(self.q._Session,'collection_tools',return_value=self.tools),
+            patch.object(self.q._Session,'native_tools',return_value={'SYNTHETIC_NATIVE_TOOL':'OBSERVED'}),
+            patch.object(self.base,'native_permissions',return_value=None),
+            patch.object(self.inventory,'read',return_value={'id':'SYNTHETIC_DAEMON'}),
+            patch.object(self.q._Session,'assert_stable',return_value=None)]
+        for p in self.patches:p.start()
+    def tearDown(self):
+        for p in reversed(self.patches):p.stop()
+        self.temp.cleanup()
+    def diagnostic(self,error,stage,code,arg='QUALIFIER_UNAVAILABLE'):
+        self.assertIs(type(error),self.q.Rejected)
+        self.assertEqual(BaseException.args.__get__(error),(arg,))
+        self.assertEqual(self.q.failure_diagnostic(error),{'stage':stage,'code':code})
+        self.assertNotIn('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED',json.dumps(self.q.failure_diagnostic(error)))
+    def rejected(self,stage,code,patcher=None,body=None,arg='QUALIFIER_UNAVAILABLE'):
+        if patcher is not None:patcher.start()
+        try:
+            with self.assertRaises(self.q.Rejected) as found:
+                with self.q.acquisition_session(self.driver) as session:
+                    if body is not None:body(session)
+            self.diagnostic(found.exception,stage,code,arg)
+            self.driver.run.assert_not_called()
+            client=self.root/'.runtime/online-recharge-qualified-client'
+            if client.exists() and stage not in ('CLIENT_CONFIG','CLEANUP'):self.assertEqual(list(client.iterdir()),[])
+            return found.exception
+        finally:
+            if patcher is not None:patcher.stop()
+    def test_happy_context_real_private_empty_file_and_cleanup(self):
+        with self.q.acquisition_session(self.driver) as session:
+            file=session.runner.config
+            self.assertEqual(file.read_bytes(),b'{}\n');self.assertEqual(file.stat().st_mode&0o777,0o600)
+            self.assertIsNone(self.q.failure_diagnostic(self.q.Rejected('QUALIFIER_UNAVAILABLE')))
+        self.assertFalse(file.parent.exists());self.driver.run.assert_not_called()
+    def test_profile_fixed_rejection_args_retained(self):
+        self.rejected('QUALIFIER_PROFILE','SOURCE_NOT_MEASURED',patch.object(self.q,'_reviewed_profile',side_effect=self.q.Rejected('SOURCE_NOT_MEASURED')),arg='SOURCE_NOT_MEASURED')
+    def test_factory_exact_type_error(self):
+        self.rejected('FACTORY','TYPE_ERROR',patch.object(self.q,'_load_base',side_effect=TypeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
+    def test_factory_bound_package_exact_code(self):
+        self.rejected('FACTORY','PACKAGE_FILE_CHANGED',patch.object(self.q,'_load_base',side_effect=self.package.Rejected('PACKAGE_FILE_CHANGED')))
+    def test_session_exact_attribute_error(self):
+        self.rejected('SESSION','ATTRIBUTE_ERROR',patch.object(self.q,'_Session',side_effect=AttributeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
+    def test_install_original_fixed_arg_retained(self):
+        self.rejected('INSTALL','CLIENT_SOURCE_CHANGED',patch.object(self.q._Session,'install',side_effect=self.q.Rejected('CLIENT_SOURCE_CHANGED')),arg='CLIENT_SOURCE_CHANGED')
+    def test_vfs_source_bound_package_failure(self):
+        from types import MethodType
+        exec("def synthetic_failed(self):\n    raise Rejected('PACKAGE_SOURCE_CHANGED')\n",self.package.__dict__)
+        self.external.assert_stable=MethodType(self.package.synthetic_failed,object())
+        self.rejected('VFS_SOURCE','PACKAGE_SOURCE_CHANGED')
+    def test_directory_exact_permission_error(self):
+        original=Path.mkdir
+        def denied(path,*args,**kwargs):
+            if path.name=='online-recharge-qualified-client':raise PermissionError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')
+            return original(path,*args,**kwargs)
+        self.rejected('CLIENT_DIRECTORY','PERMISSION_ERROR',patch.object(Path,'mkdir',denied))
+    def test_config_exact_os_error(self):
+        original=Path.write_bytes
+        def denied(path,raw):
+            if path.name=='config.json':raise OSError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')
+            return original(path,raw)
+        self.rejected('CLIENT_CONFIG','OS_ERROR',patch.object(Path,'write_bytes',denied))
+    def test_client_real_bound_collector_file_error(self):
+        self.rejected('CLIENT_CONFIG','SOURCE_FILE_INVALID',patch.object(self.base,'file_seal',side_effect=self.base.Rejected('SOURCE_FILE_INVALID')))
+    def test_runtime_vfs_exact_bound_socket_code(self):
+        self.rejected('RUNTIME_VFS','VFS_DIAG_UNAVAILABLE',patch.object(self.socket,'runtime_daemon_socket_binding',side_effect=self.socket.Rejected('VFS_DIAG_UNAVAILABLE')))
+    def test_runtime_vfs_exact_bound_identity_code(self):
+        self.rejected('RUNTIME_VFS','RUNTIME_DRIFT',patch.object(self.socket,'runtime_daemon_socket_binding',side_effect=self.identity.Rejected('RUNTIME_DRIFT')))
+    def test_collection_tools_bound_identity_permission(self):
+        self.rejected('COLLECTION_TOOLS','PERMISSIONS_INVALID',patch.object(self.q._Session,'collection_tools',side_effect=self.identity.Rejected('PERMISSIONS_INVALID')))
+    def test_full_identity_fingerprint_accepts_tuple_without_loosening_pure_schema(self):
+        rows=copy.deepcopy(self.tools)
+        for row in rows.values():row['identity']={'file':tuple(range(9)),'parents':[tuple(range(5))]}
+        expected=self.identity.fingerprint(rows)
+        self.report['listenerBinding']['runtimeIdentity']['runtime']['collectionToolsSha256']=expected
+        with self.assertRaisesRegex(self.q.Rejected,'^SOURCE_PROFILE_INVALID$'):self.q.digest(rows)
+        with patch.object(self.q._Session,'collection_tools',return_value=rows):
+            with self.q.acquisition_session(self.driver) as session:
+                self.assertEqual(self.identity.fingerprint(rows),expected)
+                self.assertIsNotNone(session.runner)
+        self.assertEqual(list((self.root/'.runtime/online-recharge-qualified-client').iterdir()),[])
+        self.driver.run.assert_not_called()
+    def test_native_permissions_bound_collector_code(self):
+        self.rejected('NATIVE_PERMISSIONS','CLI_SOURCE_CHANGED',patch.object(self.base,'native_permissions',side_effect=self.base.Rejected('CLI_SOURCE_CHANGED')))
+    def test_native_tools_exact_os_error(self):
+        self.rejected('NATIVE_TOOLS','OS_ERROR',patch.object(self.q._Session,'native_tools',side_effect=FileNotFoundError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
+    def test_daemon_info_exact_type_error(self):
+        self.rejected('DAEMON_INFO','TYPE_ERROR',patch.object(self.inventory,'read',side_effect=TypeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
+    def test_stability_failure_before_yield(self):
+        self.rejected('STABILITY','DAEMON_CHANGED',patch.object(self.q._Session,'assert_stable',side_effect=self.q.Rejected('DAEMON_CHANGED')),arg='DAEMON_CHANGED')
+    def test_body_exception_bare_private_reraise_and_real_cleanup(self):
+        error=ValueError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')
+        session=self.q._Session(self.base,self.profile,self.socket);session._diagnostic_state=self.q._DiagnosticState();session._diagnostic_state.bind_base(self.base)
+        with self.assertRaises(ValueError) as found:
+            with self.q._acquisition_context(self.driver,session):raise error
+        self.assertIs(found.exception,error)
+        self.assertEqual(session._diagnostic_state.first,('YIELD','UNKNOWN'))
+        self.assertEqual(list((self.root/'.runtime/online-recharge-qualified-client').iterdir()),[])
+    def test_public_body_keeps_original_unavailable_arg(self):
+        def body(_):raise ValueError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')
+        self.rejected('YIELD','UNKNOWN',body=body)
+    def test_post_yield_stability_failure(self):
+        with patch.object(self.q._Session,'assert_stable',side_effect=[None,self.q.Rejected('SOCKET_BINDING_CHANGED')]):
+            self.rejected('STABILITY','SOCKET_BINDING_CHANGED',arg='SOCKET_BINDING_CHANGED')
+    def test_cleanup_failure_is_not_suppressed(self):
+        with patch.object(self.q._Session,'remove_deferred',side_effect=PermissionError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')):
+            self.rejected('CLEANUP','PERMISSION_ERROR')
+    def test_first_inner_failure_preserved_before_cleanup(self):
+        with patch.object(self.q._Session,'native_tools',side_effect=TypeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')):
+            with patch.object(self.q._Session,'remove_deferred',side_effect=PermissionError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')):
+                error=self.rejected('CLEANUP','PERMISSION_ERROR')
+                self.assertEqual(self.q.failure_diagnostic(error)['stage'],'CLEANUP')
+        # Original inner reason remains retained in the private state, while
+        # actual cleanup exception still rejects rather than yielding success.
+        state=self.q._DiagnosticState();state.stage='NATIVE_TOOLS';state.capture(TypeError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED'))
+        state.stage='CLEANUP';state.capture(PermissionError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED'),cleanup=True)
+        self.assertEqual(state.first,('NATIVE_TOOLS','TYPE_ERROR'));self.assertEqual(state.cleanup,('CLEANUP','PERMISSION_ERROR'))
+    def test_secret_magic_exception_does_not_execute_str_or_args(self):
+        class SecretError(RuntimeError):
+            def __str__(self):raise AssertionError('STR_EXECUTED')
+            @property
+            def args(self):raise AssertionError('ARGS_EXECUTED')
+        self.rejected('RUNTIME_VFS','UNKNOWN',patch.object(self.socket,'runtime_daemon_socket_binding',side_effect=SecretError('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED')))
+    def test_foreign_same_code_and_exact_subclass_are_not_accepted(self):
+        class Subclass(self.socket.Rejected):pass
+        for error,expected in ((RuntimeError('VFS_DIAG_UNAVAILABLE'),'RUNTIME_ERROR'),(Subclass('VFS_DIAG_UNAVAILABLE'),'UNKNOWN')):
+            with self.subTest(type=type(error).__name__):
+                self.rejected('RUNTIME_VFS',expected,patch.object(self.socket,'runtime_daemon_socket_binding',side_effect=error))
+    def test_malformed_bound_args_cannot_claim_fixed_code(self):
+        class HashBomb(str):
+            def __hash__(self):raise AssertionError('HASH_EXECUTED')
+        for args in (('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED',),('RUNTIME_DRIFT','SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED'),(HashBomb('RUNTIME_DRIFT'),),()):
+            with self.subTest(count=len(args)):
+                self.rejected('RUNTIME_VFS','UNKNOWN',patch.object(self.socket,'runtime_daemon_socket_binding',side_effect=self.identity.Rejected(*args)))
+    def test_getter_rejects_subclass_shadow_types_and_malicious_marker(self):
+        class Subclass(self.q.Rejected):pass
+        class HashBomb(str):
+            def __hash__(self):raise AssertionError('HASH_EXECUTED')
+        for value in (['YIELD','UNKNOWN'],('YIELD',True),('YIELD',HashBomb('UNKNOWN')),('YIELD','MATCH'),('NEW_STAGE','UNKNOWN'),('YIELD','UNKNOWN','x')):
+            error=self.q.Rejected('QUALIFIER_UNAVAILABLE');error._qualified_failure=value
+            self.assertIsNone(self.q.failure_diagnostic(error))
+        error=Subclass('QUALIFIER_UNAVAILABLE');error._qualified_failure=('YIELD','UNKNOWN')
+        self.assertIsNone(self.q.failure_diagnostic(error))
+        for args in ((HashBomb('QUALIFIER_UNAVAILABLE'),),('QUALIFIER_UNAVAILABLE','SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED'),('SYNTHETIC_DIAGNOSTIC_SECRET_NEVER_PUBLISHED',),()):
+            error=self.q.Rejected(*args);error._qualified_failure=('YIELD','UNKNOWN')
+            self.assertIsNone(self.q.failure_diagnostic(error))
+    def test_diagnostic_binding_unknown_codes_rejected(self):
+        class Foreign(RuntimeError):pass
+        self.assertIsNone(self.q._diagnostic_binding(SimpleNamespace(Rejected=Foreign,CODES=frozenset({'MATCH'}))))
+        state=self.q._DiagnosticState();state.stage='FACTORY';state.capture(Foreign('PACKAGE_FILE_CHANGED'))
+        self.assertEqual(state.first,('FACTORY','UNKNOWN'))
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

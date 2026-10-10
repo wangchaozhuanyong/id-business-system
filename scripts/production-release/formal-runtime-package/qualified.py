@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from types import MappingProxyType,SimpleNamespace,ModuleType
+from types import MappingProxyType,SimpleNamespace,ModuleType,MethodType
 import uuid
 
 HERE=Path(__file__).resolve().parent
@@ -173,6 +173,97 @@ HEX=re.compile('[a-f0-9]{64}\\Z')
 
 class Rejected(RuntimeError):pass
 
+# Diagnostics classify only fixed sealed exception classes and literal codes.
+# They never authorize a source, inspect a message, or alter a rejected argument.
+DIAGNOSTIC_STAGES=frozenset(('QUALIFIER_PROFILE', 'FACTORY', 'SESSION', 'INSTALL', 'VFS_SOURCE', 'CLIENT_DIRECTORY', 'CLIENT_CONFIG', 'RUNTIME_VFS', 'COLLECTION_TOOLS', 'NATIVE_PERMISSIONS', 'NATIVE_TOOLS', 'DAEMON_INFO', 'STABILITY', 'YIELD', 'CLEANUP'))
+DIAGNOSTIC_CODES=frozenset(('ACTUAL_IDENTITY', 'ACTUAL_IDENTITY_CHANGED', 'ACTUAL_INSPECT_CHANGED', 'ACTUAL_NETWORK_ADDRESS', 'ACTUAL_NETWORK_DECLARATION', 'ACTUAL_NETWORK_ID_OR_MEMBERS', 'ACTUAL_NETWORK_INSPECT_CHANGED', 'ACTUAL_NETWORK_MEMBERS', 'ACTUAL_NETWORK_SET', 'ACTUAL_PRIMARY_NETWORK', 'ACTUAL_STATE_OR_ENV', 'ACTUAL_VOLUME_INSPECT_CHANGED', 'ATTRIBUTE_ERROR', 'BASE_SOURCE_UNMEASURED', 'BINDING_REPORT_INVALID', 'BOUND_LABEL', 'CLEANUP_FAILED', 'CLEANUP_REMAINING', 'CLEANUP_SEAL_CHANGED', 'CLIENT_DEFAULT_INJECTION', 'CLIENT_SOURCE_CHANGED', 'CLI_SOURCE_CHANGED', 'CMDLINE_INVALID', 'COMPLETE_CONFIGURATION_DIFFERENCE', 'CONFIGURATION_INVALID', 'CONFIG_INVALID', 'DAEMON_CHANGED', 'DAEMON_FD_MISSING', 'DAEMON_SOURCE_NOT_MEASURED', 'DEPENDENCY_LABEL', 'ENV_INVALID', 'EXECUTABLE_INVALID', 'EXISTING_REFERENCE_REFUSED', 'FD_INVALID', 'GENERATOR_SOURCE_CHANGED', 'HOST_MOUNTS_SHAPE', 'IMAGE_INSPECT_CHANGED', 'LISTENER_INVALID', 'MEASUREMENT_FAILED', 'MOUNT_BINDING', 'NAMESPACE_MISMATCH', 'NATIVE_TOOL_CHANGED', 'ORIGIN_CHANGED', 'OS_ERROR', 'PACKAGE_ARCHIVE_CHANGED', 'PACKAGE_BINARY_MISMATCH', 'PACKAGE_DIGEST_UNSUPPORTED', 'PACKAGE_FILE_CHANGED', 'PACKAGE_INPUT_INVALID', 'PACKAGE_INVALID', 'PACKAGE_SCHEMA_CHANGED', 'PACKAGE_SOURCE_CHANGED', 'PACK_IMAGE_OR_NATIVE_IDENTITY', 'PACK_INVALID', 'PATH_INVALID', 'PERMISSIONS_INVALID', 'PERMISSION_ERROR', 'POOL_SOURCE_CHANGED', 'PRIMARY_NETWORK', 'PRIMARY_NETWORK_OR_IMAGE', 'PROCESS_INVALID', 'PROC_ALIAS_INVALID', 'QUALIFIER_FROZEN_INPUT_CHANGED', 'QUALIFIER_UNAVAILABLE', 'RUNTIME_ERROR', 'REFERENCE_ID_CHANGED', 'REFERENCE_MODEL_CHANGED', 'REFERENCE_NETWORK_OVERLAP', 'REFERENCE_NETWORK_SET', 'REFERENCE_PATH_INVALID', 'REFERENCE_PENDING_ENDPOINT', 'REFERENCE_RESOURCE_CHANGED', 'REFERENCE_STARTED_OR_OWNER_CHANGED', 'REFERENCE_STATE_OWNER_OR_ENV', 'REPLACE_LABEL', 'REPORT_INVALID', 'RESOURCE_DEFAULT_POOL_INVALID', 'RESOURCE_INVENTORY_INVALID', 'RESOURCE_IPAM_INVALID', 'RESOURCE_OWNER_OR_MEMBERS_INVALID', 'RESOURCE_PROPERTIES_INVALID', 'RESOURCE_READ_INVALID', 'RESOURCE_SCHEMA_INVALID', 'RESOURCE_VOLUME_INVALID', 'RUNTIME_BINARY_CHANGED', 'RUNTIME_CAPABILITY_REQUIRED', 'RUNTIME_DRIFT', 'RUNTIME_IDENTITY_INVALID', 'RUNTIME_PACKAGE_CHANGED', 'RUNTIME_UNAVAILABLE', 'SERVICE_INVALID', 'SOCKET_BINDING_CHANGED', 'SOCKET_BINDING_DRIFT', 'SOCKET_BINDING_INVALID', 'SOCKET_BINDING_UNAVAILABLE', 'SOCKET_PATH_INVALID', 'SOCKET_PERMISSIONS_INVALID', 'SOURCE_DECLARATION_INVALID', 'SOURCE_ENV_INVALID', 'SOURCE_ENV_SEAL_CHANGED', 'SOURCE_FILES_CHANGED', 'SOURCE_FILE_INVALID', 'SOURCE_FILE_PERMISSIONS', 'SOURCE_IMAGE_INVALID', 'SOURCE_MODEL_HASH_INVALID', 'SOURCE_NETWORK_DECLARATION', 'SOURCE_NOT_MEASURED', 'SOURCE_PATH_INVALID', 'SOURCE_PROFILE_INVALID', 'SOURCE_PROJECT_INVALID', 'SOURCE_REPLACE_ANCHOR_INVALID', 'SOURCE_SEAL_INVALID', 'SOURCE_VOLUME_DECLARATION', 'TYPE_ERROR', 'UNKNOWN', 'VFS_BINDING_UNAVAILABLE', 'VFS_BOUND_CAPABILITY_REQUIRED', 'VFS_DIAG_UNAVAILABLE', 'VFS_DRIFT', 'VFS_NODE_MISMATCH', 'VFS_QUERY_INVALID', 'VFS_REPORT_INVALID', 'VFS_SOURCE_UNMEASURED', 'VFS_WIRE_INVALID'))
+_DIAGNOSTIC_BUILTINS=((RuntimeError,'RUNTIME_ERROR'),(TypeError,'TYPE_ERROR'),(AttributeError,'ATTRIBUTE_ERROR'),
+    (PermissionError,'PERMISSION_ERROR'),(OSError,'OS_ERROR'),
+    (FileNotFoundError,'OS_ERROR'),(FileExistsError,'OS_ERROR'),
+    (NotADirectoryError,'OS_ERROR'),(IsADirectoryError,'OS_ERROR'),
+    (BlockingIOError,'OS_ERROR'),(InterruptedError,'OS_ERROR'),(TimeoutError,'OS_ERROR'),
+    (ConnectionError,'OS_ERROR'),(BrokenPipeError,'OS_ERROR'),
+    (ConnectionAbortedError,'OS_ERROR'),(ConnectionRefusedError,'OS_ERROR'),
+    (ConnectionResetError,'OS_ERROR'),(ChildProcessError,'OS_ERROR'),(ProcessLookupError,'OS_ERROR'))
+
+
+def failure_diagnostic(error):
+    if type(error) is not Rejected:return None
+    args=BaseException.args.__get__(error)
+    if not (type(args) is tuple and len(args)==1 and type(args[0]) is str and args[0] in CODES):return None
+    fields=error.__dict__
+    if type(fields) is not dict:return None
+    value=fields.get('_qualified_failure')
+    if (type(value) is tuple and len(value)==2 and type(value[0]) is str and type(value[1]) is str
+            and value[0] in DIAGNOSTIC_STAGES and value[1] in DIAGNOSTIC_CODES):
+        return {'stage':value[0],'code':value[1]}
+    return None
+
+
+def _diagnostic_binding(module,codes_name='CODES'):
+    cls=getattr(module,'Rejected',None);codes=getattr(module,codes_name,None)
+    if (type(cls) is type and issubclass(cls,BaseException) and type(codes) is frozenset
+            and all(type(code) is str and code in DIAGNOSTIC_CODES for code in codes)):
+        return (cls,codes)
+    return None
+
+
+class _DiagnosticState:
+    __slots__=('stage','first','cleanup','bindings')
+    def __init__(self):
+        self.stage='QUALIFIER_PROFILE';self.first=None;self.cleanup=None;self.bindings=[(Rejected,CODES)]
+        if _EXTERNAL is not None:
+            for name in ('identity','listener','socket'):
+                row=_diagnostic_binding(getattr(_EXTERNAL,name,None))
+                if row is not None:self.bindings.append(row)
+            # This method is the sealed Package.assert_stable already supplied
+            # by the fixed loader, rather than a new caller class/code override.
+            stable=getattr(_EXTERNAL,'assert_stable',None)
+            if type(stable) is MethodType:
+                values=stable.__func__.__globals__
+                row=_diagnostic_binding(SimpleNamespace(Rejected=values.get('Rejected'),CODES=values.get('CODES')))
+                if row is not None:self.bindings.append(row)
+    def bind_base(self,base):
+        row=_diagnostic_binding(base,'ERROR_CODES')
+        if row is not None:self.bindings.append(row)
+    def capture(self,error,*,cleanup=False):
+        code=None
+        for cls,codes in self.bindings:
+            if type(error) is cls:
+                values=BaseException.args.__get__(error)
+                if type(values) is tuple and len(values)==1 and type(values[0]) is str and values[0] in codes:
+                    code=values[0];break
+        if code is None:
+            for cls,literal in _DIAGNOSTIC_BUILTINS:
+                if type(error) is cls:code=literal;break
+        value=(self.stage,code if code is not None else 'UNKNOWN')
+        if cleanup:self.cleanup=('CLEANUP',value[1])
+        elif self.first is None:self.first=value
+    def mark(self,error):
+        value=self.cleanup if self.cleanup is not None else self.first
+        if value is not None:error._qualified_failure=value
+        return error
+
+
+def _stage(session,literal):
+    state=getattr(session,'_diagnostic_state',None)
+    if state is not None:state.stage=literal
+
+
+def _capture(session,error,*,cleanup=False):
+    state=getattr(session,'_diagnostic_state',None)
+    if state is not None:state.capture(error,cleanup=cleanup)
+
+
+def _rejection_argument(error):
+    # Same fixed public arguments for existing actual Rejected literals; do not
+    # execute subclass __str__, dynamic args access, or a string-subclass hash.
+    if isinstance(error,Rejected):
+        values=BaseException.args.__get__(error)
+        if type(values) is tuple and len(values)==1 and type(values[0]) is str and values[0] in CODES:return values[0]
+    return 'QUALIFIER_UNAVAILABLE'
+
+
 def need(ok,code='SOURCE_PROFILE_INVALID'):
     if not ok:raise Rejected(code)
 
@@ -250,6 +341,7 @@ class _Session:
         self.initial_binding=None;self.initial_tools=None;self.initial_collection_tools=None;self.daemon_sha=None;self.environment=None;self.client_seals={};self.runner=None;self.deferred=[]
         self.old_spec=base.spec_validate;self.old_permissions=base.native_permissions
         self.old_client=base.controlled_client
+        self._diagnostic_state=None
     def native_tools(self):
         reader=IDENTITY._reader_factory();rows={}
         for path in ('/usr/bin/docker','/usr/libexec/docker/cli-plugins/docker-compose'):
@@ -273,23 +365,31 @@ class _Session:
             and sha(_EXTERNAL.socket_bytes)==VFS_SHA,'VFS_BOUND_CAPABILITY_REQUIRED')
         _EXTERNAL.assert_stable()
     def runtime(self,d):
-        self.require_vfs()
-        need(self.capability is not None,'RUNTIME_CAPABILITY_REQUIRED')
-        value=_closed_binding(self.capability.runtime_daemon_socket_binding(d),self.capability)
-        runtime=value['listenerBinding']['runtimeIdentity'];p=self.profile
-        need(runtime['runtime']['binarySha256']==p['dockerdBinarySha256'],'RUNTIME_BINARY_CHANGED')
-        rpm=runtime['package']
-        need(rpm['name']=='docker' and rpm['nevraSha256']==digest(RPM)
-            and rpm['sourceRpmSha256']==sha(SRPM_NAME) and rpm['fileDigest']==DOCKERD_SHA,'RUNTIME_PACKAGE_CHANGED')
-        tools=self.collection_tools()
-        need(runtime['runtime']['collectionToolsSha256']==digest(tools),'NATIVE_TOOL_CHANGED')
-        if self.initial_collection_tools is None:self.initial_collection_tools=copy.deepcopy(tools)
-        else:need(tools==self.initial_collection_tools,'NATIVE_TOOL_CHANGED')
-        if self.initial_binding is None:self.initial_binding=copy.deepcopy(value)
-        else:
-            self.capability.assert_same_binding(self.initial_binding,value)
-            need(value==self.initial_binding,'SOCKET_BINDING_CHANGED')
-        return value
+        try:
+            _stage(self,'VFS_SOURCE')
+            self.require_vfs()
+            need(self.capability is not None,'RUNTIME_CAPABILITY_REQUIRED')
+            _stage(self,'RUNTIME_VFS')
+            value=_closed_binding(self.capability.runtime_daemon_socket_binding(d),self.capability)
+            runtime=value['listenerBinding']['runtimeIdentity'];p=self.profile
+            need(runtime['runtime']['binarySha256']==p['dockerdBinarySha256'],'RUNTIME_BINARY_CHANGED')
+            rpm=runtime['package']
+            need(rpm['name']=='docker' and rpm['nevraSha256']==digest(RPM)
+                and rpm['sourceRpmSha256']==sha(SRPM_NAME) and rpm['fileDigest']==DOCKERD_SHA,'RUNTIME_PACKAGE_CHANGED')
+            _stage(self,'COLLECTION_TOOLS')
+            tools=self.collection_tools()
+            need(runtime['runtime']['collectionToolsSha256']==IDENTITY.fingerprint(tools),'NATIVE_TOOL_CHANGED')
+            if self.initial_collection_tools is None:self.initial_collection_tools=copy.deepcopy(tools)
+            else:need(tools==self.initial_collection_tools,'NATIVE_TOOL_CHANGED')
+            _stage(self,'STABILITY')
+            if self.initial_binding is None:self.initial_binding=copy.deepcopy(value)
+            else:
+                self.capability.assert_same_binding(self.initial_binding,value)
+                need(value==self.initial_binding,'SOCKET_BINDING_CHANGED')
+            return value
+        except Exception as error:
+            _capture(self,error)
+            raise
     def pools(self,statement,runtime):
         p=self.profile;spec=p['spec'];args=runtime['cmdline'];config=runtime['configuration'];expected=spec['defaultPools']
         need(statement['status']==spec['defaultPoolsStatement'] and statement['status'] in ('DECLARED','UNDECLARED'),'POOL_SOURCE_CHANGED')
@@ -409,49 +509,80 @@ class _AcquiredSession:
 def _acquisition_context(d,session):
     """Private implementation. Tests inject only into this private boundary."""
     import os,stat,shutil
-    need(session.runner is None,'CLIENT_SOURCE_CHANGED');session.install()
-    # Capability/source table was selected by the public caller before this point.
-    session.require_vfs()
-    root=d.BASE/'.runtime'/'online-recharge-qualified-client'
-    need(root.is_absolute() and root.parent.resolve()==root.parent and not root.is_symlink(),'CLIENT_SOURCE_CHANGED')
-    root.mkdir(mode=0o700,exist_ok=True)
-    info=root.stat();need(info.st_uid==os.getuid() and stat.S_IMODE(info.st_mode)==0o700,'CLIENT_SOURCE_CHANGED')
-    work=root/uuid.uuid4().hex;work.mkdir(mode=0o700)
-    config=work/'config.json';config.write_bytes(b'{}\n');config.chmod(0o600)
-    def defer_local_remove(path):
-        path=Path(path);expected=d.BASE/'.runtime'/'online-recharge-declaration-measurement'
-        need(path.parent==expected and re.fullmatch('[a-f0-9]{32}',path.name)
-            and path.resolve()==path and path not in session.deferred,'CLIENT_SOURCE_CHANGED')
-        session.deferred.append(path)
-    session.base.shutil=SimpleNamespace(rmtree=defer_local_remove)
     try:
-        session.runner=_ControlledDriver(d,session,config)
-        session.base.frozen.clean_source_environment=session.runner.source_environment
-        # Qualify process/VFS/tools BEFORE any production-service acquisition.
-        session.runtime(session.runner);session.old_permissions(session.profile['spec'])
-        session.initial_tools=session.native_tools()
-        info=session.base.frozen.read(session.runner,session.profile['spec']['dockerPath'],'info',
-            '--format',session.base.frozen.INFO_FORMAT,env=session.runner.environment)
-        need(type(info.get('id')) is str and 0<len(info['id'])<=256,'DAEMON_CHANGED')
-        session.daemon_sha=sha(info['id']);session.assert_stable()
-        yield _AcquiredSession(session)
-        session.assert_stable()
-    finally:
-        if session.runner is not None:session.remove_deferred()
-        # Only this exact freshly-created client directory, never source or volumes.
-        need(work.parent==root and work.name==config.parent.name and work.resolve()==work,'CLIENT_SOURCE_CHANGED')
-        shutil.rmtree(work)
-        session.runner=None;session.client_seals={}
+        _stage(session,'INSTALL')
+        need(session.runner is None,'CLIENT_SOURCE_CHANGED');session.install()
+        # Capability/source table was selected by the public caller before this point.
+        _stage(session,'VFS_SOURCE')
+        session.require_vfs()
+        _stage(session,'CLIENT_DIRECTORY')
+        root=d.BASE/'.runtime'/'online-recharge-qualified-client'
+        need(root.is_absolute() and root.parent.resolve()==root.parent and not root.is_symlink(),'CLIENT_SOURCE_CHANGED')
+        root.mkdir(mode=0o700,exist_ok=True)
+        info=root.stat();need(info.st_uid==os.getuid() and stat.S_IMODE(info.st_mode)==0o700,'CLIENT_SOURCE_CHANGED')
+        work=root/uuid.uuid4().hex;work.mkdir(mode=0o700)
+        _stage(session,'CLIENT_CONFIG')
+        config=work/'config.json';config.write_bytes(b'{}\n');config.chmod(0o600)
+        def defer_local_remove(path):
+            path=Path(path);expected=d.BASE/'.runtime'/'online-recharge-declaration-measurement'
+            need(path.parent==expected and re.fullmatch('[a-f0-9]{32}',path.name)
+                and path.resolve()==path and path not in session.deferred,'CLIENT_SOURCE_CHANGED')
+            session.deferred.append(path)
+        session.base.shutil=SimpleNamespace(rmtree=defer_local_remove)
+        try:
+            _stage(session,'CLIENT_CONFIG')
+            session.runner=_ControlledDriver(d,session,config)
+            session.base.frozen.clean_source_environment=session.runner.source_environment
+            # Qualify process/VFS/tools BEFORE any production-service acquisition.
+            session.runtime(session.runner)
+            _stage(session,'NATIVE_PERMISSIONS')
+            session.old_permissions(session.profile['spec'])
+            _stage(session,'NATIVE_TOOLS')
+            session.initial_tools=session.native_tools()
+            _stage(session,'DAEMON_INFO')
+            info=session.base.frozen.read(session.runner,session.profile['spec']['dockerPath'],'info',
+                '--format',session.base.frozen.INFO_FORMAT,env=session.runner.environment)
+            need(type(info.get('id')) is str and 0<len(info['id'])<=256,'DAEMON_CHANGED')
+            session.daemon_sha=sha(info['id'])
+            _stage(session,'STABILITY')
+            session.assert_stable()
+            _stage(session,'YIELD')
+            yield _AcquiredSession(session)
+            _stage(session,'STABILITY')
+            session.assert_stable()
+        except Exception as error:
+            _capture(session,error)
+            raise
+        finally:
+            _stage(session,'CLEANUP')
+            try:
+                if session.runner is not None:session.remove_deferred()
+                # Only this exact freshly-created client directory, never source or volumes.
+                need(work.parent==root and work.name==config.parent.name and work.resolve()==work,'CLIENT_SOURCE_CHANGED')
+                shutil.rmtree(work)
+                session.runner=None;session.client_seals={}
+            except Exception as error:
+                _capture(session,error,cleanup=True)
+                raise
+    except Exception as error:
+        _capture(session,error)
+        raise
 
 @contextmanager
 def acquisition_session(d):
     """No caller admission/bool/profile override; runtime qualification remains live."""
+    state=_DiagnosticState()
     try:
-        profile=_reviewed_profile();base=_load_base();session=_Session(base,profile,_load_socket())
+        state.stage='QUALIFIER_PROFILE'
+        profile=_reviewed_profile()
+        state.stage='FACTORY'
+        base=_load_base();state.bind_base(base)
+        state.stage='SESSION'
+        session=_Session(base,profile,_load_socket());session._diagnostic_state=state
         with _acquisition_context(d,session) as acquired:yield acquired
-    except Rejected as error:
-        code=str(error);raise Rejected(code if code in CODES else 'QUALIFIER_UNAVAILABLE') from None
-    except Exception:raise Rejected('QUALIFIER_UNAVAILABLE') from None
+    except Exception as error:
+        state.capture(error)
+        raise state.mark(Rejected(_rejection_argument(error))) from None
 
 class _ControlledDriver:
     """Fixed executables + whitelisted environment for every execution.
