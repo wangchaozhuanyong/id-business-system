@@ -506,7 +506,9 @@ class InstallerTests(unittest.TestCase):
         extra = self.current / 'synthetic-hardlink'; os.link(path, extra)
         value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_LINKS')
         extra.unlink(); path.chmod(0o622)
-        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_WRITABLE')
+        value = self.run_install(); self.assertEqual(value['status'], 'COMPLETED')
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.calls.clear()
         path.chmod(0o600); path.write_bytes(b'')
         value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_SIZE')
         self.assertFalse(value['mutationAttempted'])
@@ -824,7 +826,7 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('SYNTHETIC_SECRET_PATH', i.canonical(value).decode())
         self.assertEqual(self.timer, 'active')
 
-    def test_current_scripts_following_leaf_writable_refusal_is_not_repaired(self):
+    def test_current_scripts_and_public_leaf_each_repair_only_their_refused_inode(self):
         path = self.current / 'scripts'
         original_chmod = os.fchmod
         for leaf, stage in (('backup-aws-mysql.sh', 'BACKUP_SCRIPT'), ('mysql-dump-restore-normalizer.sed', 'NORMALIZER')):
@@ -835,12 +837,9 @@ class InstallerTests(unittest.TestCase):
                     changes.append((os.fstat(fd).st_ino, mode)); return original_chmod(fd, mode)
                 with patch.object(os, 'fchmod', chmod):
                     value = self.run_install()
-                self.assertEqual(value['code'], stage + '_SOURCE_WRITABLE')
-                self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
-                self.assertEqual(changes, [(path.stat().st_ino, 0o755)])
-                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o622)
-                self.assertFalse(self.destination.exists())
-                target.chmod(0o600)
+                self.assertEqual(value['status'], 'COMPLETED')
+                self.assertEqual(changes, [(path.stat().st_ino, 0o755), (target.stat().st_ino, 0o600)])
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
                 self.assert_original()
 
     def test_current_scripts_budget_exhaustion_prevents_chmod(self):
@@ -865,6 +864,230 @@ class InstallerTests(unittest.TestCase):
                 authority.check()
         finally:
             authority.close()
+
+    def public_target(self, authority, stage):
+        names = {'BACKUP_SCRIPT': 'backup-aws-mysql.sh', 'NORMALIZER': 'mysql-dump-restore-normalizer.sed',
+                 'COMPOSE': 'docker-compose.aws-mysql.yml'}
+        parent = authority.current_fd if stage == 'COMPOSE' else authority.child(authority.current_fd, 'scripts', role='CURRENT_RELEASE')
+        path = self.current / names[stage] if stage == 'COMPOSE' else self.current / 'scripts' / names[stage]
+        return path, parent, 1024**2 if stage == 'COMPOSE' else 256*1024
+
+    def test_public_leaves_strict_refusal_precedes_each_chmod_and_preserves_sha_attributes(self):
+        modes = {'BACKUP_SCRIPT': 0o3775, 'NORMALIZER': 0o1664, 'COMPOSE': 0o666}
+        paths = [self.current / 'scripts/backup-aws-mysql.sh', self.current / 'scripts/mysql-dump-restore-normalizer.sed',
+                 self.current / 'docker-compose.aws-mysql.yml']
+        for path, mode in zip(paths, modes.values()): path.chmod(mode)
+        before = {p: i.file_identity(p.stat()) for p in self.original}
+        hashes = {p: i.sha(p.read_bytes()) for p in self.original}
+        original_read, original_chmod = t.Authority.read, os.fchmod
+        events, opened = [], set()
+        original_open, original_close = os.open, os.close
+        def reading(authority, parent, name, limit=256*1024):
+            try: return original_read(authority, parent, name, limit=limit)
+            except t.Rejected as error:
+                events.append(('refused', os.fstat(authority.fds[-1]).st_ino, error.args))
+                raise
+        def chmod(fd, mode):
+            inode = os.fstat(fd).st_ino
+            self.assertIn(('refused', inode, ('SOURCE_INVALID',)), events)
+            events.append(('chmod', inode, mode)); return original_chmod(fd, mode)
+        def opening(*args, **kwargs):
+            fd = original_open(*args, **kwargs); opened.add(fd); return fd
+        def closing(fd):
+            opened.discard(fd); return original_close(fd)
+        with patch.object(t.Authority, 'read', reading), patch.object(os, 'fchmod', chmod), \
+             patch.object(os, 'open', opening), patch.object(os, 'close', closing):
+            value = self.run_install()
+        self.assertEqual(value['status'], 'COMPLETED')
+        self.assertEqual(len([e for e in events if e[0] == 'chmod']), 3)
+        self.assertEqual(opened, set())
+        for path in self.original:
+            after = i.file_identity(path.stat())
+            self.assertEqual(tuple(before[path][n] for n in (0, 1, 3, 4, 5, 6, 7)),
+                             tuple(after[n] for n in (0, 1, 3, 4, 5, 6, 7)))
+            self.assertEqual(stat.S_IMODE(after[2]), stat.S_IMODE(before[path][2]) & ~0o022)
+            self.assertEqual(i.sha(path.read_bytes()), hashes[path])
+        self.assertEqual(self.timer, 'active')
+
+    def test_public_safe_leaves_never_chmod(self):
+        before = {p: i.file_identity(p.stat()) for p in self.original}
+        with patch.object(os, 'fchmod', side_effect=AssertionError('strict-safe public leaves')):
+            self.assertEqual(self.run_install()['status'], 'COMPLETED')
+        self.assertEqual(before, {p: i.file_identity(p.stat()) for p in before})
+
+    def test_public_scope_excludes_env_unknown_name_parent_limit_and_stage_type(self):
+        env = self.current / '.env.aws.production'; env.chmod(0o622)
+        with patch.object(os, 'fchmod', side_effect=AssertionError('ENV excluded')):
+            value = self.run_install()
+        self.assertEqual(value['code'], 'ENV_LIMITS_SOURCE_WRITABLE')
+        self.assertFalse(value['mutationAttempted']); env.chmod(0o600)
+        authority = t.Authority()
+        class Text(str): pass
+        try:
+            path, parent, limit = self.public_target(authority, 'BACKUP_SCRIPT'); path.chmod(0o622)
+            unknown = path.parent / 'unknown-synthetic'; unknown.write_bytes(b'synthetic'); unknown.chmod(0o622)
+            duplicate = os.dup(parent)
+            try:
+                for chosen_parent, name, stage, chosen_limit in ((parent, unknown.name, 'BACKUP_SCRIPT', limit),
+                    (duplicate, path.name, 'BACKUP_SCRIPT', limit), (parent, path.name, 'COMPOSE', 1024**2),
+                    (parent, path.name, 'BACKUP_SCRIPT', limit+1), (parent, path.name, Text('BACKUP_SCRIPT'), limit),
+                    (parent, Text(path.name), 'BACKUP_SCRIPT', limit)):
+                    result = i.empty_result(self.binding)
+                    with self.subTest(stage=stage, name=name, limit=chosen_limit), \
+                         patch.object(os, 'read', side_effect=AssertionError('no repair read')), \
+                         patch.object(os, 'fchmod', side_effect=AssertionError('not a fixed target')):
+                        with self.assertRaises(i.Rejected):
+                            i.read_original(authority, chosen_parent, name, stage=stage, transport=t, limit=chosen_limit,
+                                            result=result, guard=lambda: self.fail('not a fixed target'))
+                    self.assertFalse(result['mutationAttempted'])
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o622)
+                self.assertEqual(stat.S_IMODE(unknown.stat().st_mode), 0o622)
+            finally: os.close(duplicate)
+        finally: authority.close()
+
+    def test_public_writable_plus_invalid_size_never_reads_or_changes(self):
+        for stage in ('BACKUP_SCRIPT', 'NORMALIZER', 'COMPOSE'):
+            for size_kind in ('empty', 'oversized'):
+                authority = t.Authority()
+                try:
+                    path, parent, limit = self.public_target(authority, stage)
+                    original = path.read_bytes()
+                    path.write_bytes(b'' if size_kind == 'empty' else b'x'*(limit+1)); path.chmod(0o622)
+                    result = i.empty_result(self.binding)
+                    with self.subTest(stage=stage, size=size_kind), \
+                         patch.object(os, 'read', side_effect=AssertionError('size rejected before reading')), \
+                         patch.object(os, 'fchmod', side_effect=AssertionError('size invalid')):
+                        with self.assertRaisesRegex(i.Rejected, '^'+stage+'_SOURCE_SIZE$'):
+                            i.read_original(authority, parent, path.name, stage=stage, transport=t, limit=limit,
+                                            result=result, guard=lambda: self.fail('size invalid'))
+                    self.assertFalse(result['mutationAttempted'])
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o622)
+                    path.write_bytes(original); path.chmod(0o600)
+                finally: authority.close()
+
+    def test_public_legacy_fake_authority_no_kwargs_preserves_finite_diagnostics(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'
+        original = path.read_bytes()
+        for reason in ('WRITABLE', 'SIZE', 'OWNER', 'LINKS'):
+            path.write_bytes(b'' if reason == 'SIZE' else original); path.chmod(0o622 if reason == 'WRITABLE' else 0o600)
+            inode = path.stat(); extra = self.current / 'synthetic-hardlink'
+            if reason == 'OWNER': self.wrong_owners.add((inode.st_dev, inode.st_ino))
+            if reason == 'LINKS': os.link(path, extra)
+            fake = types.SimpleNamespace(fds=[])
+            def reading(*args, **kwargs):
+                fake.fds.append(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK))
+                raise t.Rejected('SOURCE_INVALID')
+            fake.read = reading
+            try:
+                with self.subTest(reason=reason), patch.object(os, 'read', side_effect=AssertionError('old diagnostic only')), \
+                     patch.object(os, 'fchmod', side_effect=AssertionError('no optional repair kwargs')):
+                    with self.assertRaisesRegex(i.Rejected, '^BACKUP_SCRIPT_SOURCE_'+reason+'$'):
+                        i.read_original(fake, 7, path.name, stage='BACKUP_SCRIPT', transport=t)
+            finally:
+                for fd in fake.fds: os.close(fd)
+                self.wrong_owners.clear()
+                if extra.exists(): extra.unlink()
+        path.write_bytes(original); path.chmod(0o600)
+
+    def test_public_refusal_requires_exact_class_args_and_one_new_fd(self):
+        class Foreign(RuntimeError): pass
+        class Sub(t.Rejected): pass
+        class Text(str): pass
+        for error, count in ((Foreign('SOURCE_INVALID'),1), (Sub('SOURCE_INVALID'),1),
+                             (t.Rejected(Text('SOURCE_INVALID')),1), (t.Rejected('SOURCE_INVALID','extra'),1),
+                             (t.Rejected('UNDECLARED'),1), (t.Rejected('SOURCE_INVALID'),0), (t.Rejected('SOURCE_INVALID'),2)):
+            authority = t.Authority()
+            try:
+                path, parent, limit = self.public_target(authority, 'BACKUP_SCRIPT'); path.chmod(0o622)
+                def reading(*args, **kwargs):
+                    for unused in range(count): authority.fds.append(os.open(path, os.O_RDONLY | os.O_NOFOLLOW))
+                    raise error
+                result = i.empty_result(self.binding)
+                with self.subTest(error_type=type(error).__name__, fd_count=count), patch.object(authority, 'read', reading), \
+                     patch.object(os, 'read', side_effect=AssertionError('not an exact refusal')), \
+                     patch.object(os, 'fchmod', side_effect=AssertionError('not an exact refusal')):
+                    with self.assertRaises(type(error)) as caught:
+                        i.read_original(authority, parent, path.name, stage='BACKUP_SCRIPT', transport=t, limit=limit,
+                                        result=result, guard=lambda: self.fail('not an exact refusal'))
+                    self.assertIs(caught.exception, error)
+                self.assertFalse(result['mutationAttempted'])
+            finally: authority.close()
+
+    def test_public_guard_changes_before_and_after_chmod_keep_original_failure_semantics(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'
+        other = self.base / 'releases' / ('20261011T000001Z-'+i.BASELINE[:12]); other.mkdir(mode=0o700)
+        for change in ('current', 'source', 'services', 'namespace', 'bytes'):
+            for phase in (2,3):
+                with self.subTest(change=change, phase=phase):
+                    path.chmod(0o622); self.snapshot_calls = 0; calls = [0]
+                    held = path.parent / 'synthetic-original-held'
+                    def source():
+                        calls[0] += 1
+                        if calls[0] == phase:
+                            if change == 'current':
+                                (self.base/'current').unlink(); (self.base/'current').symlink_to(other)
+                            elif change == 'source': raise i.Rejected('SOURCE_INVALID')
+                            elif change == 'namespace':
+                                path.rename(held); path.write_bytes(self.original[path]); path.chmod(0o622)
+                            elif change == 'bytes': path.write_bytes(b'x'*len(self.original[path]))
+                    self.source_hook = source
+                    self.snapshot_hook = lambda count: ('b' if change == 'services' and count == phase else 'a')*64
+                    value = self.run_install()
+                    code = {'current':'AUTHORITY_RECHECK_AUTHORITY_CHANGED','source':'SOURCE_INVALID','services':'SERVICES_CHANGED',
+                            'namespace':'BACKUP_SCRIPT_AUTHORITY_CHANGED','bytes':'BACKUP_SCRIPT_AUTHORITY_CHANGED'}[change]
+                    self.assertEqual(value['code'], code)
+                    self.assertEqual(value['mutationAttempted'], phase == 3)
+                    self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED' if phase == 3 else 'FAILED')
+                    self.assertFalse(self.destination.exists()); self.assertEqual(self.timer, 'active')
+                    self.source_hook = self.snapshot_hook = None
+                    (self.base/'current').unlink(); (self.base/'current').symlink_to(self.current)
+                    if held.exists(): path.unlink(); held.rename(path)
+                    path.write_bytes(self.original[path]); path.chmod(0o600)
+
+    def test_public_sha_mismatch_with_unchanged_metadata_is_rejected(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'; path.chmod(0o622)
+        inode = path.stat().st_ino
+        original_chmod, original_read = os.fchmod, os.read
+        changed = [False]
+        def chmod(fd, mode):
+            result = original_chmod(fd, mode)
+            if os.fstat(fd).st_ino == inode: changed[0] = True
+            return result
+        def reading(fd, size):
+            raw = original_read(fd, size)
+            return b'X'*len(raw) if changed[0] and os.fstat(fd).st_ino == inode else raw
+        with patch.object(os, 'fchmod', chmod), patch.object(os, 'read', reading):
+            value = self.run_install()
+        self.assertEqual(value['code'], 'BACKUP_SCRIPT_AUTHORITY_CHANGED')
+        self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
+        self.assertFalse(self.destination.exists()); self.assert_original()
+
+    def test_public_fchmod_error_and_budget_expiry_never_advance_or_expose_details(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'; path.chmod(0o622)
+        with patch.object(os, 'fchmod', side_effect=PermissionError(i.errno.EACCES,'SYNTHETIC_SECRET')):
+            value = self.run_install()
+        self.assertEqual(value['code'], 'BACKUP_SCRIPT_ACCESS_DENIED')
+        self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
+        self.assertNotIn('SYNTHETIC_SECRET', i.canonical(value).decode())
+        with patch.object(os, 'fchmod', side_effect=AssertionError('760s expired')):
+            value = self.run_install(clock=lambda:760,deadline=760)
+        self.assertEqual(value['code'], 'SERVICE_BUSY'); self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o622)
+        self.assertEqual(self.timer,'active'); self.assertFalse(self.destination.exists())
+
+    def test_public_repaired_file_remains_registered_under_original_authority(self):
+        for stage in ('BACKUP_SCRIPT','NORMALIZER','COMPOSE'):
+            authority = t.Authority()
+            try:
+                path,parent,limit = self.public_target(authority,stage); path.chmod(0o622)
+                result = i.empty_result(self.binding)
+                raw = i.read_original(authority,parent,path.name,stage=stage,transport=t,limit=limit,result=result,guard=authority.check)
+                self.assertEqual(raw,self.original[path])
+                self.assertTrue(any(p==parent and n==path.name for p,n,fd,anchor in authority.files))
+                authority.check(); path.chmod(0o622)
+                with self.assertRaisesRegex(t.Rejected,'^AUTHORITY_CHANGED$'): authority.check()
+                path.chmod(0o600)
+            finally: authority.close()
 
 
 class ContractTests(unittest.TestCase):

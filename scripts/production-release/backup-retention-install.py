@@ -128,8 +128,8 @@ def failure_code(error, stage, *, transport=None, diagnostic=None, snapshot_vali
     return 'IO_FAILURE'
 
 
-def read_original(authority, parent, name, *, stage, transport, limit=256*1024):
-    """Unchanged original read; diagnose a refusal only through its already-held FD."""
+def read_original(authority, parent, name, *, stage, transport, limit=256*1024, result=None, guard=None):
+    """Strict original read; only fixed public leaves may repair its held refusal FD."""
     count = len(authority.fds)
     try:
         return authority.read(parent, name, limit=limit)
@@ -138,6 +138,7 @@ def read_original(authority, parent, name, *, stage, transport, limit=256*1024):
         if (transport is not None and type(error) is transport.Rejected
                 and len(args) == 1 and type(args[0]) is str and args[0] == 'SOURCE_INVALID'
                 and len(authority.fds) == count + 1):
+            reason = None
             try:
                 row = os.fstat(authority.fds[-1])
                 reason = ('SOURCE_TYPE' if not stat.S_ISREG(row.st_mode) else
@@ -145,13 +146,66 @@ def read_original(authority, parent, name, *, stage, transport, limit=256*1024):
                           'SOURCE_LINKS' if row.st_nlink != 1 else
                           'SOURCE_WRITABLE' if stat.S_IMODE(row.st_mode) & 0o022 else
                           'SOURCE_SIZE' if not 0 < row.st_size <= limit else None)
-                if reason is not None:
-                    raise Rejected(stage + '_' + reason) from None
             except Rejected:
                 raise
             except Exception:
                 pass
+            if reason is not None:
+                if reason == 'SOURCE_WRITABLE' and result is not None and guard is not None:
+                    fixed = {'BACKUP_SCRIPT': ('backup-aws-mysql.sh', 256*1024),
+                             'NORMALIZER': ('mysql-dump-restore-normalizer.sed', 256*1024),
+                             'COMPOSE': ('docker-compose.aws-mysql.yml', 1024**2)}
+                    public = (type(stage) is str and type(name) is str and type(limit) is int
+                              and type(parent) is int and fixed.get(stage) == (name, limit)
+                              and (parent == authority.current_fd if stage == 'COMPOSE' else
+                                   any(p == authority.current_fd and n == 'scripts' and fd == parent
+                                       for p, n, fd, unused in authority.directories)))
+                    if public:
+                        return repair_public_leaf(authority, parent, name, stage, limit, result, guard)
+                raise Rejected(stage + '_' + reason) from None
         raise
+
+
+def repair_public_leaf(authority, parent, name, stage, limit, result, guard):
+    """One existing refused FD; no content write, new path, owner or wider permissions."""
+    fd = authority.fds[-1]
+    before = os.fstat(fd)
+    for ok, reason in ((stat.S_ISREG(before.st_mode), 'TYPE'), (before.st_uid == 0, 'OWNER'),
+                       (before.st_nlink == 1, 'LINKS'), (0 < before.st_size <= limit, 'SIZE')):
+        need(ok, stage + '_SOURCE_' + reason)
+    mode = stat.S_IMODE(before.st_mode)
+    code = stage + '_AUTHORITY_CHANGED'
+    need(mode & 0o022, code)
+    anchor = file_identity(before)
+    def verify(expected):
+        need(file_identity(os.fstat(fd)) == expected
+             == file_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)), code)
+    def digest(expected):
+        verify(expected)
+        os.lseek(fd, 0, os.SEEK_SET)
+        size, hashed = 0, hashlib.sha256()
+        while size <= limit:
+            chunk = os.read(fd, min(65536, limit + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk); hashed.update(chunk)
+        need(size == expected[6], code)
+        verify(expected)
+        return hashed.hexdigest()
+    original_sha = digest(anchor)
+    guard()
+    verify(anchor)
+    result['mutationAttempted'] = True
+    os.fchmod(fd, mode & ~0o022)
+    changed = file_identity(os.fstat(fd))
+    need(changed[2] == (stat.S_IFMT(before.st_mode) | (mode & ~0o022))
+         and all(changed[n] == anchor[n] for n in (0, 1, 3, 4, 5, 6, 7)), code)
+    need(digest(changed) == original_sha, code)
+    guard()
+    verify(changed)
+    raw = authority.read(parent, name, limit=limit)
+    need(sha(raw) == original_sha and file_identity(os.fstat(authority.fds[-1])) == changed, code)
+    return raw
 
 
 def current_scripts(authority, transport, result, guard):
@@ -457,8 +511,9 @@ def install(binding, scripts, authority, snapshot_read, *, source_check, clock=t
         need(type(before) is str and HEX.fullmatch(before), 'SERVICES_CHANGED')
         result['servicesBeforeSha256'] = before
         stage = 'CURRENT_SCRIPTS'
-        def scripts_guard():
+        def original_guard():
             nonlocal stage
+            caller_stage = stage
             stage = 'AUTHORITY_RECHECK'
             authority.check()
             stage = 'SOURCE_RECHECK'
@@ -468,16 +523,19 @@ def install(binding, scripts, authority, snapshot_read, *, source_check, clock=t
             remaining()
             stage = 'AUTHORITY_RECHECK'
             authority.check()
-            stage = 'CURRENT_SCRIPTS'
-        original_scripts = current_scripts(authority, transport, result, scripts_guard)
+            stage = caller_stage
+        original_scripts = current_scripts(authority, transport, result, original_guard)
         stage = 'BACKUP_SCRIPT'
-        read_original(authority, original_scripts, 'backup-aws-mysql.sh', stage=stage, transport=transport)
+        read_original(authority, original_scripts, 'backup-aws-mysql.sh', stage=stage, transport=transport,
+                      result=result, guard=original_guard)
         stage = 'NORMALIZER'
-        read_original(authority, original_scripts, 'mysql-dump-restore-normalizer.sed', stage=stage, transport=transport)
+        read_original(authority, original_scripts, 'mysql-dump-restore-normalizer.sed', stage=stage, transport=transport,
+                      result=result, guard=original_guard)
         stage = 'ENV_LIMITS'
         limits = retention_limits(read_original(authority, authority.current_fd, '.env.aws.production', stage=stage, transport=transport))
         stage = 'COMPOSE'
-        read_original(authority, authority.current_fd, 'docker-compose.aws-mysql.yml', stage=stage, transport=transport, limit=1024**2)
+        read_original(authority, authority.current_fd, 'docker-compose.aws-mysql.yml', stage=stage, transport=transport,
+                      limit=1024**2, result=result, guard=original_guard)
         destination = BASE / 'maintenance' / ('mysql-backup-' + binding['maintenanceSourceSha256'][:16])
         entry = destination / 'backup-aws-mysql.sh'
         stage = 'SERVICE_ENTRY'
