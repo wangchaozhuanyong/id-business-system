@@ -669,10 +669,70 @@ class DeclarationFailureProjectionTests(unittest.TestCase):
         cls.online=SimpleNamespace(**S)
 
     def test_closed_enums_equal_captured_existing_fixed_codes(self):
-        expected=m.CODES|self.loader.CODES|self.qualified.DIAGNOSTIC_CODES|self.collector.ERROR_CODES|frozenset(m._SOURCE_FILE_PERMISSION_CODES.values())|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
+        expected=m.CODES|self.loader.CODES|self.qualified.DIAGNOSTIC_CODES|self.collector.ERROR_CODES|frozenset(m._SOURCE_FILE_PERMISSION_CODES.values())|m._FACTS_READER_CODES|m._FACTS_PURE_CODES|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
         self.assertEqual(m.DIAGNOSTIC_CODES,expected)
         self.assertEqual(S['DECLARATION_DIAGNOSTIC_CODES'],expected)
         self.assertEqual(S['DECLARATION_DIAGNOSTIC_STAGES'],m.DIAGNOSTIC_STAGES)
+
+    def facts_capabilities(self):
+        package=m._local_package()
+        external=SimpleNamespace(online=self.online,workspace=SimpleNamespace(**W),
+            inventory=self.inventory,paths={'api-admin-scope.py':HERE.parent/'api-admin-scope.py'},
+            identity=SimpleNamespace(),leaf_pins=package.manifest['externalLeafPins'])
+        with patch.object(m,'_local_package',return_value=package), \
+             patch.object(package,'bind_consumers',return_value=external):
+            return m._capabilities({'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'1','workflowRunAttempt':'1'})
+
+    def test_loaded_facts_exact_classes_capture_all_fourteen_fixed_literals(self):
+        caps=self.facts_capabilities();reader=caps.reader;pure=reader.DERIVE
+        bindings=caps._diagnostic_errors
+        self.assertIn((reader.ReaderRejected,m._FACTS_READER_CODES),bindings)
+        self.assertIn((pure.FactsRejected,m._FACTS_PURE_CODES),bindings)
+        import ast
+        def literals(name):
+            return frozenset(node.value for node in ast.walk(ast.parse((HERE/name).read_bytes()))
+                if isinstance(node,ast.Constant) and type(node.value) is str and node.value.startswith('FACTS_'))
+        self.assertEqual(m._FACTS_READER_CODES,literals('reader.py'))
+        self.assertEqual(m._FACTS_PURE_CODES,literals('pure.py'))
+        self.assertEqual(len(m._FACTS_READER_CODES|m._FACTS_PURE_CODES),14)
+        for cls,codes in ((reader.ReaderRejected,m._FACTS_READER_CODES),(pure.FactsRejected,m._FACTS_PURE_CODES)):
+            for code in codes:
+                with self.subTest(code=code):
+                    self.assertEqual(m._reason(cls(code),'ACQUIRE',bindings),{'stage':'ACQUIRE','code':code})
+
+    def test_loaded_facts_fake_subclass_args_and_undeclared_literals_stay_unknown(self):
+        caps=self.facts_capabilities();bindings=caps._diagnostic_errors
+        class Text(str):pass
+        for cls,codes,other in ((caps.reader.ReaderRejected,m._FACTS_READER_CODES,m._FACTS_PURE_CODES),
+                               (caps.reader.DERIVE.FactsRejected,m._FACTS_PURE_CODES,m._FACTS_READER_CODES)):
+            code=next(iter(codes))
+            fake=type(cls.__name__,(RuntimeError,),{})
+            derived=type('Derived',(cls,),{})
+            for error in (fake(code),derived(code),cls(code,SENTINEL),cls(Text(code)),
+                          cls('FACTS_UNDECLARED'),cls(next(iter(other))),RuntimeError(code)):
+                with self.subTest(errorType=type(error).__name__):
+                    self.assertEqual(m._reason(error,'ACQUIRE',bindings),{'stage':'ACQUIRE','code':'UNKNOWN'})
+                    rejected=m._rejected(error,'ACQUIRE',bindings)
+                    self.assertEqual(m.failure_diagnostic(rejected),{'stage':'ACQUIRE','code':'UNKNOWN'})
+                    self.assertNotIn(SENTINEL,json.dumps(m.failure_diagnostic(rejected)))
+
+    def test_all_facts_fixed_literals_reach_online_and_api_without_extra_fields(self):
+        caps=self.facts_capabilities();driver=S['_declaration_runtime_driver']()
+        function=S['measure_declaration_equivalence']
+        for cls,codes in ((caps.reader.ReaderRejected,m._FACTS_READER_CODES),
+                          (caps.reader.DERIVE.FactsRejected,m._FACTS_PURE_CODES)):
+            for code in codes:
+                with self.subTest(code=code):
+                    rejected=driver._rejected(cls(code),'ACQUIRE',caps._diagnostic_errors)
+                    with patch.dict(function.__globals__,{'_declaration_runtime_driver':lambda:driver}), \
+                         patch.object(driver,'measure_declaration_equivalence',side_effect=rejected):
+                        with self.assertRaises(S['DeclarationDriverError']) as caught:
+                            function(object(),Path('/LOCAL_ONLY'),{},producer={'LOCAL_SYNTHETIC_ONLY':True},purpose='INDEPENDENT_PREFLIGHT')
+                    error,diagnostic=self.api_failure(caught.exception)
+                    self.assertEqual(error.args,('API_ADMIN_PENDING_ONLINE_DRIVER_'+code,))
+                    self.assertEqual(diagnostic['step'],'DECLARATION_ACQUIRE')
+                    self.assertEqual(diagnostic['phase'],'MANIFEST')
+                    self.assertEqual(set(S['declaration_failure_diagnostic'](caught.exception)),{'stage','code'})
 
     def test_qualified_marker_only_from_exact_captured_class_and_closed_getter(self):
         cls=self.qualified.Rejected;error=cls('QUALIFIER_UNAVAILABLE')
