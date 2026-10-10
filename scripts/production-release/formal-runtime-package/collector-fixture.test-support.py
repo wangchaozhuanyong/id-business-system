@@ -188,7 +188,13 @@ class FakeDocker:
             if kind=='container':
                 row=self.actual if target==API_ID else self.created_container
                 if row is None or row['Id']!=target:raise RuntimeError('not found')
-                return json.dumps([row])
+                # Synthetic Moby API 1.44 inspect projection; the stored metadata
+                # and source model remain unchanged, just as the daemon copies them.
+                inspected=copy.deepcopy(row)
+                for endpoint in inspected['NetworkSettings']['Networks'].values():
+                    endpoint['Aliases']=list(dict.fromkeys([*endpoint['Aliases'],
+                        inspected['Id'][:12],inspected['Config']['Hostname']]))
+                return json.dumps([inspected])
             if kind=='volume':
                 for row in [self.source_volume,self.created_volume]:
                     if row is not None and row['Name']==target:return json.dumps([row])

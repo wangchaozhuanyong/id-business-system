@@ -384,6 +384,20 @@ def volume_validate(vol, project, spec, *, reference=False, owner=None, declarat
     check(vol['Labels'] in expected_labels, 'RESOURCE_OWNER_OR_MEMBERS_INVALID')
 
 
+def endpoint_aliases(meta, spec):
+    check(type(meta) is dict and type(meta.get('Name')) is str
+          and type(meta.get('Id')) is str and frozen.HEX.fullmatch(meta['Id'])
+          and type(meta.get('Config')) is dict and type(meta['Config'].get('Hostname')) is str,
+          'ACTUAL_NETWORK_DECLARATION')
+    values = [meta['Name'].lstrip('/'), 'api']
+    if spec['engineApiVersion'] == '1.44':
+        # Moby 6fdf0a6 ContainerInspect API < 1.45 appends the short CID and
+        # hostname to user-defined network aliases, including stopped containers.
+        values.extend((meta['Id'][:12], meta['Config']['Hostname']))
+        return list(dict.fromkeys(values))
+    return values
+
+
 def endpoint_dns_names(meta, aliases):
     # Moby 6fdf0a6 buildEndpointDNSNames + sliceutil.Dedup. The first
     # occurrence determines PTR order; do not sort or omit any DNSNames bytes.
@@ -423,7 +437,7 @@ def actual_endpoints(meta, networks, services, spec):
               and endpoint['GlobalIPv6PrefixLen'] == 0
               and endpoint.get('IPv6Gateway') == '', 'ACTUAL_NETWORK_ADDRESS')
         aliases = endpoint.get('Aliases')
-        check(isinstance(aliases,list) and sorted(aliases) == sorted((meta['Name'].lstrip('/'),'api'))
+        check(type(aliases) is list and aliases == endpoint_aliases(meta,spec)
               and endpoint.get('IPAMConfig') is None and endpoint.get('DriverOpts') is None
               and endpoint.get('Links') is None
               and endpoint.get('DNSNames') == endpoint_dns_names(meta, aliases), 'ACTUAL_NETWORK_DECLARATION')
@@ -489,8 +503,8 @@ def bind_pack(pack, spec, *, reference=False, source=None):
                   and all(endpoint[k] == '' for k in ('Gateway','IPAddress','IPv6Gateway','GlobalIPv6Address','MacAddress'))
                   and type(endpoint['IPPrefixLen']) is int and endpoint['IPPrefixLen'] == 0
                   and type(endpoint['GlobalIPv6PrefixLen']) is int and endpoint['GlobalIPv6PrefixLen'] == 0
-                  and isinstance(endpoint.get('Aliases'), list)
-                  and sorted(endpoint['Aliases']) == sorted((meta['Name'].lstrip('/'), 'api'))
+                  and type(endpoint.get('Aliases')) is list
+                  and endpoint['Aliases'] == endpoint_aliases(meta,spec)
                   and endpoint.get('IPAMConfig') is None and endpoint.get('DriverOpts') is None
                   and endpoint.get('Links') is None and endpoint.get('DNSNames') is None, 'REFERENCE_PENDING_ENDPOINT')
     else:
