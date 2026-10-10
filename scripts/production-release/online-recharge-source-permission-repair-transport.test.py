@@ -45,7 +45,9 @@ def remote_receipt(binding, status='CHANGED'):
     return {'kind': 'ONLINE_SOURCE_PERMISSION_REPAIR_EXECUTION_V1', 'operation': t.OPERATION,
             'producer': binding['producer'], 'origin': copy.deepcopy(t.ORIGIN),
             'coreSha256': binding['coreSha256'], 'helperPinsSha256': binding['helperPinsSha256'],
-            'clientCleanupVerified': True, 'receipt': core_receipt(status)}
+            'clientCleanupVerified': True, 'receipt': core_receipt(status),
+            'snapshotDiagnostic': {'status':'PASSED','stage':'COMPLETE','code':'NONE',
+                                   'currentAnchorCount':7,'retainedServiceCount':0,'rawOutputSuppressed':True}}
 
 
 def invocation(value):
@@ -126,6 +128,12 @@ class NativeSnapshotTests(unittest.TestCase):
                     selected.append(cid)
             return '\n'.join(selected)
         self.assertEqual(args[0], 'inspect')
+        if args[1:3] == ('--format',t.PUBLIC_LABEL_FORMAT):
+            row=self.rows[args[-1]];labels=row['Config']['Labels']
+            return json.dumps({'id':row['Id'],'project':labels.get('com.docker.compose.project'),
+                               'role':labels.get('com.docker.compose.service'),
+                               'directory':labels.get('com.docker.compose.project.working_dir'),
+                               'files':labels.get('com.docker.compose.project.config_files')})
         return json.dumps([self.rows[args[1]]])
 
     def snapshot(self):
@@ -219,18 +227,124 @@ class NativeSnapshotTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): self.driver.run('docker', 'exec', 'a' * 64)
         with self.assertRaises(RuntimeError): self.driver.compose(self.directory, 'up', '-d', 'api')
 
+    def retained(self, keep=('api','admin')):
+        previous=t.BASE/'releases'/'20261008T020705Z-e7c9862d5859'
+        for row in self.rows.values():
+            labels=row['Config']['Labels']
+            if labels['com.docker.compose.service'] not in keep:
+                labels['com.docker.compose.project.working_dir']=str(previous)
+                labels['com.docker.compose.project.config_files']=','.join(str(previous/n) for n in
+                    ('docker-compose.aws-mysql.yml','compose.release.json'))
+
+    def test_actual_old_driver_rejects_mixed_retained_new_keeps_original_snapshot(self):
+        self.retained()
+        raw=subprocess.run(['git','show','c6510771b97189f62163f3cdcf606d63284f7136:scripts/production-release/online-recharge-source-permission-repair-transport.py'],
+                           cwd=ROOT,capture_output=True,check=True,timeout=10).stdout
+        old=t.literal_module(raw,'actual_c651_old_driver',SOURCE/'online-recharge-source-permission-repair-transport.py')
+        old_driver=old.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+        with patch.object(old_driver,'native',side_effect=self.native),self.assertRaises(RuntimeError):old_driver.snapshot(self.directory)
+        self.calls=[]
+        self.driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+        value=self.snapshot()
+        with patch.object(self.driver,'native',side_effect=self.native):original=self.online.snapshot(self.driver,self.directory)
+        self.assertEqual(value,t.sha(t.canonical(original)))
+        self.assertEqual(self.driver.diagnostic.get(),{'status':'PASSED','stage':'COMPLETE','code':'NONE',
+                         'currentAnchorCount':2,'retainedServiceCount':5,'rawOutputSuppressed':True})
+        self.assertIs(self.remote.service_state,self.original_service_state)
+        first_full=next(i for i,args in enumerate(self.calls) if args[0]=='inspect' and len(args)==2)
+        public_before={args[-1] for args in self.calls[:first_full] if args[:2]==('inspect','--format')}
+        self.assertEqual(public_before,set(self.rows))
+        self.assertEqual(set(original),set(t.ROLES))
+        self.assertTrue(all(set(row)==t.SERVICE_FIELDS for row in original.values()))
+
+    def test_no_current_seed_foreign_source_pair_and_project_or_seed_race_fail_before_full_inspect(self):
+        pristine=copy.deepcopy(self.rows)
+        for keep, expected in (((),'ANCHOR_MISSING'),(('api',),'PASSED')):
+            self.rows=copy.deepcopy(pristine);self.retained(keep)
+            self.driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+            if expected=='PASSED':self.snapshot();self.assertEqual(self.driver.diagnostic.get()['currentAnchorCount'],1)
+            else:
+                with self.assertRaises(RuntimeError):self.snapshot()
+                self.assertEqual(self.driver.diagnostic.get()['code'],expected)
+        for field,bad in (('com.docker.compose.project.working_dir','/foreign/release'),
+                          ('com.docker.compose.project.config_files','/foreign/config')):
+            self.rows=copy.deepcopy(pristine);self.retained()
+            row=next(row for row in self.rows.values() if row['Config']['Labels']['com.docker.compose.service']=='mysql')
+            row['Config']['Labels'][field]=bad
+            self.driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+            self.calls=[]
+            with self.assertRaises(RuntimeError):self.snapshot()
+            self.assertEqual(self.driver.diagnostic.get()['code'],'LABELS_INVALID')
+            self.assertFalse(any(args[0]=='inspect' and len(args)==2 for args in self.calls))
+        self.rows=copy.deepcopy(pristine);self.retained();self.driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+        self.snapshot()
+        for row in self.rows.values():row['Config']['Labels']['com.docker.compose.project']='changed-project'
+        with self.assertRaises(RuntimeError):self.snapshot()
+        self.assertEqual(self.driver.diagnostic.get()['code'],'SET_CHANGED')
+        self.rows=copy.deepcopy(pristine);self.retained()
+        self.driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+        def changed_seed(*args,**kwargs):
+            if args[:2]==('container','ls') and args[-1].startswith('label=com.docker.compose.project='):
+                self.retained(keep=('admin',))
+            return self.native(*args,**kwargs)
+        with patch.object(self.driver,'native',side_effect=changed_seed),self.assertRaises(RuntimeError):self.driver.snapshot(self.directory)
+        self.assertEqual(self.driver.diagnostic.get()['code'],'SEED_CHANGED')
+
+    def test_snapshot_diagnostic_native_ids_original_and_first_failure_are_finite(self):
+        cases=[('NATIVE_EXECUTION',SimpleNamespace(returncode=1,stdout=b'',stderr=b'RAW_PRIVATE')),
+               ('NATIVE_OUTPUT',SimpleNamespace(returncode=0,stdout=b'\xff',stderr=b''))]
+        for code,response in cases:
+            driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+            with patch.object(t.subprocess,'run',return_value=response),self.assertRaises(RuntimeError):driver.snapshot(self.directory)
+            value=driver.diagnostic.get();self.assertEqual(value['code'],code);self.assertNotIn('RAW_PRIVATE',json.dumps(value))
+        driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+        with patch.object(driver,'native',return_value='invalid-id'),self.assertRaises(RuntimeError):driver.snapshot(self.directory)
+        self.assertEqual(driver.diagnostic.get()['code'],'IDS_INVALID')
+        self.driver=t.NativeSnapshotDriver(self.directory,Path('/fixture/private-client'),self.online,self.workspace,self.remote)
+        with patch.object(self.online,'snapshot',side_effect=RuntimeError('RAW_PRIVATE')),self.assertRaises(RuntimeError):self.snapshot()
+        first=self.driver.diagnostic.get();self.assertEqual(first['stage'],'ORIGINAL_SNAPSHOT');self.assertEqual(first['code'],'ORIGINAL_SNAPSHOT')
+        self.driver.diagnostic.mark('CURRENT_IDS')
+        with self.assertRaises(RuntimeError):self.driver.diagnostic.fail('IDS_INVALID')
+        self.assertEqual(self.driver.diagnostic.get(),first)
+
+    def test_diagnostic_closed_types_unissued_alias_attrs_and_subclasses_cannot_fake_cause(self):
+        state=t.snapshot_state();state.mark('CURRENT_IDS')
+        with self.assertRaises(RuntimeError) as captured:state.fail('IDS_INVALID')
+        issued=captured.exception
+        self.assertTrue(state.owns(issued));issued.extra='RAW_PRIVATE';self.assertTrue(state.owns(issued))
+        self.assertFalse(state.owns(RuntimeError()))
+        self.assertFalse(state.owns(type('Pretend',(RuntimeError,),{})()))
+        self.assertNotIn('RAW_PRIVATE',json.dumps(state.get()))
+        original=state.get()
+        for key,bad in (('stage','unissued'),('code','private'),('currentAnchorCount',True),
+                        ('retainedServiceCount',8),('rawOutputSuppressed',False),('private','RAW_PRIVATE')):
+            invalid={**original,key:bad}
+            with self.assertRaises(RuntimeError):t.snapshot_validate(invalid)
+        success=remote_receipt({'producer':PRODUCER,'coreSha256':'d'*64,'helperPinsSha256':'e'*64})
+        for invalid in (original,{**success['snapshotDiagnostic'],'currentAnchorCount':0,'retainedServiceCount':7}):
+            changed=copy.deepcopy(success);changed['snapshotDiagnostic']=invalid
+            with self.assertRaises(RuntimeError):t.validate_remote(changed,{'producer':PRODUCER,'coreSha256':'d'*64,'helperPinsSha256':'e'*64})
+
 
 class TransportTests(unittest.TestCase):
     def setUp(self):
         self.binding = {'producer': copy.deepcopy(PRODUCER), 'coreSha256': 'd' * 64, 'helperPinsSha256': 'e' * 64}
 
     def test_single_bound_core_command_preserves_original_twenty_one_carrier(self):
-        data, binding = t.parameters(copy.deepcopy(PRODUCER))
+        producers=({'commit':'c6510771b97189f62163f3cdcf606d63284f7136','sourceTree':'8e0109fb74c20837f2a9c45dbc35abc0f37ef3c1',
+                    'workflowRunId':'9999999999999999999','workflowRunAttempt':'9'},
+                   {'commit':hashlib.sha1(b'SYNTHETIC_FUTURE_COMMIT_NO_AUTHORITY').hexdigest(),
+                    'sourceTree':hashlib.sha1(b'SYNTHETIC_FUTURE_TREE_NO_AUTHORITY').hexdigest(),
+                    'workflowRunId':'8473926501937462851','workflowRunAttempt':'4'})
+        for producer in producers:self.bound_wire(producer)
+
+    def bound_wire(self,producer):
+        data, binding = t.parameters(copy.deepcopy(producer))
         self.assertEqual(len(data['commands']), 4)
         self.assertLess(len(t.canonical(data)), 20480)
         helper = t.readonly_helper()
-        expected = helper.formal_runtime_commands(str(t.BASE / '.staging' / ('api-workspace-verify-' + PRODUCER['commit'])),
-                   PRODUCER['commit'], SOURCE / 'formal-runtime-package', SOURCE)
+        expected = helper.formal_runtime_commands(str(t.BASE / '.staging' / ('api-workspace-verify-' + producer['commit'])),
+                   producer['commit'], SOURCE / 'formal-runtime-package', SOURCE)
         self.assertEqual(data['commands'][2:3], expected)
         self.assertEqual(binding['coreSha256'], t.sha((SOURCE / t.CORE_NAME).read_bytes()))
         bootstrap = ast.parse(shlex.split(data['commands'][-1])[3])
@@ -242,7 +356,19 @@ class TransportTests(unittest.TestCase):
         self.assertLessEqual(len(captured), 65536)
         self.assertIn(t.ORIGIN['receiptSha256'].encode(), captured)
         self.assertIn(t.ORIGIN['commandId'].encode(), captured)
-        self.assertIn(base64.b85encode((SOURCE / t.CORE_NAME).read_bytes()), captured)
+        captured_ast=ast.parse(captured)
+        captured_core=next(ast.literal_eval(n.value) for n in captured_ast.body
+                           if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='core_raw' for x in n.targets))
+        self.assertEqual(captured_core,(SOURCE / t.CORE_NAME).read_bytes())
+        compile(captured,'<actual-captured-wire>','exec')
+        supplied_sha=next(ast.literal_eval(n.comparators[0]) for n in ast.walk(bootstrap)
+                         if isinstance(n,ast.Compare) and isinstance(n.left,ast.Call)
+                         and isinstance(n.left.func,ast.Attribute) and n.left.func.attr=='hexdigest')
+        self.assertEqual(supplied_sha,t.sha(captured))
+        print(json.dumps({'measurement':'SYNTHETIC_ONLY','producer':producer,'parametersBytes':len(t.canonical(data)),
+                          'strictMargin':20479-len(t.canonical(data)),'capturedBytes':len(captured),
+                          'capturedSha256':t.sha(captured),'coreSha256':binding['coreSha256'],
+                          'firstThreeCommandSha256':t.sha('\n'.join(data['commands'][:3]).encode())}))
         self.assertEqual(data['executionTimeout'], ['300'])
 
     def test_duplicate_oversized_untrusted_keys_and_success_semantics_are_closed(self):
