@@ -12,6 +12,7 @@ on:
           - verify_access
           - verify_online_recharge
           - release_online_recharge
+          - repair_online_source_permissions
           - verify_api_admin
           - verify_api_workspace
           - release_api_workspace
@@ -258,6 +259,7 @@ jobs:
       - name: Validate release policy and reviewed seal selection
         env:
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
+          DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
         run: bash scripts/production-release/validate-release-selection.sh
 
       - name: Verify fixed registration runtime approval
@@ -508,6 +510,13 @@ jobs:
           aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
           test "$(aws ssm get-command-invocation --command-id "$command_id" \
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)" = release_access_ok
+
+      - name: Explicitly repair the single baseline Compose source permission
+        if: inputs.operation == 'repair_online_source_permissions'
+        env:
+          CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
+          DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
+        run: python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.py
 
       - name: Verify build-only ECR target
         if: inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
@@ -2252,6 +2261,16 @@ jobs:
         with:
           name: online-recharge-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/online-recharge-*.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save only the explicit source permission repair safe receipt
+        if: always() && inputs.operation == 'repair_online_source_permissions'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: online-source-permission-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/online-source-permission-repair-result.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14

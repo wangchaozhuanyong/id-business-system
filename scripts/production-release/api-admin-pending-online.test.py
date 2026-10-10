@@ -594,20 +594,35 @@ class FinitePublicationChain(unittest.TestCase):
 class BoundedProofTransport(unittest.TestCase):
     def test_only_pending_workspace_proof_uses_large_compressed_envelope(self):
         value = {'pendingOnlineProjection': {'inventory': 'a' * 33059}}
-        encoded = 'gzip:' + base64.b64encode(gzip.compress(json.dumps(value).encode(), mtime=0)).decode()
-        self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), encoded), value)
-        with patch.object(s, 'WORKSPACE', False), self.assertRaises(RuntimeError):
-            s.decode_build_proof(SimpleNamespace(require=need), encoded)
+        for prefix, encode in (('gzip:', base64.b64encode), ('gzip85:', base64.b85encode)):
+            encoded = prefix + encode(gzip.compress(json.dumps(value).encode(), mtime=0)).decode()
+            with self.subTest(prefix=prefix):
+                self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), encoded), value)
+                with patch.object(s, 'WORKSPACE', False), self.assertRaises(RuntimeError):
+                    s.decode_build_proof(SimpleNamespace(require=need), encoded)
         ordinary = base64.b64encode(json.dumps(value).encode()).decode()
         with self.assertRaisesRegex(RuntimeError, 'API_ADMIN_BUILD_PROOF_TOO_LARGE'):
             s.decode_build_proof(SimpleNamespace(require=need), ordinary)
 
     def test_bomb_trailing_stream_and_missing_projection_are_rejected(self):
-        for value, tail in [({'pendingOnlineProjection': {'inventory': 'a' * 65536}}, b''), ({'version': 1}, b''),
-                            ({'pendingOnlineProjection': {}}, b'unsigned-extra-stream')]:
-            encoded = 'gzip:' + base64.b64encode(gzip.compress(json.dumps(value).encode(), mtime=0) + tail).decode()
-            with self.subTest(tail=bool(tail)), self.assertRaises(RuntimeError):
-                s.decode_build_proof(SimpleNamespace(require=need), encoded)
+        for prefix, encode in (('gzip:', base64.b64encode), ('gzip85:', base64.b85encode)):
+            for value, tail in [({'pendingOnlineProjection': {'inventory': 'a' * 65536}}, b''), ({'version': 1}, b''),
+                                ({'pendingOnlineProjection': {}}, b'unsigned-extra-stream')]:
+                encoded = prefix + encode(gzip.compress(json.dumps(value).encode(), mtime=0) + tail).decode()
+                with self.subTest(prefix=prefix, tail=bool(tail)), self.assertRaises(RuntimeError):
+                    s.decode_build_proof(SimpleNamespace(require=need), encoded)
+
+    def test_base85_canonical_invalid_and_shell_argument_boundaries(self):
+        import shlex
+        value = {'pendingOnlineProjection': {'inventory': {str(i): s.hashlib.sha256(str(i).encode()).hexdigest()
+                                                         for i in range(152)}}}
+        encoded = 'gzip85:' + base64.b85encode(gzip.compress(json.dumps(value).encode(), mtime=0)).decode('ascii')
+        self.assertEqual(shlex.split('python3 --api-admin-build-proof ' + shlex.quote(encoded)),
+                         ['python3', '--api-admin-build-proof', encoded])
+        self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), encoded), value)
+        for bad in ('gzip85:', 'gzip85:invalid~', encoded + ' ', encoded[:-1]):
+            with self.subTest(case=bad[:15]), self.assertRaises(Exception):
+                s.decode_build_proof(SimpleNamespace(require=need), bad)
 
     def test_real_dispatch_envelope_binds_unchanged_proof_and_fits_ssm_budget(self):
         value = {'pendingOnlineProjection': {'removedFiles': {('f' + str(i) + '.ts'):
@@ -632,12 +647,29 @@ class BoundedProofTransport(unittest.TestCase):
             encoded_parameters = (Path(temporary) / 'parameters.json').read_bytes()
         self.assertLess(len(encoded_parameters), 65536)
         commands = json.loads(encoded_parameters)['commands']
-        self.assertEqual(sum('sha256sum -c -' in command for command in commands), 8)
-        for name in ('api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
-                     'api-admin-readonly.py'):
-            self.assertTrue(any(name in command for command in commands))
-        argument = next(command for command in commands if '--api-admin-build-proof ' in command).split('--api-admin-build-proof ', 1)[1].split()[0]
-        self.assertTrue(argument.startswith('gzip:'))
+        import shlex
+        import ast
+        self.assertLess(len(encoded_parameters), 20 * 1024)
+        self.assertEqual(sum('sha256sum -c -' in command for command in commands), 0)
+        carrier = next(command for command in commands if command.startswith('python3 -B -c '))
+        bootstrap = ast.parse(shlex.split(carrier)[3])
+        payload = next(node.args[0].value for node in ast.walk(bootstrap)
+                       if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                       and node.func.attr == 'b85decode')
+        program = ast.parse(gzip.decompress(base64.b85decode(payload)).decode())
+        stores = [node for node in ast.walk(program) if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Name) and node.func.id == '_store_files']
+        self.assertEqual(len(stores), 2)
+        controllers, package = [ast.literal_eval(node.args[2]) for node in stores]
+        self.assertEqual(set(controllers), set(t.FORMAL_RUNTIME_CONTROLLERS))
+        self.assertEqual(set(package), set(t.FORMAL_RUNTIME_FILES))
+        for name, digest in controllers.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release' / name).read_bytes()).hexdigest())
+        for name, digest in package.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release/formal-runtime-package' / name).read_bytes()).hexdigest())
+        arguments = shlex.split(next(command for command in commands if '--api-admin-build-proof ' in command))
+        argument = arguments[arguments.index('--api-admin-build-proof') + 1]
+        self.assertTrue(argument.startswith('gzip85:'))
         self.assertEqual(s.decode_build_proof(SimpleNamespace(require=need), argument), value)
 
 
@@ -1087,31 +1119,36 @@ class DeclarationConsumerBinding(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED$'):
                 s.pending_online_declaration_call(controller, 'declaration_equivalence_issuer_binding', {})
 
-    def test_actual_formal_initial_and_remeasure_stay_source_not_measured_before_io(self):
+    @patch('urllib.request.urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE'))
+    def test_reviewed_formal_initial_and_remeasure_still_require_archive_or_runtime(self, archive):
         controller = SimpleNamespace(require=need)
         value = declaration_context()
         producer = {name: value['restoredConfigurationProof']['semantic']['producer'][name]
                     for name in ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')}
-        # Use the real frozen closed generator, not a success-producing fixture.
+        # Capture actual singleton bytes with the real local file owner first.
+        driver = online._declaration_runtime_driver()
+        selected = driver._local_package().load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
         materials = MagicMock(side_effect=AssertionError('unmeasured source I/O'))
-        helper = SimpleNamespace(measure_declaration_equivalence=online.measure_declaration_equivalence,
-            declaration_equivalence_materials=materials,
-            declaration_equivalence_source_binding=online.declaration_equivalence_source_binding)
-        with patch.object(s, 'pending_online_equivalence', return_value=helper):
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
-                s.pending_online_declaration_initial_measure(controller, Path('/unused'), {}, producer=producer)
-            materials.assert_not_called()
-        with self.private_fixture() as (controller, before, output, projection):
-            raw = output.joinpath('api-workspace-preflight-result.json').read_bytes()
-            # Origin validation uses the actual pure module before the shared
-            # measuring helper is selected; neither branch enables publication.
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+        helper = SimpleNamespace(**vars(online))
+        helper.declaration_equivalence_materials = materials
+        # Only entry uid is simulated; captured file ownership was already verified.
+        with patch.object(online, '_declaration_runtime_driver', return_value=driver), \
+                patch('os.geteuid', return_value=0):
+            with patch.object(s, 'pending_online_equivalence', return_value=helper):
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):
+                    s.pending_online_declaration_initial_measure(controller, Path('/unused'), {}, producer=producer)
+                materials.assert_not_called(); archive.assert_called_once()
+            with self.private_fixture() as (controller, before, output, projection), \
+                    patch.object(s, 'pending_online_equivalence', return_value=helper):
+                raw = output.joinpath('api-workspace-preflight-result.json').read_bytes()
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):
+                    s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
+                        producer=producer, origin=value, preflight_raw=raw)
+                self.assert_no_image_reads(controller); self.assertEqual(archive.call_count, 2)
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_CHAIN_CHANGED$'):
                 s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
-                    producer=producer, origin=value, preflight_raw=raw)
-            self.assert_no_image_reads(controller)
-        with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_CHAIN_CHANGED$'):
-            s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
-                producer=producer, origin=declaration_context(2), preflight_raw=b'{}')
+                    producer=producer, origin=declaration_context(2), preflight_raw=b'{}')
 
     def test_actual_prepare_and_build_bind_exact_private_f_for_a_and_b(self):
         for stage in (1, 2):
@@ -1353,13 +1390,21 @@ class DeclarationEntryFoundation(unittest.TestCase):
             stack.enter_context(patch.object(s, 'snapshot', return_value=value['services']))
             yield controller, directory, value, module, recovery
 
-    def test_known_initial_mismatch_reaches_actual_closed_generator_before_any_create(self):
-        with self.initial_fixture() as (controller, directory, value, module, recovery):
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+    @patch('urllib.request.urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE'))
+    def test_known_initial_mismatch_with_source1_still_cannot_create(self, archive):
+        driver = online._declaration_runtime_driver()
+        selected = driver._local_package().load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+        with self.initial_fixture() as (controller, directory, value, module, recovery), \
+                patch.object(s, 'pending_online_equivalence', return_value=module), \
+                patch.object(online, '_declaration_runtime_driver', return_value=driver), \
+                patch('os.geteuid', return_value=0):
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):
                 s.pending_online_first(controller, directory)
             module.verify_permission_seed.assert_called_once()
             module.require_fresh_resources.assert_called_once()
             module.jobs_idle.assert_called_once_with(controller, directory, migrated=True)
+            archive.assert_called_once()
             self.assertEqual(list(directory.iterdir()), [directory / 'release-manifest.json'])
 
     def test_unknown_error_and_nonpreflight_entry_cannot_select_measurement(self):
@@ -1371,8 +1416,13 @@ class DeclarationEntryFoundation(unittest.TestCase):
                 measure.assert_not_called()
 
     def test_baseline_reports_only_the_exact_fixed_source_not_measured_literal(self):
-        with self.initial_fixture() as (controller, directory, value, module, recovery):
-            with self.assertRaisesRegex(s.WorkspaceBaselineError, '^API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED$') as rejected:
+        # Bounded error translation remains a consumer-only contract, not table0 admission.
+        selected = online._declaration_runtime_driver()._local_package().load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+        with self.initial_fixture() as (controller, directory, value, module, recovery), \
+                patch.object(s, 'pending_online_declaration_initial_measure',
+                    side_effect=RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')):
+            with self.assertRaisesRegex(s.WorkspaceBaselineError, '^' + 'API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED' + '$') as rejected:
                 s.baseline(controller, online.BASELINE_COMMIT)
             self.assertEqual(rejected.exception.workspaceDiagnostic['phase'], 'MANIFEST')
             self.assertTrue(rejected.exception.workspaceDiagnostic['rawOutputSuppressed'])
@@ -1402,6 +1452,487 @@ class DeclarationEntryFoundation(unittest.TestCase):
                     other = self.controller(entry); other._apiWorkspaceDeclarationPreflightSha256 = '0' * 64
                     with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED$'):
                         s.pending_online_declaration_stage_preflight(other)
+
+
+class DeclarationPublicationConsumers(unittest.TestCase):
+    """Synthetic publication files; real Git archive/wire and pure bindings.
+
+    Mocked acquired byte capabilities never claim production measurement or AWS
+    authority. The real closed generator and normal v1 suites remain separate.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.pure_module = load('consumer_pure_fixture', 'online-recharge-scope.test.py')
+        cls.pure_module.DeclarationEquivalencePureTests.setUpClass()
+        cls.pure = cls.pure_module.DeclarationEquivalencePureTests()
+        cls.output = ROOT / '.runtime/online-recharge-release-20261009/build/declaration-consumer-implementation'
+        cls.output.mkdir(parents=True, exist_ok=True)
+        cls.wire = load('consumer_wire', 'api-admin-pending-receipt-wire.py')
+
+    @contextmanager
+    def fixture(self, entry='READBACK'):
+        f = self.pure.fixture(); value = f['origin']; producer = f['producer']
+        metadata = {name: producer[name] for name in ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')}
+        value['baselineRelease'] = '/opt/id-business-v2/releases/20261009T124501Z-' + online.BASELINE_COMMIT[:12]
+        value['restoredOrigin']['source'] = '/opt/id-business-v2/releases/20261009T142956Z-' + online.RESTORED_COMMIT[:12]
+        before = json.loads(f['preflight_raw'])
+        before.update(pendingOnlineMigrationOrigin=value, onlinePublished=False, migrationPerformed=False,
+                      pendingOnlineEndedFailures=s.pending_online_ended_failures(value))
+        raw_f = self.pure.raw(before); second = f['second']
+        second['measurement']['priorIndependentPreflightBytesSha256'] = hashlib.sha256(raw_f).hexdigest()
+        second['measurement']['priorProofSha256'] = s.fingerprint(value['restoredConfigurationProof'])
+        seal = online.declaration_equivalence_pair_seal(SimpleNamespace(require=need), value['restoredConfigurationProof'], second, raw_f)
+        marker = {**s.pending_online_marker(value), 'configurationEquivalenceSeal': seal}
+        with tempfile.TemporaryDirectory(dir=self.output) as temporary, ExitStack() as stack:
+            base = Path(temporary).resolve(); releases = base / 'releases'; releases.mkdir(mode=0o700)
+            original = releases / Path(value['baselineRelease']).name; original.mkdir(mode=0o700)
+            directory = releases / ('20261010T010000Z-' + producer['commit'][:12]); directory.mkdir(mode=0o700)
+            for folder in (original, directory):
+                for name in (*s.CONFIG_FILES, 'compose.release.json'):
+                    path = folder / name; path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(('LOCAL_SYNTHETIC_PUBLIC:' + name).encode()); path.chmod(0o600)
+            (original / 'release-manifest.json').write_bytes(f['historical_files']['workspaceManifestBytesSha256'])
+            (base / 'current').symlink_to(directory)
+            def mapped(item):
+                path = Path(item)
+                return releases / path.name if str(path).startswith('/opt/id-business-v2/releases/') else path
+            stack.enter_context(patch.object(s, 'Path', side_effect=mapped))
+            configuration_before = s.configuration_hashes(original); configuration_after = s.configuration_hashes(directory)
+            proof = workspace_build_proof(value); proof.update(version=2, commit=producer['commit'], sourceTree=producer['sourceTree'],
+                pendingOnlinePreflightSha256=hashlib.sha256(raw_f).hexdigest(),
+                declarationEquivalenceSeal={name: seal[name] for name in ('kind', 'version', 'preflightProofSha256', 'semanticSha256')})
+            after = json.loads(f['record_raw'])['after']
+            for name, row in proof['images'].items():
+                row['reference'] = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + producer['commit'] + '-' + producer['workflowRunId'] + '-' + producer['workflowRunAttempt'] + '-' + name
+                row['imageId'] = after[name]['image']; after[name]['reference'] = row['reference']
+            record = {'before': value['services'], 'after': after,
+                'baselineEvidence': {'pendingOnlineMigrationOrigin': value},
+                'buildProofSha256': s.fingerprint(proof), 'configurationBefore': configuration_before,
+                'configurationAfter': configuration_after, 'pendingOnlineMigrationOrigin': value,
+                'pendingOnlineConfigurationMeasurement': second}
+            tag = 'github-actions-' + producer['workflowRunId'] + '-' + producer['workflowRunAttempt']
+            manifest = {'commit': producer['commit'], 'sourceTree': producer['sourceTree'],
+                'previousCommit': online.BASELINE_COMMIT, 'previousRelease': value['baselineRelease'],
+                'previousManifestSha256': value['baselineManifestSha256'], 'deploymentRun': tag, 'imageBuildRun': tag,
+                'servicesUpdated': ['api', 'admin'], 'migrationApplied': False, 'newMigrations': [],
+                'images': {name: {'reference': row['reference'], 'digest': row['imageId'], 'sourceCommit': producer['commit']}
+                           for name, row in proof['images'].items()},
+                'pendingOnlineMigration': marker, 'apiWorkspacePublication': {'pendingOnlineMigration': marker}}
+            for name, data in ((s.STATE_FILE, record), (s.PROOF_FILE, proof), ('release-manifest.json', manifest)):
+                path = directory / name; path.write_bytes(self.pure.raw(data)); path.chmod(0o600)
+            controller = SimpleNamespace(require=need, BASE=base, sys=SimpleNamespace(argv=['remote.py',
+                {'READBACK': '--api-workspace-readback', 'STAGE': '--api-workspace-only', 'PREFLIGHT': '--api-workspace-preflight'}[entry]]),
+                _apiWorkspaceDeclarationEntry=entry, _apiWorkspaceDeclarationProducer=copy.deepcopy(metadata),
+                _apiWorkspaceDeclarationPreflightSha256=hashlib.sha256(raw_f).hexdigest(),
+                _apiWorkspaceDeclarationDeploymentMeasurement=second, _apiWorkspaceDeclarationDeploymentSeal=seal,
+                run=MagicMock(side_effect=AssertionError('RETIRED_OR_UNPLANNED_RUNTIME_READ')))
+            materials = {name: f[name] for name in ('producer', 'archive_bytes', 'historical_files')}
+            acquired = SimpleNamespace(**vars(online))
+            acquired.declaration_equivalence_materials = MagicMock(return_value=materials)
+            acquired.declaration_equivalence_preflight_bytes = MagicMock(return_value=raw_f)
+            acquired.declaration_equivalence_saved_invocation = MagicMock(side_effect=RuntimeError('LOCAL_SYNTHETIC_Q_MISSING'))
+            acquired.verify_permission_seed = MagicMock(); acquired.require_fresh_resources = MagicMock()
+            recovery = {'state': value['migrationState'], 'marker': value['recoveryMarker'],
+                'source': base / 'synthetic-first-failure', 'restored': value['restoredOrigin']}
+            stack.enter_context(patch.object(s, 'pending_online_equivalence', return_value=acquired))
+            stack.enter_context(patch.object(s, 'pending_online_recovery', return_value=(acquired, recovery)))
+            stack.enter_context(patch.object(s, 'pending_online_migrations'))
+            stack.enter_context(patch.object(s, 'pending_projection', return_value=SimpleNamespace(validate_record=MagicMock())))
+            stack.enter_context(patch.object(s, 'snapshot', return_value=after))
+            yield SimpleNamespace(d=controller, context=value, original=original, directory=directory,
+                proof=proof, record=record, manifest=manifest, preflight=raw_f, second=second, seal=seal,
+                module=acquired, recovery=recovery, materials=materials, after=after)
+
+    def test_stage_record_persists_only_actual_p2_and_exact_transported_pair(self):
+        with self.fixture('STAGE') as f:
+            record = copy.deepcopy(f.record); record.pop('pendingOnlineConfigurationMeasurement')
+            marker = s.pending_online_declaration_stage_record(f.d, f.context, record, f.proof)
+            self.assertEqual(record['pendingOnlineConfigurationMeasurement'], f.second)
+            self.assertEqual(marker, f.manifest['pendingOnlineMigration'])
+            self.assertIsNot(record['pendingOnlineConfigurationMeasurement'], f.second)
+        for change in ('missing-p2', 'seal', 'proof-f', 'proof-p', 'before', 'source-role', 'phase'):
+            with self.subTest(change=change), self.fixture('STAGE') as f:
+                if change == 'missing-p2': del f.d._apiWorkspaceDeclarationDeploymentMeasurement
+                elif change == 'seal': f.d._apiWorkspaceDeclarationDeploymentSeal = {'trusted': True}
+                elif change == 'proof-f': f.proof['pendingOnlinePreflightSha256'] = '0' * 64
+                elif change == 'proof-p': f.proof['declarationEquivalenceSeal']['preflightProofSha256'] = '0' * 64
+                elif change == 'before': f.record['before'] = {}
+                elif change == 'source-role': f.d._apiWorkspaceDeclarationProducer['workflowRunId'] = '9'
+                else: f.d._apiWorkspaceDeclarationEntry = 'READBACK'
+                f.record.pop('pendingOnlineConfigurationMeasurement')
+                with self.assertRaises(RuntimeError): s.pending_online_declaration_stage_record(f.d, f.context, f.record, f.proof)
+                self.assertNotIn('pendingOnlineConfigurationMeasurement', f.record)
+
+    def test_actual_private_artifacts_bind_full_git_history_and_publication_files(self):
+        with self.fixture() as f:
+            _reader, material, publication, marker, record = s.pending_online_declaration_files(f.d,
+                f.directory, f.context, f.recovery, phase='COLD')
+            self.assertEqual(publication['afterServices'], f.after)
+            self.assertEqual(marker, f.manifest['pendingOnlineMigration'])
+            self.assertEqual(publication['recordBytesSha256'], hashlib.sha256((f.directory / s.STATE_FILE).read_bytes()).hexdigest())
+            f.d.run.assert_not_called()
+        for field in ('state', 'seal', 'tag', 'image', 'mode', 'source-history', 'source-archive'):
+            with self.subTest(field=field), self.fixture() as f:
+                if field == 'state': f.record['pendingOnlineConfigurationMeasurement']['measurement']['priorProofSha256'] = '0' * 64
+                elif field == 'seal': f.manifest['pendingOnlineMigration']['configurationEquivalenceSeal'] = {}
+                elif field == 'tag': f.manifest['deploymentRun'] = 'github-actions-9-9'
+                elif field == 'image': f.manifest['images']['api']['digest'] = 'sha256:' + '0' * 64
+                elif field == 'mode': (f.directory / s.STATE_FILE).chmod(0o666)
+                elif field == 'source-history': f.materials['historical_files']['workspaceRecordBytesSha256'] += b'\n'
+                else: f.materials['archive_bytes'] = b'LOCAL_SYNTHETIC_FORGED_ARCHIVE'
+                for name, data in ((s.STATE_FILE, f.record), ('release-manifest.json', f.manifest)):
+                    (f.directory / name).write_bytes(self.pure.raw(data))
+                with self.assertRaises(Exception): s.pending_online_declaration_files(f.d, f.directory, f.context, f.recovery, phase='COLD')
+
+    def test_only_fixed_independent_readback_issues_after_live_measurement(self):
+        with self.fixture() as f:
+            s.pending_online_guard(f.d, f.directory, f.context)
+            issued = s.pending_online_declaration_readback(f.d, f.directory, f.context, f.after)
+            self.assertEqual(issued['recordBytesSha256'], hashlib.sha256((f.directory / s.STATE_FILE).read_bytes()).hexdigest())
+            f.module.declaration_equivalence_saved_invocation.assert_not_called()
+        for change in ('stage', 'producer', 'live', 'configuration', 'current'):
+            with self.subTest(change=change), self.fixture() as f:
+                if change == 'stage': f.d._apiWorkspaceDeclarationEntry = 'STAGE'
+                elif change == 'producer': f.d._apiWorkspaceDeclarationProducer['workflowRunId'] = '9'
+                elif change == 'live': f.after['api']['containerId'] = '0' * 64
+                elif change == 'configuration': (f.directory / 'compose.release.json').write_bytes(b'LOCAL_SYNTHETIC_CHANGED')
+                else: (f.d.BASE / 'current').unlink(); (f.d.BASE / 'current').symlink_to(f.original)
+                with self.assertRaises(Exception): s.pending_online_declaration_readback(f.d, f.directory, f.context, f.after)
+
+    @contextmanager
+    def complete_readback(self):
+        """Real readback/preservation/guards; ordinary runtime callbacks synthetic."""
+        with self.fixture() as f, ExitStack() as stack:
+            for directory in (f.original, f.directory):
+                (directory / '.env.aws.production').write_bytes(b'LOCAL_SYNTHETIC_PUBLIC=readback\n')
+                (directory / 'compose.release.json').write_bytes(self.pure.raw({'services': {
+                    name: {'image': 'synthetic-' + name, 'pull_policy': 'never'} for name in f.after}}))
+            f.record.update(environmentSha256=hashlib.sha256((f.directory / '.env.aws.production').read_bytes()).hexdigest(),
+                configurationBefore=s.configuration_hashes(f.original),
+                configurationAfter=s.configuration_hashes(f.directory),
+                workspaceVolumeAfter={'fixture': 'LOCAL_SYNTHETIC_VOLUME'},
+                workspaceBackup={'fixture': 'LOCAL_SYNTHETIC_BACKUP'})
+            audit = {'ok': True, 'checkCount': 49, 'violationCount': 0,
+                     'checks': [{'code': 'LOCAL_' + str(i), 'count': 0} for i in range(49)]}
+            for name in ('before-audit.json', 'after-audit.json'):
+                (f.directory / name).write_bytes(self.pure.raw(audit))
+            receipt = s.audit_receipt(f.d, f.directory / 'before-audit.json')
+            f.manifest.update(dataAuditBefore=receipt, dataAuditAfter=receipt)
+            f.manifest['apiWorkspacePublication']['version'] = 4
+            for name, value in ((s.STATE_FILE, f.record), ('release-manifest.json', f.manifest)):
+                (f.directory / name).write_bytes(self.pure.raw(value))
+            evidence = {'environmentSha256': f.record['environmentSha256'],
+                        'pendingOnlineMigrationOrigin': f.context}
+            f.d._pendingOnlineMigrationOrigin = f.context
+            f.d.migration_plan = MagicMock(return_value=[])
+            # Baseline/runtime callbacks are explicitly synthetic; no Docker or
+            # production authority is supplied by this integration fixture.
+            stack.enter_context(patch.object(s, 'baseline', return_value=(f.directory, f.manifest, f.after, evidence)))
+            stack.enter_context(patch.object(s, 'pending_online_migrations', return_value=online.MIGRATION_FILE))
+            stack.enter_context(patch.object(s, 'workspace_volume', return_value=f.record['workspaceVolumeAfter']))
+            stack.enter_context(patch.object(s, 'workspace_configuration', return_value=f.proof['configuration']))
+            stack.enter_context(patch.object(s, 'workspace_health'))
+            stack.enter_context(patch.object(s, 'workspace_public_origin', return_value='https://local.example.test'))
+            stack.enter_context(patch.object(s, 'workspace_backup_receipt', return_value=f.record['workspaceBackup']))
+            stack.enter_context(patch.object(s, 'verify_running'))
+            f.preserved = stack.enter_context(patch.object(s, 'require_preserved', wraps=s.require_preserved))
+            f.guard = stack.enter_context(patch.object(s, 'pending_online_guard', wraps=s.pending_online_guard))
+            f.issuer = stack.enter_context(patch.object(s, 'pending_online_declaration_readback', wraps=s.pending_online_declaration_readback))
+            yield f
+
+    def test_complete_readback_traverses_real_predecessor_guard_before_current_issuer(self):
+        with self.complete_readback() as f:
+            result = s.readback(f.d, f.proof['commit'])
+            self.assertEqual(result['status'], 'API_ADMIN_WORKSPACE_VERIFIED')
+            self.assertEqual(result['declarationEquivalencePublication']['recordBytesSha256'],
+                             hashlib.sha256((f.directory / s.STATE_FILE).read_bytes()).hexdigest())
+            f.preserved.assert_called_once_with(f.d, f.original, f.directory, f.record['before'],
+                                               (f.directory / '.env.aws.production').read_bytes())
+            self.assertEqual([call.args[1] for call in f.guard.call_args_list], [f.original, f.directory])
+            f.issuer.assert_called_once_with(f.d, f.directory, f.context, f.after)
+            f.module.declaration_equivalence_saved_invocation.assert_not_called()
+            f.d.run.assert_not_called()
+
+    def test_complete_readback_cannot_issue_on_old_pointer_wrong_producer_or_failed_audit(self):
+        for change in ('old-pointer', 'wrong-producer', 'normal-audit', 'live-identity'):
+            with self.subTest(change=change), self.complete_readback() as f:
+                if change == 'old-pointer':
+                    (f.d.BASE / 'current').unlink(); (f.d.BASE / 'current').symlink_to(f.original)
+                elif change == 'wrong-producer': f.d._apiWorkspaceDeclarationProducer['workflowRunId'] = '9'
+                elif change == 'normal-audit':
+                    (f.directory / 'after-audit.json').write_bytes(self.pure.raw({'ok': False}))
+                else: f.after['api']['containerId'] = '0' * 64
+                with self.assertRaises(RuntimeError): s.readback(f.d, f.proof['commit'])
+                f.issuer.assert_not_called()
+                f.module.declaration_equivalence_saved_invocation.assert_not_called()
+                f.d.run.assert_not_called()
+        with self.complete_readback() as f:
+            s.pending_online_guard(f.d, f.original, f.context)
+            f.issuer.assert_not_called()
+            with self.assertRaises(RuntimeError):
+                s.pending_online_declaration_readback(f.d, f.original, f.context, f.after)
+
+    def test_later_cold_requires_real_q_and_archived_wire_without_retired_inspect(self):
+        with self.fixture('PREFLIGHT') as f:
+            f.d._apiWorkspaceDeclarationProducer['workflowRunId'] = '9'
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED$'):
+                s.pending_online_guard(f.d, f.directory, f.context)
+            _reader, _material, publication, _marker, _record = s.pending_online_declaration_files(f.d, f.directory, f.context, f.recovery, phase='COLD')
+            issued = online.declaration_equivalence_issuer_binding(f.d, publication, live_services=f.after,
+                live_configuration=s.configuration_hashes(f.directory), execution_producer=f.materials['producer'])
+            command = '00000000-0000-0000-0000-000000000002'
+            raw = self.pure.raw({'CommandId': command, 'Status': 'Success', 'ResponseCode': 0,
+                'StandardOutputContent': self.wire.receipt_output({'status': 'API_ADMIN_WORKSPACE_VERIFIED',
+                    'pendingOnlineMigrationOrigin': f.context, 'declarationEquivalencePublication': issued}, scope='API_ADMIN_WORKSPACE')})
+            f.module.declaration_equivalence_saved_invocation.side_effect = None
+            f.module.declaration_equivalence_saved_invocation.return_value = {'raw_bytes': raw, 'command_id': command}
+            self.assertEqual(s.pending_online_guard(f.d, f.directory, f.context), f.recovery)
+            f.d.run.assert_not_called()
+            f.module.declaration_equivalence_saved_invocation.return_value['raw_bytes'] = raw.replace(b'Success', b'Failed')
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED$'):
+                s.pending_online_guard(f.d, f.directory, f.context)
+
+    def test_v2_prior_publication_remains_closed_without_claiming_b_or_online_support(self):
+        with self.fixture() as f:
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED$'):
+                s.pending_online_guard(f.d, f.directory, declaration_context(2))
+            f.module.declaration_equivalence_materials.assert_not_called()
+
+
+class DeclarationSuccessorConsumers(unittest.TestCase):
+    """Full synthetic consumer path; real Git/wire, no AWS or Docker authority."""
+    fixture = DeclarationPublicationConsumers.fixture
+    complete_readback = DeclarationPublicationConsumers.complete_readback
+
+    @classmethod
+    def setUpClass(cls):
+        DeclarationPublicationConsumers.setUpClass()
+        cls.pure = DeclarationPublicationConsumers.pure
+        cls.wire = DeclarationPublicationConsumers.wire
+        cls.output = ROOT / '.runtime/online-recharge-release-20261009/build/declaration-successor-consumer-implementation'
+        cls.output.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def successor(self):
+        with self.complete_readback() as a, ExitStack() as stack:
+            actual_a_receipt = s.readback(a.d, a.proof['commit'])
+            metadata_a = copy.deepcopy(a.d._apiWorkspaceDeclarationProducer)
+            producer_b = copy.deepcopy(a.materials['producer']); producer_b['workflowRunId'] = '70000000002'
+            metadata_b = {n: producer_b[n] for n in metadata_a}
+            command_a = '00000000-0000-0000-0000-000000000002'
+            qa = {'raw_bytes': self.pure.raw({'CommandId': command_a, 'Status': 'Success', 'ResponseCode': 0,
+                'StandardOutputContent': self.wire.receipt_output(actual_a_receipt, scope='API_ADMIN_WORKSPACE')}), 'command_id': command_a}
+            saved = {'a': qa, 'b': None}
+            def invocation(_d, *, producer):
+                if producer == metadata_a: return saved['a']
+                if producer == metadata_b and saved['b'] is not None: return saved['b']
+                raise RuntimeError('LOCAL_SYNTHETIC_Q_MISSING')
+            a.module.declaration_equivalence_saved_invocation.side_effect = invocation
+            a.d._apiWorkspaceDeclarationEntry = 'PREFLIGHT'; a.d.sys.argv = ['remote.py', '--api-workspace-preflight']
+            a.d._apiWorkspaceDeclarationProducer = metadata_b
+            s.pending_online_guard(a.d, a.directory, a.context, all_services=True)
+            # Only a logical public path is substituted; all artifact bytes are
+            # the owned local A fixture. This never writes to /opt.
+            class LogicalRelease:
+                def __str__(self): return '/opt/id-business-v2/releases/' + a.directory.name
+                def __truediv__(self, name): return a.directory / name
+            origin = s.pending_online_successor(a.d, a.context, LogicalRelease(), a.manifest,
+                (a.directory / 'release-manifest.json').read_bytes(), a.proof, a.after)
+            before = {'mode': 'preflight', 'commandId': '00000000-0000-0000-0000-000000000003',
+                'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': a.proof['commit'],
+                'releaseCandidateCommit': producer_b['commit'], 'workflowRunId': producer_b['workflowRunId'],
+                'workflowRunAttempt': producer_b['workflowRunAttempt'], 'services': a.after,
+                'pendingOnlineMigrationOrigin': origin, 'pendingOnlineEndedFailures': s.pending_online_ended_failures(origin),
+                'onlinePublished': False, 'migrationPerformed': False}
+            preflight = self.pure.raw(before)
+            def materials(_d, _original, _recovery, *, producer, phase):
+                if producer == metadata_a: return a.materials
+                if producer == metadata_b: return {**a.materials, 'producer': producer_b}
+                raise RuntimeError('LOCAL_SYNTHETIC_PRODUCER_CHANGED')
+            def get_preflight(_d, *, producer, expected_sha):
+                value = a.preflight if producer == metadata_a else preflight if producer == metadata_b else None
+                if value is None or hashlib.sha256(value).hexdigest() != expected_sha:
+                    raise RuntimeError('LOCAL_SYNTHETIC_F_CHANGED')
+                return value
+            a.module.declaration_equivalence_materials.side_effect = materials
+            a.module.declaration_equivalence_preflight_bytes.side_effect = get_preflight
+            del a.d._apiWorkspaceDeclarationDeploymentMeasurement
+            del a.d._apiWorkspaceDeclarationDeploymentSeal
+            a.d._apiWorkspaceDeclarationPreflightSha256 = hashlib.sha256(preflight).hexdigest()
+            a.d._pendingOnlineMigrationOrigin = origin
+            a.d._apiWorkspaceDeclarationEntry = 'STAGE'; a.d.sys.argv = ['remote.py', '--api-workspace-only']
+            directory = a.d.BASE / 'releases' / ('20261010T020000Z-' + producer_b['commit'][:12]); directory.mkdir(mode=0o700)
+            for name in (*s.CONFIG_FILES, 'compose.release.json', '.env.aws.production'):
+                destination = directory / name; destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((a.directory / name).read_bytes()); destination.chmod(0o600)
+            after = copy.deepcopy(a.after); proof = copy.deepcopy(a.proof)
+            proof.update(pendingOnlineOriginSha256=s.fingerprint(origin), pendingOnlinePreflightSha256=hashlib.sha256(preflight).hexdigest())
+            for name in ('api', 'admin'):
+                after[name]['containerId'] = hashlib.sha256(('SYNTHETIC_B:' + name).encode()).hexdigest()
+                after[name]['image'] = 'sha256:' + hashlib.sha256(('SYNTHETIC_B_IMAGE:' + name).encode()).hexdigest()
+                after[name]['reference'] = '123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + producer_b['commit'] + '-70000000002-1-' + name
+                proof['images'][name].update(reference=after[name]['reference'], imageId=after[name]['image'])
+            record = copy.deepcopy(a.record); record.pop('pendingOnlineConfigurationMeasurement')
+            record.update(before=a.after, after=after, pendingOnlineMigrationOrigin=origin,
+                baselineEvidence={'pendingOnlineMigrationOrigin': origin}, buildProofSha256=s.fingerprint(proof),
+                configurationBefore=s.configuration_hashes(a.directory), configurationAfter=s.configuration_hashes(directory))
+            s.pending_online_guard(a.d, a.directory, origin, all_services=True)
+            marker = s.pending_online_declaration_stage_record(a.d, origin, record, proof)
+            manifest = copy.deepcopy(a.manifest)
+            manifest.update(previousCommit=a.proof['commit'], previousRelease=origin['priorPublications'][0]['release'],
+                previousManifestSha256=origin['priorPublications'][0]['manifestSha256'],
+                deploymentRun='github-actions-70000000002-1', imageBuildRun='github-actions-70000000002-1',
+                pendingOnlineMigration=marker,
+                images={name: {'reference': row['reference'], 'digest': row['imageId'], 'sourceCommit': producer_b['commit']}
+                        for name, row in proof['images'].items()})
+            manifest['apiWorkspacePublication']['pendingOnlineMigration'] = marker
+            for name, value in ((s.STATE_FILE, record), (s.PROOF_FILE, proof), ('release-manifest.json', manifest)):
+                (directory / name).write_bytes(self.pure.raw(value)); (directory / name).chmod(0o600)
+            for name in ('before-audit.json', 'after-audit.json'):
+                (directory / name).write_bytes((a.directory / name).read_bytes())
+            live = stack.enter_context(patch.object(s, 'snapshot', return_value=after))
+            # Execute the real preservation guard with B's switched runtime.
+            s.require_preserved(a.d, a.directory, directory, record['before'], (directory / '.env.aws.production').read_bytes())
+            (a.d.BASE / 'current').unlink(); (a.d.BASE / 'current').symlink_to(directory)
+            evidence = {'environmentSha256': record['environmentSha256'], 'pendingOnlineMigrationOrigin': origin}
+            baseline = stack.enter_context(patch.object(s, 'baseline', return_value=(directory, manifest, after, evidence)))
+            a.issuer.reset_mock(); a.guard.reset_mock(); a.preserved.reset_mock()
+            yield SimpleNamespace(a=a, d=a.d, context=origin, directory=directory, producer=producer_b, proof=proof,
+                record=record, manifest=manifest, preflight=preflight, after=after, saved=saved, live=live, baseline=baseline)
+
+    def test_complete_b_preflight_stage_readback_and_cold_require_separate_b_q(self):
+        with self.successor() as b:
+            stage_result = s.readback(b.d, b.proof['commit'])
+            self.assertNotIn('declarationEquivalencePublication', stage_result)
+            self.assertNotIn('declarationEquivalenceSuccessorPublication', stage_result)
+            b.a.issuer.assert_not_called()
+            self.assertNotIn('pendingOnlineConfigurationMeasurement', b.record)
+            b.d._apiWorkspaceDeclarationEntry = 'READBACK'; b.d.sys.argv = ['remote.py', '--api-workspace-readback']
+            result = s.readback(b.d, b.proof['commit'])
+            self.assertEqual(result['declarationEquivalenceSuccessorPublication']['kind'], online.DECLARATION_SUCCESSOR_KIND)
+            self.assertNotIn('declarationEquivalencePublication', result)
+            self.assertEqual([call.args[1] for call in b.a.guard.call_args_list],
+                             [b.a.directory, b.directory, b.a.directory, b.directory])
+            b.d._apiWorkspaceDeclarationEntry = 'PREFLIGHT'; b.d.sys.argv = ['remote.py', '--api-workspace-preflight']
+            b.d._apiWorkspaceDeclarationProducer = {**b.d._apiWorkspaceDeclarationProducer, 'workflowRunId': '9'}
+            with self.assertRaises(RuntimeError): s.pending_online_guard(b.d, b.directory, b.context)
+            command = '00000000-0000-0000-0000-000000000004'
+            b.saved['b'] = {'command_id': command, 'raw_bytes': self.pure.raw({'CommandId': command, 'Status': 'Success', 'ResponseCode': 0,
+                'StandardOutputContent': self.wire.receipt_output(result, scope='API_ADMIN_WORKSPACE')})}
+            s.pending_online_guard(b.d, b.directory, b.context)
+            b.d.run.assert_not_called()
+            with self.assertRaises(RuntimeError): s.pending_online_successor(b.d, b.context, b.directory, b.manifest,
+                (b.directory / 'release-manifest.json').read_bytes(), b.proof, b.after)
+
+    def test_b_rejects_missing_a_q_repeated_f_cross_source_stale_state_config_and_p2_b(self):
+        for change in ('missing-a-q', 'f-a', 'producer', 'stale-a', 'live-five', 'configuration', 'p2-b', 'prior', 'audit'):
+            with self.subTest(change=change), self.successor() as b:
+                b.d._apiWorkspaceDeclarationEntry = 'READBACK'; b.d.sys.argv = ['remote.py', '--api-workspace-readback']
+                if change == 'missing-a-q': b.saved['a'] = None
+                elif change == 'f-a':
+                    b.proof['pendingOnlinePreflightSha256'] = hashlib.sha256(b.a.preflight).hexdigest()
+                    (b.directory / s.PROOF_FILE).write_bytes(self.pure.raw(b.proof))
+                elif change == 'producer': b.d._apiWorkspaceDeclarationProducer['workflowRunId'] = '9'
+                elif change == 'stale-a': b.record['before'] = b.a.context['services']
+                elif change == 'live-five': b.after['mysql']['containerId'] = '0' * 64
+                elif change == 'configuration': (b.a.directory / 'compose.release.json').write_bytes(b'LOCAL_CHANGED')
+                elif change == 'p2-b': b.record['pendingOnlineConfigurationMeasurement'] = b.context['restoredConfigurationProof']
+                elif change == 'prior': b.context['priorPublications'][0]['manifestSha256'] = '0' * 64
+                else: (b.directory / 'after-audit.json').write_bytes(self.pure.raw({'ok': False}))
+                (b.directory / s.STATE_FILE).write_bytes(self.pure.raw(b.record))
+                with self.assertRaises(RuntimeError): s.readback(b.d, b.proof['commit'])
+                b.a.issuer.assert_not_called(); b.d.run.assert_not_called()
+
+    def test_closed_transport_summary_binds_actual_f_and_build_without_claiming_file_authority(self):
+        with self.successor() as b:
+            a_receipt = self.wire.decode_receipt_output(json.loads(b.saved['a']['raw_bytes'])['StandardOutputContent'], scope='API_ADMIN_WORKSPACE')
+            a_summary = a_receipt['declarationEquivalencePublication']
+            a_producer = {n: b.a.context['restoredConfigurationProof']['semantic']['producer'][n]
+                          for n in ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')}
+            self.assertIs(s.pending_online_declaration_summary(b.d, a_summary, b.a.context, producer=a_producer,
+                preflight_raw=b.a.preflight, build_proof_sha256=s.fingerprint(b.a.proof)), a_summary)
+            b.d._apiWorkspaceDeclarationEntry = 'READBACK'; b.d.sys.argv = ['remote.py', '--api-workspace-readback']
+            result = s.readback(b.d, b.proof['commit']); summary = result['declarationEquivalenceSuccessorPublication']
+            actual = s.pending_online_declaration_summary(b.d, summary, b.context, producer=b.d._apiWorkspaceDeclarationProducer,
+                preflight_raw=b.preflight, build_proof_sha256=s.fingerprint(b.proof))
+            self.assertIs(actual, summary)
+            self.assertEqual({**s.pending_online_marker(b.context), 'successorConfigurationSeal': actual['successorConfigurationSeal']},
+                             b.manifest['pendingOnlineMigration'])
+            for change in ('extra', 'bool', 'producer', 'f', 'build', 'initial-reference', 'kind', 'secret-nested'):
+                value = copy.deepcopy(summary); producer = copy.deepcopy(b.d._apiWorkspaceDeclarationProducer)
+                raw = b.preflight; build_sha = s.fingerprint(b.proof)
+                if change == 'extra': value['trusted'] = True
+                elif change == 'bool': value['version'] = True
+                elif change == 'producer': producer['workflowRunId'] = '9'
+                elif change == 'f': raw = b.a.preflight
+                elif change == 'build': build_sha = '0' * 64
+                elif change == 'initial-reference': value['successorConfigurationSeal']['initialPublication']['recordBytesSha256'] = '0' * 64
+                elif change == 'kind': value['kind'] = online.DECLARATION_EQUIVALENCE_KIND
+                else: value['successorConfigurationSeal']['rawEnv'] = 'SECRET_MUST_NOT_LEAK'
+                with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$') as error:
+                    s.pending_online_declaration_summary(b.d, value, b.context, producer=producer, preflight_raw=raw,
+                                                         build_proof_sha256=build_sha)
+                self.assertNotIn('SECRET', str(error.exception))
+
+
+class DeclarationReadbackTransportContract(unittest.TestCase):
+    """Real remote readback -> real client finite parser; runtime is synthetic."""
+    fixture = DeclarationPublicationConsumers.fixture
+    complete_readback = DeclarationPublicationConsumers.complete_readback
+    successor = DeclarationSuccessorConsumers.successor
+
+    @classmethod
+    def setUpClass(cls):
+        DeclarationSuccessorConsumers.setUpClass()
+        cls.pure = DeclarationSuccessorConsumers.pure
+        cls.wire = DeclarationSuccessorConsumers.wire
+        cls.output = DeclarationSuccessorConsumers.output
+
+    def assert_client(self, f, receipt, preflight_raw, context, proof, seal_key):
+        spec = importlib.util.spec_from_file_location('actual_readback_client', ROOT / 'scripts/production-release/api-admin-readonly.py')
+        client = importlib.util.module_from_spec(spec); spec.loader.exec_module(client)
+        directory = f.d.BASE / '.deploy/production-release'
+        directory.mkdir(parents=True, mode=0o700)
+        (directory / 'api-workspace-preflight-result.json').write_bytes(preflight_raw)
+        producer = f.d._apiWorkspaceDeclarationProducer
+        predecessor = context['priorPublications'][-1]['commit'] if context['priorPublications'] else s.WORKSPACE_BOOTSTRAP_COMMIT
+        env = {'RELEASE_COMMIT': producer['commit'], 'SOURCE_TREE': producer['sourceTree'],
+               'GITHUB_RUN_ID': producer['workflowRunId'], 'GITHUB_RUN_ATTEMPT': producer['workflowRunAttempt'],
+               'EXPECTED_CURRENT': predecessor}
+        cwd = Path.cwd()
+        try:
+            os.chdir(f.d.BASE)
+            with patch.dict(os.environ, env):
+                self.assertTrue(client.validate_pending_workspace_receipt(s.__dict__, receipt,
+                    producer['commit'], 'readback', proof=proof))
+                for changed in ('missing-seal', 'wrong-seal'):
+                    value = copy.deepcopy(receipt)
+                    if changed == 'missing-seal': value['preservedPendingOnlineMigration'].pop(seal_key)
+                    else: value['preservedPendingOnlineMigration'][seal_key]['preflightBytesSha256'] = '0' * 64
+                    with self.subTest(change=changed), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):
+                        client.validate_pending_workspace_receipt(s.__dict__, value,
+                            producer['commit'], 'readback', proof=proof)
+        finally:
+            os.chdir(cwd)
+
+    def test_initial_a_actual_independent_readback_reaches_client_full_marker(self):
+        with self.complete_readback() as a:
+            value = s.readback(a.d, a.proof['commit'])
+            self.assertEqual(value['preservedPendingOnlineMigration'], a.manifest['pendingOnlineMigration'])
+            self.assert_client(a, value, a.preflight, a.context, a.proof, 'configurationEquivalenceSeal')
+            a.d.run.assert_not_called()
+
+    def test_successor_b_actual_independent_readback_reaches_client_full_marker(self):
+        with self.successor() as b:
+            stage = s.readback(b.d, b.proof['commit'])
+            self.assertEqual(stage['preservedPendingOnlineMigration'], s.pending_online_marker(b.context))
+            self.assertNotIn('declarationEquivalenceSuccessorPublication', stage)
+            b.d._apiWorkspaceDeclarationEntry = 'READBACK'
+            b.d.sys.argv = ['remote.py', '--api-workspace-readback']
+            value = s.readback(b.d, b.proof['commit'])
+            self.assertEqual(value['preservedPendingOnlineMigration'], b.manifest['pendingOnlineMigration'])
+            self.assert_client(b, value, b.preflight, b.context, b.proof, 'successorConfigurationSeal')
+            b.d.run.assert_not_called()
 
 
 if __name__ == '__main__':

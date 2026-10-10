@@ -2613,6 +2613,160 @@ def declaration_equivalence_successor_preflight_binding(d, preflight_raw, *, ini
             'currentProducer': copy.deepcopy(current_producer), 'currentServicesSha256': fingerprint(current_services)}
 
 
+DECLARATION_SUCCESSOR_KIND = 'ONLINE_RECHARGE_DECLARATION_SUCCESSOR_B_PUBLICATION'
+DECLARATION_SUCCESSOR_FIELDS = ('kind', 'version', 'producer', 'preflightCommandId', 'preflightBytesSha256',
+    'originSha256', 'manifestBytesSha256', 'recordBytesSha256', 'buildProofBytesSha256',
+    'buildProofCanonicalSha256', 'archiveInventorySha256', 'successorConfigurationSeal',
+    'afterServices', 'configurationAfter')
+
+
+def _declaration_successor_publication_shape(publication, *, issued=False):
+    _declaration_exact(publication, tuple(n for n in DECLARATION_SUCCESSOR_FIELDS
+                                       if not issued or n not in ('afterServices', 'configurationAfter')))
+    if not issued:
+        _declaration_states(publication['afterServices'])
+        _declaration_exact(publication['configurationAfter'], ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
+                                                             SCHEMA_FILE, 'compose.release.json'))
+        _declaration_require(all(_declaration_hash(v) for v in publication['configurationAfter'].values()))
+    seal = _declaration_exact(publication['successorConfigurationSeal'], ('kind', 'version', 'initialProofSha256',
+        'preflightBytesSha256', 'currentProducer', 'currentServicesSha256', 'initialPublication',
+        'initialReadbackInvocationBytesSha256', 'preflightCommandId', 'currentConfigurationSha256'))
+    initial = _declaration_exact(seal['initialPublication'], ('kind', 'version', 'producer', 'preflightCommandId',
+        'preflightBytesSha256', 'manifestBytesSha256', 'recordBytesSha256', 'buildProofBytesSha256',
+        'buildProofCanonicalSha256', 'archiveInventorySha256', 'configurationEquivalenceSeal', 'readbackCommandId'))
+    pair = _declaration_exact(initial['configurationEquivalenceSeal'], ('kind', 'version', 'preflightBytesSha256',
+        'preflightProofSha256', 'deploymentProofSha256', 'semanticSha256'))
+    _declaration_require(publication['kind'] == seal['kind'] == DECLARATION_SUCCESSOR_KIND
+        and type(publication['version']) is int and publication['version'] == 1
+        and type(seal['version']) is int and seal['version'] == 1
+        and initial['kind'] == pair['kind'] == DECLARATION_EQUIVALENCE_KIND
+        and type(initial['version']) is int and initial['version'] == DECLARATION_EQUIVALENCE_VERSION
+        and type(pair['version']) is int and pair['version'] == DECLARATION_EQUIVALENCE_VERSION
+        and publication['producer'] == seal['currentProducer'] != initial['producer']
+        and publication['preflightBytesSha256'] == seal['preflightBytesSha256']
+        and publication['preflightCommandId'] == seal['preflightCommandId']
+        and seal['initialProofSha256'] == pair['preflightProofSha256']
+        and all(_declaration_hash(v) for mapping in (publication, seal, initial, pair)
+                for k, v in mapping.items() if k.endswith('Sha256')))
+    for producer in (publication['producer'], initial['producer']):
+        _declaration_exact(producer, DECLARATION_EQUIVALENCE_FIELDS['producer'])
+        _declaration_exact(producer['helpers'], DECLARATION_EQUIVALENCE_HELPERS)
+        _declaration_require(all(type(producer[k]) is str and re.fullmatch(r'[a-f0-9]{40}', producer[k]) for k in ('commit', 'sourceTree'))
+            and all(type(producer[k]) is str and re.fullmatch(r'[1-9][0-9]*', producer[k]) for k in ('workflowRunId', 'workflowRunAttempt'))
+            and _declaration_hash(producer['archiveInventorySha256']) and all(_declaration_hash(v) for v in producer['helpers'].values()))
+    _declaration_require(publication['archiveInventorySha256'] == publication['producer']['archiveInventorySha256'])
+    _declaration_require(all(type(v) is str and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', v)
+        for v in (publication['preflightCommandId'], initial['preflightCommandId'], initial['readbackCommandId']))
+        and publication['preflightCommandId'] not in (initial['preflightCommandId'], initial['readbackCommandId']))
+
+
+def declaration_equivalence_successor_seal(d, preflight_raw, *, initial_origin, initial_publication,
+        current_producer, current_services, current_configuration, current_archive_bytes,
+        initial_invocation_raw, initial_command_id, wire_decoder):
+    """Only A->B: inherit acquired Q_A; never create a second measurement for B."""
+    binding = declaration_equivalence_successor_preflight_binding(d, preflight_raw,
+        initial_origin=initial_origin, initial_publication=initial_publication, current_producer=current_producer,
+        current_services=current_services, current_archive_bytes=current_archive_bytes,
+        initial_invocation_raw=initial_invocation_raw, initial_command_id=initial_command_id, wire_decoder=wire_decoder)
+    before = closed_recovery_json(d, preflight_raw)
+    _declaration_exact(current_configuration, ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
+                                              SCHEMA_FILE, 'compose.release.json'))
+    _declaration_require(current_configuration == initial_publication['configurationAfter']
+        and all(_declaration_hash(v) for v in current_configuration.values())
+        and type(before.get('commandId')) is str
+        and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', before['commandId'])
+        and before['commandId'] not in (initial_publication['preflightCommandId'], initial_command_id))
+    initial = declaration_equivalence_receipt_binding(d, initial_publication, initial_invocation_raw,
+        command_id=initial_command_id, wire_decoder=wire_decoder)
+    return {'kind': DECLARATION_SUCCESSOR_KIND, 'version': 1, **binding,
+        'initialPublication': initial, 'initialReadbackInvocationBytesSha256': hashlib.sha256(initial_invocation_raw).hexdigest(),
+        'preflightCommandId': before['commandId'], 'currentConfigurationSha256': fingerprint(current_configuration)}
+
+
+def declaration_equivalence_successor_publication_binding(d, *, origin, preflight_raw, build_raw, record_raw,
+        manifest_raw, initial_origin, initial_publication, current_producer, current_services,
+        current_configuration, current_archive_bytes, initial_invocation_raw, initial_command_id, wire_decoder):
+    """B artifact seal; original full source/runtime validators remain mandatory.
+
+    Initial publication and Q_A must be independently acquired and validated.
+    This pure function does not turn caller hashes or synthetic data into file,
+    source, completed-invocation or production authority.
+    """
+    _declaration_exact(origin, DECLARATION_EQUIVALENCE_FIELDS['origin'])
+    before = closed_recovery_json(d, preflight_raw)
+    _declaration_require(type(origin['version']) is int and origin['version'] == 2
+        and origin.get('scope') == 'PENDING_ONLINE_MIGRATION'
+        and type(origin.get('priorPublications')) is list and len(origin['priorPublications']) == 1
+        and before.get('pendingOnlineMigrationOrigin') == origin)
+    seal = declaration_equivalence_successor_seal(d, preflight_raw, initial_origin=initial_origin,
+        initial_publication=initial_publication, current_producer=current_producer, current_services=current_services,
+        current_configuration=current_configuration, current_archive_bytes=current_archive_bytes,
+        initial_invocation_raw=initial_invocation_raw, initial_command_id=initial_command_id, wire_decoder=wire_decoder)
+    build, record, manifest = (closed_recovery_json(d, raw) for raw in (build_raw, record_raw, manifest_raw))
+    first = initial_origin['restoredConfigurationProof']
+    _declaration_require(all(type(v) is dict for v in (build, record, manifest))
+        and type(build.get('version')) is int and build['version'] == 2
+        and record.get('pendingOnlineMigrationOrigin') == origin
+        and record.get('pendingOnlineSuccessorPreflight') == seal
+        and 'pendingOnlineConfigurationMeasurement' not in record
+        and record.get('before') == current_services == origin.get('services')
+        and record.get('configurationBefore') == current_configuration
+        and build.get('commit') == manifest.get('commit') == current_producer['commit']
+        and build.get('sourceTree') == manifest.get('sourceTree') == current_producer['sourceTree']
+        and build.get('pendingOnlineOriginSha256') == fingerprint(origin)
+        and build.get('pendingOnlinePreflightSha256') == seal['preflightBytesSha256']
+        and build.get('declarationEquivalenceSeal') == {'kind': first['kind'], 'version': first['version'],
+            'preflightProofSha256': fingerprint(first), 'semanticSha256': fingerprint(first['semantic'])}
+        and manifest.get('pendingOnlineMigration', {}).get('originSha256') == fingerprint(origin)
+        and manifest['pendingOnlineMigration'].get('successorConfigurationSeal') == seal
+        and 'configurationEquivalenceSeal' not in manifest['pendingOnlineMigration'])
+    _declaration_states(record.get('after'))
+    _declaration_exact(record.get('configurationAfter'), ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
+                                                        SCHEMA_FILE, 'compose.release.json'))
+    _declaration_require(all(_declaration_hash(v) for v in record['configurationAfter'].values())
+        and all(record['after'][n] == record['before'][n] for n in PRESERVED))
+    return {'kind': DECLARATION_SUCCESSOR_KIND, 'version': 1, 'producer': copy.deepcopy(current_producer),
+        'preflightCommandId': seal['preflightCommandId'], 'preflightBytesSha256': seal['preflightBytesSha256'],
+        'originSha256': fingerprint(origin), 'manifestBytesSha256': hashlib.sha256(manifest_raw).hexdigest(),
+        'recordBytesSha256': hashlib.sha256(record_raw).hexdigest(), 'buildProofBytesSha256': hashlib.sha256(build_raw).hexdigest(),
+        'buildProofCanonicalSha256': fingerprint(build), 'archiveInventorySha256': current_producer['archiveInventorySha256'],
+        'successorConfigurationSeal': seal, 'afterServices': copy.deepcopy(record['after']),
+        'configurationAfter': copy.deepcopy(record['configurationAfter'])}
+
+
+def declaration_equivalence_successor_issuer_binding(d, publication, *, live_services, live_configuration, execution_producer):
+    """The independent fixed B READBACK supplies actual current B measurements."""
+    _declaration_successor_publication_shape(publication)
+    _declaration_states(live_services)
+    _declaration_require(publication['kind'] == DECLARATION_SUCCESSOR_KIND
+        and type(publication['version']) is int and publication['version'] == 1
+        and execution_producer == publication['producer']
+        and live_services == publication['afterServices'] and live_configuration == publication['configurationAfter'])
+    return {k: copy.deepcopy(v) for k, v in publication.items() if k not in ('afterServices', 'configurationAfter')}
+
+
+def declaration_equivalence_successor_receipt_binding(d, publication, invocation_raw, *, command_id, wire_decoder):
+    """Cold B consumes Q_B; an initial-A seal or absent receipt never substitutes."""
+    _declaration_successor_publication_shape(publication)
+    _declaration_require(publication['kind'] == DECLARATION_SUCCESSOR_KIND
+        and type(publication['version']) is int and publication['version'] == 1)
+    invocation = closed_recovery_json(d, invocation_raw)
+    _declaration_require(type(invocation) is dict and invocation.get('Status') == 'Success'
+        and type(invocation.get('ResponseCode')) is int and invocation['ResponseCode'] == 0
+        and type(command_id) is str and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', command_id)
+        and invocation.get('CommandId') == command_id and type(invocation.get('StandardOutputContent')) is str
+        and callable(wire_decoder))
+    try:
+        receipt = wire_decoder(invocation['StandardOutputContent'], scope='API_ADMIN_WORKSPACE')
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_PROOF_INVALID') from None
+    expected = {k: publication[k] for k in publication if k not in ('afterServices', 'configurationAfter')}
+    _declaration_require(type(receipt) is dict and receipt.get('status') == 'API_ADMIN_WORKSPACE_VERIFIED'
+        and receipt.get('declarationEquivalenceSuccessorPublication') == expected
+        and fingerprint(receipt.get('pendingOnlineMigrationOrigin')) == publication['originSha256'])
+    return {**expected, 'readbackCommandId': command_id}
+
+
 def _declaration_source_bytes(path, *, limit=256 * 1024):
     """Read one owned ordinary file without following a path or inode change."""
     path = Path(path)
@@ -2710,7 +2864,10 @@ def declaration_equivalence_materials(d, directory, recovery, *, producer, phase
     inventory = archive_inventory(d, raw, producer['commit'], producer['sourceTree'])
     names = (*DECLARATION_EQUIVALENCE_HELPERS,
         'scripts/production-release/online-recharge-declaration-measurement.py',
-        'scripts/production-release/api-admin-pending-receipt-wire.py')
+        'scripts/production-release/api-admin-pending-receipt-wire.py',
+        'scripts/production-release/online-recharge-daemon-identity.py',
+        'scripts/production-release/online-recharge-daemon-listener.py',
+        'scripts/production-release/online-recharge-daemon-socket.py')
     _declaration_require(all(n in inventory for n in names))
     if phase == 'LIVE':
         for name in names:
@@ -2805,15 +2962,136 @@ def declaration_equivalence_saved_invocation(d, *, producer):
     return {'raw_bytes': raw, 'command_id': value['CommandId']}
 
 
-def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose, preflight_raw=None):
-    """Fixed formal entry remains closed until production generator review.
+FORMAL_RUNTIME_DRIVER_SHA256 = 'fe2f3810f2977109438af793969bff4d2b51ada236221d8301cb9f022ac2d885'
 
-    The inventory and LOCAL fixture cannot activate this entry. Actual P
-    construction will be added only after the real generator/resource sources
-    have been independently measured and frozen.
-    """
+
+class DeclarationDriverError(RuntimeError):
+    """Non-authorizing bounded cause from the captured fixed driver only."""
+
+DECLARATION_DIAGNOSTIC_STAGES = frozenset((
+    'PACKAGE_BIND','LOCAL_PACKAGE','SOURCE_PROFILE',
+    'ARCHIVE_BIND','CONFIGURE','ENTRY',
+    'ACQUISITION','RULES','ACQUIRE',
+    'MEASURE','AFTER','CONSTRUCT',
+    'CLOSE','REGISTRY','QUALIFIER_PROFILE',
+    'FACTORY','SESSION','INSTALL',
+    'VFS_SOURCE','CLIENT_DIRECTORY','CLIENT_CONFIG',
+    'RUNTIME_VFS','COLLECTION_TOOLS','NATIVE_PERMISSIONS',
+    'NATIVE_TOOLS','DAEMON_INFO','STABILITY',
+    'YIELD','CLEANUP',
+))
+DECLARATION_DIAGNOSTIC_CODES = frozenset((
+    'ACTUAL_IDENTITY','ACTUAL_IDENTITY_CHANGED','ACTUAL_INSPECT_CHANGED',
+    'ACTUAL_NETWORK_ADDRESS','ACTUAL_NETWORK_DECLARATION','ACTUAL_NETWORK_ID_OR_MEMBERS',
+    'ACTUAL_NETWORK_INSPECT_CHANGED','ACTUAL_NETWORK_MEMBERS','ACTUAL_NETWORK_SET',
+    'ACTUAL_PRIMARY_NETWORK','ACTUAL_STATE_OR_ENV','ACTUAL_VOLUME_INSPECT_CHANGED',
+    'ATTRIBUTE_ERROR','BASE_SOURCE_UNMEASURED','BINDING_REPORT_INVALID',
+    'BOUND_LABEL','CLEANUP_FAILED','CLEANUP_REMAINING',
+    'CLEANUP_SEAL_CHANGED','CLIENT_DEFAULT_INJECTION','CLIENT_SOURCE_CHANGED',
+    'CLI_SOURCE_CHANGED','CMDLINE_INVALID','COMPLETE_CONFIGURATION_DIFFERENCE',
+    'CONFIGURATION_INVALID','CONFIG_INVALID','DAEMON_CHANGED',
+    'DAEMON_FD_MISSING','DAEMON_SOURCE_NOT_MEASURED','DEPENDENCY_LABEL',
+    'ENV_INVALID','EXECUTABLE_INVALID','EXISTING_REFERENCE_REFUSED',
+    'FD_INVALID','GENERATOR_SOURCE_CHANGED','HOST_MOUNTS_SHAPE',
+    'HTTP_ERROR','IMAGE_INSPECT_CHANGED','LISTENER_INVALID',
+    'MEASUREMENT_FAILED','MOUNT_BINDING','NAMESPACE_MISMATCH',
+    'NATIVE_TOOL_CHANGED','ORIGIN_CHANGED','OS_ERROR',
+    'PACKAGE_ARCHIVE_CHANGED','PACKAGE_BINARY_MISMATCH','PACKAGE_DIGEST_UNSUPPORTED',
+    'PACKAGE_FILE_CHANGED','PACKAGE_INPUT_INVALID','PACKAGE_INVALID',
+    'PACKAGE_SCHEMA_CHANGED','PACKAGE_SOURCE_CHANGED','PACK_IMAGE_OR_NATIVE_IDENTITY',
+    'PACK_INVALID','PATH_INVALID','PERMISSIONS_INVALID',
+    'PERMISSION_ERROR','POOL_SOURCE_CHANGED','PRIMARY_NETWORK',
+    'PRIMARY_NETWORK_OR_IMAGE','PROCESS_INVALID','PROC_ALIAS_INVALID',
+    'QUALIFIER_FROZEN_INPUT_CHANGED','QUALIFIER_UNAVAILABLE','REFERENCE_ID_CHANGED',
+    'REFERENCE_MODEL_CHANGED','REFERENCE_NETWORK_OVERLAP','REFERENCE_NETWORK_SET',
+    'REFERENCE_PATH_INVALID','REFERENCE_PENDING_ENDPOINT','REFERENCE_RESOURCE_CHANGED',
+    'REFERENCE_STARTED_OR_OWNER_CHANGED','REFERENCE_STATE_OWNER_OR_ENV','REPLACE_LABEL',
+    'REPORT_INVALID','RESOURCE_DEFAULT_POOL_INVALID','RESOURCE_INVENTORY_INVALID',
+    'RESOURCE_IPAM_INVALID','RESOURCE_OWNER_OR_MEMBERS_INVALID','RESOURCE_PROPERTIES_INVALID',
+    'RESOURCE_READ_INVALID','RESOURCE_SCHEMA_INVALID','RESOURCE_VOLUME_INVALID',
+    'ROOT_ACQUISITION_UNAVAILABLE','ROOT_ADMIN_PROJECTION_FAILED','ROOT_DRIVER_SOURCE_UNMEASURED',
+    'ROOT_DRIVER_UNAVAILABLE','ROOT_ENTRY_INVALID','ROOT_GENERATOR_SOURCE_UNMEASURED',
+    'ROOT_HISTORY_CHANGED','ROOT_MEASUREMENT_INVALID','ROOT_OBSERVATION_CHANGED',
+    'ROOT_PREFLIGHT_CHANGED','ROOT_PRODUCER_CHANGED','ROOT_REGISTRY_CHANGED',
+    'ROOT_REGISTRY_EXISTS','ROOT_REGISTRY_INVALID','ROOT_REGISTRY_MISSING',
+    'ROOT_SOURCE_CHANGED','RUNTIME_BINARY_CHANGED','RUNTIME_CAPABILITY_REQUIRED',
+    'RUNTIME_DRIFT','RUNTIME_ERROR','RUNTIME_IDENTITY_INVALID',
+    'RUNTIME_PACKAGE_CHANGED','RUNTIME_UNAVAILABLE','SERVICE_INVALID',
+    'SOCKET_BINDING_CHANGED','SOCKET_BINDING_DRIFT','SOCKET_BINDING_INVALID',
+    'SOCKET_BINDING_UNAVAILABLE','SOCKET_PATH_INVALID','SOCKET_PERMISSIONS_INVALID',
+    'SOURCE_DECLARATION_INVALID','SOURCE_ENV_INVALID','SOURCE_ENV_SEAL_CHANGED',
+    'SOURCE_FILES_CHANGED','SOURCE_FILE_INVALID','SOURCE_FILE_PERMISSIONS',
+    'SOURCE_IMAGE_INVALID','SOURCE_MODEL_HASH_INVALID','SOURCE_NETWORK_DECLARATION',
+    'SOURCE_NOT_MEASURED','SOURCE_PATH_INVALID','SOURCE_PROFILE_INVALID',
+    'SOURCE_PROJECT_INVALID','SOURCE_REPLACE_ANCHOR_INVALID','SOURCE_SEAL_INVALID',
+    'SOURCE_VOLUME_DECLARATION','TIMEOUT','TYPE_ERROR',
+    'UNKNOWN','URL_ERROR','VFS_BINDING_UNAVAILABLE',
+    'VFS_BOUND_CAPABILITY_REQUIRED','VFS_DIAG_UNAVAILABLE','VFS_DRIFT',
+    'VFS_NODE_MISMATCH','VFS_QUERY_INVALID','VFS_REPORT_INVALID',
+    'VFS_SOURCE_UNMEASURED','VFS_WIRE_INVALID',
+    'FILE_EXISTS_ERROR','FILE_NOT_FOUND_ERROR',
+    'CLI_COMPOSE_LEAF_SYMLINK','CLI_COMPOSE_NLINK','CLI_COMPOSE_NOT_REGULAR',
+    'CLI_COMPOSE_OWNER_EXEC','CLI_COMPOSE_SPECIAL_MODE','CLI_COMPOSE_UID',
+    'CLI_COMPOSE_WRITABLE','CLI_DOCKER_LEAF_SYMLINK','CLI_DOCKER_NLINK',
+    'CLI_DOCKER_NOT_REGULAR','CLI_DOCKER_OWNER_EXEC','CLI_DOCKER_SPECIAL_MODE',
+    'CLI_DOCKER_UID','CLI_DOCKER_WRITABLE',
+    'SOURCE_COMPOSE_PARENT_UID',
+    'SOURCE_COMPOSE_PARENT_WRITABLE',
+    'SOURCE_COMPOSE_PUBLIC_WRITABLE',
+    'SOURCE_RELEASE_PARENT_UID',
+    'SOURCE_RELEASE_PARENT_WRITABLE',
+    'SOURCE_RELEASE_PUBLIC_WRITABLE',
+    'SOURCE_CLIENT_PARENT_UID',
+    'SOURCE_CLIENT_PARENT_WRITABLE',
+    'SOURCE_CLIENT_PRIVATE_MODE',
+))
+
+def declaration_failure_diagnostic(error):
+    if type(error) is DeclarationDriverError:
+        value=error.__dict__.get('_declaration_failure')
+        if (type(value) is tuple and len(value)==2 and type(value[0]) is str and type(value[1]) is str
+                and value[0] in DECLARATION_DIAGNOSTIC_STAGES and value[1] in DECLARATION_DIAGNOSTIC_CODES):
+            return {'stage':value[0],'code':value[1]}
+    return None
+
+def _declaration_driver_failure(message,failure):
+    error=DeclarationDriverError(message)
+    if (type(failure) is dict and set(failure)=={'stage','code'} and type(failure['stage']) is str
+            and type(failure['code']) is str and failure['stage'] in DECLARATION_DIAGNOSTIC_STAGES
+            and failure['code'] in DECLARATION_DIAGNOSTIC_CODES):
+        error._declaration_failure=(failure['stage'],failure['code'])
+    else:error._declaration_failure=('PACKAGE_BIND','UNKNOWN')
+    return error
+
+
+def _declaration_runtime_driver():
+    """Compile only captured fixed driver bytes; package binds the full archive."""
+    try:
+        import types
+        path = Path(__file__).with_name('formal-runtime-package') / 'driver.py'
+        raw = _declaration_source_bytes(path, limit=256 * 1024)
+        _declaration_require(hashlib.sha256(raw).hexdigest() == FORMAL_RUNTIME_DRIVER_SHA256)
+        module = types.ModuleType('_online_formal_runtime_driver')
+        module.__file__ = str(path)
+        exec(compile(raw, str(path), 'exec'), module.__dict__)
+        return module
+    except Exception:
+        raise _declaration_driver_failure('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE',
+            {'stage':'LOCAL_PACKAGE','code':'UNKNOWN'}) from None
+
+
+def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose, preflight_raw=None):
+    """Fixed source/runtime entry; unsupported sources fail before references."""
     _declaration_require(purpose in ('INDEPENDENT_PREFLIGHT', 'DEPLOYMENT_REMEASURE'))
     _declaration_require(preflight_raw is None if purpose == 'INDEPENDENT_PREFLIGHT'
                          else type(preflight_raw) is bytes and 0 < len(preflight_raw) < 65536)
-    # There is no caller-provided registry, trusted boolean or fixture fallback.
-    raise RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')
+    driver = _declaration_runtime_driver()
+    try:
+        return driver.measure_declaration_equivalence(d, directory, recovery,
+            producer=producer, purpose=purpose, preflight_raw=preflight_raw)
+    except Exception as error:
+        failure=driver.failure_diagnostic(error)
+        message='ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE'
+        if type(error) is driver.Rejected and BaseException.args.__get__(error)==('ROOT_GENERATOR_SOURCE_UNMEASURED',):
+            message='ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
+        raise _declaration_driver_failure(message,failure) from None

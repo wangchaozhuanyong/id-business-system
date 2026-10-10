@@ -1,5 +1,9 @@
 """Exercise the real pinned Workspace staging and dispatch contracts offline."""
 import hashlib
+import ast
+import builtins
+import gzip
+import zlib
 import base64
 import contextlib
 import io
@@ -37,6 +41,33 @@ spec.loader.exec_module(transport)
 
 
 class WorkspaceStagingTests(unittest.TestCase):
+    def assert_combined_pinned(self, commands):
+        import ast
+        import gzip
+        carriers = [line for line in commands if line.startswith('python3 -B -c ')]
+        self.assertEqual(len(carriers), 1)
+        self.assertLess(commands.index(carriers[0]), len(commands) - 1)
+        bootstrap = ast.parse(shlex.split(carriers[0])[3])
+        payload = next(node.args[0].value for node in ast.walk(bootstrap)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'b85decode')
+        program_raw = gzip.decompress(base64.b85decode(payload))
+        assertions = [node for node in ast.walk(bootstrap) if isinstance(node, ast.Compare)]
+        self.assertTrue(any(isinstance(node.comparators[0], ast.Constant)
+            and node.comparators[0].value == hashlib.sha256(program_raw).hexdigest() for node in assertions))
+        program = ast.parse(program_raw.decode())
+        stores = [node for node in ast.walk(program) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == '_store_files']
+        self.assertEqual(len(stores), 2)
+        controllers, package = [ast.literal_eval(node.args[2]) for node in stores]
+        self.assertEqual(set(controllers), set(transport.FORMAL_RUNTIME_CONTROLLERS))
+        self.assertEqual(set(package), set(transport.FORMAL_RUNTIME_FILES))
+        for name, digest in controllers.items():
+            self.assertEqual(digest, hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest())
+        for name, digest in package.items():
+            self.assertEqual(digest, hashlib.sha256((Path(__file__).with_name('formal-runtime-package') / name).read_bytes()).hexdigest())
+        self.assertFalse(any(line.startswith('curl ') or 'sha256sum -c -' in line for line in commands))
+
     def assert_pinned(self, commands, filenames):
         """Every executable comes from the candidate and is verified before execution."""
         assignments = [line for line in commands if line.startswith('readonly release_controller_directory=')]
@@ -91,8 +122,7 @@ class WorkspaceStagingTests(unittest.TestCase):
                     'workflowRunId': '123', 'workflowRunAttempt': '1'}
         parameters = transport.parameters(COMMIT, PREVIOUS, 'preflight', 'API_ADMIN_WORKSPACE',
                                           declaration_producer=producer)
-        self.assert_pinned(parameters['commands'], (*WORKSPACE_READONLY_CONTROLLERS,
-            'online-recharge-declaration-measurement.py'))
+        self.assert_combined_pinned(parameters['commands'])
         encoded = parameters['commands'][-1].split(' --declaration-producer ', 1)[1]
         self.assertEqual(json.loads(base64.b64decode(encoded, validate=True)), producer)
         self.assertLess(len(json.dumps(parameters).encode()), 48 * 1024)
@@ -436,8 +466,7 @@ raise SystemExit(1)
 
     def test_workspace_dispatch_pins_reader_but_cannot_select_online_initial_publication(self):
         parameters = self.dispatch_parameters('release_api_workspace')
-        self.assert_pinned(parameters['commands'], (*WORKSPACE_READONLY_CONTROLLERS,
-                                                   'online-recharge-declaration-measurement.py'))
+        self.assert_combined_pinned(parameters['commands'])
         command = parameters['commands'][-1]
         self.assertIn('--api-workspace-only --api-admin-build-proof ', command)
         self.assertNotIn('--online-recharge-only', command)
@@ -455,6 +484,75 @@ raise SystemExit(1)
         self.assert_pinned(online['commands'], ONLINE_CONTROLLERS)
         self.assertIn('--online-recharge-only --online-recharge-build-proof ', online['commands'][-1])
         self.assertNotIn('--api-workspace-only', online['commands'][-1])
+
+
+class PendingDeclarationTransportTests(unittest.TestCase):
+    """Transport order only; complete declaration semantics have separate tests."""
+    def fixture(self, prior_count):
+        origin={'version':2,'services':{name:{'containerId':str(i)*64} for i,name in enumerate(
+            ('api','admin','mysql','caddy','media-resolver','auto-recharge','auto-registration'),1)},
+            'priorPublications':[{'commit':PREVIOUS}] if prior_count else []}
+        seal_key='successorConfigurationSeal' if prior_count else 'configurationEquivalenceSeal'
+        key='declarationEquivalenceSuccessorPublication' if prior_count else 'declarationEquivalencePublication'
+        marker={'originSha256':'d'*64}; summary={seal_key:{'checkedTransportFixture':'e'*64}}
+        fingerprint=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        trace=[]
+        def validate_summary(_d,value,context,**inputs):
+            trace.append((value,context,inputs));return value
+        namespace={'validate_pending_online_origin':lambda value:value,
+            'pending_online_marker':lambda value:marker,'pending_online_declaration_summary':validate_summary,
+            'pending_online_ended_failures':lambda value:[], 'fingerprint':fingerprint}
+        before={'status':'API_ADMIN_WORKSPACE_BASELINE_VERIFIED','mode':'preflight',
+            'releaseCandidateCommit':COMMIT,'commit':PREVIOUS,'workflowRunId':'123','workflowRunAttempt':'1',
+            'pendingOnlineMigrationOrigin':origin,'pendingOnlineEndedFailures':[]}
+        raw=(json.dumps(before,indent=2)+'\n\n').encode()
+        receipt={'pendingOnlineMigrationOrigin':origin,'preservedPendingOnlineMigration':{**marker,seal_key:summary[seal_key]},
+            'onlinePublished':False,'migrationPerformed':False,'services':copy.deepcopy(origin['services']),
+            'observedServiceCount':7,'servicesUpdated':['api','admin'],key:summary}
+        proof={'pendingOnlineProjection':{},'pendingOnlineOriginSha256':fingerprint(origin)}
+        env={'RELEASE_COMMIT':COMMIT,'SOURCE_TREE':TREE,'EXPECTED_CURRENT':PREVIOUS,
+            'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1'}
+        return SimpleNamespace(namespace=namespace,raw=raw,receipt=receipt,proof=proof,env=env,trace=trace,key=key,seal_key=seal_key)
+    def validate(self, fixture):
+        RUNTIME.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
+            previous=Path.cwd()
+            try:
+                os.chdir(temporary);target=Path('.deploy/production-release/api-workspace-preflight-result.json')
+                target.parent.mkdir(parents=True);target.write_bytes(fixture.raw)
+                with patch.dict(os.environ,fixture.env,clear=True):
+                    return transport.validate_pending_workspace_receipt(fixture.namespace,fixture.receipt,COMMIT,'readback',proof=fixture.proof)
+            finally:os.chdir(previous)
+    def test_initial_and_b_call_closed_summary_with_original_f_and_actual_producer(self):
+        for prior in (0,1):
+            with self.subTest(prior=prior):
+                f=self.fixture(prior);self.assertTrue(self.validate(f));self.assertEqual(len(f.trace),1)
+                value,origin,inputs=f.trace[0]
+                self.assertIs(value,f.receipt[f.key]);self.assertEqual(origin,f.receipt['pendingOnlineMigrationOrigin'])
+                self.assertEqual(inputs,{'producer':{'commit':COMMIT,'sourceTree':TREE,'workflowRunId':'123','workflowRunAttempt':'1'},
+                    'preflight_raw':f.raw,'build_proof_sha256':f.namespace['fingerprint'](f.proof)})
+    def test_missing_or_wrong_generation_summary_never_reaches_closed_validator(self):
+        for prior in (0,1):
+            for change in ('missing','both','wrong'):
+                f=self.fixture(prior);other='declarationEquivalencePublication' if prior else 'declarationEquivalenceSuccessorPublication'
+                if change!='both':f.receipt.pop(f.key)
+                if change!='missing':f.receipt[other]={}
+                with self.subTest(prior=prior,change=change),self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):
+                    self.validate(f)
+                self.assertEqual(f.trace,[])
+    def test_marker_and_late_run_drift_reject_after_summary_without_saving(self):
+        for prior in (0,1):
+            for change in ('marker','run'):
+                f=self.fixture(prior)
+                if change=='marker':f.receipt['preservedPendingOnlineMigration'][f.seal_key]={}
+                else:f.env['GITHUB_RUN_ID']='124'
+                with self.subTest(prior=prior,change=change),self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):
+                    self.validate(f)
+    def test_closed_summary_rejection_suppresses_raw_error(self):
+        f=self.fixture(1)
+        def fail(*args,**kwargs):raise RuntimeError('PRIVATE_TRANSPORT_TEST_VALUE')
+        f.namespace['pending_online_declaration_summary']=fail
+        with self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_RECEIPT_CHANGED$'):self.validate(f)
 
 
 class WorkspaceSuccessorReceiptTests(unittest.TestCase):
@@ -616,6 +714,7 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         def read(path):
             return json.dumps(proof if path.name == self.namespace['PROOF_FILE'] else self.before)
         with patch.object(Path, 'is_file', return_value=True), patch.object(Path, 'read_text', read), \
+                patch.object(Path, 'read_bytes', lambda path:read(path).encode()), \
                 patch.dict(os.environ, self.environment, clear=True):
             self.assertEqual(transport.validate_receipt(receipt, COMMIT, 'readback',
                 'API_ADMIN_WORKSPACE'), receipt)
@@ -667,7 +766,9 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
             def read(path):
                 return json.dumps(proof if path.name == self.namespace['PROOF_FILE'] else before)
             with self.subTest(label=label), patch.object(Path, 'is_file', return_value=True), \
-                    patch.object(Path, 'read_text', read), patch.dict(os.environ, self.environment, clear=True), \
+                    patch.object(Path, 'read_text', read), \
+                    patch.object(Path, 'read_bytes', lambda path:read(path).encode()), \
+                    patch.dict(os.environ, self.environment, clear=True), \
                     self.assertRaises(RuntimeError):
                 transport.validate_receipt(receipt, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
 
@@ -680,6 +781,277 @@ class WorkspaceSuccessorReceiptTests(unittest.TestCase):
         receipt['services']['online-recharge'] = copy.deepcopy(self.services['online-recharge'])
         with self.assertRaisesRegex(RuntimeError, 'MIGRATION_ORIGIN_RECEIPT_CHANGED'):
             transport.validate_receipt(receipt, PREVIOUS, 'preflight', 'API_ADMIN')
+
+
+class FormalRuntimeFileTransportTests(unittest.TestCase):
+    """Execute the real 21-file program with only private targets and UID/URL fixtures."""
+    @classmethod
+    def setUpClass(cls):
+        cls.namespace = runpy.run_path(str(Path(__file__).with_name('api-admin-readonly.py')))
+        source = Path(__file__).parent
+        cls.bodies = {
+            **{('controller', name): (source / name).read_bytes()
+               for name in cls.namespace['FORMAL_RUNTIME_CONTROLLERS']},
+            **{('package', name): (source / 'formal-runtime-package' / name).read_bytes()
+               for name in cls.namespace['FORMAL_RUNTIME_FILES']},
+        }
+        command = cls.namespace['formal_runtime_commands'](
+            '/opt/id-business-v2/.staging/oidc-' + COMMIT, COMMIT,
+            source / 'formal-runtime-package', source)[0]
+        tokens = shlex.split(command)
+        if tokens[:3] != ['python3', '-B', '-c'] or len(tokens) != 4:
+            raise AssertionError('carrier framing')
+        cls.bootstrap = ast.parse(tokens[3])
+        payload = next(node.args[0].value for node in ast.walk(cls.bootstrap)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'b85decode')
+        cls.compressed = base64.b85decode(payload)
+        decoder = zlib.decompressobj(31)
+        cls.raw = decoder.decompress(cls.compressed, 16385)
+        if (not 0 < len(cls.raw) <= 16384 or not decoder.eof
+                or decoder.unused_data or decoder.unconsumed_tail):
+            raise AssertionError('carrier size')
+        digest = next(node.comparators[0].value for node in ast.walk(cls.bootstrap)
+            if isinstance(node, ast.Compare) and isinstance(node.left, ast.Call)
+            and isinstance(node.left.func, ast.Attribute) and node.left.func.attr == 'hexdigest')
+        if hashlib.sha256(cls.raw).hexdigest() != digest:
+            raise AssertionError('carrier code sha')
+        cls.program = ast.parse(cls.raw)
+        stores = [node for node in cls.program.body[-1].body
+                  if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                  and isinstance(node.value.func, ast.Name) and node.value.func.id == '_store_files']
+        if len(stores) != 2 or [node.value.args[-1].value for node in stores] != [False, True]:
+            raise AssertionError('store boundaries')
+        for branch, node in zip(('controller', 'package'), stores):
+            pins = ast.literal_eval(node.value.args[2])
+            expected = {name: hashlib.sha256(body).hexdigest()
+                        for (kind, name), body in cls.bodies.items() if kind == branch}
+            if pins != expected:
+                raise AssertionError('source pins')
+
+    @contextlib.contextmanager
+    def sandbox(self):
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='formal-carrier-', dir=RUNTIME) as temporary:
+            base = Path(temporary)
+            directory = base / 'controllers'
+            directory.mkdir(mode=0o700)
+            yield base, directory
+
+    def execute_program(self, directory, *, override=None, bad=None, drift=None, uid=0):
+        # Public targets remain fixed. This test maps exactly their two literals
+        # into its owned sandbox, leaving the complete file algorithm unchanged.
+        program = copy.deepcopy(self.program)
+        stores = program.body[-1].body
+        stores[0].value.args[0] = ast.Constant(str(directory))
+        stores[1].value.args[0] = ast.Constant(str(directory / 'formal-runtime-package'))
+        if override is not None:
+            branch, name, body = override
+            node = stores[0 if branch == 'controller' else 1].value
+            pins = ast.literal_eval(node.args[2])
+            self.assertIn(name, pins)
+            pins[name] = hashlib.sha256(body).hexdigest()
+            node.args[2] = ast.parse(repr(pins), mode='eval').body
+        ast.fix_missing_locations(program)
+        self.downloads = []
+        url_prefix = ('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'
+                      + COMMIT + '/scripts/production-release/')
+        def response(url, timeout):
+            self.assertTrue(url.startswith(url_prefix))
+            self.assertEqual(timeout, 30)
+            relative = url[len(url_prefix):]
+            branch = 'package' if relative.startswith('formal-runtime-package/') else 'controller'
+            name = relative.rsplit('/', 1)[-1]
+            key = (branch, name)
+            self.assertIn(key, self.bodies)
+            self.downloads.append(key)
+            if drift is not None:
+                drift(branch, name)
+            body = self.bodies[key]
+            if bad is not None and key == bad[:2]:
+                body = bad[2]
+            if override is not None and key == override[:2]:
+                body = override[2]
+            return io.BytesIO(body)
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        real_stat, real_fstat = os.stat, os.fstat
+        def root_uid(item):
+            # Mock ownership only; every other identity and file operation is real.
+            return SimpleNamespace(**{key: 0 if key == 'st_uid' else getattr(item, key)
+                                      for key in fields})
+        with patch.object(os, 'geteuid', return_value=uid), \
+                patch.object(os, 'stat', side_effect=lambda *args, **kwargs:
+                             root_uid(real_stat(*args, **kwargs))), \
+                patch.object(os, 'fstat', side_effect=lambda *args, **kwargs:
+                             root_uid(real_fstat(*args, **kwargs))), \
+                patch('urllib.request.urlopen', side_effect=response):
+            exec(compile(program, '<real-carrier-private-targets>', 'exec'), {'__name__': '__main__'})
+
+    def assert_rejected(self, directory, **options):
+        with self.assertRaisesRegex(SystemExit, '^FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED$'):
+            self.execute_program(directory, **options)
+
+    def test_real_program_fresh21_exact_bytes_sha_and_private_modes(self):
+        with self.sandbox() as (_, directory):
+            self.execute_program(directory)
+            self.assertEqual(len(self.downloads), 21)
+            for (branch, name), body in self.bodies.items():
+                leaf = (directory if branch == 'controller' else
+                        directory / 'formal-runtime-package') / name
+                self.assertEqual(leaf.read_bytes(), body)
+                self.assertEqual(hashlib.sha256(leaf.read_bytes()).hexdigest(),
+                                 hashlib.sha256(body).hexdigest())
+                self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE((directory / 'formal-runtime-package').stat().st_mode), 0o700)
+            self.assertEqual(len(list(directory.iterdir())), 12)
+
+    def test_real_program_same_bytes_reuse_inode_and_mtime(self):
+        with self.sandbox() as (_, directory):
+            self.execute_program(directory)
+            before = {}
+            for leaf in directory.rglob('*'):
+                if leaf.is_file():
+                    leaf.chmod(0o644)
+                    before[leaf] = (leaf.stat().st_ino, leaf.stat().st_mtime_ns)
+            self.execute_program(directory)
+            self.assertEqual(len(before), 21)
+            self.assertEqual(before, {leaf: (leaf.stat().st_ino, leaf.stat().st_mtime_ns)
+                                      for leaf in before})
+
+    def test_real_program_zero_maximum_and_plus_one_limits(self):
+        for branch, name, limit in (('controller', 'remote-deploy.py', 2 * 1024**2),
+                                     ('package', 'driver.py', 1024**2)):
+            for size in (0, limit, limit + 1):
+                with self.subTest(branch=branch, size=size), self.sandbox() as (_, directory):
+                    options = {'override': (branch, name, b'x' * size)}
+                    if size == limit:
+                        self.execute_program(directory, **options)
+                    else:
+                        self.assert_rejected(directory, **options)
+                        leaf = (directory if branch == 'controller' else
+                                directory / 'formal-runtime-package') / name
+                        self.assertFalse(leaf.exists())
+
+    def test_real_program_rejects_symlink_hardlink_and_preserves_other_bytes(self):
+        for branch, name in (('controller', 'remote-deploy.py'), ('package', 'driver.py')):
+            for kind in ('symlink', 'hardlink', 'different'):
+                with self.subTest(branch=branch, kind=kind), self.sandbox() as (base, directory):
+                    parent = directory if branch == 'controller' else directory / 'formal-runtime-package'
+                    if branch == 'package':
+                        parent.mkdir(mode=0o700)
+                    leaf = parent / name
+                    original = base / 'other'
+                    original.write_bytes(self.bodies[(branch, name)])
+                    original.chmod(0o600)
+                    if kind == 'symlink':
+                        leaf.symlink_to(original)
+                    elif kind == 'hardlink':
+                        os.link(original, leaf)
+                    else:
+                        leaf.write_bytes(b'own unrelated bytes')
+                        leaf.chmod(0o600)
+                    self.assert_rejected(directory)
+                    self.assertEqual(original.read_bytes(), self.bodies[(branch, name)])
+                    if kind == 'different':
+                        self.assertEqual(leaf.read_bytes(), b'own unrelated bytes')
+
+    def test_real_program_rejects_fifo_in_bounded_owned_child(self):
+        child = '''import runpy, sys
+namespace = runpy.run_path(sys.argv[1])
+case_class = namespace['FormalRuntimeFileTransportTests']
+case_class.setUpClass()
+case = case_class('test_real_program_rejects_fifo_in_bounded_owned_child')
+try:
+    case.execute_program(namespace['Path'](sys.argv[2]))
+except SystemExit as error:
+    assert str(error) == 'FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED'
+    print(str(error))
+    raise SystemExit(0)
+raise SystemExit(1)
+'''
+        for branch, name in (('controller', 'remote-deploy.py'), ('package', 'driver.py')):
+            with self.subTest(branch=branch), self.sandbox() as (_, directory):
+                parent = directory if branch == 'controller' else directory / 'formal-runtime-package'
+                if branch == 'package':
+                    parent.mkdir(mode=0o700)
+                leaf = parent / name
+                os.mkfifo(leaf, 0o600)
+                result = subprocess.run([sys.executable, '-B', '-c', child, str(Path(__file__)),
+                                         str(directory)], capture_output=True, text=True, timeout=2)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED\n')
+                self.assertEqual(result.stderr, '')
+                self.assertTrue(stat.S_ISFIFO(leaf.stat().st_mode))
+
+    def test_real_program_rejects_parent_replacement_after_download(self):
+        for branch in ('controller', 'package'):
+            with self.subTest(branch=branch), self.sandbox() as (base, directory):
+                changed = False
+                def drift(current, unused):
+                    nonlocal changed
+                    if current == branch and not changed:
+                        parent = directory if branch == 'controller' else directory / 'formal-runtime-package'
+                        parent.rename(base / 'moved')
+                        parent.mkdir(mode=0o700)
+                        changed = True
+                self.assert_rejected(directory, drift=drift)
+                self.assertTrue(changed)
+
+    def test_real_program_directory_modes_nonroot_and_bad_sha(self):
+        with self.sandbox() as (_, directory):
+            directory.chmod(0o755)
+            self.execute_program(directory)
+        with self.sandbox() as (_, directory):
+            (directory / 'formal-runtime-package').mkdir(mode=0o755)
+            self.assert_rejected(directory)
+            self.assertEqual(len(self.downloads), 11)
+        with self.sandbox() as (_, directory):
+            self.assert_rejected(directory, uid=501)
+            self.assertEqual(self.downloads, [])
+        for branch, name in (('controller', 'remote-deploy.py'), ('package', 'driver.py')):
+            with self.subTest(branch=branch), self.sandbox() as (_, directory):
+                self.assert_rejected(directory, bad=(branch, name, b'wrong source bytes'))
+                leaf = (directory if branch == 'controller' else directory / 'formal-runtime-package') / name
+                self.assertFalse(leaf.exists())
+
+    def test_bounded_carrier_corruption_rejects_before_code_execution(self):
+        variants = (('invalid-b85', ' '),
+                    ('truncated', base64.b85encode(self.compressed[:-8]).decode()),
+                    ('trailing', base64.b85encode(self.compressed + b'x').decode()),
+                    ('concat', base64.b85encode(self.compressed + gzip.compress(self.raw)).decode()),
+                    ('oversize', base64.b85encode(gzip.compress(b'x' * 16385)).decode()),
+                    ('code-sha', base64.b85encode(gzip.compress(self.raw + b'\n# drift')).decode()))
+        for name, payload in variants:
+            with self.subTest(name=name):
+                bootstrap = copy.deepcopy(self.bootstrap)
+                decode = next(node for node in ast.walk(bootstrap)
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'b85decode')
+                decode.args[0] = ast.Constant(payload)
+                ast.fix_missing_locations(bootstrap)
+                code_executed = []
+                def forbidden_code(*unused):
+                    code_executed.append(True)
+                    raise AssertionError('unexpected carrier execution')
+                # This non-authoritative sentinel prevents any production target
+                # from being reached even if a future decoder regression accepts it.
+                namespace = {'__builtins__': {**vars(builtins), 'exec': forbidden_code}}
+                with patch('urllib.request.urlopen', side_effect=AssertionError('network forbidden')) as network:
+                    with self.assertRaises((AssertionError, ValueError, zlib.error)):
+                        exec(compile(bootstrap, '<real-carrier-corruption>', 'exec'), namespace)
+                    network.assert_not_called()
+                self.assertEqual(code_executed, [])
+
+    def test_carrier_public_target_validation_remains_fixed(self):
+        source = Path(__file__).parent
+        for directory, commit in (('/opt/other', COMMIT),
+                ('/opt/id-business-v2/.staging/oidc-' + COMMIT + '/extra', COMMIT),
+                ('/opt/id-business-v2/.staging/oidc-' + COMMIT, COMMIT + ';x')):
+            with self.subTest(directory=directory), self.assertRaisesRegex(
+                    RuntimeError, '^FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED$'):
+                self.namespace['formal_runtime_commands'](directory, commit,
+                    source / 'formal-runtime-package', source)
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ and frozen in this module before `measure` can create a stopped reference.
 """
 import copy
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -31,9 +32,7 @@ POOL_KEYS = frozenset(('Base', 'Size'))
 NETWORK_FIELDS = frozenset(('Name', 'Id', 'Created', 'Scope', 'Driver', 'EnableIPv4', 'EnableIPv6',
     'IPAM', 'Internal', 'Attachable', 'Ingress', 'ConfigFrom', 'ConfigOnly', 'Containers', 'Options', 'Labels'))
 VOLUME_FIELDS = frozenset(('CreatedAt', 'Driver', 'Labels', 'Mountpoint', 'Name', 'Options', 'Scope', 'Status'))
-CODES = ('SOURCE_NOT_MEASURED', 'GENERATOR_UNAVAILABLE', 'CLI_SOURCE_NOT_MEASURED',
-         'DEFAULT_POOLS_UNAVAILABLE', 'SOURCE_SHAPE_UNAVAILABLE', 'IMAGE_CACHE_UNAVAILABLE',
-         'RESOURCE_SCHEMA_UNAVAILABLE', 'RESOURCE_PROPERTIES_UNAVAILABLE')
+CODES = ('SOURCE_NOT_MEASURED', 'GENERATOR_UNAVAILABLE', 'CLI_SOURCE_NOT_MEASURED', 'DEFAULT_POOLS_UNAVAILABLE', 'SOURCE_SHAPE_UNAVAILABLE', 'IMAGE_CACHE_UNAVAILABLE', 'RESOURCE_SCHEMA_UNAVAILABLE', 'RESOURCE_PROPERTIES_UNAVAILABLE', 'ACTUAL_SHAPE_UNAVAILABLE', 'RUNTIME_IDENTITY_UNAVAILABLE', 'RUNTIME_SOCKET_UNAVAILABLE', 'RUNTIME_TOOLS_UNAVAILABLE', 'RUNTIME_SOCKET_PHASE_IDENTITY_FIRST', 'RUNTIME_SOCKET_PHASE_IDENTITY_SECOND', 'RUNTIME_SOCKET_PHASE_LISTENER_REPORT', 'RUNTIME_SOCKET_PHASE_NODE_FIRST', 'RUNTIME_SOCKET_PHASE_NODE_SECOND', 'RUNTIME_SOCKET_PHASE_OBSERVATION_FIRST', 'RUNTIME_SOCKET_PHASE_OBSERVATION_SECOND', 'RUNTIME_SOCKET_PHASE_QUERY_FIRST', 'RUNTIME_SOCKET_PHASE_QUERY_SECOND', 'RUNTIME_SOCKET_PHASE_READER', 'RUNTIME_SOCKET_PHASE_REPORT', 'RUNTIME_SOCKET_PHASE_SOURCE_IDENTITY', 'RUNTIME_SOCKET_PHASE_SOURCE_LISTENER', 'RUNTIME_SOCKET_PHASE_STABILITY', 'RUNTIME_SOCKET_PHASE_START', 'RUNTIME_SOCKET_PHASE_COLLECTOR_SOURCE', 'RUNTIME_SOCKET_PHASE_COLLECTOR_BINDING', 'RUNTIME_SOCKET_PHASE_COLLECTOR_VALIDATE', 'RUNTIME_SOCKET_PHASE_COLLECTOR_IDENTITY', 'RUNTIME_SOCKET_CODE_BASE_SOURCE_UNMEASURED', 'RUNTIME_SOCKET_CODE_BINDING_REPORT_INVALID', 'RUNTIME_SOCKET_CODE_CMDLINE_INVALID', 'RUNTIME_SOCKET_CODE_CONFIG_INVALID', 'RUNTIME_SOCKET_CODE_DAEMON_FD_MISSING', 'RUNTIME_SOCKET_CODE_EXECUTABLE_INVALID', 'RUNTIME_SOCKET_CODE_FD_INVALID', 'RUNTIME_SOCKET_CODE_LISTENER_INVALID', 'RUNTIME_SOCKET_CODE_NAMESPACE_MISMATCH', 'RUNTIME_SOCKET_CODE_PACKAGE_BINARY_MISMATCH', 'RUNTIME_SOCKET_CODE_PACKAGE_DIGEST_UNSUPPORTED', 'RUNTIME_SOCKET_CODE_PACKAGE_INVALID', 'RUNTIME_SOCKET_CODE_PATH_INVALID', 'RUNTIME_SOCKET_CODE_PERMISSIONS_INVALID', 'RUNTIME_SOCKET_CODE_PROCESS_INVALID', 'RUNTIME_SOCKET_CODE_PROC_ALIAS_INVALID', 'RUNTIME_SOCKET_CODE_REPORT_INVALID', 'RUNTIME_SOCKET_CODE_RUNTIME_DRIFT', 'RUNTIME_SOCKET_CODE_RUNTIME_UNAVAILABLE', 'RUNTIME_SOCKET_CODE_SERVICE_INVALID', 'RUNTIME_SOCKET_CODE_SOCKET_BINDING_DRIFT', 'RUNTIME_SOCKET_CODE_SOCKET_BINDING_UNAVAILABLE', 'RUNTIME_SOCKET_CODE_SOCKET_PATH_INVALID', 'RUNTIME_SOCKET_CODE_SOCKET_PERMISSIONS_INVALID', 'RUNTIME_SOCKET_CODE_VFS_BINDING_UNAVAILABLE', 'RUNTIME_SOCKET_CODE_VFS_DIAG_UNAVAILABLE', 'RUNTIME_SOCKET_CODE_VFS_DRIFT', 'RUNTIME_SOCKET_CODE_VFS_NODE_MISMATCH', 'RUNTIME_SOCKET_CODE_VFS_QUERY_INVALID', 'RUNTIME_SOCKET_CODE_VFS_REPORT_INVALID', 'RUNTIME_SOCKET_CODE_VFS_SOURCE_UNMEASURED', 'RUNTIME_SOCKET_CODE_VFS_WIRE_INVALID')
 # Empty intentionally: no production Engine/Compose binary/schema/pool source has
 # been measured and reviewed. Do not auto-register the LOCAL v5.4 fixture.
 REVIEWED_GENERATORS = {}
@@ -47,16 +46,33 @@ INFO_FORMAT = ('{"id":{{json .ID}},"serverVersion":{{json .ServerVersion}},'
                '"plugins":{{json .ClientInfo.Plugins}}}')
 REPORT_KEYS = frozenset(('version', 'kind', 'status', 'authority', 'productionEligible',
     'measurementPerformed', 'proofConstructed', 'rawOutputSuppressed', 'generator',
-    'daemonDefaultAddressPools', 'sourceShape', 'resources', 'cacheImage', 'codes'))
+    'daemonDefaultAddressPools', 'sourceShape', 'actualConfigurationShape', 'runtimeDaemonIdentity', 'runtimeDaemonSocket',
+    'runtimeCollectionTools',
+    'resources', 'cacheImage', 'codes'))
 GENERATOR_KEYS = frozenset(('composeVersion', 'engineVersion', 'engineApiVersion', 'dockerCliVersion',
     'dockerCliSha256', 'composeCliSha256', 'daemonIdentitySha256', 'nativePlatform',
     'reviewedSourceStatus', 'engineGitCommit', 'dockerCliGitCommit', 'enginePackage', 'dockerCliPackage'))
+# Optional closed diagnostic selection; never a source/permission admission.
+GENERATOR_PATH_ROLE_KEYS = frozenset(('dockerCliPathRole', 'composeCliPathRole'))
+DOCKER_PATH_ROLES = {'/usr/bin/docker': 'USR_BIN_DOCKER', '/usr/local/bin/docker': 'USR_LOCAL_BIN_DOCKER'}
+COMPOSE_PATH_ROLES = {
+    '/usr/libexec/docker/cli-plugins/docker-compose': 'USR_LIBEXEC_COMPOSE',
+    '/usr/lib/docker/cli-plugins/docker-compose': 'USR_LIB_COMPOSE',
+    '/usr/local/lib/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIB_COMPOSE',
+    '/usr/local/libexec/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIBEXEC_COMPOSE',
+}
 SOURCE_KEYS = frozenset(('status', 'apiFieldNames', 'environmentKeyCount', 'declaredNetworkCount',
     'mountTypeCounts', 'schemaSha256', 'representation'))
 RESOURCE_KEYS = frozenset(('status', 'connectedNetworkCount', 'namedVolumeCount',
     'networkSchemaSha256', 'volumeSchemaSha256', 'propertiesSha256',
     'unknownNetworkFieldCount', 'unknownVolumeFieldCount', 'reviewedSchemaStatus'))
 CACHE_KEYS = frozenset(('status', 'expectedImageIdSha256', 'observedImageIdSha256', 'referenceSha256'))
+ACTUAL_SHAPE_KEYS = frozenset(('status', 'apiCreatorVersion', 'networkCreatorVersions', 'volumeCreatorVersion',
+    'bindsEncoding', 'bindsCount', 'mountsEncoding', 'mountsCount', 'hostMountFieldNames', 'hostMountUnknownFieldCount'))
+HOST_MOUNT_FIELDS = frozenset(('Type', 'Source', 'Target', 'ReadOnly', 'Consistency', 'BindOptions',
+                              'VolumeOptions', 'TmpfsOptions'))
+DAEMON_IDENTITY_SOURCE_SHA256 = '2b3698ed515d5428535e16190e7ca32f92e02493d2e498f39c22753921eb1ecb'
+DAEMON_SOCKET_SOURCE_SHA256 = 'cba4b37317e8f48778c0dbc59f2c3131340f7d769b2807d0e03fe7c4d37e511a'
 
 
 class Rejected(RuntimeError):
@@ -214,6 +230,97 @@ def schema_summary(value, known):
             'unknownFieldCount': len(set(value) - known)}
 
 
+def daemon_identity_capability():
+    path = Path(__file__).with_name('online-recharge-daemon-identity.py')
+    check(path.is_file() and not path.is_symlink(), 'SOURCE_NOT_MEASURED')
+    source = path.read_bytes()
+    check(sha(source) == DAEMON_IDENTITY_SOURCE_SHA256,
+          'SOURCE_NOT_MEASURED')
+    module_spec = importlib.util.spec_from_file_location('_fixed_dockerd_runtime_identity', path)
+    module = importlib.util.module_from_spec(module_spec)
+    exec(compile(source, str(path), 'exec'), module.__dict__)
+    return module
+
+
+def daemon_socket_capability():
+    path = Path(__file__).with_name('online-recharge-daemon-socket.py')
+    check(path.is_file() and not path.is_symlink(), 'SOURCE_NOT_MEASURED')
+    source = path.read_bytes()
+    check(sha(source) == DAEMON_SOCKET_SOURCE_SHA256, 'SOURCE_NOT_MEASURED')
+    module_spec = importlib.util.spec_from_file_location('_fixed_dockerd_socket_binding', path)
+    module = importlib.util.module_from_spec(module_spec)
+    exec(compile(source, str(path), 'exec'), module.__dict__)
+    return module
+
+# Fixed literal namespaces; never concatenate exception/config values into output.
+SOCKET_DIAGNOSTIC_PHASE_CODES = {'IDENTITY_FIRST': 'RUNTIME_SOCKET_PHASE_IDENTITY_FIRST', 'IDENTITY_SECOND': 'RUNTIME_SOCKET_PHASE_IDENTITY_SECOND', 'LISTENER_REPORT': 'RUNTIME_SOCKET_PHASE_LISTENER_REPORT', 'NODE_FIRST': 'RUNTIME_SOCKET_PHASE_NODE_FIRST', 'NODE_SECOND': 'RUNTIME_SOCKET_PHASE_NODE_SECOND', 'OBSERVATION_FIRST': 'RUNTIME_SOCKET_PHASE_OBSERVATION_FIRST', 'OBSERVATION_SECOND': 'RUNTIME_SOCKET_PHASE_OBSERVATION_SECOND', 'QUERY_FIRST': 'RUNTIME_SOCKET_PHASE_QUERY_FIRST', 'QUERY_SECOND': 'RUNTIME_SOCKET_PHASE_QUERY_SECOND', 'READER': 'RUNTIME_SOCKET_PHASE_READER', 'REPORT': 'RUNTIME_SOCKET_PHASE_REPORT', 'SOURCE_IDENTITY': 'RUNTIME_SOCKET_PHASE_SOURCE_IDENTITY', 'SOURCE_LISTENER': 'RUNTIME_SOCKET_PHASE_SOURCE_LISTENER', 'STABILITY': 'RUNTIME_SOCKET_PHASE_STABILITY', 'START': 'RUNTIME_SOCKET_PHASE_START', 'COLLECTOR_SOURCE': 'RUNTIME_SOCKET_PHASE_COLLECTOR_SOURCE', 'COLLECTOR_BINDING': 'RUNTIME_SOCKET_PHASE_COLLECTOR_BINDING', 'COLLECTOR_VALIDATE': 'RUNTIME_SOCKET_PHASE_COLLECTOR_VALIDATE', 'COLLECTOR_IDENTITY': 'RUNTIME_SOCKET_PHASE_COLLECTOR_IDENTITY'}
+SOCKET_DIAGNOSTIC_REASON_CODES = {'BASE_SOURCE_UNMEASURED': 'RUNTIME_SOCKET_CODE_BASE_SOURCE_UNMEASURED', 'BINDING_REPORT_INVALID': 'RUNTIME_SOCKET_CODE_BINDING_REPORT_INVALID', 'CMDLINE_INVALID': 'RUNTIME_SOCKET_CODE_CMDLINE_INVALID', 'CONFIG_INVALID': 'RUNTIME_SOCKET_CODE_CONFIG_INVALID', 'DAEMON_FD_MISSING': 'RUNTIME_SOCKET_CODE_DAEMON_FD_MISSING', 'EXECUTABLE_INVALID': 'RUNTIME_SOCKET_CODE_EXECUTABLE_INVALID', 'FD_INVALID': 'RUNTIME_SOCKET_CODE_FD_INVALID', 'LISTENER_INVALID': 'RUNTIME_SOCKET_CODE_LISTENER_INVALID', 'NAMESPACE_MISMATCH': 'RUNTIME_SOCKET_CODE_NAMESPACE_MISMATCH', 'PACKAGE_BINARY_MISMATCH': 'RUNTIME_SOCKET_CODE_PACKAGE_BINARY_MISMATCH', 'PACKAGE_DIGEST_UNSUPPORTED': 'RUNTIME_SOCKET_CODE_PACKAGE_DIGEST_UNSUPPORTED', 'PACKAGE_INVALID': 'RUNTIME_SOCKET_CODE_PACKAGE_INVALID', 'PATH_INVALID': 'RUNTIME_SOCKET_CODE_PATH_INVALID', 'PERMISSIONS_INVALID': 'RUNTIME_SOCKET_CODE_PERMISSIONS_INVALID', 'PROCESS_INVALID': 'RUNTIME_SOCKET_CODE_PROCESS_INVALID', 'PROC_ALIAS_INVALID': 'RUNTIME_SOCKET_CODE_PROC_ALIAS_INVALID', 'REPORT_INVALID': 'RUNTIME_SOCKET_CODE_REPORT_INVALID', 'RUNTIME_DRIFT': 'RUNTIME_SOCKET_CODE_RUNTIME_DRIFT', 'RUNTIME_UNAVAILABLE': 'RUNTIME_SOCKET_CODE_RUNTIME_UNAVAILABLE', 'SERVICE_INVALID': 'RUNTIME_SOCKET_CODE_SERVICE_INVALID', 'SOCKET_BINDING_DRIFT': 'RUNTIME_SOCKET_CODE_SOCKET_BINDING_DRIFT', 'SOCKET_BINDING_UNAVAILABLE': 'RUNTIME_SOCKET_CODE_SOCKET_BINDING_UNAVAILABLE', 'SOCKET_PATH_INVALID': 'RUNTIME_SOCKET_CODE_SOCKET_PATH_INVALID', 'SOCKET_PERMISSIONS_INVALID': 'RUNTIME_SOCKET_CODE_SOCKET_PERMISSIONS_INVALID', 'VFS_BINDING_UNAVAILABLE': 'RUNTIME_SOCKET_CODE_VFS_BINDING_UNAVAILABLE', 'VFS_DIAG_UNAVAILABLE': 'RUNTIME_SOCKET_CODE_VFS_DIAG_UNAVAILABLE', 'VFS_DRIFT': 'RUNTIME_SOCKET_CODE_VFS_DRIFT', 'VFS_NODE_MISMATCH': 'RUNTIME_SOCKET_CODE_VFS_NODE_MISMATCH', 'VFS_QUERY_INVALID': 'RUNTIME_SOCKET_CODE_VFS_QUERY_INVALID', 'VFS_REPORT_INVALID': 'RUNTIME_SOCKET_CODE_VFS_REPORT_INVALID', 'VFS_SOURCE_UNMEASURED': 'RUNTIME_SOCKET_CODE_VFS_SOURCE_UNMEASURED', 'VFS_WIRE_INVALID': 'RUNTIME_SOCKET_CODE_VFS_WIRE_INVALID'}
+SOCKET_DIAGNOSTIC_COLLECTOR_PHASES = ('COLLECTOR_SOURCE', 'COLLECTOR_BINDING', 'COLLECTOR_VALIDATE', 'COLLECTOR_IDENTITY')
+
+def _socket_failure_codes(error, capability, collector_stage):
+    # capability is only the byte-pinned fixed module acquired above, never a
+    # producer document/provider/trusted boolean. Exact owned class only.
+    fallback_phase = collector_stage if (type(collector_stage) is str and collector_stage in SOCKET_DIAGNOSTIC_COLLECTOR_PHASES) else 'COLLECTOR_SOURCE'
+    fallback = (SOCKET_DIAGNOSTIC_PHASE_CODES[fallback_phase], SOCKET_DIAGNOSTIC_REASON_CODES['VFS_BINDING_UNAVAILABLE'])
+    try:
+        if capability is None or type(error) is not capability.Rejected or fallback_phase != collector_stage:
+            return fallback
+        values = BaseException.args.__get__(error, type(error))
+        data = object.__getattribute__(error, '__dict__')
+        phase = data.get('diagnostic_phase') if type(data) is dict else None
+        if (type(values) is not tuple or len(values) != 1 or type(values[0]) is not str
+                or values[0] not in SOCKET_DIAGNOSTIC_REASON_CODES or type(phase) is not str
+                or phase not in SOCKET_DIAGNOSTIC_PHASE_CODES or phase in SOCKET_DIAGNOSTIC_COLLECTOR_PHASES):
+            return fallback
+        return (SOCKET_DIAGNOSTIC_PHASE_CODES[phase], SOCKET_DIAGNOSTIC_REASON_CODES[values[0]])
+    except Exception:
+        return fallback
+
+def _validate_socket_failure_codes(value):
+    phases = [v for v in value['codes'] if v in SOCKET_DIAGNOSTIC_PHASE_CODES.values()]
+    reasons = [v for v in value['codes'] if v in SOCKET_DIAGNOSTIC_REASON_CODES.values()]
+    if not phases and not reasons:
+        return # Existing legacy reports remain valid.
+    check(len(phases) == len(reasons) == 1 and 'RUNTIME_SOCKET_UNAVAILABLE' in value['codes']
+          and value['runtimeDaemonSocket'] == {'status': 'NOT_MEASURED', 'report': None}, 'INVENTORY_INVALID')
+
+
+def actual_configuration_shape(host, labels, networks, volumes):
+    """Safe representation only; full Config/HostConfig remains mandatory for equivalence.
+
+    Values, mount sources, arbitrary labels and unknown field names never escape.
+    This cannot replace a complete inspect or qualify a generator.
+    """
+    check(type(host) is dict and type(labels) is dict and len(networks) == 4 and len(volumes) == 1,
+          'INPUT_INVALID')
+    def creator(value):
+        check(type(value) is dict, 'INPUT_INVALID')
+        version = value.get('com.docker.compose.version')
+        check(type(version) is str and VERSION.fullmatch(version), 'INPUT_INVALID')
+        return version
+    def encoding(name):
+        value = host.get(name)
+        if name not in host:
+            return 'ABSENT', None, []
+        if value is None:
+            return 'NULL', None, []
+        check(type(value) is list and len(value) <= 8, 'INPUT_INVALID')
+        if name == 'Binds':
+            check(all(type(row) is str and len(row) <= 2048 for row in value), 'INPUT_INVALID')
+        else:
+            check(all(type(row) is dict for row in value), 'INPUT_INVALID')
+        return 'ARRAY', len(value), value
+    binds_encoding, binds_count, _binds = encoding('Binds')
+    mounts_encoding, mounts_count, mounts = encoding('Mounts')
+    return {'status': 'OBSERVED', 'apiCreatorVersion': creator(labels),
+        'networkCreatorVersions': sorted({creator(row.get('Labels')) for row in networks}),
+        'volumeCreatorVersion': creator(volumes[0].get('Labels')),
+        'bindsEncoding': binds_encoding, 'bindsCount': binds_count,
+        'mountsEncoding': mounts_encoding, 'mountsCount': mounts_count,
+        'hostMountFieldNames': [sorted(set(row) & HOST_MOUNT_FIELDS) for row in mounts],
+        'hostMountUnknownFieldCount': sum(len(set(row) - HOST_MOUNT_FIELDS) for row in mounts)}
+
+
 def validate_services(services):
     check(isinstance(services, dict) and set(services) == set(SERVICES), 'INPUT_INVALID')
     for name, row in services.items():
@@ -238,12 +345,17 @@ def inventory(d, directory, *, services, image_reference, image_id):
     check(image_reference == services['api']['reference'] and image_id == services['api']['image'], 'INPUT_INVALID')
     report = {'version': 1, 'kind': KIND, 'status': 'SOURCE_NOT_MEASURED', 'authority': False,
         'productionEligible': False, 'measurementPerformed': False, 'proofConstructed': False,
-        'rawOutputSuppressed': True, 'generator': {key: None for key in GENERATOR_KEYS},
+        'rawOutputSuppressed': True, 'generator': {key: None for key in GENERATOR_KEYS | GENERATOR_PATH_ROLE_KEYS},
         'daemonDefaultAddressPools': {'status': 'UNAVAILABLE', 'pools': [], 'reviewedRulesStatus': 'SOURCE_NOT_MEASURED',
                                      'sourceEncoding': None, 'sourceValueSha256': None},
         'sourceShape': {'status': 'NOT_MEASURED', 'apiFieldNames': [], 'environmentKeyCount': None,
                        'declaredNetworkCount': None, 'mountTypeCounts': None, 'schemaSha256': None,
                        'representation': None},
+        'actualConfigurationShape': {key: ('NOT_MEASURED' if key == 'status' else None)
+                                     for key in ACTUAL_SHAPE_KEYS},
+        'runtimeDaemonIdentity': {'status': 'NOT_MEASURED', 'report': None},
+        'runtimeDaemonSocket': {'status': 'NOT_MEASURED', 'report': None},
+        'runtimeCollectionTools': {'status': 'NOT_MEASURED', 'bytesSha256': None, 'identitySha256': None},
         'resources': {'status': 'NOT_MEASURED', 'connectedNetworkCount': None, 'namedVolumeCount': None,
             'networkSchemaSha256': None, 'volumeSchemaSha256': None, 'propertiesSha256': None,
             'unknownNetworkFieldCount': None, 'unknownVolumeFieldCount': None, 'reviewedSchemaStatus': 'SOURCE_NOT_MEASURED'},
@@ -251,6 +363,43 @@ def inventory(d, directory, *, services, image_reference, image_id):
                        'observedImageIdSha256': None, 'referenceSha256': sha(image_reference)}, 'codes': []}
     report['generator']['reviewedSourceStatus'] = 'SOURCE_NOT_MEASURED'
     codes = {'SOURCE_NOT_MEASURED'}
+    try:
+        identity = daemon_identity_capability()
+        runtime = identity.runtime_daemon_identity(d)
+        identity.validate_runtime_identity(runtime)
+        report['runtimeDaemonIdentity'] = {'status': 'OBSERVED', 'report': runtime}
+    except Exception:
+        codes.add('RUNTIME_IDENTITY_UNAVAILABLE')
+    try:
+        check(report['runtimeDaemonIdentity']['status'] == 'OBSERVED', 'SOURCE_NOT_MEASURED')
+        reader = identity._reader_factory()
+        tools = {}
+        for path in ('/usr/bin/systemctl', '/usr/bin/rpm'):
+            raw, node = reader.read(path, 128 * 1024**2, executable=True)
+            tools[path] = {'bytesSha256': sha(raw), 'identity': node}
+        tools_sha = fingerprint(tools)
+        check(tools_sha == runtime['runtime']['collectionToolsSha256'], 'SOURCE_NOT_MEASURED')
+        report['runtimeCollectionTools'] = {'status': 'OBSERVED',
+            'bytesSha256': {path: row['bytesSha256'] for path, row in tools.items()},
+            'identitySha256': tools_sha}
+    except Exception:
+        codes.add('RUNTIME_TOOLS_UNAVAILABLE')
+    socket = None
+    socket_stage = 'COLLECTOR_SOURCE'
+    try:
+        check(report['runtimeDaemonIdentity']['status'] == 'OBSERVED', 'SOURCE_NOT_MEASURED')
+        socket_stage = 'COLLECTOR_SOURCE'
+        socket = daemon_socket_capability()
+        socket_stage = 'COLLECTOR_BINDING'
+        binding = socket.runtime_daemon_socket_binding(d)
+        socket_stage = 'COLLECTOR_VALIDATE'
+        socket.validate_binding(binding)
+        socket_stage = 'COLLECTOR_IDENTITY'
+        check(binding['listenerBinding']['runtimeIdentity'] == report['runtimeDaemonIdentity']['report'], 'SOURCE_NOT_MEASURED')
+        report['runtimeDaemonSocket'] = {'status': 'OBSERVED', 'report': binding}
+    except Exception as error:
+        codes.add('RUNTIME_SOCKET_UNAVAILABLE')
+        codes.update(_socket_failure_codes(error, socket, socket_stage))
     try:
         info = read(d, 'docker', 'info', '--format', INFO_FORMAT, limit=128 * 1024)
         version = read(d, 'docker', 'version', '--format', '{{json .}}', limit=128 * 1024)
@@ -285,8 +434,13 @@ def inventory(d, directory, *, services, image_reference, image_id):
             check(isinstance(plugins, list), 'INPUT_INVALID')
             paths = [p['Path'] for p in plugins if isinstance(p, dict) and p.get('Name') == 'compose']
             check(len(paths) == 1, 'INPUT_INVALID')
-            report['generator']['dockerCliSha256'] = binary_hash(shutil.which('docker'), 'docker')
-            report['generator']['composeCliSha256'] = binary_hash(paths[0], 'compose')
+            docker_path = shutil.which('docker')
+            docker_hash = binary_hash(docker_path, 'docker')
+            report['generator'].update({'dockerCliSha256': docker_hash,
+                                       'dockerCliPathRole': DOCKER_PATH_ROLES[docker_path]})
+            compose_hash = binary_hash(paths[0], 'compose')
+            report['generator'].update({'composeCliSha256': compose_hash,
+                                       'composeCliPathRole': COMPOSE_PATH_ROLES[paths[0]]})
         except Exception:
             codes.add('CLI_SOURCE_NOT_MEASURED')
     except Exception:
@@ -333,6 +487,12 @@ def inventory(d, directory, *, services, image_reference, image_id):
             'propertiesSha256': fingerprint(properties),
             'unknownNetworkFieldCount': sum(r['unknownFieldCount'] for r in net_schemas),
             'unknownVolumeFieldCount': sum(r['unknownFieldCount'] for r in vol_schemas)})
+        try:
+            host = read(d, 'docker', 'inspect', '--format', '{{json .HostConfig}}', cid)
+            labels = read(d, 'docker', 'inspect', '--format', '{{json .Config.Labels}}', cid)
+            report['actualConfigurationShape'] = actual_configuration_shape(host, labels, nets, volumes)
+        except Exception:
+            codes.add('ACTUAL_SHAPE_UNAVAILABLE')
     except Exception:
         codes.add('RESOURCE_SCHEMA_UNAVAILABLE')
     report['codes'] = [code for code in CODES if code in codes]
@@ -346,7 +506,8 @@ def _validate_inventory(value):
           and all(value[k] is False for k in ('authority', 'productionEligible', 'measurementPerformed', 'proofConstructed'))
           and value['rawOutputSuppressed'] is True, 'INVENTORY_INVALID')
     g, p, s, r, c = (value[k] for k in ('generator', 'daemonDefaultAddressPools', 'sourceShape', 'resources', 'cacheImage'))
-    check(isinstance(g, dict) and set(g) == GENERATOR_KEYS and g['reviewedSourceStatus'] == 'SOURCE_NOT_MEASURED'
+    check(isinstance(g, dict) and set(g) in (GENERATOR_KEYS, GENERATOR_KEYS | GENERATOR_PATH_ROLE_KEYS)
+          and g['reviewedSourceStatus'] == 'SOURCE_NOT_MEASURED'
           and all(g[k] is None or isinstance(g[k], str) and VERSION.fullmatch(g[k]) for k in
                   ('composeVersion', 'engineVersion', 'dockerCliVersion'))
           and (g['engineApiVersion'] is None or isinstance(g['engineApiVersion'], str)
@@ -356,6 +517,13 @@ def _validate_inventory(value):
           and g['nativePlatform'] in (None, 'linux/x86_64', 'linux/amd64', 'linux/aarch64', 'linux/arm64'), 'INVENTORY_INVALID')
     check(all(g[k] is None or isinstance(g[k], str) and re.fullmatch(r'[a-f0-9]{7,40}', g[k])
               for k in ('engineGitCommit', 'dockerCliGitCommit')), 'INVENTORY_INVALID')
+    if GENERATOR_PATH_ROLE_KEYS <= set(g):
+        for role_key, hash_key, roles in (('dockerCliPathRole', 'dockerCliSha256', DOCKER_PATH_ROLES),
+                                         ('composeCliPathRole', 'composeCliSha256', COMPOSE_PATH_ROLES)):
+            role = g[role_key]
+            check((role is None and g[hash_key] is None)
+                  or (type(role) is str and role in roles.values() and g[hash_key] is not None),
+                  'INVENTORY_INVALID')
     for key in ('enginePackage', 'dockerCliPackage'):
         row = g[key]
         check(row is None or isinstance(row, dict) and set(row) == {'name', 'version', 'release', 'architecture'}
@@ -390,6 +558,56 @@ def _validate_inventory(value):
           and r['reviewedSchemaStatus'] == 'SOURCE_NOT_MEASURED', 'INVENTORY_INVALID')
     check(all(v is None or isinstance(v, str) and HEX.fullmatch(v) for v in
               (s['schemaSha256'], r['networkSchemaSha256'], r['volumeSchemaSha256'], r['propertiesSha256'])), 'INVENTORY_INVALID')
+    a = value['actualConfigurationShape']
+    check(type(a) is dict and set(a) == ACTUAL_SHAPE_KEYS and a['status'] in ('OBSERVED', 'NOT_MEASURED'),
+          'INVENTORY_INVALID')
+    if a['status'] == 'NOT_MEASURED':
+        check(all(a[key] is None for key in ACTUAL_SHAPE_KEYS - {'status'}), 'INVENTORY_INVALID')
+    else:
+        check(all(type(a[key]) is str and VERSION.fullmatch(a[key]) for key in
+                  ('apiCreatorVersion', 'volumeCreatorVersion'))
+              and type(a['networkCreatorVersions']) is list and 1 <= len(a['networkCreatorVersions']) <= 4
+              and a['networkCreatorVersions'] == sorted(set(a['networkCreatorVersions']))
+              and all(type(v) is str and VERSION.fullmatch(v) for v in a['networkCreatorVersions']),
+              'INVENTORY_INVALID')
+        for encoding_key, count_key in (('bindsEncoding', 'bindsCount'), ('mountsEncoding', 'mountsCount')):
+            check(a[encoding_key] in ('ABSENT', 'NULL', 'ARRAY')
+                  and ((a[encoding_key] == 'ARRAY' and type(a[count_key]) is int and 0 <= a[count_key] <= 8)
+                       or (a[encoding_key] != 'ARRAY' and a[count_key] is None)), 'INVENTORY_INVALID')
+        check(type(a['hostMountFieldNames']) is list
+              and len(a['hostMountFieldNames']) == (a['mountsCount'] or 0)
+              and all(type(row) is list and row == sorted(set(row)) and set(row) <= HOST_MOUNT_FIELDS
+                      for row in a['hostMountFieldNames'])
+              and type(a['hostMountUnknownFieldCount']) is int and 0 <= a['hostMountUnknownFieldCount'] <= 4096,
+              'INVENTORY_INVALID')
+    runtime = value['runtimeDaemonIdentity']
+    check(type(runtime) is dict and set(runtime) == {'status', 'report'}
+          and runtime['status'] in ('OBSERVED', 'NOT_MEASURED'), 'INVENTORY_INVALID')
+    if runtime['status'] == 'NOT_MEASURED':
+        check(runtime['report'] is None, 'INVENTORY_INVALID')
+    else:
+        daemon_identity_capability().validate_runtime_identity(runtime['report'])
+    tools = value['runtimeCollectionTools']
+    check(type(tools) is dict and set(tools) == {'status', 'bytesSha256', 'identitySha256'}
+          and tools['status'] in ('OBSERVED', 'NOT_MEASURED'), 'INVENTORY_INVALID')
+    if tools['status'] == 'NOT_MEASURED':
+        check(tools['bytesSha256'] is None and tools['identitySha256'] is None, 'INVENTORY_INVALID')
+    else:
+        check(runtime['status'] == 'OBSERVED' and type(tools['bytesSha256']) is dict
+              and set(tools['bytesSha256']) == {'/usr/bin/systemctl', '/usr/bin/rpm'}
+              and all(type(v) is str and HEX.fullmatch(v) for v in tools['bytesSha256'].values())
+              and type(tools['identitySha256']) is str and HEX.fullmatch(tools['identitySha256'])
+              and tools['identitySha256'] == runtime['report']['runtime']['collectionToolsSha256'],
+              'INVENTORY_INVALID')
+    socket = value['runtimeDaemonSocket']
+    check(type(socket) is dict and set(socket) == {'status', 'report'}
+          and socket['status'] in ('OBSERVED', 'NOT_MEASURED'), 'INVENTORY_INVALID')
+    if socket['status'] == 'NOT_MEASURED':
+        check(socket['report'] is None, 'INVENTORY_INVALID')
+    else:
+        daemon_socket_capability().validate_binding(socket['report'])
+        check(runtime['status'] == 'OBSERVED' and socket['report']['listenerBinding']['runtimeIdentity'] == runtime['report'],
+              'INVENTORY_INVALID')
     check(isinstance(c, dict) and set(c) == CACHE_KEYS and c['status'] in ('MATCH', 'MISMATCH', 'NOT_MEASURED')
           and all(isinstance(c[k], str) and HEX.fullmatch(c[k]) for k in ('expectedImageIdSha256', 'referenceSha256'))
           and (c['observedImageIdSha256'] is None or isinstance(c['observedImageIdSha256'], str)
@@ -424,6 +642,7 @@ def _validate_inventory(value):
               and r['connectedNetworkCount'] <= 8 and r['namedVolumeCount'] <= 8, 'INVENTORY_INVALID')
     check(isinstance(value['codes'], list) and 'SOURCE_NOT_MEASURED' in value['codes']
           and value['codes'] == [code for code in CODES if code in value['codes']], 'INVENTORY_INVALID')
+    _validate_socket_failure_codes(value)
     return copy.deepcopy(value)
 
 

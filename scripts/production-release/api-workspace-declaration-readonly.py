@@ -18,7 +18,8 @@ BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 STATUS = 'API_ADMIN_WORKSPACE_DECLARATION_INVENTORY'
 HELPERS = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
            'online-recharge-recovery.json', 'api-admin-pending-projection.py',
-           'online-recharge-declaration-measurement.py')
+           'online-recharge-declaration-measurement.py', 'online-recharge-daemon-identity.py',
+           'online-recharge-daemon-listener.py', 'online-recharge-daemon-socket.py')
 FIELDS = frozenset(('status', 'commit', 'producer', 'inventory', 'authority',
                     'productionEligible', 'rawOutputSuppressed',
                     'stableServicesSha256', 'boundFilesSha256'))

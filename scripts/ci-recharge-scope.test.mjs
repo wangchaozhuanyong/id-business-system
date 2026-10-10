@@ -1617,7 +1617,17 @@ test('pending online bridge control names are finite and preserve business scope
     'scripts/production-release/api-workspace-declaration-artifacts.py',
     'scripts/production-release/api-workspace-declaration-artifacts.test.py',
     'scripts/production-release/online-recharge-declaration-measurement.py',
-    'scripts/production-release/online-recharge-declaration-measurement.test.py'
+    'scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'scripts/production-release/online-recharge-daemon-identity.py',
+    'scripts/production-release/online-recharge-daemon-identity.test.py',
+    'scripts/production-release/online-recharge-daemon-listener.py',
+    'scripts/production-release/online-recharge-daemon-listener.test.py',
+    'scripts/production-release/online-recharge-daemon-socket.py',
+    'scripts/production-release/online-recharge-daemon-socket.test.py',
+    'scripts/production-release/online-recharge-source-permission-repair.py',
+    'scripts/production-release/online-recharge-source-permission-repair.test.py',
+    'scripts/production-release/online-recharge-source-permission-repair-transport.py',
+    'scripts/production-release/online-recharge-source-permission-repair-transport.test.py'
   ];
   for (const path of paths) {
     assert.equal(isCiOnly([path]), true);
@@ -1631,7 +1641,9 @@ test('pending online bridge control names are finite and preserve business scope
     'scripts/production-release/api-admin-pending-receipt-wire-other.py',
     'scripts/production-release/api-admin-pending-projection.py.backup',
     'scripts/production-release/api-workspace-declaration-write.py',
-    'scripts/production-release/online-recharge-declaration-measurement.py.backup'
+    'scripts/production-release/online-recharge-declaration-measurement.py.backup',
+    'scripts/production-release/online-recharge-source-permission-repair.py.backup',
+    'scripts/production-release/online-recharge-source-permission-repair-transport-other.py'
   ]) {
     assert.equal(isCiOnly([unknown]), false);
     assert.equal(checkMode([unknown], schema, schema), 'full');

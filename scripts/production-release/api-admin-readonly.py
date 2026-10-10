@@ -1,5 +1,8 @@
 """Pinned, independent SSM readback for the explicit API/Admin scope."""
 import hashlib
+import gzip
+import inspect
+import shlex
 import base64
 import json
 import os
@@ -186,6 +189,144 @@ def selected_scope(operation):
     return 'API_ADMIN'
 
 
+FORMAL_RUNTIME_FILES = ('driver.py', 'manifest.json', 'package_io.py', 'pure.py', 'collector.py',
+         'constructor.py', 'reader.py', 'qualified.py', 'contract.json',
+         'reviewed-source-table.json')
+
+
+FORMAL_RUNTIME_CONTROLLERS = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
+ 'online-recharge-recovery.json', 'api-admin-pending-projection.py', 'api-admin-readonly.py',
+ 'api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
+ 'online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
+ 'online-recharge-daemon-socket.py')
+
+
+def _store_files(directory, commit, pins, package):
+    import hashlib
+    import os
+    import stat
+    import urllib.request
+    from pathlib import Path
+
+    def need(ok):
+        if not ok:
+            raise RuntimeError('FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED')
+
+    def identity(item):
+        return (item.st_dev, item.st_ino, item.st_mode, item.st_uid, item.st_gid,
+                item.st_nlink, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+
+    def open_parent():
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        chain = []
+        try:
+            for index, part in enumerate(Path(directory).parts[1:]):
+                try:
+                    before = os.stat(part, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    need(index == len(Path(directory).parts[1:]) - 1)
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                    before = os.stat(part, dir_fd=fd, follow_symlinks=False)
+                need(stat.S_ISDIR(before.st_mode) and before.st_uid == 0
+                     and not stat.S_IMODE(before.st_mode) & 0o022)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                try:
+                    after = os.fstat(child)
+                    need(identity(before) == identity(after))
+                    chain.append((after.st_dev, after.st_ino, after.st_mode, after.st_uid, after.st_gid))
+                except BaseException:
+                    os.close(child)
+                    raise
+                os.close(fd)
+                fd = child
+            need(stat.S_IMODE(os.fstat(fd).st_mode) in ((0o700,) if package else (0o700, 0o755)))
+            return fd, chain
+        except BaseException:
+            os.close(fd)
+            raise
+
+    need(os.geteuid() == 0)
+    parent, chain = open_parent()
+    limit = 1024 * 1024 if package else 2 * 1024 * 1024
+    try:
+        for name, expected in pins.items():
+            url = ('https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/'
+                   + commit + '/scripts/production-release/'
+                   + ('formal-runtime-package/' if package else '') + name)
+            with urllib.request.urlopen(url, timeout=30) as response:
+                raw = response.read(limit + 1)
+            need(0 < len(raw) <= limit and hashlib.sha256(raw).hexdigest() == expected)
+            fd = None
+            try:
+                try:
+                    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                                 0o600, dir_fd=parent)
+                    first = os.fstat(fd)
+                    need(stat.S_ISREG(first.st_mode) and first.st_uid == 0 and first.st_nlink == 1
+                         and stat.S_IMODE(first.st_mode) == 0o600 and first.st_size == 0)
+                    offset = 0
+                    while offset < len(raw):
+                        count = os.write(fd, raw[offset:])
+                        need(count > 0)
+                        offset += count
+                    os.fsync(fd)
+                except FileExistsError:
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+                    first = os.fstat(fd)
+                    need(stat.S_ISREG(first.st_mode) and first.st_uid == 0 and first.st_nlink == 1
+                         and stat.S_IMODE(first.st_mode) in (0o600, 0o644) and first.st_size == len(raw))
+                    current = b''
+                    while len(current) <= limit:
+                        block = os.read(fd, min(65536, limit + 1 - len(current)))
+                        if not block:
+                            break
+                        current += block
+                    need(current == raw and identity(first) == identity(os.fstat(fd)))
+                final = os.fstat(fd)
+                need(final.st_size == len(raw)
+                     and identity(final) == identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
+            finally:
+                if fd is not None:
+                    os.close(fd)
+            visible, again = open_parent()
+            try:
+                need(chain == again)
+            finally:
+                os.close(visible)
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+
+
+def formal_runtime_commands(controller_directory, commit, package_directory, controller_source):
+    """Fixed checked source files, bounded carrier and finite production paths."""
+    if (type(commit) is not str or not re.fullmatch('[a-f0-9]{40}', commit)
+            or controller_directory not in tuple('/opt/id-business-v2/.staging/' + prefix + commit
+                                                 for prefix in ('api-workspace-verify-', 'oidc-'))):
+        raise RuntimeError('FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED')
+    package_pins = {name: hashlib.sha256((Path(package_directory) / name).read_bytes()).hexdigest() for name in FORMAL_RUNTIME_FILES}
+    controller_pins = {name: hashlib.sha256((Path(controller_source) / name).read_bytes()).hexdigest() for name in FORMAL_RUNTIME_CONTROLLERS}
+    program = (inspect.getsource(_store_files)
+               + '\ntry:\n    _store_files(' + repr(controller_directory) + ', '
+               + repr(commit) + ', ' + repr(controller_pins) + ', False)\n'
+               + '    _store_files(' + repr(controller_directory + '/formal-runtime-package')
+               + ', ' + repr(commit) + ', ' + repr(package_pins) + ', True)\n'
+               + "except BaseException:\n    raise SystemExit('FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED') from None\n")
+    raw = program.encode()
+    if not 0 < len(raw) <= 16 * 1024:
+        raise RuntimeError('FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED')
+    payload = base64.b85encode(gzip.compress(raw, mtime=0)).decode('ascii')
+    # Bound decompression, bind exact code, then execute the captured fixed code.
+    bootstrap = ("import base64,hashlib,zlib;v=zlib.decompressobj(31);r=v.decompress(base64.b85decode("
+                 + repr(payload) + "),16385);assert 0<len(r)<=16384 and v.eof and not v.unused_data and not v.unconsumed_tail;"
+                 + "assert hashlib.sha256(r).hexdigest()==" + repr(hashlib.sha256(raw).hexdigest())
+                 + ";exec(compile(r,'<fixed-release-carrier>','exec'))")
+    result = ['python3 -B -c ' + shlex.quote(bootstrap)]
+    if len(json.dumps(result, separators=(',', ':')).encode()) >= 12 * 1024:
+        raise RuntimeError('FORMAL_RUNTIME_PACKAGE_TRANSPORT_FAILED')
+    return result
+
+
 def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True,
                declaration_producer=None):
     if (not all(re.fullmatch(r'[a-f0-9]{40}', value) for value in (commit, expected))
@@ -203,11 +344,17 @@ def parameters(commit, expected, mode, scope='API_ADMIN', *, require_closed=True
                         'api-admin-pending-projection.py', 'api-admin-readonly.py',
                         'api-admin-pending-receipt-wire.py')
         if declaration_producer is not None:
-            controllers += ('online-recharge-declaration-measurement.py',)
-    for name in controllers:
-        digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-        commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',
-                         f'echo "{digest}  {directory}/{name}" | sha256sum -c - >/dev/null'])
+            controllers += ('online-recharge-declaration-measurement.py',
+                            'online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
+                            'online-recharge-daemon-socket.py')
+    if scope == 'API_ADMIN_WORKSPACE' and declaration_producer is not None:
+        commands.extend(formal_runtime_commands(directory, commit,
+            Path(__file__).with_name('formal-runtime-package'), Path(__file__).parent))
+    else:
+        for name in controllers:
+            digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            commands.extend([f'curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/wangchaozhuanyong/id-business-system/{commit}/scripts/production-release/{name} -o {directory}/{name}',
+                             f'echo "{digest}  {directory}/{name}" | sha256sum -c - >/dev/null'])
     action = 'verify' if scope == 'API_REGISTRATION' and mode == 'preflight' and not require_closed else mode
     producer_flag = ''
     if declaration_producer is not None:
@@ -434,10 +581,13 @@ def validate_pending_ended_failures(namespace, context):
 
 def validate_pending_workspace_receipt(namespace, receipt, expected, mode, *, proof=None):
     before_file = Path('.deploy/production-release/api-workspace-preflight-result.json')
-    before = json.loads(before_file.read_text()) if mode == 'readback' and before_file.is_file() else {}
+    before_raw = before_file.read_bytes() if mode == 'readback' and before_file.is_file() else None
+    before = json.loads(before_raw) if before_raw is not None else {}
     context = receipt.get('pendingOnlineMigrationOrigin') if mode == 'preflight' else before.get('pendingOnlineMigrationOrigin')
     selected = (context is not None or receipt.get('preservedPendingOnlineMigration') is not None
                 or receipt.get('pendingOnlineMigrationOrigin') is not None
+                or 'declarationEquivalencePublication' in receipt
+                or 'declarationEquivalenceSuccessorPublication' in receipt
                 or isinstance(proof, dict) and (proof.get('pendingOnlineProjection') is not None
                     or 'pendingOnlineOriginSha256' in proof))
     if not selected:
@@ -459,6 +609,29 @@ def validate_pending_workspace_receipt(namespace, receipt, expected, mode, *, pr
         if predecessor != expected or services != context['services']:
             raise RuntimeError(code)
     else:
+        publication_keys = ('declarationEquivalencePublication', 'declarationEquivalenceSuccessorPublication')
+        try:
+            if context['version'] == 2:
+                prior_count = len(context['priorPublications'])
+                if prior_count not in (0, 1):
+                    raise RuntimeError(code)
+                key = publication_keys[prior_count]
+                if publication_keys[1 - prior_count] in receipt or key not in receipt:
+                    raise RuntimeError(code)
+                from types import SimpleNamespace
+                def need(condition, reason):
+                    if not condition:
+                        raise RuntimeError(reason)
+                validated = namespace['pending_online_declaration_summary'](
+                    SimpleNamespace(require=need), receipt[key], context,
+                    producer=declaration_producer_metadata(), preflight_raw=before_raw,
+                    build_proof_sha256=namespace['fingerprint'](proof))
+                seal_key = 'configurationEquivalenceSeal' if prior_count == 0 else 'successorConfigurationSeal'
+                marker = {**marker, seal_key: validated[seal_key]}
+            elif any(key in receipt for key in publication_keys):
+                raise RuntimeError(code)
+        except Exception:
+            raise RuntimeError(code) from None
         if (before.get('status') != 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED' or before.get('mode') != 'preflight'
                 or before.get('releaseCandidateCommit') != expected
                 or before.get('commit') != os.environ.get('EXPECTED_CURRENT')

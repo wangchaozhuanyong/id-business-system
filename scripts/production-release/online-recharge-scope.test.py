@@ -2470,14 +2470,40 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
 
     def test_old_all_functions_classes_and_constants_remain_exact_ast(self):
         import ast
-        old = ast.parse(subprocess.check_output(['git', 'show', self.commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
+        # The preservation witness is the reviewed pre-capability baseline.
+        # HEAD is the fixture's producer archive and changes after committing.
+        old_commit = 'd8466a58cc577ed83189503f260a9c914fcac3be'
+        old = ast.parse(subprocess.check_output(['git', 'show', old_commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
         current = ast.parse((ROOT / 'scripts/production-release/online-recharge-scope.py').read_text())
         by_name = {n.name: n for n in current.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
         for node in old.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-                self.assertEqual(ast.dump(node), ast.dump(by_name[node.name]))
+                actual = copy.deepcopy(by_name[node.name])
+                if node.name == 'measure_declaration_equivalence':
+                    # This previously closed stub is the sole replaced entry.
+                    # Its ABI and two purpose/input guards remain exact; the
+                    # source-bound delegate is exercised below with the reviewed singleton.
+                    self.assertEqual(ast.dump(node.args), ast.dump(actual.args))
+                    self.assertEqual([ast.dump(n) for n in node.body[1:3]],
+                                     [ast.dump(n) for n in actual.body[1:3]])
+                    continue
+                if node.name == 'declaration_equivalence_materials':
+                    # Only three fixed actually-executed capabilities are added;
+                    # all historical/owner/path/version predicates stay exact.
+                    previous_names = next(n for n in node.body if isinstance(n, ast.Assign)
+                                          and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'names')
+                    current_names = next(n for n in actual.body if isinstance(n, ast.Assign)
+                                         and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'names')
+                    self.assertEqual([ast.dump(n) for n in current_names.value.elts],
+                        [ast.dump(n) for n in previous_names.value.elts] + [ast.dump(ast.Constant(value='scripts/production-release/' + name))
+                            for name in ('online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
+                                         'online-recharge-daemon-socket.py')])
+                    current_names.value = previous_names.value
+                self.assertEqual(ast.dump(node), ast.dump(actual))
         old_assigns = [ast.dump(n) for n in old.body if isinstance(n, ast.Assign)]
-        current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)]
+        current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)
+                           and not any(isinstance(t, ast.Name) and t.id == 'FORMAL_RUNTIME_DRIVER_SHA256'
+                                       for t in n.targets)]
         self.assertEqual(current_assigns[:len(old_assigns)], old_assigns)
 
 
@@ -2501,7 +2527,10 @@ class DeclarationEquivalenceMaterialsTests(unittest.TestCase):
         cls.repo = Path(cls.class_temp.name)
         cls.names = (*scope.DECLARATION_EQUIVALENCE_HELPERS,
             'scripts/production-release/online-recharge-declaration-measurement.py',
-            'scripts/production-release/api-admin-pending-receipt-wire.py')
+            'scripts/production-release/api-admin-pending-receipt-wire.py',
+            'scripts/production-release/online-recharge-daemon-identity.py',
+            'scripts/production-release/online-recharge-daemon-listener.py',
+            'scripts/production-release/online-recharge-daemon-socket.py')
         cls.helper_bytes = {name: (ROOT / name).read_bytes() for name in cls.names}
         cls.commit, cls.tree, cls.archive = cls.make_archive(cls.repo, cls.helper_bytes)
         cls.inventory = scope.archive_inventory(controller(), cls.archive, cls.commit, cls.tree)
@@ -2809,12 +2838,148 @@ class DeclarationEquivalenceMaterialsTests(unittest.TestCase):
         with patch.object(scope.os, 'open', side_effect=replace_after_open):
             with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path)
 
-    def test_formal_measurement_is_closed_before_source_or_runtime_authority(self):
+    def test_reviewed_source_still_requires_archive_and_runtime_authority(self):
         for purpose, raw in (('INDEPENDENT_PREFLIGHT', None), ('DEPLOYMENT_REMEASURE', b'{}')):
-            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED$'):
+            # This test's synthetic helper directory still has no trusted package.
+            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
                 scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
                     producer=self.producer, purpose=purpose, preflight_raw=raw)
+            with patch.object(scope, '__file__', str(ROOT / 'scripts/production-release/online-recharge-scope.py')):
+                driver = scope._declaration_runtime_driver()
+                selected = driver._local_package().load_leaf('qualified.py')
+                self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+                # Root entry is simulated only after ordinary bytes are owner-verified.
+                with patch.object(scope, '_declaration_runtime_driver', return_value=driver), \
+                        patch.object(scope.os, 'geteuid', return_value=0), \
+                        patch.object(scope.urllib.request, 'urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE')) as archive:
+                    with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
+                        scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
+                            producer=self.producer, purpose=purpose, preflight_raw=raw)
+                    archive.assert_called_once()
         self.d.run.assert_not_called(); self.download.assert_not_called()
+
+
+class DeclarationSuccessorPureTests(unittest.TestCase):
+    """Synthetic A/B artifacts, real immutable source; no production authority."""
+    @classmethod
+    def setUpClass(cls):
+        DeclarationEquivalencePureTests.setUpClass()
+        cls.pure = DeclarationEquivalencePureTests()
+        cls.wire = load('successor_actual_wire', 'api-admin-pending-receipt-wire.py')
+
+    def fixture(self):
+        f = self.pure.fixture(); a = self.pure.publication(f)
+        origin = copy.deepcopy(f['origin']); origin['services'] = a['afterServices']
+        origin['priorPublications'] = [{'release': '/synthetic/A', 'commit': a['producer']['commit'],
+            'sourceTree': a['producer']['sourceTree'], 'manifestSha256': a['manifestBytesSha256'],
+            'recordSha256': a['recordBytesSha256'], 'buildProofSha256': a['buildProofCanonicalSha256']}]
+        producer = copy.deepcopy(f['producer']); producer['workflowRunId'] = '70000000002'
+        before = {'mode': 'preflight', 'commandId': '00000000-0000-0000-0000-000000000003',
+            'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': a['producer']['commit'],
+            'releaseCandidateCommit': producer['commit'], 'workflowRunId': producer['workflowRunId'],
+            'workflowRunAttempt': '1', 'services': a['afterServices'], 'pendingOnlineMigrationOrigin': origin}
+        raw = self.pure.raw(before)
+        inputs = {'initial_origin': f['origin'], 'initial_publication': a, 'current_producer': producer,
+            'current_services': a['afterServices'], 'current_configuration': a['configurationAfter'],
+            'current_archive_bytes': f['archive_bytes'], 'initial_invocation_raw': self.pure.invocation(a),
+            'initial_command_id': '00000000-0000-0000-0000-000000000002', 'wire_decoder': self.wire.decode_receipt_output}
+        seal = scope.declaration_equivalence_successor_seal(controller(), raw, **inputs)
+        build = json.loads(f['build_raw']); build.update(version=2, pendingOnlineOriginSha256=scope.fingerprint(origin),
+            pendingOnlinePreflightSha256=self.pure.sha(raw))
+        after = copy.deepcopy(a['afterServices'])
+        for name in ('api', 'admin'): after[name]['containerId'] = self.pure.sha(('B-' + name).encode())
+        record = {'before': a['afterServices'], 'after': after, 'configurationBefore': a['configurationAfter'],
+            'configurationAfter': a['configurationAfter'], 'pendingOnlineMigrationOrigin': origin,
+            'pendingOnlineSuccessorPreflight': seal}
+        manifest = {'commit': producer['commit'], 'sourceTree': producer['sourceTree'],
+            'pendingOnlineMigration': {'originSha256': scope.fingerprint(origin), 'successorConfigurationSeal': seal}}
+        return {'origin': origin, 'preflight_raw': raw, 'build_raw': self.pure.raw(build),
+            'record_raw': self.pure.raw(record), 'manifest_raw': self.pure.raw(manifest), **inputs}
+
+    def test_distinct_b_kind_inherits_real_byte_a_seal_without_p2_b(self):
+        f = self.fixture(); unchanged = copy.deepcopy(f)
+        b = scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+        self.assertEqual(f, unchanged)
+        self.assertEqual((b['kind'], b['version']), (scope.DECLARATION_SUCCESSOR_KIND, 1))
+        self.assertEqual(b['successorConfigurationSeal']['initialReadbackInvocationBytesSha256'],
+                         self.pure.sha(f['initial_invocation_raw']))
+        self.assertEqual(b['successorConfigurationSeal']['initialPublication']['configurationEquivalenceSeal'],
+                         f['initial_publication']['configurationEquivalenceSeal'])
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_issuer_binding(controller(), b,
+            live_services=b['afterServices'], live_configuration=b['configurationAfter'], execution_producer=b['producer'])
+
+    def test_stale_cross_run_missing_a_q_and_source_artifact_drift_reject(self):
+        for change in ('q', 'fb-run', 'helpers', 'configuration', 'old-states', 'third', 'p2-b', 'state-seal', 'old-f', 'kind'):
+            with self.subTest(change=change):
+                f = self.fixture()
+                if change == 'q': f['initial_invocation_raw'] = None
+                elif change == 'fb-run':
+                    before = json.loads(f['preflight_raw']); before['workflowRunId'] = '70000000001'; f['preflight_raw'] = self.pure.raw(before)
+                elif change == 'helpers': f['current_producer']['helpers'][scope.DECLARATION_EQUIVALENCE_HELPERS[0]] = '0' * 64
+                elif change == 'configuration': f['current_configuration']['compose.release.json'] = '0' * 64
+                elif change == 'old-states': f['current_services'] = f['initial_origin']['services']
+                elif change == 'third': f['origin']['priorPublications'].append(copy.deepcopy(f['origin']['priorPublications'][0]))
+                elif change in ('p2-b', 'state-seal'):
+                    record = json.loads(f['record_raw'])
+                    if change == 'p2-b': record['pendingOnlineConfigurationMeasurement'] = f['origin']['restoredConfigurationProof']
+                    else: record['pendingOnlineSuccessorPreflight']['initialReadbackInvocationBytesSha256'] = '0' * 64
+                    f['record_raw'] = self.pure.raw(record)
+                elif change == 'old-f':
+                    build = json.loads(f['build_raw']); build['pendingOnlinePreflightSha256'] = f['initial_publication']['preflightBytesSha256']; f['build_raw'] = self.pure.raw(build)
+                else:
+                    manifest = json.loads(f['manifest_raw']); manifest['pendingOnlineMigration']['configurationEquivalenceSeal'] = {}; f['manifest_raw'] = self.pure.raw(manifest)
+                with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+
+    def test_b_fixed_issuer_actual_wire_cold_and_malicious_receipts(self):
+        f = self.fixture(); b = scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+        issued = scope.declaration_equivalence_successor_issuer_binding(controller(), b, live_services=b['afterServices'],
+            live_configuration=b['configurationAfter'], execution_producer=b['producer'])
+        command = '00000000-0000-0000-0000-000000000004'
+        receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFIED', 'pendingOnlineMigrationOrigin': f['origin'],
+                   'declarationEquivalenceSuccessorPublication': issued}
+        invocation = {'CommandId': command, 'Status': 'Success', 'ResponseCode': 0,
+                      'StandardOutputContent': self.wire.receipt_output(receipt, scope='API_ADMIN_WORKSPACE')}
+        raw = self.pure.raw(invocation)
+        result = scope.declaration_equivalence_successor_receipt_binding(controller(), b, raw,
+            command_id=command, wire_decoder=self.wire.decode_receipt_output)
+        self.assertEqual(result['readbackCommandId'], command)
+        for field in ('command', 'status', 'bool', 'initial-only', 'extra-seal', 'bad-wire', 'origin'):
+            value = copy.deepcopy(invocation); output = copy.deepcopy(receipt)
+            if field == 'command': value['CommandId'] = '00000000-0000-0000-0000-000000000099'
+            elif field == 'status': value['Status'] = 'Failed'
+            elif field == 'bool': value['ResponseCode'] = False
+            elif field == 'initial-only': output = {'status': receipt['status'], 'declarationEquivalencePublication': issued}
+            elif field == 'extra-seal': output['declarationEquivalenceSuccessorPublication']['trusted'] = True
+            elif field == 'origin': output['pendingOnlineMigrationOrigin']['services']['api']['containerId'] = '0' * 64
+            else: value['StandardOutputContent'] = 'SECRET_INVALID_FRAME'
+            if field != 'bad-wire': value['StandardOutputContent'] = self.wire.receipt_output(output, scope='API_ADMIN_WORKSPACE')
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_PROOF_INVALID$'):
+                scope.declaration_equivalence_successor_receipt_binding(controller(), b, self.pure.raw(value), command_id=command,
+                    wire_decoder=self.wire.decode_receipt_output)
+        wrong = copy.deepcopy(b['afterServices']); wrong['mysql']['containerId'] = '0' * 64
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_issuer_binding(controller(), b,
+            live_services=wrong, live_configuration=b['configurationAfter'], execution_producer=b['producer'])
+
+    def test_closed_b_schema_and_reused_preflight_command_cannot_issue(self):
+        f = self.fixture(); b = scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+        for change in ('extra', 'bool', 'seal-extra', 'a-extra', 'unknown-kind', 'duplicate-command', 'producer-helpers'):
+            value = copy.deepcopy(b)
+            if change == 'extra': value['trusted'] = True
+            elif change == 'bool': value['version'] = True
+            elif change == 'seal-extra': value['successorConfigurationSeal']['unmeasured'] = True
+            elif change == 'a-extra': value['successorConfigurationSeal']['initialPublication']['rawEnv'] = 'SECRET_NEVER_OUTPUT'
+            elif change == 'unknown-kind': value['kind'] = scope.DECLARATION_EQUIVALENCE_KIND
+            elif change == 'duplicate-command':
+                value['preflightCommandId'] = value['successorConfigurationSeal']['initialPublication']['readbackCommandId']
+                value['successorConfigurationSeal']['preflightCommandId'] = value['preflightCommandId']
+            else: value['producer']['helpers']['unknown'] = '0' * 64
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_PROOF_INVALID$') as error:
+                scope.declaration_equivalence_successor_issuer_binding(controller(), value, live_services=value['afterServices'],
+                    live_configuration=value['configurationAfter'], execution_producer=value['producer'])
+            self.assertNotIn('SECRET', str(error.exception))
+        before = json.loads(f['preflight_raw']); before['commandId'] = f['initial_command_id']
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_publication_binding(controller(),
+            **{**f, 'preflight_raw': self.pure.raw(before)})
 
 
 if __name__ == '__main__':

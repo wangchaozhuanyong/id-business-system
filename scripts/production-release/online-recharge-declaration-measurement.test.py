@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,8 @@ class DockerReadFixture:
         self.calls=[];self.failed=set();self.default_pools=[];self.compose_version='2.39.4'
         self.cached_image=IMAGE;self.source=model();self.network_unknown=False;self.volume_unknown=False
         self.packages={}
+        self.host={'Binds':[SENTINEL + ':/fixture:rw'], 'Mounts':None}
+        self.labels={'com.docker.compose.version':'2.39.4', 'private':SENTINEL}
         self.info={'id':'engine-fixture-only','serverVersion':'28.4.0','defaultAddressPools':self.default_pools,
             'osType':'linux','architecture':'x86_64','plugins':[{'Name':'compose','Path':'/usr/libexec/docker/cli-plugins/docker-compose'}]}
         self.version={'Server':{'Version':'28.4.0','ApiVersion':'1.51'},'Client':{'Version':'28.4.0'}}
@@ -66,18 +69,20 @@ class DockerReadFixture:
             return json.dumps(self.source)
         if args[:2]==('docker','inspect'):
             if 'resource' in self.failed:raise RuntimeError(SENTINEL)
+            if args[3]=='{{json .HostConfig}}':return json.dumps(self.host)
+            if args[3]=='{{json .Config.Labels}}':return json.dumps(self.labels)
             return json.dumps(self.nets if args[3]=='{{json .NetworkSettings.Networks}}' else self.mounts)
         if args[:3]==('docker','network','inspect'):
             role=m.NETWORK_ROLES[int(args[3][0])-1]
             row={'Name':PROJECT+'_'+role,'Id':args[3],'Driver':'bridge','Scope':'local',
                 'Internal':role.endswith('control'),'EnableIPv4':True,'EnableIPv6':False,
                 'IPAM':{'Driver':'default','Config':[]},'Attachable':False,'Ingress':False,
-                'ConfigOnly':False,'ConfigFrom':{'Network':''},'Labels':{'private':SENTINEL},'Options':{}}
+                'ConfigOnly':False,'ConfigFrom':{'Network':''},'Labels':{'private':SENTINEL,'com.docker.compose.version':'2.39.4'},'Options':{}}
             if self.network_unknown:row[SENTINEL]=SENTINEL
             return json.dumps([row])
         if args[:3]==('docker','volume','inspect'):
             row={'Name':args[3],'Driver':'local','Scope':'local','Mountpoint':'/fixture/mount',
-                 'CreatedAt':'2026-10-10T00:00:00Z','Options':None,'Labels':{'private':SENTINEL}}
+                 'CreatedAt':'2026-10-10T00:00:00Z','Options':None,'Labels':{'private':SENTINEL,'com.docker.compose.version':'2.39.4'}}
             if self.volume_unknown:row[SENTINEL]=SENTINEL
             return json.dumps([row])
         raise AssertionError('Unexpected command')
@@ -113,6 +118,131 @@ class InventoryTests(unittest.TestCase):
         result=self.inventory()
         self.assertEqual(result['daemonDefaultAddressPools']['pools'],[{'base':'10.64.0.0/16','size':24}])
         self.assertEqual(result['daemonDefaultAddressPools']['reviewedRulesStatus'],'SOURCE_NOT_MEASURED')
+    def test_actual_shape_preserves_null_array_and_absent_without_sensitive_values(self):
+        for encoding,value in (('NULL',None),('ARRAY',[]),('ARRAY',[{'Type':'volume','Source':SENTINEL,'Target':'/fixture','VolumeOptions':{}}]),('ABSENT','absent')):
+            with self.subTest(encoding=encoding):
+                self.d.host={'Binds':[SENTINEL]} if encoding=='ABSENT' else {'Binds':[SENTINEL],'Mounts':value}
+                result=self.inventory();shape=result['actualConfigurationShape']
+                self.assertEqual(shape['status'],'OBSERVED');self.assertEqual(shape['mountsEncoding'],encoding)
+                self.assertEqual(shape['mountsCount'],len(value) if encoding=='ARRAY' else None)
+                self.assertEqual(shape['apiCreatorVersion'],'2.39.4')
+                self.assertNotIn(SENTINEL,json.dumps(result));self.assertFalse(result['authority'])
+    def test_actual_unknown_mount_keys_are_counted_without_returning_names(self):
+        self.d.host={'Binds':None,'Mounts':[{'Type':'volume','Source':SENTINEL,SENTINEL:SENTINEL}]}
+        result=self.inventory();shape=result['actualConfigurationShape']
+        self.assertEqual(shape['hostMountFieldNames'],[['Source','Type']])
+        self.assertEqual(shape['hostMountUnknownFieldCount'],1);self.assertNotIn(SENTINEL,json.dumps(result))
+    def test_actual_shape_bad_creator_and_malformed_host_only_refuse_shape(self):
+        for host,labels in (([],self.d.labels),({'Mounts':SENTINEL},self.d.labels),
+                            ({'Binds':None,'Mounts':None},{'com.docker.compose.version':SENTINEL})):
+            self.d.host=host;self.d.labels=labels;result=self.inventory()
+            self.assertEqual(result['actualConfigurationShape']['status'],'NOT_MEASURED')
+            self.assertEqual(result['resources']['status'],'OBSERVED')
+            self.assertIn('ACTUAL_SHAPE_UNAVAILABLE',result['codes']);self.assertNotIn(SENTINEL,json.dumps(result))
+    def test_actual_shape_closed_validator_rejects_shadow_or_inconsistent_nodes(self):
+        good=self.inventory()
+        for mutate in (lambda a:a.update(private=SENTINEL),lambda a:a.update(mountsCount=True),
+                       lambda a:a.update(status='NOT_MEASURED'),lambda a:a.update(apiCreatorVersion=SENTINEL),
+                       lambda a:a.update(hostMountFieldNames=[[SENTINEL]]),
+                       lambda a:a.update(networkCreatorVersions=['2.39.4','2.39.4'])):
+            bad=copy.deepcopy(good);mutate(bad['actualConfigurationShape'])
+            with self.assertRaisesRegex(m.Rejected,'^INVENTORY_INVALID$'):m.validate_inventory(bad)
+    def test_runtime_identity_control_report_validated_without_qualifying_generator(self):
+        helper_spec=importlib.util.spec_from_file_location('identity_inventory_fixture',
+            Path(__file__).with_name('online-recharge-daemon-identity.test.py'))
+        helper=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(helper)
+        case=helper.IdentityTests('test_only_fixed_readonly_commands_and_no_environ_or_docker_reads')
+        case.setUp()
+        try:
+            runtime=helper.m.runtime_daemon_identity(case.controller)
+        finally:
+            case.tearDown();case.doCleanups()
+        capability=m.daemon_identity_capability()
+        capability.runtime_daemon_identity=lambda _driver: copy.deepcopy(runtime)
+        with patch.object(m,'daemon_identity_capability',return_value=capability):
+            result=self.inventory()
+        self.assertEqual(result['runtimeDaemonIdentity'],{'status':'OBSERVED','report':runtime})
+        self.assertEqual(m.validate_inventory(result),result)
+        self.assertNotIn('RUNTIME_IDENTITY_UNAVAILABLE',result['codes'])
+        self.assertEqual(m.REVIEWED_GENERATORS,{})
+        self.assertFalse(result['authority']);self.assertFalse(result['measurementPerformed'])
+        for mutation in (lambda r:r.update(authority=True),lambda r:r.update(private=SENTINEL),
+                         lambda r:r['runtime'].update(binarySha256=SENTINEL),
+                         lambda r:r['package'].update(sourceRpmRetrieved=True)):
+            bad=copy.deepcopy(result);mutation(bad['runtimeDaemonIdentity']['report'])
+            with self.assertRaisesRegex(m.Rejected,'^INVENTORY_INVALID$'):m.validate_inventory(bad)
+    def test_runtime_identity_failure_only_emits_fixed_code_and_null_report(self):
+        def failure(_driver):raise RuntimeError(SENTINEL)
+        capability=SimpleNamespace(runtime_daemon_identity=failure)
+        with patch.object(m,'daemon_identity_capability',return_value=capability):result=self.inventory()
+        self.assertEqual(result['runtimeDaemonIdentity'],{'status':'NOT_MEASURED','report':None})
+        self.assertIn('RUNTIME_IDENTITY_UNAVAILABLE',result['codes']);self.assertNotIn(SENTINEL,json.dumps(result))
+    def runtime_tools_inventory(self, *, drift=False):
+        spec=importlib.util.spec_from_file_location('identity_tools_fixture',
+            Path(__file__).with_name('online-recharge-daemon-identity.test.py'))
+        helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+        case=helper.IdentityTests('test_only_fixed_readonly_commands_and_no_environ_or_docker_reads')
+        case.setUp()
+        try:
+            runtime=helper.m.runtime_daemon_identity(case.controller)
+            capability=m.daemon_identity_capability()
+            capability.runtime_daemon_identity=lambda _d:copy.deepcopy(runtime)
+            capability._reader_factory=lambda:case.reader
+            if drift:
+                (case.root/'usr/bin/rpm').write_bytes(b'\x7fELF'+SENTINEL.encode())
+            with patch.object(m,'daemon_identity_capability',return_value=capability):
+                return self.inventory()
+        finally:
+            case.tearDown();case.doCleanups()
+    def test_fixed_tool_byte_hashes_bind_whole_runtime_identity_and_hide_bytes(self):
+        result=self.runtime_tools_inventory();tools=result['runtimeCollectionTools']
+        self.assertEqual(tools['status'],'OBSERVED')
+        self.assertEqual(set(tools['bytesSha256']),{'/usr/bin/systemctl','/usr/bin/rpm'})
+        self.assertEqual(tools['identitySha256'],result['runtimeDaemonIdentity']['report']['runtime']['collectionToolsSha256'])
+        self.assertNotIn('RUNTIME_TOOLS_UNAVAILABLE',result['codes'])
+        self.assertNotIn(SENTINEL,json.dumps(result));self.assertFalse(result['productionEligible'])
+        self.assertEqual(m.validate_inventory(result),result)
+    def test_tool_replacement_after_identity_is_not_claimed_as_observed(self):
+        result=self.runtime_tools_inventory(drift=True)
+        self.assertEqual(result['runtimeCollectionTools'],{'status':'NOT_MEASURED','bytesSha256':None,'identitySha256':None})
+        self.assertIn('RUNTIME_TOOLS_UNAVAILABLE',result['codes']);self.assertNotIn(SENTINEL,json.dumps(result))
+    def test_collection_tools_closed_fields_and_runtime_cross_binding(self):
+        good=self.runtime_tools_inventory()
+        for mutate in (lambda t:t['bytesSha256'].update({'/other':SENTINEL}),
+                       lambda t:t.update(identitySha256='0'*64),lambda t:t.update(status='NOT_MEASURED'),
+                       lambda t:t.update(authority=True),lambda t:t['bytesSha256'].update({'/usr/bin/rpm':SENTINEL})):
+            bad=copy.deepcopy(good);mutate(bad['runtimeCollectionTools'])
+            with self.assertRaisesRegex(m.Rejected,'^INVENTORY_INVALID$'):m.validate_inventory(bad)
+        bad=copy.deepcopy(good);bad['runtimeDaemonIdentity']={'status':'NOT_MEASURED','report':None}
+        with self.assertRaisesRegex(m.Rejected,'^INVENTORY_INVALID$'):m.validate_inventory(bad)
+    def test_socket_binding_is_closed_and_cross_bound_to_runtime_identity(self):
+        fixture_spec=importlib.util.spec_from_file_location('socket_inventory_fixture',
+            Path(__file__).with_name('online-recharge-daemon-socket.test.py'))
+        fixture=importlib.util.module_from_spec(fixture_spec);fixture_spec.loader.exec_module(fixture)
+        case=fixture.VfsTests('test_fixed_kernel_vfs_tuple_matches_actual_private_filesystem_node')
+        case.setUp()
+        try:
+            binding=case.collect()
+        finally:
+            case.tearDown();case.doCleanups()
+        runtime=copy.deepcopy(binding['listenerBinding']['runtimeIdentity'])
+        identity=m.daemon_identity_capability();identity.runtime_daemon_identity=lambda _d:copy.deepcopy(runtime)
+        socket=m.daemon_socket_capability();socket.runtime_daemon_socket_binding=lambda _d:copy.deepcopy(binding)
+        with patch.object(m,'daemon_identity_capability',return_value=identity),patch.object(m,'daemon_socket_capability',return_value=socket):
+            result=self.inventory()
+        self.assertEqual(result['runtimeDaemonSocket'],{'status':'OBSERVED','report':binding})
+        self.assertEqual(m.validate_inventory(result),result);self.assertFalse(result['productionEligible'])
+        for mutate in (lambda r:r.update(authority=True),lambda r:r.update(unixHost=SENTINEL),
+                       lambda r:r.update(private=SENTINEL),lambda r:r['listenerBinding'].update(listenerRowCount=2),
+                       lambda r:r['listenerBinding']['runtimeIdentity']['runtime'].update(processSha256='0'*64)):
+            bad=copy.deepcopy(result);mutate(bad['runtimeDaemonSocket']['report'])
+            with self.assertRaisesRegex(m.Rejected,'^INVENTORY_INVALID$'):m.validate_inventory(bad)
+    def test_runtime_socket_not_measured_cannot_hide_report_or_authority(self):
+        good=self.inventory()
+        for row in ({'status':'NOT_MEASURED','report':{}}, {'status':'OBSERVED','report':None},
+                    {'status':'NOT_MEASURED','report':None,'trusted':True}):
+            bad=copy.deepcopy(good);bad['runtimeDaemonSocket']=row
+            with self.assertRaisesRegex(m.Rejected,'^INVENTORY_INVALID$'):m.validate_inventory(bad)
     def test_unknown_or_malformed_daemon_pools_not_silently_assumed(self):
         for rows in ('',False,{},[{'Base':SENTINEL,'Size':24}],[{'Base':'10.0.0.1/16','Size':24}],
                      [{'Base':'10.0.0.0/16','Size':True}],[{'Base':'10.0.0.0/16','Size':24,'token':SENTINEL}]):
@@ -170,7 +300,9 @@ class InventoryTests(unittest.TestCase):
         self.d.failed={'generator','image','source','resource'}
         r=self.inventory();self.assertNotIn(SENTINEL,json.dumps(r))
         self.assertEqual(r['codes'],['SOURCE_NOT_MEASURED','GENERATOR_UNAVAILABLE','SOURCE_SHAPE_UNAVAILABLE',
-                                     'IMAGE_CACHE_UNAVAILABLE','RESOURCE_SCHEMA_UNAVAILABLE'])
+                                     'IMAGE_CACHE_UNAVAILABLE','RESOURCE_SCHEMA_UNAVAILABLE','RUNTIME_IDENTITY_UNAVAILABLE',
+                                     'RUNTIME_SOCKET_UNAVAILABLE','RUNTIME_TOOLS_UNAVAILABLE',
+                                     'RUNTIME_SOCKET_PHASE_COLLECTOR_SOURCE','RUNTIME_SOCKET_CODE_VFS_BINDING_UNAVAILABLE'])
     def test_source_ambient_variable_and_compose_overrides_removed_without_dropping_path(self):
         self.directory.joinpath(m.FILES[0]).write_text('${SOURCE_SECRET:?}')
         with patch.dict(m.os.environ,{'SOURCE_SECRET':SENTINEL,'COMPOSE_PROJECT_NAME':SENTINEL,'PATH':'/controlled'}):
@@ -275,6 +407,127 @@ class InventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(m.Rejected,'^INPUT_INVALID$'):
                 m.inventory(self.d,self.directory,services=rows,image_reference=ref,image_id=img)
         self.assertEqual(self.d.calls,[])
+
+    def _path_role_inventory_only(self):
+        # Only diagnostic selection is tested. Runtime tools/kernel collection
+        # remains unmeasured; no real system/native capability I/O is invoked.
+        with patch.object(m, 'daemon_identity_capability', side_effect=RuntimeError(SENTINEL)), \
+             patch.object(m, 'daemon_socket_capability', side_effect=RuntimeError(SENTINEL)):
+            return self.inventory()
+
+    def test_native_path_roles_same_selection_and_no_additional_calls(self):
+        docker = {'/usr/bin/docker': 'USR_BIN_DOCKER', '/usr/local/bin/docker': 'USR_LOCAL_BIN_DOCKER'}
+        compose = {'/usr/libexec/docker/cli-plugins/docker-compose': 'USR_LIBEXEC_COMPOSE',
+                   '/usr/lib/docker/cli-plugins/docker-compose': 'USR_LIB_COMPOSE',
+                   '/usr/local/lib/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIB_COMPOSE',
+                   '/usr/local/libexec/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIBEXEC_COMPOSE'}
+        baseline_calls = None
+        for docker_path, docker_role in docker.items():
+            for compose_path, compose_role in compose.items():
+                with self.subTest(docker_role=docker_role, compose_role=compose_role):
+                    self.d.calls.clear()
+                    self.d.info['plugins'] = [{'Name': 'compose', 'Path': compose_path}]
+                    with patch.object(m.shutil, 'which', return_value=docker_path) as selected, \
+                         patch.object(m, 'binary_hash', side_effect=['d' * 64, 'e' * 64]) as hashed:
+                        result = self._path_role_inventory_only()
+                    selected.assert_called_once_with('docker')
+                    self.assertEqual([call.args for call in hashed.call_args_list],
+                                     [(docker_path, 'docker'), (compose_path, 'compose')])
+                    g = result['generator']
+                    self.assertEqual((g['dockerCliSha256'], g['dockerCliPathRole']), ('d' * 64, docker_role))
+                    self.assertEqual((g['composeCliSha256'], g['composeCliPathRole']), ('e' * 64, compose_role))
+                    self.assertEqual(m.validate_inventory(result), result)
+                    for key in ('authority', 'productionEligible', 'measurementPerformed', 'proofConstructed'):
+                        self.assertIs(result[key], False)
+                    for path in (*docker, *compose):
+                        self.assertNotIn(path, json.dumps(result['generator']))
+                    if baseline_calls is None:baseline_calls = copy.deepcopy(self.d.calls)
+                    else:self.assertEqual(self.d.calls, baseline_calls)
+                    self.assertTrue(all('create' not in args and 'up' not in args for args, _ in self.d.calls))
+
+    def test_native_path_roles_only_appear_after_matching_hash_success(self):
+        cases = [([m.Rejected(SENTINEL)], None, None, None, None, 1),
+                 (['d' * 64, m.Rejected(SENTINEL)], 'd' * 64, 'USR_BIN_DOCKER', None, None, 2)]
+        for side_effect, docker_hash, docker_role, compose_hash, compose_role, calls in cases:
+            with self.subTest(successful_hash_count=calls - 1):
+                with patch.object(m.shutil, 'which', return_value='/usr/bin/docker') as selected, \
+                     patch.object(m, 'binary_hash', side_effect=side_effect) as hashed:
+                    result = self._path_role_inventory_only()
+                selected.assert_called_once_with('docker')
+                self.assertEqual(hashed.call_count, calls)
+                g = result['generator']
+                self.assertEqual((g['dockerCliSha256'], g['dockerCliPathRole']), (docker_hash, docker_role))
+                self.assertEqual((g['composeCliSha256'], g['composeCliPathRole']), (compose_hash, compose_role))
+                self.assertIn('CLI_SOURCE_NOT_MEASURED', result['codes'])
+                self.assertNotIn(SENTINEL, json.dumps(result))
+                self.assertEqual(m.validate_inventory(result), result)
+
+    def test_native_path_roles_unknown_selection_and_duplicate_plugin_remain_unmeasured(self):
+        cases = [('/private/' + SENTINEL, [{'Name': 'compose', 'Path': '/usr/lib/docker/cli-plugins/docker-compose'}], 1, 1, None),
+                 ('/usr/bin/docker', [{'Name': 'compose', 'Path': '/private/' + SENTINEL}], 1, 2, 'USR_BIN_DOCKER'),
+                 ('/usr/bin/docker', [{'Name': 'compose', 'Path': '/usr/lib/docker/cli-plugins/docker-compose'}] * 2, 0, 0, None)]
+        for selected_path, plugins, select_calls, hash_calls, docker_role in cases:
+            with self.subTest(plugin_count=len(plugins), hash_calls=hash_calls):
+                self.d.info['plugins'] = plugins
+                # An unknown selection still cannot publish a role, even when
+                # a private test mock incorrectly claims a successful hash.
+                with patch.object(m.shutil, 'which', return_value=selected_path) as selected, \
+                     patch.object(m, 'binary_hash', return_value='e' * 64) as hashed:
+                    result = self._path_role_inventory_only()
+                self.assertEqual(selected.call_count, select_calls)
+                self.assertEqual(hashed.call_count, hash_calls)
+                self.assertEqual(result['generator']['dockerCliPathRole'], docker_role)
+                self.assertIsNone(result['generator']['composeCliPathRole'])
+                self.assertIn('CLI_SOURCE_NOT_MEASURED', result['codes'])
+                self.assertNotIn(SENTINEL, json.dumps(result))
+                self.assertEqual(m.validate_inventory(result), result)
+
+    def test_native_path_roles_accept_old_schema_or_complete_pair_only(self):
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/docker'):
+            good = self._path_role_inventory_only()
+        self.assertEqual(set(good['generator']), m.GENERATOR_KEYS | m.GENERATOR_PATH_ROLE_KEYS)
+        old = copy.deepcopy(good)
+        for key in m.GENERATOR_PATH_ROLE_KEYS:del old['generator'][key]
+        self.assertEqual(set(old['generator']), m.GENERATOR_KEYS)
+        self.assertEqual(m.validate_inventory(old), old)
+        self.assertEqual(m.validate_inventory(good), good)
+        self.d.failed.add('generator')
+        none = self._path_role_inventory_only()
+        self.assertEqual(m.validate_inventory(none), none)
+        for role, digest in (('dockerCliPathRole', 'dockerCliSha256'), ('composeCliPathRole', 'composeCliSha256')):
+            self.assertIsNone(none['generator'][role]);self.assertIsNone(none['generator'][digest])
+
+    def test_native_path_roles_reject_partial_extra_wrong_type_and_cross_tool(self):
+        class StringBomb(str):
+            def __hash__(self):raise AssertionError('HASH_EXECUTED')
+            def __str__(self):raise AssertionError('STR_EXECUTED')
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/docker'):
+            good = self._path_role_inventory_only()
+        cases = []
+        for role in m.GENERATOR_PATH_ROLE_KEYS:
+            bad = copy.deepcopy(good);del bad['generator'][role];cases.append(bad)
+            for value in (True, False, 0, 1.0, [], {}, SENTINEL, StringBomb('USR_BIN_DOCKER')):
+                bad = copy.deepcopy(good);bad['generator'][role] = value;cases.append(bad)
+        bad = copy.deepcopy(good);bad['generator']['privatePath'] = SENTINEL;cases.append(bad)
+        for role, value in (('dockerCliPathRole', 'USR_LIB_COMPOSE'), ('composeCliPathRole', 'USR_BIN_DOCKER')):
+            bad = copy.deepcopy(good);bad['generator'][role] = value;cases.append(bad)
+        for index, bad in enumerate(cases):
+            with self.subTest(case=index), self.assertRaisesRegex(m.Rejected, '^INVENTORY_INVALID$'):
+                m.validate_inventory(bad)
+
+    def test_native_path_roles_never_replace_hash_or_authority(self):
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/docker'):
+            good = self._path_role_inventory_only()
+        for role, digest in (('dockerCliPathRole', 'dockerCliSha256'), ('composeCliPathRole', 'composeCliSha256')):
+            for drop in (role, digest):
+                bad = copy.deepcopy(good);bad['generator'][drop] = None
+                with self.subTest(role=role, drop=drop), self.assertRaisesRegex(m.Rejected, '^INVENTORY_INVALID$'):
+                    m.validate_inventory(bad)
+        for flag in ('authority', 'productionEligible', 'measurementPerformed', 'proofConstructed'):
+            bad = copy.deepcopy(good);bad[flag] = True
+            with self.subTest(flag=flag), self.assertRaisesRegex(m.Rejected, '^INVENTORY_INVALID$'):
+                m.validate_inventory(bad)
+
 
 
 if __name__=='__main__':unittest.main()
