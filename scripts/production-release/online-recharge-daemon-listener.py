@@ -127,7 +127,8 @@ def listener(raw):
     for line in lines[1:]:
         fields = line.split(maxsplit=7)
         check(len(fields) in (7, 8), 'LISTENER_INVALID')
-        if len(fields) == 8 and fields[7] in ('/run/docker.sock', '/var/run/docker.sock'):
+        # Accepted stream sockets inherit the path; only SO_ACCEPTCON is a listener.
+        if len(fields) == 8 and fields[7] in ('/run/docker.sock', '/var/run/docker.sock') and fields[3] == '00010000':
             selected.append(fields)
     check(len(selected) == 1, 'LISTENER_INVALID')
     fields = selected[0]

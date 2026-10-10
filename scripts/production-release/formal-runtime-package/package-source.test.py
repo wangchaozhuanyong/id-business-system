@@ -132,15 +132,43 @@ class PackageSourceTests(unittest.TestCase):
   module=load('transport_public_driver',self.folder/'driver.py')
   with patch.object(module.os,'geteuid',return_value=0):
    with self.assertRaises(module.Rejected) as caught:module.measure_declaration_equivalence(d,self.parent,{},producer={'token':'LOCAL_SENTINEL'},purpose='INDEPENDENT_PREFLIGHT')
-  self.assertEqual(str(caught.exception),'ROOT_GENERATOR_SOURCE_UNMEASURED');self.assertNotIn('LOCAL_SENTINEL',str(caught.exception))
- def test_public_empty_table_refuses_with_no_siblings_archive_or_controller_activity(self):
+  self.assertEqual(str(caught.exception),'ROOT_PRODUCER_CHANGED');self.assertNotIn('LOCAL_SENTINEL',str(caught.exception))
+ def test_reviewed_source_requires_archive_without_consumer_or_controller_fallback(self):
   for n in IO.CONSUMERS:(self.parent/n).unlink()
   module=load('isolated_public_driver',self.folder/'driver.py')
+  selected=module._local_package().load_leaf('qualified.py')
+  self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE),1);selected._reviewed_profile()
   class Forbidden:
    def __getattr__(self,name):raise AssertionError('CONTROLLER_ACTIVITY_FORBIDDEN')
-  with patch.object(module.os,'geteuid',return_value=0),patch('urllib.request.urlopen',side_effect=AssertionError('NETWORK_FORBIDDEN')):
-   with self.assertRaisesRegex(module.Rejected,'^ROOT_GENERATOR_SOURCE_UNMEASURED$'):
+  with patch.object(module.os,'geteuid',return_value=0),patch('urllib.request.urlopen',
+    side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE')) as archive:
+   with self.assertRaisesRegex(module.Rejected,'^ROOT_DRIVER_UNAVAILABLE$'):
     module.measure_declaration_equivalence(Forbidden(),self.parent,{},producer=self.p,purpose='INDEPENDENT_PREFLIGHT')
+   archive.assert_called_once()
+ def test_public_singleton_full_archive_reaches_runtime_vfs_before_any_execution(self):
+  from unittest.mock import Mock
+  package=self.package();module=load('full_archive_public_driver',self.folder/'driver.py')
+  selected=package.load_leaf('qualified.py');self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE),1);selected._reviewed_profile()
+  (self.parent/'.runtime').mkdir(mode=0o700)
+  def need(value,code):
+   if not value:raise RuntimeError(code)
+  driver=SimpleNamespace(BASE=self.parent,require=need,run=Mock(side_effect=AssertionError('RUN_FORBIDDEN')),
+   _apiWorkspaceDeclarationProducer=copy.deepcopy(self.p),_apiWorkspaceDeclarationEntry='PREFLIGHT',
+   sys=SimpleNamespace(argv=['remote.py','--api-workspace-preflight']))
+  original=package.bind_consumers;runtime=Mock(side_effect=RuntimeError('SYNTHETIC_VFS_UNAVAILABLE'));bound=[]
+  def archive_binding(value):
+   actual=original(value);bound.append(actual)
+   self.assertEqual(actual.online.FORMAL_RUNTIME_DRIVER_SHA256,hashlib.sha256((self.folder/'driver.py').read_bytes()).hexdigest())
+   actual.socket.runtime_daemon_socket_binding=runtime
+   return actual
+  with patch.object(module,'_local_package',return_value=package),patch.object(package,'bind_consumers',side_effect=archive_binding) as acquire, \
+    patch('urllib.request.urlopen',return_value=io.BytesIO(self.archive)) as download,patch.object(module.os,'geteuid',return_value=0):
+   with self.assertRaisesRegex(module.Rejected,'^ROOT_DRIVER_UNAVAILABLE$'):
+    module.measure_declaration_equivalence(driver,self.parent,{},producer=self.p,purpose='INDEPENDENT_PREFLIGHT')
+   acquire.assert_called_once_with(self.p);download.assert_called_once();runtime.assert_called_once()
+  self.assertEqual(len(bound),1);package.assert_stable();driver.run.assert_not_called()
+  self.assertEqual(list((self.parent/'.runtime/online-recharge-qualified-client').iterdir()),[])
+  self.assertFalse((self.parent/'.runtime/online-recharge-declaration-measurement').exists())
  def test_modified_nonempty_source_table_cannot_auto_admit_profile(self):
   (self.folder/'reviewed-source-table.json').write_bytes(b'[{"trusted":true}]\n')
   with self.assertRaises(IO.Rejected):self.package()

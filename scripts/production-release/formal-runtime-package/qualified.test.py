@@ -163,12 +163,13 @@ class QualificationTests(unittest.TestCase):
     def runtime(self):
         return self.session.runtime(self.d)
     def no_create(self):self.assertFalse(any('create' in cmd for cmd,_ in self.d.calls))
-    def test_public_source_table_empty_before_any_command(self):
+    def test_unbound_public_source_refuses_before_any_command(self):
         for call in (q.reviewed_rules,lambda:q.measure(self.d,self.directory,services=self.d.services,
             image_reference='source-api',image_id=FIX['IMAGE'],source_seal=self.d.seal,stability_reader=lambda:self.raw)):
             with self.assertRaisesRegex(q.Rejected,'SOURCE_NOT_MEASURED'):call()
         self.assertEqual(self.d.calls,[]);self.assertEqual(q.REVIEWED_GENERATORS,{})
-    def test_public_context_empty_table_no_acquisition(self):
+        self.assertIsNone(q._SOURCE_TABLE_BYTES);self.assertEqual(len(q.REVIEWED_SOURCE_TABLE),1)
+    def test_unbound_public_context_has_no_acquisition(self):
         with self.assertRaisesRegex(q.Rejected,'SOURCE_NOT_MEASURED'):
             with q.acquisition_session(self.d):self.fail('yielded')
         self.assertEqual(self.d.calls,[])
@@ -396,5 +397,81 @@ class QualificationTests(unittest.TestCase):
         driver=q._ControlledDriver(self.d,self.session,file)
         (self.directory/M.FILES[1]).write_text('${PATH}')
         with self.assertRaisesRegex(q.Rejected,'CLIENT_SOURCE_CHANGED'):driver.source_environment(self.directory)
+
+
+
+class ReviewedSourceAdmissionTests(unittest.TestCase):
+    """Real Package singleton selection; only runtime collection I/O is mocked."""
+    def captured(self):
+        io=load('public_source_package_io',HERE/'package_io.py')
+        package=io.Package(HERE,manifest)
+        selected=package.load_leaf('qualified.py');selected._configure(external,pure,factory)
+        return package,selected
+    def test_real_package_singleton_literal_canonical_and_closed_rules(self):
+        package,selected=self.captured();row=selected._reviewed_profile()
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE),1)
+        self.assertEqual(json.loads(package.raw['reviewed-source-table.json']),[row])
+        self.assertEqual(selected.sha(package.raw['reviewed-source-table.json']),selected.REVIEWED_SOURCE_TABLE_SHA256)
+        self.assertEqual(selected.digest(row),selected.REVIEWED_PROFILE_CANONICAL_SHA256)
+        self.assertEqual(selected._source_profile(row,factory()),row)
+        result=selected.reviewed_rules()
+        self.assertEqual(set(result),{'spec','rulesSha256','sourceInputsSha256','sourceReviewReportSha256'})
+        self.assertEqual(result['spec'],row['spec'])
+        self.assertEqual(result['sourceInputsSha256'],row['spec']['sourceSha256'])
+        self.assertFalse(hasattr(selected,'TABLE_BYTES'))
+    def test_unbound_empty_unknown_multiple_and_missing_schema_cannot_select(self):
+        package,selected=self.captured();row=selected._reviewed_profile()
+        missing=copy.deepcopy(row);missing.pop('runtimeConfigurationRuleSha256')
+        unknown=copy.deepcopy(row);unknown['trusted']=True
+        for data in (None,b'[]\n',b'[{}]\n',json.dumps([row,row]).encode(),json.dumps([missing]).encode(),
+                     json.dumps([unknown]).encode(),json.dumps([row],separators=(',',':')).encode()):
+            with self.subTest(kind=type(data).__name__),patch.object(selected,'_load_base',side_effect=AssertionError('FACTORY_FORBIDDEN')):
+                selected._SOURCE_TABLE_BYTES=data
+                with self.assertRaisesRegex(selected.Rejected,'^SOURCE_NOT_MEASURED$'):selected.reviewed_rules()
+    def test_complete_literal_drift_and_missing_profile_schema_reject(self):
+        package,selected=self.captured();row=selected._reviewed_profile()
+        changed=copy.deepcopy(row);changed['sourceReviewReportSha256']='0'*64
+        selected.REVIEWED_SOURCE_TABLE=(changed,)
+        with self.assertRaisesRegex(selected.Rejected,'^SOURCE_NOT_MEASURED$'):selected._reviewed_profile()
+        for key in ('runtimeConfigurationRuleSha256','reviewedCollectionToolSha256'):
+            changed=copy.deepcopy(row);changed.pop(key)
+            with self.subTest(key=key),self.assertRaisesRegex(selected.Rejected,'^SOURCE_PROFILE_INVALID$'):
+                selected._source_profile(changed,factory())
+    def test_actual_full_endpoint_parser_rejects_missing_or_unknown_dns_field(self):
+        package,selected=self.captured();row=selected._reviewed_profile();spec=row['spec']
+        observed={'generator':{key:spec[key] for key in ('engineVersion','composeVersion','engineApiVersion','nativePlatform',
+            'dockerCliVersion','dockerCliSha256','composeCliSha256')},
+            'daemonDefaultAddressPools':{'status':'UNDECLARED','pools':[]},
+            'resources':{'status':'OBSERVED','unknownNetworkFieldCount':0,'unknownVolumeFieldCount':0}}
+        base=factory();self.assertEqual(base.spec_validate(observed,spec),spec)
+        for mode in ('missing','unknown'):
+            changed=copy.deepcopy(spec)
+            if mode=='missing':changed['referenceEndpointFields'].remove('DNSNames')
+            else:changed['actualEndpointFields'].append('UNREVIEWED')
+            with self.subTest(mode=mode),self.assertRaisesRegex(base.Rejected,'^SOURCE_NOT_MEASURED$'):
+                base.spec_validate(observed,changed)
+    def test_singleton_missing_vfs_cannot_create_or_call_runner(self):
+        from unittest.mock import Mock
+        package,selected=self.captured()
+        with tempfile.TemporaryDirectory(dir=HERE,prefix='reviewed-source-') as temporary:
+            driver=SimpleNamespace(BASE=Path(temporary),run=Mock(side_effect=AssertionError('RUN_FORBIDDEN')))
+            with patch.object(selected,'_load_socket',return_value=None) as vfs:
+                with self.assertRaisesRegex(selected.Rejected,'^VFS_BOUND_CAPABILITY_REQUIRED$'):
+                    with selected.acquisition_session(driver):self.fail('QUALIFIED')
+                vfs.assert_called_once()
+            driver.run.assert_not_called();self.assertEqual(list(Path(temporary).iterdir()),[])
+    def test_singleton_runtime_unavailable_cleans_client_without_reference(self):
+        from unittest.mock import Mock
+        package,selected=self.captured()
+        with tempfile.TemporaryDirectory(dir=HERE,prefix='reviewed-source-') as temporary:
+            base=Path(temporary);(base/'.runtime').mkdir(mode=0o700)
+            driver=SimpleNamespace(BASE=base,run=Mock(side_effect=AssertionError('RUN_FORBIDDEN')))
+            with patch.object(external.socket,'runtime_daemon_socket_binding',side_effect=RuntimeError('SYNTHETIC_UNAVAILABLE')) as runtime:
+                with self.assertRaisesRegex(selected.Rejected,'^QUALIFIER_UNAVAILABLE$'):
+                    with selected.acquisition_session(driver):self.fail('QUALIFIED')
+                runtime.assert_called_once()
+            driver.run.assert_not_called()
+            self.assertEqual(list((base/'.runtime/online-recharge-qualified-client').iterdir()),[])
+            self.assertFalse((base/'.runtime/online-recharge-declaration-measurement').exists())
 
 if __name__=='__main__':unittest.main(verbosity=2)

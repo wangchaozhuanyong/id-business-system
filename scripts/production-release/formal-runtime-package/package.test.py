@@ -344,10 +344,16 @@ class DriverTests(unittest.TestCase):
         import inspect
         self.assertEqual(tuple(inspect.signature(m.measure_declaration_equivalence).parameters),
                          ('d','directory','recovery','producer','purpose','preflight_raw'))
-    def test_default_unconnected_source_capability_is_failclosed(self):
+    def test_reviewed_source_still_requires_real_bound_archive(self):
+        package=m._local_package();selected=package.load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE),1);selected._reviewed_profile()
         self.cap_patch.stop()
-        try:self.reject(code='ROOT_GENERATOR_SOURCE_UNMEASURED')
+        try:
+            with patch.object(m,'_local_package',return_value=package),patch.object(package,'bind_consumers',
+                    side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE')) as archive:
+                self.reject(code='ROOT_DRIVER_UNAVAILABLE');archive.assert_called_once_with(self.p)
         finally:self.cap_patch.start()
+        self.assertEqual(self.controller.calls,[]);self.assertEqual(self.material_calls,0)
 
 
     def test_reference_source_model_and_env_facts_cannot_be_missing_or_forged(self):
