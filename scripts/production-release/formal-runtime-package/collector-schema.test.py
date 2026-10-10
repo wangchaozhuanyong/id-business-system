@@ -32,7 +32,8 @@ class EndpointSchemaTests(unittest.TestCase):
         self.temp.cleanup()
 
     def validate_actual(self):
-        a.actual_endpoints(self.d.actual, self.d.source_networks, self.d.services, FIX['policy']())
+        inspected = json.loads(self.d.run('docker', 'container', 'inspect', FIX['API_ID']))[0]
+        a.actual_endpoints(inspected, self.d.source_networks, self.d.services, FIX['policy']())
 
     def endpoint(self):
         return self.d.actual['NetworkSettings']['Networks'][self.d.source_networks['default']['Name']]

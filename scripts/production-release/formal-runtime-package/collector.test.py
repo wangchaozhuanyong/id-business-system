@@ -154,6 +154,108 @@ class CollectorTests(unittest.TestCase):
                 self.measure()
             self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_container)
         self.d.run=original_run
+    def test_api144_alias_projection_exact_order_dedup_and_hostname(self):
+        spec=FIX['policy']();meta=copy.deepcopy(self.d.actual);name=meta['Name'].lstrip('/');cid=meta['Id'][:12]
+        for hostname,expected in ((cid,[name,'api',cid]),('CONTROL_HOST',[name,'api',cid,'CONTROL_HOST']),
+                                  ('api',[name,'api',cid]),(name,[name,'api',cid]),('',[name,'api',cid,''])):
+            meta['Config']['Hostname']=hostname;original=copy.deepcopy(meta)
+            with self.subTest(hostname=hostname):
+                self.assertEqual(a.endpoint_aliases(meta,spec),expected);self.assertEqual(meta,original)
+        pack,_,_=a.prepare_source(self.d,self.directory,self.d.services,'source-api',FIX['IMAGE'],self.d.seal,spec)
+        changed=copy.deepcopy(pack);changed['metadata']['Config']['Hostname']='CONTROL_HOST'
+        for reference in (False,True):
+            with self.subTest(reference=reference),self.assertRaisesRegex(a.Rejected,'^PACK_IMAGE_OR_NATIVE_IDENTITY$'):
+                a.bind_pack(changed,spec,reference=reference,source=pack)
+        spec['engineApiVersion']='1.45'
+        self.assertEqual(a.endpoint_aliases(meta,spec),[name,'api'])
+    def test_api144_actual_aliases_reject_order_duplicates_missing_wrong_id_and_legacy(self):
+        spec=FIX['policy']();meta=json.loads(self.d.run(spec['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        expected=a.endpoint_aliases(meta,spec);a.actual_endpoints(meta,self.d.source_networks,self.d.services,spec)
+        bad=(expected[:2],list(reversed(expected)),expected+[expected[-1]],expected+['CONTROL_EXTRA'],
+             [expected[0],expected[1],'9'*12],[expected[0],expected[2],expected[1]],
+             [expected[0],'OTHER_SERVICE',expected[2]],['9'*12+'_'+expected[0],*expected[1:]])
+        for role in a.NETWORK_ROLES:
+            for aliases in bad:
+                changed=copy.deepcopy(meta);changed['NetworkSettings']['Networks'][self.d.source_networks[role]['Name']]['Aliases']=aliases
+                with self.subTest(role=role,aliases=aliases),self.assertRaisesRegex(a.Rejected,'^ACTUAL_NETWORK_DECLARATION$'):
+                    a.actual_endpoints(changed,self.d.source_networks,self.d.services,spec)
+        for field,value in (('DNSNames',list(reversed(expected))),('IPAMConfig',{}),('DriverOpts',{}),('Links',[])):
+            changed=copy.deepcopy(meta);next(iter(changed['NetworkSettings']['Networks'].values()))[field]=value
+            with self.subTest(field=field),self.assertRaisesRegex(a.Rejected,'^ACTUAL_NETWORK_DECLARATION$'):
+                a.actual_endpoints(changed,self.d.source_networks,self.d.services,spec)
+    def test_api144_stopped_reference_aliases_reject_legacy_order_duplicate_and_extra(self):
+        original_run=self.d.run;mutations=('legacy','order','duplicate','wrong_id','extra')
+        for mutation in mutations:
+            projected=False;before_removed=len(self.d.removed)
+            def run(*args,**kwargs):
+                nonlocal projected
+                raw=original_run(*args,**kwargs)
+                if args[0] in ('docker',FIX['policy']()['dockerPath']) and args[1:3]==('container','inspect') and args[3]!=FIX['API_ID']:
+                    rows=json.loads(raw);row=rows[0];projected=True
+                    self.assertFalse(row['State']['Running']);self.assertEqual(row['State']['Status'],'created')
+                    for endpoint in row['NetworkSettings']['Networks'].values():
+                        self.assertIsNone(endpoint['DNSNames']);aliases=endpoint['Aliases']
+                        self.assertEqual(aliases,a.endpoint_aliases(row,FIX['policy']()))
+                        endpoint['Aliases']=(aliases[:2] if mutation=='legacy' else list(reversed(aliases)) if mutation=='order'
+                            else aliases+[aliases[-1]] if mutation=='duplicate' else [aliases[0],aliases[1],'9'*12]
+                            if mutation=='wrong_id' else aliases+['CONTROL_EXTRA'])
+                    return json.dumps(rows)
+                return raw
+            self.d.run=run
+            with self.subTest(mutation=mutation),self.assertRaisesRegex(a.Rejected,'^REFERENCE_PENDING_ENDPOINT$'):
+                self.measure()
+            self.assertTrue(projected);self.assertEqual(len(self.d.removed)-before_removed,6)
+            self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
+        self.d.run=original_run
+    def test_api144_fake_inspect_projects_only_independent_returned_copy(self):
+        original=copy.deepcopy(self.d.actual);spec=FIX['policy']()
+        inspected=json.loads(self.d.run(spec['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        self.assertEqual(self.d.actual,original);self.assertNotEqual(inspected,original)
+        for name,row in inspected['NetworkSettings']['Networks'].items():
+            self.assertEqual(row['Aliases'],a.endpoint_aliases(inspected,spec))
+            self.assertEqual(original['NetworkSettings']['Networks'][name]['Aliases'],[original['Name'].lstrip('/'),'api'])
+            self.assertEqual(row['DNSNames'],a.endpoint_dns_names(inspected,row['Aliases']))
+            row['Aliases'].append('CONTROL_RETURNED_COPY_CHANGE')
+        again=json.loads(self.d.run(spec['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        self.assertEqual(self.d.actual,original)
+        self.assertTrue(all(row['Aliases']==a.endpoint_aliases(again,spec) for row in again['NetworkSettings']['Networks'].values()))
+    def test_api144_complete_measurement_keeps_original_source_resources_and_dns(self):
+        stored=copy.deepcopy(self.d.actual);model=copy.deepcopy(self.d.source_model);resources=copy.deepcopy(self.raw['actualResource'])
+        original_run=self.d.run;observed_actual=[];observed_reference=[]
+        def run(*args,**kwargs):
+            raw=original_run(*args,**kwargs)
+            if args[0] in ('docker',FIX['policy']()['dockerPath']) and args[1:3]==('container','inspect'):
+                row=json.loads(raw)[0];reference=args[3]!=FIX['API_ID']
+                (observed_reference if reference else observed_actual).append(copy.deepcopy(row))
+                for endpoint in row['NetworkSettings']['Networks'].values():
+                    self.assertEqual(endpoint['Aliases'],a.endpoint_aliases(row,FIX['policy']()))
+                    if reference:self.assertIsNone(endpoint['DNSNames'])
+                    else:self.assertEqual(endpoint['DNSNames'],a.endpoint_dns_names(row,endpoint['Aliases']))
+            return raw
+        self.d.run=run;result=self.measure()
+        self.assertTrue(observed_actual);self.assertTrue(observed_reference)
+        self.assertTrue(all(not row['State']['Running'] for row in observed_reference))
+        self.assertEqual(self.calls,3);self.assertEqual(len(self.d.removed),6)
+        self.assertEqual(self.d.actual,stored);self.assertEqual(self.d.source_model,model)
+        self.assertEqual(self.observed()['actualResource'],resources)
+        self.assertEqual(result['facts']['source']['renderedDeclarationSha256'],a.fingerprint(model))
+        self.assertEqual(result['measured']['actualResourceSha256'],a.fingerprint(resources))
+        self.assertEqual(result['facts']['stableBefore'],result['facts']['stableAfter'])
+        C['validate_facts'](result['measured'],result['facts'],self.validation_root(result))
+        self.assertFalse(result['measured']['authority']);self.assertFalse(result['measured']['productionEligible'])
+        self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
+    def test_api144_source_alias_drift_still_fails_original_full_snapshot_guard(self):
+        original_run=self.d.run;changed=False
+        def run(*args,**kwargs):
+            nonlocal changed
+            raw=original_run(*args,**kwargs)
+            if not changed and args[:3]==(FIX['policy']()['dockerPath'],'network','create'):
+                changed=True;next(iter(self.d.actual['NetworkSettings']['Networks'].values()))['Aliases'].append('CONTROL_SOURCE_DRIFT')
+            return raw
+        self.d.run=run
+        with self.assertRaisesRegex(a.Rejected,'^ACTUAL_INSPECT_CHANGED$'):self.measure()
+        self.assertTrue(changed);self.assertFalse(self.d.created_networks)
+        self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
     def test_managed_resource_hash_matches_independent_go_golden_preimages(self):
         spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
         goldens={
