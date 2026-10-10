@@ -92,6 +92,40 @@ test('unrelated control edits do not execute database grant tests', () => {
   }
 });
 
+test('fixed source permission repair runs both dedicated suites in each control dispatcher only for its inputs', () => {
+  const suites = [
+    'scripts/production-release/online-recharge-source-permission-repair.test.py',
+    'scripts/production-release/online-recharge-source-permission-repair-transport.test.py'
+  ];
+  const paths = [
+    'scripts/production-release/online-recharge-source-permission-repair.py',
+    ...suites,
+    'scripts/production-release/online-recharge-source-permission-repair-transport.py',
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of paths) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      for (const suite of suites)
+        assert.equal(
+          calls.filter((call) => JSON.stringify(call) === JSON.stringify(['python3', '-B', suite]))
+            .length,
+          1,
+          part + ': ' + path + ': ' + suite
+        );
+      assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+    }
+    const calls = recordGuardCommands(
+      'ci-only',
+      ['docs/ONLINE_RECHARGE_RELEASE_20261009.md'],
+      part
+    );
+    assert.ok(calls.every((call) => suites.every((suite) => !call.includes(suite))));
+  }
+});
+
 function recordOnlineEngineCommands(failBrowser = false) {
   const script = `
     import childProcess from 'node:child_process';

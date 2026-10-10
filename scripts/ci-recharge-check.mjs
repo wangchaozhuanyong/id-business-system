@@ -131,6 +131,28 @@ const releaseMaintenanceControls = () => {
 const archiveReleaseControls = () => {
   run('node', ['--test', 'scripts/v2-order-archive-release-policy.test.mjs']);
 };
+const onlineSourcePermissionRepairControls = () => {
+  if (
+    changed.some(
+      (path) =>
+        path.startsWith('scripts/production-release/online-recharge-source-permission-repair') ||
+        [
+          '.github/workflows/production-release.yml',
+          'scripts/production-release/validate-release-selection.sh',
+          'scripts/ci-recharge-check.mjs'
+        ].includes(path)
+    )
+  ) {
+    run('python3', [
+      '-B',
+      'scripts/production-release/online-recharge-source-permission-repair.test.py'
+    ]);
+    run('python3', [
+      '-B',
+      'scripts/production-release/online-recharge-source-permission-repair-transport.test.py'
+    ]);
+  }
+};
 const onlineRecoveryGrantControls = () => {
   if (
     changed.some((path) =>
@@ -240,6 +262,7 @@ if (part === 'guards') {
   }
   releaseMaintenanceControls();
   archiveReleaseControls();
+  onlineSourcePermissionRepairControls();
   if (
     changed.some((path) =>
       [
@@ -384,6 +407,7 @@ if (part === 'guards') {
   }
   releaseMaintenanceControls();
   archiveReleaseControls();
+  onlineSourcePermissionRepairControls();
 } else if (part === 'admin') {
   for (const args of adminCheckCommands(mode, changed)) npm(...args);
 } else if (part === 'api') {
