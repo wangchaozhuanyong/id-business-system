@@ -218,7 +218,7 @@ class BootstrapBoundaryTests(unittest.TestCase):
   self.assertEqual(D.PACKAGE_MANIFEST_SHA,'792d8a9977800a332a29fe45d3e6818b76a06cb50959ecd32eae3e37cdb839da')
   self.assertEqual(hashlib.sha256((HERE/'manifest.json').read_bytes()).hexdigest(),D.PACKAGE_MANIFEST_SHA)
   self.assertEqual(hashlib.sha256((HERE/'driver.py').read_bytes()).hexdigest(),
-   'd1be26d54d7284e321d5510e068ce2c3d963d229b930f97bb0f5f586597415b2')
+   '9cbe7f9919feee286a2719d97ea48ff0f45592b111f483666caca95494bd03a0')
   self.assertEqual(set(M),{'version','kind','files','externalLeafPins','consumerFiles','packageRole'})
   self.assertEqual((type(M['version']),M['version'],M['kind'],M['packageRole']),
    (int,2,'FORMAL_RUNTIME_PACKAGE_V2','formal-runtime-package'))
@@ -239,8 +239,9 @@ class BootstrapBoundaryTests(unittest.TestCase):
   self.assertEqual(len(json.loads(package.raw['reviewed-source-table.json'])),1)
   with patch.object(D,'_local_package',return_value=package),patch.object(package,'bind_consumers',
     side_effect=AssertionError('ARCHIVE_ACQUISITION_FORBIDDEN')) as acquire:
-   with self.assertRaisesRegex(AssertionError,'^ARCHIVE_ACQUISITION_FORBIDDEN$'):
+   with self.assertRaisesRegex(D.Rejected,'^ROOT_DRIVER_UNAVAILABLE$') as caught:
     D._capabilities({'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'})
    acquire.assert_called_once()
+   self.assertEqual(D.failure_diagnostic(caught.exception),{'stage':'ARCHIVE_BIND','code':'UNKNOWN'})
 
 if __name__=='__main__':unittest.main(verbosity=2)

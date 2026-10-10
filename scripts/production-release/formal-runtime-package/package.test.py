@@ -544,6 +544,344 @@ class DriverTests(unittest.TestCase):
         self.reject(code='ROOT_HISTORY_CHANGED');self.assertEqual(self.material_calls,0)
 
 
+    def diagnostic_failure(self,stage,code,primary=None):
+        with self.assertRaises(m.Rejected) as caught:self.run_driver()
+        error=caught.exception
+        self.assertEqual(m.failure_diagnostic(error),{'stage':stage,'code':code})
+        if primary:self.assertEqual(error.args,(primary,))
+        self.assertFalse(self.registry_path().exists())
+        self.assertTrue(error.__suppress_context__)
+        self.assertNotIn(SENTINEL,json.dumps(m.failure_diagnostic(error)))
+        return error
+
+    def test_diagnostic_entry_remains_nonroot_rejection(self):
+        with patch.object(m.os,'geteuid',return_value=os.getuid()+1):
+            self.diagnostic_failure('ENTRY','ROOT_ENTRY_INVALID','ROOT_ENTRY_INVALID')
+        self.assertEqual(self.material_calls,0);self.assertEqual(self.measure_calls,0)
+
+    def test_diagnostic_acquisition_uses_exact_captured_qualifier_class(self):
+        package=m._local_package();qualified=package.load_leaf('qualified.py')
+        self.caps._diagnostic_errors=[(qualified.Rejected,qualified.CODES)]
+        @contextmanager
+        def closed(d):
+            raise qualified.Rejected('VFS_BOUND_CAPABILITY_REQUIRED')
+            yield
+        self.qual.acquisition_session=closed
+        self.diagnostic_failure('ACQUISITION','VFS_BOUND_CAPABILITY_REQUIRED','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.material_calls,0);self.assertEqual(self.measure_calls,0)
+
+    def test_diagnostic_rules_and_original_closed_fields_still_reject(self):
+        self.session.reviewed_rules=lambda:{'spec':{'LOCAL_ONLY':True}}
+        self.diagnostic_failure('RULES','ROOT_SOURCE_CHANGED','ROOT_SOURCE_CHANGED')
+        self.assertEqual(self.material_calls,0);self.assertEqual(self.exit_calls,1)
+
+    def test_diagnostic_acquire_preserves_source_checks(self):
+        self.controller._apiWorkspaceDeclarationProducer['sourceTree']='c'*40
+        self.diagnostic_failure('ENTRY','ROOT_PRODUCER_CHANGED','ROOT_PRODUCER_CHANGED')
+        self.assertEqual(self.material_calls,0)
+        self.controller._apiWorkspaceDeclarationProducer=self.p.copy()
+        self.online.snapshot=lambda *a: (_ for _ in ()).throw(m.Rejected('ROOT_OBSERVATION_CHANGED'))
+        self.diagnostic_failure('ACQUIRE','ROOT_OBSERVATION_CHANGED','ROOT_OBSERVATION_CHANGED')
+        self.assertEqual(self.measure_calls,0);self.assertEqual(self.exit_calls,1)
+
+    def test_diagnostic_measure_survives_actual_qualified_exception_wrapper(self):
+        package=m._local_package();qualified=package.load_leaf('qualified.py')
+        inventory=load('diagnostic_inventory',HERE.parent/'online-recharge-declaration-measurement.py')
+        collector=package.load_leaf('collector.py');collector._configure(inventory,DERIVE,package.contract)
+        original=collector.Rejected('ACTUAL_NETWORK_INSPECT_CHANGED');delivered=[]
+        self.caps._diagnostic_errors=[(qualified.Rejected,qualified.CODES),(collector.Rejected,collector.ERROR_CODES)]
+        @contextmanager
+        def inner(d,session):
+            try:yield self.session
+            except Exception as error:delivered.append(error);raise
+            finally:self.exit_calls+=1
+        patches=[patch.object(qualified,'_reviewed_profile',return_value={'LOCAL_MOCK_ONLY':True}),
+                 patch.object(qualified,'_load_base',return_value=object()),
+                 patch.object(qualified,'_Session',return_value=object()),
+                 patch.object(qualified,'_load_socket',return_value=object()),
+                 patch.object(qualified,'_acquisition_context',inner)]
+        for item in patches:item.start();self.addCleanup(item.stop)
+        self.qual.acquisition_session=qualified.acquisition_session
+        self.action=lambda:(_ for _ in ()).throw(original)
+        self.diagnostic_failure('MEASURE','ACTUAL_NETWORK_INSPECT_CHANGED','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(delivered,[original]);self.assertEqual(self.measure_calls,1)
+        self.assertEqual(self.exit_calls,1);self.assertEqual(self.source_calls,0)
+
+    def test_diagnostic_after_preserves_observation_rejection(self):
+        self.action=lambda:self.services['mysql'].update(containerId='e'*64)
+        self.diagnostic_failure('MEASURE','UNKNOWN','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.measure_calls,1);self.assertEqual(self.exit_calls,1)
+
+    def test_diagnostic_after_fixed_error_is_bounded(self):
+        original=self.measure
+        def measured(*a,**k):
+            result=original(*a,**k)
+            self.online.declaration_equivalence_materials=lambda *a,**k:(_ for _ in ()).throw(m.Rejected('ROOT_HISTORY_CHANGED'))
+            return result
+        self.session.measure=measured
+        self.diagnostic_failure('AFTER','ROOT_HISTORY_CHANGED','ROOT_HISTORY_CHANGED')
+        self.assertEqual(self.measure_calls,1);self.assertEqual(self.source_calls,0)
+
+    def test_diagnostic_construct_keeps_unknown_literal_private(self):
+        self.caps.constructor.construct_preview=lambda *a,**k:(_ for _ in ()).throw(ValueError(SENTINEL))
+        self.diagnostic_failure('CONSTRUCT','UNKNOWN','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.measure_calls,1);self.assertEqual(self.exit_calls,1)
+
+    def test_diagnostic_close_never_persists_registry(self):
+        package=m._local_package();qualified=package.load_leaf('qualified.py')
+        self.caps._diagnostic_errors=[(qualified.Rejected,qualified.CODES)]
+        self.exit_action=lambda:(_ for _ in ()).throw(qualified.Rejected('CLIENT_SOURCE_CHANGED'))
+        self.diagnostic_failure('CLOSE','CLIENT_SOURCE_CHANGED','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.source_calls,1);self.assertEqual(self.exit_calls,1)
+
+    def test_diagnostic_registry_only_after_successful_cleanup(self):
+        def denied(*a,**k):
+            self.assertEqual(self.exit_calls,1)
+            raise m.Rejected('ROOT_REGISTRY_INVALID')
+        with patch.object(m,'_save_registry',side_effect=denied):
+            self.diagnostic_failure('REGISTRY','ROOT_REGISTRY_INVALID','ROOT_REGISTRY_INVALID')
+        self.assertEqual(self.source_calls,1)
+
+    def test_diagnostic_legacy_plain_source_status_remains_non_authorizing(self):
+        @contextmanager
+        def closed(d):raise RuntimeError('SOURCE_NOT_MEASURED');yield
+        self.qual.acquisition_session=closed
+        self.diagnostic_failure('ACQUISITION','UNKNOWN','ROOT_GENERATOR_SOURCE_UNMEASURED')
+        self.assertEqual(self.material_calls,0)
+
+
+class DeclarationFailureProjectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.package=m._local_package();cls.qualified=cls.package.load_leaf('qualified.py')
+        cls.inventory=load('diagnostic_inventory_projection',HERE.parent/'online-recharge-declaration-measurement.py')
+        cls.collector=cls.package.load_leaf('collector.py');cls.collector._configure(cls.inventory,DERIVE,cls.package.contract)
+        cls.loader=m._load(HERE/'package_io.py',cls.package.manifest['files']['package_io.py'])
+        cls.online=SimpleNamespace(**S)
+
+    def test_closed_enums_equal_captured_existing_fixed_codes(self):
+        expected=m.CODES|self.loader.CODES|self.qualified.CODES|self.collector.ERROR_CODES|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
+        self.assertEqual(m.DIAGNOSTIC_CODES,expected)
+        self.assertEqual(S['DECLARATION_DIAGNOSTIC_CODES'],expected)
+        self.assertEqual(S['DECLARATION_DIAGNOSTIC_STAGES'],m.DIAGNOSTIC_STAGES)
+
+    def test_trusted_exact_classes_and_unknown_messages_never_leak(self):
+        bindings=[(self.loader.Rejected,self.loader.CODES),(self.qualified.Rejected,self.qualified.CODES),
+                  (self.collector.Rejected,self.collector.ERROR_CODES)]
+        for cls,codes in [(m.Rejected,m.CODES),*bindings]:
+            code=next(iter(codes));error=cls(code)
+            self.assertEqual(m._reason(error,'MEASURE',bindings),{'stage':'MEASURE','code':code})
+            for message in (SENTINEL,code+'_'+SENTINEL,'','UNKNOWN'):
+                self.assertEqual(m._reason(cls(message),'MEASURE',bindings)['code'],'UNKNOWN')
+        class NoString(RuntimeError):
+            def __str__(self):raise AssertionError('EXCEPTION_STRING_MUST_NOT_RUN')
+        class RootSubclass(m.Rejected):
+            def __str__(self):raise AssertionError('SUBCLASS_STRING_MUST_NOT_RUN')
+        for error in (RuntimeError('ROOT_SOURCE_CHANGED'),NoString(SENTINEL),RootSubclass('ROOT_SOURCE_CHANGED')):
+            rejected=m._rejected(error,'MEASURE',bindings)
+            self.assertEqual(m.failure_diagnostic(rejected),{'stage':'MEASURE','code':'UNKNOWN'})
+            self.assertNotIn(SENTINEL,json.dumps(m.failure_diagnostic(rejected)))
+
+    def test_package_binding_subphases_use_real_captured_loader(self):
+        for stage in ('SOURCE_PROFILE','ARCHIVE_BIND','CONFIGURE'):
+            with self.subTest(stage=stage):
+                package=m._local_package();load_leaf=package.load_leaf
+                def leaf(name):
+                    value=load_leaf(name)
+                    if name=='qualified.py' and stage=='SOURCE_PROFILE':
+                        value._reviewed_profile=lambda:(_ for _ in ()).throw(value.Rejected('SOURCE_PROFILE_INVALID'))
+                    if name=='reader.py' and stage=='CONFIGURE':
+                        # The actual Package's captured class, not a named fake.
+                        cls=package._diagnostic_errors[0][0]
+                        raise cls('PACKAGE_FILE_CHANGED')
+                    return value
+                external=SimpleNamespace(online=self.online,workspace=SimpleNamespace(**W),inventory=self.inventory,paths={'api-admin-scope.py':HERE.parent/'api-admin-scope.py'})
+                bind_error=__import__('urllib.error',fromlist=['URLError']).URLError(SENTINEL)
+                with patch.object(m,'_local_package',return_value=package),patch.object(package,'load_leaf',side_effect=leaf), \
+                     patch.object(package,'bind_consumers',side_effect=bind_error if stage=='ARCHIVE_BIND' else None,return_value=external):
+                    with self.assertRaises(m.Rejected) as caught:m._capabilities({'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'1','workflowRunAttempt':'1'})
+                self.assertEqual(m.failure_diagnostic(caught.exception),{'stage':stage,'code':{'SOURCE_PROFILE':'SOURCE_PROFILE_INVALID','ARCHIVE_BIND':'URL_ERROR','CONFIGURE':'PACKAGE_FILE_CHANGED'}[stage]})
+
+    def test_local_package_constructor_rejection_is_captured_before_return(self):
+        loader=m._load(HERE/'package_io.py',self.package.manifest['files']['package_io.py'])
+        with patch.object(m,'_load',return_value=loader),patch.object(loader,'Package',side_effect=loader.Rejected('PACKAGE_SCHEMA_CHANGED')):
+            with self.assertRaises(m.Rejected) as caught:m._local_package()
+        self.assertEqual(m.failure_diagnostic(caught.exception),{'stage':'LOCAL_PACKAGE','code':'PACKAGE_SCHEMA_CHANGED'})
+
+    def test_archive_http_url_types_are_finite_without_url_reason_or_body(self):
+        from urllib.error import HTTPError,URLError
+        for error,code in ((HTTPError('LOCAL_PRIVATE_URL',403,SENTINEL,{},None),'HTTP_ERROR'),(URLError(SENTINEL),'URL_ERROR'),(TimeoutError(SENTINEL),'TIMEOUT')):
+            self.assertEqual(m._reason(error,'ARCHIVE_BIND'),{'stage':'ARCHIVE_BIND','code':code})
+            self.assertEqual(m._reason(error,'MEASURE')['code'],'UNKNOWN')
+            class Derived(type(error)):pass
+            derived=Derived('LOCAL_PRIVATE_URL',403,SENTINEL,{},None) if code=='HTTP_ERROR' else Derived(SENTINEL)
+            self.assertEqual(m._reason(derived,'ARCHIVE_BIND')['code'],'UNKNOWN')
+
+    def test_new_driver_capture_is_exact_pinned_bytes_with_unchanged_leaves(self):
+        driver=S['_declaration_runtime_driver']()
+        self.assertEqual(S['FORMAL_RUNTIME_DRIVER_SHA256'],hashlib.sha256((HERE/'driver.py').read_bytes()).hexdigest())
+        self.assertEqual(driver.PACKAGE_MANIFEST_SHA,m.PACKAGE_MANIFEST_SHA)
+        self.assertEqual(self.package.manifest['files'],json.loads((HERE/'manifest.json').read_bytes())['files'])
+        self.assertIsNone(driver.failure_diagnostic(RuntimeError('ROOT_SOURCE_CHANGED')))
+
+    def api_failure(self,error):
+        d=SimpleNamespace(_workspaceBaselineDiagnostic={'phase':'MANIFEST','step':'JOBS_IDLE','service':'none',
+            'scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True})
+        def require(ok,code):
+            if not ok:raise RuntimeError(code)
+        d.require=require
+        original=S['measure_declaration_equivalence']
+        self.online.measure_declaration_equivalence=lambda *a,**k:(_ for _ in ()).throw(error)
+        function=W['_pending_online_declaration_measure']
+        with patch.dict(function.__globals__,{'pending_online_equivalence':lambda:self.online}):
+            with self.assertRaises(RuntimeError) as caught:function(d,Path('/LOCAL_ONLY'),{},producer={
+                'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'1','workflowRunAttempt':'1'},purpose='INDEPENDENT_PREFLIGHT')
+        self.online.measure_declaration_equivalence=original
+        self.assertTrue(W['valid_workspace_diagnostic'](d._workspaceBaselineDiagnostic))
+        self.assertEqual(set(d._workspaceBaselineDiagnostic),{'phase','step','service','scope','errorType','rawOutputSuppressed'})
+        self.assertNotIn(SENTINEL,json.dumps(d._workspaceBaselineDiagnostic))
+        return caught.exception,d._workspaceBaselineDiagnostic
+
+    def test_real_three_layer_projection_preserves_bounded_stage_and_code(self):
+        driver=S['_declaration_runtime_driver']()
+        rejected=driver._rejected(driver.Rejected('ROOT_HISTORY_CHANGED'),'ACQUIRE')
+        function=S['measure_declaration_equivalence']
+        with patch.dict(function.__globals__,{'_declaration_runtime_driver':lambda:driver}), \
+             patch.object(driver,'measure_declaration_equivalence',side_effect=rejected):
+            with self.assertRaises(S['DeclarationDriverError']) as caught:function(object(),Path('/LOCAL_ONLY'),{},
+                producer={'LOCAL_SYNTHETIC_ONLY':True},purpose='INDEPENDENT_PREFLIGHT')
+        error,diagnostic=self.api_failure(caught.exception)
+        self.assertEqual(error.args,('API_ADMIN_PENDING_ONLINE_DRIVER_ROOT_HISTORY_CHANGED',))
+        self.assertEqual(diagnostic['step'],'DECLARATION_ACQUIRE')
+        self.assertEqual(diagnostic['phase'],'MANIFEST')
+
+    def test_unknown_cause_keeps_original_error_and_no_private_text(self):
+        error=S['_declaration_driver_failure']('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE',{'stage':'MEASURE','code':'UNKNOWN'})
+        caught,diagnostic=self.api_failure(error)
+        self.assertEqual(caught.args,('API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED',))
+        self.assertEqual(diagnostic['step'],'DECLARATION_MEASURE')
+        caught,diagnostic=self.api_failure(RuntimeError(SENTINEL))
+        self.assertEqual(caught.args,('API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED',))
+        self.assertEqual(diagnostic['step'],'DECLARATION_ENTRY')
+
+    def test_original_source_status_and_missing_legacy_getter_still_reject(self):
+        error=S['_declaration_driver_failure']('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED',{'stage':'SOURCE_PROFILE','code':'SOURCE_NOT_MEASURED'})
+        caught,diagnostic=self.api_failure(error)
+        self.assertEqual(caught.args,('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED',))
+        self.assertEqual(diagnostic['step'],'DECLARATION_SOURCE_PROFILE')
+        getter=self.online.declaration_failure_diagnostic;del self.online.declaration_failure_diagnostic
+        try:
+            caught,diagnostic=self.api_failure(RuntimeError(SENTINEL))
+            self.assertEqual(caught.args,('API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED',))
+            self.assertEqual(diagnostic['step'],'DECLARATION_ENTRY')
+        finally:self.online.declaration_failure_diagnostic=getter
+
+    def test_closed_marker_rejects_unknown_extra_fields_types_and_subclasses(self):
+        cls=S['DeclarationDriverError'];helper=S['declaration_failure_diagnostic']
+        class Derived(cls):pass
+        for error in (RuntimeError('ROOT_HISTORY_CHANGED'),Derived('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE')):
+            error._declaration_failure=('MEASURE','ROOT_HISTORY_CHANGED');self.assertIsNone(helper(error))
+        for failure in ((SENTINEL,'ROOT_HISTORY_CHANGED'),('MEASURE',SENTINEL),['MEASURE','ROOT_HISTORY_CHANGED'],('MEASURE','ROOT_HISTORY_CHANGED',SENTINEL)):
+            error=cls('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE');error._declaration_failure=failure
+            self.assertIsNone(helper(error))
+        for stage in m.DIAGNOSTIC_STAGES:
+            diagnostic={'phase':'MANIFEST','step':'DECLARATION_'+stage,'service':'none','scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True}
+            self.assertTrue(W['valid_workspace_diagnostic'](diagnostic))
+            diagnostic['secret']=SENTINEL;self.assertFalse(W['valid_workspace_diagnostic'](diagnostic))
+        self.assertFalse(W['valid_workspace_diagnostic']({'phase':'MANIFEST','step':'DECLARATION_'+SENTINEL,'service':'none','scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True}))
+    def test_api_peripheral_materials_binding_and_producer_stages_preserve_checks(self):
+        p={'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'1','workflowRunAttempt':'1'}
+        function=W['_pending_online_declaration_measure']
+        for boundary in ('MATERIALS','SOURCE_BINDING','PRODUCER'):
+            with self.subTest(boundary=boundary):
+                calls=[];d=SimpleNamespace(_workspaceBaselineDiagnostic={'phase':'MANIFEST','step':'JOBS_IDLE',
+                    'service':'none','scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True})
+                def require(ok,code):
+                    if not ok:raise RuntimeError(code)
+                d.require=require
+                proof={'measurement':{'purpose':'DEPLOYMENT_REMEASURE' if boundary=='PRODUCER' else 'INDEPENDENT_PREFLIGHT'},
+                    'semantic':{'producer':p.copy()}}
+                def measured(*a,**k):
+                    calls.append(d._workspaceBaselineDiagnostic['step']);return proof
+                def materials(*a,**k):
+                    calls.append(d._workspaceBaselineDiagnostic['step'])
+                    if boundary=='MATERIALS':raise RuntimeError(SENTINEL)
+                    return {'producer':p.copy(),'archive_bytes':b'LOCAL_ONLY','historical_files':{}}
+                def binding(*a,**k):
+                    calls.append(d._workspaceBaselineDiagnostic['step'])
+                    if boundary=='SOURCE_BINDING':raise RuntimeError(SENTINEL)
+                online=SimpleNamespace(measure_declaration_equivalence=measured,declaration_equivalence_materials=materials,
+                    declaration_equivalence_source_binding=binding,declaration_failure_diagnostic=S['declaration_failure_diagnostic'])
+                with patch.dict(function.__globals__,{'pending_online_equivalence':lambda:online}):
+                    with self.assertRaises(RuntimeError) as caught:function(d,Path('/LOCAL_ONLY'),{},producer=p,purpose='INDEPENDENT_PREFLIGHT')
+                self.assertEqual(caught.exception.args,('API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED',))
+                self.assertEqual(d._workspaceBaselineDiagnostic['step'],'DECLARATION_'+boundary)
+                self.assertEqual(calls,['DECLARATION_ENTRY','DECLARATION_MATERIALS']+([] if boundary=='MATERIALS' else ['DECLARATION_SOURCE_BINDING']))
+                self.assertTrue(W['valid_workspace_diagnostic'](d._workspaceBaselineDiagnostic))
+                self.assertNotIn(SENTINEL,json.dumps(d._workspaceBaselineDiagnostic))
+
+    def test_api_final_origin_step_preserves_original_validation(self):
+        with tempfile.TemporaryDirectory(prefix='diagnostic-origin-',dir=HERE) as sandbox:
+            base=Path(sandbox);directory=base/'releases'/('LOCAL_ONLY-'+m.BASELINE[:12]);directory.mkdir(parents=True)
+            (directory/'release-manifest.json').write_bytes(b'{"LOCAL_SYNTHETIC_ONLY":true}')
+            d=SimpleNamespace(BASE=base,_workspaceBaselineDiagnostic={'phase':'MANIFEST','step':'JOBS_IDLE',
+                'service':'none','scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True})
+            def require(ok,code):
+                if not ok:raise RuntimeError(code)
+            d.require=require;calls=[]
+            def mark(name):return lambda *a,**k:calls.append(name)
+            online=SimpleNamespace(recovery_services=mark('recovery_services'),verify_permission_seed=mark('verify_permission_seed'),
+                require_fresh_resources=mark('require_fresh_resources'),jobs_idle=mark('jobs_idle'))
+            recovery={'state':'APPLIED','marker':'LOCAL_ONLY','source':directory,
+                'restored':{'source':directory,'manifestSha256':'a'*64,'recordSha256':'b'*64}}
+            def validate(value):
+                calls.append('validate_pending_online_origin')
+                self.assertEqual(d._workspaceBaselineDiagnostic['step'],'DECLARATION_ORIGIN_CHECK')
+                raise RuntimeError('API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+            fn=W['pending_online_first']
+            with patch.dict(fn.__globals__,{'pending_online_recovery':lambda *a:(online,recovery),
+                'snapshot':lambda *a:{},'validate_pending_online_origin':validate}):
+                with self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):fn(d,directory)
+            self.assertEqual(calls,['recovery_services','verify_permission_seed','require_fresh_resources','jobs_idle','validate_pending_online_origin'])
+            self.assertTrue(W['valid_workspace_diagnostic'](d._workspaceBaselineDiagnostic))
+
+    def test_api_peripheral_step_enums_keep_six_fields_closed(self):
+        for stage in ('MATERIALS','SOURCE_BINDING','PRODUCER','ORIGIN_CHECK'):
+            value={'phase':'MANIFEST','step':'DECLARATION_'+stage,'service':'none','scope':'API_ADMIN_WORKSPACE',
+                'errorType':'RuntimeError','rawOutputSuppressed':True}
+            self.assertTrue(W['valid_workspace_diagnostic'](value))
+            value['rawOutputSuppressed']=False;self.assertFalse(W['valid_workspace_diagnostic'](value))
+
+    def test_current_readonly_failure_transport_accepts_only_closed_six_fields(self):
+        reader=runpy.run_path(str(HERE.parent/'api-admin-readonly.py'))
+        diagnostic={'phase':'MANIFEST','step':'DECLARATION_MEASURE','service':'none','scope':'API_ADMIN_WORKSPACE',
+            'errorType':'RuntimeError','rawOutputSuppressed':True}
+        receipt={'status':'API_ADMIN_WORKSPACE_VERIFICATION_FAILED','code':'API_ADMIN_PENDING_ONLINE_DRIVER_ACTUAL_NETWORK_INSPECT_CHANGED',
+            'errorType':'RuntimeError','workspaceDiagnostic':diagnostic}
+        safe=reader['safe_failure'](receipt,'API_ADMIN_WORKSPACE')
+        self.assertEqual(safe,receipt)
+        diagnostic['unexpected']=SENTINEL
+        safe=reader['safe_failure'](receipt,'API_ADMIN_WORKSPACE')
+        self.assertNotIn('workspaceDiagnostic',safe);self.assertNotIn(SENTINEL,json.dumps(safe))
+
+    def test_factory_configuration_cause_survives_before_context_yield(self):
+        package=m._local_package();load_leaf=package.load_leaf;factories=[]
+        def leaf(name):
+            if name=='collector.py':raise package._diagnostic_errors[0][0]('PACKAGE_FILE_CHANGED')
+            result=load_leaf(name)
+            if name=='qualified.py':result._configure=lambda external,pure,factory:factories.append(factory)
+            return result
+        external=SimpleNamespace(online=self.online,workspace=SimpleNamespace(**W),inventory=self.inventory,
+            paths={'api-admin-scope.py':HERE.parent/'api-admin-scope.py'})
+        with patch.object(m,'_local_package',return_value=package),patch.object(package,'load_leaf',side_effect=leaf), \
+             patch.object(package,'bind_consumers',return_value=external):
+            caps=m._capabilities({'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'1','workflowRunAttempt':'1'})
+            with self.assertRaises(package._diagnostic_errors[0][0]):factories[0]()
+        self.assertEqual(caps._diagnostic_failure,[{'stage':'CONFIGURE','code':'PACKAGE_FILE_CHANGED'}])
+        self.assertEqual(m.failure_diagnostic(m._rejected(self.qualified.Rejected('QUALIFIER_UNAVAILABLE'),'ACQUISITION',
+            caps._diagnostic_errors,caps._diagnostic_failure[0])),{'stage':'CONFIGURE','code':'PACKAGE_FILE_CHANGED'})
+
+
 class LiveMaterialsAdapterTests(unittest.TestCase):
     """Actual pinned source helpers + real private files, synthetic archive.
 

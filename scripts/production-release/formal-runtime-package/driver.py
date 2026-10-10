@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import stat
 import types
+import urllib.error
 
 HERE = Path(__file__).resolve().parent
 BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
@@ -29,6 +30,90 @@ CODES = frozenset(('ROOT_DRIVER_SOURCE_UNMEASURED','ROOT_GENERATOR_SOURCE_UNMEAS
     'ROOT_REGISTRY_MISSING','ROOT_REGISTRY_EXISTS','ROOT_REGISTRY_CHANGED','ROOT_DRIVER_UNAVAILABLE'))
 
 class Rejected(RuntimeError): pass
+
+DIAGNOSTIC_STAGES = frozenset((
+    'PACKAGE_BIND','LOCAL_PACKAGE','SOURCE_PROFILE',
+    'ARCHIVE_BIND','CONFIGURE','ENTRY',
+    'ACQUISITION','RULES','ACQUIRE',
+    'MEASURE','AFTER','CONSTRUCT',
+    'CLOSE','REGISTRY',
+))
+DIAGNOSTIC_CODES = frozenset((
+    'ACTUAL_IDENTITY','ACTUAL_IDENTITY_CHANGED','ACTUAL_INSPECT_CHANGED',
+    'ACTUAL_NETWORK_ADDRESS','ACTUAL_NETWORK_DECLARATION','ACTUAL_NETWORK_ID_OR_MEMBERS',
+    'ACTUAL_NETWORK_INSPECT_CHANGED','ACTUAL_NETWORK_MEMBERS','ACTUAL_NETWORK_SET',
+    'ACTUAL_PRIMARY_NETWORK','ACTUAL_STATE_OR_ENV','ACTUAL_VOLUME_INSPECT_CHANGED',
+    'BOUND_LABEL','CLEANUP_FAILED','CLEANUP_REMAINING',
+    'CLEANUP_SEAL_CHANGED','CLIENT_DEFAULT_INJECTION','CLIENT_SOURCE_CHANGED',
+    'CLI_SOURCE_CHANGED','COMPLETE_CONFIGURATION_DIFFERENCE','CONFIGURATION_INVALID',
+    'DAEMON_CHANGED','DAEMON_SOURCE_NOT_MEASURED','DEPENDENCY_LABEL',
+    'ENV_INVALID','EXISTING_REFERENCE_REFUSED','GENERATOR_SOURCE_CHANGED',
+    'HOST_MOUNTS_SHAPE','HTTP_ERROR','IMAGE_INSPECT_CHANGED',
+    'MEASUREMENT_FAILED','MOUNT_BINDING','NATIVE_TOOL_CHANGED',
+    'ORIGIN_CHANGED','PACKAGE_ARCHIVE_CHANGED','PACKAGE_FILE_CHANGED',
+    'PACKAGE_INPUT_INVALID','PACKAGE_SCHEMA_CHANGED','PACKAGE_SOURCE_CHANGED',
+    'PACK_IMAGE_OR_NATIVE_IDENTITY','PACK_INVALID','POOL_SOURCE_CHANGED',
+    'PRIMARY_NETWORK','PRIMARY_NETWORK_OR_IMAGE','QUALIFIER_FROZEN_INPUT_CHANGED',
+    'QUALIFIER_UNAVAILABLE','REFERENCE_ID_CHANGED','REFERENCE_MODEL_CHANGED',
+    'REFERENCE_NETWORK_OVERLAP','REFERENCE_NETWORK_SET','REFERENCE_PATH_INVALID',
+    'REFERENCE_PENDING_ENDPOINT','REFERENCE_RESOURCE_CHANGED','REFERENCE_STARTED_OR_OWNER_CHANGED',
+    'REFERENCE_STATE_OWNER_OR_ENV','REPLACE_LABEL','RESOURCE_DEFAULT_POOL_INVALID',
+    'RESOURCE_INVENTORY_INVALID','RESOURCE_IPAM_INVALID','RESOURCE_OWNER_OR_MEMBERS_INVALID',
+    'RESOURCE_PROPERTIES_INVALID','RESOURCE_READ_INVALID','RESOURCE_SCHEMA_INVALID',
+    'RESOURCE_VOLUME_INVALID','ROOT_ACQUISITION_UNAVAILABLE','ROOT_ADMIN_PROJECTION_FAILED',
+    'ROOT_DRIVER_SOURCE_UNMEASURED','ROOT_DRIVER_UNAVAILABLE','ROOT_ENTRY_INVALID',
+    'ROOT_GENERATOR_SOURCE_UNMEASURED','ROOT_HISTORY_CHANGED','ROOT_MEASUREMENT_INVALID',
+    'ROOT_OBSERVATION_CHANGED','ROOT_PREFLIGHT_CHANGED','ROOT_PRODUCER_CHANGED',
+    'ROOT_REGISTRY_CHANGED','ROOT_REGISTRY_EXISTS','ROOT_REGISTRY_INVALID',
+    'ROOT_REGISTRY_MISSING','ROOT_SOURCE_CHANGED','RUNTIME_BINARY_CHANGED',
+    'RUNTIME_CAPABILITY_REQUIRED','RUNTIME_IDENTITY_INVALID','RUNTIME_PACKAGE_CHANGED',
+    'SOCKET_BINDING_CHANGED','SOCKET_BINDING_INVALID','SOURCE_DECLARATION_INVALID',
+    'SOURCE_ENV_INVALID','SOURCE_ENV_SEAL_CHANGED','SOURCE_FILES_CHANGED',
+    'SOURCE_FILE_INVALID','SOURCE_FILE_PERMISSIONS','SOURCE_IMAGE_INVALID',
+    'SOURCE_MODEL_HASH_INVALID','SOURCE_NETWORK_DECLARATION','SOURCE_NOT_MEASURED',
+    'SOURCE_PATH_INVALID','SOURCE_PROFILE_INVALID','SOURCE_PROJECT_INVALID',
+    'SOURCE_REPLACE_ANCHOR_INVALID','SOURCE_SEAL_INVALID','SOURCE_VOLUME_DECLARATION',
+    'TIMEOUT','UNKNOWN','URL_ERROR','VFS_BOUND_CAPABILITY_REQUIRED',
+))
+
+def _literal_error(error,cls,codes):
+    # Only the exact captured exception class may contribute its fixed literal.
+    # BaseException's descriptor avoids arbitrary __str__/args overrides.
+    if type(error) is cls:
+        args=BaseException.args.__get__(error)
+        if len(args)==1 and type(args[0]) is str and args[0] in codes:return args[0]
+    return None
+
+def failure_diagnostic(error):
+    if type(error) is Rejected:
+        value=error.__dict__.get('_declaration_failure')
+        if (type(value) is tuple and len(value)==2 and type(value[0]) is str and type(value[1]) is str
+                and value[0] in DIAGNOSTIC_STAGES and value[1] in DIAGNOSTIC_CODES):
+            return {'stage':value[0],'code':value[1]}
+    return None
+
+def _reason(error,stage,bindings=()):
+    prior=failure_diagnostic(error)
+    if prior is not None:return prior
+    code=_literal_error(error,Rejected,CODES)
+    for cls,codes in bindings:
+        if code is None:code=_literal_error(error,cls,codes)
+    if code is None and stage=='ARCHIVE_BIND':
+        if type(error) is urllib.error.HTTPError:code='HTTP_ERROR'
+        elif type(error) is urllib.error.URLError:code='URL_ERROR'
+        elif type(error) is TimeoutError:code='TIMEOUT'
+    return {'stage':stage,'code':code if code in DIAGNOSTIC_CODES else 'UNKNOWN'}
+
+def _rejected(error,stage,bindings=(),failure=None):
+    args=BaseException.args.__get__(error)
+    code=args[0] if isinstance(error,Rejected) and len(args)==1 and type(args[0]) is str and args[0] in CODES else 'ROOT_DRIVER_UNAVAILABLE'
+    # Preserve the existing non-authorizing source status, without trusting a
+    # generic exception's message as a diagnostic cause.
+    if len(args)==1 and type(args[0]) is str and args[0]=='SOURCE_NOT_MEASURED':code='ROOT_GENERATOR_SOURCE_UNMEASURED'
+    rejected=Rejected(code)
+    detail=failure if failure is not None else _reason(error,stage,bindings)
+    rejected._declaration_failure=(detail['stage'],detail['code'])
+    return rejected
 
 def need(ok,code):
     if not ok: raise Rejected(code)
@@ -133,27 +218,45 @@ def _load(path,expected,globals=None):
     return module
 
 def _local_package():
-    raw=_bootstrap_read(HERE/'manifest.json')
-    need(byte_sha(raw)==PACKAGE_MANIFEST_SHA,'ROOT_DRIVER_SOURCE_UNMEASURED')
-    manifest=decode(raw,limit=65536)
-    row=manifest['files']['package_io.py']
-    loader=_load(HERE/'package_io.py',row)
-    return loader.Package(HERE,manifest)
+    bindings=[]
+    try:
+        raw=_bootstrap_read(HERE/'manifest.json')
+        need(byte_sha(raw)==PACKAGE_MANIFEST_SHA,'ROOT_DRIVER_SOURCE_UNMEASURED')
+        manifest=decode(raw,limit=65536)
+        row=manifest['files']['package_io.py']
+        loader=_load(HERE/'package_io.py',row)
+        bindings.append((loader.Rejected,loader.CODES))
+        package=loader.Package(HERE,manifest)
+        package._diagnostic_errors=bindings
+        return package
+    except Exception as error:raise _rejected(error,'LOCAL_PACKAGE',bindings) from None
 
 def _capabilities(producer_value=None):
-    package=_local_package()
-    qualified=package.load_leaf('qualified.py')
-    # Fixed literal source selection precedes archive and runtime/tool acquisition.
-    qualified._reviewed_profile()
-    external=package.bind_consumers(producer(producer_value))
-    pure=package.load_leaf('pure.py')
-    reader=package.load_leaf('reader.py');reader._configure(external.online,external.workspace,external.inventory,pure,external.paths['api-admin-scope.py'])
-    constructor=package.load_leaf('constructor.py');constructor._configure(external.online,package.contract)
-    def factory():
-        collector=package.load_leaf('collector.py');collector._configure(external.inventory,pure,package.contract);return collector
-    qualified._configure(external,pure,factory)
-    return types.SimpleNamespace(online=external.online,workspace=external.workspace,qualified=qualified,
-        reader=reader,constructor=constructor,package=package)
+    stage='LOCAL_PACKAGE';bindings=[];failures=[]
+    try:
+        package=_local_package();bindings=package._diagnostic_errors
+        stage='SOURCE_PROFILE'
+        qualified=package.load_leaf('qualified.py');bindings.append((qualified.Rejected,qualified.CODES))
+        # Fixed literal source selection precedes archive and runtime/tool acquisition.
+        qualified._reviewed_profile()
+        stage='ARCHIVE_BIND'
+        external=package.bind_consumers(producer(producer_value))
+        stage='CONFIGURE'
+        pure=package.load_leaf('pure.py')
+        reader=package.load_leaf('reader.py');reader._configure(external.online,external.workspace,external.inventory,pure,external.paths['api-admin-scope.py'])
+        constructor=package.load_leaf('constructor.py');constructor._configure(external.online,package.contract)
+        def factory():
+            try:
+                collector=package.load_leaf('collector.py')
+                bindings.append((external.inventory.Rejected,collector.ERROR_CODES))
+                collector._configure(external.inventory,pure,package.contract);return collector
+            except Exception as error:
+                if not failures:failures.append(_reason(error,'CONFIGURE',bindings))
+                raise
+        qualified._configure(external,pure,factory)
+        return types.SimpleNamespace(online=external.online,workspace=external.workspace,qualified=qualified,
+            reader=reader,constructor=constructor,package=package,_diagnostic_errors=bindings,_diagnostic_failure=failures)
+    except Exception as error:raise _rejected(error,stage,bindings) from None
 
 
 def _uid(): return 0
@@ -384,70 +487,88 @@ def acquire(caps,d,directory,recovery,p):
     return {'root':root,'source_seal':seal,'materials':materials,'reader':callback}
 
 def measure_declaration_equivalence(d,directory,recovery,*,producer:dict,purpose,preflight_raw=None):
+    stage='ENTRY';caps=None;failure=None
     try:
         need(os.geteuid()==0,'ROOT_ENTRY_INVALID')
-        caps=_capabilities(producer);p=_producer(caps.workspace,d,producer);_entry(caps.workspace,d,purpose)
+        stage='PACKAGE_BIND'
+        caps=_capabilities(producer)
+        stage='ENTRY'
+        p=_producer(caps.workspace,d,producer);_entry(caps.workspace,d,purpose)
         need(preflight_raw is None if purpose=='INDEPENDENT_PREFLIGHT' else
              type(preflight_raw) is bytes and 0<len(preflight_raw)<65536,'ROOT_PREFLIGHT_CHANGED')
         # The public successor context is fixed-source reviewed, private-empty
         # client, VFS2/runtime/tool qualified. No caller/admission bool can replace it.
+        stage='ACQUISITION'
         factory=getattr(caps.qualified,'acquisition_session',None)
         need(callable(factory),'ROOT_ACQUISITION_UNAVAILABLE')
         with factory(_ArchiveBoundController(d,caps)) as session:
-            runner=_SourceReadDriver(session.runner)
-            if hasattr(caps,'package'):caps.package.assert_stable()
-            rules=session.reviewed_rules()
-            exact(rules,('spec','rulesSha256','sourceInputsSha256','sourceReviewReportSha256'))
-            need(digest(rules['spec'])==rules['rulesSha256'] and all(type(rules[k]) is str and HEX.fullmatch(rules[k])
-                 for k in ('rulesSha256','sourceInputsSha256','sourceReviewReportSha256')),'ROOT_GENERATOR_SOURCE_UNMEASURED')
-            session.assert_stable()
-            acquired=acquire(caps,runner,directory,recovery,p)
-            root=acquired['root'];root['generatorRulesSha256']=rules['rulesSha256']
-            prior=None;fraw=None;first=None
-            if purpose=='DEPLOYMENT_REMEASURE':
-                expected=getattr(d,'_apiWorkspaceDeclarationPreflightSha256',None)
-                need(type(expected) is str and HEX.fullmatch(expected),'ROOT_PREFLIGHT_CHANGED')
-                fraw=caps.online.declaration_equivalence_preflight_bytes(runner,producer=p,expected_sha=expected)
-                need(fraw==preflight_raw,'ROOT_PREFLIGHT_CHANGED')
-                f=caps.online.closed_recovery_json(runner,fraw)
-                first=f['pendingOnlineMigrationOrigin']['restoredConfigurationProof']
-                caps.online.validate_declaration_equivalence_proof(runner,first)
-                need(first['semantic']['producer']==root['producer'] and first['measurement']['purpose']=='INDEPENDENT_PREFLIGHT',
-                     'ROOT_PRODUCER_CHANGED')
-                prior=_read_registry(runner.BASE,p,caps.constructor)
-                need(prior['p1Sha256']==digest(first) and digest(prior['referenceRegistry'])==first['measurement']['referenceRegistrySha256'],
-                     'ROOT_REGISTRY_CHANGED')
-            result=session.measure(directory,services=root['actual'],image_reference=root['actual']['api']['reference'],
-                     image_id=root['actual']['api']['image'],source_seal=acquired['source_seal'],stability_reader=acquired['reader'])
-            exact(result,('measured','facts'),'ROOT_MEASUREMENT_INVALID')
-            after=acquired['reader']()
-            need(caps.reader.DERIVE.observation(after,root['actual'],acquired['source_seal']['files'],after['actualResource'])==root['stableObservation'],
-                 'ROOT_OBSERVATION_CHANGED')
-            _producer(caps.workspace,d,p);_entry(caps.workspace,d,purpose);_current(runner,directory)
-            materials=caps.online.declaration_equivalence_materials(runner,directory,recovery,producer=p,phase='LIVE')
-            need(materials==acquired['materials'],'ROOT_HISTORY_CHANGED')
-            session.assert_stable()
-            if hasattr(caps,'package'):caps.package.assert_stable()
-            proof=caps.constructor.construct_preview(result['measured'],root=root,facts=result['facts'],purpose=purpose,
-                preflight_raw=fraw,prior_registry=prior['referenceRegistry'] if prior else None)
-            caps.online.validate_declaration_equivalence_proof(runner,proof)
-            caps.online.declaration_equivalence_source_binding(runner,proof,**materials)
-            if first is not None:
-                caps.online.declaration_equivalence_pair_seal(runner,first,proof,fraw)
-                need(_read_registry(runner.BASE,p,caps.constructor)==prior,'ROOT_REGISTRY_CHANGED')
+            try:
+                stage='RULES'
+                runner=_SourceReadDriver(session.runner)
+                if hasattr(caps,'package'):caps.package.assert_stable()
+                rules=session.reviewed_rules()
+                exact(rules,('spec','rulesSha256','sourceInputsSha256','sourceReviewReportSha256'))
+                need(digest(rules['spec'])==rules['rulesSha256'] and all(type(rules[k]) is str and HEX.fullmatch(rules[k])
+                     for k in ('rulesSha256','sourceInputsSha256','sourceReviewReportSha256')),'ROOT_GENERATOR_SOURCE_UNMEASURED')
+                session.assert_stable()
+                stage='ACQUIRE'
+                acquired=acquire(caps,runner,directory,recovery,p)
+                root=acquired['root'];root['generatorRulesSha256']=rules['rulesSha256']
+                prior=None;fraw=None;first=None
+                if purpose=='DEPLOYMENT_REMEASURE':
+                    expected=getattr(d,'_apiWorkspaceDeclarationPreflightSha256',None)
+                    need(type(expected) is str and HEX.fullmatch(expected),'ROOT_PREFLIGHT_CHANGED')
+                    fraw=caps.online.declaration_equivalence_preflight_bytes(runner,producer=p,expected_sha=expected)
+                    need(fraw==preflight_raw,'ROOT_PREFLIGHT_CHANGED')
+                    f=caps.online.closed_recovery_json(runner,fraw)
+                    first=f['pendingOnlineMigrationOrigin']['restoredConfigurationProof']
+                    caps.online.validate_declaration_equivalence_proof(runner,first)
+                    need(first['semantic']['producer']==root['producer'] and first['measurement']['purpose']=='INDEPENDENT_PREFLIGHT',
+                         'ROOT_PRODUCER_CHANGED')
+                    stage='REGISTRY'
+                    prior=_read_registry(runner.BASE,p,caps.constructor)
+                    need(prior['p1Sha256']==digest(first) and digest(prior['referenceRegistry'])==first['measurement']['referenceRegistrySha256'],
+                         'ROOT_REGISTRY_CHANGED')
+                stage='MEASURE'
+                result=session.measure(directory,services=root['actual'],image_reference=root['actual']['api']['reference'],
+                         image_id=root['actual']['api']['image'],source_seal=acquired['source_seal'],stability_reader=acquired['reader'])
+                exact(result,('measured','facts'),'ROOT_MEASUREMENT_INVALID')
+                stage='AFTER'
+                after=acquired['reader']()
+                need(caps.reader.DERIVE.observation(after,root['actual'],acquired['source_seal']['files'],after['actualResource'])==root['stableObservation'],
+                     'ROOT_OBSERVATION_CHANGED')
+                _producer(caps.workspace,d,p);_entry(caps.workspace,d,purpose);_current(runner,directory)
+                materials=caps.online.declaration_equivalence_materials(runner,directory,recovery,producer=p,phase='LIVE')
+                need(materials==acquired['materials'],'ROOT_HISTORY_CHANGED')
+                session.assert_stable()
+                if hasattr(caps,'package'):caps.package.assert_stable()
+                stage='CONSTRUCT'
+                proof=caps.constructor.construct_preview(result['measured'],root=root,facts=result['facts'],purpose=purpose,
+                    preflight_raw=fraw,prior_registry=prior['referenceRegistry'] if prior else None)
+                caps.online.validate_declaration_equivalence_proof(runner,proof)
+                caps.online.declaration_equivalence_source_binding(runner,proof,**materials)
+                if first is not None:
+                    caps.online.declaration_equivalence_pair_seal(runner,first,proof,fraw)
+                    need(_read_registry(runner.BASE,p,caps.constructor)==prior,'ROOT_REGISTRY_CHANGED')
+            except Exception as error:
+                failure=_reason(error,stage,getattr(caps,'_diagnostic_errors',()))
+                raise
+            stage='CLOSE'
         # Private client cleanup/runtime exit must have succeeded before P1 is
         # persisted, so context failure cannot leave a registry implying success.
+        stage='AFTER'
         _producer(caps.workspace,d,p);_entry(caps.workspace,d,purpose);_current(d,directory)
         if first is not None:
             need(_read_registry(d.BASE,p,caps.constructor)==prior,'ROOT_REGISTRY_CHANGED')
             need(caps.online.declaration_equivalence_preflight_bytes(d,producer=p,expected_sha=expected)==fraw,
                  'ROOT_PREFLIGHT_CHANGED')
         if hasattr(caps,'package'):caps.package.assert_stable()
+        stage='REGISTRY'
         if purpose=='INDEPENDENT_PREFLIGHT':
             _save_registry(d.BASE,p,proof,result['facts']['referenceRegistry'],caps.constructor)
         return proof
     except Exception as error:
-        code=str(error) if isinstance(error,Rejected) else 'ROOT_DRIVER_UNAVAILABLE'
-        # Qualification source failure remains a fixed non-authorizing status.
-        if str(error)=='SOURCE_NOT_MEASURED':code='ROOT_GENERATOR_SOURCE_UNMEASURED'
-        raise Rejected(code if code in CODES else 'ROOT_DRIVER_UNAVAILABLE') from None
+        bindings=getattr(caps,'_diagnostic_errors',()) if caps is not None else ()
+        recorded=getattr(caps,'_diagnostic_failure',()) if caps is not None else ()
+        if failure is None and recorded:failure=recorded[0]
+        raise _rejected(error,stage,bindings,failure) from None

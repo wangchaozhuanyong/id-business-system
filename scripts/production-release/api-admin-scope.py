@@ -130,7 +130,14 @@ MIGRATION_SUCCESSOR_PROOF_SHA = '6208643f01babb412956fe43f537990adf951c14447645e
 WORKSPACE_DIAGNOSTIC_STEPS = frozenset(('NOT_STARTED', 'CURRENT_PROOF', 'CURRENT_RECORD',
     'RUNTIME_IMAGE', 'RUNTIME_CONTENT', 'ORIGIN_PROOF', 'ORIGIN_RECORD', 'ORIGIN_CONFIG',
     'ORIGIN_AUDIT', 'ORIGIN_BACKUP', 'ORIGIN_SOURCE', 'MIGRATION_SCHEMA', 'MIGRATION_IMAGE',
-    'MIGRATION_CONTENT', 'TASK_IDENTITY', 'JOBS_IDLE', 'WINDOW_STATE'))
+    'MIGRATION_CONTENT', 'TASK_IDENTITY', 'JOBS_IDLE', 'WINDOW_STATE',
+    'DECLARATION_PACKAGE_BIND','DECLARATION_LOCAL_PACKAGE','DECLARATION_SOURCE_PROFILE',
+    'DECLARATION_ARCHIVE_BIND','DECLARATION_CONFIGURE','DECLARATION_ENTRY',
+    'DECLARATION_ACQUISITION','DECLARATION_RULES','DECLARATION_ACQUIRE',
+    'DECLARATION_MEASURE','DECLARATION_AFTER','DECLARATION_CONSTRUCT',
+    'DECLARATION_CLOSE','DECLARATION_REGISTRY',
+    'DECLARATION_MATERIALS','DECLARATION_SOURCE_BINDING','DECLARATION_PRODUCER','DECLARATION_ORIGIN_CHECK',
+))
 WORKSPACE_DIAGNOSTIC_PHASES = frozenset(('MANIFEST', 'SNAPSHOT', 'IMAGES', 'PROJECTION', 'JOBS'))
 WORKSPACE_DIAGNOSTIC_ERRORS = frozenset(('RuntimeError', 'ValueError', 'TypeError', 'KeyError',
     'FileNotFoundError', 'PermissionError', 'OSError', 'JSONDecodeError', 'OTHER'))
@@ -285,20 +292,30 @@ def _pending_online_declaration_measure(d, directory, recovery, *, producer, pur
     try:
         # The formal generator is currently closed. It must reject before any
         # reference creation; there is no diagnostic/LOCAL/native fallback.
+        workspace_probe_step(d,'DECLARATION_ENTRY')
         proof = functions['measure_declaration_equivalence'](d, directory, recovery,
             producer=producer, purpose=purpose, preflight_raw=preflight_raw)
+        workspace_probe_step(d,'DECLARATION_MATERIALS')
         materials = functions['declaration_equivalence_materials'](d, directory, recovery,
             producer=producer, phase='LIVE')
         d.require(type(materials) is dict and set(materials) == {'producer', 'archive_bytes', 'historical_files'},
                   'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
+        workspace_probe_step(d,'DECLARATION_SOURCE_BINDING')
         functions['declaration_equivalence_source_binding'](d, proof, **materials)
+        workspace_probe_step(d,'DECLARATION_PRODUCER')
         d.require(proof['measurement']['purpose'] == purpose
                   and all(proof['semantic']['producer'][name] == actual for name, actual in producer.items()),
                   'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
         return proof
     except (RuntimeError, ValueError, TypeError, KeyError) as error:
-        if isinstance(error, RuntimeError) and str(error) == 'ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED':
+        diagnostic=getattr(online,'declaration_failure_diagnostic',None)
+        failure=diagnostic(error) if callable(diagnostic) else None
+        if failure is not None:
+            workspace_probe_step(d,'DECLARATION_'+failure['stage'])
+        if BaseException.args.__get__(error)==('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED',):
             raise RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED') from None
+        if failure is not None and failure['code']!='UNKNOWN':
+            raise RuntimeError('API_ADMIN_PENDING_ONLINE_DRIVER_'+failure['code']) from None
         raise RuntimeError('API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') from None
 
 
@@ -964,6 +981,7 @@ def pending_online_first(d, directory):
         'services': states, 'priorPublications': []}
     if declaration is not None:
         context.update(version=2, restoredConfigurationProof=declaration)
+    workspace_probe_step(d,'DECLARATION_ORIGIN_CHECK')
     return validate_pending_online_origin(context)
 
 
