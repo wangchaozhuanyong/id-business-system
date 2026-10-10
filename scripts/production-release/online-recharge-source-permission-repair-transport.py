@@ -49,7 +49,19 @@ CORE_STATUSES = frozenset(('CHANGED', 'NO_CHANGE', 'FAILED_BEFORE_MUTATION',
                           'FAILED_UNCHANGED', 'FAILED_ROLLED_BACK', 'FAILED_MUTATED_UNVERIFIED'))
 COMPOSE_SHA = '953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c'
 REMOTE_FIELDS = frozenset(('kind', 'operation', 'producer', 'origin', 'coreSha256',
-                          'helperPinsSha256', 'clientCleanupVerified', 'receipt'))
+                          'helperPinsSha256', 'clientCleanupVerified', 'receipt', 'snapshotDiagnostic'))
+SNAPSHOT_FIELDS = frozenset(('status', 'stage', 'code', 'currentAnchorCount', 'retainedServiceCount', 'rawOutputSuppressed'))
+SNAPSHOT_STAGES = ('NOT_MEASURED', 'CURRENT_IDS', 'CURRENT_ANCHORS', 'PROJECT_IDS', 'PROJECT_ROLES', 'ORIGINAL_SNAPSHOT', 'COMPLETE', 'UNKNOWN')
+SNAPSHOT_CODES = ('NONE', 'NATIVE_EXECUTION', 'NATIVE_OUTPUT', 'IDS_INVALID', 'LABELS_INVALID',
+                  'LABELS_JSON_INVALID', 'LABELS_SHAPE_INVALID', 'LABELS_ID_INVALID', 'LABELS_TYPES_INVALID',
+                  'LABELS_PROJECT_INVALID', 'LABELS_ROLE_INVALID', 'LABELS_PARENT_INVALID', 'LABELS_BASENAME_INVALID',
+                  'LABELS_LITERAL_INVALID', 'LABELS_FILES_INVALID', 'ANCHOR_MISSING',
+                  'ANCHOR_AMBIGUOUS', 'ROLE_DUPLICATE', 'ROLES_INCOMPLETE', 'ROLES_EXTRA', 'SEED_CHANGED', 'SET_CHANGED',
+                  'ORIGINAL_SNAPSHOT', 'SNAPSHOT_FIELDS', 'UNKNOWN')
+PUBLIC_LABEL_FORMAT = ('{"id":{{json .Id}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
+                       '"role":{{json (index .Config.Labels "com.docker.compose.service")}},'
+                       '"directory":{{json (index .Config.Labels "com.docker.compose.project.working_dir")}},'
+                       '"files":{{json (index .Config.Labels "com.docker.compose.project.config_files")}}}')
 
 
 def need(ok):
@@ -107,6 +119,57 @@ def core_validate(value):
     return value
 
 
+def snapshot_validate(value):
+    need(type(value) is dict and set(value) == SNAPSHOT_FIELDS
+         and value['status'] in ('NOT_MEASURED', 'FAILED', 'PASSED')
+         and value['stage'] in SNAPSHOT_STAGES and value['code'] in SNAPSHOT_CODES
+         and value['rawOutputSuppressed'] is True)
+    counts = (value['currentAnchorCount'], value['retainedServiceCount'])
+    need(all(item == 'NOT_MEASURED' or type(item) is int and 0 <= item <= 7 for item in counts))
+    if value['status'] == 'PASSED':
+        need(value['stage'] == 'COMPLETE' and value['code'] == 'NONE'
+             and all(type(n) is int for n in counts) and counts[0] >= 1 and sum(counts) == 7)
+    elif value['status'] == 'NOT_MEASURED':
+        need(value['stage'] == 'NOT_MEASURED' and value['code'] == 'NONE'
+             and counts == ('NOT_MEASURED', 'NOT_MEASURED'))
+    else:
+        need(value['stage'] not in ('NOT_MEASURED', 'COMPLETE') and value['code'] != 'NONE')
+    return value
+
+
+def snapshot_state():
+    value = {'status': 'NOT_MEASURED', 'stage': 'NOT_MEASURED', 'code': 'NONE',
+             'currentAnchorCount': 'NOT_MEASURED', 'retainedServiceCount': 'NOT_MEASURED', 'rawOutputSuppressed': True}
+    stage = 'NOT_MEASURED'
+    issued = None
+    def mark(point):
+        nonlocal stage
+        need(point in SNAPSHOT_STAGES)
+        stage = point
+        if point == 'CURRENT_IDS' and value['status'] != 'FAILED':
+            value['currentAnchorCount'] = value['retainedServiceCount'] = 'NOT_MEASURED'
+    def fail(code):
+        nonlocal issued
+        need(code in SNAPSHOT_CODES and code != 'NONE')
+        error = RuntimeError()
+        if value['status'] != 'FAILED':
+            value.update(status='FAILED', stage=stage if stage not in ('NOT_MEASURED', 'COMPLETE') else 'UNKNOWN', code=code)
+        issued = error
+        raise error from None
+    def owns(error):
+        return type(error) is RuntimeError and error is issued
+    def require(ok, code):
+        if not ok: fail(code)
+    def counts(anchors, retained=None):
+        if value['status'] != 'FAILED':
+            value['currentAnchorCount'] = anchors
+            if retained is not None: value['retainedServiceCount'] = retained
+    def finish():
+        if value['status'] != 'FAILED': value.update(status='PASSED', stage='COMPLETE', code='NONE')
+    return types.SimpleNamespace(mark=mark, fail=fail, owns=owns, require=require, counts=counts, finish=finish,
+                                 get=lambda: snapshot_validate(dict(value)))
+
+
 def literal_module(raw, name, path):
     module = types.ModuleType(name)
     module.__file__ = str(path)
@@ -151,7 +214,7 @@ class NativeSnapshotDriver:
     BASE = BASE
     ALL_SERVICES = ROLES
 
-    def __init__(self, directory, client, online, workspace, remote):
+    def __init__(self, directory, client, online, workspace, remote, diagnostic=None):
         need(directory.parent == BASE / 'releases'
              and re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + BASELINE[:12], directory.name))
         self.directory = directory
@@ -159,6 +222,8 @@ class NativeSnapshotDriver:
         self.online, self.workspace, self.remote = online, workspace, remote
         self.project = None
         self.ids = {}
+        self.seeds = {}
+        self.diagnostic = diagnostic if diagnostic is not None else snapshot_state()
         # These functions close over only this private module namespace.
         remote.run = self.run
         remote.compose = self.compose
@@ -173,49 +238,92 @@ class NativeSnapshotDriver:
 
     def native(self, *args, timeout=30):
         need(type(timeout) is int and 0 < timeout <= 60)
-        result = subprocess.run([DOCKER, '--host', SOCKET, '--config', str(self.client), *args],
-                                env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'},
-                                capture_output=True, timeout=timeout)
-        need(result.returncode == 0 and type(result.stdout) is bytes and len(result.stdout) < 2 * 1024**2)
-        return result.stdout.decode().strip()
+        try:
+            result = subprocess.run([DOCKER, '--host', SOCKET, '--config', str(self.client), *args],
+                                    env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'},
+                                    capture_output=True, timeout=timeout)
+        except Exception:
+            self.diagnostic.fail('NATIVE_EXECUTION')
+        self.diagnostic.require(result.returncode == 0, 'NATIVE_EXECUTION')
+        self.diagnostic.require(type(result.stdout) is bytes and len(result.stdout) < 2 * 1024**2, 'NATIVE_OUTPUT')
+        try:
+            return result.stdout.decode().strip()
+        except Exception:
+            self.diagnostic.fail('NATIVE_OUTPUT')
 
-    def inspect_one(self, cid):
-        need(type(cid) is str and HEX.fullmatch(cid))
-        rows = closed_json(self.native('inspect', cid), 2 * 1024**2)
-        need(type(rows) is list and len(rows) == 1 and type(rows[0]) is dict and rows[0].get('Id') == cid)
-        return rows[0]
+    def public_labels(self, cid):
+        raw = self.native('inspect', '--format', PUBLIC_LABEL_FORMAT, cid)
+        try:
+            value = closed_json(raw, 2 * 1024**2)
+        except Exception as error:
+            if self.diagnostic.owns(error): raise
+            self.diagnostic.fail('LABELS_JSON_INVALID')
+        self.diagnostic.require(type(value) is dict and set(value) == {'id', 'project', 'role', 'directory', 'files'}, 'LABELS_SHAPE_INVALID')
+        self.diagnostic.require(value['id'] == cid, 'LABELS_ID_INVALID')
+        self.diagnostic.require(all(type(value[n]) is str for n in value), 'LABELS_TYPES_INVALID')
+        directory = Path(value['directory'])
+        self.diagnostic.require(re.fullmatch('[a-z0-9][a-z0-9_-]{0,127}', value['project']), 'LABELS_PROJECT_INVALID')
+        self.diagnostic.require(value['role'] in ROLES, 'LABELS_ROLE_INVALID')
+        self.diagnostic.require(directory.parent == BASE / 'releases', 'LABELS_PARENT_INVALID')
+        current = directory == self.directory
+        # Retained labels are hashed metadata, never paths opened by this driver.
+        # Keep current's exact source contract; older releases used a single YAML.
+        try:
+            retained_name = (directory.name not in ('', '.', '..')
+                             and len(directory.name.encode('utf-8')) <= 255
+                             and all(not (ord(c) < 32 or 127 <= ord(c) <= 159) for c in directory.name))
+        except UnicodeEncodeError:
+            retained_name = False
+        self.diagnostic.require(re.fullmatch('[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}', directory.name)
+                                if current else retained_name, 'LABELS_BASENAME_INVALID')
+        self.diagnostic.require(str(directory) == value['directory'], 'LABELS_LITERAL_INVALID')
+        self.diagnostic.require(value['files'] == ','.join(
+                str(directory / n) for n in ('docker-compose.aws-mysql.yml', 'compose.release.json'))
+                or (not current and value['files'] == str(directory / 'docker-compose.aws-mysql.yml')), 'LABELS_FILES_INVALID')
+        return value
+
+    def list_ids(self, *filters):
+        args = ('container', 'ls', '--no-trunc', '--format', '{{.ID}}')
+        for value in filters: args += ('--filter', value)
+        text = self.native(*args)
+        ids = text.splitlines() if text else []
+        self.diagnostic.require(len(ids) <= 128 and len(set(ids)) == len(ids) and all(HEX.fullmatch(cid) for cid in ids), 'IDS_INVALID')
+        return ids
 
     def discover(self):
-        text = self.native('container', 'ls', '--no-trunc', '--format', '{{.ID}}',
-                           '--filter', 'label=com.docker.compose.project',
-                           '--filter', 'label=com.docker.compose.project.working_dir=' + str(self.directory))
-        ids = text.splitlines() if text else []
-        need(len(ids) <= 128 and len(set(ids)) == len(ids) and all(HEX.fullmatch(cid) for cid in ids))
+        state = self.diagnostic
+        state.mark('CURRENT_IDS')
+        ids = self.list_ids('label=com.docker.compose.project', 'label=com.docker.compose.project.working_dir=' + str(self.directory))
+        state.mark('CURRENT_ANCHORS')
         groups = {}
         for cid in ids:
-            row = self.inspect_one(cid)
-            labels = row.get('Config', {}).get('Labels')
-            need(type(labels) is dict)
-            project = labels.get('com.docker.compose.project')
-            role = labels.get('com.docker.compose.service')
-            if (labels.get('com.docker.compose.project.working_dir') == str(self.directory)
-                    and labels.get('com.docker.compose.project.config_files') == ','.join(
-                        str(self.directory / name) for name in ('docker-compose.aws-mysql.yml', 'compose.release.json'))):
-                need(type(project) is str and re.fullmatch('[a-z0-9][a-z0-9_-]{0,127}', project)
-                     and type(role) is str and role in ROLES)
-                group = groups.setdefault(project, {})
-                need(role not in group)
-                group[role] = cid
-        need(len(groups) == 1)
-        project, found = next(iter(groups.items()))
-        need(set(found) == set(ROLES))
-        # Include mismatched-source and extra service containers in this project's rejection.
-        same = self.native('container', 'ls', '--no-trunc', '--format', '{{.ID}}',
-                           '--filter', 'label=com.docker.compose.project=' + project)
-        need(set(same.splitlines()) == set(found.values()) and len(same.splitlines()) == 7)
+            row = self.public_labels(cid)
+            state.require(row['directory'] == str(self.directory), 'SEED_CHANGED')
+            group = groups.setdefault(row['project'], {})
+            state.require(row['role'] not in group, 'ROLE_DUPLICATE')
+            group[row['role']] = cid
+        state.require(bool(groups), 'ANCHOR_MISSING')
+        state.require(len(groups) == 1, 'ANCHOR_AMBIGUOUS')
+        project, seeds = next(iter(groups.items()))
+        state.counts(len(seeds))
+        state.mark('PROJECT_IDS')
+        all_ids = self.list_ids('label=com.docker.compose.project=' + project)
+        state.require(len(all_ids) <= 7, 'ROLES_EXTRA')
+        state.require(len(all_ids) == 7, 'ROLES_INCOMPLETE')
+        state.mark('PROJECT_ROLES')
+        found, current = {}, {}
+        for cid in all_ids:
+            row = self.public_labels(cid)
+            state.require(row['project'] == project, 'SEED_CHANGED')
+            state.require(row['role'] not in found, 'ROLE_DUPLICATE')
+            found[row['role']] = cid
+            if row['directory'] == str(self.directory): current[row['role']] = cid
+        state.require(set(found) == set(ROLES), 'ROLES_INCOMPLETE')
+        state.require(current == seeds and all(found[n] == cid for n, cid in seeds.items()), 'SEED_CHANGED')
         if self.project is not None:
-            need(project == self.project and found == self.ids)
-        self.project, self.ids = project, found
+            state.require(project == self.project and seeds == self.seeds and found == self.ids, 'SET_CHANGED')
+        self.project, self.seeds, self.ids = project, seeds, found
+        state.counts(len(seeds), 7 - len(seeds))
 
     def production_services(self, directory):
         need(Path(directory) == self.directory)
@@ -241,11 +349,18 @@ class NativeSnapshotDriver:
     def snapshot(self, directory):
         need(Path(directory) == self.directory)
         self.discover()
-        value = self.online.snapshot(self, directory)
-        need(type(value) is dict and set(value) == set(ROLES)
-             and all(type(row) is dict and set(row) == SERVICE_FIELDS for row in value.values()))
+        self.diagnostic.mark('ORIGINAL_SNAPSHOT')
+        try:
+            value = self.online.snapshot(self, directory)
+        except Exception as error:
+            if self.diagnostic.owns(error): raise
+            self.diagnostic.fail('ORIGINAL_SNAPSHOT')
+        self.diagnostic.require(type(value) is dict and set(value) == set(ROLES)
+             and all(type(row) is dict and set(row) == SERVICE_FIELDS for row in value.values()), 'SNAPSHOT_FIELDS')
         # Original helpers validate all 8 fields and digest Config.Env/Config/HostConfig/Mounts.
-        return sha(canonical(value))
+        digest = sha(canonical(value))
+        self.diagnostic.finish()
+        return digest
 
 
 def remote_execute(producer, pins, core_raw, core_sha, directory):
@@ -267,14 +382,20 @@ def remote_execute(producer, pins, core_raw, core_sha, directory):
         finally:
             os.close(fd)
         drivers = []
+        diagnostic = snapshot_state()
         def snapshot_read(current):
             if not drivers:
-                drivers.append(NativeSnapshotDriver(current, client, online, workspace, remote))
-            return drivers[0].snapshot(current)
+                drivers.append(NativeSnapshotDriver(current, client, online, workspace, remote, diagnostic))
+            try:
+                return drivers[0].snapshot(current)
+            except Exception as error:
+                if diagnostic.owns(error): raise
+                diagnostic.fail('UNKNOWN')
         receipt = core_validate(core.repair(snapshot_read))
     return {'kind': 'ONLINE_SOURCE_PERMISSION_REPAIR_EXECUTION_V1', 'operation': OPERATION,
             'producer': producer, 'origin': ORIGIN, 'coreSha256': core_sha,
-            'helperPinsSha256': sha(canonical(pins)), 'clientCleanupVerified': True, 'receipt': receipt}
+            'helperPinsSha256': sha(canonical(pins)), 'clientCleanupVerified': True, 'receipt': receipt,
+            'snapshotDiagnostic': diagnostic.get()}
 
 
 def readonly_helper():
@@ -291,14 +412,15 @@ def parameters(producer):
     core_raw = (source / CORE_NAME).read_bytes(); core_sha = sha(core_raw)
     need(0 < len(core_raw) <= 1024**2)
     names = ('OPERATION', 'PREFIX', 'BASELINE', 'DOCKER', 'SOCKET', 'ROLES', 'SERVICE_FIELDS',
-             'ORIGIN', 'CORE_NAME', 'CORE_FIELDS', 'CORE_CODES', 'CORE_STATUSES', 'COMPOSE_SHA', 'REMOTE_FIELDS')
+             'ORIGIN', 'CORE_NAME', 'CORE_FIELDS', 'CORE_CODES', 'CORE_STATUSES', 'COMPOSE_SHA', 'REMOTE_FIELDS',
+             'SNAPSHOT_FIELDS', 'SNAPSHOT_STAGES', 'SNAPSHOT_CODES', 'PUBLIC_LABEL_FORMAT')
     body = 'import base64,hashlib,json,os,re,stat,subprocess,tempfile,types\nfrom pathlib import Path\n'
     body += "BASE=Path('/opt/id-business-v2')\nHEX=re.compile(r'[a-f0-9]{64}\\Z')\n"
     for name in names:
         value = globals()[name]
         body += name + '=' + ("frozenset(" + repr(tuple(sorted(value))) + ")" if type(value) is frozenset else repr(value)) + '\n'
     support = ('need', 'sha', 'canonical', 'closed_json', 'producer_validate', 'core_validate',
-               'literal_module', 'read_fixed', 'NativeSnapshotDriver', 'remote_execute')
+               'snapshot_validate', 'snapshot_state', 'literal_module', 'read_fixed', 'NativeSnapshotDriver', 'remote_execute')
     source_text = Path(__file__).read_text()
     lines = source_text.splitlines(keepends=True)
     nodes = {node.name: node for node in ast.parse(source_text).body
@@ -308,7 +430,7 @@ def parameters(producer):
         node = nodes[name]
         need(not node.decorator_list)
         body += ''.join(lines[node.lineno - 1:node.end_lineno]) + '\n'
-    body += 'core_raw=base64.b85decode(' + repr(base64.b85encode(core_raw).decode()) + ')\n'
+    body += 'core_raw=' + repr(core_raw) + '\n'
     body += 'value=remote_execute(' + repr(producer) + ',' + repr(pins) + ',core_raw,' + repr(core_sha) + ',Path(' + repr(str(directory)) + '))\n'
     body += "print(PREFIX+json.dumps(value,sort_keys=True,separators=(',',':')))\nraise SystemExit(0 if value['receipt']['status'] in ('CHANGED','NO_CHANGE') else 1)\n"
     captured = body.encode(); need(0 < len(captured) <= 65536)
@@ -332,6 +454,9 @@ def validate_remote(value, binding):
          and value['helperPinsSha256'] == binding['helperPinsSha256']
          and value['clientCleanupVerified'] is True)
     core_validate(value['receipt'])
+    snapshot_validate(value['snapshotDiagnostic'])
+    if value['receipt']['status'] in ('CHANGED', 'NO_CHANGE'):
+        need(value['snapshotDiagnostic']['status'] == 'PASSED')
     return value
 
 

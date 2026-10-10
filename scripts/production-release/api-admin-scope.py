@@ -127,8 +127,76 @@ MIGRATION_IDENTITY = {
 MIGRATION_SUCCESSOR_COMMIT = '23c5841b9b7e60be715250cbb985fc0966c0bce3'
 MIGRATION_SUCCESSOR_MANIFEST_SHA = '117ca444e81623f372a2d9c34ecc16effd52141dcfb5e511f74624280092f639'
 MIGRATION_SUCCESSOR_PROOF_SHA = '6208643f01babb412956fe43f537990adf951c14447645e7f56303d03a6b1d6c'
+# Fixed public failure codes emitted by the existing pending ONLINE recovery
+# call closure. Unknown messages, statuses and environment names stay suppressed.
+PENDING_ONLINE_BASELINE_FAILURE_CODES = frozenset((
+    'ONLINE_RECHARGE_API_ENV_CHANGED',
+    'ONLINE_RECHARGE_API_MOUNT_CHANGED',
+    'ONLINE_RECHARGE_AUDIT_RULES_CHANGED',
+    'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED',
+    'ONLINE_RECHARGE_BACKUP_UNVERIFIED',
+    'ONLINE_RECHARGE_BUILD_IMAGE_INVALID',
+    'ONLINE_RECHARGE_BUILD_PROOF_INVALID',
+    'ONLINE_RECHARGE_BUILD_RUN_CHANGED',
+    'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED',
+    'ONLINE_RECHARGE_CADDY_PROJECTION_CHANGED',
+    'ONLINE_RECHARGE_COMPOSE_INVALID',
+    'ONLINE_RECHARGE_CONTAINER_CHANGED',
+    'ONLINE_RECHARGE_DATABASE_GRANTS_FAILED',
+    'ONLINE_RECHARGE_DATABASE_RESPONSE_INVALID',
+    'ONLINE_RECHARGE_ENGINE_CONTENT_INVALID',
+    'ONLINE_RECHARGE_ENV_SCOPE_CHANGED',
+    'ONLINE_RECHARGE_EXECUTOR_ISOLATION_CHANGED',
+    'ONLINE_RECHARGE_EXISTING_ENV_CHANGED',
+    'ONLINE_RECHARGE_EXISTING_SERVICE_CHANGED',
+    'ONLINE_RECHARGE_FIRST_PUBLICATION_RESOURCES_NOT_EMPTY',
+    'ONLINE_RECHARGE_HISTORY_VIEW_INVALID',
+    'ONLINE_RECHARGE_IMAGE_CONTENT_CHANGED',
+    'ONLINE_RECHARGE_IMAGE_PROVENANCE_CHANGED',
+    'ONLINE_RECHARGE_IMAGE_SOURCE_CHANGED',
+    'ONLINE_RECHARGE_INPUT_INVALID',
+    'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT',
+    'ONLINE_RECHARGE_MIGRATION_DATABASE_INVALID',
+    'ONLINE_RECHARGE_MIGRATION_HISTORY_CHANGED',
+    'ONLINE_RECHARGE_MIGRATION_PARTIAL_SCHEMA',
+    'ONLINE_RECHARGE_MIGRATION_SCHEMA_CHANGED',
+    'ONLINE_RECHARGE_MIGRATION_SCHEMA_INVALID',
+    'ONLINE_RECHARGE_MIGRATION_SCOPE_CHANGED',
+    'ONLINE_RECHARGE_MIGRATION_SOURCE_INVALID',
+    'ONLINE_RECHARGE_PERMISSION_SEED_CHANGED',
+    'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED',
+    'ONLINE_RECHARGE_PRESERVED_INFRASTRUCTURE_CHANGED',
+    'ONLINE_RECHARGE_PRESERVED_SERVICE_DEFINITION_CHANGED',
+    'ONLINE_RECHARGE_PREVIOUS_ENV_CHANGED',
+    'ONLINE_RECHARGE_READBACK_MIGRATION_CHANGED',
+    'ONLINE_RECHARGE_READBACK_PRESERVATION_CHANGED',
+    'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED',
+    'ONLINE_RECHARGE_SHARED_GATE_SOURCE_CHANGED',
+    'ONLINE_RECHARGE_SOURCE_ARCHIVE_INVALID',
+    'ONLINE_RECHARGE_SOURCE_INVALID',
+    'ONLINE_RECHARGE_SOURCE_TOO_LARGE',
+    'ONLINE_RECHARGE_SOURCE_TREE_CHANGED',
+    'ONLINE_RECHARGE_TASKS_BUSY',
+    'ONLINE_RECHARGE_VOLUME_SCOPE_CHANGED',
+    'ONLINE_RECHARGE_WORKSPACE_BACKUP_CHANGED',
+    'ONLINE_RECHARGE_WORKSPACE_BACKUP_CONFIG_INVALID',
+    'ONLINE_RECHARGE_WORKSPACE_BACKUP_INVALID',
+    'ONLINE_RECHARGE_WORKSPACE_BACKUP_NAME_INVALID',
+    'ONLINE_RECHARGE_WORKSPACE_BACKUP_PATH_INVALID',
+    'ONLINE_RECHARGE_WORKSPACE_BACKUP_RECEIPT_CHANGED',
+    'ONLINE_RECHARGE_WORKSPACE_IMAGE_CHANGED',
+    'ONLINE_RECHARGE_WORKSPACE_INTEGRITY_FAILED',
+    'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED',
+    'ONLINE_RECHARGE_WORKSPACE_ORIGIN_INVALID',
+    'ONLINE_RECHARGE_WORKSPACE_S3_UNVERIFIED',
+    'ONLINE_RECHARGE_WORKSPACE_TASK_ACTIVE',
+    'ONLINE_RECHARGE_WORKSPACE_VOLUME_CHANGED',
+))
 WORKSPACE_DIAGNOSTIC_STEPS = frozenset((
     'NOT_STARTED','CURRENT_PROOF','CURRENT_RECORD',
+    'PENDING_ONLINE_RECOVERY','PENDING_ONLINE_SNAPSHOT','PENDING_ONLINE_NATIVE',
+    'PENDING_ONLINE_BACKUP_SCHEMA','PENDING_ONLINE_BACKUP_LOCAL','PENDING_ONLINE_BACKUP_MANIFEST',
+    'PENDING_ONLINE_PERMISSION','PENDING_ONLINE_RESOURCES','PENDING_ONLINE_JOBS',
     'RUNTIME_IMAGE','RUNTIME_CONTENT','ORIGIN_PROOF',
     'ORIGIN_RECORD','ORIGIN_CONFIG','ORIGIN_AUDIT',
     'ORIGIN_BACKUP','ORIGIN_SOURCE','MIGRATION_SCHEMA',
@@ -910,6 +978,49 @@ def pending_online_successor(d, pending, previous, manifest, raw, proof, states)
     return validate_pending_online_origin(result)
 
 
+def pending_online_backup_failure_step(online, error):
+    """Identify one original guard from loaded bytecode; never inspect frame locals."""
+    if type(error) is not RuntimeError:
+        return None
+    args = BaseException.args.__get__(error, type(error))
+    if (len(args) != 1 or type(args[0]) is not str
+            or args[0] != 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED'):
+        return None
+    try:
+        import dis
+        from types import FunctionType
+        reader = getattr(online, 'recovery_backups', None)
+        if type(reader) is not FunctionType:
+            return None
+        instructions = list(dis.get_instructions(reader))
+        calls = []
+        for index, instruction in enumerate(instructions):
+            if (instruction.opname != 'LOAD_CONST' or type(instruction.argval) is not str
+                    or instruction.argval != args[0]):
+                continue
+            following = index + 1
+            while following < len(instructions) and instructions[following].opname in ('PRECALL', 'EXTENDED_ARG'):
+                following += 1
+            if (following + 1 >= len(instructions)
+                    or instructions[following].opname not in ('CALL', 'CALL_FUNCTION', 'CALL_METHOD')):
+                return None
+            calls.append((instructions[following].offset, instructions[following + 1].offset))
+        if len(calls) != 3:
+            return None
+        trace = error.__traceback__
+        while trace is not None:
+            if trace.tb_frame.f_code is reader.__code__:
+                matched = [n for n, (start, end) in enumerate(calls) if start <= trace.tb_lasti < end]
+                if len(matched) == 1:
+                    return ('PENDING_ONLINE_BACKUP_SCHEMA', 'PENDING_ONLINE_BACKUP_LOCAL',
+                            'PENDING_ONLINE_BACKUP_MANIFEST')[matched[0]]
+                return None
+            trace = trace.tb_next
+    except Exception:
+        return None
+    return None
+
+
 def pending_online_recovery(d, original):
     from types import SimpleNamespace
     online, _ = d.online_recharge_scope()
@@ -917,7 +1028,13 @@ def pending_online_recovery(d, original):
     # reader, never through this successor's pending context (or recursively).
     original_reader = SimpleNamespace(**{k: v for k, v in vars(d).items()
         if k not in ('_pendingOnlineMigrationOrigin', '_pendingOnlineHistoryProjected')})
-    recovery = online.release_recovery(original_reader, original)
+    try:
+        recovery = online.release_recovery(original_reader, original)
+    except Exception as error:
+        step = pending_online_backup_failure_step(online, error)
+        if step is not None:
+            workspace_probe_step(d, step)
+        raise
     for name in ('_onlineRechargeVerifiedOrigin', '_onlineRechargeVerifiedRestored'):
         if hasattr(original_reader, name):
             setattr(d, name, getattr(original_reader, name))
@@ -931,7 +1048,9 @@ def pending_online_recovery(d, original):
 def pending_online_first(d, directory):
     d.require(WORKSPACE and directory.parent == d.BASE / 'releases'
               and not directory.is_symlink(), 'API_ADMIN_PENDING_ONLINE_SCOPE_CHANGED')
+    workspace_probe_step(d, 'PENDING_ONLINE_RECOVERY')
     online, recovery = pending_online_recovery(d, directory)
+    workspace_probe_step(d, 'PENDING_ONLINE_SNAPSHOT')
     states = snapshot(d, directory)
     declaration, declaration_producer = None, None
     if getattr(d, '_apiWorkspaceDeclarationPreflightSha256', None) is not None:
@@ -962,6 +1081,7 @@ def pending_online_first(d, directory):
         return saved
     try:
         # A diagnostic reconstruction never satisfies this original native gate.
+        workspace_probe_step(d, 'PENDING_ONLINE_NATIVE')
         online.recovery_services(d, states, recovery)
     except RuntimeError as error:
         if str(error) != 'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED':
@@ -972,8 +1092,11 @@ def pending_online_first(d, directory):
                   'API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED')
         pending_online_declaration_native_mismatch(d, states, recovery)
         declaration_producer = pending_online_declaration_producer(d)
+    workspace_probe_step(d, 'PENDING_ONLINE_PERMISSION')
     online.verify_permission_seed(d, recovery['source'])
+    workspace_probe_step(d, 'PENDING_ONLINE_RESOURCES')
     online.require_fresh_resources(d, recovery['source'])
+    workspace_probe_step(d, 'PENDING_ONLINE_JOBS')
     online.jobs_idle(d, directory, migrated=True)
     if declaration_producer is not None:
         declaration = pending_online_declaration_initial_measure(d, directory, recovery,
@@ -3793,6 +3916,12 @@ def baseline(d, expected, *, check_jobs=True):
         code = str(error)
         if code == 'ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED':
             code = 'API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED'
+        elif (WORKSPACE and stage == 'MANIFEST' and type(error) is RuntimeError
+              and len(BaseException.args.__get__(error)) == 1
+              and type(BaseException.args.__get__(error)[0]) is str
+              and BaseException.args.__get__(error) == (code,)
+              and code in PENDING_ONLINE_BASELINE_FAILURE_CODES):
+            code = 'API_ADMIN_PENDING_ONLINE_' + code[len('ONLINE_RECHARGE_'):]
         if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
             code = f'API_ADMIN_BASELINE_{stage}_FAILED'
         if WORKSPACE:
