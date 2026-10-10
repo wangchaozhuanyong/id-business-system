@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 import select
 import shutil
+import secrets
 import sqlite3
 import stat
 import subprocess
@@ -17,6 +19,7 @@ import time
 import urllib.request
 import zlib
 from urllib.parse import urlsplit
+from contextlib import closing
 
 SCOPE = globals().get('SCOPE', 'API_ADMIN')
 if SCOPE not in ('API_ADMIN', 'API_REGISTRATION', 'API_ADMIN_MIGRATION', 'API_ADMIN_WORKSPACE'):
@@ -33,15 +36,12 @@ CONFIG_FILES = ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
 WORKSPACE_VOLUME = 'auto_registration_data'
 WORKSPACE_DIRECTORY = '/app/.runtime/auto-registration'
 WORKSPACE_BOOTSTRAP_COMMIT = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
+WORKSPACE_MAINTENANCE = '.id-release-maintenance.json'
+WORKSPACE_SAFETY = 'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py'
+WORKSPACE_SQLITE_RECEIPT = PREFIX + '-sqlite-protection.json'
 WORKSPACE_BACKUP_FILE = 'workspace-sqlite-backup.enc'
 WORKSPACE_BACKUP_RECEIPT = 'workspace-sqlite-backup.json'
-ONLINE_ENGINE = 'online-recharge'
-ONLINE_UPDATED = (*UPDATED, ONLINE_ENGINE)
-ONLINE_TABLES = tuple('online_recharge_' + name for name in (
-    'config', 'cards', 'proxies', 'addresses', 'codes', 'tasks', 'events', 'bills', 'webhook_receipts'))
-# The first online publication may include a controller-only fix. Its business
-# sources/configuration remain the reviewed 28a3ba4 tree, and its predecessor
-# must still be the sealed first workspace publication.
+ONLINE_SERVICE = 'online-recharge'
 ONLINE_SOURCE_SEALS = {
     'apps/api/src/id-business-v2/online-recharge': '338adfad51001a88fe0b77f1415c0a232548d38d49993766955a970aea6e3e0c',
     'apps/admin/src/v2/features/online-recharge': '0e1abd3800877af9a2152f946952447f785b0a45d581730e2dbb7fa40b419d24'}
@@ -55,8 +55,6 @@ ONLINE_ORIGIN_FILES = ('release-manifest.json', 'online-recharge-build-proof.jso
     'docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
     'apps/api/prisma-mysql/schema.prisma', 'apps/api/prisma-mysql/seed.ts',
     'compose.release.json', '.env.aws.production', 'scripts/production-release/online-recharge-recovery.json')
-WORKSPACE_BUSINESS_TABLES = ('accounts', 'email_services', 'registration_tasks', 'proxies',
-                            'cpa_services', 'sub2api_services', 'tm_services')
 WORKSPACE_CADDY_BEFORE = 'f8b230bba46136c27651a0df8b7d6fd7fc4f13a47f7db48d0ff0a436fcfe37e0'
 WORKSPACE_CADDY_AFTER = 'f3d253904be6acbe24184b6a317eb3c9ded71636d9622dc9636c196dd7a56674'
 WORKSPACE_API_ROOTS = ('/app/apps/api/dist', '/app/packages/shared/dist',
@@ -1246,44 +1244,122 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def validate_online_successor_origin(value):
-    fields = {'version', 'release', 'commit', 'sourceTree', 'manifestSha256', 'buildProofSha256',
-              'files', 'workspaceOrigin', 'engineConfigurationSha256'}
-    if (not isinstance(value, dict) or set(value) != fields or type(value['version']) is not int
-            or value['version'] != 1 or not all(re.fullmatch(r'[a-f0-9]{40}', value[n] or '')
-                                              for n in ('commit', 'sourceTree'))
-            or not all(re.fullmatch(r'[a-f0-9]{64}', value[n] or '')
-                       for n in ('manifestSha256', 'buildProofSha256', 'engineConfigurationSha256'))
-            or not isinstance(value['files'], dict) or set(value['files']) != set(ONLINE_ORIGIN_FILES)
-            or not all(isinstance(v, str) and re.fullmatch(r'[a-f0-9]{64}', v) for v in value['files'].values())
-            or value['files']['release-manifest.json'] != value['manifestSha256']
-            or not isinstance(value['release'], str) or not Path(value['release']).is_absolute()
-            or Path(value['release']).parent.name != 'releases'
-            or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + value['commit'][:12], Path(value['release']).name)):
-        raise RuntimeError('API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    origin = value['workspaceOrigin']
-    if (not isinstance(origin, dict) or set(origin) != {'release', 'commit', 'recordSha256', 'volume'}
-            or origin['commit'] != WORKSPACE_BOOTSTRAP_COMMIT
-            or not isinstance(origin['release'], str) or not Path(origin['release']).is_absolute()
-            or Path(origin['release']).parent != Path(value['release']).parent
-            or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-' + WORKSPACE_BOOTSTRAP_COMMIT[:12], Path(origin['release']).name)
-            or not re.fullmatch(r'[a-f0-9]{64}', origin['recordSha256'] or '')
-            or not isinstance(origin['volume'], dict) or set(origin['volume']) != {'name', 'status', 'identitySha256'}
-            or origin['volume']['status'] != 'PRESENT'
-            or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,100}_auto_registration_data', origin['volume']['name'] or '')
-            or not re.fullmatch(r'[a-f0-9]{64}', origin['volume']['identitySha256'] or '')):
-        raise RuntimeError('API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    return value
+def workspace_configuration(d, previous, candidate):
+    """Only the reviewed mount and edge route may differ; no YAML reserialization."""
+    d.require(WORKSPACE, 'API_ADMIN_SCOPE_CONFLICT')
+    old = (previous / CONFIG_FILES[0]).read_bytes()
+    new = (candidate / CONFIG_FILES[0]).read_bytes()
+    online = b'  online-recharge:\n' in old
+    if online:
+        d.require(new == old and b'      - auto_registration_data:/app/.runtime/auto-registration\n' in new
+                  and b'      - online_recharge_data:/app/.runtime/online-recharge\n' in new
+                  and b'  online_recharge_data:\n' in new, 'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
+    mount = b'    volumes:\n      - auto_registration_data:/app/.runtime/auto-registration\n'
+    volume = b'  auto_registration_data:\n'
+    api = new.split(b'  api:\n', 1)
+    d.require(online or (len(api) == 2 and mount in api[1].split(b'  admin:\n', 1)[0]
+              and new.count(mount) == 1 and new.count(volume) == 1
+              and b'volumes:\n  mysql_data:\n  auto_registration_data:\n  caddy_data:\n' in new),
+              'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
+    normalized = new.replace(mount, b'', 1).replace(volume, b'', 1)
+    d.require(old in (new, normalized), 'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
+    before = hashlib.sha256((previous / CONFIG_FILES[1]).read_bytes()).hexdigest()
+    after = hashlib.sha256((candidate / CONFIG_FILES[1]).read_bytes()).hexdigest()
+    d.require(before in (WORKSPACE_CADDY_BEFORE, WORKSPACE_CADDY_AFTER)
+              and after == WORKSPACE_CADDY_AFTER, 'API_ADMIN_WORKSPACE_EDGE_CHANGED')
+    return {'composeSha256': hashlib.sha256(new).hexdigest(), 'caddySha256': after,
+            'volume': WORKSPACE_VOLUME, 'containerDirectory': WORKSPACE_DIRECTORY}
 
 
-def online_successor_marker(value):
-    value = validate_online_successor_origin(value)
-    return {n: value[n] for n in ('version', 'commit', 'sourceTree', 'manifestSha256', 'buildProofSha256')} | {
-        'filesSha256': fingerprint(value['files'])}
+def online_reader(d):
+    d.require(WORKSPACE, 'API_ADMIN_SCOPE_CONFLICT')
+    return d.online_recharge_scope()[0]
 
 
-def workspace_online_sources(d, directory):
-    online, _ = d.online_recharge_scope()
+def workspace_service_names(d, directory):
+    names = tuple(d.ALL_SERVICES)
+    if WORKSPACE and directory is not None and (directory / CONFIG_FILES[0]).is_file():
+        if b'  online-recharge:\n' in (directory / CONFIG_FILES[0]).read_bytes():
+            names += (ONLINE_SERVICE,)
+    return names
+
+
+def online_binding(d, directory, states=None):
+    states = states or snapshot(d, directory)
+    d.require(ONLINE_SERVICE in states, 'API_ADMIN_ONLINE_SERVICE_MISSING')
+    worker, api = states[ONLINE_SERVICE], states['api']
+    metadata = json.loads(d.run('docker', 'inspect', worker['containerId']))[0]
+    api_metadata = json.loads(d.run('docker', 'inspect', api['containerId']))[0]
+    mounts = metadata.get('Mounts', [])
+    engine = [m for m in mounts if m.get('Destination') == '/workspace/engine/runtime']
+    shared = [m for m in api_metadata.get('Mounts', []) if m.get('Destination') == '/app/.runtime/online-recharge']
+    d.require(metadata.get('Id') == worker['containerId'] and metadata.get('Image') == worker['image']
+              and metadata.get('HostConfig', {}).get('NetworkMode') == 'container:' + api['containerId']
+              and not metadata.get('HostConfig', {}).get('PortBindings')
+              and len(engine) == len(shared) == 1
+              and engine[0].get('Type') == shared[0].get('Type') == 'volume'
+              and engine[0].get('Name') == shared[0].get('Name')
+              and isinstance(engine[0].get('Name'), str) and engine[0]['Name'].endswith('_online_recharge_data')
+              and engine[0].get('RW') is True and shared[0].get('RW') is True,
+              'API_ADMIN_ONLINE_BINDING_CHANGED')
+    configuration = {key: metadata.get(key) for key in ('Config', 'HostConfig')}
+    configuration['Config'] = dict(configuration['Config'])
+    labels = dict(configuration['Config'].get('Labels', {}))
+    api_config = api_metadata.get('Config', {})
+    d.require(configuration['Config'].get('Hostname') == api_config.get('Hostname') == api['containerId'][:12]
+        and labels.get('com.docker.compose.service') == ONLINE_SERVICE
+        and labels.get('com.docker.compose.container-number') == '1'
+        and labels.get('com.docker.compose.project') == api_config.get('Labels', {}).get('com.docker.compose.project')
+        and labels.get('com.docker.compose.image') == worker['image']
+        and re.fullmatch(r'[a-f0-9]{64}', labels.get('com.docker.compose.config-hash', ''))
+        and labels.get('com.docker.compose.depends_on', '') in ('', 'api:service_healthy:true', 'api:service_healthy:false')
+        and (labels.get('com.docker.compose.replace') in (None, 'online-recharge-1')
+            or re.fullmatch(r'[a-f0-9]{64}', labels.get('com.docker.compose.replace', ''))),
+        'API_ADMIN_ONLINE_GENERATED_IDENTITY_CHANGED')
+    configuration['Config']['Hostname'] = '${API_HOSTNAME}'
+    working = Path(labels.get('com.docker.compose.project.working_dir', ''))
+    d.require(working.parent == d.BASE / 'releases' and working.is_dir() and not working.is_symlink()
+        and labels.get('com.docker.compose.project.config_files') == ','.join(str(working / n)
+            for n in (CONFIG_FILES[0], 'compose.release.json'))
+        and (working / CONFIG_FILES[0]).read_bytes() == (directory / CONFIG_FILES[0]).read_bytes()
+        and (working / '.env.aws.production').read_bytes() == (directory / '.env.aws.production').read_bytes()
+        and labels.get('com.docker.compose.project.environment_file', str(working / '.env.aws.production'))
+            == str(working / '.env.aws.production'),
+        'API_ADMIN_ONLINE_COMPOSE_ORIGIN_CHANGED')
+    labels['com.docker.compose.project.working_dir'] = '${RELEASE}'
+    labels['com.docker.compose.project.config_files'] = '${RELEASE}/' + CONFIG_FILES[0] + ',${RELEASE}/compose.release.json'
+    labels['com.docker.compose.project.environment_file'] = '${RELEASE}/.env.aws.production'
+    labels['com.docker.compose.config-hash'] = '${COMPOSE_SERVICE_HASH}'
+    labels['com.docker.compose.depends_on'] = 'api:service_healthy'
+    labels.pop('com.docker.compose.replace', None)
+    configuration['Config']['Labels'] = labels
+    configuration['HostConfig'] = dict(configuration['HostConfig'])
+    configuration['HostConfig'].pop('NetworkMode')
+    configuration['Mounts'] = sorted(mounts, key=lambda m: m['Destination'])
+    volume = json.loads(d.run('docker', 'volume', 'inspect', engine[0]['Name']))[0]
+    d.require(volume.get('Name') == engine[0]['Name'], 'API_ADMIN_ONLINE_VOLUME_CHANGED')
+    return {'image': worker['image'], 'reference': worker['reference'],
+        'environmentSha256': worker['environmentSha256'], 'configurationSha256': fingerprint(configuration),
+        'volumeIdentitySha256': fingerprint(volume), 'apiContainerId': api['containerId'],
+        'containerId': worker['containerId'], 'startedAtSha256': worker['startedAtSha256']}
+
+
+def online_marker(context):
+    return {'version': 1, 'commit': context['commit'], 'manifestSha256': context['manifestSha256'],
+            'buildProofSha256': context['buildProofSha256'], 'preservationSha256': fingerprint(context)}
+
+
+def online_fence_receipt(d, value):
+    d.require(isinstance(value, dict) and set(value) == {'version', 'busyCount', 'sameConnection',
+        'mysqlIdentitySha256', 'connectionIdSha256', 'businessActions'}
+        and type(value['version']) is int and value['version'] == 1 and value['sameConnection'] is True
+        and all(type(value[n]) is int and value[n] == 0 for n in ('busyCount', 'businessActions'))
+        and all(isinstance(value[n], str) and re.fullmatch(r'[a-f0-9]{64}', value[n])
+            for n in ('mysqlIdentitySha256', 'connectionIdSha256')), 'API_ADMIN_ONLINE_FENCE_RECEIPT_CHANGED')
+
+
+def online_source_guard(d, directory):
+    online = online_reader(d)
     online.recovery_policy(d)
     policy = directory / 'scripts/production-release' / online.RECOVERY_FILE
     d.require(policy.is_file() and not policy.is_symlink() and policy.stat().st_size <= 256 * 1024
@@ -1296,221 +1372,346 @@ def workspace_online_sources(d, directory):
     return online
 
 
-def workspace_online_files(d, directory):
-    result = {}
-    for name in ONLINE_ORIGIN_FILES:
-        path = directory / name
-        d.require(path.is_file() and not path.is_symlink() and path.stat().st_size < 16 * 1024**2,
+def online_origin_guard(d, directory, context, *, runtime=True):
+    fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256', 'files',
+              'migrationState', 'binding'}
+    d.require(WORKSPACE and isinstance(context, dict) and set(context) == fields
+              and type(context['version']) is int and context['version'] == 1
+              and re.fullmatch(r'[a-f0-9]{40}', context['commit'] or ''), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+    origin = Path(context['release']); o = online_reader(d)
+    d.require(origin.parent == d.BASE / 'releases' and origin.is_dir() and not origin.is_symlink()
+              and set(context['files']) == set(ONLINE_ORIGIN_FILES)
+              and all((origin / n).is_file() and not (origin / n).is_symlink()
+                  and hashlib.sha256((origin / n).read_bytes()).hexdigest() == digest
+                  for n, digest in context['files'].items()), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+    manifest = json.loads((origin / 'release-manifest.json').read_text())
+    proof = o.validate_proof(d, json.loads((origin / o.PROOF_FILE).read_text()), context['commit'], manifest['sourceTree'])
+    record = json.loads((origin / o.STATE_FILE).read_text()); previous = Path(manifest['previousRelease'])
+    d.require(manifest.get('commit') == context['commit'] and manifest.get('previousCommit') == o.BASELINE_COMMIT
+              and context['manifestSha256'] == context['files']['release-manifest.json']
+              and fingerprint(proof) == context['buildProofSha256'] == record['buildProofSha256']
+              and manifest.get('servicesUpdated') == list(o.UPDATED)
+              and manifest.get('newMigrations') == [o.MIGRATION_FILE]
+              and manifest.get('migrationApplied') is True
+              and manifest.get('onlineRechargePublication') == {'version': 1, 'scope': o.SCOPE,
+                  'buildProofSha256': fingerprint(proof), 'migration': dict(o.MIGRATION_IDENTITY),
+                  'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+              and previous.parent == d.BASE / 'releases' and previous.is_dir() and not previous.is_symlink()
+              and hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
+                  == manifest.get('previousManifestSha256') == record['baselineEvidence']['manifestSha256']
+              and o.configuration_hashes(origin) == record['configurationAfter']
+              and o.configuration_hashes(previous) == record['configurationBefore'], 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+    online_source_guard(d, origin)
+    online_source_guard(d, directory)
+    o.protected_source(d, previous, origin)
+    preservation = {'environment': o.verify_environment(d, previous, origin,
+                        (previous / '.env.aws.production').read_bytes()),
+                    'compose': o.verify_compose(d, previous, origin),
+                    'caddy': o.verify_caddy_projection(d, previous, origin)}
+    d.require(preservation == record.get('preservation'), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+    online_recovery_guard(d, o, previous, origin, manifest, record)
+    d.require((origin / '.env.aws.production').read_bytes() == (directory / '.env.aws.production').read_bytes()
+              and o.engine_content(d, directory) == o.engine_content(d, origin)
+              and hashlib.sha256((origin / CONFIG_FILES[0]).read_bytes()).hexdigest() == proof['composeSourceSha256'],
+              'API_ADMIN_ONLINE_SOURCE_CHANGED')
+    o.migration_source_check(d, origin); o.migration_source_check(d, directory)
+    state = o.migration_database_state(d, directory)
+    d.require(state['status'] == 'APPLIED' and state == context['migrationState']
+              and all(record['migration'][k] == v for k, v in state.items()), 'API_ADMIN_ONLINE_MIGRATION_CHANGED')
+    o.verify_permission_seed(d, directory)
+    for n in ('before', 'after'):
+        d.require(audit_receipt(d, origin / (n + '-audit.json')) == manifest['dataAudit' + n.title()],
                   'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-        result[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return result
+    d.require(manifest['dataAuditBefore']['checksSha256'] == manifest['dataAuditAfter']['checksSha256'],
+              'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+    o.backup_receipt(d, origin, manifest)
+    o.workspace_backup_receipt(d, origin, previous, record['baselineEvidence'], manifest, record)
+    o.workspace_origin(d, previous, origin, record['baselineEvidence'], record['before'])
+    o.historical_guard(d, previous, record['baselineEvidence'], origin)
+    for service in o.IMAGE_SERVICES:
+        o.verify_image_content(d, origin, proof, service)
+    if runtime:
+        binding = online_binding(d, directory)
+        d.require(all(binding[n] == context['binding'][n] for n in
+            ('image', 'reference', 'environmentSha256', 'configurationSha256', 'volumeIdentitySha256')),
+            'API_ADMIN_ONLINE_RUNTIME_CHANGED')
+    return context
 
 
-def workspace_engine_metadata(d, directory):
-    identifier = d.compose(directory, 'ps', '--all', '-q', ONLINE_ENGINE, timeout=10)
-    d.require(isinstance(identifier, str) and re.fullmatch(r'[a-f0-9]{64}', identifier),
-              'API_ADMIN_ONLINE_ENGINE_UNAVAILABLE')
-    rows = json.loads(d.run('docker', 'inspect', identifier, timeout=5))
-    d.require(isinstance(rows, list) and len(rows) == 1 and rows[0].get('Id') == identifier
-              and rows[0].get('Config', {}).get('Labels', {}).get('com.docker.compose.service') == ONLINE_ENGINE
-              and type(rows[0].get('State', {}).get('Running')) is bool,
-              'API_ADMIN_ONLINE_ENGINE_UNAVAILABLE')
-    return rows[0]
-
-
-def workspace_engine_configuration(d, metadata, api_identifier, *, exited_api=False):
-    # Recreate using the ORIGINAL compose directory, so project path labels and
-    # every other Config/HostConfig/Mounts field stay byte-semantically unchanged.
-    value = json.loads(json.dumps({n: metadata.get(n) for n in ('Config', 'HostConfig', 'Mounts')}))
-    labels = value['Config'].get('Labels', {})
-    d.require(value['HostConfig'].get('NetworkMode') == 'container:' + api_identifier
-              and not value['HostConfig'].get('PortBindings') and isinstance(value['Mounts'], list)
-              and 'com.docker.compose.replace' not in labels
-              and labels.get('com.docker.compose.depends_on') == ''
-              and isinstance(labels.get('com.docker.compose.config-hash'), str)
-              and re.fullmatch(r'[a-f0-9]{64}', labels['com.docker.compose.config-hash']),
-              'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
-    # Compose includes the resolved API container ID in this generated hash.
-    # The first publication's sealed source and the full actual configuration
-    # below establish the behavior; only this typed redundant metadata may vary.
-    # Every other label, permission, command, environment and mount stays sealed.
-    labels['com.docker.compose.config-hash'] = '${COMPOSE_API_CONFIGURATION}'
-    value['HostConfig']['NetworkMode'] = 'container:${API}'
-    if exited_api:
-        # The removed API's ID comes only from the sealed first publication.
-        # Its stopped engine retains Docker's inherited default hostname.
-        d.require(metadata.get('State', {}).get('Running') is False and metadata['State'].get('Pid') == 0
-                  and value['Config'].get('Hostname') == api_identifier[:12]
-                  and value['Config'].get('Domainname') == '', 'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
-        value['Config']['Hostname'] = '${API_HOSTNAME}'
-    else:
-        apis = json.loads(d.run('docker', 'inspect', api_identifier, timeout=5))
-        d.require(isinstance(apis, list) and len(apis) == 1 and apis[0].get('Id') == api_identifier
-                  and value['Config'].get('Hostname') == apis[0].get('Config', {}).get('Hostname')
-                  and value['Config'].get('Domainname') == apis[0]['Config'].get('Domainname'),
-                  'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
-        if value['Config'].get('Hostname') == api_identifier[:12]:
-            value['Config']['Hostname'] = '${API_HOSTNAME}'
-    value['Mounts'] = sorted(value['Mounts'], key=lambda m: m['Destination'])
-    mounts = [m for m in value['Mounts'] if m.get('Destination') == '/workspace/engine/runtime']
-    project = value['Config'].get('Labels', {}).get('com.docker.compose.project')
-    d.require(len(mounts) == 1 and mounts[0].get('Type') == 'volume' and mounts[0].get('RW') is True
-              and isinstance(project, str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', project)
-              and mounts[0].get('Name') == project + '_online_recharge_data',
-              'API_ADMIN_ONLINE_ENGINE_VOLUME_CHANGED')
-    volumes = json.loads(d.run('docker', 'volume', 'inspect', mounts[0]['Name'], timeout=5))
-    d.require(isinstance(volumes, list) and len(volumes) == 1 and volumes[0].get('Name') == mounts[0]['Name']
-              and volumes[0].get('Driver') == 'local' and volumes[0].get('Scope') == 'local'
-              and volumes[0].get('Options') in (None, {})
-              and volumes[0].get('Labels', {}).get('com.docker.compose.project') == project
-              and volumes[0]['Labels'].get('com.docker.compose.volume') == 'online_recharge_data',
-              'API_ADMIN_ONLINE_ENGINE_VOLUME_CHANGED')
-    value['volumeIdentity'] = {n: volumes[0].get(n) for n in ('Name', 'Driver', 'Scope', 'Mountpoint', 'Labels', 'CreatedAt', 'Options')}
-    return fingerprint(value)
-
-
-def workspace_online_snapshot(d, directory):
-    online, _ = d.online_recharge_scope()
-    rendered = online.rendered_configuration(d, directory)
-    d.require(set(rendered['services']) == set(d.ALL_SERVICES) | {'migrate', ONLINE_ENGINE},
-              'API_ADMIN_ONLINE_SERVICE_SET_CHANGED')
-    states = online.snapshot(d, directory, include_engine=True)
-    metadata = workspace_engine_metadata(d, directory)
-    states[ONLINE_ENGINE]['configurationSha256'] = workspace_engine_configuration(
-        d, metadata, states['api']['containerId'])
-    return states
-
-
-def workspace_online_recovery(d, online, original, source, manifest, record):
-    """Recheck the completed recovery's immutable origin after API replacement."""
-    evidence = record['baselineEvidence']
+def online_recovery_guard(d, online, previous, origin, manifest, record):
+    """Revalidate the sealed recovery after replacement, without a second publication path."""
     performed = record.get('migration', {}).get('performed')
     d.require(type(performed) is bool and manifest.get('migrationPerformed') is performed,
               'API_ADMIN_ONLINE_MIGRATION_CHANGED')
+    evidence = record['baselineEvidence']
     if evidence.get('migrationRecovery') is not None:
-        # This reader checks immutable failed source/images, DB and backups;
-        # its attached-volume check uses the current API, not the old API ID.
-        recovery = online.recovery_origin(d, original)
+        reader = getattr(online, 'release_recovery', online.recovery_origin)
+        recovery = reader(d, previous)
         d.require(recovery is not None and manifest.get('migrationRecovery') == recovery['marker']
                   == evidence['migrationRecovery'] and performed is False,
                   'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-        online.candidate_recovery_source(d, source, recovery)
+        online.candidate_recovery_source(d, origin, recovery)
     else:
         d.require(manifest.get('migrationRecovery') is None and performed is True,
                   'API_ADMIN_ONLINE_ORIGIN_CHANGED')
 
 
-def workspace_online_origin(d, directory, context):
-    """Recheck original proof off-line after its API/Admin have been replaced."""
-    validate_online_successor_origin(context)
-    source = Path(context['release'])
-    d.require(source.parent == d.BASE / 'releases' and source.is_dir() and not source.is_symlink()
-              and workspace_online_files(d, source) == context['files'], 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    online = workspace_online_sources(d, source)
-    workspace_online_sources(d, directory)
-    manifest = json.loads((source / 'release-manifest.json').read_text())
-    proof = online.validate_proof(d, json.loads((source / online.PROOF_FILE).read_text()),
-                                  context['commit'], context['sourceTree'])
-    record = json.loads((source / online.STATE_FILE).read_text())
-    original = Path(manifest.get('previousRelease', ''))
-    evidence = record.get('baselineEvidence', {})
-    d.require(original == Path(context['workspaceOrigin']['release'])
-              and original.parent == d.BASE / 'releases' and not original.is_symlink()
-              and manifest.get('commit') == context['commit'] and manifest.get('sourceTree') == context['sourceTree']
-              and manifest.get('previousCommit') == WORKSPACE_BOOTSTRAP_COMMIT
-              and manifest.get('servicesUpdated') == list(online.UPDATED)
-              and manifest.get('newMigrations') == [online.MIGRATION_FILE] and manifest.get('migrationApplied') is True
-              and manifest.get('onlineRechargePublication') == {'version': 1, 'scope': 'ONLINE_RECHARGE',
-                  'buildProofSha256': fingerprint(proof), 'migration': dict(online.MIGRATION_IDENTITY),
-                  'legacyWorkersPublished': False, 'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
-              and fingerprint(proof) == context['buildProofSha256'] == record.get('buildProofSha256')
-              and hashlib.sha256((original / 'release-manifest.json').read_bytes()).hexdigest()
-                  == manifest.get('previousManifestSha256') == evidence.get('manifestSha256')
-              and online.configuration_hashes(original) == record.get('configurationBefore')
-              and online.configuration_hashes(source) == record.get('configurationAfter')
-              and workspace_origin(d, original, evidence.get('workspaceVolume')) == context['workspaceOrigin']
-              and (source / '.env.aws.production').read_bytes() == (directory / '.env.aws.production').read_bytes(),
-              'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    preservation = {'environment': online.verify_environment(d, original, source,
-                        (original / '.env.aws.production').read_bytes()),
-                    'compose': online.verify_compose(d, original, source),
-                    'caddy': online.verify_caddy_projection(d, original, source)}
-    d.require(preservation == record.get('preservation'), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    workspace_online_recovery(d, online, original, source, manifest, record)
-    online.protected_source(d, original, source)
-    online.historical_guard(d, original, evidence, source)
-    online.workspace_origin(d, original, directory, evidence, record['before'])
-    migration = online.migration_database_state(d, directory, source=source)
-    d.require(migration['status'] == 'APPLIED'
-              and all(record['migration'].get(n) == v for n, v in migration.items()),
-              'API_ADMIN_ONLINE_MIGRATION_CHANGED')
-    online.verify_permission_seed(d, directory)
-    for name in ('before', 'after'):
-        d.require(audit_receipt(d, source / (name + '-audit.json')) == manifest.get('dataAudit' + name.title()),
-                  'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    d.require(manifest['dataAuditBefore']['checksSha256'] == manifest['dataAuditAfter']['checksSha256'],
-              'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    online.backup_receipt(d, source, manifest)
-    online.workspace_backup_receipt(d, source, original, evidence, manifest, record)
-    for name in online.IMAGE_SERVICES:
-        online.verify_image_content(d, source, proof, name)
-    d.require(fingerprint(online.file_inventory(d, source / online.ENGINE_ROOT)) == proof['engineSourceSha256']
-              and proof['composeSourceSha256'] == ONLINE_COMPOSE_SEAL,
-              'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+def online_origin(d, directory, manifest, states):
+    o = online_reader(d); receipt = o.readback(d, manifest['commit'])
+    # Its independent reader verified the raw inspect record. Only the verified
+    # generated-identity normalization differs in this successor's snapshot.
+    if receipt.get('status') == 'ONLINE_RECHARGE_VERIFIED' and ONLINE_SERVICE in receipt.get('services', {}):
+        receipt['services'][ONLINE_SERVICE]['configurationSha256'] = online_binding(d, directory, states)['configurationSha256']
+    d.require(receipt.get('status') == 'ONLINE_RECHARGE_VERIFIED' and receipt.get('services') == states
+              and receipt.get('migrationApplied') is True and receipt.get('workspaceBackupVerified') is True
+              and receipt.get('backupVerified') is True, 'API_ADMIN_ONLINE_NOT_PUBLISHED')
+    context = {'version': 1, 'release': str(directory), 'commit': manifest['commit'],
+        'manifestSha256': hashlib.sha256((directory / 'release-manifest.json').read_bytes()).hexdigest(),
+        'buildProofSha256': receipt['buildProofSha256'], 'migrationState': receipt['migration'],
+        'files': {n: hashlib.sha256((directory / n).read_bytes()).hexdigest() for n in ONLINE_ORIGIN_FILES},
+        'binding': online_binding(d, directory, states)}
+    online_origin_guard(d, directory, context)
     return context
 
 
-def workspace_online_first(d, directory, manifest):
-    d.require(WORKSPACE and manifest.get('previousCommit') == WORKSPACE_BOOTSTRAP_COMMIT,
-              'API_ADMIN_ONLINE_FIRST_PUBLICATION_REQUIRED')
-    online = workspace_online_sources(d, directory)
-    # Genuine full live publication/readback, including backups, migration,
-    # source/image content, first workspace origin and the eight real services.
-    receipt = online.readback(d, manifest['commit'])
-    d.require(receipt.get('status') == 'ONLINE_RECHARGE_VERIFIED' and receipt.get('backupVerified') is True
-              and receipt.get('workspaceBackupVerified') is True and receipt.get('migrationApplied') is True,
-              'API_ADMIN_ONLINE_FIRST_PUBLICATION_REQUIRED')
-    record = json.loads((directory / online.STATE_FILE).read_text())
-    states = workspace_online_snapshot(d, directory)
-    origin = workspace_origin(d, Path(manifest['previousRelease']), record['baselineEvidence']['workspaceVolume'])
-    context = {'version': 1, 'release': str(directory), 'commit': manifest['commit'],
-        'sourceTree': receipt['sourceTree'], 'manifestSha256': hashlib.sha256((directory / 'release-manifest.json').read_bytes()).hexdigest(),
-        'buildProofSha256': receipt['buildProofSha256'], 'files': workspace_online_files(d, directory),
-        'workspaceOrigin': origin, 'engineConfigurationSha256': states[ONLINE_ENGINE]['configurationSha256']}
-    return validate_online_successor_origin(context)
+def preserved_migration_guard(d, directory, context, online=None):
+    if online is None:
+        return migration_successor_guard(d, directory, context)
+    o = online_reader(d); origin = Path(online['release'])
+    manifest = json.loads((origin / 'release-manifest.json').read_text())
+    o.historical_guard(d, Path(manifest['previousRelease']), {'migrationOrigin': context}, origin)
 
 
-def workspace_configuration(d, previous, candidate):
-    """Only the reviewed mount and edge route may differ; no YAML reserialization."""
-    d.require(WORKSPACE, 'API_ADMIN_SCOPE_CONFLICT')
-    old = (previous / CONFIG_FILES[0]).read_bytes()
-    new = (candidate / CONFIG_FILES[0]).read_bytes()
-    if b'online_recharge_data:/app/.runtime/online-recharge' in new:
-        d.require(old == new and hashlib.sha256(new).hexdigest() == ONLINE_COMPOSE_SEAL,
-                  'API_ADMIN_ONLINE_CONFIGURATION_CHANGED')
-        online, _ = d.online_recharge_scope()
-        online.migration_source_check(d, candidate)
-        d.require(hashlib.sha256((previous / CONFIG_FILES[1]).read_bytes()).hexdigest()
-                  == hashlib.sha256((candidate / CONFIG_FILES[1]).read_bytes()).hexdigest()
-                  == WORKSPACE_CADDY_AFTER, 'API_ADMIN_WORKSPACE_EDGE_CHANGED')
-        return {'composeSha256': ONLINE_COMPOSE_SEAL, 'caddySha256': WORKSPACE_CADDY_AFTER,
-                'volume': WORKSPACE_VOLUME, 'containerDirectory': WORKSPACE_DIRECTORY}
-    mount = b'    volumes:\n      - auto_registration_data:/app/.runtime/auto-registration\n'
-    volume = b'  auto_registration_data:\n'
-    api = new.split(b'  api:\n', 1)
-    d.require(len(api) == 2 and mount in api[1].split(b'  admin:\n', 1)[0]
-              and new.count(mount) == 1 and new.count(volume) == 1
-              and b'volumes:\n  mysql_data:\n  auto_registration_data:\n  caddy_data:\n' in new,
-              'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
-    normalized = new.replace(mount, b'', 1).replace(volume, b'', 1)
-    d.require(old in (new, normalized), 'API_ADMIN_WORKSPACE_CONFIG_CHANGED')
-    before = hashlib.sha256((previous / CONFIG_FILES[1]).read_bytes()).hexdigest()
-    after = hashlib.sha256((candidate / CONFIG_FILES[1]).read_bytes()).hexdigest()
-    d.require(before in (WORKSPACE_CADDY_BEFORE, WORKSPACE_CADDY_AFTER)
-              and after == WORKSPACE_CADDY_AFTER, 'API_ADMIN_WORKSPACE_EDGE_CHANGED')
-    return {'composeSha256': hashlib.sha256(new).hexdigest(), 'caddySha256': after,
-            'volume': WORKSPACE_VOLUME, 'containerDirectory': WORKSPACE_DIRECTORY}
+def online_engine_idle(d, metadata):
+    script = ("require('/workspace/engine/healthcheck.cjs').check().then(v=>{"
+        "const out={ready:v.ready,mode:v.mode,activeTasks:v.activeTasks,stopping:v.stopping,rpcConnected:v.rpcConnected};"
+        "process.stdout.write(JSON.stringify(out))}).catch(()=>process.exit(1))")
+    value = json.loads(d.run('docker', 'exec', metadata['Id'], 'node', '-e', script, timeout=8))
+    d.require(value == {'ready': True, 'mode': 'enabled', 'activeTasks': 0, 'stopping': False, 'rpcConnected': True}
+              and type(value.get('activeTasks')) is int, 'API_ADMIN_ONLINE_ENGINE_NOT_IDLE')
 
+
+def online_idle(d, directory):
+    o = online_reader(d)
+    o.jobs_idle(d, directory, migrated=True)
+    value = o.database_read(d, directory, "SELECT JSON_OBJECT('busy', (SELECT COUNT(*) FROM online_recharge_cards "
+        "WHERE lease_expires_at > UTC_TIMESTAMP(6)))")
+    d.require(value == {'busy': 0}, 'API_ADMIN_ONLINE_TASK_ACTIVE')
+    state = d.service_state(directory, ONLINE_SERVICE, include_container_id=True)
+    online_engine_idle(d, {'Id': state['containerId']})
+
+
+class OnlineSqlFence:
+    """Same-connection task/card write locks; never writes a business row or executes DDL."""
+    QUERY = ("SELECT JSON_OBJECT('version',1,'connectionId',CONNECTION_ID(),'busy',"
+        "(SELECT COUNT(*) FROM online_recharge_tasks WHERE status IN ('queued','running') "
+        "OR lease_expires_at>UTC_TIMESTAMP(6))+(SELECT COUNT(*) FROM online_recharge_cards "
+        "WHERE lease_expires_at>UTC_TIMESTAMP(6)));\n")
+
+    def __init__(self, d, directory):
+        self.d, self.directory, self.process = d, directory, None
+        self.connection_id, self.buffer = None, b''
+        self.mysql = d.service_state(directory, 'mysql', include_container_id=True, include_environment_hash=True)
+
+    def acquire(self):
+        self.deadline = time.monotonic() + 120
+        database = self.d.current_job_database(self.directory)
+        self.d.require(isinstance(database, str) and re.fullmatch(r'[A-Za-z0-9_]+', database),
+                       'API_ADMIN_ONLINE_DATABASE_INVALID')
+        command = ['docker', 'compose', '--env-file', str(self.directory / '.env.aws.production'),
+            '-f', str(self.directory / CONFIG_FILES[0]), '-f', str(self.directory / 'compose.release.json'),
+            'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+            'exec mysql --batch --skip-column-names --unbuffered -u root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"']
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            self.send('SET SESSION lock_wait_timeout=5; SET SESSION innodb_lock_wait_timeout=5; '
+                      'LOCK TABLES online_recharge_tasks WRITE, online_recharge_cards WRITE;\n')
+            self.check_idle()
+        except Exception:
+            self.close()
+            raise RuntimeError('API_ADMIN_ONLINE_FENCE_UNAVAILABLE') from None
+
+    def send(self, source):
+        self.d.require(self.process is not None and self.process.poll() is None
+                       and time.monotonic() < self.deadline, 'API_ADMIN_ONLINE_FENCE_LOST')
+        self.process.stdin.write(source.encode()); self.process.stdin.flush()
+
+    def check_idle(self):
+        self.send(self.QUERY)
+        deadline = min(self.deadline, time.monotonic() + 10)
+        while b'\n' not in self.buffer:
+            remaining = deadline - time.monotonic()
+            self.d.require(remaining > 0 and self.process.poll() is None, 'API_ADMIN_ONLINE_FENCE_LOST')
+            readable, _, _ = select.select([self.process.stdout], [], [], remaining)
+            self.d.require(bool(readable), 'API_ADMIN_ONLINE_FENCE_LOST')
+            chunk = os.read(self.process.stdout.fileno(), 4096)
+            self.d.require(bool(chunk) and len(self.buffer) + len(chunk) <= 4096, 'API_ADMIN_ONLINE_FENCE_LOST')
+            self.buffer += chunk
+        line, self.buffer = self.buffer.split(b'\n', 1)
+        try:
+            value = json.loads(line)
+        except Exception:
+            raise RuntimeError('API_ADMIN_ONLINE_FENCE_LOST') from None
+        self.d.require(isinstance(value, dict) and set(value) == {'version', 'connectionId', 'busy'}
+                       and type(value['version']) is int and value['version'] == 1
+                       and type(value['connectionId']) is int and value['connectionId'] > 0
+                       and (self.connection_id is None or self.connection_id == value['connectionId'])
+                       and type(value['busy']) is int and value['busy'] == 0, 'API_ADMIN_ONLINE_TASK_ACTIVE')
+        self.connection_id = value['connectionId']
+        self.d.require(self.d.service_state(self.directory, 'mysql', include_container_id=True,
+            include_environment_hash=True) == self.mysql, 'API_ADMIN_ONLINE_FENCE_LOST')
+        return {'busy': 0, 'sameConnection': True}
+
+    def stop(self, identity, *, grace):
+        self.check_idle()
+        remaining = self.deadline - time.monotonic()
+        self.d.require(remaining > grace + 5, 'API_ADMIN_ONLINE_FENCE_TIMEOUT')
+        metadata = json.loads(self.d.run('docker', 'inspect', identity['containerId'], timeout=10))[0]
+        self.d.require(metadata.get('Id') == identity['containerId'] and metadata.get('Image') == identity['image']
+            and hashlib.sha256(metadata['State']['StartedAt'].encode()).hexdigest() == identity['startedAtSha256'],
+            'API_ADMIN_ONLINE_CONTAINER_CHANGED')
+        if metadata['State'].get('Running') is True:
+            self.d.run('docker', 'stop', '--time', str(grace), identity['containerId'],
+                       timeout=min(grace + 5, self.deadline - time.monotonic()))
+        metadata = json.loads(self.d.run('docker', 'inspect', identity['containerId'], timeout=10))[0]
+        self.d.require(metadata.get('Id') == identity['containerId'] and metadata['State'].get('Running') is False,
+                       'API_ADMIN_ONLINE_CONTAINER_NOT_STOPPED')
+        self.check_idle()
+
+    def close(self):
+        if self.process is not None:
+            try:
+                if self.process.poll() is None:
+                    self.process.stdin.write(b'UNLOCK TABLES;\n'); self.process.stdin.flush()
+                self.process.stdin.close()
+                self.process.wait(timeout=3)
+            except Exception:
+                self.process.kill(); self.process.wait(timeout=3)
+            finally:
+                self.process.stdout.close(); self.process = None
+
+
+class WorkspaceAuditBarrier(OnlineSqlFence):
+    """Legacy proxy mutations await audit INSERT before forwarding to the worker."""
+
+    def __init__(self, d, directory):
+        super().__init__(d, directory)
+        self.api_identity = workspace_api_identity(d, directory)
+        # Truncate to the same millisecond Date boundary used by the legacy Prisma read.
+        since = self.api_identity['startedAt'].replace('T', ' ').rstrip('Z')
+        if '.' in since:
+            first, fraction = since.split('.', 1)
+            since = first + '.' + fraction[:3].ljust(3, '0')
+        stamp = 'CONVERT(0x' + since.encode().hex() + ' USING utf8mb4)'
+        def literal(value):
+            return 'CONVERT(0x' + value.encode().hex() + ' USING utf8mb4)'
+        self.QUERY = ("SELECT JSON_OBJECT('version',1,'connectionId',CONNECTION_ID(),'busy',"
+            "IF(UTC_TIMESTAMP(6)<CAST(" + stamp + " AS DATETIME(6)),1,(SELECT COUNT(*) FROM audit_logs "
+            "WHERE created_at>=CAST(" + stamp + " AS DATETIME(6)) AND module=" + literal('自动注册')
+            + " AND action=" + literal('操作请求') + " AND object_type=" + literal('开源注册模块')
+            + " AND (remark LIKE '% /api/registration%' OR remark LIKE '% /api/ws/%'))));\n")
+
+    def acquire(self):
+        self.deadline = time.monotonic() + 180
+        workspace_audit_protection(self.d, self.directory)
+        database = self.d.current_job_database(self.directory)
+        self.d.require(isinstance(database, str) and re.fullmatch(r'[A-Za-z0-9_]{1,64}', database),
+                       'API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
+        command = ['docker', 'exec', '-i', '-e', 'MYSQL_DATABASE=' + database,
+            self.mysql['containerId'], 'sh', '-c',
+            'exec mysql --batch --raw --skip-column-names --unbuffered --skip-reconnect -u root '
+            '--password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"']
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL)
+        try:
+            self.send('SET SESSION autocommit=0; SET SESSION lock_wait_timeout=5; '
+                      'SET SESSION wait_timeout=210; LOCK TABLES audit_logs READ;\n')
+            self.check_idle()
+            self.d.require(workspace_api_identity(self.d, self.directory, expected=self.api_identity)
+                           == self.api_identity, 'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+        except Exception:
+            self.close()
+            raise RuntimeError('API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED') from None
+
+    def before_stop(self):
+        self.check_idle()
+        self.d.require(time.monotonic() + 45 < self.deadline, 'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
+
+
+def online_rebind(d, directory, context):
+    d.compose(directory, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', ONLINE_SERVICE, timeout=300)
+    d.wait_healthy(directory, ONLINE_SERVICE)
+    binding = online_binding(d, directory)
+    d.require(all(binding[n] == context['binding'][n] for n in
+        ('image', 'reference', 'environmentSha256', 'configurationSha256', 'volumeIdentitySha256')),
+        'API_ADMIN_ONLINE_RUNTIME_CHANGED')
+    return binding
+
+
+def online_container(d, directory, name, images):
+    identifier = d.compose(directory, 'ps', '-q', '--all', name)
+    if not identifier:
+        return None
+    metadata = json.loads(d.run('docker', 'inspect', identifier))[0]
+    d.require(re.fullmatch(r'[a-f0-9]{64}', identifier) and metadata.get('Id') == identifier
+              and metadata.get('Image') in images and isinstance(metadata.get('State', {}).get('StartedAt'), str),
+              'API_ADMIN_ONLINE_CONTAINER_CHANGED')
+    return {'containerId': identifier, 'image': metadata['Image'],
+            'startedAtSha256': hashlib.sha256(metadata['State']['StartedAt'].encode()).hexdigest()}
+
+
+def workspace_database_controller(d, directory, identity):
+    class Controller:
+        def __getattr__(self, name):
+            return getattr(d, name)
+        def current_job_database(self, selected):
+            return workspace_database_identity(d, directory, identity)['database']
+    return Controller()
+
+
+def online_rollback_api(d, previous, target, before, proof, context, *, database_identity=None):
+    controller = workspace_database_controller(d, previous, database_identity) if database_identity is not None else d
+    fence = OnlineSqlFence(controller, previous)
+    try:
+        fence.acquire()
+        api = online_container(d, target, 'api', {before['api']['image'], proof['images']['api']['imageId']})
+        engine = online_container(d, target, ONLINE_SERVICE, {before[ONLINE_SERVICE]['image']})
+        if api is not None:
+            fence.stop(api, grace=30)
+        fence.check_idle()
+        if engine is not None:
+            fence.stop(engine, grace=45)
+    finally:
+        fence.close()
+    d.rollback_service(previous, target, 'api', before)
+    return online_rebind(d, previous, context)
+
+
+def workspace_database_identity(d, directory, identity=None):
+    """Reuse only an identity measured live before stop, with unchanged MySQL/env."""
+    environment = hashlib.sha256((directory / '.env.aws.production').read_bytes()).hexdigest()
+    mysql = d.service_state(directory, 'mysql', include_container_id=True, include_environment_hash=True)
+    if identity is None:
+        return {'database': d.current_job_database(directory), 'environmentSha256': environment, 'mysql': mysql}
+    d.require(WORKSPACE and isinstance(identity, dict)
+              and set(identity) == {'database', 'environmentSha256', 'mysql'}
+              and re.fullmatch(r'[A-Za-z0-9_]{1,64}', identity['database'] or '')
+              and identity['environmentSha256'] == environment and identity['mysql'] == mysql
+              and mysql.get('status') == 'running' and mysql.get('health') == 'healthy',
+              'API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
+    return identity
+
+def workspace_api_metadata(d, directory):
+    """Compose's normal ps omits stopped containers; read the selected project's sole API."""
+    identifier = d.compose(directory, 'ps', '--all', '-q', 'api', timeout=10)
+    d.require(isinstance(identifier, str) and re.fullmatch(r'[a-f0-9]{64}', identifier),
+              'API_ADMIN_WORKSPACE_API_CONTAINER_UNAVAILABLE')
+    rows = json.loads(d.run('docker', 'inspect', identifier, timeout=5))
+    d.require(isinstance(rows, list) and len(rows) == 1 and rows[0].get('Id') == identifier
+              and rows[0].get('Config', {}).get('Labels', {}).get('com.docker.compose.service') == 'api'
+              and type(rows[0].get('State', {}).get('Running')) is bool,
+              'API_ADMIN_WORKSPACE_API_CONTAINER_UNAVAILABLE')
+    return rows[0]
 
 def workspace_public_origin(d, directory):
     value = urlsplit(d.environment_values(directory / '.env.aws.production')['APP_PUBLIC_URL'])
@@ -1519,6 +1720,33 @@ def workspace_public_origin(d, directory):
               and re.fullmatch(r'[A-Za-z0-9.-]{1,253}', value.hostname)
               and (value.port is None or 1 <= value.port <= 65535), 'API_ADMIN_WORKSPACE_PUBLIC_ORIGIN_INVALID')
     return 'https://' + value.hostname + (':' + str(value.port) if value.port is not None else '')
+
+def workspace_audit_protection(d, directory, database_identity=None):
+    """Inspect only immutable trigger definitions, never audit contents."""
+    files = (('DELETE', '20261002123500_routine_audit_retention_exception'),
+             ('UPDATE', '20260830182500_mysql_trigger_service_definers'))
+    expected = {}
+    for event, migration in files:
+        raw = (directory / MIGRATION_ROOT / migration / 'migration.sql').read_text()
+        name = 'idv2_audit_log_no_' + ('delete' if event == 'DELETE' else 'update')
+        body = raw.split('CREATE TRIGGER `' + name + '`', 1)[1].split('FOR EACH ROW', 1)[1]
+        body = body.split('END;', 1)[0] + 'END' if event == 'DELETE' else body.split(';', 1)[0]
+        expected[event] = ' '.join(body.split()).rstrip(';')
+    database = (workspace_database_identity(d, directory, database_identity)['database']
+                if database_identity is not None else d.current_job_database(directory))
+    query = ("SELECT JSON_ARRAYAGG(JSON_OBJECT('event',EVENT_MANIPULATION,'timing',ACTION_TIMING,"
+        "'statement',ACTION_STATEMENT)) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() "
+        "AND EVENT_OBJECT_TABLE='audit_logs'")
+    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+        'mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+        '"$MYSQL_DATABASE" -e "' + query + '"', timeout=15)
+    rows = json.loads(raw)
+    d.require(isinstance(rows, list) and len(rows) == 2
+              and all(isinstance(row, dict) and set(row) == {'event', 'timing', 'statement'}
+                      and row['timing'] == 'BEFORE' and isinstance(row['statement'], str) for row in rows)
+              and {row['event']: ' '.join(row['statement'].split()).rstrip(';') for row in rows} == expected,
+              'API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN')
+    return fingerprint(expected)
 
 
 def workspace_present(directory, metadata=None):
@@ -1583,9 +1811,9 @@ def workspace_volume(d, directory, *, empty=False, attached=False, api_metadata=
     return {'name': name, 'status': 'PRESENT', 'identitySha256': fingerprint(identity)}
 
 
-def workspace_idle(d, directory):
+def workspace_idle(d, directory, *, legacy=False, api_metadata=None):
     """Fail closed before stopping a worker; read only the controlled task statuses."""
-    identity = workspace_volume(d, directory)
+    identity = workspace_volume(d, directory, **({'api_metadata': api_metadata} if api_metadata is not None else {}))
     if identity['status'] == 'ABSENT':
         return identity
     value = json.loads(d.run('docker', 'volume', 'inspect', identity['name']))[0]
@@ -1603,11 +1831,347 @@ def workspace_idle(d, directory):
             rows = connection.execute('SELECT status, COUNT(*) FROM registration_tasks GROUP BY status').fetchall()
         d.require(all(status in ('pending', 'running', 'completed', 'failed', 'cancelled')
                       and type(count) is int and count >= 0 for status, count in rows)
-                  and sum(count for status, count in rows if status in ('pending', 'running')) == 0,
+                  and sum(count for status, count in rows if status in ('pending', 'running') or legacy and status == 'cancelled') == 0,
                   'API_ADMIN_WORKSPACE_TASK_ACTIVE')
     except sqlite3.Error:
         raise RuntimeError('API_ADMIN_WORKSPACE_TASK_STATE_UNAVAILABLE') from None
     return identity
+
+
+def workspace_api_identity(d, directory, *, expected=None, timeout=30):
+    state = d.service_state(directory, 'api', include_container_id=True) if expected is None else expected
+    value = json.loads(d.run('docker', 'inspect', state['containerId'], timeout=timeout))[0]
+    started = value.get('State', {}).get('StartedAt', '')
+    d.require(value.get('Id') == state['containerId'] and value.get('Image') == state['image']
+              and value.get('State', {}).get('Running') is True
+              and re.fullmatch(r'20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z', started)
+              and hashlib.sha256(started.encode()).hexdigest() == state['startedAtSha256'],
+              'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+    # Date.parse and MySQL UTC_TIMESTAMP must agree; an unverifiable/future start is rejected.
+    from datetime import datetime, timezone
+    observed = datetime.fromisoformat(started[:19] + '+00:00')
+    d.require(0 < observed.timestamp() <= datetime.now(timezone.utc).timestamp() + 5,
+              'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+    return {'containerId': state['containerId'], 'image': state['image'],
+            'startedAtSha256': state['startedAtSha256'], 'startedAt': started}
+
+
+def workspace_legacy_audit(d, directory, identity=None, *, deadline=None):
+    """Old workers lack a live-thread protocol. Any registration mutation since boot blocks them."""
+    identity = identity or workspace_api_identity(d, directory)
+    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+    d.require(timeout > 0, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+    source = r'''const {PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});
+const since=new Date(process.argv[1]);
+(async()=>{if(!Number.isFinite(+since))throw Error();
+const clock=await p.$queryRaw`SELECT UTC_TIMESTAMP(6) AS observed`;
+if(clock.length!==1||!(clock[0].observed instanceof Date)||+clock[0].observed<+since)throw Error();
+const mutationCount=await p.auditLog.count({where:{module:'自动注册',action:'操作请求',objectType:'开源注册模块',
+createdAt:{gte:since},OR:[{remark:{contains:' /api/registration'}},{remark:{contains:' /api/ws/'}}]}});
+if(!Number.isSafeInteger(mutationCount)||mutationCount<0)throw Error();
+console.log(JSON.stringify({version:1,mutationCount}));})().catch(()=>process.exitCode=2).finally(()=>p.$disconnect());'''
+    try:
+        result = json.loads(d.compose(directory, 'exec', '-T', 'api', 'node', '-e', source,
+                                     identity['startedAt'], timeout=timeout))
+    except Exception:
+        raise RuntimeError('API_ADMIN_WORKSPACE_LEGACY_AUDIT_UNAVAILABLE') from None
+    d.require(isinstance(result, dict) and set(result) == {'version', 'mutationCount'}
+              and type(result['version']) is int and result['version'] == 1
+              and type(result['mutationCount']) is int and result['mutationCount'] == 0,
+              'API_ADMIN_WORKSPACE_LEGACY_MUTATION_UNVERIFIED')
+    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+    d.require(timeout > 0, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+    d.require(workspace_api_identity(d, directory, expected=identity, timeout=timeout) == identity,
+              'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+    return {'legacyMutationCount': 0, 'containerId': identity['containerId'],
+            'startedAtSha256': identity['startedAtSha256']}
+
+
+def workspace_safety_result(d, value):
+    fields = {'version', 'status', 'schemaSha256', 'logicalSha256', 'tableCounts', 'taskCounts',
+              'activeAppleLeaseCount', 'corruptEncryptedValueCount', 'businessActions'}
+    d.require(isinstance(value, dict) and set(value) == fields and type(value['version']) is int
+              and value['version'] == 1 and value['status'] == 'PASS'
+              and all(isinstance(value[n], str) and re.fullmatch(r'[a-f0-9]{64}', value[n])
+                      for n in ('schemaSha256', 'logicalSha256'))
+              and isinstance(value['tableCounts'], dict)
+              and set(value['tableCounts']) == {'accounts', 'email_services', 'registration_tasks', 'settings',
+                     'proxies', 'cpa_services', 'sub2api_services', 'tm_services'}
+              and all(type(n) is int and 0 <= n <= 2_000_000 for n in value['tableCounts'].values())
+              and isinstance(value['taskCounts'], dict)
+              and set(value['taskCounts']) == {'pending', 'running', 'completed', 'failed', 'cancelled'}
+              and all(type(n) is int and 0 <= n <= 2_000_000 for n in value['taskCounts'].values())
+              and value['taskCounts']['pending'] == value['taskCounts']['running'] == 0
+              and sum(value['taskCounts'].values()) == value['tableCounts']['registration_tasks']
+              and all(type(value[n]) is int and value[n] == 0 for n in
+                      ('activeAppleLeaseCount', 'corruptEncryptedValueCount', 'businessActions')),
+              'API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED')
+    return value
+
+
+def workspace_private_inspect(d, directory, reference, volume, *, mode='inspect', expected=None, timeout=60):
+    values = d.environment_values(directory / '.env.aws.production')
+    key = values.get('FIELD_ENCRYPTION_KEY')
+    d.require(isinstance(key, str) and len(key) >= 32, 'API_ADMIN_WORKSPACE_SQLITE_KEY_UNAVAILABLE')
+    request = {'mode': mode, 'databasePath': WORKSPACE_DIRECTORY + '/database.db', 'encryptionKey': key}
+    if expected is not None:
+        request['expectedLogicalSha256'] = expected
+    try:
+        output = d.run('docker', 'run', '--rm', '-i', '--network', 'none', '--read-only',
+            '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',
+            '--mount', 'type=volume,source=' + volume + ',target=' + WORKSPACE_DIRECTORY + ',readonly',
+            '--entrypoint', '/opt/id-registration/venv/bin/python', reference, '-B',
+            '/app/' + WORKSPACE_SAFETY, timeout=timeout, input_data=json.dumps(request))
+        result = workspace_safety_result(d, json.loads(output))
+    except Exception:
+        raise RuntimeError('API_ADMIN_WORKSPACE_SQLITE_SAFETY_FAILED') from None
+    return result
+
+
+class WorkspaceSqliteProtection:
+    """A bounded writer fence, immutable encrypted backup and isolated restore proof."""
+
+    def __init__(self, d, previous, target, proof, args, *, legacy):
+        self.d, self.previous, self.target, self.proof, self.args = d, previous, target, proof, args
+        self.legacy, self.connection, self.marker_bytes = legacy, None, None
+        self.volume = workspace_volume(d, previous, attached=True)
+        meta = json.loads(d.run('docker', 'volume', 'inspect', self.volume['name']))[0]
+        self.root = Path(meta['Mountpoint'])
+        self.database = self.root / 'database.db'
+        self.marker = self.root / WORKSPACE_MAINTENANCE
+        self.summary = None
+        self.record = None
+        self.api_identity = workspace_api_identity(d, previous)
+
+    def summary_reader(self):
+        path = self.target / WORKSPACE_SAFETY
+        self.d.require(path.is_file() and not path.is_symlink(), 'API_ADMIN_WORKSPACE_SQLITE_HELPER_MISSING')
+        spec = importlib.util.spec_from_file_location('id_release_sqlite_safety', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.logical_summary
+
+    def lock(self):
+        self.deadline = time.monotonic() + 150
+        self.d.require(not self.marker.exists() and not self.marker.is_symlink(),
+                       'API_ADMIN_WORKSPACE_MAINTENANCE_EXISTS')
+        self.d.require(self.database.is_file() and not self.database.is_symlink()
+                       and stat.S_IMODE(self.database.stat().st_mode) == 0o600
+                       and all(not (self.root / ('database.db' + suffix)).is_symlink()
+                               for suffix in ('-wal', '-shm', '-journal')),
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_INVALID')
+        self.database_identity = (self.database.stat().st_dev, self.database.stat().st_ino)
+        try:
+            self.connection = sqlite3.connect(self.database.as_uri() + '?mode=rw', uri=True, timeout=2)
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.connection.set_progress_handler(lambda: int(time.monotonic() >= self.deadline), 10000)
+            self.d.require(self.connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)],
+                           'API_ADMIN_WORKSPACE_SQLITE_INTEGRITY_FAILED')
+            self.summary = self.summary_reader()(self.connection)
+            tasks = self.summary['taskCounts']
+            self.d.require(tasks['pending'] == tasks['running'] == 0
+                           and (not self.legacy or tasks['cancelled'] == 0),
+                           'API_ADMIN_WORKSPACE_TASK_ACTIVE')
+            if self.legacy:
+                self.legacy_proof = workspace_legacy_audit(self.d, self.previous, self.api_identity, deadline=self.deadline)
+            else:
+                self.legacy_proof = None
+            marker = {'version': 1, 'runId': self.args.run_id, 'runAttempt': self.args.run_attempt,
+                      'candidateCommit': self.args.commit, 'nonce': secrets.token_hex(32)}
+            self.marker_bytes = (json.dumps(marker, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            descriptor = os.open(self.marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(self.marker_bytes); stream.flush(); os.fsync(stream.fileno())
+            os.chown(self.marker, self.database.stat().st_uid, self.database.stat().st_gid)
+            self.marker_identity = (self.marker.stat().st_dev, self.marker.stat().st_ino)
+            self.check_locked()
+        except Exception:
+            self.close()
+            raise
+
+    def check_marker(self):
+        self.d.require(self.marker_bytes is not None and self.marker.is_file() and not self.marker.is_symlink()
+                       and stat.S_IMODE(self.marker.stat().st_mode) == 0o600
+                       and (self.marker.stat().st_dev, self.marker.stat().st_ino) == self.marker_identity
+                       and self.marker.read_bytes() == self.marker_bytes,
+                       'API_ADMIN_WORKSPACE_MAINTENANCE_CHANGED')
+
+    def check_locked(self):
+        self.check_marker()
+        self.d.require(time.monotonic() < self.deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+        self.d.require(self.connection is not None and self.connection.in_transaction
+                       and (self.database.stat().st_dev, self.database.stat().st_ino) == self.database_identity
+                       and not self.database.is_symlink()
+                       and self.summary_reader()(self.connection) == self.summary,
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        self.d.require(workspace_api_identity(self.d, self.previous, expected=self.api_identity,
+                       timeout=min(30, self.deadline - time.monotonic())) == self.api_identity,
+                       'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+        if self.legacy:
+            self.d.require(workspace_legacy_audit(self.d, self.previous, self.api_identity,
+                           deadline=self.deadline) == self.legacy_proof,
+                           'API_ADMIN_WORKSPACE_LEGACY_MUTATION_UNVERIFIED')
+
+    def backup_restore(self):
+        self.check_locked()
+        self.d.require(self.database.stat().st_size <= 256 * 1024**2
+                       and shutil.disk_usage(self.target).free > max(2 * 1024**3, self.database.stat().st_size * 4),
+                       'API_ADMIN_WORKSPACE_SQLITE_CAPACITY_FAILED')
+        backup_root = self.target / 'backups'
+        backup_root.mkdir(mode=0o700, exist_ok=True)
+        self.d.require(backup_root.is_dir() and not backup_root.is_symlink()
+                       and stat.S_IMODE(backup_root.stat().st_mode) == 0o700,
+                       'API_ADMIN_WORKSPACE_SQLITE_BACKUP_PATH_INVALID')
+        directory = backup_root / 'auto-registration'
+        directory.mkdir(mode=0o700)
+        backup = directory / 'database.db'
+        descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.close(descriptor)
+        deadline = min(self.deadline, time.monotonic() + 30)
+        def progress(*_):
+            self.d.require(time.monotonic() < deadline, 'API_ADMIN_WORKSPACE_SQLITE_BACKUP_TIMEOUT')
+        with closing(sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=2)) as source:
+            with closing(sqlite3.connect(backup)) as destination:
+                source.backup(destination, pages=256, progress=progress, sleep=0.01)
+                # A WAL source can transfer its journal flag. Seal the independent
+                # snapshot as a standalone database before mounting its restore read-only.
+                self.d.require(destination.execute('PRAGMA journal_mode=DELETE').fetchone() == ('delete',),
+                               'API_ADMIN_WORKSPACE_SQLITE_BACKUP_CHANGED')
+                self.d.require(destination.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+                               and self.summary_reader()(destination) == self.summary,
+                               'API_ADMIN_WORKSPACE_SQLITE_BACKUP_CHANGED')
+        with backup.open('rb') as stream:
+            os.fsync(stream.fileno())
+        name = 'id-sqlite-restore-' + self.args.run_id + '-' + self.args.run_attempt
+        self.d.require(re.fullmatch(r'id-sqlite-restore-[1-9][0-9]*-[1-9][0-9]*', name)
+                       and not self.d.run('docker', 'volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}'),
+                       'API_ADMIN_WORKSPACE_RESTORE_VOLUME_EXISTS')
+        self.d.run('docker', 'volume', 'create', '--label', 'id-business-v2.sqlite-restore=' + self.args.run_id + '-' + self.args.run_attempt, name)
+        try:
+            meta = json.loads(self.d.run('docker', 'volume', 'inspect', name))[0]
+            clone = Path(meta['Mountpoint'])
+            self.d.require(clone.is_absolute() and clone.resolve() == clone and clone.is_dir()
+                           and not clone.is_symlink() and not any(clone.iterdir()),
+                           'API_ADMIN_WORKSPACE_RESTORE_VOLUME_CHANGED')
+            clone.chmod(0o700)
+            original_stat = self.database.stat()
+            os.chown(clone, original_stat.st_uid, original_stat.st_gid)
+            cloned_db = clone / 'database.db'
+            descriptor = os.open(cloned_db, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
+            shutil.copyfile(backup, cloned_db)
+            cloned_db.chmod(0o600)
+            os.chown(cloned_db, original_stat.st_uid, original_stat.st_gid)
+            restored = workspace_private_inspect(self.d, self.previous, self.proof['images']['api']['reference'],
+                                                name, mode='restore', expected=self.summary['logicalSha256'],
+                                                timeout=max(0.1, min(60, self.deadline - time.monotonic())))
+            self.d.require(all(restored[key] == self.summary[key] for key in self.summary),
+                           'API_ADMIN_WORKSPACE_SQLITE_RESTORE_CHANGED')
+        finally:
+            meta = json.loads(self.d.run('docker', 'volume', 'inspect', name))[0]
+            self.d.require(meta.get('Name') == name and meta.get('Labels', {}).get('id-business-v2.sqlite-restore')
+                           == self.args.run_id + '-' + self.args.run_attempt,
+                           'API_ADMIN_WORKSPACE_RESTORE_VOLUME_CHANGED')
+            self.d.run('docker', 'volume', 'rm', name)
+        self.check_locked()
+        self.record = {'version': 1, 'volume': self.volume, 'backupName': 'backups/auto-registration/database.db',
+            'backupSha256': hashlib.sha256(backup.read_bytes()).hexdigest(), 'backupSize': backup.stat().st_size,
+            'sourceDatabaseIdentitySha256': fingerprint(self.database_identity),
+            'sourceApiIdentity': {k: v for k, v in self.api_identity.items() if k != 'startedAt'},
+            'candidateImageId': self.proof['images']['api']['imageId'], 'inspection': restored,
+            'legacyAudit': self.legacy_proof, 'sourceSummary': self.summary,
+            'maintenanceSha256': hashlib.sha256(self.marker_bytes).hexdigest(),
+            'restoreVerified': True, 'temporaryRestoreVolumeRemoved': True, 'volumeDeletionPerformed': False}
+        receipt = self.target / WORKSPACE_SQLITE_RECEIPT
+        with receipt.open('x') as stream:
+            json.dump(self.record, stream, sort_keys=True); stream.write('\n')
+        receipt.chmod(0o600)
+        return self.record
+
+    def stop_previous(self):
+        self.check_locked()
+        remaining = self.deadline - time.monotonic()
+        self.d.require(remaining > 35, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+        self.d.run('docker', 'stop', '--time', '30', self.api_identity['containerId'], timeout=min(45, remaining - 2))
+        remaining = self.deadline - time.monotonic()
+        self.d.require(remaining > 0, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+        value = json.loads(self.d.run('docker', 'inspect', self.api_identity['containerId'], timeout=min(15, remaining)))[0]
+        self.d.require(value.get('Id') == self.api_identity['containerId']
+                       and value.get('State', {}).get('Running') is False,
+                       'API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
+        self.close()
+
+    def finish(self):
+        self.check_marker()
+        current = workspace_private_inspect(self.d, self.target, self.proof['images']['api']['reference'],
+                                            self.volume['name'], expected=self.summary['logicalSha256'])
+        self.d.require(all(current[key] == self.summary[key] for key in self.summary),
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        self.check_marker()
+        self.marker.unlink()
+
+    def abort(self):
+        """Clear only our fence after the original image and unchanged, idle data are proven."""
+        self.close()
+        if self.marker_bytes is None:
+            return
+        self.check_marker()
+        self.d.require(not self.database.is_symlink()
+                       and (self.database.stat().st_dev, self.database.stat().st_ino) == self.database_identity,
+                       'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+        identity = workspace_api_identity(self.d, self.previous)
+        self.d.require(identity['image'] == self.api_identity['image'],
+                       'API_ADMIN_WORKSPACE_OLD_API_NOT_RESTORED')
+        deadline = time.monotonic() + 60
+        try:
+            self.connection = sqlite3.connect(self.database.as_uri() + '?mode=rw', uri=True, timeout=2)
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
+            self.d.require(self.summary_reader()(self.connection) == self.summary,
+                           'API_ADMIN_WORKSPACE_SQLITE_SOURCE_CHANGED')
+            if self.legacy:
+                workspace_legacy_audit(self.d, self.previous, identity, deadline=deadline)
+            else:
+                workspace_private_inspect(self.d, self.previous, identity['image'], self.volume['name'],
+                                          expected=self.summary['logicalSha256'],
+                                          timeout=max(0.1, min(30, deadline - time.monotonic())))
+            self.d.require(time.monotonic() < deadline, 'API_ADMIN_WORKSPACE_SQLITE_FENCE_TIMEOUT')
+            self.d.require(workspace_api_identity(self.d, self.previous, expected=identity,
+                           timeout=min(15, deadline - time.monotonic())) == identity,
+                           'API_ADMIN_WORKSPACE_API_IDENTITY_CHANGED')
+            self.check_marker()
+            self.marker.unlink()
+        finally:
+            self.close()
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.rollback(); self.connection.close(); self.connection = None
+
+
+def workspace_prepare(d, previous, target, proof, args, evidence, *, legacy):
+    if evidence['workspaceVolume']['status'] == 'ABSENT':
+        workspace_volume(d, previous, empty=True)
+        return None
+    volume = workspace_volume(d, previous, attached=True)
+    meta = json.loads(d.run('docker', 'volume', 'inspect', volume['name']))[0]
+    root = Path(meta['Mountpoint'])
+    if not (root / 'database.db').exists():
+        workspace_volume(d, previous, empty=True)
+        return None
+    gate = WorkspaceSqliteProtection(d, previous, target, proof, args, legacy=legacy)
+    try:
+        gate.lock()
+        gate.backup_restore()
+    except Exception as error:
+        gate.close()
+        code = str(error)
+        if not re.fullmatch(r'API_ADMIN_[A-Z0-9_]+', code):
+            code = 'API_ADMIN_WORKSPACE_SQLITE_PREPARATION_FAILED'
+        failure = RuntimeError(code)
+        failure.sqlite_gate = gate
+        raise failure from None
+    return gate
 
 
 def workspace_origin(d, directory, volume):
@@ -1631,269 +2195,6 @@ def workspace_origin(d, directory, volume):
               'API_ADMIN_WORKSPACE_UNUSED_ORIGIN_REQUIRED')
     d.require(workspace_origin(d, path, volume) == origin, 'API_ADMIN_WORKSPACE_UNUSED_ORIGIN_REQUIRED')
     return origin
-
-
-def workspace_empty_business(d, database):
-    """No data values are read; completed/deleted-looking task history is insufficient."""
-    d.require(database.is_file() and not database.is_symlink()
-              and database.stat().st_size < 16 * 1024**2
-              and all(not Path(str(database) + suffix).is_symlink() for suffix in ('-wal', '-shm', '-journal')),
-              'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
-    try:
-        with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=2) as connection:
-            connection.execute('PRAGMA query_only=ON')
-            names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            d.require(set(WORKSPACE_BUSINESS_TABLES) <= names
-                      and names <= set(WORKSPACE_BUSINESS_TABLES) | {'settings', 'sqlite_sequence'},
-                      'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
-            counts = [connection.execute('SELECT COUNT(*) FROM "' + name + '"').fetchone()[0]
-                      for name in WORKSPACE_BUSINESS_TABLES]
-            d.require(counts == [0] * len(WORKSPACE_BUSINESS_TABLES), 'API_ADMIN_WORKSPACE_ALREADY_USED')
-            d.require(connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)],
-                      'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
-    except sqlite3.Error:
-        raise RuntimeError('API_ADMIN_WORKSPACE_UNUSED_REQUIRED') from None
-
-
-WORKSPACE_AUDIT_QUERY = ("SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'auditCount',"
-    "(SELECT COUNT(*) FROM audit_logs WHERE module=CONVERT(0xe887aae58aa8e6b3a8e5868c USING utf8mb4)))")
-ONLINE_AUDIT_QUERY = ("SELECT JSON_OBJECT('connectionId',CONNECTION_ID(),'auditCount',"
-    "CAST(COALESCE(SUM(module=CONVERT(0xe887aae58aa8e6b3a8e5868c USING utf8mb4)),0) AS UNSIGNED),"
-    "'onlineAuditCount',CAST(COALESCE(SUM(module='online_recharge'),0) AS UNSIGNED),'tables',JSON_OBJECT("
-    + ','.join("'" + n + "',(SELECT COUNT(*) FROM `" + n + "`)" for n in ONLINE_TABLES) + ")) FROM audit_logs")
-
-
-def workspace_audit_probe(d, directory):
-    database = d.current_job_database(directory)
-    d.require(re.fullmatch(r'[a-zA-Z0-9_]{1,64}', database or ''), 'API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
-    # No log bodies, identity fields or credentials leave MySQL.
-    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
-        'mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
-        '"$MYSQL_DATABASE" -e "' + WORKSPACE_AUDIT_QUERY + '"', timeout=15)
-    value = json.loads(raw)
-    d.require(isinstance(value, dict) and set(value) == {'connectionId', 'auditCount'}
-              and type(value['connectionId']) is int and value['connectionId'] > 0
-              and type(value['auditCount']) is int and value['auditCount'] == 0,
-              'API_ADMIN_WORKSPACE_ALREADY_USED')
-    return {'auditCount': 0}
-
-
-def workspace_audit_protection(d, directory, database_identity=None):
-    """Inspect only immutable trigger definitions, never audit contents."""
-    files = (('DELETE', '20261002123500_routine_audit_retention_exception'),
-             ('UPDATE', '20260830182500_mysql_trigger_service_definers'))
-    expected = {}
-    for event, migration in files:
-        raw = (directory / MIGRATION_ROOT / migration / 'migration.sql').read_text()
-        name = 'idv2_audit_log_no_' + ('delete' if event == 'DELETE' else 'update')
-        body = raw.split('CREATE TRIGGER `' + name + '`', 1)[1].split('FOR EACH ROW', 1)[1]
-        body = body.split('END;', 1)[0] + 'END' if event == 'DELETE' else body.split(';', 1)[0]
-        expected[event] = ' '.join(body.split()).rstrip(';')
-    database = (workspace_database_identity(d, directory, database_identity)['database']
-                if database_identity is not None else d.current_job_database(directory))
-    query = ("SELECT JSON_ARRAYAGG(JSON_OBJECT('event',EVENT_MANIPULATION,'timing',ACTION_TIMING,"
-        "'statement',ACTION_STATEMENT)) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() "
-        "AND EVENT_OBJECT_TABLE='audit_logs'")
-    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
-        'mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
-        '"$MYSQL_DATABASE" -e "' + query + '"', timeout=15)
-    rows = json.loads(raw)
-    d.require(isinstance(rows, list) and len(rows) == 2
-              and all(isinstance(row, dict) and set(row) == {'event', 'timing', 'statement'}
-                      and row['timing'] == 'BEFORE' and isinstance(row['statement'], str) for row in rows)
-              and {row['event']: ' '.join(row['statement'].split()).rstrip(';') for row in rows} == expected,
-              'API_ADMIN_WORKSPACE_AUDIT_HISTORY_UNPROVEN')
-    return fingerprint(expected)
-
-
-def workspace_database_identity(d, directory, identity=None):
-    """Reuse only an identity measured live before stop, with unchanged MySQL/env."""
-    environment = hashlib.sha256((directory / '.env.aws.production').read_bytes()).hexdigest()
-    mysql = d.service_state(directory, 'mysql', include_container_id=True, include_environment_hash=True)
-    if identity is None:
-        return {'database': d.current_job_database(directory), 'environmentSha256': environment, 'mysql': mysql}
-    d.require(WORKSPACE and isinstance(identity, dict)
-              and set(identity) == {'database', 'environmentSha256', 'mysql'}
-              and re.fullmatch(r'[A-Za-z0-9_]{1,64}', identity['database'] or '')
-              and identity['environmentSha256'] == environment and identity['mysql'] == mysql
-              and mysql.get('status') == 'running' and mysql.get('health') == 'healthy',
-              'API_ADMIN_WORKSPACE_DATABASE_IDENTITY_CHANGED')
-    return identity
-
-
-class WorkspacePipe:
-    """Bounded private control transport; stderr and unsafe payloads stay suppressed."""
-    def __init__(self, command, deadline):
-        self.deadline = deadline
-        self.buffer = b''
-        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL)
-
-    def send(self, value):
-        if self.process.poll() is not None or time.monotonic() >= self.deadline:
-            raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_LOST')
-        try:
-            self.process.stdin.write(value.encode()); self.process.stdin.flush()
-        except (OSError, BrokenPipeError):
-            raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_LOST') from None
-
-    def read(self, timeout=12, limit=24 * 1024**2):
-        end = min(self.deadline, time.monotonic() + timeout)
-        while b'\n' not in self.buffer:
-            remaining = end - time.monotonic()
-            if remaining <= 0 or not select.select([self.process.stdout], [], [], remaining)[0]:
-                raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
-            chunk = os.read(self.process.stdout.fileno(), 65536)
-            if not chunk or len(self.buffer) + len(chunk) > limit:
-                raise RuntimeError('API_ADMIN_WORKSPACE_GUARD_LOST')
-            self.buffer += chunk
-        raw, self.buffer = self.buffer.split(b'\n', 1)
-        return json.loads(raw)
-
-    def close(self):
-        # An exited child still owns its parent's write descriptor.
-        try: self.process.stdin.close()
-        except (OSError, BrokenPipeError): pass
-        if self.process.poll() is None:
-            try: self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.process.terminate()
-                try: self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.process.kill(); self.process.wait(timeout=3)
-        self.process.stdout.close()
-
-
-class WorkspaceAuditBarrier:
-    def __init__(self, d, directory, database_identity=None, *, online=False):
-        self.d, self.directory, self.pipe, self.connection_id = d, directory, None, None
-        self.database_identity = database_identity
-        self.online = online
-        self.query = ONLINE_AUDIT_QUERY if online else WORKSPACE_AUDIT_QUERY
-
-    def __enter__(self):
-        database = (workspace_database_identity(self.d, self.directory, self.database_identity)['database']
-                    if self.database_identity is not None else self.d.current_job_database(self.directory))
-        self.d.require(re.fullmatch(r'[a-zA-Z0-9_]{1,64}', database or ''),
-                       'API_ADMIN_WORKSPACE_AUDIT_GUARD_FAILED')
-        state = self.d.service_state(self.directory, 'mysql', include_container_id=True)
-        self.pipe = WorkspacePipe(['docker', 'exec', '-i', '-e', 'MYSQL_DATABASE=' + database,
-            state['containerId'], 'sh', '-c',
-            'exec mysql --batch --raw --skip-column-names --unbuffered --skip-reconnect -u root '
-            '--password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'], time.monotonic() + (210 if self.online else 75))
-        try:
-            # Read lock blocks every future forward: all mutations await their durable audit first.
-            tables = ('audit_logs', *ONLINE_TABLES) if self.online else ('audit_logs',)
-            self.pipe.send('SET SESSION autocommit=0; SET SESSION lock_wait_timeout=10; '
-                           'SET SESSION wait_timeout=' + ('240' if self.online else '75') + '; LOCK TABLES '
-                           + ','.join('`' + name + '` READ' for name in tables) + '; ' + self.query + ';\n')
-            value = self.pipe.read(limit=4096)
-            self.connection_id = value.get('connectionId')
-            self.check(value)
-            return self
-        except Exception:
-            self.pipe.close(); raise
-
-    def check(self, value=None):
-        if value is None:
-            self.pipe.send(self.query + ';\n')
-            value = self.pipe.read(limit=4096)
-        self.d.require(isinstance(value, dict) and type(value.get('auditCount')) is int
-                       and (not self.online or (type(value.get('onlineAuditCount')) is int
-                            and isinstance(value.get('tables'), dict)
-                            and all(type(v) is int for v in value['tables'].values())))
-                       and type(self.connection_id) is int and self.connection_id > 0
-                       and value == {'connectionId': self.connection_id, 'auditCount': 0,
-                           **({'onlineAuditCount': 0, 'tables': {n: 0 for n in ONLINE_TABLES}} if self.online else {})}
-                       and self.pipe.process.poll() is None,
-                       'API_ADMIN_WORKSPACE_AUDIT_GUARD_LOST')
-
-    def before_stop(self):
-        self.check()
-        # 35s stop + 5s inspect + 12s same-connection read, with bounded margin.
-        self.d.require(time.monotonic() + 65 < self.pipe.deadline,
-                       'API_ADMIN_WORKSPACE_GUARD_TIMEOUT')
-
-    def __exit__(self, *unused):
-        self.pipe.close()
-
-
-# Executed using the OLD API's already installed Python/cryptography. The key stays
-# in its existing environment. Plaintext is SQLite memory only, never host stdout/disk.
-WORKSPACE_BACKUP_SOURCE = r'''
-import base64, hashlib, json, os, signal, sqlite3, sys, time
-from pathlib import Path
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-def check(value):
-    if not value: raise RuntimeError('workspace backup refused')
-def backup(database, field_key, aad):
-    end=time.monotonic()+12
-    connection=sqlite3.connect(database, timeout=2)
-    connection.execute('BEGIN IMMEDIATE')
-    try:
-        memory=sqlite3.connect(':memory:')
-        with sqlite3.connect(Path(database).as_uri()+'?mode=ro',uri=True,timeout=2) as reader:
-            def progress(*unused): check(time.monotonic()<end)
-            reader.backup(memory, pages=32, progress=progress, sleep=0.05)
-        tables=('accounts','email_services','registration_tasks','proxies','cpa_services','sub2api_services','tm_services')
-        names={r[0] for r in memory.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        check(set(tables)<=names and names<=set(tables)|{'settings','sqlite_sequence'})
-        check(all(memory.execute('SELECT COUNT(*) FROM "'+name+'"').fetchone()[0]==0 for name in tables))
-        check(memory.execute('PRAGMA integrity_check').fetchall()==[('ok',)])
-        plain=memory.serialize(); check(0<len(plain)<16*1024**2)
-        # The online backup contains every committed WAL page. Its standalone
-        # in-memory restore has no external WAL; change only the two format flags.
-        check(plain[:16]==b'SQLite format 3\0' and plain[18] in (1,2) and plain[19] in (1,2))
-        plain=plain[:18]+b'\x01\x01'+plain[20:]
-        key=hashlib.sha256(b'id-auto-registration-backup-v1\0'+field_key.encode()).digest()
-        nonce=os.urandom(12); cipher=AESGCM(key)
-        packed=b'IDWSBK1\0'+nonce+cipher.encrypt(nonce,plain,aad)
-        restored=cipher.decrypt(packed[8:20],packed[20:],aad)
-        verification=sqlite3.connect(':memory:'); verification.deserialize(restored)
-        check(verification.execute('PRAGMA integrity_check').fetchall()==[('ok',)])
-        check(hashlib.sha256(restored).digest()==hashlib.sha256(plain).digest())
-        verification.close(); memory.close()
-        return connection, {'databaseSha256':hashlib.sha256(plain).hexdigest(),
-            'ciphertextSha256':hashlib.sha256(packed).hexdigest(),'ciphertextBytes':len(packed),
-            'aadSha256':hashlib.sha256(aad).hexdigest(),'integrityVerified':True,'restoreVerified':True,
-            'ciphertext':base64.b64encode(packed).decode()}
-    except BaseException:
-        connection.close(); raise
-def main():
-    signal.alarm(70)
-    request=json.loads(sys.stdin.readline()); database=Path('/app/.runtime/auto-registration/database.db')
-    check(database.is_file() and not database.is_symlink() and database.stat().st_size<16*1024**2)
-    check(all(not Path(str(database)+suffix).is_symlink() for suffix in ('-wal','-shm','-journal')))
-    key=os.environ['FIELD_ENCRYPTION_KEY']; check(len(key)>=32)
-    connection,receipt=backup(str(database),key,request['aad'].encode())
-    try:
-        print(json.dumps(receipt),flush=True)
-        for line in sys.stdin:
-            check(json.loads(line)=={'check':True})
-            print('{"held":true}',flush=True)
-    finally:
-        connection.close()
-if __name__=='__main__':
-    try: main()
-    except BaseException: sys.exit(1)
-'''
-
-
-def workspace_prepare(d, directory, identity):
-    if identity['status'] == 'ABSENT':
-        return {'status': 'ABSENT', 'backupRequired': False}
-    value = json.loads(d.run('docker', 'volume', 'inspect', identity['name']))[0]
-    root = Path(value['Mountpoint'])
-    if not any(root.iterdir()):
-        return {'status': 'EMPTY', 'backupRequired': False}
-    context = getattr(d, '_workspaceOnlineOrigin', None)
-    origin = (workspace_origin(d, Path(context['workspaceOrigin']['release']), identity) if context is not None
-              else workspace_origin(d, directory, identity))
-    d.require(context is None or origin == context['workspaceOrigin'], 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-    workspace_audit_protection(d, directory)
-    workspace_audit_probe(d, directory)
-    workspace_empty_business(d, root / 'database.db')
-    return {'status': 'INITIALIZED_UNUSED', 'backupRequired': True, 'origin': origin}
 
 
 def workspace_backup_receipt(d, directory, record):
@@ -1937,150 +2238,58 @@ def workspace_backup_receipt(d, directory, record):
     return value
 
 
-def workspace_engine_idle(d, metadata):
-    script = ("require('/workspace/engine/healthcheck.cjs').check().then(v=>{"
-        "const out={ready:v.ready,mode:v.mode,activeTasks:v.activeTasks,stopping:v.stopping,rpcConnected:v.rpcConnected};"
-        "process.stdout.write(JSON.stringify(out))}).catch(()=>process.exit(1))")
-    value = json.loads(d.run('docker', 'exec', metadata['Id'], 'node', '-e', script, timeout=8))
-    d.require(value == {'ready': True, 'mode': 'enabled', 'activeTasks': 0, 'stopping': False, 'rpcConnected': True}
-              and type(value.get('activeTasks')) is int, 'API_ADMIN_ONLINE_ENGINE_NOT_IDLE')
-
-
-def workspace_stop_engine(d, directory, context, audit, changed=None):
-    api = workspace_api_metadata(d, directory)
-    metadata = workspace_engine_metadata(d, directory)
-    proof = json.loads((Path(context['release']) / 'online-recharge-build-proof.json').read_text())
-    engine = proof['images'][ONLINE_ENGINE]
-    bound_api = api['Id']
-    exited_api = False
-    if metadata['State']['Running'] is False and metadata.get('HostConfig', {}).get('NetworkMode') != 'container:' + bound_api:
-        d.require(workspace_online_files(d, Path(context['release'])) == context['files'],
-                  'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-        record = json.loads((Path(context['release']) / 'online-recharge-preservation.json').read_text())
-        bound_api = record['after']['api']['containerId']
-        d.require(re.fullmatch(r'[a-f0-9]{64}', bound_api or ''), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
-        exited_api = True
-    d.require(metadata.get('Image') == engine['imageId'] and metadata.get('Config', {}).get('Image') == engine['reference']
-              and metadata.get('Config', {}).get('Labels', {}).get('com.docker.compose.project')
-                  == api.get('Config', {}).get('Labels', {}).get('com.docker.compose.project')
-              and workspace_engine_configuration(d, metadata, bound_api, exited_api=exited_api)
-                  == context['engineConfigurationSha256'],
-              'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
-    if metadata['State']['Running']:
-        workspace_engine_idle(d, metadata)
-    else:
-        d.require(metadata['State'].get('Pid') == 0, 'API_ADMIN_ONLINE_ENGINE_NOT_STOPPED')
-    audit.before_stop()
-    if changed is not None and ONLINE_ENGINE not in changed:
-        changed.append(ONLINE_ENGINE)
-    d.compose(Path(context['release']), 'stop', '--timeout', '25', ONLINE_ENGINE, timeout=35)
-    stopped = json.loads(d.run('docker', 'inspect', metadata['Id'], timeout=5))[0]
-    d.require(stopped.get('Id') == metadata['Id'] and stopped.get('State', {}).get('Running') is False
-              and stopped['State'].get('Pid') == 0, 'API_ADMIN_ONLINE_ENGINE_NOT_STOPPED')
-    audit.check()
-
-
-def workspace_online_rebind(d, directory, context):
-    source = Path(context['release'])
-    metadata = workspace_engine_metadata(d, directory)
-    d.require(metadata['State'].get('Running') is False and metadata['State'].get('Pid') == 0,
-              'API_ADMIN_ONLINE_ENGINE_NOT_STOPPED')
-    # Remove only the confirmed exited container, without -v; creating it fresh
-    # avoids an unverifiable Compose replacement label. No data volume is removed.
-    d.compose(source, 'rm', '-f', ONLINE_ENGINE, timeout=15)
-    d.require(not d.compose(source, 'ps', '--all', '-q', ONLINE_ENGINE, timeout=10),
-              'API_ADMIN_ONLINE_ENGINE_NOT_STOPPED')
-    d.compose(source, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', ONLINE_ENGINE, timeout=90)
-    d.wait_healthy(source, ONLINE_ENGINE)
-    states = workspace_online_snapshot(d, directory)
-    proof = json.loads((source / 'online-recharge-build-proof.json').read_text())['images'][ONLINE_ENGINE]
-    d.require(states[ONLINE_ENGINE]['image'] == proof['imageId'] and states[ONLINE_ENGINE]['reference'] == proof['reference']
-              and states[ONLINE_ENGINE]['configurationSha256'] == context['engineConfigurationSha256'],
-              'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
-    workspace_engine_idle(d, workspace_engine_metadata(d, directory))
-
-
-def workspace_backup_stop(d, previous, target, identity, preparation, changed):
-    """Audit admission stays blocked until Docker confirms every old process exited."""
-    d.require(preparation.get('status') == 'INITIALIZED_UNUSED', 'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
-    state = d.service_state(previous, 'api', include_container_id=True)
-    pipe = None
-    context = getattr(d, '_workspaceOnlineOrigin', None)
-    with WorkspaceAuditBarrier(d, previous, online=context is not None) as audit:
-        try:
-            if context is not None:
-                workspace_audit_protection(d, previous)
-                workspace_stop_engine(d, previous, context, audit, changed)
-            d.require(workspace_volume(d, previous, attached=True) == identity,
-                      'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
-            aad = json.dumps({'volume': identity, 'origin': preparation['origin'],
-                             'release': str(target)}, sort_keys=True, separators=(',', ':'))
-            pipe = WorkspacePipe(['docker', 'exec', '-i', state['containerId'],
-                '/opt/id-registration/venv/bin/python', '-u', '-B', '-c', WORKSPACE_BACKUP_SOURCE],
-                time.monotonic() + 65)
-            pipe.send(json.dumps({'aad': aad}) + '\n')
-            receipt = pipe.read(timeout=18)
-            d.require(isinstance(receipt, dict) and set(receipt) == {'databaseSha256', 'ciphertextSha256',
-                'ciphertextBytes', 'aadSha256', 'integrityVerified', 'restoreVerified', 'ciphertext'},
-                'API_ADMIN_WORKSPACE_BACKUP_FAILED')
-            packed = base64.b64decode(receipt.pop('ciphertext'), validate=True)
-            d.require(packed.startswith(b'IDWSBK1\0') and 28 < len(packed) < 16*1024**2+64
-                      and receipt['ciphertextBytes'] == len(packed)
-                      and receipt['ciphertextSha256'] == hashlib.sha256(packed).hexdigest()
-                      and receipt['aadSha256'] == hashlib.sha256(aad.encode()).hexdigest()
-                      and receipt['integrityVerified'] is True and receipt['restoreVerified'] is True
-                      and re.fullmatch(r'[a-f0-9]{64}', receipt['databaseSha256']),
-                      'API_ADMIN_WORKSPACE_BACKUP_FAILED')
-            receipt.update(version=1, status='ENCRYPTED_VERIFIED', algorithm='AES-256-GCM',
-                volume=identity, origin=preparation['origin'], auditCount=0, businessRows=0,
-                admissionGuard='MYSQL_AUDIT_READ_LOCK', databaseRestored=False)
-            (target / WORKSPACE_BACKUP_FILE).write_bytes(packed)
-            (target / WORKSPACE_BACKUP_RECEIPT).write_text(json.dumps(receipt, indent=2) + '\n')
-            audit.check(); pipe.send('{"check":true}\n')
-            d.require(pipe.read(timeout=5, limit=4096) == {'held': True}, 'API_ADMIN_WORKSPACE_GUARD_LOST')
-            # Mark attempted before stop, so any stop failure restores the old API.
-            audit.before_stop()
-            if 'api' not in changed: changed.append('api')
-            d.compose(previous, 'stop', '--timeout', '25', 'api', timeout=35)
-            metadata = json.loads(d.run('docker', 'inspect', state['containerId'], timeout=5))[0]
-            d.require(metadata.get('Id') == state['containerId'] and metadata.get('State', {}).get('Running') is False
-                      and metadata['State'].get('Pid') == 0, 'API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
-            audit.check()
-            return receipt
-        finally:
-            if pipe is not None: pipe.close()
-
-
-def workspace_api_metadata(d, directory):
-    """Compose's normal ps omits stopped containers; read the selected project's sole API."""
-    identifier = d.compose(directory, 'ps', '--all', '-q', 'api', timeout=10)
-    d.require(isinstance(identifier, str) and re.fullmatch(r'[a-f0-9]{64}', identifier),
-              'API_ADMIN_WORKSPACE_API_CONTAINER_UNAVAILABLE')
-    rows = json.loads(d.run('docker', 'inspect', identifier, timeout=5))
-    d.require(isinstance(rows, list) and len(rows) == 1 and rows[0].get('Id') == identifier
-              and rows[0].get('Config', {}).get('Labels', {}).get('com.docker.compose.service') == 'api'
-              and type(rows[0].get('State', {}).get('Running')) is bool,
-              'API_ADMIN_WORKSPACE_API_CONTAINER_UNAVAILABLE')
-    return rows[0]
-
-
-def workspace_rollback_stop(d, directory, database_identity=None):
-    """Do not interrupt a new accepted task, even when its SQLite row is absent."""
-    context = getattr(d, '_workspaceOnlineOrigin', None)
-    with WorkspaceAuditBarrier(d, directory, database_identity, online=context is not None) as audit:
-        if context is not None:
-            workspace_audit_protection(d, directory, database_identity)
-            workspace_stop_engine(d, directory, context, audit)
-        api = workspace_api_metadata(d, directory)
-        volume = workspace_volume(d, directory, attached=True, api_metadata=api)
-        info = json.loads(d.run('docker', 'volume', 'inspect', volume['name']))[0]
-        workspace_empty_business(d, Path(info['Mountpoint']) / 'database.db')
-        audit.before_stop()
-        d.compose(directory, 'stop', '--timeout', '25', 'api', timeout=35)
-        metadata = json.loads(d.run('docker', 'inspect', api['Id'], timeout=5))[0]
-        d.require(metadata.get('Id') == api['Id'] and metadata.get('State', {}).get('Running') is False
-                  and metadata['State'].get('Pid') == 0, 'API_ADMIN_WORKSPACE_OLD_API_NOT_STOPPED')
-        audit.check()
+def workspace_sqlite_receipt(d, directory, proof, record, manifest):
+    digest = manifest['apiWorkspacePublication'].get('sqliteProtectionSha256')
+    if digest is None:
+        d.require('sqliteProtectionSha256' not in record, 'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+        return None
+    path = directory / WORKSPACE_SQLITE_RECEIPT
+    d.require(isinstance(digest, str) and re.fullmatch(r'[a-f0-9]{64}', digest)
+              and record.get('sqliteProtectionSha256') == digest and path.is_file() and not path.is_symlink()
+              and stat.S_IMODE(path.stat().st_mode) == 0o600 and path.stat().st_size < 16384,
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    value = json.loads(path.read_bytes())
+    fields = {'version', 'volume', 'backupName', 'backupSha256', 'backupSize', 'sourceDatabaseIdentitySha256',
+              'sourceApiIdentity', 'candidateImageId', 'inspection', 'legacyAudit', 'sourceSummary',
+              'maintenanceSha256', 'restoreVerified', 'temporaryRestoreVolumeRemoved', 'volumeDeletionPerformed'}
+    d.require(isinstance(value, dict) and set(value) == fields and fingerprint(value) == digest
+              and value['version'] == 1 and type(value['version']) is int
+              and value['volume'] == record['workspaceVolumeBefore'] == record['workspaceVolumeAfter']
+              and value['candidateImageId'] == proof['images']['api']['imageId']
+              and value['backupName'] == 'backups/auto-registration/database.db'
+              and type(value['backupSize']) is int and 0 < value['backupSize'] <= 256 * 1024**2
+              and value['restoreVerified'] is True and value['temporaryRestoreVolumeRemoved'] is True
+              and value['volumeDeletionPerformed'] is False
+              and all(isinstance(value[name], str) and re.fullmatch(r'[a-f0-9]{64}', value[name])
+                      for name in ('backupSha256', 'sourceDatabaseIdentitySha256', 'maintenanceSha256')),
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    inspection = workspace_safety_result(d, value['inspection'])
+    d.require(value['sourceSummary'] == {k: inspection[k] for k in
+              ('schemaSha256', 'logicalSha256', 'tableCounts', 'taskCounts')},
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    identity = value['sourceApiIdentity']
+    d.require(isinstance(identity, dict) and set(identity) == {'containerId', 'image', 'startedAtSha256'}
+              and isinstance(identity['containerId'], str) and re.fullmatch(r'[a-f0-9]{64}', identity['containerId'])
+              and identity['image'] == record['before']['api']['image']
+              and identity['containerId'] == record['before']['api']['containerId']
+              and identity['startedAtSha256'] == record['before']['api']['startedAtSha256'],
+              'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    if value['legacyAudit'] is not None:
+        d.require(value['legacyAudit'] == {'legacyMutationCount': 0, 'containerId': identity['containerId'],
+                  'startedAtSha256': identity['startedAtSha256']} and inspection['taskCounts']['cancelled'] == 0,
+                  'API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
+    backup = directory / value['backupName']
+    d.require(backup.parent.parent.is_dir() and not backup.parent.parent.is_symlink()
+              and stat.S_IMODE(backup.parent.parent.stat().st_mode) == 0o700
+              and backup.parent.is_dir() and not backup.parent.is_symlink()
+              and stat.S_IMODE(backup.parent.stat().st_mode) == 0o700
+              and backup.is_file() and not backup.is_symlink()
+              and stat.S_IMODE(backup.stat().st_mode) == 0o600
+              and backup.stat().st_size == value['backupSize']
+              and hashlib.sha256(backup.read_bytes()).hexdigest() == value['backupSha256'],
+              'API_ADMIN_WORKSPACE_SQLITE_BACKUP_CHANGED')
+    return {'backupVerified': True, 'restoreVerified': True, 'sqliteProtectionSha256': digest,
+            'backupSha256': value['backupSha256'], 'backupSize': value['backupSize']}
 
 
 def workspace_acceptance(d, reference, run_id, attempt):
@@ -2253,12 +2462,6 @@ def migration_successor_guard(d, directory, context):
         projected = online.historical_controller(d, directory, recovery['source'])
         projected._pendingOnlineHistoryProjected = True
         return migration_successor_guard(projected, Path(pending['baselineRelease']), context)
-    online_origin = getattr(d, '_workspaceOnlineOrigin', None)
-    if online_origin is not None and not getattr(d, '_workspaceOnlineHistoryProjected', False):
-        online, _ = d.online_recharge_scope()
-        projected = online.historical_controller(d, directory, Path(online_origin['release']))
-        projected._workspaceOnlineHistoryProjected = True
-        return migration_successor_guard(projected, Path(online_origin['workspaceOrigin']['release']), context)
     fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256',
               'migration', 'migrationState', 'task', 'guards'}
     d.require(SCOPE in ('API_ADMIN', 'API_ADMIN_WORKSPACE') and isinstance(context, dict) and set(context) == fields
@@ -2696,7 +2899,7 @@ def worker_content(rows):
 def snapshot(d, directory):
     d.require(set(d.production_services(directory)) == set(d.ALL_SERVICES), 'API_ADMIN_SPLIT_WORKERS_REQUIRED')
     states = {}
-    for service in d.ALL_SERVICES:
+    for service in workspace_service_names(d, directory):
         row = d.service_state(directory, service, include_container_id=True, include_environment_hash=True)
         metadata = json.loads(d.run('docker', 'inspect', row['containerId']))[0]
         d.require(metadata['Id'] == row['containerId'] and metadata['Image'] == row['image'],
@@ -2715,6 +2918,9 @@ def snapshot(d, directory):
     d.require(all(row['status'] == 'running' for row in states.values())
               and all(row['health'] == 'healthy' for name, row in states.items() if name != 'caddy'),
               'API_ADMIN_SERVICE_UNHEALTHY')
+    if ONLINE_SERVICE in states:
+        binding = online_binding(d, directory, states)
+        states[ONLINE_SERVICE]['configurationSha256'] = binding['configurationSha256']
     return states
 
 
@@ -3560,31 +3766,12 @@ def baseline(d, expected, *, check_jobs=True):
             d._pendingOnlineMigrationOrigin = pending
         elif hasattr(d, '_pendingOnlineMigrationOrigin'):
             del d._pendingOnlineMigrationOrigin
-        online_origin = None
-        if manifest.get('onlineRechargePublication'):
-            online_origin = workspace_online_first(d, previous, manifest)
-        elif manifest.get('apiWorkspacePublication', {}).get('version') == 3:
-            # This finite extension admits one publication after the first
-            # ONLINE_RECHARGE release, plus its readback. Further publication
-            # chains need a separately verified baseline; they are not inferred.
-            d.require(WORKSPACE and not check_jobs, 'API_ADMIN_ONLINE_SUCCESSOR_BASELINE_NOT_SUPPORTED')
-            record = json.loads((previous / STATE_FILE).read_text())
-            online_origin = workspace_online_origin(d, previous, record.get('onlineOrigin'))
-        else:
-            compose_source = previous / CONFIG_FILES[0]
-            d.require(not compose_source.is_file() or b'online_recharge_data:/app/.runtime/online-recharge'
-                      not in compose_source.read_bytes(),
-                      'API_ADMIN_ONLINE_FIRST_PUBLICATION_REQUIRED')
-        if online_origin is not None:
-            d._workspaceOnlineOrigin = online_origin
-        elif hasattr(d, '_workspaceOnlineOrigin'):
-            del d._workspaceOnlineOrigin
         stage = 'SNAPSHOT'
-        states = workspace_online_snapshot(d, previous) if online_origin is not None else snapshot(d, previous)
+        states = snapshot(d, previous)
         if not WORKSPACE:
             d.require(not workspace_existing(d, previous), 'API_ADMIN_WORKSPACE_SCOPE_REQUIRED')
         stage = 'IMAGES'
-        for service in d.SERVICES:
+        for service in (*d.SERVICES, *((ONLINE_SERVICE,) if ONLINE_SERVICE in states else ())):
             row = manifest.get('images', {}).get(service, {})
             d.require(row.get('reference') == states[service]['reference']
                       and row.get('digest') == states[service]['image'], 'API_ADMIN_BASELINE_IMAGE_CHANGED')
@@ -3595,11 +3782,13 @@ def baseline(d, expected, *, check_jobs=True):
         source = {'imageId': metadata['Id'], 'revision': labels['org.opencontainers.image.revision']}
         stage = 'PROJECTION'
         migration_origin = None
+        online_context = None
         if manifest.get('onlineRechargePublication'):
-            record = json.loads((previous / 'online-recharge-preservation.json').read_text())
-            migration_origin = record['baselineEvidence'].get('migrationOrigin')
-            if migration_origin is not None: migration_successor_guard(d, previous, migration_origin)
-            source['kind'] = 'VERIFIED_ONLINE_FIRST_PUBLICATION'
+            d.require(WORKSPACE, 'API_ADMIN_SCOPE_CONFLICT')
+            online_context = online_origin(d, previous, manifest, states)
+            online_record = json.loads((previous / online_reader(d).STATE_FILE).read_text())
+            migration_origin = online_record['baselineEvidence'].get('migrationOrigin')
+            source['kind'] = 'VERIFIED_ONLINE_RECHARGE_ORIGIN'
         elif manifest.get('apiAdminMigrationPublication'):
             if SCOPE in ('API_ADMIN', 'API_ADMIN_WORKSPACE'):
                 migration_origin = migration_successor_origin(d, previous)
@@ -3643,22 +3832,25 @@ def baseline(d, expected, *, check_jobs=True):
                 record = json.loads((previous / STATE_FILE).read_text())
                 publication = manifest['apiWorkspacePublication']
                 version = publication.get('version')
-                d.require(version in (1, 2, 3, 4) and type(version) is int
-                          and (version in (2, 3, 4) or expected == WORKSPACE_BOOTSTRAP_COMMIT)
+                d.require(type(version) is int and version in (1, 4)
                           and (version != 4 or pending is not None)
                           and (pending_marker is None or version == 4),
                           'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
-                receipt = workspace_backup_receipt(d, previous, record) if version in (2, 3, 4) else None
+                receipt = (workspace_backup_receipt(d, previous, record)
+                    if version == 4 and 'workspaceBackupSha256' in publication else None)
+                d.require(version != 4 or ((receipt is not None) != ('sqliteProtectionSha256' in publication)),
+                          'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
                 d.require(publication == {'version': version, 'scope': SCOPE,
                     'buildProofSha256': fingerprint(proof), 'workersPublished': False, 'cacheStatus': 'SKIPPED',
                     'configurationChanged': version != 4, 'volume': record.get('workspaceVolumeAfter'),
                     'volumeDeletionPerformed': False,
-                    **({'workspaceBackupSha256': fingerprint(receipt)} if version in (2, 3, 4) else {}),
-                    **({'preservedOnlineOrigin': online_successor_marker(online_origin),
-                        'onlineEngineRebound': True} if version == 3 else {}),
+                    **({'sqliteProtectionSha256': record['sqliteProtectionSha256']}
+                       if 'sqliteProtectionSha256' in record else {}),
+                    **({'workspaceBackupSha256': fingerprint(receipt)} if receipt is not None else {}),
                     **({'pendingOnlineMigration': pending_online_publication_marker(d, previous, pending),
                         'onlinePublished': False, 'migrationPerformed': False} if version == 4 else {})},
                     'API_ADMIN_WORKSPACE_PROVENANCE_CHANGED')
+                workspace_sqlite_receipt(d, previous, proof, record, manifest)
                 if version == 4:
                     d.require(manifest.get('servicesUpdated') == ['api', 'admin']
                               and manifest.get('migrationApplied') is False and manifest.get('newMigrations') == []
@@ -3677,6 +3869,28 @@ def baseline(d, expected, *, check_jobs=True):
                 workspace_probe_step(d, 'CURRENT_RECORD')
                 record = json.loads((previous / STATE_FILE).read_text())
             source['kind'] = 'API_WORKSPACE_BUILD_PROVEN' if manifest.get('apiWorkspacePublication') else 'API_ADMIN_BUILD_PROVEN'
+            if WORKSPACE and (manifest.get('preservedOnlineRechargeOrigin') is not None
+                              or record.get('onlineRechargeOrigin') is not None):
+                online_context = record.get('onlineRechargeOrigin')
+                online_origin_guard(d, previous, online_context)
+                d.require(manifest.get('preservedOnlineRechargeOrigin') == online_marker(online_context),
+                          'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+                predecessor = Path(manifest.get('previousRelease', ''))
+                d.require(predecessor.parent == d.BASE / 'releases' and not predecessor.is_symlink()
+                    and predecessor.is_dir(), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+                predecessor_manifest = json.loads((predecessor / 'release-manifest.json').read_text())
+                d.require(predecessor_manifest.get('commit') == manifest.get('previousCommit')
+                    and hashlib.sha256((predecessor / 'release-manifest.json').read_bytes()).hexdigest()
+                        == manifest.get('previousManifestSha256') == record['baselineEvidence']['manifestSha256']
+                    and record['baselineEvidence'].get('onlineRechargeOrigin') == online_context,
+                    'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+                if predecessor_manifest.get('onlineRechargePublication'):
+                    d.require(predecessor == Path(online_context['release']), 'API_ADMIN_ONLINE_ORIGIN_CHANGED')
+                else:
+                    d.require(predecessor_manifest.get('apiWorkspacePublication') is not None
+                        and predecessor_manifest.get('preservedOnlineRechargeOrigin') == online_marker(online_context)
+                        and json.loads((predecessor / STATE_FILE).read_text()).get('onlineRechargeOrigin') == online_context,
+                        'API_ADMIN_ONLINE_ORIGIN_CHANGED')
             predecessor = Path(manifest.get('previousRelease', ''))
             predecessor_origin = None
             if predecessor.parent == d.BASE / 'releases' and (predecessor / 'release-manifest.json').is_file():
@@ -3688,7 +3902,7 @@ def baseline(d, expected, *, check_jobs=True):
             if (manifest.get('preservedMigrationOrigin') or record.get('migrationOrigin')
                     or predecessor_origin is not None or manifest.get('previousCommit') == MIGRATION_SUCCESSOR_COMMIT):
                 migration_origin = record.get('migrationOrigin')
-                migration_successor_guard(d, previous, migration_origin)
+                preserved_migration_guard(d, previous, migration_origin, online_context)
                 d.require(manifest.get('preservedMigrationOrigin') == migration_successor_marker(migration_origin),
                           'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
                 d.require(predecessor_origin is None or predecessor_origin == manifest['preservedMigrationOrigin'],
@@ -3747,28 +3961,32 @@ def baseline(d, expected, *, check_jobs=True):
         if check_jobs:
             d.require(free_bytes > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         stage = 'JOBS'
+        d.require((ONLINE_SERVICE in states) is (online_context is not None), 'API_ADMIN_ONLINE_ORIGIN_REQUIRED')
         guards = jobs_idle(d, previous) if check_jobs else None
+        if check_jobs and online_context is not None:
+            online_idle(d, previous)
         workspace_state = workspace_volume(d, previous,
-                                            attached=bool(manifest.get('apiWorkspacePublication'))) if WORKSPACE else None
-        preparation = workspace_prepare(d, previous, workspace_state) if WORKSPACE and check_jobs else None
-        if online_origin is not None:
-            d.require(states[ONLINE_ENGINE]['configurationSha256'] == online_origin['engineConfigurationSha256'],
-                      'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
-            if check_jobs:
-                d.require(preparation.get('status') == 'INITIALIZED_UNUSED' and preparation.get('backupRequired') is True,
-                          'API_ADMIN_ONLINE_WORKSPACE_BACKUP_REQUIRED')
-                workspace_audit_protection(d, previous)
-                with WorkspaceAuditBarrier(d, previous, online=True) as guard:
-                    workspace_engine_idle(d, workspace_engine_metadata(d, previous))
-                    guard.check()
+                                            attached=bool(manifest.get('apiWorkspacePublication') or online_context)) if WORKSPACE else None
+        if WORKSPACE and check_jobs:
+            legacy = 'sqliteProtectionSha256' not in manifest.get('apiWorkspacePublication', {})
+            workspace_idle(d, previous, legacy=legacy)
+            if workspace_state['status'] == 'PRESENT':
+                root = Path(json.loads(d.run('docker', 'volume', 'inspect', workspace_state['name']))[0]['Mountpoint'])
+                if (root / 'database.db').exists():
+                    d.require(not (root / WORKSPACE_MAINTENANCE).exists()
+                              and not (root / WORKSPACE_MAINTENANCE).is_symlink(),
+                              'API_ADMIN_WORKSPACE_MAINTENANCE_EXISTS')
+                    if legacy:
+                        workspace_legacy_audit(d, previous)
+                    else:
+                        workspace_private_inspect(d, previous, states['api']['reference'], workspace_state['name'])
         if REGISTRATION and check_jobs:
             require_registration_handoff(d, previous, manifest)
         migration_state = migration_database_state(d, previous) if MIGRATION_MODE else None
         stage = 'SNAPSHOT'
         d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_POINTER_MOVED')
         d.require((previous / 'release-manifest.json').read_bytes() == raw, 'API_ADMIN_BASELINE_MANIFEST_CHANGED')
-        d.require((workspace_online_snapshot(d, previous) if online_origin is not None else snapshot(d, previous))
-                  == states, 'API_ADMIN_BASELINE_SERVICES_CHANGED')
+        d.require(snapshot(d, previous) == states, 'API_ADMIN_BASELINE_SERVICES_CHANGED')
         evidence = {'manifestSha256': hashlib.sha256(raw).hexdigest(),
             'environmentSha256': hashlib.sha256((previous / '.env.aws.production').read_bytes()).hexdigest(),
             'apiSource': source, 'guards': guards, 'freeBytes': free_bytes}
@@ -3778,10 +3996,8 @@ def baseline(d, expected, *, check_jobs=True):
             evidence['migrationOrigin'] = migration_origin
         if WORKSPACE:
             evidence['workspaceVolume'] = workspace_state
-            if check_jobs:
-                evidence['workspacePreparation'] = preparation
-        if online_origin is not None:
-            evidence.update(onlineOrigin=online_origin, onlineSuccessorVerified=True, observedServiceCount=8)
+            if online_context is not None:
+                evidence['onlineRechargeOrigin'] = online_context
         if pending is not None:
             if check_jobs and pending_marker is not None:
                 pending = pending_online_successor(d, pending, previous, manifest, raw, proof, states)
@@ -3841,7 +4057,7 @@ def configuration_hashes(directory):
             for name in (*CONFIG_FILES, 'compose.release.json')}
 
 
-def require_preserved(d, previous, release, before, environment, *, all_services=False):
+def require_preserved(d, previous, release, before, environment, *, all_services=False, online_context=None):
     d.require((previous / '.env.aws.production').read_bytes() == environment
               and (release / '.env.aws.production').read_bytes() == environment,
               'API_ADMIN_ENVIRONMENT_CHANGED')
@@ -3853,21 +4069,21 @@ def require_preserved(d, previous, release, before, environment, *, all_services
         d.require((previous / name).read_bytes() == (release / name).read_bytes(), 'API_ADMIN_CONFIG_OR_SCHEMA_CHANGED')
     if WORKSPACE:
         workspace_configuration(d, previous, release)
-    online = ONLINE_ENGINE in before
     pending = getattr(d, '_pendingOnlineMigrationOrigin', None)
-    updated = ('api', 'admin') if pending is not None else ONLINE_UPDATED if online else UPDATED
+    updated = ('api', 'admin') if pending is not None else UPDATED
     if pending is not None:
-        d.require(not online and WORKSPACE, 'API_ADMIN_PENDING_ONLINE_SCOPE_CHANGED')
+        d.require(ONLINE_SERVICE not in before and WORKSPACE and online_context is None,
+                  'API_ADMIN_PENDING_ONLINE_SCOPE_CHANGED')
         pending_online_guard(d, previous, pending, all_services=all_services)
         before_migration = pending_online_migrations(d, previous)
         after_migration = pending_online_migrations(d, release)
-    if online:
-        workspace_online_sources(d, previous)
-        workspace_online_sources(d, release)
+    if WORKSPACE and online_context is not None:
+        online_source_guard(d, previous)
+        online_source_guard(d, release)
         d.require(all((previous / name).is_file() and not (previous / name).is_symlink()
-                      and (release / name).is_file() and not (release / name).is_symlink()
-                      and (previous / name).read_bytes() == (release / name).read_bytes()
-                      for name in ONLINE_ADMISSION_FILES), 'API_ADMIN_ONLINE_ADMISSION_SOURCE_CHANGED')
+                  and (release / name).is_file() and not (release / name).is_symlink()
+                  and (previous / name).read_bytes() == (release / name).read_bytes()
+                  for name in ONLINE_ADMISSION_FILES), 'API_ADMIN_ONLINE_ADMISSION_SOURCE_CHANGED')
     if MIGRATION_MODE:
         migration_source_check(d, previous, candidate=False)
         migration_source_check(d, release)
@@ -3877,13 +4093,16 @@ def require_preserved(d, previous, release, before, environment, *, all_services
                   'API_ADMIN_PENDING_ONLINE_MIGRATION_SCOPE_CHANGED')
     else:
         d.require(d.migration_plan(previous, release) == [], 'API_ADMIN_MIGRATIONS_FORBIDDEN')
-    states = workspace_online_snapshot(d, previous) if online else snapshot(d, previous)
-    d.require(all(states[name] == before[name] for name in before if all_services or name not in updated),
+    states = snapshot(d, previous)
+    d.require(all(states[name] == before[name] for name in before
+                  if all_services or name not in (*updated, *((ONLINE_SERVICE,) if online_context is not None else ()))),
               'API_ADMIN_PRESERVED_CONTAINER_CHANGED')
-    if online:
-        d.require(all(states[ONLINE_ENGINE][n] == before[ONLINE_ENGINE][n]
-                      for n in ('image', 'reference', 'environmentSha256', 'configurationSha256')),
-                  'API_ADMIN_ONLINE_ENGINE_CONFIGURATION_CHANGED')
+    if ONLINE_SERVICE in before:
+        d.require(online_context is not None, 'API_ADMIN_ONLINE_ORIGIN_REQUIRED')
+        binding = online_binding(d, release, states)
+        d.require(all(binding[n] == online_context['binding'][n] for n in
+            ('image', 'reference', 'environmentSha256', 'configurationSha256', 'volumeIdentitySha256')),
+            'API_ADMIN_ONLINE_RUNTIME_CHANGED')
     if WORKSPACE:
         d.require(all(states['caddy'][name] == before['caddy'][name]
                       for name in ('image', 'reference', 'environmentSha256')),
@@ -3937,24 +4156,26 @@ def readback(d, expected, *, check_task=True):
     previous, manifest, states, evidence = baseline(d, expected, check_jobs=False)
     record = json.loads((previous / STATE_FILE).read_text())
     proof = validate_proof(d, json.loads((previous / PROOF_FILE).read_text()), expected, manifest['sourceTree'])
-    online_origin = evidence.get('onlineOrigin')
+    retained_online = evidence.get('onlineRechargeOrigin')
     pending = evidence.get('pendingOnlineMigrationOrigin')
     if pending is not None:
-        d.require(proof.get('pendingOnlineOriginSha256') == fingerprint(pending),
+        d.require(retained_online is None and proof.get('pendingOnlineOriginSha256') == fingerprint(pending),
                   'API_ADMIN_PENDING_ONLINE_BUILD_ORIGIN_CHANGED')
-    updated = ('api', 'admin') if pending is not None else ONLINE_UPDATED if online_origin is not None else UPDATED
+    updated = ('api', 'admin') if pending is not None else UPDATED
     d.require(manifest.get('servicesUpdated') == list(updated)
               and manifest.get('migrationApplied') is (True if MIGRATION_MODE else False)
               and manifest.get('newMigrations') == ([MIGRATION_FILE] if MIGRATION_MODE else [])
               and record['buildProofSha256'] == fingerprint(proof)
               and evidence['environmentSha256'] == record['environmentSha256']
-              and all(states[name] == record['before'][name] for name in states if name not in updated),
+              and all(states[name] == record['before'][name] for name in states
+                  if name not in (*updated, *((ONLINE_SERVICE,) if retained_online is not None else ()))),
               'API_ADMIN_READBACK_PRESERVATION_FAILED')
     origin = Path(manifest['previousRelease'])
     d.require(origin.parent == d.BASE / 'releases'
               and configuration_hashes(previous) == record['configurationAfter']
               and configuration_hashes(origin) == record['configurationBefore'], 'API_ADMIN_READBACK_CONFIG_CHANGED')
-    require_preserved(d, origin, previous, record['before'], (previous / '.env.aws.production').read_bytes())
+    require_preserved(d, origin, previous, record['before'], (previous / '.env.aws.production').read_bytes(),
+                      **({'online_context': retained_online} if retained_online is not None else {}))
     workspace = {}
     if WORKSPACE:
         volume = workspace_volume(d, previous, attached=True)
@@ -3965,7 +4186,26 @@ def readback(d, expected, *, check_task=True):
         workspace = {'workspaceVolume': volume, 'volumePreserved': True, 'volumeDeletionPerformed': False,
                      'offlineAcceptance': proof['acceptance'], 'registrationHealthChecked': True,
                      'publicOrigin': workspace_public_origin(d, previous)}
-        if manifest['apiWorkspacePublication'].get('version') in (2, 3, 4):
+        sqlite_protection = workspace_sqlite_receipt(d, previous, proof, record, manifest)
+        if sqlite_protection is not None:
+            workspace['sqliteProtection'] = sqlite_protection
+        if retained_online is not None:
+            binding = online_binding(d, previous, states)
+            rebind = record.get('onlineNetworkRebind')
+            d.require(isinstance(rebind, dict) and set(rebind) == {'version', 'before', 'after', 'sqlFence', 'businessActions'}
+                and type(rebind['version']) is int and rebind['version'] == 1
+                and type(rebind['businessActions']) is int and rebind['businessActions'] == 0
+                and rebind['after'] == binding and rebind['before']['containerId'] == record['before'][ONLINE_SERVICE]['containerId']
+                and rebind['before']['apiContainerId'] == record['before']['api']['containerId']
+                and rebind['before']['containerId'] != binding['containerId']
+                and rebind['before']['startedAtSha256'] != binding['startedAtSha256']
+                and all(rebind['before'][n] == binding[n] for n in
+                    ('image', 'reference', 'environmentSha256', 'configurationSha256', 'volumeIdentitySha256')),
+                'API_ADMIN_ONLINE_REBIND_RECEIPT_CHANGED')
+            online_fence_receipt(d, rebind['sqlFence'])
+            workspace.update(preservedOnlineRechargeOrigin=online_marker(retained_online),
+                             servicesRebound=[ONLINE_SERVICE], onlineNetworkRebind=rebind)
+        if manifest['apiWorkspacePublication'].get('version') == 4 and 'sqliteProtectionSha256' not in manifest['apiWorkspacePublication']:
             receipt = workspace_backup_receipt(d, previous, record)
             workspace.update(workspaceBackup=receipt, workspaceBackupVerified=True)
     d.require(audit_receipt(d, previous / 'before-audit.json') == manifest['dataAuditBefore']
@@ -3973,8 +4213,7 @@ def readback(d, expected, *, check_task=True):
               and manifest['dataAuditBefore']['checksSha256'] == manifest['dataAuditAfter']['checksSha256'],
               'API_ADMIN_READBACK_AUDIT_CHANGED')
     verify_running(d, previous, proof)
-    d.require((workspace_online_snapshot(d, previous) if online_origin is not None else snapshot(d, previous)) == states
-              and (d.BASE / 'current').resolve() == previous,
+    d.require(snapshot(d, previous) == states and (d.BASE / 'current').resolve() == previous,
               'API_ADMIN_READBACK_MOVED')
     if REGISTRATION and check_task:
         jobs_idle(d, previous)
@@ -3985,7 +4224,7 @@ def readback(d, expected, *, check_task=True):
         d.require(check_task and record.get('migrationOrigin') == retained_origin
                   and manifest.get('preservedMigrationOrigin') == migration_successor_marker(retained_origin),
                   'API_ADMIN_MIGRATION_ORIGIN_CHANGED')
-        migration_successor_guard(d, previous, retained_origin)
+        preserved_migration_guard(d, previous, retained_origin, retained_online)
         backup = json.loads((previous / 'backup-verification.json').read_text())
         d.require(backup.get('name') == manifest.get('backupBeforeRelease') and backup.get('s3Verified') is True
                   and type(backup.get('size')) is int and backup['size'] > 0
@@ -4012,19 +4251,11 @@ def readback(d, expected, *, check_task=True):
                      'migrationApplied': True, 'migrationPerformed': manifest['migrationPerformed'],
                      'taskHmacMatched': True, 'windowPreserved': True,
                      'registrationWindowRetained': record['registrationGuards']['registrationWindowRetained']}
-    if online_origin is not None:
-        d.require(record.get('onlineOrigin') == online_origin
-                  and states[ONLINE_ENGINE]['containerId'] != record['before'][ONLINE_ENGINE]['containerId'],
-                  'API_ADMIN_ONLINE_ENGINE_NOT_REBOUND')
-        workspace_engine_idle(d, workspace_engine_metadata(d, previous))
-        workspace.update(preservedOnlineOrigin=online_successor_marker(online_origin),
-                         onlineSuccessorVerified=True, onlineEngineRebound=True,
-                         observedServiceCount=8, migrationPerformed=False)
     if pending is not None:
         d.require(record.get('pendingOnlineMigrationOrigin') == pending
                   and manifest.get('pendingOnlineMigration') == pending_online_publication_marker(d, previous, pending)
                   and manifest.get('onlineRechargePublication') is None
-                  and record.get('onlineOrigin') is None,
+                  and record.get('onlineOrigin') is None and record.get('onlineRechargeOrigin') is None,
                   'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED')
         pending_online_guard(d, previous, pending)
         workspace.update(preservedPendingOnlineMigration=pending_online_marker(pending),
@@ -4079,9 +4310,8 @@ def _release_locked(d, args):
                           args.repository, args.run_id, args.run_attempt)
     os.umask(0o077)
     previous, old, before, evidence = baseline(d, args.expected_current)
-    online_origin = evidence.get('onlineOrigin')
     pending = evidence.get('pendingOnlineMigrationOrigin')
-    updated = ('api', 'admin') if pending is not None else ONLINE_UPDATED if online_origin is not None else UPDATED
+    updated = ('api', 'admin') if pending is not None else UPDATED
     d.require((proof.get('pendingOnlineProjection') is not None) == (pending is not None),
               'API_ADMIN_PENDING_ONLINE_PROJECTION_REQUIRED')
     if pending is not None:
@@ -4091,8 +4321,9 @@ def _release_locked(d, args):
         d.require(proof.get('pendingOnlineOriginSha256') == fingerprint(pending),
                   'API_ADMIN_PENDING_ONLINE_BUILD_ORIGIN_CHANGED')
     retained_origin = evidence.get('migrationOrigin')
+    retained_online = evidence.get('onlineRechargeOrigin')
     if retained_origin is not None:
-        migration_successor_guard(d, previous, retained_origin)
+        preserved_migration_guard(d, previous, retained_origin, retained_online)
     original_task = registration_task(d, previous) if REGISTRATION or MIGRATION_MODE else None
     if MIGRATION_MODE:
         migration_task_guard(d, previous, original_task, evidence['guards'])
@@ -4105,8 +4336,10 @@ def _release_locked(d, args):
     d.require(not target.exists(), 'API_ADMIN_RELEASE_EXISTS')
     target.mkdir(mode=0o700)
     changed, step = [], 'source'
-    workspace_backup = None
+    sqlite_gate = None
+    workspace_admission = None
     workspace_database = None
+    online_fence, online_changed, online_before, online_fence_proof = None, False, None, None
     try:
         with urllib.request.urlopen(f'https://github.com/wangchaozhuanyong/id-business-system/archive/{args.commit}.tar.gz', timeout=60) as response:
             data = response.read(128 * 1024 * 1024 + 1)
@@ -4133,7 +4366,7 @@ def _release_locked(d, args):
         d.require((target / 'scripts/production-release/api-admin-scope.py').read_bytes() == Path(__file__).read_bytes()
                   and (target / 'scripts/production-release/remote-deploy.py').read_bytes() == Path(d.__file__).read_bytes(),
                   'API_ADMIN_EXECUTOR_SOURCE_CHANGED')
-        if online_origin is not None:
+        if retained_online is not None:
             online, _ = d.online_recharge_scope()
             d.require((target / 'scripts/production-release/online-recharge-scope.py').read_bytes()
                       == Path(online.__file__).read_bytes(), 'API_ADMIN_EXECUTOR_SOURCE_CHANGED')
@@ -4149,7 +4382,7 @@ def _release_locked(d, args):
         for name in IMAGE_SERVICES:
             override['services'][name] = {'image': proof['images'][name]['reference'], 'pull_policy': 'never'}
         (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
-        require_preserved(d, previous, target, before, environment, all_services=True)
+        require_preserved(d, previous, target, before, environment, all_services=True, online_context=retained_online)
         if WORKSPACE:
             d.require(proof['configuration'] == workspace_configuration(d, previous, target),
                       'API_ADMIN_WORKSPACE_CONFIG_PROOF_CHANGED')
@@ -4165,7 +4398,7 @@ def _release_locked(d, args):
             except RuntimeError:
                 raise RuntimeError('API_ADMIN_WORKSPACE_CADDY_VALIDATION_FAILED') from None
         if retained_origin is not None:
-            migration_successor_guard(d, target, retained_origin)
+            preserved_migration_guard(d, target, retained_origin, retained_online)
         step = 'images'
         d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'API_ADMIN_DISK_LOW_BEFORE_PULL')
         password = d.run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
@@ -4194,55 +4427,89 @@ def _release_locked(d, args):
         d.require((d.BASE / 'current').resolve() == previous and
                   hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest() == evidence['manifestSha256'],
                   'API_ADMIN_BASELINE_MOVED')
-        require_preserved(d, previous, target, before, environment, all_services=True)
+        require_preserved(d, previous, target, before, environment, all_services=True, online_context=retained_online)
         jobs_idle(d, previous)
         if WORKSPACE:
-            identity = workspace_volume(d, previous, attached=bool(old.get('apiWorkspacePublication') or online_origin))
-            d.require(identity == evidence['workspaceVolume'], 'API_ADMIN_WORKSPACE_VOLUME_CHANGED')
-            preparation = workspace_prepare(d, previous, identity)
-            d.require(preparation == evidence.get('workspacePreparation'), 'API_ADMIN_WORKSPACE_UNUSED_REQUIRED')
+            workspace_idle(d, previous, legacy='sqliteProtectionSha256' not in old.get('apiWorkspacePublication', {}))
         if retained_origin is not None:
-            migration_successor_guard(d, target, retained_origin)
+            preserved_migration_guard(d, target, retained_origin, retained_online)
         if MIGRATION_MODE:
             step = 'migration'
             migration_task_guard(d, previous, original_task, evidence['guards'])
             migration_attempted = migration_result['status'] == 'PENDING'
             migration_result = apply_migration(d, target)
-            require_preserved(d, previous, target, before, environment, all_services=True)
+            require_preserved(d, previous, target, before, environment, all_services=True, online_context=retained_online)
             migration_task_guard(d, previous, original_task, evidence['guards'])
         step = 'switch'
         for name in (('admin', 'api') if pending is not None else SWITCH_ORDER):
-            require_preserved(d, previous, target, before, environment)
+            require_preserved(d, previous, target, before, environment, online_context=retained_online)
             if retained_origin is not None:
-                migration_successor_guard(d, target, retained_origin)
+                preserved_migration_guard(d, target, retained_origin, retained_online)
             if MIGRATION_MODE:
                 migration_task_guard(d, previous, original_task, evidence['guards'])
             if name == 'api' or REGISTRATION:
                 jobs_idle(d, previous)
                 if WORKSPACE:
-                    if preparation['backupRequired']:
-                        workspace_database = workspace_database_identity(d, previous)
-                        step = 'workspace-backup-stop'
-                        workspace_backup = workspace_backup_stop(d, previous, target, identity, preparation, changed)
-                        step = 'switch'
-                    else:
-                        workspace_volume(d, previous, empty=True)
+                    step = 'sqlite-protection'
+                    workspace_database = workspace_database_identity(d, previous)
+                    if 'sqliteProtectionSha256' not in old.get('apiWorkspacePublication', {}):
+                        workspace_admission = WorkspaceAuditBarrier(d, previous)
+                        workspace_admission.acquire()
+                    sqlite_gate = workspace_prepare(d, previous, target, proof, args, evidence,
+                        legacy='sqliteProtectionSha256' not in old.get('apiWorkspacePublication', {}))
+                    step = 'switch'
                 if REGISTRATION:
                     require_registration_handoff(d, previous, old)
                     d.require(registration_task(d, previous) == original_task, 'API_ADMIN_REGISTRATION_HANDOFF_CHANGED')
             if WORKSPACE and name == 'caddy':
                 workspace_idle(d, target)
-            if name not in changed:
+            if WORKSPACE and name == 'api' and retained_online is not None:
+                online_idle(d, previous)
+                online_before = online_binding(d, previous, before)
+                online_fence = OnlineSqlFence(d, previous)
+                online_fence.acquire()
+                if workspace_admission is not None:
+                    workspace_admission.before_stop()
+                changed.append(name)
+                online_changed = True
+                if sqlite_gate is not None:
+                    sqlite_gate.stop_previous()
+                    online_fence.check_idle()
+                else:
+                    online_fence.stop(before['api'], grace=30)
+                if workspace_admission is not None:
+                    workspace_admission.check_idle()
+                    workspace_admission.close()
+                online_fence.stop(before[ONLINE_SERVICE], grace=45)
+                online_fence_proof = {'version': 1, 'busyCount': 0, 'sameConnection': True,
+                    'mysqlIdentitySha256': fingerprint(online_fence.mysql),
+                    'connectionIdSha256': fingerprint(online_fence.connection_id), 'businessActions': 0}
+                online_fence.close()
+            elif WORKSPACE and name == 'api' and sqlite_gate is not None:
+                # The old singleton must actually stop before releasing its writer fence.
+                if workspace_admission is not None:
+                    workspace_admission.before_stop()
+                changed.append(name)
+                sqlite_gate.stop_previous()
+                if workspace_admission is not None:
+                    workspace_admission.check_idle()
+                    workspace_admission.close()
+            elif WORKSPACE and name == 'api' and workspace_admission is not None:
+                workspace_admission.before_stop()
+                changed.append(name)
+                workspace_admission.stop(before['api'], grace=30)
+                workspace_admission.close()
+            else:
                 changed.append(name)
             d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', name, timeout=300)
             d.wait_healthy(target, name)
-            if name == 'api' and online_origin is not None:
-                workspace_online_rebind(d, target, online_origin)
+            if WORKSPACE and name == 'api' and retained_online is not None:
+                online_rebind(d, target, retained_online)
         step = 'audit-after'
         second = strict_audit(d, target, target / 'after-audit.json')
         d.require(first['checksSha256'] == second['checksSha256'], 'API_ADMIN_AUDIT_RULES_CHANGED')
         verify_running(d, target, proof)
-        after = require_preserved(d, previous, target, before, environment)
+        after = require_preserved(d, previous, target, before, environment, online_context=retained_online)
         public = d.environment_values(target / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
         for suffix in ('/api/health/ready', '/'):
             with urllib.request.urlopen(public + suffix, timeout=20) as response:
@@ -4251,7 +4518,7 @@ def _release_locked(d, args):
                     policy = re.search(r'Content-Security-Policy "([^"]+)"', (target / CONFIG_FILES[1]).read_text())
                     d.require(policy is not None and response.headers.get('Content-Security-Policy') == policy.group(1),
                               'API_ADMIN_WORKSPACE_PUBLIC_EDGE_CHANGED')
-        after = require_preserved(d, previous, target, before, environment)
+        after = require_preserved(d, previous, target, before, environment, online_context=retained_online)
         record = {'before': before, 'after': after, 'environmentSha256': evidence['environmentSha256'],
                   'baselineEvidence': evidence, 'buildProofSha256': fingerprint(proof),
                   'configurationBefore': configuration_hashes(previous), 'configurationAfter': configuration_hashes(target)}
@@ -4262,21 +4529,25 @@ def _release_locked(d, args):
             migration_task_guard(d, target, original_task, evidence['guards'])
             record.update(registrationGuards=evidence['guards'], migration=migration_result)
         if retained_origin is not None:
-            migration_successor_guard(d, target, retained_origin)
+            preserved_migration_guard(d, target, retained_origin, retained_online)
             record['migrationOrigin'] = retained_origin
+        if retained_online is not None:
+            online_origin_guard(d, target, retained_online)
+            record.update(onlineRechargeOrigin=retained_online,
+                onlineNetworkRebind={'version': 1, 'before': online_before,
+                    'after': online_binding(d, target, after), 'sqlFence': online_fence_proof, 'businessActions': 0})
         if WORKSPACE:
             record.update(workspaceVolumeBefore=evidence['workspaceVolume'],
-                          workspaceVolumeAfter=workspace_volume(d, target, attached=True),
-                          workspacePreparation=preparation)
-            if workspace_backup is None:
-                workspace_backup = {'version': 1, 'status': 'NOT_REQUIRED_EMPTY',
+                          workspaceVolumeAfter=workspace_volume(d, target, attached=True))
+            if sqlite_gate is not None:
+                record['sqliteProtectionSha256'] = fingerprint(sqlite_gate.record)
+            elif pending is not None:
+                # workspace_prepare has proven ABSENT or a genuinely empty volume.
+                record['workspacePreparation'] = {'status': 'ABSENT' if evidence['workspaceVolume']['status'] == 'ABSENT' else 'EMPTY',
+                    'backupRequired': False}
+                record['workspaceBackup'] = {'version': 1, 'status': 'NOT_REQUIRED_EMPTY',
                     'volumeBefore': evidence['workspaceVolume'], 'databaseRestored': False}
-                (target / WORKSPACE_BACKUP_RECEIPT).write_text(json.dumps(workspace_backup, indent=2) + '\n')
-            else:
-                record['workspaceVolumeOrigin'] = preparation['origin']
-            record['workspaceBackup'] = workspace_backup
-            if online_origin is not None:
-                record['onlineOrigin'] = online_origin
+                (target / WORKSPACE_BACKUP_RECEIPT).write_text(json.dumps(record['workspaceBackup'], indent=2) + '\n')
             if pending is not None:
                 record['pendingOnlineMigrationOrigin'] = pending
                 if pending['version'] == 2:
@@ -4300,16 +4571,17 @@ def _release_locked(d, args):
             databaseGrants={'status': 'SKIPPED', 'reason': 'API_ADMIN_EXISTING_TABLE_COLUMN_INDEX' if MIGRATION_MODE else 'API_ADMIN_UNCHANGED_SCHEMA'},
             rollback={'release': str(previous), 'images': {name: before[name]['image'] for name in updated}, 'servicesAdded': []},
             **{'apiAdminMigrationPublication' if MIGRATION_MODE else 'apiRegistrationPublication' if REGISTRATION else 'apiWorkspacePublication' if WORKSPACE else 'apiAdminPublication':
-                {'version': 4 if pending is not None else 3 if online_origin is not None else 2 if WORKSPACE else 1,
-                 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
+                {'version': 4 if pending is not None else 1, 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
                  'workersPublished': REGISTRATION, 'cacheStatus': 'SKIPPED', 'configurationChanged': WORKSPACE and pending is None,
                  **({'volume': record['workspaceVolumeAfter'], 'volumeDeletionPerformed': False,
-                     'workspaceBackupSha256': fingerprint(workspace_backup)} if WORKSPACE else {}),
-                 **({'preservedOnlineOrigin': online_successor_marker(online_origin),
-                     'onlineEngineRebound': True} if online_origin is not None else {}),
+                     **({'sqliteProtectionSha256': record['sqliteProtectionSha256']} if sqlite_gate is not None else {})} if WORKSPACE else {}),
+                 **({'workspaceBackupSha256': fingerprint(record['workspaceBackup'])}
+                     if pending is not None and sqlite_gate is None else {}),
                  **({'pendingOnlineMigration': pending_publication_marker if pending['version'] == 2 else pending_online_marker(pending),
                      'onlinePublished': False, 'migrationPerformed': False} if pending is not None else {}),
                  **({'schemaChanged': True, 'migration': dict(MIGRATION_IDENTITY)} if MIGRATION_MODE else {})}})
+        if retained_online is not None:
+            manifest['preservedOnlineRechargeOrigin'] = online_marker(retained_online)
         if MIGRATION_MODE:
             manifest['migrationPerformed'] = migration_result['performed']
         if retained_origin is not None:
@@ -4320,10 +4592,20 @@ def _release_locked(d, args):
         d.require((d.BASE / 'current').resolve() == previous, 'API_ADMIN_BASELINE_MOVED')
         d.point_current(target, f'{stamp}-publish')
         result = readback(d, args.commit)
+        if sqlite_gate is not None:
+            sqlite_gate.finish()
         result.update(backupVerified=True, checkCount=49, violationCount=0)
         print(d.api_workspace_receipt_output(result) if WORKSPACE else json.dumps(result))
         return 0
     except Exception as error:
+        if workspace_admission is not None:
+            workspace_admission.close()
+        if online_fence is not None:
+            online_fence.close()
+        if sqlite_gate is None:
+            sqlite_gate = getattr(error, 'sqlite_gate', None)
+        if sqlite_gate is not None:
+            sqlite_gate.close()
         if MIGRATION_MODE and migration_attempted:
             try:
                 observed = migration_database_state(d, target)
@@ -4334,56 +4616,56 @@ def _release_locked(d, args):
         # force rollback. Keep an explicit partial-state receipt for recovery.
         rollback_ok = True
         rollback = {}
+        rollback_controller = (workspace_database_controller(d, target, workspace_database)
+            if WORKSPACE and workspace_database is not None else d)
         for name in reversed(changed):
-            if online_origin is not None and name in ('api', ONLINE_ENGINE):
-                if 'api' in rollback or ONLINE_ENGINE in rollback:
-                    continue
-                try:
-                    jobs_idle(d, target, **({'database_identity': workspace_database}
-                                           if workspace_database is not None else {}))
-                    workspace_rollback_stop(d, target, workspace_database)
-                    d.rollback_service(previous, target, 'api', before)
-                    workspace_online_rebind(d, previous, online_origin)
-                    rollback.update(api='RESTORED', **{ONLINE_ENGINE: 'RESTORED'})
-                except Exception:
-                    rollback.update(api='BLOCKED_OR_FAILED', **{ONLINE_ENGINE: 'BLOCKED_OR_FAILED'})
-                    rollback_ok = False
-                    # Unknown admission/process state forbids further recovery mutations.
-                    break
-                continue
             try:
                 if retained_origin is not None:
-                    migration_successor_guard(d, target, retained_origin)
+                    preserved_migration_guard(rollback_controller, target, retained_origin, retained_online)
                 if name == 'api' or REGISTRATION or MIGRATION_MODE:
                     jobs_idle(d, target, **({'database_identity': workspace_database}
-                                           if WORKSPACE and workspace_database is not None else {}))
+                        if WORKSPACE and workspace_database is not None else {}))
                     if WORKSPACE:
-                        # Includes a failed old-API stop. Never infer safe recovery
-                        # from SQLite status alone after any stop was attempted.
-                        workspace_rollback_stop(d, target, workspace_database)
+                        workspace_idle(d, target, **({'api_metadata': workspace_api_metadata(d, target)}
+                            if workspace_database is not None else {}))
+                        if sqlite_gate is not None:
+                            sqlite_gate.check_marker()
+                            workspace_private_inspect(d, target, proof['images']['api']['reference'],
+                                sqlite_gate.volume['name'], expected=sqlite_gate.summary['logicalSha256'])
                 if MIGRATION_MODE:
                     d.require(jobs_idle(d, target) == evidence['guards'], 'API_ADMIN_REGISTRATION_TASK_CHANGED')
                     registration_private(d, target, retained=evidence['guards']['registrationWindowRetained'])
-                d.rollback_service(previous, target, name, before)
+                if name == 'api' and retained_online is not None and online_changed:
+                    online_rollback_api(d, previous, target, before, proof, retained_online,
+                        **({'database_identity': workspace_database} if workspace_database is not None else {}))
+                    rollback[ONLINE_SERVICE] = 'REBOUND_ORIGINAL_IMAGE'
+                else:
+                    d.rollback_service(previous, target, name, before)
                 rollback[name] = 'RESTORED'
             except Exception:
                 rollback[name] = 'BLOCKED_OR_FAILED'
                 rollback_ok = False
         if rollback_ok:
             try:
-                restored = workspace_online_snapshot(d, previous) if online_origin is not None else snapshot(d, previous)
+                restored = snapshot(d, previous)
                 d.require((previous / '.env.aws.production').read_bytes() == environment
                           and configuration_hashes(previous) == original_configuration
-                          and all(restored[name] == before[name] for name in before if name not in updated)
+                          and all(restored[name] == before[name] for name in before
+                              if name not in (*updated, *((ONLINE_SERVICE,) if retained_online is not None else ())))
                           and all(restored[name]['image'] == before[name]['image']
-                                  and restored[name]['reference'] == before[name]['reference'] for name in updated)
-                          and (online_origin is None or restored[ONLINE_ENGINE]['configurationSha256']
-                               == before[ONLINE_ENGINE]['configurationSha256']),
+                                  and restored[name]['reference'] == before[name]['reference'] for name in updated),
                           'API_ADMIN_ROLLBACK_NOT_RESTORED')
+                if retained_online is not None:
+                    online_binding(d, previous, restored)
                 if MIGRATION_MODE:
                     migration_task_guard(d, previous, original_task, evidence['guards'])
                 if retained_origin is not None:
-                    migration_successor_guard(d, previous, retained_origin)
+                    preserved_migration_guard(d, previous, retained_origin, retained_online)
+            except Exception:
+                rollback_ok = False
+        if sqlite_gate is not None and rollback_ok:
+            try:
+                sqlite_gate.abort()
             except Exception:
                 rollback_ok = False
         if rollback_ok and (d.BASE / 'current').resolve() == target:
@@ -4394,7 +4676,7 @@ def _release_locked(d, args):
         if MIGRATION_MODE and migration_result['status'] == 'UNVERIFIED':
             rollback_ok = False
         actual = {}
-        for name in (*d.ALL_SERVICES, ONLINE_ENGINE) if online_origin is not None else d.ALL_SERVICES:
+        for name in workspace_service_names(d, previous):
             try:
                 actual[name] = d.service_state(previous, name, include_container_id=True,
                                                include_environment_hash=True)
@@ -4409,9 +4691,13 @@ def _release_locked(d, args):
                   'servicesAttempted': changed, 'rollback': rollback, 'actualServices': actual,
                   'candidateCommit': args.commit, 'previousCommit': args.expected_current,
                   'currentPointsToCandidate': (d.BASE / 'current').resolve() == target}
+        if retained_online is not None:
+            result.update(servicesReboundAttempted=[ONLINE_SERVICE] if online_changed else [],
+                          preservedOnlineRechargeOrigin=online_marker(retained_online))
         if WORKSPACE:
-            result.update(volumeDeletionPerformed=False, sqliteBackupStatus=(workspace_backup or {}).get('status', 'NOT_COMPLETED'),
-                          sqliteRestorePerformed=False)
+            result.update(volumeDeletionPerformed=False, sqliteBackupStatus=(
+                'VERIFIED_RESTORE' if sqlite_gate is not None and sqlite_gate.record is not None
+                else 'INCOMPLETE_PROOF' if sqlite_gate is not None else 'NOT_SWITCHED_OR_EMPTY_VOLUME'))
         result['receiptPersisted'] = True
         if MIGRATION_MODE:
             result.update(migration=migration_result,

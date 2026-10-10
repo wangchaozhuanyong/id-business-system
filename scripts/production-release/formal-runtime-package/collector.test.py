@@ -38,7 +38,8 @@ class CollectorTests(unittest.TestCase):
             'actualResource':{'networks':copy.deepcopy(self.d.source_networks),'volume':copy.deepcopy(self.d.source_volume)}}
     def read_stability(self):self.calls+=1;return copy.deepcopy(self.raw)
     def measure(self,reader=None):
-        with patch.dict(a.REVIEWED_GENERATORS,{('25.0.16','5.5.0'):FIX['policy']()}):
+        with patch.object(M.shutil,'which',side_effect=lambda name:FIX['policy']()['dockerPath'] if name=='docker' else None), \
+                patch.dict(a.REVIEWED_GENERATORS,{('25.0.16','5.5.0'):FIX['policy']()}):
             return a.measure(self.d,self.directory,services=self.d.services,image_reference='source-api',
                 image_id=FIX['IMAGE'],source_seal=self.d.seal,stability_reader=reader or self.read_stability)
     def validation_root(self,result):

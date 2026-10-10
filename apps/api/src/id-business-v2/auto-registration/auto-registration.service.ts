@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  HttpException,
   ServiceUnavailableException
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -66,6 +67,41 @@ export class AutoRegistrationService implements OnModuleInit, OnModuleDestroy {
       version: '1.0.4',
       sourceCommit
     };
+  }
+
+  async appleMailboxRequest<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
+    if (!/^\/internal\/apple-mailboxes(?:\/[a-z0-9-]+)*$/.test(path)) throw this.unavailable();
+    await this.start();
+    let response: globalThis.Response;
+    try {
+      response = await fetch(`${origin}${path}`, {
+        method,
+        headers: {
+          'X-ID-Workspace-Token': this.internalToken,
+          'Content-Type': 'application/json'
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'error',
+        signal: AbortSignal.timeout(20_000)
+      });
+    } catch {
+      throw this.unavailable();
+    }
+    if (!response.ok) {
+      const messages: Record<number, string> = {
+        400: '邮箱信息或标记内容无效，请核对输入',
+        404: '邮箱记录或注册任务不存在，请刷新后重试',
+        409: '邮箱状态或任务占用已变化，请刷新列表后重试'
+      };
+      if (messages[response.status])
+        throw new HttpException(messages[response.status]!, response.status);
+      throw this.unavailable();
+    }
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw this.unavailable();
+    }
   }
 
   private start(): Promise<void> {
