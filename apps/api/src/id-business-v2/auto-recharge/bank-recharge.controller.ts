@@ -22,6 +22,7 @@ import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
 import { BankRechargeCorrectionService } from './bank-recharge-correction.service';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
+import { BankRechargePricingService } from './bank-recharge-pricing.service';
 
 @Controller('id-business-v2/bank-recharge')
 @RequireRoles('admin')
@@ -36,8 +37,26 @@ export class BankRechargeController {
     private readonly corrections: BankRechargeCorrectionService,
     private readonly subscriptionReview: BankRechargeSubscriptionReviewService,
     private readonly lifecycle: BankRechargeLifecycleService,
-    private readonly cardRemoval: RechargeCardRemovalService
+    private readonly cardRemoval: RechargeCardRemovalService,
+    private readonly pricing: BankRechargePricingService
   ) {}
+
+  @Get('order-pricing-settings')
+  @Header('Cache-Control', 'no-store')
+  orderPricingSettings(@CurrentUser() operator: AuthenticatedUser) {
+    return this.pricing.read(operator);
+  }
+
+  @Put('order-pricing-settings')
+  updateOrderPricingSettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.pricing.update(input, operator);
+  }
+
+  @Get('order-pricing-rates')
+  @Header('Cache-Control', 'no-store')
+  orderPricingRates(@CurrentUser() operator: AuthenticatedUser) {
+    return this.pricing.rates(operator);
+  }
 
   @Get('accounts/:id/opening-card-deletion')
   @Header('Cache-Control', 'no-store')

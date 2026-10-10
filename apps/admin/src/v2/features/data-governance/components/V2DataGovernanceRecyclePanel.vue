@@ -58,7 +58,7 @@
       <footer>
         <p>
           <el-icon aria-hidden="true"><InfoFilled /></el-icon>
-          恢复保留审计；账号保持停用，银充误录单恢复待补全，不自动入账或激活订阅。
+          恢复保留审计；账号保持停用，比特充值误录单恢复待补全，不自动入账或激活订阅。
         </p>
         <span>{{ page.recycleQueryModel.entity ? '已按类型筛选' : '当前显示全部类型' }}</span>
       </footer>
