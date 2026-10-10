@@ -218,7 +218,7 @@ class BootstrapBoundaryTests(unittest.TestCase):
   self.assertEqual(D.PACKAGE_MANIFEST_SHA,'3e7214c1f0287424c53af85805cf2530effa1b2ee8c39c21abbe06e0bfd369b8')
   self.assertEqual(hashlib.sha256((HERE/'manifest.json').read_bytes()).hexdigest(),D.PACKAGE_MANIFEST_SHA)
   self.assertEqual(hashlib.sha256((HERE/'driver.py').read_bytes()).hexdigest(),
-            'fe2f3810f2977109438af793969bff4d2b51ada236221d8301cb9f022ac2d885')
+            '27d0913dd1ed070973168a2d5e656f54ce9d9679279c986570b253194bf96c53')
   self.assertEqual(set(M),{'version','kind','files','externalLeafPins','consumerFiles','packageRole'})
   self.assertEqual((type(M['version']),M['version'],M['kind'],M['packageRole']),
    (int,2,'FORMAL_RUNTIME_PACKAGE_V2','formal-runtime-package'))
