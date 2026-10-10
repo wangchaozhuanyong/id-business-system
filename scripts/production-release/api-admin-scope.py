@@ -1043,10 +1043,15 @@ def pending_online_sealed_services(d, states, recovery):
 def decode_build_proof(d, encoded):
     """Only this fixed pending projection may carry a larger gzip envelope."""
     d.require(isinstance(encoded, str) and len(encoded) < 49152, 'API_ADMIN_BUILD_PROOF_TOO_LARGE')
-    compressed = encoded.startswith('gzip:')
+    compressed = encoded.startswith(('gzip:', 'gzip85:'))
     if compressed:
         d.require(WORKSPACE, 'API_ADMIN_PENDING_ONLINE_SCOPE_CHANGED')
-        raw = base64.b64decode(encoded[5:], validate=True)
+        if encoded.startswith('gzip85:'):
+            raw = base64.b85decode(encoded[7:])
+            d.require(base64.b85encode(raw).decode('ascii') == encoded[7:],
+                      'API_ADMIN_BUILD_PROOF_INVALID')
+        else:
+            raw = base64.b64decode(encoded[5:], validate=True)
         decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
         raw = decoder.decompress(raw, 65536)
         d.require(decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
@@ -4432,3 +4437,143 @@ def registration_cli(d, tokens):
             result['recoveryDiagnostic'] = error.diagnostic
         print(json.dumps(result))
         return 1
+
+# Runtime-only candidate: append to the byte-pinned API scope. No formal caller.
+ONLINE_AFTER_BIT_KIND = 'ONLINE_RECHARGE_AFTER_BIT_SUCCESSOR_ORIGIN'
+
+
+def online_after_bit_cold(d, directory, *, expected_commit):
+    """Acquire B provenance and existing Q_A/Q_B; issue nothing and inspect no CID.
+
+    The private Q installer already requires the actual ended AWS invocation
+    and complete ordinary readback. Here the acquired raw Q and archived finite
+    decoder are re-bound to actual state/manifest/proof/F, never to a boolean.
+    """
+    code = 'ONLINE_RECHARGE_AFTER_BIT_ORIGIN_CHANGED'
+    try:
+        online = pending_online_equivalence()
+        d.require(type(expected_commit) is str and re.fullmatch(r'[a-f0-9]{40}', expected_commit), code)
+        d.require(directory.parent == d.BASE / 'releases' and directory.resolve() == directory
+            and directory.is_dir() and not directory.is_symlink()
+            and directory.stat().st_uid == os.geteuid() and stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0, code)
+        files = (STATE_FILE, PROOF_FILE, 'release-manifest.json')
+        raw_before = {n: online._declaration_source_bytes(directory / n) for n in files}
+        record = online.closed_recovery_json(d, raw_before[STATE_FILE])
+        environment_raw = online._declaration_source_bytes(directory / '.env.aws.production')
+        d.require(hashlib.sha256(environment_raw).hexdigest() == record.get('environmentSha256'), code)
+        context = validate_pending_online_origin(record.get('pendingOnlineMigrationOrigin'))
+        d.require(context['version'] == 2 and len(context['priorPublications']) == 1, code)
+        _online, recovery = pending_online_recovery(d, Path(context['baselineRelease']))
+        reader, materials, publication, marker, record = pending_online_declaration_b_files(
+            d, directory, context, recovery, phase='COLD')
+        d.require(publication['producer']['commit'] == expected_commit
+            and configuration_hashes(directory) == publication['configurationAfter'], code)
+        producer = {n: publication['producer'][n] for n in ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')}
+        invocation = reader.declaration_equivalence_saved_invocation(d, producer=producer)
+        decoder = pending_online_declaration_wire(d, reader, materials)
+        pending_online_declaration_call(d, 'declaration_equivalence_successor_receipt_binding', publication,
+            invocation['raw_bytes'], command_id=invocation['command_id'], wire_decoder=decoder)
+        value = online.closed_recovery_json(d, invocation['raw_bytes'])
+        receipt = decoder(value['StandardOutputContent'], scope='API_ADMIN_WORKSPACE')
+        # The existing transport-installed Q must be the ordinary B readback,
+        # not just a synthetic publication digest in an otherwise empty object.
+        d.require(receipt.get('status') == 'API_ADMIN_WORKSPACE_VERIFIED'
+            and receipt.get('commit') == expected_commit
+            and receipt.get('sourceTree') == publication['producer']['sourceTree']
+            and receipt.get('services') == publication['afterServices']
+            and receipt.get('servicesUpdated') == ['api', 'admin']
+            and type(receipt.get('preservedServiceCount')) is int and receipt['preservedServiceCount'] == 5
+            and receipt.get('runningImagesAndContentMatched') is True
+            and receipt.get('buildProofSha256') == publication['buildProofCanonicalSha256']
+            and receipt.get('environmentUnchanged') is True
+            and receipt.get('onlinePublished') is False and receipt.get('migrationPerformed') is False
+            and type(receipt.get('observedServiceCount')) is int and receipt['observedServiceCount'] == 7
+            and receipt.get('volumePreserved') is True and receipt.get('volumeDeletionPerformed') is False
+            and receipt.get('registrationHealthChecked') is True
+            and receipt.get('workspaceVolume') == record.get('workspaceVolumeAfter')
+            and receipt.get('pendingOnlineMigrationOrigin') == context
+            and receipt.get('preservedPendingOnlineMigration') == marker
+            and 'declarationEquivalencePublication' not in receipt, code)
+        manifest = online.closed_recovery_json(d, raw_before['release-manifest.json'])
+        before_audit = audit_receipt(d, directory / 'before-audit.json')
+        after_audit = audit_receipt(d, directory / 'after-audit.json')
+        d.require(before_audit == manifest.get('dataAuditBefore')
+            and after_audit == manifest.get('dataAuditAfter')
+            and before_audit['checksSha256'] == after_audit['checksSha256'], code)
+        d.require({n: online._declaration_source_bytes(directory / n) for n in files} == raw_before
+            and online._declaration_source_bytes(directory / '.env.aws.production') == environment_raw, code)
+        return {'kind': ONLINE_AFTER_BIT_KIND, 'version': 1,
+            'baselineRelease': str(directory), 'baselineCommit': expected_commit,
+            'baselineProducer': producer,
+            'manifestBytesSha256': publication['manifestBytesSha256'],
+            'recordBytesSha256': publication['recordBytesSha256'],
+            'buildProofBytesSha256': publication['buildProofBytesSha256'],
+            'buildProofCanonicalSha256': publication['buildProofCanonicalSha256'],
+            'environmentFileSha256': hashlib.sha256(environment_raw).hexdigest(),
+            'publicationSha256': fingerprint(publication), 'pendingOriginSha256': fingerprint(context),
+            'readbackCommandId': invocation['command_id'],
+            'readbackInvocationBytesSha256': hashlib.sha256(invocation['raw_bytes']).hexdigest(),
+            'initialReadbackInvocationBytesSha256': publication['successorConfigurationSeal']['initialReadbackInvocationBytesSha256'],
+            'originalWorkspace': {'release': context['baselineRelease'], 'manifestSha256': context['baselineManifestSha256']},
+            'migrationRecovery': context['recoveryMarker'], 'migrationState': context['migrationState'],
+            'services': publication['afterServices'], 'configurationAfter': publication['configurationAfter']}
+    except Exception:
+        raise RuntimeError(code) from None
+
+
+def online_after_bit_measure_before(d, directory, *, expected_commit):
+    """Re-measure existing B now. This is no declaration/source qualification."""
+    bridge = online_after_bit_cold(d, directory, expected_commit=expected_commit)
+    d.require((d.BASE / 'current').resolve() == directory, 'ONLINE_RECHARGE_AFTER_BIT_BASELINE_MOVED')
+    measured = snapshot(d, directory)
+    d.require(measured == bridge['services'] and configuration_hashes(directory) == bridge['configurationAfter'],
+              'ONLINE_RECHARGE_AFTER_BIT_BASELINE_MOVED')
+    again = online_after_bit_cold(d, directory, expected_commit=expected_commit)
+    d.require(again == bridge and snapshot(d, directory) == measured
+        and (d.BASE / 'current').resolve() == directory, 'ONLINE_RECHARGE_AFTER_BIT_BASELINE_MOVED')
+    return bridge
+
+
+def online_after_bit_readback_origin(d, directory, *, expected_commit, producer):
+    """After ONLINE replacement consume B cold evidence plus actual owned F_O.
+
+    Only current ONLINE containers may be measured. Ordinary ONLINE image,
+    content, audit, backup, volume, network, payment-safety gates still run in
+    the real caller; this origin guard cannot replace or authorize them.
+    """
+    code='ONLINE_RECHARGE_AFTER_BIT_READBACK_CHANGED'
+    try:
+        online=pending_online_equivalence()
+        d.require(directory.parent==d.BASE/'releases' and directory.resolve()==directory
+            and directory.is_dir() and not directory.is_symlink()
+            and directory.stat().st_uid==os.geteuid() and stat.S_IMODE(directory.stat().st_mode)&0o077==0
+            and (d.BASE/'current').resolve()==directory and expected_commit==producer['commit'],code)
+        files=(online.STATE_FILE,online.PROOF_FILE,'release-manifest.json')
+        raw={n:online._declaration_source_bytes(directory/n) for n in files}
+        record,proof,manifest=(online.closed_recovery_json(d,raw[n]) for n in files)
+        baseline=Path(manifest.get('previousRelease',''))
+        bridge=online_after_bit_cold(d,baseline,expected_commit=manifest.get('previousCommit'))
+        before_raw=online.online_after_bit_preflight_bytes(d,producer=producer,
+            expected_sha256=proof.get('preflightBytesSha256'))
+        online.online_after_bit_preflight_binding(d,before_raw,producer=producer,bridge=bridge)
+        online.online_after_bit_build_shape(d,proof,producer=producer,bridge=bridge,preflight_raw=before_raw)
+        states=online.snapshot(d,directory,include_engine=True)
+        d.require(record.get('baselineEvidence',{}).get('onlineAfterBitOrigin')==bridge
+            and record.get('before')==bridge['services']
+            and record.get('buildProofSha256')==fingerprint(proof)
+            and record.get('configurationBefore')==bridge['configurationAfter']
+            and record.get('configurationAfter')==online.configuration_hashes(directory)
+            and manifest.get('commit')==expected_commit and manifest.get('sourceTree')==producer['sourceTree']
+            and manifest.get('previousManifestSha256')==bridge['manifestBytesSha256']
+            and manifest.get('migrationPerformed') is False and record.get('migration',{}).get('performed') is False
+            and record.get('migration')=={**bridge['migrationState'],'performed':False}
+            and set(states)==set((*online.PRESERVED,*online.UPDATED)) and record.get('after')==states
+            and all(states[n]==bridge['services'][n] for n in online.PRESERVED)
+            and all(states[n]['image']==proof['images'][n]['imageId']
+                    and states[n]['reference']==proof['images'][n]['reference'] for n in online.UPDATED),code)
+        d.require({n:online._declaration_source_bytes(directory/n) for n in files}==raw
+            and (d.BASE/'current').resolve()==directory
+            and online.snapshot(d,directory,include_engine=True)==states,code)
+        return bridge
+    except Exception:
+        raise RuntimeError(code) from None

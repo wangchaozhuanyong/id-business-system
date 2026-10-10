@@ -1,0 +1,33 @@
+{
+  "consumerFiles": [
+    "remote-deploy.py",
+    "api-admin-scope.py",
+    "online-recharge-scope.py",
+    "api-admin-readonly.py",
+    "online-recharge-declaration-measurement.py",
+    "api-admin-pending-receipt-wire.py",
+    "online-recharge-daemon-identity.py",
+    "online-recharge-daemon-listener.py",
+    "online-recharge-daemon-socket.py",
+    "online-recharge-recovery.json"
+  ],
+  "externalLeafPins": {
+    "online-recharge-daemon-identity.py": "32d4b45c936685ffc46a876007796027bb8f9ef7f5ac43ca8b243c05c9b23b4f",
+    "online-recharge-daemon-listener.py": "0164c6f5c20a3aab24062e37c9931b216a4c29adfd1440002da5b8952147306a",
+    "online-recharge-daemon-socket.py": "90d5fadf031d19c318fa790f202ca93b054c6e672ba2ef38ec213be236a4035e",
+    "online-recharge-declaration-measurement.py": "820899c20e72d09e239e7172ceec8e0715f49317355fa19b04985ddbd62d6375"
+  },
+  "files": {
+    "collector.py": "d1bf7fec49896143b647dfd06e5dd776d193836b0c8f204ebd6bfa0afbcff203",
+    "constructor.py": "fcab46eea82ea426225276ddd0506634ea36742ea44c7b3c952544d3975f7d9d",
+    "contract.json": "7d45bd738b254a2e56b49a5e307cd417c769becfb62ea4d589e90a75d34f29c8",
+    "package_io.py": "250e8357146e6756f87dca07113fa232192d0f5ad1c5d891975a3b8026ccf246",
+    "pure.py": "d1ad9bf5c2fdd695000e517ba43ef85e137a2c8d0183f10cceb03da34d54c780",
+    "qualified.py": "36dde0db8c5b3f7f8fffa77a28851077dd2b098829c117449469068901698ced",
+    "reader.py": "2ea0b20791c86c8ac0f7e4dd18edcd1e76037445bde63da51ae66ec3ff3e160f",
+    "reviewed-source-table.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+  },
+  "kind": "FORMAL_RUNTIME_PACKAGE_V2",
+  "packageRole": "formal-runtime-package",
+  "version": 2
+}

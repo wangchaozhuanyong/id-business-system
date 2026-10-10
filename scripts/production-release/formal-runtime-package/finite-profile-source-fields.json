@@ -1,0 +1,410 @@
+{
+  "actualFullMetadataCollected": false,
+  "authority": false,
+  "fields": [
+    {
+      "actualRuntimeValueStatus": "NOT_MEASURED",
+      "field": "actualEndpointFields",
+      "rule": "exact14 including DNSNames; actual DNSNames is ordered first-occurrence dedup of complete metadata Name single-prefix trim, original Aliases, ID[:12], nonempty Hostname",
+      "source": [
+        "api/types/network/endpoint.go:11-34",
+        "daemon/container_operations.go:651-691",
+        "internal/sliceutil/sliceutil.go:6-16"
+      ],
+      "sourceValue": [
+        "Aliases",
+        "DNSNames",
+        "DriverOpts",
+        "EndpointID",
+        "Gateway",
+        "GlobalIPv6Address",
+        "GlobalIPv6PrefixLen",
+        "IPAMConfig",
+        "IPAddress",
+        "IPPrefixLen",
+        "IPv6Gateway",
+        "Links",
+        "MacAddress",
+        "NetworkID"
+      ],
+      "status": "SOURCE_RULE_IDENTIFIED"
+    },
+    {
+      "actualRuntimeValueStatus": "NOT_MEASURED",
+      "field": "referenceEndpointFields",
+      "rule": "Compose request omits DNSNames and create stores epConfig; never-started reference requires DNSNames explicitly null",
+      "source": [
+        "api/types/network/endpoint.go:11-34",
+        "docker-compose-v5.5.0-pkg-compose-create.go:477-553",
+        "daemon/container_operations.go:413-488"
+      ],
+      "sourceValue": [
+        "Aliases",
+        "DNSNames",
+        "DriverOpts",
+        "EndpointID",
+        "Gateway",
+        "GlobalIPv6Address",
+        "GlobalIPv6PrefixLen",
+        "IPAMConfig",
+        "IPAddress",
+        "IPPrefixLen",
+        "IPv6Gateway",
+        "Links",
+        "MacAddress",
+        "NetworkID"
+      ],
+      "status": "SOURCE_RULE_IDENTIFIED"
+    },
+    {
+      "actualResourceValuesVerified": false,
+      "actualSchemaSha256": "3e381637acc50c12ead4fa5971721bffdab25befe0084f73a2e6c8d6a8e2c6b0",
+      "field": "networkFields",
+      "rule": "all16 mandatory non-omitempty NetworkResource fields; optional Peers/Services must remain absent under this closed bridge schema",
+      "source": ["api/types/types.go:427-445"],
+      "sourceValue": [
+        "Attachable",
+        "ConfigFrom",
+        "ConfigOnly",
+        "Containers",
+        "Created",
+        "Driver",
+        "EnableIPv6",
+        "IPAM",
+        "Id",
+        "Ingress",
+        "Internal",
+        "Labels",
+        "Name",
+        "Options",
+        "Scope"
+      ],
+      "status": "SOURCE_AND_ACTUAL_SCHEMA_HASH_BOUND"
+    },
+    {
+      "field": "enableIpv4Field",
+      "rule": "Engine25 NetworkResource has no EnableIPv4 member; no newer Engine rule imported",
+      "source": ["api/types/types.go:427-445"],
+      "sourceValue": "ABSENT",
+      "status": "SOURCE_AND_ACTUAL_SCHEMA_HASH_BOUND"
+    },
+    {
+      "actualResourceValuesVerified": false,
+      "actualSchemaSha256": "89c13d45d62429998fc9dab676be154bfa8ab4c7e07845375ea10af0bd96d6e0",
+      "field": "volumeFields",
+      "rule": "closed local-volume7; Status nil omits; ClusterVolume/UsageData absent; CreatedAt must remain present and nonempty",
+      "source": [
+        "api/types/volume/volume.go:8-54",
+        "volume/local/local.go:361-363",
+        "volume/service/service.go:90-106"
+      ],
+      "sourceValue": ["CreatedAt", "Driver", "Labels", "Mountpoint", "Name", "Options", "Scope"],
+      "status": "SOURCE_AND_ACTUAL_SCHEMA_HASH_BOUND"
+    },
+    {
+      "field": "sourceIpamRowFields",
+      "rule": "IPRange/AuxiliaryAddresses are optional, not silently discarded; actual full rows must exactly match the reviewed two fields",
+      "source": ["api/types/network/ipam.go:11-24"],
+      "sourceValue": ["Gateway", "Subnet"],
+      "status": "SOURCE_TYPE_IDENTIFIED_VALUES_NOT_MEASURED"
+    },
+    {
+      "field": "referenceIpamRowFields",
+      "rule": "no new reference allocated; first-address default-pool rule remains independently reviewed/unactivated",
+      "source": ["api/types/network/ipam.go:11-24"],
+      "sourceValue": ["Gateway", "Subnet"],
+      "status": "SOURCE_TYPE_IDENTIFIED_VALUES_NOT_MEASURED"
+    },
+    {
+      "actualFieldNames": {
+        "default": [],
+        "media-egress": [],
+        "recharge-control": [],
+        "registration-control": []
+      },
+      "field": "renderedNetworkEntry",
+      "rule": "zero-value ServiceNetworkConfig fields all omitempty; exact fixed0a four entries are empty field sets",
+      "source": ["compose-spec-compose-go-v2.14.0-types-types.go:447-459"],
+      "sourceValue": {},
+      "status": "SOURCE_AND_ACTUAL_FIELD_NAMES_OBSERVED"
+    },
+    {
+      "actualFieldNames": [["source", "target", "type", "volume"]],
+      "field": "renderedVolumeRow",
+      "rule": "fixed0a short named-volume declaration has no options; final complete row values still must be LIVE rendered and bound, inventory only exposes field names",
+      "source": [
+        "compose-spec-compose-go-v2.14.0-types-types.go:511-523",
+        "compose-spec-compose-go-v2.14.0-types-types.go:607-613"
+      ],
+      "sourceValue": {
+        "source": "auto_registration_data",
+        "target": "/app/.runtime/auto-registration",
+        "type": "volume",
+        "volume": {}
+      },
+      "status": "SOURCE_TYPE_AND_ACTUAL_FIELD_NAMES_OBSERVED_CONTENT_RECHECK_REQUIRED"
+    },
+    {
+      "field": "renderedExternalNetworkExtra",
+      "rule": "NetworkConfig.Ipam is value struct; encoding/json omitempty does not omit struct; zero fields inside IPAMConfig omit, yielding exact ipam:{}; no extra field allowed",
+      "source": ["compose-spec-compose-go-v2.14.0-types-types.go:738-762"],
+      "sourceValue": {
+        "ipam": {}
+      },
+      "status": "SOURCE_RULE_IDENTIFIED_REFERENCE_RENDER_NOT_MEASURED"
+    },
+    {
+      "actualFieldNames": {
+        "media-resolver": ["condition", "required"],
+        "migrate": ["condition", "required"]
+      },
+      "field": "renderedDependencies",
+      "rule": "fixed0a two declared conditions; actual inventory only exposes condition/required key sets; LIVE full source render still binds exact values",
+      "sourceValue": {
+        "media-resolver": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "status": "SOURCE_DECLARATION_AND_ACTUAL_FIELD_NAMES_OBSERVED_CONTENT_RECHECK_REQUIRED"
+    },
+    {
+      "field": "networkCreatorVersion",
+      "rule": "actual labels report all network creator versions exactly singleton5.5.0; no substitute for full actual inspect validation",
+      "sourceValue": "5.5.0",
+      "status": "ACTUAL_BOUNDED_INVENTORY_OBSERVED"
+    },
+    {
+      "field": "volumeCreatorVersion",
+      "rule": "actual bounded inventory reports volume creator5.5.0; no substitute for full actual inspect validation",
+      "sourceValue": "5.5.0",
+      "status": "ACTUAL_BOUNDED_INVENTORY_OBSERVED"
+    }
+  ],
+  "fixedBaselineSource": {
+    "blobSha256": "953c6264f157b00218f2a019d5e2c0b6bc4a34f687f2ec42ad782e0009e7672c",
+    "commit": "0a03fa28e6b844a18833d5c63f1de700f091fc64",
+    "file": "docker-compose.aws-mysql.yml",
+    "workspaceOverrideStatus": "LIVE_GENERATED_MATERIALS_REQUIRED_NOT_A_GIT_BLOB"
+  },
+  "inventoryActualShape": {
+    "apiCreatorVersion": "5.5.0",
+    "bindsCount": 1,
+    "bindsEncoding": "ARRAY",
+    "hostMountFieldNames": [],
+    "hostMountUnknownFieldCount": 0,
+    "mountsCount": null,
+    "mountsEncoding": "ABSENT",
+    "networkCreatorVersions": ["5.5.0"],
+    "status": "OBSERVED",
+    "volumeCreatorVersion": "5.5.0"
+  },
+  "inventoryInput": {
+    "producer": {
+      "commit": "01ce8abf4d1a6cf01ea78084d64c27bec7b68171",
+      "sourceTree": "b6a7c531987e8dd54064ef9c18a4c9a2e8d7036a",
+      "workflowRunAttempt": "1",
+      "workflowRunId": "38005264557"
+    },
+    "sha256": "9a51b51f150b3db8267c869e8d22e03fea53ea426283a4b4496dc8b9cae0c89b",
+    "status": "API_ADMIN_WORKSPACE_DECLARATION_INVENTORY"
+  },
+  "inventoryResources": {
+    "connectedNetworkCount": 4,
+    "namedVolumeCount": 1,
+    "networkSchemaSha256": "3e381637acc50c12ead4fa5971721bffdab25befe0084f73a2e6c8d6a8e2c6b0",
+    "propertiesSha256": "0bafb6aeee22b14b4c672f8be4738e0040480a1865d97d843c6e1ba5a729a118",
+    "reviewedSchemaStatus": "SOURCE_NOT_MEASURED",
+    "status": "OBSERVED",
+    "unknownNetworkFieldCount": 0,
+    "unknownVolumeFieldCount": 0,
+    "volumeSchemaSha256": "89c13d45d62429998fc9dab676be154bfa8ab4c7e07845375ea10af0bd96d6e0"
+  },
+  "inventorySourceRepresentation": {
+    "dependencyFieldNames": {
+      "media-resolver": ["condition", "required"],
+      "migrate": ["condition", "required"]
+    },
+    "networkEntryFieldNames": {
+      "default": [],
+      "media-egress": [],
+      "recharge-control": [],
+      "registration-control": []
+    },
+    "volumeFieldNames": [["source", "target", "type", "volume"]]
+  },
+  "kind": "ENGINE25_FINITE_SPEC_SOURCE_FIELDS_V1",
+  "notMeasured": [
+    "actual complete DNSNames4 values",
+    "reference final endpoint shape on actual Engine",
+    "reference external-network config full dry-render result",
+    "actual full network/volume property values",
+    "current socket runtime kernel VFS route",
+    "source runtime configuration effective pools",
+    "qualified generator admission"
+  ],
+  "productionEligible": false,
+  "profileConstructed": false,
+  "referenceCreated": false,
+  "registryRows": 0,
+  "sourceReferences": {
+    "api/types/network/endpoint.go": {
+      "sha256": "707b6c16a504a36a1caa94f2f07162b3202613f1c7cbf128972a1a19517ad28c",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/network/endpoint.go"
+    },
+    "api/types/network/ipam.go": {
+      "sha256": "ec206169c5b4bf018f1b5460fc95b717a9ab92a152850a914fcfe40586b877a2",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/network/ipam.go"
+    },
+    "api/types/types.go": {
+      "sha256": "3743f38e1616fb14cf645033094e94958d5a78fe831fff7e1324216147ffb47a",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/types.go"
+    },
+    "api/types/volume/volume.go": {
+      "sha256": "fd22ac2cf54fdff0b03d9f5a33032240bdd9a4578df2b7d611b9e4c33051d0c3",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/volume/volume.go"
+    },
+    "compose-spec-compose-go-v2.14.0-types-command.go": {
+      "sha256": "faf039c11274666874e42be60a0d99dbd1c3783170fae5a9d8740216153727be",
+      "url": "https://raw.githubusercontent.com/compose-spec/compose-go/d70c053ec9cbd7180c7881ba769d277f5cfc6fb5/types/command.go"
+    },
+    "compose-spec-compose-go-v2.14.0-types-types.go": {
+      "sha256": "d8d1c389734d4907f6d42c94f5e6947d863eead724685bc538b8915a113ae857",
+      "url": "https://raw.githubusercontent.com/compose-spec/compose-go/d70c053ec9cbd7180c7881ba769d277f5cfc6fb5/types/types.go"
+    },
+    "daemon/container_operations.go": {
+      "sha256": "f9a1ccecfb33bd45d3715ea6c789a2ebd28e812ecd7cefc502596ec73e0b0c6c",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/daemon/container_operations.go"
+    },
+    "daemon/inspect.go": {
+      "sha256": "7b5e62b40e49cb43ed6a323f0cb4bc50c677f2ad7a40fd9c7fd11286ab26223c",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/daemon/inspect.go"
+    },
+    "docker-compose-v5.5.0-pkg-compose-create.go": {
+      "sha256": "5bf9fbeaade155073ae03ecacdfd31fe91cb1154364bf90c7694b586b6a47b55",
+      "url": "https://raw.githubusercontent.com/docker/compose/870908cc8f07f5e90acdf5d34dd1b96a4fe51d16/pkg/compose/create.go"
+    },
+    "internal/sliceutil/sliceutil.go": {
+      "sha256": "1302e8719eae63edb6b36d1d570614a53561eafce7b4a60d0e60fb6a537ee97c",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/internal/sliceutil/sliceutil.go"
+    },
+    "pkg/stringid/stringid.go": {
+      "sha256": "1dff83510190caa0156cd5e7ae3c72e6e07257d7ed0c45812b5e0039d3577440",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/pkg/stringid/stringid.go"
+    },
+    "volume/local/local.go": {
+      "sha256": "7d879cccb28ea139534f904dd0520c49d57e23e1e99e7a7ada9c3387916cc705",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/volume/local/local.go"
+    },
+    "volume/service/convert.go": {
+      "sha256": "e05c68d348d443ce6440354dc3b7cc2792dacd312e6471de281b6a4f6b32aee3",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/volume/service/convert.go"
+    },
+    "volume/service/service.go": {
+      "sha256": "a99b0c70bcf7fc682da7d4f8bd3f09348f3671e597251eda46971a5302aba25c",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/volume/service/service.go"
+    }
+  },
+  "typedSchemaBindings": {
+    "networkSchemas": [
+      {
+        "knownFields": {
+          "Attachable": "bool",
+          "ConfigFrom": "dict",
+          "ConfigOnly": "bool",
+          "Containers": "dict",
+          "Created": "str",
+          "Driver": "str",
+          "EnableIPv6": "bool",
+          "IPAM": "dict",
+          "Id": "str",
+          "Ingress": "bool",
+          "Internal": "bool",
+          "Labels": "dict",
+          "Name": "str",
+          "Options": "dict",
+          "Scope": "str"
+        },
+        "unknownFieldCount": 0
+      },
+      {
+        "knownFields": {
+          "Attachable": "bool",
+          "ConfigFrom": "dict",
+          "ConfigOnly": "bool",
+          "Containers": "dict",
+          "Created": "str",
+          "Driver": "str",
+          "EnableIPv6": "bool",
+          "IPAM": "dict",
+          "Id": "str",
+          "Ingress": "bool",
+          "Internal": "bool",
+          "Labels": "dict",
+          "Name": "str",
+          "Options": "dict",
+          "Scope": "str"
+        },
+        "unknownFieldCount": 0
+      },
+      {
+        "knownFields": {
+          "Attachable": "bool",
+          "ConfigFrom": "dict",
+          "ConfigOnly": "bool",
+          "Containers": "dict",
+          "Created": "str",
+          "Driver": "str",
+          "EnableIPv6": "bool",
+          "IPAM": "dict",
+          "Id": "str",
+          "Ingress": "bool",
+          "Internal": "bool",
+          "Labels": "dict",
+          "Name": "str",
+          "Options": "dict",
+          "Scope": "str"
+        },
+        "unknownFieldCount": 0
+      },
+      {
+        "knownFields": {
+          "Attachable": "bool",
+          "ConfigFrom": "dict",
+          "ConfigOnly": "bool",
+          "Containers": "dict",
+          "Created": "str",
+          "Driver": "str",
+          "EnableIPv6": "bool",
+          "IPAM": "dict",
+          "Id": "str",
+          "Ingress": "bool",
+          "Internal": "bool",
+          "Labels": "dict",
+          "Name": "str",
+          "Options": "dict",
+          "Scope": "str"
+        },
+        "unknownFieldCount": 0
+      }
+    ],
+    "volumeSchemas": [
+      {
+        "knownFields": {
+          "CreatedAt": "str",
+          "Driver": "str",
+          "Labels": "dict",
+          "Mountpoint": "str",
+          "Name": "str",
+          "Options": "NoneType",
+          "Scope": "str"
+        },
+        "unknownFieldCount": 0
+      }
+    ]
+  }
+}

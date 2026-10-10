@@ -301,7 +301,8 @@ class InventoryTests(unittest.TestCase):
         r=self.inventory();self.assertNotIn(SENTINEL,json.dumps(r))
         self.assertEqual(r['codes'],['SOURCE_NOT_MEASURED','GENERATOR_UNAVAILABLE','SOURCE_SHAPE_UNAVAILABLE',
                                      'IMAGE_CACHE_UNAVAILABLE','RESOURCE_SCHEMA_UNAVAILABLE','RUNTIME_IDENTITY_UNAVAILABLE',
-                                     'RUNTIME_SOCKET_UNAVAILABLE','RUNTIME_TOOLS_UNAVAILABLE'])
+                                     'RUNTIME_SOCKET_UNAVAILABLE','RUNTIME_TOOLS_UNAVAILABLE',
+                                     'RUNTIME_SOCKET_PHASE_COLLECTOR_SOURCE','RUNTIME_SOCKET_CODE_VFS_BINDING_UNAVAILABLE'])
     def test_source_ambient_variable_and_compose_overrides_removed_without_dropping_path(self):
         self.directory.joinpath(m.FILES[0]).write_text('${SOURCE_SECRET:?}')
         with patch.dict(m.os.environ,{'SOURCE_SECRET':SENTINEL,'COMPOSE_PROJECT_NAME':SENTINEL,'PATH':'/controlled'}):
