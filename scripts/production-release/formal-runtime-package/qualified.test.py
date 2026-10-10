@@ -53,7 +53,8 @@ def profile():
     source.update(srpmSha256=q.SRPM_SHA,engineSourceArchiveSha256=q.ENGINE_ARCHIVE_SHA,
         engineCommit=q.ENGINE_GIT+'a'*33,cliCommit=q.CLI_FULL_GIT,composeAssetSha256=q.COMPOSE_SHA,binaryRpmSha256=q.BINARY_RPM_SHA)
     spec=FIX['policy']();spec.update(sourceSha256=q.digest(source),poolSourceSha256=source['poolSourceReviewSha256'],
-        dockerCliSha256=q.DOCKER_SHA,composeCliSha256=q.COMPOSE_SHA)
+        dockerCliSha256=q.DOCKER_SHA,composeCliSha256=q.COMPOSE_SHA,
+        composePath='/usr/local/lib/docker/cli-plugins/docker-compose')
     return {'kind':'ENGINE25_RUNTIME_QUALIFICATION_PROFILE_V1','spec':spec,'sourceInputs':source,
         'sourceReviewReportSha256':q.sha('SYNTHETIC_REVIEW'),'poolMode':'REVIEWED_EXPLICIT_COMPLETE_INPUTS',
         'zeroConfigurationEncodings':['ABSENT'],'runtimeConfigurationRuleSha256':q.sha('SYNTHETIC_CONFIG_RULE'),
@@ -108,7 +109,7 @@ def vfs_binding(listener=None):
 class Driver(FIX['FakeDocker']):
     def run(self,*args,**kwargs):
         args=list(args)
-        if args[0]==FIX['policy']()['composePath'] and '--project-directory' not in args:
+        if args[0]=='/usr/local/lib/docker/cli-plugins/docker-compose' and '--project-directory' not in args:
             args=['docker','compose',*args[1:]]
         if args[:3]==['docker','compose','version'] and '--short' in args:return '5.5.0'
         if args[:2]==['docker','compose'] and 'ps' in args:
@@ -123,6 +124,10 @@ class Driver(FIX['FakeDocker']):
             self.calls.append((tuple(args),kwargs))
             return json.dumps({'Server':{'Version':'25.0.16','ApiVersion':'1.44','GitCommit':q.ENGINE_GIT},
                 'Client':{'Version':'25.0.14','GitCommit':q.CLI_GIT}})
+        # Synthetic reference commands retain the shared fixture's old alias.
+        # The production native reader is independently checked against the new fixed path.
+        if args[0]=='/usr/local/lib/docker/cli-plugins/docker-compose':
+            args[0]=FIX['policy']()['composePath']
         return super().run(*args,**kwargs)
 
 
@@ -537,6 +542,56 @@ class ReviewedSourceAdmissionTests(unittest.TestCase):
         self.assertEqual(result['spec'],row['spec'])
         self.assertEqual(result['sourceInputsSha256'],row['spec']['sourceSha256'])
         self.assertFalse(hasattr(selected,'TABLE_BYTES'))
+    def test_fixed_compose_path_rejects_previous_alternate_paths_and_hash_drift(self):
+        package,selected=self.captured();row=selected._reviewed_profile()
+        self.assertEqual(row['spec']['composePath'],'/usr/local/lib/docker/cli-plugins/docker-compose')
+        self.assertEqual(row['spec']['dockerPath'],'/usr/bin/docker')
+        self.assertEqual(row['spec']['composeCliSha256'],'c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b')
+        self.assertEqual(row['sourceInputs']['composeAssetSha256'],row['spec']['composeCliSha256'])
+        self.assertEqual(row['spec']['dockerCliSha256'],'bd00a70e8981680dd96f2d923e85a43644e87a7b998a83fe8eb8f5b318a6e594')
+        self.assertEqual(selected._source_profile(row,factory()),row)
+        for path in ('/usr/libexec/docker/cli-plugins/docker-compose',
+                '/usr/lib/docker/cli-plugins/docker-compose',
+                '/usr/local/libexec/docker/cli-plugins/docker-compose','/tmp/docker-compose'):
+            changed=copy.deepcopy(row);changed['spec']['composePath']=path
+            with self.subTest(path=path),self.assertRaisesRegex(selected.Rejected,'^SOURCE_PROFILE_INVALID$'):
+                selected._source_profile(changed,factory())
+        for field in ('dockerCliSha256','composeCliSha256'):
+            changed=copy.deepcopy(row);changed['spec'][field]='0'*64
+            with self.subTest(field=field),self.assertRaisesRegex(selected.Rejected,'^SOURCE_PROFILE_INVALID$'):
+                selected._source_profile(changed,factory())
+    def test_fixed_native_reader_path_keeps_hash_and_permission_rejections(self):
+        import stat
+        from unittest.mock import Mock,call
+        package,selected=self.captured();row=selected._reviewed_profile();base=factory()
+        session=selected._Session(base,row,None)
+        docker='/usr/bin/docker';compose='/usr/local/lib/docker/cli-plugins/docker-compose'
+        raw={docker:b'SYNTHETIC_DOCKER_BINARY',compose:b'SYNTHETIC_COMPOSE_BINARY'}
+        identities={path:('SYNTHETIC_FIXED_FILE',index) for index,path in enumerate((docker,compose))}
+        reader=Mock();reader.read.side_effect=lambda path,limit,executable:(raw[path],identities[path])
+        with patch.object(selected.IDENTITY,'_reader_factory',return_value=reader),                patch.object(selected,'DOCKER_SHA',selected.sha(raw[docker])),                patch.object(selected,'COMPOSE_SHA',selected.sha(raw[compose])),                patch.object(base.frozen.shutil,'which',side_effect=AssertionError('AMBIENT_PATH_FORBIDDEN')):
+            result=session.native_tools()
+            self.assertEqual(reader.read.call_args_list,[call(docker,128*1024**2,executable=True),
+                call(compose,128*1024**2,executable=True)])
+            self.assertEqual(result,{path:{'sha256':selected.sha(raw[path]),'identity':identities[path]} for path in (docker,compose)})
+            raw[compose]=b'SYNTHETIC_CHANGED_COMPOSE_BINARY'
+            with self.assertRaisesRegex(selected.Rejected,'^NATIVE_TOOL_CHANGED$'):session.native_tools()
+        permission_error=selected.IDENTITY.Rejected('PERMISSIONS_INVALID')
+        reader.read.side_effect=[(raw[docker],identities[docker]),permission_error]
+        with patch.object(selected.IDENTITY,'_reader_factory',return_value=reader):
+            with self.assertRaises(selected.IDENTITY.Rejected) as found:session.native_tools()
+        self.assertIs(found.exception,permission_error)
+        for reason,info in (('UID',SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=501,st_nlink=1)),
+                ('WRITABLE',SimpleNamespace(st_mode=stat.S_IFREG|0o775,st_uid=0,st_nlink=1))):
+            paths={path:Mock() for path in (docker,compose)}
+            for path in paths.values():
+                path.is_file.return_value=True;path.is_symlink.return_value=False
+                path.stat.return_value=SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=0,st_nlink=1)
+            paths[compose].stat.return_value=info
+            with self.subTest(reason=reason),patch.object(base,'Path',side_effect=lambda literal:paths[literal]):
+                with self.assertRaisesRegex(base.Rejected,'^CLI_SOURCE_CHANGED$') as found:
+                    session.old_permissions(row['spec'])
+            self.assertEqual(base.native_permission_failure(found.exception),('COMPOSE',reason))
     def test_unbound_empty_unknown_multiple_and_missing_schema_cannot_select(self):
         package,selected=self.captured();row=selected._reviewed_profile()
         missing=copy.deepcopy(row);missing.pop('runtimeConfigurationRuleSha256')

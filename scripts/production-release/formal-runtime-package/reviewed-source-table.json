@@ -48,7 +48,7 @@
         "NetworkID"
       ],
       "composeCliSha256": "c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b",
-      "composePath": "/usr/libexec/docker/cli-plugins/docker-compose",
+      "composePath": "/usr/local/lib/docker/cli-plugins/docker-compose",
       "composeVersion": "5.5.0",
       "defaultPools": [
         {

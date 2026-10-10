@@ -9,8 +9,8 @@ from types import MappingProxyType,SimpleNamespace,ModuleType,MethodType,Functio
 import uuid
 
 HERE=Path(__file__).resolve().parent
-REVIEWED_SOURCE_TABLE_SHA256='021dc4e4e54cbffe84200c41abc938b761383dbe81e3735f4ed609433da589c4'
-REVIEWED_PROFILE_CANONICAL_SHA256='2e459113762e616f2007f1bc6328b25b4e13d8abdffc4ea9e556ea48cfda4dea'
+REVIEWED_SOURCE_TABLE_SHA256='fe094929ad54d3eb4e518b69c78683258ff68418f149a3f11c96b1b613b7f66e'
+REVIEWED_PROFILE_CANONICAL_SHA256='f460463c43bc2aaea3cc029c4a2e76cbd9cbb16890b29d31f507c68fa05be122'
 _FIXED_REVIEWED_PROFILE={'dockerdBinarySha256': '05ba54e4ba99a3018891bc190f8be6ccdb2d483b4da715140f34ad73c5d6a1f3',
  'kind': 'ENGINE25_RUNTIME_QUALIFICATION_PROFILE_V1',
  'poolMode': 'REVIEWED_BUILTIN_ZERO_INPUTS',
@@ -50,7 +50,7 @@ _FIXED_REVIEWED_PROFILE={'dockerdBinarySha256': '05ba54e4ba99a3018891bc190f8be6c
                                    'MacAddress',
                                    'NetworkID'],
           'composeCliSha256': 'c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b',
-          'composePath': '/usr/libexec/docker/cli-plugins/docker-compose',
+          'composePath': '/usr/local/lib/docker/cli-plugins/docker-compose',
           'composeVersion': '5.5.0',
           'defaultPools': [{'base': '172.17.0.0/16', 'size': 16},
                            {'base': '172.18.0.0/16', 'size': 16},
@@ -315,7 +315,7 @@ def _source_profile(profile,base):
         and spec['engineVersion']=='25.0.16' and spec['engineApiVersion']=='1.44'
         and spec['dockerCliVersion']=='25.0.14' and spec['composeVersion']=='5.5.0'
         and spec['nativePlatform']=='linux/x86_64' and spec['dockerPath']=='/usr/bin/docker'
-        and spec['composePath']=='/usr/libexec/docker/cli-plugins/docker-compose'
+        and spec['composePath']=='/usr/local/lib/docker/cli-plugins/docker-compose'
         and spec['dockerCliSha256']==DOCKER_SHA and spec['composeCliSha256']==COMPOSE_SHA)
     return copy.deepcopy(profile)
 
@@ -358,11 +358,11 @@ class _Session:
         self._diagnostic_state=None
     def native_tools(self):
         reader=IDENTITY._reader_factory();rows={}
-        for path in ('/usr/bin/docker','/usr/libexec/docker/cli-plugins/docker-compose'):
+        for path in ('/usr/bin/docker','/usr/local/lib/docker/cli-plugins/docker-compose'):
             raw,identity=reader.read(path,128*1024**2,executable=True)
             rows[path]={'sha256':sha(raw),'identity':identity}
         need(rows['/usr/bin/docker']['sha256']==DOCKER_SHA
-            and rows['/usr/libexec/docker/cli-plugins/docker-compose']['sha256']==COMPOSE_SHA,'NATIVE_TOOL_CHANGED')
+            and rows['/usr/local/lib/docker/cli-plugins/docker-compose']['sha256']==COMPOSE_SHA,'NATIVE_TOOL_CHANGED')
         return rows
     def collection_tools(self):
         reader=IDENTITY._reader_factory();rows={}
