@@ -617,6 +617,255 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         i.validate_result(value, self.binding)
 
+    def test_current_scripts_writable_only_tightens_directory_preserving_other_bits_and_sources(self):
+        path = self.current / 'scripts'
+        unknown = path / 'unknown-synthetic-file'
+        unknown.write_bytes(b'synthetic opaque content not read by repair')
+        original_chmod = os.fchmod
+        for mode in (0o775, 0o777, 0o1702, 0o3777):
+            with self.subTest(mode=mode):
+                path.chmod(mode)
+                before = i.file_identity(path.stat())
+                leaves = {p: i.file_identity(p.stat()) for p in [*self.original, unknown]}
+                changes = []
+                def chmod(fd, target):
+                    changes.append((os.fstat(fd).st_ino, target))
+                    return original_chmod(fd, target)
+                with patch.object(os, 'fchmod', chmod):
+                    value = self.run_install()
+                self.assertEqual(value['status'], 'COMPLETED')
+                self.assertEqual(changes, [(before[1], mode & ~0o022)])
+                after = i.file_identity(path.stat())
+                self.assertEqual(stat.S_IMODE(after[2]), mode & ~0o022)
+                self.assertEqual(tuple(before[n] for n in (0, 1, 3, 4, 5, 6, 7)),
+                                 tuple(after[n] for n in (0, 1, 3, 4, 5, 6, 7)))
+                self.assertEqual(leaves, {p: i.file_identity(p.stat()) for p in leaves})
+                self.assert_original()
+                self.assertEqual(self.timer, 'active')
+
+    def test_current_scripts_safe_directory_uses_original_strict_path_without_chmod(self):
+        path = self.current / 'scripts'
+        for mode in (0o700, 0o755, 0o1755):
+            with self.subTest(mode=mode):
+                path.chmod(mode)
+                before = i.file_identity(path.stat())
+                with patch.object(os, 'fchmod', side_effect=AssertionError('no directory repair')):
+                    self.assertEqual(self.run_install()['status'], 'COMPLETED')
+                self.assertEqual(i.file_identity(path.stat()), before)
+
+    def test_current_scripts_wrong_owner_type_and_symlink_are_never_repaired(self):
+        path = self.current / 'scripts'
+        path.chmod(0o777)
+        item = path.stat(); self.wrong_owners.add((item.st_dev, item.st_ino))
+        with patch.object(os, 'fchmod', side_effect=AssertionError('not authorized')):
+            value = self.run_install()
+        self.assertEqual(value['code'], 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_OWNER')
+        self.assertFalse(value['mutationAttempted'])
+        self.wrong_owners.clear()
+        saved = self.current / 'synthetic-scripts-original'
+        path.rename(saved)
+        for shape in ('file', 'symlink'):
+            with self.subTest(shape=shape):
+                if shape == 'file': path.write_bytes(b'synthetic wrong type')
+                else: path.symlink_to(saved)
+                with patch.object(os, 'fchmod', side_effect=AssertionError('not authorized')):
+                    value = self.run_install()
+                self.assertEqual(value['code'], 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_TYPE')
+                self.assertFalse(value['mutationAttempted'])
+                path.unlink()
+        saved.rename(path)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+        self.assert_original()
+
+    def test_current_scripts_only_exact_loaded_single_literal_authorizes_repair(self):
+        class Foreign(RuntimeError): pass
+        class Sub(t.Rejected): pass
+        class Text(str): pass
+        literal = 'ANCESTOR_CURRENT_RELEASE_WRITABLE'
+        path = self.current / 'scripts'; path.chmod(0o777)
+        authority = t.Authority()
+        try:
+            for error in (Foreign(literal), Sub(literal), i.Rejected(literal),
+                          t.Rejected(Text(literal)), t.Rejected(literal, 'extra'),
+                          t.Rejected('ANCESTOR_CURRENT_RELEASE_OWNER'), t.Rejected('SYNTHETIC_SECRET')):
+                result = i.empty_result(self.binding)
+                with self.subTest(error_type=type(error).__name__), patch.object(authority, 'child', side_effect=error), \
+                     patch.object(os, 'fchmod', side_effect=AssertionError('not authorized')):
+                    with self.assertRaises(type(error)) as caught:
+                        i.current_scripts(authority, t, result, lambda: self.fail('must not guard'))
+                    self.assertIs(caught.exception, error)
+                self.assertFalse(result['mutationAttempted'])
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+        finally:
+            authority.close()
+
+    def test_current_scripts_fd_cleanup_and_no_unknown_file_reads(self):
+        path = self.current / 'scripts'
+        for refusal in (None, 1, 2):
+            with self.subTest(refusal=refusal):
+                path.chmod(0o777)
+                authority = t.Authority()
+                opened = set()
+                original_open, original_close = os.open, os.close
+                def opening(*args, **kwargs):
+                    fd = original_open(*args, **kwargs); opened.add(fd); return fd
+                def closing(fd):
+                    opened.discard(fd); return original_close(fd)
+                guards = [0]
+                def guard():
+                    guards[0] += 1
+                    if guards[0] == refusal: raise i.Rejected('SOURCE_INVALID')
+                    authority.check()
+                result = i.empty_result(self.binding)
+                with patch.object(os, 'open', opening), patch.object(os, 'close', closing), \
+                     patch.object(os, 'read', side_effect=AssertionError('no contents')), \
+                     patch.object(os, 'listdir', side_effect=AssertionError('no listing')), \
+                     patch.object(os, 'scandir', side_effect=AssertionError('no scan')):
+                    try:
+                        if refusal is None:
+                            child = i.current_scripts(authority, t, result, guard)
+                            self.assertIn(child, authority.fds)
+                            self.assertTrue(result['mutationAttempted'])
+                        else:
+                            with self.assertRaisesRegex(i.Rejected, '^SOURCE_INVALID$'):
+                                i.current_scripts(authority, t, result, guard)
+                            self.assertEqual(result['mutationAttempted'], refusal == 2)
+                    finally:
+                        authority.close()
+                self.assertEqual(opened, set())
+
+    def test_current_scripts_replacement_before_open_rejected_without_mutation(self):
+        path = self.current / 'scripts'; path.chmod(0o777)
+        saved = self.current / 'synthetic-scripts-original'
+        authority = t.Authority()
+        original_open = os.open
+        swapped = [False]
+        def opening(name, *args, **kwargs):
+            if name == 'scripts' and kwargs.get('dir_fd') == authority.current_fd and not swapped[0]:
+                swapped[0] = True; path.rename(saved); path.mkdir(mode=0o777); path.chmod(0o777)
+            return original_open(name, *args, **kwargs)
+        result = i.empty_result(self.binding)
+        try:
+            with patch.object(os, 'open', opening), patch.object(os, 'fchmod', side_effect=AssertionError('identity changed')):
+                with self.assertRaisesRegex(i.Rejected, '^CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_IDENTITY$'):
+                    i.current_scripts(authority, t, result, lambda: self.fail('not reached'))
+            self.assertFalse(result['mutationAttempted'])
+            self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o777)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+        finally:
+            authority.close()
+
+    def test_current_scripts_namespace_replacement_during_guard_is_never_followed(self):
+        path = self.current / 'scripts'
+        for phase in (2, 3):
+            with self.subTest(phase=phase):
+                path.chmod(0o777)
+                saved = self.current / 'synthetic-scripts-original'
+                source_calls = [0]
+                def source():
+                    source_calls[0] += 1
+                    if source_calls[0] == phase:
+                        path.rename(saved); path.mkdir(mode=0o777); path.chmod(0o777)
+                self.source_hook = source
+                value = self.run_install()
+                self.source_hook = None
+                self.assertEqual(value['code'], 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_IDENTITY')
+                self.assertEqual(value['mutationAttempted'], phase == 3)
+                self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED' if phase == 3 else 'FAILED')
+                self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o755 if phase == 3 else 0o777)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+                self.assertFalse(self.destination.exists())
+                path.rmdir(); saved.rename(path)
+                self.assert_original()
+
+    def test_current_scripts_current_source_and_services_guards_before_and_after_chmod(self):
+        path = self.current / 'scripts'
+        other = self.base / 'releases' / ('20261011T000001Z-' + i.BASELINE[:12])
+        other.mkdir(mode=0o700)
+        for change in ('current', 'source', 'services', 'owner'):
+            for phase in (2, 3):
+                with self.subTest(change=change, phase=phase):
+                    path.chmod(0o777)
+                    self.snapshot_calls = 0
+                    source_calls = [0]
+                    def source():
+                        source_calls[0] += 1
+                        if source_calls[0] == phase:
+                            if change == 'current':
+                                (self.base / 'current').unlink(); (self.base / 'current').symlink_to(other)
+                            elif change == 'source': raise i.Rejected('SOURCE_INVALID')
+                            elif change == 'owner':
+                                row = path.stat(); self.wrong_owners.add((row.st_dev, row.st_ino))
+                    self.source_hook = source
+                    self.snapshot_hook = lambda count: ('b' if change == 'services' and count == phase else 'a') * 64
+                    value = self.run_install()
+                    expected = {'current': 'AUTHORITY_RECHECK_AUTHORITY_CHANGED', 'source': 'SOURCE_INVALID',
+                                'services': 'SERVICES_CHANGED', 'owner': 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_IDENTITY'}[change]
+                    self.assertEqual(value['code'], expected)
+                    self.assertEqual(value['mutationAttempted'], phase == 3)
+                    self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED' if phase == 3 else 'FAILED')
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755 if phase == 3 else 0o777)
+                    self.assertFalse(self.destination.exists())
+                    self.assertEqual(self.timer, 'active')
+                    self.source_hook = self.snapshot_hook = None
+                    self.wrong_owners.clear()
+                    (self.base / 'current').unlink(); (self.base / 'current').symlink_to(self.current)
+                    self.assert_original()
+
+    def test_current_scripts_fchmod_failure_is_unverified_and_suppresses_raw_error(self):
+        path = self.current / 'scripts'; path.chmod(0o777)
+        with patch.object(os, 'fchmod', side_effect=PermissionError(i.errno.EACCES, 'SYNTHETIC_SECRET_PATH')):
+            value = self.run_install()
+        self.assertEqual(value['code'], 'CURRENT_SCRIPTS_ACCESS_DENIED')
+        self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
+        self.assertTrue(value['mutationAttempted'])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+        self.assertFalse(self.destination.exists())
+        self.assertNotIn('SYNTHETIC_SECRET_PATH', i.canonical(value).decode())
+        self.assertEqual(self.timer, 'active')
+
+    def test_current_scripts_following_leaf_writable_refusal_is_not_repaired(self):
+        path = self.current / 'scripts'
+        original_chmod = os.fchmod
+        for leaf, stage in (('backup-aws-mysql.sh', 'BACKUP_SCRIPT'), ('mysql-dump-restore-normalizer.sed', 'NORMALIZER')):
+            with self.subTest(leaf=leaf):
+                path.chmod(0o777); target = path / leaf; target.chmod(0o622)
+                changes = []
+                def chmod(fd, mode):
+                    changes.append((os.fstat(fd).st_ino, mode)); return original_chmod(fd, mode)
+                with patch.object(os, 'fchmod', chmod):
+                    value = self.run_install()
+                self.assertEqual(value['code'], stage + '_SOURCE_WRITABLE')
+                self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
+                self.assertEqual(changes, [(path.stat().st_ino, 0o755)])
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o622)
+                self.assertFalse(self.destination.exists())
+                target.chmod(0o600)
+                self.assert_original()
+
+    def test_current_scripts_budget_exhaustion_prevents_chmod(self):
+        path = self.current / 'scripts'; path.chmod(0o777)
+        with patch.object(os, 'fchmod', side_effect=AssertionError('budget expired')):
+            value = self.run_install(clock=lambda: 760, deadline=760)
+        self.assertEqual(value['code'], 'SERVICE_BUSY')
+        self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o777)
+        self.assertEqual(self.timer, 'active')
+
+    def test_current_scripts_repaired_directory_is_tracked_by_original_authority(self):
+        path = self.current / 'scripts'; path.chmod(0o777)
+        authority = t.Authority()
+        result = i.empty_result(self.binding)
+        try:
+            child = i.current_scripts(authority, t, result, authority.check)
+            self.assertTrue(any(row[2] == child for row in authority.directories))
+            authority.check()
+            path.chmod(0o777)
+            with self.assertRaisesRegex(t.Rejected, '^AUTHORITY_CHANGED$'):
+                authority.check()
+        finally:
+            authority.close()
+
 
 class ContractTests(unittest.TestCase):
     def setUp(self):
