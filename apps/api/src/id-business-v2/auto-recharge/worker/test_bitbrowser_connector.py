@@ -227,6 +227,80 @@ class BitBrowserConnectorTests(unittest.TestCase):
         self.assertNotIn("123456", str(job.callback.send.call_args_list))
         self.assertIsNone(job.login_code)
 
+    def test_code_expiry_is_preserved_only_in_memory_until_the_original_waiter_receives_it(self):
+        job = connector.LocalJob(payload())
+        job.callback.send = MagicMock(return_value={})
+        expiry = connector.datetime.fromtimestamp(101, connector.timezone.utc).isoformat()
+        async def scenario():
+            waiting = asyncio.create_task(job.wait_for_code(2))
+            for _ in range(50):
+                if job.waiting_for_code:
+                    break
+                await asyncio.sleep(.005)
+            job.signal_code("123456", expiry)
+            self.assertEqual(await waiting, {"code": "123456", "expiresAt": expiry})
+        with patch.object(connector.time, "time", return_value=100):
+            asyncio.run(scenario())
+        self.assertIsNone(job.login_code)
+        self.assertFalse(job.waiting_for_code)
+        self.assertNotIn("123456", str(job.callback.send.call_args_list))
+        self.assertNotIn(expiry, str(job.callback.send.call_args_list))
+        self.assertNotIn("expiresAt", str(job.state()))
+
+    def test_code_expired_while_queued_is_cleared_before_returning_to_the_browser(self):
+        job = connector.LocalJob(payload())
+        job.callback.send = MagicMock(return_value={})
+        expiry = connector.datetime.fromtimestamp(101, connector.timezone.utc).isoformat()
+        async def scenario(clock):
+            waiting = asyncio.create_task(job.wait_for_code(2))
+            for _ in range(50):
+                if job.waiting_for_code:
+                    break
+                await asyncio.sleep(.005)
+            job.signal_code("123456", expiry)
+            queued = job.login_code
+            clock.return_value = 102
+            with self.assertRaises(Stop) as stopped:
+                await waiting
+            self.assertEqual(stopped.exception.report["reason"], "login_code_expired")
+            self.assertEqual(queued, {})
+        with patch.object(connector.time, "time", return_value=100) as clock:
+            asyncio.run(scenario(clock))
+        self.assertIsNone(job.login_code)
+        self.assertFalse(job.waiting_for_code)
+
+    def test_already_expired_code_wakes_the_original_waiter_for_manual_completion(self):
+        job = connector.LocalJob(payload())
+        job.callback.send = MagicMock(return_value={})
+        expiry = connector.datetime.fromtimestamp(99, connector.timezone.utc).isoformat()
+        async def scenario():
+            waiting = asyncio.create_task(job.wait_for_code(2))
+            for _ in range(50):
+                if job.waiting_for_code:
+                    break
+                await asyncio.sleep(.005)
+            with self.assertRaises(Stop) as stopped:
+                job.signal_code("123456", expiry)
+            self.assertEqual(stopped.exception.report["reason"], "login_code_expired")
+            with self.assertRaises(Stop) as stopped:
+                await waiting
+            self.assertEqual(stopped.exception.report["reason"], "login_code_expired")
+        with patch.object(connector.time, "time", return_value=100):
+            asyncio.run(scenario())
+        self.assertIsNone(job.login_code)
+        self.assertFalse(job.waiting_for_code)
+
+    def test_invalid_expiry_is_rejected_without_accepting_a_code(self):
+        for expiry in (True, 1, "invalid", "2030-01-01T00:00:00", "" ):
+            with self.subTest(expiry=expiry):
+                job = connector.LocalJob(payload())
+                job.waiting_for_code = True
+                with self.assertRaises(Stop) as stopped:
+                    job.signal_code("123456", expiry)
+                self.assertEqual(stopped.exception.report["reason"], "invalid_login_code")
+                self.assertIsNone(job.login_code)
+                self.assertFalse(job.code_event.is_set())
+
     def test_unknown_payment_resolution_has_no_browser_session_or_payment_data(self):
         value = resolution_payload()
         self.assertIs(connector.validate_payload(value), value)

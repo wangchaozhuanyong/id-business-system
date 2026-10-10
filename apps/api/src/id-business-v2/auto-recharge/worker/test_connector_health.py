@@ -74,6 +74,8 @@ class ConnectorHealthTests(unittest.TestCase):
         job_id = '11111111-1111-4111-8111-111111111111'
         for action, body, method, args in (
                 ('code', {'code': '123456'}, 'signal_code', ('123456',)),
+                ('code', {'code': '123456', 'expiresAt': '2030-01-01T00:00:00.000Z'},
+                 'signal_code', ('123456', '2030-01-01T00:00:00.000Z')),
                 ('resume', {}, 'signal_resume', ()),
                 ('cancel', {}, 'signal_cancel', ())):
             with self.subTest(action=action):
