@@ -985,15 +985,18 @@ def api_native_projection_probe(d, metadata, actual, original, restored):
 
 
 def recovery_backups(d, source, previous, *, commit=RECOVERY_COMMIT, manifest=None, record=None):
-    audit = legacy(d).audit_receipt(d, source / 'before-audit.json')
+    original_reader = legacy(d)
+    audit = original_reader.audit_receipt(d, source / 'before-audit.json')
     original = legacy(d).audit_receipt(d, previous / 'after-audit.json')
     d.require(audit['checksSha256'] == original['checksSha256'], 'ONLINE_RECHARGE_AUDIT_RULES_CHANGED')
+    original_reader.workspace_probe_step(d, 'PENDING_ONLINE_BACKUP_SCHEMA')
     backup = closed_recovery_json(d, (source / 'backup-verification.json').read_bytes())
     d.require(isinstance(backup, dict) and set(backup) == {'name', 'sha256', 'size', 's3Verified'}
               and re.fullmatch(r'id-business-v2-[0-9]{8}T[0-9]{6}Z\.sql\.gz', backup.get('name', ''))
               and re.fullmatch(r'[a-f0-9]{64}', backup.get('sha256', '')) and type(backup.get('size')) is int
               and backup['size'] > 0 and backup.get('s3Verified') is True, 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
     path = d.BASE / 'backups/mysql' / backup['name']
+    original_reader.workspace_probe_step(d, 'PENDING_ONLINE_BACKUP_LOCAL')
     d.require(path.is_file() and not path.is_symlink() and path.resolve() == path
               and path.stat().st_size == backup['size'] and file_digest(path) == backup['sha256'],
               'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
@@ -1011,6 +1014,7 @@ def recovery_backups(d, source, previous, *, commit=RECOVERY_COMMIT, manifest=No
         manifest = {'commit': commit, 'workspaceBackupBeforeRelease': workspace.get('name'),
                     'workspaceBackupSha256': fingerprint(workspace)}
     else:
+        original_reader.workspace_probe_step(d, 'PENDING_ONLINE_BACKUP_MANIFEST')
         d.require(manifest.get('backupBeforeRelease') == backup['name'], 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
     workspace_backup_receipt(d, source, previous, {'workspaceVolume': volume}, manifest,
                              {'workspaceBackupSha256': fingerprint(workspace)} if record is None else record)
