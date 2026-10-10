@@ -180,6 +180,27 @@ const onlineBackupSourceRecoveryControls = () => {
     ]);
   }
 };
+const backupRetentionProtectionControls = () => {
+  if (
+    changed.some((path) =>
+      [
+        'scripts/backup-aws-mysql.sh',
+        'scripts/backup-retention-protection.py',
+        'scripts/backup-retention-protection.test.py',
+        'scripts/production-release/backup-retention-install.py',
+        'scripts/production-release/backup-retention-install.test.py',
+        '.github/workflows/production-release.yml',
+        'scripts/production-release/validate-release-selection.sh',
+        'scripts/ci-recharge-check.mjs'
+      ].includes(path)
+    )
+  ) {
+    run('python3', ['-B', 'scripts/backup-retention-protection.test.py']);
+    run('python3', ['-B', 'scripts/production-release/backup-retention-install.test.py']);
+    if (part === 'release-controls' || !changed.includes('scripts/backup-aws-mysql.sh'))
+      run('node', ['--test', 'scripts/aws-mysql-backup.test.mjs']);
+  }
+};
 const onlineRecoveryGrantControls = () => {
   if (
     changed.some((path) =>
@@ -291,6 +312,7 @@ if (part === 'guards') {
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
   onlineBackupSourceRecoveryControls();
+  backupRetentionProtectionControls();
   if (
     changed.some((path) =>
       [
@@ -437,6 +459,7 @@ if (part === 'guards') {
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
   onlineBackupSourceRecoveryControls();
+  backupRetentionProtectionControls();
 } else if (part === 'admin') {
   for (const args of adminCheckCommands(mode, changed)) npm(...args);
 } else if (part === 'api') {
