@@ -2962,7 +2962,7 @@ def declaration_equivalence_saved_invocation(d, *, producer):
     return {'raw_bytes': raw, 'command_id': value['CommandId']}
 
 
-FORMAL_RUNTIME_DRIVER_SHA256 = 'a7f6025a1662dcb8b35c66ee95d873c0359c8c6fdc4b7ccbe6ab4b67b862f774'
+FORMAL_RUNTIME_DRIVER_SHA256 = 'd3dd409370f24572a42061f32a093373c665c1ab827a43d786d7ce8eb29cb691'
 
 
 class DeclarationDriverError(RuntimeError):
@@ -3029,6 +3029,7 @@ DECLARATION_DIAGNOSTIC_CODES = frozenset((
     'VFS_BOUND_CAPABILITY_REQUIRED','VFS_DIAG_UNAVAILABLE','VFS_DRIFT',
     'VFS_NODE_MISMATCH','VFS_QUERY_INVALID','VFS_REPORT_INVALID',
     'VFS_SOURCE_UNMEASURED','VFS_WIRE_INVALID',
+    'FILE_EXISTS_ERROR','FILE_NOT_FOUND_ERROR',
 ))
 
 def declaration_failure_diagnostic(error):
