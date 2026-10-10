@@ -468,75 +468,127 @@ def validate_migration_origin(namespace, context):
     return namespace['migration_successor_marker'](context)
 
 
-def validate_online_workspace_receipt(namespace, receipt, expected, mode):
-    """Admit eight services only through this run's verified online origin."""
-    before = {}
-    if mode == 'readback':
-        path = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
-        before = json.loads(path.read_text()) if path.is_file() else {}
+def validate_online_origin(namespace, context):
+    fields = {'version', 'release', 'commit', 'manifestSha256', 'buildProofSha256', 'files', 'migrationState', 'binding'}
+    binding_fields = {'image', 'reference', 'environmentSha256', 'configurationSha256', 'volumeIdentitySha256',
+                      'apiContainerId', 'containerId', 'startedAtSha256'}
+    if (not isinstance(context, dict) or set(context) != fields or type(context['version']) is not int
+            or context['version'] != 1 or not isinstance(context['release'], str) or not Path(context['release']).is_absolute()
+            or not re.fullmatch(r'[a-f0-9]{40}', context['commit'] or '')
+            or any(not re.fullmatch(r'[a-f0-9]{64}', context[n] or '') for n in ('manifestSha256', 'buildProofSha256'))
+            or not isinstance(context['files'], dict) or set(context['files']) != set(namespace['ONLINE_ORIGIN_FILES'])
+            or any(not isinstance(n, str) or not re.fullmatch(r'[a-f0-9]{64}', n) for n in context['files'].values())
+            or context['files']['release-manifest.json'] != context['manifestSha256']
+            or not isinstance(context['binding'], dict) or set(context['binding']) != binding_fields):
+        raise RuntimeError('API_ADMIN_ONLINE_ORIGIN_RECEIPT_CHANGED')
+    binding = context['binding']; state = context['migrationState']
+    if (not isinstance(state, dict) or set(state) != {'name', 'sha256', 'status', 'schemaVerified', 'appliedMigrationsSha256'}
+            or state.get('name') != '20261009093000_online_recharge' or state.get('status') != 'APPLIED'
+            or state.get('sha256') != '44966182c1bf38290b01f665a4c2c863b052677c5e0024b900137f1d7f11eb95'
+            or state.get('schemaVerified') is not True or not re.fullmatch(r'[a-f0-9]{64}', state.get('appliedMigrationsSha256', ''))
+            or not isinstance(binding['image'], str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', binding['image'])
+            or not isinstance(binding['reference'], str) or not re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release:'
+                r'[a-f0-9]{40}-[1-9][0-9]*-[1-9][0-9]*-online-recharge', binding['reference'])
+            or any(not isinstance(binding[n], str) or not re.fullmatch(r'[a-f0-9]{64}', binding[n]) for n in
+                ('environmentSha256', 'configurationSha256', 'volumeIdentitySha256', 'apiContainerId', 'containerId', 'startedAtSha256'))):
+        raise RuntimeError('API_ADMIN_ONLINE_ORIGIN_RECEIPT_CHANGED')
+    return namespace['online_marker'](context)
+
+
+def validate_online_workspace_receipt(namespace, receipt, expected, mode, *, before=None, environment=None):
+    """Validate the one Workspace successor protocol without reading files or services."""
+    before = before if isinstance(before, dict) else {}
+    environment = environment if environment is not None else {}
     services = receipt.get('services', {})
-    selected = (receipt.get('onlineOrigin') is not None
-        or receipt.get('preservedOnlineOrigin') is not None
-        or receipt.get('onlineSuccessorVerified') is True
+    selected = (receipt.get('onlineRechargeOrigin') is not None
+        or receipt.get('preservedOnlineRechargeOrigin') is not None
+        or receipt.get('onlineNetworkRebind') is not None
+        or receipt.get('servicesRebound') == ['online-recharge']
         or isinstance(services, dict) and 'online-recharge' in services
-        or isinstance(before, dict) and before.get('onlineOrigin') is not None)
+        or before.get('onlineRechargeOrigin') is not None
+        or isinstance(before.get('services'), dict) and 'online-recharge' in before['services'])
     if not selected:
         return False
-    context = receipt.get('onlineOrigin') if mode == 'preflight' else before.get('onlineOrigin')
     code = 'API_ADMIN_ONLINE_ORIGIN_RECEIPT_CHANGED'
+    source = receipt if mode == 'preflight' else before
+    context = source.get('onlineRechargeOrigin')
     try:
-        namespace['validate_online_successor_origin'](context)
-        marker = namespace['online_successor_marker'](context)
+        marker = validate_online_origin(namespace, context)
+        validate_migration_origin(namespace, source.get('migrationOrigin'))
     except (KeyError, TypeError, ValueError, RuntimeError):
         raise RuntimeError(code) from None
-    if context['commit'] != (receipt.get('commit') if mode == 'preflight' else before.get('commit')):
-        raise RuntimeError(code)
     names = {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge',
              'auto-registration', 'online-recharge'}
     keys = {'image', 'reference', 'status', 'health', 'containerId', 'startedAtSha256',
             'environmentSha256', 'configurationSha256'}
-    if (receipt.get('onlineSuccessorVerified') is not True
-            or type(receipt.get('observedServiceCount')) is not int
-            or receipt['observedServiceCount'] != len(names)
-            or not isinstance(services, dict) or set(services) != names
-            or any(not isinstance(row, dict) or set(row) != keys or row.get('status') != 'running'
-                or (row.get('health') not in ('healthy', None) if name == 'caddy'
-                    else row.get('health') != 'healthy')
-                or not re.fullmatch(r'sha256:[a-f0-9]{64}', row.get('image', ''))
-                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9:/@._-]{0,511}', row.get('reference', ''))
-                or any(not re.fullmatch(r'[a-f0-9]{64}', row.get(key, '')) for key in
+    def matches(pattern, value):
+        return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+    def complete(rows):
+        return (isinstance(rows, dict) and set(rows) == names
+            and all(isinstance(row, dict) and set(row) == keys and row['status'] == 'running'
+                and (row['health'] in ('healthy', None) if name == 'caddy' else row['health'] == 'healthy')
+                and matches(r'sha256:[a-f0-9]{64}', row['image'])
+                and matches(r'[A-Za-z0-9][A-Za-z0-9:/@._-]{0,511}', row['reference'])
+                and all(matches(r'[a-f0-9]{64}', row[key]) for key in
                     ('containerId', 'startedAtSha256', 'environmentSha256', 'configurationSha256'))
-                for name, row in services.items())
-            or services['online-recharge']['configurationSha256'] != context['engineConfigurationSha256']):
+                for name, row in rows.items()))
+    if (not complete(services)
+            or source.get('guards') != source['migrationOrigin']['guards']
+            or type(source.get('freeBytes')) is not int or source['freeBytes'] <= 6 * 1024**3
+            or any(services['online-recharge'][key] != context['binding'][key] for key in
+                ('image', 'reference', 'environmentSha256', 'configurationSha256'))):
         raise RuntimeError(code)
-    if mode == 'readback':
-        prior = before.get('services', {})
-        if (before.get('status') != 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED'
-                or before.get('mode') != 'preflight'
-                or before.get('onlineSuccessorVerified') is not True
-                or type(before.get('observedServiceCount')) is not int
-                or before.get('observedServiceCount') != len(names)
-                or before.get('releaseCandidateCommit') != expected
-                or os.environ.get('RELEASE_COMMIT') != expected
-                or before.get('commit') != os.environ.get('EXPECTED_CURRENT')
-                or not re.fullmatch(r'[a-f0-9]{40}', os.environ.get('EXPECTED_CURRENT', ''))
-                or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ID', ''))
-                or not re.fullmatch(r'[1-9][0-9]*', os.environ.get('GITHUB_RUN_ATTEMPT', ''))
-                or before.get('workflowRunId') != os.environ['GITHUB_RUN_ID']
-                or before.get('workflowRunAttempt') != os.environ['GITHUB_RUN_ATTEMPT']
-                or receipt.get('preservedOnlineOrigin') != marker
-                or receipt.get('onlineEngineRebound') is not True
-                or receipt.get('migrationPerformed') is not False
-                or not isinstance(prior, dict) or set(prior) != names
-                or any(services[name] != prior[name] for name in
-                    ('mysql', 'media-resolver', 'auto-recharge', 'auto-registration'))
-                or any(services[name][key] != prior.get(name, {}).get(key)
-                    for name in ('online-recharge', 'caddy')
-                    for key in ('image', 'reference', 'environmentSha256'))
-                or services['online-recharge']['configurationSha256']
-                    != prior['online-recharge'].get('configurationSha256')
-                or services['online-recharge']['containerId'] == prior['online-recharge'].get('containerId')):
+    if mode == 'preflight':
+        if receipt.get('commit') != expected:
             raise RuntimeError(code)
+        return True
+    prior = before.get('services', {})
+    if (mode != 'readback' or not complete(prior)
+            or before.get('status') != 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED'
+            or before.get('mode') != 'preflight'
+            or before.get('releaseCandidateCommit') != expected
+            or environment.get('RELEASE_COMMIT') != expected
+            or before.get('commit') != environment.get('EXPECTED_CURRENT')
+            or not matches(r'[a-f0-9]{40}', environment.get('EXPECTED_CURRENT'))
+            or not matches(r'[1-9][0-9]*', environment.get('GITHUB_RUN_ID'))
+            or not matches(r'[1-9][0-9]*', environment.get('GITHUB_RUN_ATTEMPT'))
+            or before.get('workflowRunId') != environment['GITHUB_RUN_ID']
+            or before.get('workflowRunAttempt') != environment['GITHUB_RUN_ATTEMPT']
+            or receipt.get('preservedOnlineRechargeOrigin') != marker
+            or receipt.get('servicesRebound') != ['online-recharge']
+            or receipt.get('migrationPerformed') is not False
+            or any(services[name] != prior[name] for name in
+                ('mysql', 'media-resolver', 'auto-recharge', 'auto-registration'))
+            or any(services[name][key] != prior[name][key]
+                for name in ('online-recharge', 'caddy')
+                for key in ('image', 'reference', 'environmentSha256'))
+            or services['online-recharge']['configurationSha256'] != prior['online-recharge']['configurationSha256']):
+        raise RuntimeError(code)
+    rebind = receipt.get('onlineNetworkRebind')
+    binding_keys = set(context['binding'])
+    if (not isinstance(rebind, dict) or set(rebind) != {'version', 'before', 'after', 'sqlFence', 'businessActions'}
+            or type(rebind['version']) is not int or rebind['version'] != 1
+            or type(rebind['businessActions']) is not int or rebind['businessActions'] != 0
+            or any(not isinstance(rebind[key], dict) or set(rebind[key]) != binding_keys
+                for key in ('before', 'after'))
+            or any(not matches(r'[a-f0-9]{64}', rebind[side][key])
+                for side in ('before', 'after') for key in ('apiContainerId', 'containerId', 'startedAtSha256'))
+            or any(rebind['before'][key] != rebind['after'][key]
+                or rebind['after'][key] != context['binding'][key] for key in
+                ('image', 'reference', 'environmentSha256', 'configurationSha256', 'volumeIdentitySha256'))
+            or rebind['before']['containerId'] == rebind['after']['containerId']
+            or rebind['before']['startedAtSha256'] == rebind['after']['startedAtSha256']
+            or rebind['before']['apiContainerId'] != prior['api']['containerId']
+            or rebind['after']['apiContainerId'] != services['api']['containerId']
+            or any(rebind[side][key] != rows['online-recharge'][key]
+                for side, rows in (('before', prior), ('after', services))
+                for key in ('image', 'reference', 'environmentSha256', 'configurationSha256', 'containerId', 'startedAtSha256'))):
+        raise RuntimeError('API_ADMIN_ONLINE_REBIND_RECEIPT_CHANGED')
+    from types import SimpleNamespace
+    def need(condition, failure):
+        if not condition:
+            raise RuntimeError(failure)
+    namespace['online_fence_receipt'](SimpleNamespace(require=need), rebind['sqlFence'])
     return True
 
 
@@ -664,16 +716,12 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
             validate_pending_workspace_receipt(namespace, receipt, expected, mode)
         online_workspace = (scope == 'API_ADMIN_WORKSPACE'
             and validate_online_workspace_receipt(namespace, receipt, expected, mode))
-        services = {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'}
-        if online_workspace:
-            services.add('online-recharge')
-        # This finite online origin inherits the fixed bootstrap's migration.
-        # Removing either origin must not select a less restrictive reader.
         if online_workspace or expected == namespace['MIGRATION_SUCCESSOR_COMMIT'] or receipt.get('migrationOrigin') is not None:
             validate_migration_origin(namespace, receipt.get('migrationOrigin'))
             if (type(receipt.get('freeBytes')) is not int or receipt['freeBytes'] <= 6 * 1024**3
                     or receipt.get('guards') != receipt['migrationOrigin']['guards']
-                    or set(receipt.get('services', {})) != services
+                    or set(receipt.get('services', {})) != {'api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'}
+                        | ({'online-recharge'} if online_workspace else set())
                     or any(not isinstance(row, dict) or row.get('status') != 'running'
                            for row in receipt['services'].values())):
                 raise RuntimeError('API_ADMIN_MIGRATION_ORIGIN_RECEIPT_CHANGED')
@@ -711,11 +759,16 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                 if not condition:
                     raise RuntimeError(code)
             namespace['validate_proof'](SimpleNamespace(require=need), proof, expected, receipt.get('sourceTree'))
+        before = {}
+        if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE'):
+            before_file = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
+            before = json.loads(before_file.read_text()) if before_file.is_file() else {}
         online_workspace = (scope == 'API_ADMIN_WORKSPACE'
-            and validate_online_workspace_receipt(namespace, receipt, expected, mode))
+            and validate_online_workspace_receipt(namespace, receipt, expected, mode,
+                before=before, environment=os.environ))
         pending_workspace = (scope == 'API_ADMIN_WORKSPACE'
             and validate_pending_workspace_receipt(namespace, receipt, expected, mode, proof=proof))
-        updated = ['api', 'admin'] if pending_workspace else [*namespace['UPDATED'], *(['online-recharge'] if online_workspace else [])]
+        updated = ['api', 'admin'] if pending_workspace else list(namespace['UPDATED'])
         if (receipt.get('buildProofSha256') != namespace['fingerprint'](proof)
                 or receipt.get('sourceTree') != proof['sourceTree'] or proof['commit'] != expected
                 or receipt.get('servicesUpdated') != updated
@@ -743,9 +796,15 @@ def validate_receipt(receipt, expected, mode, scope='API_ADMIN'):
                     or receipt.get('volumePreserved') is not True or receipt.get('volumeDeletionPerformed') is not False
                     or receipt.get('registrationHealthChecked') is not True or receipt.get('offlineAcceptance') != proof.get('acceptance')):
                 raise RuntimeError('API_ADMIN_WORKSPACE_READBACK_CHANGED')
+            protection = receipt.get('sqliteProtection')
+            if protection is not None and (not isinstance(protection, dict)
+                    or set(protection) != {'backupVerified', 'restoreVerified', 'sqliteProtectionSha256', 'backupSha256', 'backupSize'}
+                    or protection['backupVerified'] is not True or protection['restoreVerified'] is not True
+                    or type(protection['backupSize']) is not int or not 0 < protection['backupSize'] <= 256 * 1024**2
+                    or any(not isinstance(protection[key], str) or not re.fullmatch(r'[a-f0-9]{64}', protection[key])
+                           for key in ('sqliteProtectionSha256', 'backupSha256'))):
+                raise RuntimeError('API_ADMIN_WORKSPACE_SQLITE_RECEIPT_CHANGED')
         if scope in ('API_ADMIN', 'API_ADMIN_WORKSPACE'):
-            before_file = Path('.deploy/production-release') / (namespace['PREFIX'] + '-preflight-result.json')
-            before = json.loads(before_file.read_text()) if before_file.is_file() else {}
             context = before.get('migrationOrigin')
             if online_workspace or context is not None or receipt.get('preservedMigrationOrigin') is not None:
                 marker = validate_migration_origin(namespace, context)

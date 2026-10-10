@@ -2,7 +2,7 @@ import { defineV2Feature } from '@/v2/features/feature';
 
 export const bankRechargeOrdersFeature = defineV2Feature({
   key: 'bank-recharge-orders',
-  title: '银充订单',
+  title: '比特订单',
   group: '自动充值',
   route: '/v2/auto-recharge/bank-orders',
   sourceSheet: '银充订单',

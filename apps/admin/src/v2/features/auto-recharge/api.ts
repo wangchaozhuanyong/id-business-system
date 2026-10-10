@@ -174,10 +174,18 @@ export const rechargeConnectorApi = {
       body: {}
     });
   },
-  submitCode(connectorUrl: string, connectorToken: string, id: string, code: string) {
+  submitCode(
+    connectorUrl: string,
+    connectorToken: string,
+    id: string,
+    code: string,
+    expiresAt?: string,
+    options: { signal?: AbortSignal } = {}
+  ) {
     return connectorRequest(connectorUrl, `/jobs/${id}/code`, {
       token: connectorToken,
-      body: { code }
+      signal: options.signal,
+      body: { code, ...(expiresAt === undefined ? {} : { expiresAt }) }
     });
   },
   cancel(connectorUrl: string, connectorToken: string, id: string) {

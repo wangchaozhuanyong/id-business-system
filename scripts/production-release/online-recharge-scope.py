@@ -3100,3 +3100,933 @@ def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose
         if type(error) is driver.Rejected and BaseException.args.__get__(error)==('ROOT_GENERATOR_SOURCE_UNMEASURED',):
             message='ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
         raise _declaration_driver_failure(message,failure) from None
+
+# Same immutable main candidate: initial WORKSPACE publication then ONLINE.
+# Finite initial WORKSPACE type/argv/transport adapter.
+ONLINE_PENDING_WORKSPACE_KIND = 'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN'
+ONLINE_PENDING_WORKSPACE_FIELDS = ('kind', 'version', 'baselineRelease', 'baselineCommit', 'baselineProducer',
+    'manifestBytesSha256', 'recordBytesSha256', 'buildProofBytesSha256', 'buildProofCanonicalSha256', 'environmentFileSha256',
+    'publicationSha256', 'pendingOriginSha256', 'readbackCommandId', 'readbackInvocationBytesSha256',
+    'initialReadbackInvocationBytesSha256', 'originalWorkspace', 'migrationRecovery', 'migrationState',
+    'services', 'configurationAfter')
+
+
+def online_pending_workspace_bridge_shape(d, value):
+    """Shape only: the cold consumer must acquire and derive this exact value."""
+    try:
+        _declaration_exact(value, ONLINE_PENDING_WORKSPACE_FIELDS)
+        _declaration_require(value['kind'] == ONLINE_PENDING_WORKSPACE_KIND and type(value['version']) is int and value['version'] == 1)
+        _declaration_exact(value['baselineProducer'], ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'))
+        p = value['baselineProducer']
+        _declaration_require(all(type(p[n]) is str and re.fullmatch('[a-f0-9]{40}', p[n]) for n in ('commit', 'sourceTree'))
+            and all(type(p[n]) is str and re.fullmatch('[1-9][0-9]*', p[n]) for n in ('workflowRunId', 'workflowRunAttempt'))
+            and value['baselineCommit'] == p['commit'])
+        _declaration_require(type(value['baselineRelease']) is str and re.fullmatch(
+            re.escape(str(d.BASE / 'releases')) + '/[0-9]{8}T[0-9]{6}Z-' + p['commit'][:12], value['baselineRelease']))
+        _declaration_require(all(_declaration_hash(v) for k, v in value.items() if k.endswith('Sha256')))
+        _declaration_require(type(value['readbackCommandId']) is str and re.fullmatch(
+            '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['readbackCommandId']))
+        _declaration_states(value['services']); _declaration_exact(value['configurationAfter'],
+            ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws', SCHEMA_FILE, 'compose.release.json'))
+        _declaration_require(all(_declaration_hash(v) for v in value['configurationAfter'].values()))
+        _declaration_exact(value['originalWorkspace'], ('release', 'manifestSha256'))
+        _declaration_require(type(value['originalWorkspace']['release']) is str and re.fullmatch(
+            '/opt/id-business-v2/releases/[0-9]{8}T[0-9]{6}Z-' + BASELINE_COMMIT[:12], value['originalWorkspace']['release'])
+            and _declaration_hash(value['originalWorkspace']['manifestSha256']))
+        _declaration_require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
+            and type(value['migrationState']) is dict and set(value['migrationState']) == {'name','sha256','status','schemaVerified','appliedMigrationsSha256'}
+            and value['migrationState']['name'] == MIGRATION_NAME and value['migrationState']['sha256'] == MIGRATION_IDENTITY['sha256']
+            and value['migrationState']['status'] == 'APPLIED' and value['migrationState']['schemaVerified'] is True
+            and _declaration_hash(value['migrationState']['appliedMigrationsSha256']))
+        return value
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED') from None
+
+
+def online_pending_workspace_argv(argv):
+    """A distinct namespace; never forge the API READBACK execution capability."""
+    import base64
+    try:
+        flags = {'--online-recharge-preflight': 'PREFLIGHT','--online-recharge-only': 'STAGE',
+                 '--online-recharge-readback': 'READBACK',
+}
+        _declaration_require(type(argv) in (list, tuple) and len(argv) == 5
+            and argv[0] in flags and argv[1] == '--expected-current' and argv[3] == '--declaration-producer'
+            and type(argv[2]) is str and re.fullmatch('[a-f0-9]{40}', argv[2])
+            and type(argv[4]) is str and len(argv[4]) < 1024)
+        def need(c, _unused): _declaration_require(c)
+        p = closed_recovery_json(SimpleNamespace(require=need), base64.b64decode(argv[4], validate=True))
+        _declaration_exact(p, ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'))
+        _declaration_require(all(type(p[n]) is str and re.fullmatch('[a-f0-9]{40}', p[n]) for n in ('commit', 'sourceTree'))
+            and all(type(p[n]) is str and re.fullmatch('[1-9][0-9]*', p[n]) for n in ('workflowRunId', 'workflowRunAttempt')))
+        return {'entry': flags[argv[0]], 'expectedCommit': argv[2], 'producer': p}
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID') from None
+
+
+def online_pending_workspace_preflight_binding(d, raw, *, producer, bridge):
+    """Pure same-run F_O binding, not a trusted-file authority or live measurement."""
+    try:
+        _declaration_require(type(raw) is bytes and 0 < len(raw) < 65536)
+        value = closed_recovery_json(d, raw)
+        _declaration_exact(value, ('kind', 'version', 'mode', 'status', 'commandId', 'releaseCandidateCommit',
+            'workflowRunId', 'workflowRunAttempt', 'sourceTree', 'baseline', 'services',
+            *(('ordinaryPreflight',) if value.get('version') == 2 else ())))
+        _declaration_require(value['kind'] == 'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT' and type(value['version']) is int
+            and value['version'] in (1,2) and value['mode'] == 'preflight'
+            and value['status'] == 'ONLINE_RECHARGE_PENDING_WORKSPACE_BASELINE_VERIFIED'
+            and type(value['commandId']) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['commandId'])
+            and value['releaseCandidateCommit'] == producer['commit'] and value['sourceTree'] == producer['sourceTree']
+            and value['workflowRunId'] == producer['workflowRunId'] and value['workflowRunAttempt'] == producer['workflowRunAttempt']
+            and value['baseline'] == bridge and value['services'] == bridge['services'])
+        if value['version'] == 2:
+            receipt=value['ordinaryPreflight']
+            _pending_workspace_pref_fields(d,receipt)
+            _declaration_require(type(receipt) is dict and receipt.get('onlinePendingWorkspaceOrigin')==bridge
+                and receipt.get('services')==bridge['services'] and receipt.get('migrationPerformed') is False)
+            _pending_workspace_validate_receipt(d,receipt,'preflight',producer['commit'],bridge['baselineCommit'])
+        return {'kind': 'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_SEAL', 'version': value['version'],
+                'bytesSha256': hashlib.sha256(raw).hexdigest(), 'commandId': value['commandId'],
+                'baselineSha256': fingerprint(bridge), 'producer': producer}
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED') from None
+
+
+def online_pending_workspace_preflight_bytes(d, *, producer, expected_sha256):
+    """Actual 0600 F_O installed by trusted ended-preflight transport only.
+
+    The fixed private artifact installer/transport is not implemented here;
+    absence or a wrong file fails closed, never a default provider.
+    """
+    try:
+        _declaration_exact(producer, ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt'))
+        _declaration_require(all(type(producer[n]) is str and re.fullmatch('[a-f0-9]{40}', producer[n]) for n in ('commit', 'sourceTree'))
+            and all(type(producer[n]) is str and re.fullmatch('[1-9][0-9]*', producer[n]) for n in ('workflowRunId', 'workflowRunAttempt'))
+            and _declaration_hash(expected_sha256))
+        folder=d.BASE/'.staging'/('online-recharge-pending-workspace-preflight-'+producer['commit']+'-'
+                                 +producer['workflowRunId']+'-'+producer['workflowRunAttempt'])
+        _declaration_require(folder.is_dir() and folder.resolve()==folder and not folder.is_symlink()
+            and folder.stat().st_uid==os.geteuid() and stat.S_IMODE(folder.stat().st_mode)==0o700)
+        path=folder/'online-recharge-pending-workspace-preflight-result.json'
+        _declaration_require(stat.S_IMODE(path.lstat().st_mode)==0o600)
+        raw=_declaration_source_bytes(path,limit=65535)
+        _declaration_require(hashlib.sha256(raw).hexdigest()==expected_sha256)
+        value=closed_recovery_json(d,raw)
+        online_pending_workspace_preflight_binding(d,raw,producer=producer,bridge=value.get('baseline'))
+        return raw
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED') from None
+
+
+def online_pending_workspace_build_shape(d, proof, *, producer, bridge, preflight_raw):
+    """An explicit different proof kind, not a normalized legacy v1 proof."""
+    try:
+        _declaration_exact(proof, ('kind','version','scope','commit','sourceTree','baselineCommit',
+            'migration','images','engineSourceSha256','composeSourceSha256','baselineOriginSha256','preflightBytesSha256'))
+        _declaration_require(proof['kind']=='ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_PROOF'
+            and type(proof['version']) is int and proof['version']==2 and proof['scope']==SCOPE
+            and proof['commit']==producer['commit'] and proof['sourceTree']==producer['sourceTree']
+            and proof['baselineCommit']==bridge['baselineCommit'] and proof['migration']==MIGRATION_IDENTITY
+            and proof['baselineOriginSha256']==fingerprint(bridge)
+            and proof['preflightBytesSha256']==hashlib.sha256(preflight_raw).hexdigest()
+            and _declaration_hash(proof['engineSourceSha256']) and _declaration_hash(proof['composeSourceSha256'])
+            and type(proof['images']) is dict and set(proof['images'])==set(IMAGE_SERVICES))
+        for name,row in proof['images'].items():
+            _declaration_exact(row, ('reference','imageId','fileCount','sha256'))
+            _declaration_require(type(row['reference']) is str and re.fullmatch(
+                '[0-9]{12}\\.dkr\\.ecr\\.ap-northeast-1\\.amazonaws\\.com/id-business-v2-release:'
+                +producer['commit']+'-'+producer['workflowRunId']+'-'+producer['workflowRunAttempt']+'-'+name,row['reference'])
+                and type(row['imageId']) is str and re.fullmatch('sha256:[a-f0-9]{64}',row['imageId'])
+                and type(row['fileCount']) is int and 0<row['fileCount']<30000 and _declaration_hash(row['sha256']))
+        return proof
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_PROOF_INVALID') from None
+
+def _pending_workspace_preserved(d, previous, target, before, original, *, all_services=False, include_engine=False):
+    env = verify_environment(d, previous, target, original)
+    infrastructure = verify_compose(d, previous, target)
+    caddy = verify_caddy_projection(d, previous, target)
+    migration_source_check(d, previous, candidate=False)
+    migration_source_check(d, target)
+    workspace = json.loads((previous / legacy(d).STATE_FILE).read_text()).get('workspaceVolumeAfter')
+    d.require(isinstance(workspace, dict), 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_INVALID')
+    workspace_guard(d, target if include_engine else previous, workspace)
+    d.require(d.migration_plan(previous, target) == [], 'ONLINE_RECHARGE_MIGRATION_SCOPE_CHANGED')
+    states = snapshot(d, target if include_engine else previous, include_engine=include_engine)
+    d.require(all(states[n] == before[n] for n in before if all_services or n in PRESERVED),
+              'ONLINE_RECHARGE_PRESERVED_CONTAINER_CHANGED')
+    if not all_services:
+        d.require(states['caddy']['image'] == before['caddy']['image']
+                  and states['caddy']['reference'] == before['caddy']['reference'],
+                  'ONLINE_RECHARGE_CADDY_IMAGE_CHANGED')
+    old = json.loads((previous / 'compose.release.json').read_text())
+    new = json.loads((target / 'compose.release.json').read_text())
+    d.require(set(old) == set(new) == {'services'} and set(new['services']) == set(old['services']) | {'online-recharge'}
+              and all(new['services'][n] == old['services'][n] for n in old['services'] if n not in IMAGE_SERVICES),
+              'ONLINE_RECHARGE_PRESERVED_IMAGE_REFERENCE_CHANGED')
+    return states, {'environment': env, 'compose': infrastructure, 'caddy': caddy}
+
+def _pending_workspace_release_locked(d, args):
+    proof = validate_arguments(d, args)
+    previous, old, before, evidence = baseline(d, args.expected_current)
+    recovery = release_recovery(d, previous) if evidence.get('migrationRecovery') is not None else None
+    d.require(recovery is not None and evidence['migrationRecovery'] == recovery['marker'] and recovery['state']['status']=='APPLIED',
+              'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+    migration_source_check(d, previous, candidate=False)
+    environment = (previous / '.env.aws.production').read_bytes()
+    configuration_before = configuration_hashes(previous)
+    stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+    target = d.BASE / 'releases' / f'{stamp}-{args.commit[:12]}'
+    d.require(not target.exists(), 'ONLINE_RECHARGE_RELEASE_EXISTS')
+    target.mkdir(mode=0o700)
+    changed, step = [], 'source'
+    migration = {**recovery['state'], 'performed': False} if recovery is not None else {'status': 'NOT_ATTEMPTED', 'performed': False}
+    migration_attempted = False
+    sqlite_gate = None
+    audit_barrier = None
+    try:
+        workspace_origin(d, previous, previous, evidence, before)
+        archive = extract_source(d, args.commit, target)
+        d.require(legacy(d).source_tree(d, target) == args.source_tree, 'ONLINE_RECHARGE_SOURCE_TREE_CHANGED')
+        migration_source_check(d, target)
+        if recovery is not None:
+            candidate_recovery_source(d, target, recovery)
+        protected_source(d, previous, target)
+        d.require(fingerprint(file_inventory(d, target / ENGINE_ROOT)) == proof['engineSourceSha256']
+                  and hashlib.sha256((target / 'docker-compose.aws-mysql.yml').read_bytes()).hexdigest() == proof['composeSourceSha256'],
+                  'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED')
+        for name in CONTROL_FILES:
+            current = Path(__file__) if name.endswith('online-recharge-scope.py') else Path(d.__file__) if name.endswith('remote-deploy.py') else Path(__file__).with_name('api-admin-scope.py')
+            d.require((target / name).read_bytes() == current.read_bytes(), 'ONLINE_RECHARGE_EXECUTOR_SOURCE_CHANGED')
+        extend_environment(d, previous, target)
+        override = json.loads((previous / 'compose.release.json').read_text())
+        for service in IMAGE_SERVICES:
+            override['services'][service] = {'image': proof['images'][service]['reference'], 'pull_policy': 'never'}
+        (target / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
+        require_preserved(d, previous, target, before, environment, all_services=True)
+        migration = {**migration_database_state(d, previous, source=target), 'performed': False}
+        d.require(migration['status'] == ('APPLIED' if recovery is not None else 'PENDING'),
+                  'ONLINE_RECHARGE_MIGRATION_ALREADY_PRESENT')
+        step = 'images'
+        d.require(shutil.disk_usage(d.BASE).free > 6 * 1024**3, 'ONLINE_RECHARGE_DISK_LOW_BEFORE_PULL')
+        password = d.run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
+        registry = args.repository.split('/')[0]
+        login = subprocess.run(['docker', 'login', '--username', 'AWS', '--password-stdin', registry],
+                               input=password, capture_output=True, text=True)
+        d.require(login.returncode == 0, 'ONLINE_RECHARGE_ECR_LOGIN_FAILED')
+        try:
+            for service in IMAGE_SERVICES:
+                d.run('docker', 'pull', proof['images'][service]['reference'], timeout=900)
+                verify_image_content(d, target, proof, service)
+        finally:
+            subprocess.run(['docker', 'logout', registry], capture_output=True, text=True)
+        d.require(shutil.disk_usage(d.BASE).free > 2 * 1024**3, 'ONLINE_RECHARGE_DISK_LOW')
+        step = 'audit-before'
+        first = legacy(d).strict_audit(d, target, target / 'before-audit.json')
+        step = 'backup'
+        backup = d.fresh_backup(previous)
+        (target / 'backup-verification.json').write_text(json.dumps(backup, indent=2) + '\n')
+        d.require(backup.get('s3Verified') is True, 'ONLINE_RECHARGE_BACKUP_UNVERIFIED')
+        step = 'workspace-backup'
+        sqlite_backup = workspace_backup(d, previous, evidence['workspaceVolume'], args.commit, stamp)
+        (target / WORKSPACE_BACKUP_FILE).write_text(json.dumps(sqlite_backup, indent=2) + '\n')
+        d.require((d.BASE / 'current').resolve() == previous and hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest() == evidence['manifestSha256'],
+                  'ONLINE_RECHARGE_BASELINE_MOVED')
+        require_preserved(d, previous, target, before, environment, all_services=True)
+        jobs_idle(d, previous)
+        historical_guard(d, previous, evidence, target)
+        step = 'migration'
+        # Already APPLIED recovery is mandatory; DDL is unreachable here.
+        migration_attempted = False
+        migration = {**migration_database_state(d, target), 'performed': migration_attempted}
+        d.require(migration['status'] == 'APPLIED', 'ONLINE_RECHARGE_MIGRATION_NOT_APPLIED')
+        verify_permission_seed(d, target)
+        require_fresh_resources(d, target)
+        step = 'grants'
+        grants = d.sync_new_table_grants(target, [MIGRATION_FILE])
+        d.require(grants.get('ok') is True and grants.get('newTableCount') == len(TABLES), 'ONLINE_RECHARGE_DATABASE_GRANTS_FAILED')
+        require_preserved(d, previous, target, before, environment, all_services=True)
+        historical_guard(d, previous, evidence, target)
+        step = 'workspace-protection'
+        audit_barrier = legacy(d).WorkspaceUnusedAuditBarrier(d, previous, online=True)
+        audit_barrier.__enter__()
+        sqlite_gate = legacy(d).workspace_prepare(d, previous, target, proof, args, evidence, legacy=False)
+        d.require(sqlite_gate is not None, 'ONLINE_RECHARGE_WORKSPACE_DATABASE_INVALID')
+        step = 'switch'
+        for service in SWITCH_ORDER:
+            require_preserved(d, previous, target, before, environment)
+            jobs_idle(d, previous, migrated=True)
+            historical_guard(d, previous, evidence, target)
+            # The first executor publication accepts no imported cards/CDKs/tasks.
+            require_fresh_resources(d, target)
+            changed.append(service)
+            if service == 'api':
+                audit_barrier.before_stop()
+                sqlite_gate.stop_previous()
+                audit_barrier.check()
+                audit_barrier.__exit__(None,None,None)
+                audit_barrier = None
+            d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', service, timeout=300)
+            d.wait_healthy(target, service)
+        step = 'audit-after'
+        second = legacy(d).strict_audit(d, target, target / 'after-audit.json')
+        d.require(first['checksSha256'] == second['checksSha256'], 'ONLINE_RECHARGE_AUDIT_RULES_CHANGED')
+        verify_running(d, target, proof)
+        after, preservation = require_preserved(d, previous, target, before, environment, include_engine=True)
+        historical_guard(d, previous, evidence, target)
+        public = d.environment_values(target / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
+        for suffix in ('/api/health/ready', '/'):
+            with urllib.request.urlopen(public + suffix, timeout=20) as response:
+                d.require(response.status == 200, 'ONLINE_RECHARGE_PUBLIC_HEALTH_FAILED')
+        record = {'before': before, 'after': after, 'baselineEvidence': evidence, 'buildProofSha256': fingerprint(proof),
+                  'configurationBefore': configuration_before, 'configurationAfter': configuration_hashes(target),
+                  'preservation': preservation, 'migration': migration, 'databaseGrants': grants,
+                  'workspaceBackupSha256': fingerprint(sqlite_backup),
+                  'sqliteProtectionSha256': fingerprint(sqlite_gate.record),
+                  'workspaceVolumeBefore': evidence['workspaceVolume'],
+                  'workspaceVolumeAfter': workspace_guard(d,target,evidence['workspaceVolume'])}
+        (target / STATE_FILE).write_text(json.dumps(record, indent=2) + '\n')
+        (target / PROOF_FILE).write_text(json.dumps(proof, indent=2) + '\n')
+        manifest = {'commit': args.commit, 'sourceBranch': 'main', 'sourceTree': args.source_tree,
+            'previousCommit': args.expected_current, 'previousRelease': str(previous),
+            'previousManifestSha256': evidence['manifestSha256'], 'releaseTag': f'v2-production-{stamp}',
+            'deployedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            'ciWorkflow': 'Quality Gate', 'ciWorkflowRunId': int(args.ci_run_id),
+            'deploymentRun': f'github-actions-{args.run_id}-{args.run_attempt}',
+            'imageBuildRun': f'github-actions-{args.run_id}-{args.run_attempt}',
+            'servicesUpdated': list(UPDATED), 'sourceArchiveSha256': hashlib.sha256(archive).hexdigest(),
+            'images': {**old['images'], **{n: {'reference': proof['images'][n]['reference'], 'digest': proof['images'][n]['imageId'],
+                       'sourceCommit': args.commit} for n in IMAGE_SERVICES}},
+            'backupBeforeRelease': backup['name'], 'migrationApplied': True, 'migrationPerformed': migration['performed'],
+            'workspaceBackupBeforeRelease': sqlite_backup['name'], 'workspaceBackupSha256': fingerprint(sqlite_backup),
+            'newMigrations': [], 'dataAuditBefore': first, 'dataAuditAfter': second,
+            'databaseGrants': grants, 'rollback': {'release': str(previous),
+                'images': {n: before[n]['image'] for n in ('api', 'admin')}, 'servicesAdded': ['online-recharge'],
+                'inverseMigrationAllowed': False, 'mediaVolumePreserved': True, 'workspaceVolumePreserved': True},
+            'onlineRechargePublication': {'version': 2,
+                'baselineOriginSha256': fingerprint(evidence['onlinePendingWorkspaceOrigin']),
+                'sqliteProtectionSha256': fingerprint(sqlite_gate.record), 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
+                'migration': dict(MIGRATION_IDENTITY), 'legacyWorkersPublished': False,
+                'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}}
+        if evidence.get('migrationOrigin') is not None:
+            manifest['preservedMigrationOrigin'] = legacy(d).migration_successor_marker(evidence['migrationOrigin'])
+        if recovery is not None:
+            manifest['migrationRecovery'] = recovery['marker']
+        (target / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        d.require((d.BASE / 'current').resolve() == previous, 'ONLINE_RECHARGE_BASELINE_MOVED')
+        d.point_current(target, f'{stamp}-publish')
+        result = readback(d, args.commit)
+        sqlite_gate.finish()
+        print(json.dumps(result))
+        return 0
+    except Exception as error:
+        if audit_barrier is not None:
+            audit_barrier.__exit__(None,None,None)
+            audit_barrier = None
+        if sqlite_gate is None:
+            sqlite_gate = getattr(error,'sqlite_gate',None)
+        if sqlite_gate is not None:
+            sqlite_gate.close()
+        if migration_attempted:
+            try:
+                observed = migration_database_state(d, target)
+                migration = {**observed, 'performed': observed['status'] == 'APPLIED'}
+            except Exception:
+                migration = {'status': 'UNVERIFIED', 'performed': None}
+        okay, restored = rollback(d, previous, target, changed, before,
+                                 migrated=migration.get('status') == 'APPLIED', workspace=evidence['workspaceVolume'])
+        if okay and sqlite_gate is not None:
+            try:
+                sqlite_gate.abort()
+            except Exception:
+                okay = False
+        if okay:
+            try:
+                states = snapshot(d, previous)
+                d.require((previous / '.env.aws.production').read_bytes() == environment
+                          and configuration_hashes(previous) == configuration_before
+                          and all(states[n] == before[n] for n in PRESERVED)
+                          and all(states[n]['image'] == before[n]['image'] and states[n]['reference'] == before[n]['reference']
+                                  for n in ('api', 'admin')), 'ONLINE_RECHARGE_ROLLBACK_NOT_RESTORED')
+                workspace_guard(d, previous, evidence['workspaceVolume'])
+                if migration.get('status') == 'APPLIED':
+                    historical_guard(d, previous, evidence, target)
+            except Exception:
+                okay = False
+        if migration.get('status') == 'UNVERIFIED':
+            okay = False
+        if okay and (d.BASE / 'current').resolve() == target:
+            try:
+                d.point_current(previous, f'{stamp}-recover')
+            except Exception:
+                okay = False
+        result = {'status': SCOPE + '_FAILED_RESTORED' if changed and okay else SCOPE + '_FAILED_BEFORE_SWITCH'
+                  if not changed and okay else SCOPE + '_PARTIAL_RECOVERY_REQUIRED',
+                  'step': step, 'code': safe_code(error), 'errorType': type(error).__name__,
+                  'rollbackOk': okay, 'rollback': restored, 'servicesAttempted': changed,
+                  'candidateCommit': args.commit, 'previousCommit': args.expected_current,
+                  'migration': migration, 'migrationAttempted': migration_attempted,
+                  'inverseMigrationPerformed': False, 'mediaVolumeDeleted': False,
+                  'currentPointsToCandidate': (d.BASE / 'current').resolve() == target, 'receiptPersisted': True}
+        try:
+            (target / FAILURE_FILE).write_text(json.dumps(result, indent=2) + '\n')
+        except Exception:
+            result['receiptPersisted'] = False
+        print(json.dumps(result))
+        return 1
+    finally:
+        if audit_barrier is not None:
+            audit_barrier.__exit__(None,None,None)
+        if sqlite_gate is not None:
+            sqlite_gate.close()
+
+def _pending_workspace_readback(d, expected):
+    directory = (d.BASE / 'current').resolve()
+    d.require(directory.parent == d.BASE / 'releases' and not directory.is_symlink(),
+              'ONLINE_RECHARGE_READBACK_PATH_INVALID')
+    manifest_raw = (directory / 'release-manifest.json').read_bytes()
+    manifest = json.loads(manifest_raw)
+    proof = validate_proof(d, json.loads((directory / PROOF_FILE).read_text()), expected, manifest.get('sourceTree'))
+    record = json.loads((directory / STATE_FILE).read_text())
+    previous = Path(manifest.get('previousRelease', ''))
+    d.require(previous.parent == d.BASE / 'releases' and not previous.is_symlink()
+              and manifest.get('commit') == expected and manifest.get('previousCommit') == record['baselineEvidence']['onlinePendingWorkspaceOrigin']['baselineCommit']
+              and manifest.get('servicesUpdated') == list(UPDATED)
+              and manifest.get('newMigrations') == [] and manifest.get('migrationApplied') is True
+              and manifest.get('onlineRechargePublication') == {
+                  'version': 2, 'baselineOriginSha256': fingerprint(record['baselineEvidence']['onlinePendingWorkspaceOrigin']),
+                  'sqliteProtectionSha256': record.get('sqliteProtectionSha256'), 'scope': SCOPE, 'buildProofSha256': fingerprint(proof),
+                  'migration': dict(MIGRATION_IDENTITY), 'legacyWorkersPublished': False,
+                  'configurationScope': 'ONLINE_RECHARGE_VOLUME_LOOPBACK_ONLY'}
+              and record.get('buildProofSha256') == fingerprint(proof)
+              and hashlib.sha256((previous / 'release-manifest.json').read_bytes()).hexdigest()
+                  == manifest.get('previousManifestSha256') == record['baselineEvidence']['manifestSha256'],
+              'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+    d.require(json.loads((previous / 'release-manifest.json').read_text()).get('commit') == record['baselineEvidence']['onlinePendingWorkspaceOrigin']['baselineCommit']
+              and configuration_hashes(previous) == record['configurationBefore']
+              and configuration_hashes(directory) == record['configurationAfter'],
+              'ONLINE_RECHARGE_READBACK_SOURCE_CHANGED')
+    recovered = {}
+    if record['baselineEvidence'].get('migrationRecovery') is not None:
+        recovery = release_recovery(d, previous)
+        d.require(recovery is not None and manifest.get('migrationRecovery') == recovery['marker']
+                  == record['baselineEvidence']['migrationRecovery'] and record['migration']['performed'] is False,
+                  'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+        candidate_recovery_source(d, directory, recovery)
+        recovered['migrationRecovery'] = recovery['marker']
+    else:
+        d.require(manifest.get('migrationRecovery') is None and record['migration']['performed'] is True,
+                  'ONLINE_RECHARGE_READBACK_PROVENANCE_CHANGED')
+    d.require(fingerprint(file_inventory(d, directory / ENGINE_ROOT)) == proof['engineSourceSha256']
+              and hashlib.sha256((directory / 'docker-compose.aws-mysql.yml').read_bytes()).hexdigest() == proof['composeSourceSha256'],
+              'ONLINE_RECHARGE_READBACK_SOURCE_CHANGED')
+    protected_source(d, previous, directory)
+    states, preservation = require_preserved(d, previous, directory, record['before'],
+        (previous / '.env.aws.production').read_bytes(), include_engine=True)
+    d.require(preservation == record['preservation']
+              and all(states[n] == record['after'][n] for n in PRESERVED),
+              'ONLINE_RECHARGE_READBACK_PRESERVATION_CHANGED')
+    historical_guard(d, previous, record['baselineEvidence'], directory)
+    workspace_origin(d, previous, directory, record['baselineEvidence'], record['before'])
+    migration = migration_database_state(d, directory)
+    d.require(migration['status'] == 'APPLIED'
+              and all(record['migration'].get(n) == v for n, v in migration.items())
+              and manifest.get('migrationPerformed') is record['migration']['performed'],
+              'ONLINE_RECHARGE_READBACK_MIGRATION_CHANGED')
+    verify_permission_seed(d, directory)
+    before = legacy(d).audit_receipt(d, directory / 'before-audit.json')
+    after = legacy(d).audit_receipt(d, directory / 'after-audit.json')
+    d.require(before == manifest.get('dataAuditBefore') and after == manifest.get('dataAuditAfter')
+              and before['checksSha256'] == after['checksSha256'], 'ONLINE_RECHARGE_READBACK_AUDIT_CHANGED')
+    backup_receipt(d, directory, manifest)
+    workspace_backup_receipt(d, directory, previous, record['baselineEvidence'], manifest, record)
+    _pending_workspace_sqlite_receipt(d,directory,manifest,record)
+    verify_running(d, directory, proof)
+    verify_image_content(d, directory, proof, 'migrate')
+    d.require(snapshot(d, directory, include_engine=True) == states and (d.BASE / 'current').resolve() == directory
+              and (directory / 'release-manifest.json').read_bytes() == manifest_raw,
+              'ONLINE_RECHARGE_READBACK_MOVED')
+    return {'status': SCOPE + '_VERIFIED', 'commit': expected, 'sourceTree': proof['sourceTree'],
+            'servicesUpdated': list(UPDATED), 'preservedServiceCount': len(PRESERVED),
+            'services': states, 'runningImagesAndContentMatched': True,
+            'buildProofSha256': fingerprint(proof), 'migration': migration,
+            'migrationApplied': True, 'migrationPerformed': record['migration']['performed'],
+            'existingEnvironmentPreserved': True, 'credentialsLoopback': True, 'dedicatedVolume': MEDIA_VOLUME,
+            'backupVerified': True, 'workspaceBackupVerified': True, 'workspaceVolumePreserved': True,
+            'checkCount': 49, 'violationCount': 0,
+            'legacyWorkersPublished': False, 'externalAcceptancePerformed': False, 'onlinePendingWorkspaceOrigin': record['baselineEvidence']['onlinePendingWorkspaceOrigin'], **recovered}
+
+def _pending_workspace_validate_receipt(d, value, mode, commit, expected):
+    """Bounded public summary; never return raw remote output or credentials."""
+    d.require(mode in ('preflight', 'readback')
+              and all(re.fullmatch(r'[a-f0-9]{40}', v or '') for v in (commit, expected))
+              and isinstance(value, dict) and value.get('commit') == expected,
+              'ONLINE_RECHARGE_RECEIPT_INVALID')
+    status = SCOPE + ('_BASELINE_VERIFIED' if mode == 'preflight' else '_VERIFIED')
+    d.require(value.get('status') == status and isinstance(value.get('services'), dict),
+              'ONLINE_RECHARGE_RECEIPT_INVALID')
+    services = value['services']
+    expected_services = set((*PRESERVED, 'api', 'admin', *(() if mode == 'preflight' else ('online-recharge',))))
+    d.require(set(services) == expected_services
+              and all(isinstance(r, dict) and r.get('status') == 'running'
+                      and (r.get('health') == 'healthy' if n != 'caddy' else r.get('health') in ('healthy', None))
+                      and re.fullmatch(r'sha256:[a-f0-9]{64}', r.get('image', ''))
+                      and re.fullmatch(r'[a-f0-9]{64}', r.get('containerId', ''))
+                      and all(re.fullmatch(r'[a-f0-9]{64}', r.get(k, '')) for k in
+                              ('startedAtSha256', 'environmentSha256', 'configurationSha256'))
+                      for n, r in services.items()), 'ONLINE_RECHARGE_RECEIPT_SERVICES_CHANGED')
+    if mode == 'preflight':
+        guards, audit = value.get('guards', {}), value.get('audit', {})
+        d.require(expected == value['onlinePendingWorkspaceOrigin']['baselineCommit'] and value.get('migration') == MIGRATION_IDENTITY
+                  and value.get('workersPreserved') is True and value.get('requiresWindowHandoff') is False
+                  and guards.get('rechargeIdle') is True and guards.get('registrationBusy') is False
+                  and guards.get('registrationLeaseActive') is False
+                  and type(guards.get('registrationWindowRetained')) is bool
+                  and audit.get('checkCount') == 49 and audit.get('violationCount') == 0
+                  and audit.get('mode') == 'STRICT_ZERO_49'
+                  and re.fullmatch(r'[a-f0-9]{64}', audit.get('checksSha256', ''))
+                  and re.fullmatch(r'[a-f0-9]{64}', value.get('manifestSha256', ''))
+                  and value.get('workspaceIdle') is True
+                  and value.get('workspaceVolume', {}).get('status') == 'PRESENT'
+                  and re.fullmatch(r'[a-f0-9]{64}', value.get('workspaceVolume', {}).get('identitySha256', ''))
+                  and re.fullmatch(r'[a-f0-9]{64}', value.get('workspaceBuildProofSha256', '')),
+                  'ONLINE_RECHARGE_RECEIPT_BASELINE_CHANGED')
+        resumed = {'onlinePendingWorkspaceOrigin': value['onlinePendingWorkspaceOrigin']}
+        if value.get('migrationRecovery') is not None:
+            d.require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
+                      and value.get('migrationPerformed', False) is False
+                      and value.get('migrationState', {}).get('status') == 'APPLIED'
+                      and value['migrationState'].get('name') == MIGRATION_NAME
+                      and value['migrationState'].get('sha256') == MIGRATION_IDENTITY['sha256']
+                      and value['migrationState'].get('schemaVerified') is True,
+                      'ONLINE_RECHARGE_RECEIPT_BASELINE_CHANGED')
+            resumed = {**resumed, 'migrationRecovery': value['migrationRecovery'], 'migrationPerformed': False}
+        return {'status': status, 'commit': expected, 'manifestSha256': value['manifestSha256'],
+                'checkCount': 49, 'violationCount': 0, 'legacyWorkersPreserved': True,
+                'requiresWindowHandoff': False, 'workspaceIdle': True,
+                'workspaceVolumePreserved': True, 'workspaceBuildProofSha256': value['workspaceBuildProofSha256'],
+                'migration': dict(MIGRATION_IDENTITY), **resumed}
+    migration = value.get('migration', {})
+    d.require(expected == commit and value.get('servicesUpdated') == list(UPDATED)
+              and value.get('preservedServiceCount') == len(PRESERVED)
+              and value.get('runningImagesAndContentMatched') is True and value.get('migrationApplied') is True
+              and type(value.get('migrationPerformed')) is bool
+              and migration.get('name') == MIGRATION_NAME and migration.get('sha256') == MIGRATION_IDENTITY['sha256']
+              and migration.get('status') == 'APPLIED' and migration.get('schemaVerified') is True
+              and re.fullmatch(r'[a-f0-9]{64}', migration.get('appliedMigrationsSha256', ''))
+              and all(value.get(n) is True for n in ('existingEnvironmentPreserved', 'credentialsLoopback', 'backupVerified',
+                                                    'workspaceBackupVerified', 'workspaceVolumePreserved'))
+              and value.get('legacyWorkersPublished') is False and value.get('externalAcceptancePerformed') is False
+              and value.get('dedicatedVolume') == MEDIA_VOLUME and value.get('checkCount') == 49
+              and value.get('violationCount') == 0
+              and re.fullmatch(r'[a-f0-9]{40}', value.get('sourceTree', ''))
+              and re.fullmatch(r'[a-f0-9]{64}', value.get('buildProofSha256', '')),
+              'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
+    resumed = {'onlinePendingWorkspaceOrigin': value['onlinePendingWorkspaceOrigin']}
+    if value.get('migrationRecovery') is not None:
+        d.require(value['migrationRecovery'] == recovery_marker(recovery_policy(d))
+                  and value['migrationPerformed'] is False, 'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
+        resumed['migrationRecovery'] = value['migrationRecovery']
+    else:
+        d.require(value['migrationPerformed'] is True, 'ONLINE_RECHARGE_RECEIPT_READBACK_CHANGED')
+    return {**{n: value[n] for n in ('status', 'commit', 'sourceTree', 'servicesUpdated', 'preservedServiceCount',
+        'buildProofSha256', 'migrationApplied', 'migrationPerformed', 'backupVerified', 'checkCount', 'violationCount',
+        'workspaceBackupVerified', 'workspaceVolumePreserved', 'existingEnvironmentPreserved', 'credentialsLoopback',
+        'dedicatedVolume', 'legacyWorkersPublished', 'externalAcceptancePerformed')}, **resumed}
+
+
+
+def _pending_workspace_sqlite_receipt(d,directory,manifest,record):
+    """Map the actual ONLINE publication's SQLite digest to the shared validator."""
+    publication=manifest.get('onlineRechargePublication')
+    d.require(type(publication) is dict and publication.get('version')==2
+        and publication.get('scope')==SCOPE and publication.get('sqliteProtectionSha256')==record.get('sqliteProtectionSha256')
+        and _declaration_hash(record.get('sqliteProtectionSha256')),
+        'ONLINE_RECHARGE_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+    proof=validate_proof(d,closed_recovery_json(d,_declaration_source_bytes(directory/PROOF_FILE)),manifest['commit'],manifest['sourceTree'])
+    result=legacy(d).workspace_sqlite_receipt(d,directory,proof,record,{'apiWorkspacePublication':publication})
+    d.require(type(result) is dict and result.get('backupVerified') is True and result.get('restoreVerified') is True,
+              'ONLINE_RECHARGE_WORKSPACE_BACKUP_RECEIPT_CHANGED')
+    return result
+
+_PENDING_WORKSPACE_CONTROL_NAMES = (*DECLARATION_EQUIVALENCE_HELPERS,
+    'scripts/production-release/online-recharge-declaration-measurement.py',
+    'scripts/production-release/api-admin-pending-receipt-wire.py',
+    'scripts/production-release/online-recharge-daemon-identity.py',
+    'scripts/production-release/online-recharge-daemon-listener.py',
+    'scripts/production-release/online-recharge-daemon-socket.py')
+_PENDING_WORKSPACE_FIRST = {n: globals()[n] for n in ('baseline','validate_arguments','validate_proof','build_proof',
+    'readback','validate_receipt','release_recovery','workspace_origin','historical_guard',
+    'candidate_recovery_source','migration_source_check','require_preserved','_release_locked','preflight')}
+
+
+def _pending_workspace_producer(d, args=None):
+    if args is None:
+        value=getattr(d,'_onlinePendingWorkspaceProducer',None)
+    else:
+        value={'commit':args.commit,'sourceTree':args.source_tree,'workflowRunId':args.run_id,'workflowRunAttempt':args.run_attempt}
+    _declaration_exact(value,('commit','sourceTree','workflowRunId','workflowRunAttempt'))
+    _declaration_require(all(type(value[n]) is str and re.fullmatch('[a-f0-9]{40}',value[n]) for n in ('commit','sourceTree'))
+        and all(type(value[n]) is str and re.fullmatch('[1-9][0-9]*',value[n]) for n in ('workflowRunId','workflowRunAttempt')))
+    return value
+
+
+def _pending_workspace_reader(d):
+    reader=legacy(d)
+    d.require(callable(getattr(reader,'online_pending_workspace_cold',None))
+              and callable(getattr(reader,'online_pending_workspace_measure_before',None))
+              and callable(getattr(reader,'online_pending_workspace_readback_origin',None)),
+              'ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')
+    return reader
+
+
+def _pending_workspace_current_source_inventory(d,producer):
+    """Independent actual N immutable archive/tree, never a P/F source claim.
+
+    Transport supplies producer metadata from its actual checkout/run. Cached
+    immutable raw bytes still undergo the complete Git tree calculation.
+    """
+    _declaration_exact(producer,('commit','sourceTree','workflowRunId','workflowRunAttempt'))
+    _declaration_require(all(type(producer[n]) is str and re.fullmatch('[a-f0-9]{40}',producer[n]) for n in ('commit','sourceTree'))
+        and all(type(producer[n]) is str and re.fullmatch('[1-9][0-9]*',producer[n]) for n in ('workflowRunId','workflowRunAttempt')))
+    key=(producer['commit'],producer['sourceTree'])
+    cached=getattr(d,'_onlinePendingWorkspaceArchiveBytes',{})
+    raw=cached.get(key)
+    if raw is None:
+        with urllib.request.urlopen('https://github.com/wangchaozhuanyong/id-business-system/archive/'+producer['commit']+'.tar.gz',timeout=60) as response:
+            raw=response.read(128*1024*1024+1)
+    result=archive_inventory(d,raw,*key)
+    cached[key]=raw;d._onlinePendingWorkspaceArchiveBytes=cached
+    return result
+
+
+def _pending_workspace_profile(d, bridge, producer):
+    """The two real runs must publish the identical complete immutable source."""
+    initial=bridge['baselineProducer']
+    d.require(producer['commit']==initial['commit'] and producer['sourceTree']==initial['sourceTree']
+        and producer['workflowRunId']!=initial['workflowRunId'],
+        'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
+    inventory=_pending_workspace_current_source_inventory(d,producer)
+    for name in _PENDING_WORKSPACE_CONTROL_NAMES:
+        raw=_declaration_source_bytes(Path(__file__).with_name(Path(name).name),
+            limit=2*1024*1024 if name.endswith('/remote-deploy.py') else 1024*1024)
+        d.require(inventory.get(name,{}).get('sha256')==hashlib.sha256(raw).hexdigest(),
+                  'ONLINE_RECHARGE_EXECUTOR_SOURCE_CHANGED')
+    return inventory
+
+
+def _pending_workspace_session(d, *, expected=None, producer=None):
+    saved=getattr(d,'_onlinePendingWorkspaceSession',None)
+    d.require(type(saved) is dict and set(saved)=={'bridge','producer'},'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
+    producer=_pending_workspace_producer(d) if producer is None else producer
+    reader=_pending_workspace_reader(d)
+    directory=Path(saved['bridge']['baselineRelease'])
+    bridge=reader.online_pending_workspace_cold(d,directory,expected_commit=saved['bridge']['baselineCommit'])
+    d.require(bridge==saved['bridge'] and producer==saved['producer']
+        and (expected is None or expected==bridge['baselineCommit']), 'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
+    _pending_workspace_profile(d,bridge,producer)
+    return bridge,producer
+
+
+def _pending_workspace_begin(d, expected, producer, *, live):
+    d.require(hasattr(d,'BASE') and expected==producer['commit'], 'ONLINE_RECHARGE_PENDING_WORKSPACE_INPUT_INVALID')
+    previous=(d.BASE/'current').resolve()
+    reader=_pending_workspace_reader(d)
+    bridge=(reader.online_pending_workspace_measure_before if live else reader.online_pending_workspace_cold)(
+        d,previous,expected_commit=expected)
+    online_pending_workspace_bridge_shape(d,bridge)
+    _pending_workspace_profile(d,bridge,producer)
+    d._onlinePendingWorkspaceProducer=producer
+    d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':producer}
+    return previous,bridge
+
+
+def baseline(d, expected):
+    if expected==BASELINE_COMMIT:
+        return _PENDING_WORKSPACE_FIRST['baseline'](d,expected)
+    d.require(type(getattr(d,'_onlinePendingWorkspaceProducer',None)) is dict, 'ONLINE_RECHARGE_BASELINE_NOT_APPROVED')
+    previous,bridge=_pending_workspace_begin(d,expected,_pending_workspace_producer(d),live=True)
+    reader=legacy(d)
+    manifest=closed_recovery_json(d,_declaration_source_bytes(previous/'release-manifest.json'))
+    record=closed_recovery_json(d,_declaration_source_bytes(previous/reader.STATE_FILE))
+    proof=reader.validate_proof(d,closed_recovery_json(d,_declaration_source_bytes(previous/reader.PROOF_FILE)),
+                               expected,bridge['baselineProducer']['sourceTree'])
+    # Complete live checks omitted from no cold proof: run existing image/content,
+    # attached volume, workspace health, backup and current job guards unchanged.
+    reader.verify_running(d,previous,proof)
+    volume=workspace_guard(d,previous,record.get('workspaceVolumeAfter'))
+    reader.workspace_health(d,previous)
+    reader.workspace_backup_receipt(d,previous,record)
+    guards=jobs_idle(d,previous,migrated=True)
+    recovery=release_recovery(d,previous)
+    verify_permission_seed(d,recovery['source']);require_fresh_resources(d,recovery['source'])
+    evidence={**({ 'migrationOrigin':record['baselineEvidence']['migrationOrigin']} if record['baselineEvidence'].get('migrationOrigin') is not None else {}),
+        'manifestSha256':bridge['manifestBytesSha256'],
+        'environmentSha256':bridge['environmentFileSha256'],
+        'apiSource':{'imageId':bridge['services']['api']['image'],'revision':expected,'kind':'API_WORKSPACE_BUILD_PROVEN'},
+        'guards':guards,'workspaceIdle':True,'workspaceVolume':volume,'workspaceOriginFiles':workspace_files(d,previous),
+        'workspaceBuildProofSha256':bridge['buildProofCanonicalSha256'],'migrationRecovery':bridge['migrationRecovery'],
+        'onlinePendingWorkspaceOrigin':bridge,'freeBytes':shutil.disk_usage(d.BASE).free}
+    workspace_origin(d,previous,previous,evidence,bridge['services'])
+    d.require(evidence['freeBytes']>6*1024**3 and snapshot(d,previous)==bridge['services']
+        and (d.BASE/'current').resolve()==previous,'ONLINE_RECHARGE_BASELINE_MOVED')
+    return previous,manifest,bridge['services'],evidence
+
+
+def release_recovery(d, previous):
+    if re.fullmatch('[0-9]{8}T[0-9]{6}Z-' + BASELINE_COMMIT[:12], previous.name):
+        return _PENDING_WORKSPACE_FIRST['release_recovery'](d,previous)
+    if not hasattr(d,'_onlinePendingWorkspaceSession'):
+        return _PENDING_WORKSPACE_FIRST['release_recovery'](d,previous)
+    bridge,_producer=_pending_workspace_session(d,expected=None)
+    d.require(str(previous)==bridge['baselineRelease'],'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
+    recovery=_PENDING_WORKSPACE_FIRST['release_recovery'](d,Path(bridge['originalWorkspace']['release']))
+    d.require(recovery is not None and recovery['marker']==bridge['migrationRecovery']
+        and recovery['state']==bridge['migrationState'],'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
+    return recovery
+
+
+def workspace_origin(d, previous, directory, evidence, before):
+    if 'onlinePendingWorkspaceOrigin' not in evidence:
+        return _PENDING_WORKSPACE_FIRST['workspace_origin'](d,previous,directory,evidence,before)
+    bridge,_producer=_pending_workspace_session(d)
+    d.require(evidence['onlinePendingWorkspaceOrigin']==bridge and str(previous)==bridge['baselineRelease']
+        and before==bridge['services'] and workspace_files(d,previous)==evidence['workspaceOriginFiles']
+        and evidence['workspaceBuildProofSha256']==bridge['buildProofCanonicalSha256'],
+        'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED')
+    # Cold actual initial Q evidence establishes retired owner provenance. The current
+    # attached volume and current API health still get their original live guards.
+    workspace_guard(d,directory,evidence['workspaceVolume']);legacy(d).workspace_health(d,directory)
+
+
+def historical_guard(d, previous, evidence, source):
+    if 'onlinePendingWorkspaceOrigin' not in evidence:
+        return _PENDING_WORKSPACE_FIRST['historical_guard'](d,previous,evidence,source)
+    bridge,_producer=_pending_workspace_session(d)
+    d.require(evidence['onlinePendingWorkspaceOrigin']==bridge,'ONLINE_RECHARGE_PENDING_WORKSPACE_ORIGIN_CHANGED')
+    return _PENDING_WORKSPACE_FIRST['historical_guard'](d,Path(bridge['originalWorkspace']['release']),evidence,source)
+
+
+def migration_source_check(d,directory,*,candidate=True):
+    saved=getattr(d,'_onlinePendingWorkspaceSession',None)
+    if type(saved) is dict and str(directory)==saved['bridge']['baselineRelease']:
+        reader=legacy(d)
+        d.require(reader.pending_online_migrations(d,directory)==MIGRATION_FILE,
+                  'ONLINE_RECHARGE_MIGRATION_SCOPE_CHANGED')
+        return None
+    return _PENDING_WORKSPACE_FIRST['migration_source_check'](d,directory,candidate=candidate)
+
+
+def candidate_recovery_source(d, directory, context):
+    if not hasattr(d,'_onlinePendingWorkspaceSession') or any(directory.name.endswith('-'+c[:12])
+            for c in (RECOVERY_COMMIT,RESTORED_COMMIT)):
+        return _PENDING_WORKSPACE_FIRST['candidate_recovery_source'](d,directory,context)
+    bridge,producer=_pending_workspace_session(d)
+    expected=_pending_workspace_profile(d,bridge,producer)
+    actual=release_source_inventory(d,directory,published=True)
+    # Only the own, independently verified SQLite receipt may account for two
+    # extra stage files; no directory-wide generated-file exemption exists.
+    extra={legacy(d).WORKSPACE_SQLITE_RECEIPT,'backups/auto-registration/database.db'}
+    observed=set(actual)-set(expected)
+    if observed:
+        d.require(observed==extra,'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED')
+        manifest=closed_recovery_json(d,_declaration_source_bytes(directory/'release-manifest.json'))
+        record=closed_recovery_json(d,_declaration_source_bytes(directory/STATE_FILE))
+        _pending_workspace_sqlite_receipt(d,directory,manifest,record)
+    d.require({n:v for n,v in actual.items() if n not in observed}==expected,
+              'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED')
+    fixed=fixed_recovery_inventory(d)
+    roots=(ENGINE_ROOT+'/', 'apps/admin/src/v2/features/online-recharge/', 'apps/api/src/id-business-v2/online-recharge/')
+    d.require({n:v for n,v in actual.items() if n.startswith(roots)}
+        =={n:v for n,v in fixed.items() if n.startswith(roots)},'ONLINE_RECHARGE_BUILD_SOURCE_CHANGED')
+    migration_source_check(d,directory)
+
+
+def require_preserved(d, previous, target, before, original, *, all_services=False, include_engine=False):
+    if not hasattr(d,'_onlinePendingWorkspaceSession'):
+        return _PENDING_WORKSPACE_FIRST['require_preserved'](d,previous,target,before,original,
+            all_services=all_services,include_engine=include_engine)
+    _pending_workspace_session(d)
+    return _pending_workspace_preserved(d,previous,target,before,original,all_services=all_services,include_engine=include_engine)
+
+
+def validate_arguments(d, args):
+    if args.expected_current==BASELINE_COMMIT:
+        return _PENDING_WORKSPACE_FIRST['validate_arguments'](d,args)
+    d.require(getattr(args,'online_recharge_only',False) is True and not any(value for key,value in vars(args).items()
+        if key.startswith(('historical_','registration_worker_','recharge_pro_')) or key in
+        ('admin_only','api_admin_only','api_registration_only','api_admin_migration_only','api_workspace_only',
+         'image_commit','image_run_id','image_run_attempt','post_cleanup_seal_sha256',
+         'order_archive_seal_sha256','order_archive_prepared_images_sha256')), 'ONLINE_RECHARGE_SCOPE_CONFLICT')
+    producer=_pending_workspace_producer(d,args)
+    _previous,bridge=_pending_workspace_begin(d,args.expected_current,producer,live=True)
+    encoded=getattr(args,'online_recharge_build_proof','')
+    d.require(type(encoded) is str and len(encoded)<32768,'ONLINE_RECHARGE_BUILD_PROOF_TOO_LARGE')
+    raw=base64.b64decode(encoded,validate=True)
+    d.require(len(raw)<24000,'ONLINE_RECHARGE_BUILD_PROOF_TOO_LARGE')
+    proof=closed_recovery_json(d,raw)
+    before=online_pending_workspace_preflight_bytes(d,producer=producer,expected_sha256=proof.get('preflightBytesSha256'))
+    _pending_workspace_complete_preflight(d,before,producer=producer,bridge=bridge)
+    d.require(re.fullmatch('[0-9]{12}\\.dkr\\.ecr\\.ap-northeast-1\\.amazonaws\\.com/id-business-v2-release',args.repository or '')
+        and type(args.ci_run_id) is str and re.fullmatch('[1-9][0-9]*',args.ci_run_id),'ONLINE_RECHARGE_INPUT_INVALID')
+    return validate_proof(d,proof,args.commit,args.source_tree,args.repository,args.run_id,args.run_attempt)
+
+
+def validate_proof(d, value, commit, tree, repository=None, run_id=None, attempt=None):
+    if type(value) is not dict or 'kind' not in value:
+        return _PENDING_WORKSPACE_FIRST['validate_proof'](d,value,commit,tree,repository,run_id,attempt)
+    d.require(value.get('kind')=='ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_PROOF','ONLINE_RECHARGE_BUILD_PROOF_INVALID')
+    bridge,producer=_pending_workspace_session(d)
+    d.require(commit==producer['commit'] and tree==producer['sourceTree']
+        and (run_id is None or run_id==producer['workflowRunId'])
+        and (attempt is None or attempt==producer['workflowRunAttempt']),'ONLINE_RECHARGE_BUILD_RUN_CHANGED')
+    raw=online_pending_workspace_preflight_bytes(d,producer=producer,expected_sha256=value.get('preflightBytesSha256'))
+    _pending_workspace_complete_preflight(d,raw,producer=producer,bridge=bridge)
+    if repository is not None:
+        d.require(all(row['reference']==repository+':'+commit+'-'+str(run_id)+'-'+str(attempt)+'-'+name
+            for name,row in value.get('images',{}).items()),'ONLINE_RECHARGE_BUILD_RUN_CHANGED')
+    return online_pending_workspace_build_shape(d,value,producer=producer,bridge=bridge,preflight_raw=raw)
+
+
+def build_proof(d):
+    expected=os.environ.get('EXPECTED_CURRENT',BASELINE_COMMIT)
+    if expected==BASELINE_COMMIT:
+        return _PENDING_WORKSPACE_FIRST['build_proof'](d)
+    # CI build has no server file authority: use only the original F_O from
+    # the fixed ended transport. The same-candidate source binding remains mandatory.
+    before_path=Path('.deploy/production-release/online-recharge-pending-workspace-preflight-result.json').absolute()
+    raw=_declaration_source_bytes(before_path,limit=65535)
+    before=closed_recovery_json(d,raw);bridge=online_pending_workspace_bridge_shape(d,before.get('baseline'))
+    producer={n:os.environ.get(e,'') for n,e in (('commit','RELEASE_COMMIT'),('sourceTree','SOURCE_TREE'),
+        ('workflowRunId','GITHUB_RUN_ID'),('workflowRunAttempt','GITHUB_RUN_ATTEMPT'))}
+    _pending_workspace_complete_preflight(d,raw,producer=producer,bridge=bridge)
+    _pending_workspace_profile(d,bridge,producer)
+    d.require(d.run('git','rev-parse','HEAD')==producer['commit'] and d.run('git','rev-parse','HEAD^{tree}')==producer['sourceTree']
+        and d.run('git','status','--porcelain','--untracked-files=all')=='','ONLINE_RECHARGE_BUILD_WORKTREE_DIRTY')
+    directory=Path.cwd();migration_source_check(d,directory)
+    proof={'kind':'ONLINE_RECHARGE_PENDING_WORKSPACE_BUILD_PROOF','version':2,'scope':SCOPE,
+        'commit':producer['commit'],'sourceTree':producer['sourceTree'],'baselineCommit':expected,
+        'migration':dict(MIGRATION_IDENTITY),'images':{},'engineSourceSha256':fingerprint(file_inventory(d,directory/ENGINE_ROOT)),
+        'composeSourceSha256':file_digest(directory/'docker-compose.aws-mysql.yml'),
+        'baselineOriginSha256':fingerprint(bridge),'preflightBytesSha256':hashlib.sha256(raw).hexdigest()}
+    for service in IMAGE_SERVICES:
+        reference=os.environ['RELEASE_REPOSITORY']+':'+producer['commit']+'-'+producer['workflowRunId']+'-'+producer['workflowRunAttempt']+'-'+service
+        metadata=json.loads(d.run('docker','image','inspect',reference))[0]
+        proof['images'][service]={'reference':reference,'imageId':metadata['Id'],**content_summary(d,service,d.run('docker','run','--rm',
+            '--network','none','--read-only','--entrypoint','/bin/sh',reference,'-c',content_command(service)))}
+    online_pending_workspace_build_shape(d,proof,producer=producer,bridge=bridge,preflight_raw=raw)
+    for service in IMAGE_SERVICES:
+        verify_image_content(d,directory,proof,service)
+    target=directory/'.deploy/production-release'/PROOF_FILE
+    target.parent.mkdir(parents=True,exist_ok=True)
+    target.write_text(json.dumps(proof,sort_keys=True,indent=2)+'\n')
+    print(json.dumps({'status':SCOPE+'_BUILD_PROVEN','proofSha256':fingerprint(proof)}))
+    return proof
+
+
+def _release_locked(d,args):
+    if args.expected_current==BASELINE_COMMIT:
+        return _PENDING_WORKSPACE_FIRST['_release_locked'](d,args)
+    return _pending_workspace_release_locked(d,args)
+
+
+def readback(d,expected):
+    if not hasattr(d,'_onlinePendingWorkspaceProducer'):
+        return _PENDING_WORKSPACE_FIRST['readback'](d,expected)
+    directory=(d.BASE/'current').resolve()
+    record=closed_recovery_json(d,_declaration_source_bytes(directory/STATE_FILE))
+    evidence=record.get('baselineEvidence',{})
+    if 'onlinePendingWorkspaceOrigin' not in evidence:
+        return _PENDING_WORKSPACE_FIRST['readback'](d,expected)
+    producer=_pending_workspace_producer(d)
+    bridge=_pending_workspace_reader(d).online_pending_workspace_readback_origin(d,directory,expected_commit=expected,producer=producer)
+    _pending_workspace_profile(d,bridge,producer)
+    d._onlinePendingWorkspaceSession={'bridge':bridge,'producer':producer}
+    return _pending_workspace_readback(d,expected)
+
+
+def validate_receipt(d,value,mode,commit,expected):
+    if type(value) is not dict or 'onlinePendingWorkspaceOrigin' not in value:
+        return _PENDING_WORKSPACE_FIRST['validate_receipt'](d,value,mode,commit,expected)
+    bridge=online_pending_workspace_bridge_shape(d,value['onlinePendingWorkspaceOrigin'])
+    d.require(mode in ('preflight','readback') and value.get('migrationPerformed') is False
+        and (mode!='preflight' or expected==bridge['baselineCommit']),'ONLINE_RECHARGE_RECEIPT_INVALID')
+    return _pending_workspace_validate_receipt(d,value,mode,commit,expected)
+
+
+def preflight(d,expected):
+    if expected==BASELINE_COMMIT:
+        return _PENDING_WORKSPACE_FIRST['preflight'](d,expected)
+    result=_PENDING_WORKSPACE_FIRST['preflight'](d,expected)
+    # This calls the complete original preflight body, with its independently
+    # checked actual initial WORKSPACE baseline, source48, APPLIED database, strict49 audit and
+    # final full7/current comparison. It is not a shape-only F construction.
+    bridge,producer=_pending_workspace_session(d,expected=expected)
+    result={**result,'onlinePendingWorkspaceOrigin':bridge,'migrationPerformed':False}
+    _pending_workspace_pref_fields(d,result)
+    _pending_workspace_validate_receipt(d,result,'preflight',producer['commit'],expected)
+    return result
+
+
+def _pending_workspace_complete_preflight(d,raw,*,producer,bridge):
+    value=closed_recovery_json(d,raw)
+    d.require(value.get('version')==2 and type(value.get('version')) is int,
+              'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED')
+    return online_pending_workspace_preflight_binding(d,raw,producer=producer,bridge=bridge)
+
+
+def online_pending_workspace_ended_preflight(d,invocation_raw,*,command_id,instance_id,producer,wire_decoder):
+    """Client adapter for an ACTUALLY acquired ended invocation.
+
+    Transport must provide the actual AWS command/target and fixed same-tree
+    decoder bytes, not metadata claimed by P/F/proof. This pure helper cannot
+    acquire AWS or grant authority to caller-supplied bytes. Its result is F_O
+    installed by the existing root-private trusted artifact transport only.
+    """
+    import datetime
+    try:
+        _declaration_require(type(invocation_raw) is bytes and 0<len(invocation_raw)<65536
+            and type(command_id) is str and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',command_id)
+            and type(instance_id) is str and re.fullmatch('i-[a-f0-9]{8}(?:[a-f0-9]{9})?',instance_id)
+            and callable(wire_decoder))
+        value=closed_recovery_json(d,invocation_raw)
+        ended=datetime.datetime.fromisoformat(value.get('ExecutionEndDateTime','').replace('Z','+00:00'))
+        _declaration_require(value.get('CommandId')==command_id and value.get('InstanceId')==instance_id
+            and value.get('DocumentName')=='AWS-RunShellScript' and value.get('PluginName')=='aws:runShellScript'
+            and value.get('Status')=='Success' and type(value.get('ResponseCode')) is int and value['ResponseCode']==0
+            and value.get('StandardErrorContent')=='' and ended.tzinfo is not None
+            and ended.utcoffset()==datetime.timedelta(0)
+            and ended<=datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=5))
+        receipt=wire_decoder(value.get('StandardOutputContent'),scope=SCOPE)
+        bridge=online_pending_workspace_bridge_shape(d,receipt.get('onlinePendingWorkspaceOrigin'))
+        _pending_workspace_validate_receipt(d,receipt,'preflight',producer['commit'],bridge['baselineCommit'])
+        f={'kind':'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT','version':2,'mode':'preflight',
+            'status':'ONLINE_RECHARGE_PENDING_WORKSPACE_BASELINE_VERIFIED','commandId':command_id,
+            'releaseCandidateCommit':producer['commit'],'workflowRunId':producer['workflowRunId'],
+            'workflowRunAttempt':producer['workflowRunAttempt'],'sourceTree':producer['sourceTree'],
+            'baseline':bridge,'services':bridge['services'],'ordinaryPreflight':receipt}
+        raw=(json.dumps(f,indent=2)+'\n').encode()
+        _pending_workspace_complete_preflight(d,raw,producer=producer,bridge=bridge)
+        return {'preflight_raw':raw,'invocation_raw':invocation_raw,
+            'command_id':command_id,'invocation_bytes_sha256':hashlib.sha256(invocation_raw).hexdigest()}
+    except Exception:
+        raise RuntimeError('ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED') from None
+
+
+def _pending_workspace_pref_fields(d,value):
+    # This producer owns an explicit finite evidence schema. Inherited full P,
+    # arbitrary old baseline fields, raw Env and extra stdout keys never enter F.
+    required={'status','commit','services','manifestSha256','environmentSha256','apiSource','guards','freeBytes',
+        'workspaceIdle','workspaceVolume','workspaceOriginFiles','workspaceBuildProofSha256','migrationRecovery',
+        'onlinePendingWorkspaceOrigin','audit','migration','migrationState','workersPreserved','requiresWindowHandoff','migrationPerformed'}
+    d.require(type(value) is dict and required<=set(value) and set(value)<=required|{'migrationOrigin'},
+              'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED')
+    bridge=online_pending_workspace_bridge_shape(d,value['onlinePendingWorkspaceOrigin'])
+    d.require(value['apiSource']=={'imageId':bridge['services']['api']['image'],'revision':bridge['baselineCommit'],
+        'kind':'API_WORKSPACE_BUILD_PROVEN'} and value['environmentSha256']==bridge['environmentFileSha256']
+        and value['manifestSha256']==bridge['manifestBytesSha256'] and type(value['freeBytes']) is int
+        and value['freeBytes']>6*1024**3 and value['workspaceBuildProofSha256']==bridge['buildProofCanonicalSha256']
+        and type(value['workspaceOriginFiles']) is dict and set(value['workspaceOriginFiles'])==
+            {'release-manifest.json','api-workspace-preservation.json','api-workspace-build-proof.json','backup-verification.json','before-audit.json','after-audit.json'}
+        and all(_declaration_hash(v) for v in value['workspaceOriginFiles'].values()),
+        'ONLINE_RECHARGE_PENDING_WORKSPACE_PREFLIGHT_CHANGED')

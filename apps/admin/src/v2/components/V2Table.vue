@@ -62,20 +62,35 @@ export default defineComponent({
     const tableRef = ref<ElementTableExpose>();
     const shellRef = ref<HTMLElement>();
     const toolbarHeight = ref(0);
+    const headerHeight = ref<number>();
     let toolbarObserver: ResizeObserver | undefined;
+    let headerObserver: ResizeObserver | undefined;
     onMounted(() => {
       const toolbar = shellRef.value?.querySelector<HTMLElement>(
         ':scope > .v2-table-preference-toolbar'
       );
-      if (!toolbar) return;
-      const measure = () => {
-        toolbarHeight.value = Math.ceil(toolbar.getBoundingClientRect().height);
-      };
-      measure();
-      toolbarObserver = new ResizeObserver(measure);
-      toolbarObserver.observe(toolbar);
+      if (toolbar) {
+        const measure = () => {
+          toolbarHeight.value = Math.ceil(toolbar.getBoundingClientRect().height);
+        };
+        measure();
+        toolbarObserver = new ResizeObserver(measure);
+        toolbarObserver.observe(toolbar);
+      }
+      const header = shellRef.value?.querySelector<HTMLElement>('.el-table__header-wrapper');
+      if (header) {
+        const measure = () => {
+          headerHeight.value = Math.ceil(header.getBoundingClientRect().height);
+        };
+        measure();
+        headerObserver = new ResizeObserver(measure);
+        headerObserver.observe(header);
+      }
     });
-    onBeforeUnmount(() => toolbarObserver?.disconnect());
+    onBeforeUnmount(() => {
+      toolbarObserver?.disconnect();
+      headerObserver?.disconnect();
+    });
     const mobileColumns = window.matchMedia('(max-width: 900px)');
     const isMobile = ref(mobileColumns.matches);
     const syncViewport = () => {
@@ -142,7 +157,11 @@ export default defineComponent({
         {
           class: 'v2-unified-table-shell',
           ref: shellRef,
-          style: { '--v2-table-toolbar-height': `${toolbarHeight.value}px` }
+          style: {
+            '--v2-table-toolbar-height': `${toolbarHeight.value}px`,
+            '--v2-table-header-height':
+              headerHeight.value === undefined ? undefined : `${headerHeight.value}px`
+          }
         },
         [
           props.showColumnSettings ? h(V2TableColumnSettings, { schema: props.schema }) : null,

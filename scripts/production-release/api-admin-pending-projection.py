@@ -219,6 +219,43 @@ def _inverse_delta(candidate, before, after):
     return result
 
 
+_INITIAL_WORKSPACE_APPLE_CONTEXT = {
+    'apps/admin/src/v2/features/registry.spec.ts': (
+        b"    expect(tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))).toEqual(\n"
+        b"      []\n    );\n",
+        b"    expect(\n"
+        b"      tablesFor(v2FeatureRegistry.find((item) => item.key === 'auto-registration'))?.map(\n"
+        b"        (item) => item.id\n      )\n"
+        b"    ).toEqual(['auto-registration.apple-mailboxes']);\n",
+        b'online-recharge'),
+    'apps/admin/src/v2/features/tableSchemas.ts': (
+        b"  'auto-registration': [],\n",
+        b"  'auto-registration': [v2TableSchemas.autoRegistration.appleMailboxes],\n",
+        b'onlineTablesByFeature'),
+}
+
+
+def _inverse_initial_workspace_delta(name, candidate, before, after):
+    """Retain the two exact reviewed Apple edits inside ONLINE hunk context.
+
+    This changes only context for the existing unique, three-line inverse.
+    It restores the exact candidate bytes afterwards; no business edit is part
+    of the inverse and no fuzzy offset or shorter ONLINE hunk is accepted.
+    """
+    context = _INITIAL_WORKSPACE_APPLE_CONTEXT.get(name)
+    if context is None or context[1] not in candidate:
+        return _inverse_delta(candidate, before, after)
+    old, apple, marker = context
+    require(before.count(old) == after.count(old) == candidate.count(apple) == 1
+            and candidate.count(old) == 0 and candidate.count(marker) == after.count(marker),
+            'DELTA_INTERSECTION')
+    normalized = candidate.replace(apple, old, 1)
+    result = _inverse_delta(normalized, before, after)
+    require(result.count(old) == 1 and result.count(marker) == before.count(marker),
+            'DELTA_INTERSECTION')
+    return result.replace(old, apple, 1)
+
+
 def project_files(candidate, baseline, online, candidate_commit, candidate_tree):
     """Pure projection of an already downloaded, exact candidate Git archive."""
     require(isinstance(candidate_commit, str) and re.fullmatch(r'[a-f0-9]{40}', candidate_commit)
@@ -236,7 +273,7 @@ def project_files(candidate, baseline, online, candidate_commit, candidate_tree)
         # configuration; there is no implicit schema/seed/Compose extension.
         if name in RUNTIME_FILES:
             require(result[name] == online[name], 'RUNTIME_INPUT_CHANGED')
-        raw = _inverse_delta(result[name][0], baseline[name][0], online[name][0])
+        raw = _inverse_initial_workspace_delta(name, result[name][0], baseline[name][0], online[name][0])
         if name in RUNTIME_FILES:
             require(raw == baseline[name][0], 'RUNTIME_OUTPUT_CHANGED')
         generated[name] = {'before': candidate_rows[name],

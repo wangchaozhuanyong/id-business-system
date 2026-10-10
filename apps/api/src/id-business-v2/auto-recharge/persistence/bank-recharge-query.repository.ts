@@ -5,7 +5,11 @@ import {
   ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS,
   ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
 } from '../../renewals/public-api';
-import { bankRechargeId, bankRechargeText } from '../bank-recharge-validation';
+import {
+  bankRechargeCountryCode,
+  bankRechargeId,
+  bankRechargeText
+} from '../bank-recharge-validation';
 
 @Injectable()
 export class BankRechargeQueryRepository {
@@ -102,6 +106,9 @@ export class BankRechargeQueryRepository {
     const status = bankRechargeText(query.status, '订单状态', 40, false);
     const expiry = bankRechargeText(query.expiry, '到期筛选', 20, false) || 'all';
     if (!['all', 'expired'].includes(expiry)) throw new BadRequestException('到期筛选无效');
+    if (query.executionSource !== undefined && query.executionSource !== 'bitbrowser') {
+      throw new BadRequestException('执行来源筛选无效');
+    }
     const now = new Date();
     const accountId = query.accountId ? bankRechargeId(query.accountId, 'ChatGPT 账号') : null;
     if (
@@ -121,6 +128,9 @@ export class BankRechargeQueryRepository {
       throw new BadRequestException('删除状态筛选无效');
     const where: Prisma.IdBusinessV2BankRechargeOrderWhereInput = {
       deletedAt: query.deleted === 'deleted' ? { not: null } : null,
+      ...(query.executionSource === 'bitbrowser'
+        ? { source: 'automatic', rechargeJob: { is: { action: 'bitbrowser' } } }
+        : {}),
       ...(expiry === 'expired' ? { dueAt: { lte: now } } : {}),
       ...(accountId ? { accountId } : {}),
       ...(status
@@ -144,7 +154,8 @@ export class BankRechargeQueryRepository {
           customer: { select: { id: true, name: true } },
           account: { select: { id: true, emailMasked: true } },
           card: { select: { id: true, label: true, last4: true } },
-          activeSubscription: { select: { status: true } }
+          activeSubscription: { select: { status: true } },
+          rechargeJob: { select: { result: true } }
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * pageSize,
@@ -153,7 +164,35 @@ export class BankRechargeQueryRepository {
       this.prisma.idBusinessV2BankRechargeOrder.count({ where })
     ]);
     return {
-      items,
+      items: items.map(({ rechargeJob, ...order }) => {
+        const result = rechargeJob?.result;
+        const report =
+          result && typeof result === 'object' && !Array.isArray(result) ? result : null;
+        const network = report?.network;
+        const country =
+          network && typeof network === 'object' && !Array.isArray(network)
+            ? network.country
+            : null;
+        let chargeCountryCode: string | null = null;
+        if (
+          order.source === 'automatic' &&
+          report?.account_matched === true &&
+          typeof country === 'string' &&
+          /^[A-Z]{2}$/.test(country)
+        ) {
+          try {
+            chargeCountryCode = bankRechargeCountryCode(country);
+          } catch {
+            // 历史任务中的未知或占位国家不影响整页读取。
+            chargeCountryCode = null;
+          }
+        }
+        return {
+          ...order,
+          // 国家只来自本次任务已核实账号的出口，不按币种或账单地址推算。
+          chargeCountryCode
+        };
+      }),
       total,
       page,
       pageSize,

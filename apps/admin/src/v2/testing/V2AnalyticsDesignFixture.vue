@@ -515,10 +515,10 @@ const accountCodeLabels: Record<V2FinanceAccountCode, string> = {
   realized_fx_gain_loss: '已实现汇兑损益',
   opening_equity: '期初权益',
   manual_adjustment: '手工调整',
-  bank_recharge_revenue: '银充代充收入',
-  bank_recharge_service_fee: '银充客户手续费收入',
-  bank_recharge_cost: '银充代付成本',
-  bank_recharge_bank_fee: '银充银行手续费'
+  bank_recharge_revenue: '比特充值代充收入',
+  bank_recharge_service_fee: '比特充值客户手续费收入',
+  bank_recharge_cost: '比特充值代付成本',
+  bank_recharge_bank_fee: '比特充值银行手续费'
 };
 
 function setNotice(message: string) {

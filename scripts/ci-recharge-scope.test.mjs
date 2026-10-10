@@ -20,6 +20,7 @@ import {
   backendArchitectureGuardChecks,
   registrationOnboardingControls,
   hasRegistrationOnboardingScope,
+  hasAppleMailboxScope,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest
@@ -886,6 +887,41 @@ test('direct login and workspace browser acceptance stay in exact admin scope', 
   ])
     assert.equal(checkMode([...paths, other], schema, schema), 'full', other);
 });
+test('exact Vite acceptance runners preserve the existing joint Apple and recharge scope', () => {
+  const runners = [
+    'scripts/acceptance-v2-auto-recharge.mjs',
+    'scripts/acceptance-v2-bank-recharge-ui.mjs',
+    'scripts/lib/vite-cli.mjs'
+  ];
+  const business = [
+    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py'
+  ];
+  for (const path of runners) {
+    assert.equal(
+      checkMode([path], schema, schema),
+      path.includes('auto-recharge') ? 'recharge' : 'admin'
+    );
+    assert.deepEqual(selectedParts([path]), ['guards', 'admin']);
+    assert.equal(isCiOnly([path]), false);
+    assert.equal(checkMode([...business, path], schema, schema), 'recharge');
+    assert.deepEqual(selectedParts([...business, path]), ['guards', 'admin', 'api', 'connector']);
+  }
+  assert.equal(checkMode([...business, ...runners], schema, schema), 'recharge');
+  for (const path of [
+    'scripts/acceptance-v2-auto-recharge-other.mjs',
+    'scripts/acceptance-v2-bank-recharge-ui-other.mjs',
+    'scripts/lib/vite-cli-other.mjs',
+    'scripts/lib/vite-cli.test.mjs',
+    'scripts/lib/vite-cli.mjs.backup',
+    'scripts/lib/unknown.mjs'
+  ]) {
+    assert.equal(checkMode([path], schema, schema), 'full', path);
+    assert.equal(checkMode([...business, ...runners, path], schema, schema), 'full', path);
+  }
+});
+
 test('Vendure mailbox integration runs only its shared, admin, API and guard checks', () => {
   const paths = [
     '.env.example',
@@ -1042,6 +1078,69 @@ test('CI selector and Python-only changes retain unrelated API and frontend chec
   assert.equal(affectsPart('api', changed), false);
   assert.equal(affectsPart('admin', changed), false);
   assert.equal(affectsPart('connector', changed), true);
+});
+
+test('combined BitBrowser orders and Apple scope retains every affected check without unrelated suites', () => {
+  const changed = [
+    'apps/admin/src/v2/components/V2Table.vue',
+    'apps/admin/src/v2/features/auto-recharge/RechargeSensitiveInput.vue',
+    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue',
+    'apps/admin/src/v2/features/customers/useCustomersPage.ts',
+    'apps/admin/src/v2/features/tableSchemas.ts',
+    'apps/admin/src/v2/styles/records.css',
+    'apps/api/src/id-business-v2/auto-recharge/bank-recharge-finance.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/worker/workspace.py',
+    'scripts/acceptance-v2-auto-recharge.mjs',
+    'scripts/acceptance-v2-bank-recharge-ui.mjs',
+    'scripts/acceptance-v2-bit-orders-mysql.mjs',
+    'scripts/acceptance-v2-table-layout.mjs',
+    'scripts/production-release/api-admin-scope.py',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(hasAppleMailboxScope(changed), true);
+  assert.equal(checkMode(changed, schema, schema), 'recharge');
+  assert.deepEqual(selectedParts(changed), ['guards', 'admin', 'api', 'connector']);
+  assert.deepEqual(adminCheckCommands('recharge', changed)[1], [
+    'run',
+    'test',
+    '--workspace',
+    '@apple-business/admin'
+  ]);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(adminUiGuardChecks('recharge', changed).includes(name), name);
+  for (const path of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unknown/migration.sql',
+    'apps/api/src/id-business-v2/auto-registration/unknown.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/worker/requirements.lock.txt',
+    'apps/api/src/id-business-v2/orders/order.service.ts',
+    'apps/api/src/auth/auth.controller.ts',
+    'package-lock.json'
+  ])
+    assert.equal(checkMode([...changed, path], schema, schema), 'full', path);
+});
+
+test('Apple worker-only scope selects API worker verification while frontend-only keeps existing admin scope', () => {
+  const worker = 'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py';
+  assert.equal(checkMode([worker], schema, schema), 'recharge');
+  assert.deepEqual(selectedParts([worker]), ['guards', 'api']);
+  const frontend = 'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue';
+  assert.equal(checkMode([frontend], schema, schema), 'admin');
+  assert.deepEqual(selectedParts([frontend]), ['guards', 'admin']);
+  for (const path of [worker + '.backup', worker.replace('release_safety', 'unknown')]) {
+    assert.equal(hasAppleMailboxScope([path]), false);
+    assert.equal(checkMode([path], schema, schema), 'full');
+  }
 });
 
 test('image reuse requires unchanged complete inputs of that service', () => {

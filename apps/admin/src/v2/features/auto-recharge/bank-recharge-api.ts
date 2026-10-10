@@ -4,6 +4,21 @@ import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 
 const base = '/id-business-v2/bank-recharge';
 
+export interface BitOrderPricingSettings {
+  receivedCurrencyCode: string;
+  shoppingFeePercent: string | null;
+  usdtFeePercent: string | null;
+  planPrices: Record<string, string | null>;
+  updatedAt: string | null;
+}
+export interface BitOrderPricingRate {
+  currency: string;
+  rateToCny: string | null;
+  id: string | null;
+  capturedAt: string | null;
+  expiresAt: string | null;
+}
+
 export type BankLifecycleEntity = 'account' | 'order';
 export type BankLifecycleAction = 'cancel' | 'delete' | 'restore';
 export interface BankLifecyclePreview {
@@ -135,6 +150,7 @@ export type BankRechargeOrderStatus =
   | 'cancelled';
 
 export interface BankRechargeOrder {
+  chargeCountryCode?: string | null;
   accountingVersion?: 'legacy' | 'subscription_cost_v2';
   usdtFeeAmount?: string | null;
   usdtFeeCurrencyCode?: string | null;
@@ -306,9 +322,9 @@ export const bankRechargeApi = {
       ['auto-recharge', 'renewals', 'renewal-warning-summary']
     );
   },
-  totpCode(id: string) {
+  totpCode(id: string, options: ApiRequestOptions = {}) {
     return request<{ token: string; expiresAt: string }>(
-      http.post(`${base}/accounts/${id}/totp-code`, {})
+      http.post(`${base}/accounts/${id}/totp-code`, {}, { signal: options.signal })
     );
   },
   accountIdentity(id: string) {
@@ -453,6 +469,7 @@ export const bankRechargeApi = {
       accountId?: string;
       expiry?: 'all' | 'expired';
       deleted?: 'active' | 'deleted';
+      executionSource?: 'bitbrowser';
     },
     options: ApiRequestOptions = {}
   ) {
@@ -468,6 +485,22 @@ export const bankRechargeApi = {
   orderOptions(options: ApiRequestOptions = {}) {
     return request<BankRechargeOrderOptions>(
       http.get(`${base}/orders/options`, { signal: options.signal })
+    );
+  },
+  orderPricingSettings(options: ApiRequestOptions = {}) {
+    return request<BitOrderPricingSettings>(
+      http.get(`${base}/order-pricing-settings`, { signal: options.signal })
+    );
+  },
+  updateOrderPricingSettings(input: BitOrderPricingSettings) {
+    return withV2QueryInvalidation(
+      request<BitOrderPricingSettings>(http.put(`${base}/order-pricing-settings`, input)),
+      ['auto-recharge']
+    );
+  },
+  orderPricingRates(options: ApiRequestOptions = {}) {
+    return request<{ items: BitOrderPricingRate[]; generatedAt: string }>(
+      http.get(`${base}/order-pricing-rates`, { signal: options.signal })
     );
   },
   createManualOrder(input: Record<string, unknown>) {

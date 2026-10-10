@@ -3,7 +3,8 @@
     <el-select
       :model-value="countryCode"
       aria-label="选择代理国家"
-      filterable
+      name="recharge-proxy-region"
+      autocomplete="off"
       placeholder="选择国家后查看该国代理"
       @update:model-value="$emit('update:countryCode', $event)"
     >
@@ -19,6 +20,8 @@
     <el-select
       :model-value="proxyId"
       aria-label="选择代理 IP"
+      name="recharge-proxy-entry"
+      autocomplete="off"
       filterable
       :disabled="!countryCode"
       :loading="loading"

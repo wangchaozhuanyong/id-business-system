@@ -8,6 +8,7 @@ import {
   auditRetentionMigration,
   historicalReleaseControlPaths,
   hasRegistrationOnboardingScope,
+  hasAppleMailboxScope,
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessHelper,
   productionDatabaseAccessTest
@@ -485,6 +486,7 @@ if (part === 'guards') {
       '@apple-business/api',
       '--',
       'src/id-business-v2/auto-recharge',
+      ...(hasAppleMailboxScope(changed) ? ['src/id-business-v2/auto-registration'] : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))
         ? ['src/id-business-v2/online-recharge']
         : []),
@@ -503,6 +505,14 @@ if (part === 'guards') {
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
+  if (hasAppleMailboxScope(changed)) {
+    npm('run', 'auto-registration:setup');
+    const python = '.runtime/auto-registration/venv/bin/python';
+    const worker = 'apps/api/src/id-business-v2/auto-registration/worker';
+    for (const name of ['test_workspace.py', 'test_apple_mailboxes.py', 'test_release_safety.py'])
+      run(python, ['-B', '-m', 'unittest', 'discover', '-s', worker, '-p', name]);
+    run(python, ['-B', worker + '/acceptance_runtime.py']);
+  }
   if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
     onlineEngine();
 } else if (part === 'online-engine') {
