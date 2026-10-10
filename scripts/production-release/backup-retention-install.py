@@ -154,6 +154,48 @@ def read_original(authority, parent, name, *, stage, transport, limit=256*1024):
         raise
 
 
+def current_scripts(authority, transport, result, guard):
+    """Tighten only the fixed current/scripts directory after its exact refusal."""
+    try:
+        return authority.child(authority.current_fd, 'scripts', role='CURRENT_RELEASE')
+    except Exception as error:
+        args = BaseException.args.__get__(error)
+        if not (transport is not None and type(error) is transport.Rejected and len(args) == 1
+                and type(args[0]) is str and args[0] == 'ANCESTOR_CURRENT_RELEASE_WRITABLE'):
+            raise
+    identity_code = 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_IDENTITY'
+    visible = os.stat('scripts', dir_fd=authority.current_fd, follow_symlinks=False)
+    need(stat.S_ISDIR(visible.st_mode), 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_TYPE')
+    need(visible.st_uid == 0, 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_OWNER')
+    mode = stat.S_IMODE(visible.st_mode)
+    need(mode & 0o022, identity_code)
+    fd = os.open('scripts', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 dir_fd=authority.current_fd)
+    try:
+        anchor = file_identity(visible)
+        def verify(expected):
+            need(file_identity(os.fstat(fd)) == expected
+                 == file_identity(os.stat('scripts', dir_fd=authority.current_fd,
+                                          follow_symlinks=False)), identity_code)
+        verify(anchor)
+        guard()
+        verify(anchor)
+        result['mutationAttempted'] = True
+        os.fchmod(fd, mode & ~0o022)
+        changed = file_identity(os.fstat(fd))
+        # chmod may change only the requested mode bits and this inode's ctime.
+        need(changed[2] == (stat.S_IFMT(visible.st_mode) | (mode & ~0o022))
+             and all(changed[n] == anchor[n] for n in (0, 1, 3, 4, 5, 6, 7)), identity_code)
+        verify(changed)
+        guard()
+        verify(changed)
+        child = authority.child(authority.current_fd, 'scripts', role='CURRENT_RELEASE')
+        need(file_identity(os.fstat(child)) == changed, identity_code)
+        return child
+    finally:
+        os.close(fd)
+
+
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -415,7 +457,19 @@ def install(binding, scripts, authority, snapshot_read, *, source_check, clock=t
         need(type(before) is str and HEX.fullmatch(before), 'SERVICES_CHANGED')
         result['servicesBeforeSha256'] = before
         stage = 'CURRENT_SCRIPTS'
-        original_scripts = authority.child(authority.current_fd, 'scripts', role='CURRENT_RELEASE')
+        def scripts_guard():
+            nonlocal stage
+            stage = 'AUTHORITY_RECHECK'
+            authority.check()
+            stage = 'SOURCE_RECHECK'
+            source_check()
+            stage = 'SNAPSHOT_RECHECK'
+            need(snapshot_read(authority.current) == before, 'SERVICES_CHANGED')
+            remaining()
+            stage = 'AUTHORITY_RECHECK'
+            authority.check()
+            stage = 'CURRENT_SCRIPTS'
+        original_scripts = current_scripts(authority, transport, result, scripts_guard)
         stage = 'BACKUP_SCRIPT'
         read_original(authority, original_scripts, 'backup-aws-mysql.sh', stage=stage, transport=transport)
         stage = 'NORMALIZER'
