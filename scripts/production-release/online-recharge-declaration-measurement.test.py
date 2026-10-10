@@ -408,5 +408,126 @@ class InventoryTests(unittest.TestCase):
                 m.inventory(self.d,self.directory,services=rows,image_reference=ref,image_id=img)
         self.assertEqual(self.d.calls,[])
 
+    def _path_role_inventory_only(self):
+        # Only diagnostic selection is tested. Runtime tools/kernel collection
+        # remains unmeasured; no real system/native capability I/O is invoked.
+        with patch.object(m, 'daemon_identity_capability', side_effect=RuntimeError(SENTINEL)), \
+             patch.object(m, 'daemon_socket_capability', side_effect=RuntimeError(SENTINEL)):
+            return self.inventory()
+
+    def test_native_path_roles_same_selection_and_no_additional_calls(self):
+        docker = {'/usr/bin/docker': 'USR_BIN_DOCKER', '/usr/local/bin/docker': 'USR_LOCAL_BIN_DOCKER'}
+        compose = {'/usr/libexec/docker/cli-plugins/docker-compose': 'USR_LIBEXEC_COMPOSE',
+                   '/usr/lib/docker/cli-plugins/docker-compose': 'USR_LIB_COMPOSE',
+                   '/usr/local/lib/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIB_COMPOSE',
+                   '/usr/local/libexec/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIBEXEC_COMPOSE'}
+        baseline_calls = None
+        for docker_path, docker_role in docker.items():
+            for compose_path, compose_role in compose.items():
+                with self.subTest(docker_role=docker_role, compose_role=compose_role):
+                    self.d.calls.clear()
+                    self.d.info['plugins'] = [{'Name': 'compose', 'Path': compose_path}]
+                    with patch.object(m.shutil, 'which', return_value=docker_path) as selected, \
+                         patch.object(m, 'binary_hash', side_effect=['d' * 64, 'e' * 64]) as hashed:
+                        result = self._path_role_inventory_only()
+                    selected.assert_called_once_with('docker')
+                    self.assertEqual([call.args for call in hashed.call_args_list],
+                                     [(docker_path, 'docker'), (compose_path, 'compose')])
+                    g = result['generator']
+                    self.assertEqual((g['dockerCliSha256'], g['dockerCliPathRole']), ('d' * 64, docker_role))
+                    self.assertEqual((g['composeCliSha256'], g['composeCliPathRole']), ('e' * 64, compose_role))
+                    self.assertEqual(m.validate_inventory(result), result)
+                    for key in ('authority', 'productionEligible', 'measurementPerformed', 'proofConstructed'):
+                        self.assertIs(result[key], False)
+                    for path in (*docker, *compose):
+                        self.assertNotIn(path, json.dumps(result['generator']))
+                    if baseline_calls is None:baseline_calls = copy.deepcopy(self.d.calls)
+                    else:self.assertEqual(self.d.calls, baseline_calls)
+                    self.assertTrue(all('create' not in args and 'up' not in args for args, _ in self.d.calls))
+
+    def test_native_path_roles_only_appear_after_matching_hash_success(self):
+        cases = [([m.Rejected(SENTINEL)], None, None, None, None, 1),
+                 (['d' * 64, m.Rejected(SENTINEL)], 'd' * 64, 'USR_BIN_DOCKER', None, None, 2)]
+        for side_effect, docker_hash, docker_role, compose_hash, compose_role, calls in cases:
+            with self.subTest(successful_hash_count=calls - 1):
+                with patch.object(m.shutil, 'which', return_value='/usr/bin/docker') as selected, \
+                     patch.object(m, 'binary_hash', side_effect=side_effect) as hashed:
+                    result = self._path_role_inventory_only()
+                selected.assert_called_once_with('docker')
+                self.assertEqual(hashed.call_count, calls)
+                g = result['generator']
+                self.assertEqual((g['dockerCliSha256'], g['dockerCliPathRole']), (docker_hash, docker_role))
+                self.assertEqual((g['composeCliSha256'], g['composeCliPathRole']), (compose_hash, compose_role))
+                self.assertIn('CLI_SOURCE_NOT_MEASURED', result['codes'])
+                self.assertNotIn(SENTINEL, json.dumps(result))
+                self.assertEqual(m.validate_inventory(result), result)
+
+    def test_native_path_roles_unknown_selection_and_duplicate_plugin_remain_unmeasured(self):
+        cases = [('/private/' + SENTINEL, [{'Name': 'compose', 'Path': '/usr/lib/docker/cli-plugins/docker-compose'}], 1, 1, None),
+                 ('/usr/bin/docker', [{'Name': 'compose', 'Path': '/private/' + SENTINEL}], 1, 2, 'USR_BIN_DOCKER'),
+                 ('/usr/bin/docker', [{'Name': 'compose', 'Path': '/usr/lib/docker/cli-plugins/docker-compose'}] * 2, 0, 0, None)]
+        for selected_path, plugins, select_calls, hash_calls, docker_role in cases:
+            with self.subTest(plugin_count=len(plugins), hash_calls=hash_calls):
+                self.d.info['plugins'] = plugins
+                # An unknown selection still cannot publish a role, even when
+                # a private test mock incorrectly claims a successful hash.
+                with patch.object(m.shutil, 'which', return_value=selected_path) as selected, \
+                     patch.object(m, 'binary_hash', return_value='e' * 64) as hashed:
+                    result = self._path_role_inventory_only()
+                self.assertEqual(selected.call_count, select_calls)
+                self.assertEqual(hashed.call_count, hash_calls)
+                self.assertEqual(result['generator']['dockerCliPathRole'], docker_role)
+                self.assertIsNone(result['generator']['composeCliPathRole'])
+                self.assertIn('CLI_SOURCE_NOT_MEASURED', result['codes'])
+                self.assertNotIn(SENTINEL, json.dumps(result))
+                self.assertEqual(m.validate_inventory(result), result)
+
+    def test_native_path_roles_accept_old_schema_or_complete_pair_only(self):
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/docker'):
+            good = self._path_role_inventory_only()
+        self.assertEqual(set(good['generator']), m.GENERATOR_KEYS | m.GENERATOR_PATH_ROLE_KEYS)
+        old = copy.deepcopy(good)
+        for key in m.GENERATOR_PATH_ROLE_KEYS:del old['generator'][key]
+        self.assertEqual(set(old['generator']), m.GENERATOR_KEYS)
+        self.assertEqual(m.validate_inventory(old), old)
+        self.assertEqual(m.validate_inventory(good), good)
+        self.d.failed.add('generator')
+        none = self._path_role_inventory_only()
+        self.assertEqual(m.validate_inventory(none), none)
+        for role, digest in (('dockerCliPathRole', 'dockerCliSha256'), ('composeCliPathRole', 'composeCliSha256')):
+            self.assertIsNone(none['generator'][role]);self.assertIsNone(none['generator'][digest])
+
+    def test_native_path_roles_reject_partial_extra_wrong_type_and_cross_tool(self):
+        class StringBomb(str):
+            def __hash__(self):raise AssertionError('HASH_EXECUTED')
+            def __str__(self):raise AssertionError('STR_EXECUTED')
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/docker'):
+            good = self._path_role_inventory_only()
+        cases = []
+        for role in m.GENERATOR_PATH_ROLE_KEYS:
+            bad = copy.deepcopy(good);del bad['generator'][role];cases.append(bad)
+            for value in (True, False, 0, 1.0, [], {}, SENTINEL, StringBomb('USR_BIN_DOCKER')):
+                bad = copy.deepcopy(good);bad['generator'][role] = value;cases.append(bad)
+        bad = copy.deepcopy(good);bad['generator']['privatePath'] = SENTINEL;cases.append(bad)
+        for role, value in (('dockerCliPathRole', 'USR_LIB_COMPOSE'), ('composeCliPathRole', 'USR_BIN_DOCKER')):
+            bad = copy.deepcopy(good);bad['generator'][role] = value;cases.append(bad)
+        for index, bad in enumerate(cases):
+            with self.subTest(case=index), self.assertRaisesRegex(m.Rejected, '^INVENTORY_INVALID$'):
+                m.validate_inventory(bad)
+
+    def test_native_path_roles_never_replace_hash_or_authority(self):
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/docker'):
+            good = self._path_role_inventory_only()
+        for role, digest in (('dockerCliPathRole', 'dockerCliSha256'), ('composeCliPathRole', 'composeCliSha256')):
+            for drop in (role, digest):
+                bad = copy.deepcopy(good);bad['generator'][drop] = None
+                with self.subTest(role=role, drop=drop), self.assertRaisesRegex(m.Rejected, '^INVENTORY_INVALID$'):
+                    m.validate_inventory(bad)
+        for flag in ('authority', 'productionEligible', 'measurementPerformed', 'proofConstructed'):
+            bad = copy.deepcopy(good);bad[flag] = True
+            with self.subTest(flag=flag), self.assertRaisesRegex(m.Rejected, '^INVENTORY_INVALID$'):
+                m.validate_inventory(bad)
+
+
 
 if __name__=='__main__':unittest.main()

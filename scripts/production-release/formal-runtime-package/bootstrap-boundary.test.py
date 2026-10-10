@@ -215,10 +215,10 @@ class BootstrapBoundaryTests(unittest.TestCase):
  def test_fixed_package_manifest_execution_closure_and_reviewed_singleton(self):
   # Historical V1->V2 AST evidence is local-only. CI verifies the current
   # complete byte-pinned executable closure and the actual closed entry.
-  self.assertEqual(D.PACKAGE_MANIFEST_SHA,'72459dbea16c2b38be5a140152bfbab06447bd9551a0ee49565ed7d70a767806')
+  self.assertEqual(D.PACKAGE_MANIFEST_SHA,'b391a55b4791819c1a9f6e8a8b3d9766251adf302a405ed0406bb2cdae02dca5')
   self.assertEqual(hashlib.sha256((HERE/'manifest.json').read_bytes()).hexdigest(),D.PACKAGE_MANIFEST_SHA)
   self.assertEqual(hashlib.sha256((HERE/'driver.py').read_bytes()).hexdigest(),
-   'd3dd409370f24572a42061f32a093373c665c1ab827a43d786d7ce8eb29cb691')
+   '67ba301c9d057f8a5db70b25114d31d9b521ffce4dde143b9a6859d1984ededa')
   self.assertEqual(set(M),{'version','kind','files','externalLeafPins','consumerFiles','packageRole'})
   self.assertEqual((type(M['version']),M['version'],M['kind'],M['packageRole']),
    (int,2,'FORMAL_RUNTIME_PACKAGE_V2','formal-runtime-package'))

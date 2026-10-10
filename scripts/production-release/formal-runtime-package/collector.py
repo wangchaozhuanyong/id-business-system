@@ -563,22 +563,75 @@ def controlled_client(d, work, spec, daemon_sha):
     return environment,client_seal
 
 
+_NATIVE_CLI_ROLES = frozenset(('DOCKER', 'COMPOSE'))
+_NATIVE_CLI_REASONS = frozenset(('NOT_REGULAR', 'LEAF_SYMLINK', 'UID', 'NLINK',
+    'OWNER_EXEC', 'SPECIAL_MODE', 'WRITABLE'))
+_NATIVE_CLI_ATTEMPT = None
+_NATIVE_CLI_FAILURE = None
+
+
+def _native_cli_predicate(ok, reason):
+    global _NATIVE_CLI_ATTEMPT
+    row = _NATIVE_CLI_ATTEMPT
+    if (ok is False and type(row) is tuple and len(row) == 2
+            and type(row[0]) is str and row[0] in _NATIVE_CLI_ROLES):
+        _NATIVE_CLI_ATTEMPT = (row[0], reason)
+    return ok
+
+
+def _native_cli_original_error(error):
+    if type(error) is not Rejected:return False
+    values = BaseException.args.__get__(error)
+    return type(values) is tuple and len(values) == 1 and type(values[0]) is str and values[0] == 'CLI_SOURCE_CHANGED'
+
+
+def native_permission_failure(error):
+    # One bounded issuance, bound to the exact original exception object. The
+    # inventory Rejected alias and caller-owned exception attributes confer no trust.
+    row = _NATIVE_CLI_FAILURE
+    if not _native_cli_original_error(error):
+        return None
+    if (type(row) is tuple and len(row) == 3 and row[0] is error
+            and type(row[1]) is str and row[1] in _NATIVE_CLI_ROLES
+            and type(row[2]) is str and row[2] in _NATIVE_CLI_REASONS):
+        return row[1:]
+    return None
+
+
 def trusted_native_permissions(info, *, socket=False):
     mode = stat.S_IMODE(info.st_mode)
     if socket:
         check(stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and mode & 0o002 == 0,
               'DAEMON_SOURCE_NOT_MEASURED')
     else:
-        check(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
-              and mode & 0o100 != 0 and mode & 0o7022 == 0, 'CLI_SOURCE_CHANGED')
+        check(_native_cli_predicate(stat.S_ISREG(info.st_mode), 'NOT_REGULAR')
+              and _native_cli_predicate(info.st_uid == 0, 'UID')
+              and _native_cli_predicate(info.st_nlink == 1, 'NLINK')
+              and _native_cli_predicate(mode & 0o100 != 0, 'OWNER_EXEC')
+              and _native_cli_predicate(mode & 0o7022 == 0,
+                  'SPECIAL_MODE' if mode & 0o7000 != 0 else 'WRITABLE'), 'CLI_SOURCE_CHANGED')
 
 
 def native_permissions(spec):
     # Linux production paths only. A LOCAL desktop socket/CLI is not a fallback.
-    for literal in (spec['dockerPath'], spec['composePath']):
+    global _NATIVE_CLI_ATTEMPT, _NATIVE_CLI_FAILURE
+    _NATIVE_CLI_FAILURE = None
+    for role, literal in (('DOCKER', spec['dockerPath']), ('COMPOSE', spec['composePath'])):
         path = Path(literal)
-        check(path.is_file() and not path.is_symlink(), 'CLI_SOURCE_CHANGED')
-        trusted_native_permissions(path.stat())
+        _NATIVE_CLI_ATTEMPT = (role, None)
+        try:
+            check(_native_cli_predicate(path.is_file(), 'NOT_REGULAR')
+                  and _native_cli_predicate(not path.is_symlink(), 'LEAF_SYMLINK'), 'CLI_SOURCE_CHANGED')
+            trusted_native_permissions(path.stat())
+        except Exception as error:
+            row = _NATIVE_CLI_ATTEMPT
+            if (_native_cli_original_error(error) and type(row) is tuple and len(row) == 2
+                    and type(row[0]) is str and row[0] in _NATIVE_CLI_ROLES
+                    and type(row[1]) is str and row[1] in _NATIVE_CLI_REASONS):
+                _NATIVE_CLI_FAILURE = (error, row[0], row[1])
+            raise
+        finally:
+            _NATIVE_CLI_ATTEMPT = None
     path = Path('/var/run/docker.sock')
     check(not path.is_symlink(), 'DAEMON_SOURCE_NOT_MEASURED')
     trusted_native_permissions(path.stat(), socket=True)

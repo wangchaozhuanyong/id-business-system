@@ -269,4 +269,115 @@ class CollectorTests(unittest.TestCase):
         self.mutate_created_network(mutation)
         self.assertEqual(len(self.d.removed),1)
 
+
+class NativePermissionDiagnosticTests(unittest.TestCase):
+    # Only native metadata is synthetic. No host CLI/socket or subprocess is read.
+    def setUp(self):
+        import stat
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        self.spec={'dockerPath':'SYNTHETIC_DOCKER','composePath':'SYNTHETIC_COMPOSE'}
+        self.good=lambda **changes:SimpleNamespace(**{'st_mode':stat.S_IFREG|0o755,'st_uid':0,'st_nlink':1,**changes})
+        self.paths={role:Mock() for role in ('DOCKER','COMPOSE','SOCKET')}
+        for role in ('DOCKER','COMPOSE'):
+            self.paths[role].is_file.return_value=True;self.paths[role].is_symlink.return_value=False
+            self.paths[role].stat.return_value=self.good()
+        self.paths['SOCKET'].is_symlink.return_value=False
+        self.paths['SOCKET'].stat.return_value=SimpleNamespace(st_mode=stat.S_IFSOCK|0o660,st_uid=0)
+        self.patch=patch.object(a,'Path',side_effect=lambda literal:self.paths[{'SYNTHETIC_DOCKER':'DOCKER','SYNTHETIC_COMPOSE':'COMPOSE','/var/run/docker.sock':'SOCKET'}[literal]])
+        self.patch.start();a._NATIVE_CLI_FAILURE=None;a._NATIVE_CLI_ATTEMPT=None
+    def tearDown(self):self.patch.stop()
+    def failure(self,role,reason):
+        with self.assertRaises(a.Rejected) as found:a.native_permissions(self.spec)
+        self.assertIs(type(found.exception),a.Rejected)
+        self.assertEqual(BaseException.args.__get__(found.exception),('CLI_SOURCE_CHANGED',))
+        self.assertEqual(a.native_permission_failure(found.exception),(role,reason))
+        self.assertIsNone(a._NATIVE_CLI_ATTEMPT)
+        return found.exception
+    def test_every_predicate_both_fixed_roles(self):
+        import stat
+        cases={'NOT_REGULAR':{'st_mode':stat.S_IFDIR|0o755},'UID':{'st_uid':501},'NLINK':{'st_nlink':2},
+            'OWNER_EXEC':{'st_mode':stat.S_IFREG|0o644},'SPECIAL_MODE':{'st_mode':stat.S_IFREG|0o4755},
+            'WRITABLE':{'st_mode':stat.S_IFREG|0o775}}
+        for role in ('DOCKER','COMPOSE'):
+            for reason,changes in cases.items():
+                with self.subTest(role=role,reason=reason):
+                    for native in ('DOCKER','COMPOSE'):self.paths[native].stat.return_value=self.good()
+                    self.paths[role].stat.return_value=self.good(**changes)
+                    self.failure(role,reason)
+            self.paths[role].stat.return_value=self.good();self.paths[role].is_symlink.return_value=True
+            self.failure(role,'LEAF_SYMLINK');self.paths[role].is_symlink.return_value=False
+    def test_is_file_false_short_circuits_link_and_stat_and_second_tool(self):
+        self.paths['DOCKER'].is_file.return_value=False
+        self.failure('DOCKER','NOT_REGULAR')
+        for call in (self.paths['DOCKER'].is_symlink,self.paths['DOCKER'].stat,
+                self.paths['COMPOSE'].is_file,self.paths['SOCKET'].stat):call.assert_not_called()
+    def test_leaf_symlink_short_circuits_stat(self):
+        self.paths['DOCKER'].is_symlink.return_value=True
+        self.failure('DOCKER','LEAF_SYMLINK');self.paths['DOCKER'].stat.assert_not_called()
+        self.paths['COMPOSE'].is_file.assert_not_called()
+    def test_double_invalid_reports_only_original_first_predicate(self):
+        import stat
+        self.paths['DOCKER'].stat.return_value=self.good(st_uid=501,st_nlink=2,st_mode=stat.S_IFREG|0o4644)
+        self.failure('DOCKER','UID')
+        self.paths['DOCKER'].stat.return_value=self.good(st_mode=stat.S_IFREG|0o4775)
+        self.failure('DOCKER','SPECIAL_MODE')
+    def test_attribute_reads_keep_original_short_circuit(self):
+        import stat
+        reads=[]
+        class Info:
+            @property
+            def st_mode(self):reads.append('mode');return stat.S_IFREG|0o755
+            @property
+            def st_uid(self):reads.append('uid');return 501
+            @property
+            def st_nlink(self):raise AssertionError('LATE_ATTRIBUTE_READ')
+        self.paths['DOCKER'].stat.return_value=Info()
+        self.failure('DOCKER','UID');self.assertEqual(reads,['mode','mode','uid'])
+    def test_non_bool_original_value_is_not_coerced_by_observer(self):
+        calls=[]
+        class Value:
+            def __bool__(self):calls.append('bool');return False
+        value=Value()
+        self.assertIs(a._native_cli_predicate(value,'UID'),value)
+        self.assertEqual(calls,[])
+    def test_same_alias_attrs_subclass_unknown_args_have_no_issuance(self):
+        self.paths['DOCKER'].stat.return_value=self.good(st_uid=501)
+        issued=self.failure('DOCKER','UID')
+        ordinary=a.Rejected('CLI_SOURCE_CHANGED');ordinary._native_cli_failure=('DOCKER','UID')
+        class Subclass(a.Rejected):pass
+        class EvilString(str):
+            def __eq__(self,other):raise AssertionError('EQ_EXECUTED')
+        for error in (ordinary,Subclass('CLI_SOURCE_CHANGED'),a.Rejected('SECRET_UNKNOWN'),
+                a.Rejected(EvilString('CLI_SOURCE_CHANGED')),a.Rejected('CLI_SOURCE_CHANGED','SECRET')):
+            self.assertIsNone(a.native_permission_failure(error))
+        self.assertEqual(a.native_permission_failure(issued),('DOCKER','UID'))
+    def test_next_success_clears_prior_issuance_and_socket_fail_is_not_cli(self):
+        self.paths['DOCKER'].stat.return_value=self.good(st_uid=501)
+        issued=self.failure('DOCKER','UID');self.paths['DOCKER'].stat.return_value=self.good()
+        a.native_permissions(self.spec);self.assertIsNone(a.native_permission_failure(issued))
+        self.paths['SOCKET'].is_symlink.return_value=True
+        with self.assertRaisesRegex(a.Rejected,'^DAEMON_SOURCE_NOT_MEASURED$') as found:a.native_permissions(self.spec)
+        self.assertIsNone(a.native_permission_failure(found.exception))
+    def test_exact_missing_stat_retains_builtin_and_no_issuance(self):
+        self.paths['DOCKER'].stat.side_effect=FileNotFoundError('SYNTHETIC_PRIVATE_PATH')
+        with self.assertRaises(FileNotFoundError) as found:a.native_permissions(self.spec)
+        self.assertIsNone(a.native_permission_failure(found.exception));self.assertIsNone(a._NATIVE_CLI_ATTEMPT)
+    def test_corrupt_private_slot_never_confers_issuance_or_replaces_guard(self):
+        for row in (None,{},[],('DOCKER',),('UNKNOWN','UID'),('DOCKER',[])):
+            a._NATIVE_CLI_FAILURE=row
+            self.assertIsNone(a.native_permission_failure(a.Rejected('CLI_SOURCE_CHANGED')))
+        for row in (None,{},[],('DOCKER',),('UNKNOWN','UID')):
+            a._NATIVE_CLI_ATTEMPT=row
+            self.assertIs(a._native_cli_predicate(False,'UID'),False)
+        a._NATIVE_CLI_ATTEMPT=None
+
+    def test_guard_calls_and_arguments_unchanged(self):
+        with patch.object(a,'check',wraps=a.check) as guard:
+            a.native_permissions(self.spec)
+        self.assertEqual(guard.call_args_list,[unittest.mock.call(True,'CLI_SOURCE_CHANGED'),
+            unittest.mock.call(True,'CLI_SOURCE_CHANGED'),unittest.mock.call(True,'CLI_SOURCE_CHANGED'),
+            unittest.mock.call(True,'CLI_SOURCE_CHANGED'),unittest.mock.call(True,'DAEMON_SOURCE_NOT_MEASURED'),
+            unittest.mock.call(True,'DAEMON_SOURCE_NOT_MEASURED')])
+
 if __name__=='__main__':unittest.main(verbosity=2)

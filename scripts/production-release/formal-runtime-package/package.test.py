@@ -705,6 +705,27 @@ class DeclarationFailureProjectionTests(unittest.TestCase):
         self.assertEqual(diagnostic['step'],'DECLARATION_DAEMON_INFO')
         self.assertEqual(diagnostic['phase'],'MANIFEST')
 
+    def test_native_cli_fixed_codes_reach_online_and_api_without_extra_fields(self):
+        codes=tuple(self.qualified._NATIVE_PERMISSION_CODES.values())
+        self.assertEqual(len(codes),14)
+        driver=S['_declaration_runtime_driver']();function=S['measure_declaration_equivalence']
+        for code in codes:
+            with self.subTest(code=code):
+                error=self.qualified.Rejected('QUALIFIER_UNAVAILABLE')
+                error._qualified_failure=('NATIVE_PERMISSIONS',code)
+                failure=m._qualified_reason(error,SimpleNamespace(qualified=self.qualified))
+                self.assertEqual(failure,{'stage':'NATIVE_PERMISSIONS','code':code})
+                rejected=driver._rejected(error,'ACQUISITION',failure=failure)
+                with patch.dict(function.__globals__,{'_declaration_runtime_driver':lambda:driver}), \
+                     patch.object(driver,'measure_declaration_equivalence',side_effect=rejected):
+                    with self.assertRaises(S['DeclarationDriverError']) as caught:
+                        function(object(),Path('/LOCAL_ONLY'),{},producer={'LOCAL_SYNTHETIC_ONLY':True},purpose='INDEPENDENT_PREFLIGHT')
+                api_error,diagnostic=self.api_failure(caught.exception)
+                self.assertEqual(api_error.args,('API_ADMIN_PENDING_ONLINE_DRIVER_'+code,))
+                self.assertEqual(diagnostic['step'],'DECLARATION_NATIVE_PERMISSIONS')
+                self.assertEqual(diagnostic['phase'],'MANIFEST')
+                self.assertNotIn(SENTINEL,json.dumps(diagnostic))
+
     def test_trusted_exact_classes_and_unknown_messages_never_leak(self):
         bindings=[(self.loader.Rejected,self.loader.CODES),(self.qualified.Rejected,self.qualified.CODES),
                   (self.collector.Rejected,self.collector.ERROR_CODES)]

@@ -52,6 +52,15 @@ REPORT_KEYS = frozenset(('version', 'kind', 'status', 'authority', 'productionEl
 GENERATOR_KEYS = frozenset(('composeVersion', 'engineVersion', 'engineApiVersion', 'dockerCliVersion',
     'dockerCliSha256', 'composeCliSha256', 'daemonIdentitySha256', 'nativePlatform',
     'reviewedSourceStatus', 'engineGitCommit', 'dockerCliGitCommit', 'enginePackage', 'dockerCliPackage'))
+# Optional closed diagnostic selection; never a source/permission admission.
+GENERATOR_PATH_ROLE_KEYS = frozenset(('dockerCliPathRole', 'composeCliPathRole'))
+DOCKER_PATH_ROLES = {'/usr/bin/docker': 'USR_BIN_DOCKER', '/usr/local/bin/docker': 'USR_LOCAL_BIN_DOCKER'}
+COMPOSE_PATH_ROLES = {
+    '/usr/libexec/docker/cli-plugins/docker-compose': 'USR_LIBEXEC_COMPOSE',
+    '/usr/lib/docker/cli-plugins/docker-compose': 'USR_LIB_COMPOSE',
+    '/usr/local/lib/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIB_COMPOSE',
+    '/usr/local/libexec/docker/cli-plugins/docker-compose': 'USR_LOCAL_LIBEXEC_COMPOSE',
+}
 SOURCE_KEYS = frozenset(('status', 'apiFieldNames', 'environmentKeyCount', 'declaredNetworkCount',
     'mountTypeCounts', 'schemaSha256', 'representation'))
 RESOURCE_KEYS = frozenset(('status', 'connectedNetworkCount', 'namedVolumeCount',
@@ -336,7 +345,7 @@ def inventory(d, directory, *, services, image_reference, image_id):
     check(image_reference == services['api']['reference'] and image_id == services['api']['image'], 'INPUT_INVALID')
     report = {'version': 1, 'kind': KIND, 'status': 'SOURCE_NOT_MEASURED', 'authority': False,
         'productionEligible': False, 'measurementPerformed': False, 'proofConstructed': False,
-        'rawOutputSuppressed': True, 'generator': {key: None for key in GENERATOR_KEYS},
+        'rawOutputSuppressed': True, 'generator': {key: None for key in GENERATOR_KEYS | GENERATOR_PATH_ROLE_KEYS},
         'daemonDefaultAddressPools': {'status': 'UNAVAILABLE', 'pools': [], 'reviewedRulesStatus': 'SOURCE_NOT_MEASURED',
                                      'sourceEncoding': None, 'sourceValueSha256': None},
         'sourceShape': {'status': 'NOT_MEASURED', 'apiFieldNames': [], 'environmentKeyCount': None,
@@ -425,8 +434,13 @@ def inventory(d, directory, *, services, image_reference, image_id):
             check(isinstance(plugins, list), 'INPUT_INVALID')
             paths = [p['Path'] for p in plugins if isinstance(p, dict) and p.get('Name') == 'compose']
             check(len(paths) == 1, 'INPUT_INVALID')
-            report['generator']['dockerCliSha256'] = binary_hash(shutil.which('docker'), 'docker')
-            report['generator']['composeCliSha256'] = binary_hash(paths[0], 'compose')
+            docker_path = shutil.which('docker')
+            docker_hash = binary_hash(docker_path, 'docker')
+            report['generator'].update({'dockerCliSha256': docker_hash,
+                                       'dockerCliPathRole': DOCKER_PATH_ROLES[docker_path]})
+            compose_hash = binary_hash(paths[0], 'compose')
+            report['generator'].update({'composeCliSha256': compose_hash,
+                                       'composeCliPathRole': COMPOSE_PATH_ROLES[paths[0]]})
         except Exception:
             codes.add('CLI_SOURCE_NOT_MEASURED')
     except Exception:
@@ -492,7 +506,8 @@ def _validate_inventory(value):
           and all(value[k] is False for k in ('authority', 'productionEligible', 'measurementPerformed', 'proofConstructed'))
           and value['rawOutputSuppressed'] is True, 'INVENTORY_INVALID')
     g, p, s, r, c = (value[k] for k in ('generator', 'daemonDefaultAddressPools', 'sourceShape', 'resources', 'cacheImage'))
-    check(isinstance(g, dict) and set(g) == GENERATOR_KEYS and g['reviewedSourceStatus'] == 'SOURCE_NOT_MEASURED'
+    check(isinstance(g, dict) and set(g) in (GENERATOR_KEYS, GENERATOR_KEYS | GENERATOR_PATH_ROLE_KEYS)
+          and g['reviewedSourceStatus'] == 'SOURCE_NOT_MEASURED'
           and all(g[k] is None or isinstance(g[k], str) and VERSION.fullmatch(g[k]) for k in
                   ('composeVersion', 'engineVersion', 'dockerCliVersion'))
           and (g['engineApiVersion'] is None or isinstance(g['engineApiVersion'], str)
@@ -502,6 +517,13 @@ def _validate_inventory(value):
           and g['nativePlatform'] in (None, 'linux/x86_64', 'linux/amd64', 'linux/aarch64', 'linux/arm64'), 'INVENTORY_INVALID')
     check(all(g[k] is None or isinstance(g[k], str) and re.fullmatch(r'[a-f0-9]{7,40}', g[k])
               for k in ('engineGitCommit', 'dockerCliGitCommit')), 'INVENTORY_INVALID')
+    if GENERATOR_PATH_ROLE_KEYS <= set(g):
+        for role_key, hash_key, roles in (('dockerCliPathRole', 'dockerCliSha256', DOCKER_PATH_ROLES),
+                                         ('composeCliPathRole', 'composeCliSha256', COMPOSE_PATH_ROLES)):
+            role = g[role_key]
+            check((role is None and g[hash_key] is None)
+                  or (type(role) is str and role in roles.values() and g[hash_key] is not None),
+                  'INVENTORY_INVALID')
     for key in ('enginePackage', 'dockerCliPackage'):
         row = g[key]
         check(row is None or isinstance(row, dict) and set(row) == {'name', 'version', 'release', 'architecture'}
