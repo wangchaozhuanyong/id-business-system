@@ -1,4 +1,8 @@
-"""Local-only tests of the finite pending-online generated build projection."""
+"""Local-only tests of the finite pending-online generated build projection.
+
+Fixed-main and nonintersecting Apple inputs prove byte preservation only. A
+synthetic mixed source fixture is not a publishable or runnable application.
+"""
 
 from contextlib import contextmanager
 import copy
@@ -14,6 +18,30 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
+POSITIVE_FIXTURE_COMMIT = 'c6510771b97189f62163f3cdcf606d63284f7136'
+APPLE_SOURCE_COMMIT = '41b97cec1a41338c387bd7eccaafc3a698fde1a2'
+APPLE_NONINTERSECTING_FILES = (
+    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue',
+    'apps/admin/src/v2/features/auto-registration/V2AutoRegistrationView.vue',
+    'apps/admin/src/v2/features/auto-registration/api.ts',
+    'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.spec.ts',
+    'apps/admin/src/v2/features/auto-registration/apple-mailbox-presentation.ts',
+    'apps/admin/src/v2/features/auto-registration/apple-mailbox-query-cache.spec.ts',
+    'apps/admin/src/v2/features/auto-registration/contracts.ts',
+    'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.spec.ts',
+    'apps/admin/src/v2/features/auto-registration/useAppleMailboxes.ts',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts',
+    'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts',
+    'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts',
+    'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py',
+    'apps/api/src/id-business-v2/auto-registration/worker/workspace.py',
+)
 spec = importlib.util.spec_from_file_location('pending_projection',
     Path(__file__).with_name('api-admin-pending-projection.py'))
 projection = importlib.util.module_from_spec(spec)
@@ -54,7 +82,7 @@ class PendingProjectionTests(unittest.TestCase):
     def setUpClass(cls):
         cls.baseline = archive_files(git_archive(projection.BASELINE_COMMIT))
         cls.online = archive_files(git_archive(projection.ONLINE_COMMIT))
-        cls.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
+        cls.commit = POSITIVE_FIXTURE_COMMIT
         cls.candidate = archive_files(git_archive(cls.commit))
         cls.tree = subprocess.check_output(['git', 'rev-parse', cls.commit + '^{tree}'], cwd=ROOT).decode().strip()
         cls.output, cls.record = projection.project_files(cls.candidate, cls.baseline,
@@ -111,6 +139,39 @@ class PendingProjectionTests(unittest.TestCase):
         output, record = self.project(files)
         self.assertEqual(output[name][0], self.baseline[name][0] + suffix)
         self.assertNotEqual(record['projectionSha256'], self.record['projectionSha256'])
+
+    def test_complete_fixed_apple_files_outside_online_hunks_are_preserved(self):
+        apple = archive_files(git_archive(APPLE_SOURCE_COMMIT))
+        apple_tree = subprocess.check_output(
+            ['git', 'rev-parse', APPLE_SOURCE_COMMIT + '^{tree}'], cwd=ROOT).decode().strip()
+        self.assertEqual(projection.source_tree(apple), apple_tree)
+        files = dict(self.candidate)
+        for name in APPLE_NONINTERSECTING_FILES:
+            self.assertNotIn(name, projection.FILE_SEALS)
+            self.assertNotIn(name, projection.REMOVED_FILE_SEALS)
+            files[name] = apple[name]
+        original = dict(files)
+        output, record = self.project(files)
+        self.assertEqual(files, original)
+        for name in APPLE_NONINTERSECTING_FILES:
+            with self.subTest(name=name):
+                self.assertEqual(output[name], apple[name])
+                self.assertNotIn(name, record['generatedFiles'])
+                self.assertNotIn(name, record['removedFiles'])
+
+    def test_current_complete_apple_archive_and_each_crossed_hunk_are_rejected(self):
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
+        tree = subprocess.check_output(['git', 'rev-parse', commit + '^{tree}'], cwd=ROOT).decode().strip()
+        current = archive_files(git_archive(commit))
+        self.assertEqual(projection.source_tree(current), tree)
+        with self.assertRaisesRegex(RuntimeError, 'DELTA_INTERSECTION'):
+            projection.project_files(current, self.baseline, self.online, commit, tree)
+        for name in ('apps/admin/src/v2/features/registry.spec.ts',
+                     'apps/admin/src/v2/features/tableSchemas.ts'):
+            files = dict(self.candidate)
+            files[name] = current[name]
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'DELTA_INTERSECTION'):
+                self.project(files)
 
     def test_candidate_tree_mismatch_rejects_before_projection(self):
         with self.assertRaisesRegex(RuntimeError, 'CANDIDATE_TREE_CHANGED'):

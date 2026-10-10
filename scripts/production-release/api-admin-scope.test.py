@@ -3660,7 +3660,10 @@ class OnlineWorkspaceCompatibilityTests(unittest.TestCase):
 
     def test_successful_online_readback_seals_actual_source_files_and_original_binding(self):
         with self.fixture() as f:
-            for name in workspace.ONLINE_ORIGIN_FILES:(f.previous/name).write_text('sealed-fixture')
+            for name in workspace.ONLINE_ORIGIN_FILES:
+                path=f.previous/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('sealed-fixture')
             state=self.context()['migrationState']
             reader=SimpleNamespace(readback=MagicMock(return_value={'status':'ONLINE_RECHARGE_VERIFIED','services':f.states,
                 'migrationApplied':True,'workspaceBackupVerified':True,'backupVerified':True,'buildProofSha256':'2'*64,'migration':state}))
@@ -3820,6 +3823,7 @@ class OnlineWorkspaceCompatibilityTests(unittest.TestCase):
         def read(path,*a,**kw):
             return json.dumps(case.before if path.name.endswith('preflight-result.json') else value)
         with patch.object(Path,'read_text',read),patch.object(Path,'is_file',return_value=True), \
+                patch.object(Path,'read_bytes',lambda path:read(path).encode()), \
                 patch.dict(os.environ,case.environment,clear=True):
             transport.validate_receipt(receipt,fixtures.COMMIT,'readback','API_ADMIN_WORKSPACE')
             after=receipt['onlineNetworkRebind']['after']

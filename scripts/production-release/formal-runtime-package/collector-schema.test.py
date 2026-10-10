@@ -50,6 +50,7 @@ class EndpointSchemaTests(unittest.TestCase):
         self.d.seal['stabilitySha256'] = a.fingerprint(a.derive.observation(
             raw, self.d.services, self.d.seal['files'], raw['actualResource']))
         with patch.object(M, 'binary_hash', return_value='e' * 64), \
+                patch.object(M.shutil, 'which', side_effect=lambda name: FIX['policy']()['dockerPath'] if name == 'docker' else None), \
                 patch.object(a, 'native_permissions', return_value=None), \
                 patch.dict(a.REVIEWED_GENERATORS, {('25.0.16', '5.5.0'): FIX['policy']()}):
             return a.measure(self.d, self.directory, services=self.d.services,
