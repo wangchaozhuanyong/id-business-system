@@ -1604,3 +1604,42 @@ test('fixed95 plaintext module remains a finite control and rejects mixed Pro ap
     assert.equal(isTargetedOnly(drift, schema, schema), false);
   }
 });
+
+test('pending online bridge control names are finite and preserve business scope', () => {
+  const paths = [
+    'scripts/production-release/api-admin-pending-projection.py',
+    'scripts/production-release/api-admin-pending-projection.test.py',
+    'scripts/production-release/api-admin-pending-online.test.py',
+    'scripts/production-release/api-admin-pending-receipt-wire.py',
+    'scripts/production-release/api-admin-pending-receipt-wire.test.py',
+    'scripts/production-release/api-workspace-declaration-readonly.py',
+    'scripts/production-release/api-workspace-declaration-readonly.test.py',
+    'scripts/production-release/api-workspace-declaration-artifacts.py',
+    'scripts/production-release/api-workspace-declaration-artifacts.test.py',
+    'scripts/production-release/online-recharge-declaration-measurement.py',
+    'scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'scripts/production-release/online-recharge-daemon-identity.py',
+    'scripts/production-release/online-recharge-daemon-identity.test.py',
+    'scripts/production-release/online-recharge-daemon-listener.py',
+    'scripts/production-release/online-recharge-daemon-listener.test.py',
+    'scripts/production-release/online-recharge-daemon-socket.py',
+    'scripts/production-release/online-recharge-daemon-socket.test.py'
+  ];
+  for (const path of paths) {
+    assert.equal(isCiOnly([path]), true);
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  }
+  assert.equal(isCiOnly([...paths, 'apps/api/src/auth/unknown.ts']), false);
+  for (const unknown of [
+    'scripts/production-release/api-admin-pending-online.py',
+    'scripts/production-release/api-admin-pending-anything.py',
+    'scripts/production-release/api-admin-pending-receipt-wire.py.backup',
+    'scripts/production-release/api-admin-pending-receipt-wire-other.py',
+    'scripts/production-release/api-admin-pending-projection.py.backup',
+    'scripts/production-release/api-workspace-declaration-write.py',
+    'scripts/production-release/online-recharge-declaration-measurement.py.backup'
+  ]) {
+    assert.equal(isCiOnly([unknown]), false);
+    assert.equal(checkMode([unknown], schema, schema), 'full');
+  }
+});

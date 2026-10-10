@@ -1,0 +1,123 @@
+{
+  "authority": false,
+  "composeCommit": "870908cc8f07f5e90acdf5d34dd1b96a4fe51d16",
+  "composeGoCommit": "d70c053ec9cbd7180c7881ba769d277f5cfc6fb5",
+  "kind": "ENGINE25_ENDPOINT_SCHEMA_SOURCE_INPUTS_V1",
+  "mobyArchiveSha256": "e4b09862eca79992b4a11df0f7f661d364949637a71560281a5321f8985c5971",
+  "mobyCommit": "6fdf0a663f15d71b6944cb0b2bc3abac221ff15c",
+  "productionEligible": false,
+  "sources": [
+    {
+      "bytes": 4325,
+      "localFile": "moby2516-api-types-network-endpoint.go",
+      "path": "api/types/network/endpoint.go",
+      "sha256": "707b6c16a504a36a1caa94f2f07162b3202613f1c7cbf128972a1a19517ad28c",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/network/endpoint.go"
+    },
+    {
+      "bytes": 37041,
+      "localFile": "moby2516-daemon-container_operations.go",
+      "path": "daemon/container_operations.go",
+      "sha256": "f9a1ccecfb33bd45d3715ea6c789a2ebd28e812ecd7cefc502596ec73e0b0c6c",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/daemon/container_operations.go"
+    },
+    {
+      "bytes": 398,
+      "localFile": "moby2516-internal-sliceutil-sliceutil.go",
+      "path": "internal/sliceutil/sliceutil.go",
+      "sha256": "1302e8719eae63edb6b36d1d570614a53561eafce7b4a60d0e60fb6a537ee97c",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/internal/sliceutil/sliceutil.go"
+    },
+    {
+      "bytes": 1926,
+      "localFile": "moby2516-pkg-stringid-stringid.go",
+      "path": "pkg/stringid/stringid.go",
+      "sha256": "1dff83510190caa0156cd5e7ae3c72e6e07257d7ed0c45812b5e0039d3577440",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/pkg/stringid/stringid.go"
+    },
+    {
+      "bytes": 11100,
+      "localFile": "moby2516-daemon-inspect.go",
+      "path": "daemon/inspect.go",
+      "sha256": "7b5e62b40e49cb43ed6a323f0cb4bc50c677f2ad7a40fd9c7fd11286ab26223c",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/daemon/inspect.go"
+    },
+    {
+      "bytes": 23069,
+      "localFile": "moby2516-api-types-types.go",
+      "path": "api/types/types.go",
+      "sha256": "3743f38e1616fb14cf645033094e94958d5a78fe831fff7e1324216147ffb47a",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/types.go"
+    },
+    {
+      "bytes": 3461,
+      "localFile": "moby2516-api-types-network-ipam.go",
+      "path": "api/types/network/ipam.go",
+      "sha256": "ec206169c5b4bf018f1b5460fc95b717a9ab92a152850a914fcfe40586b877a2",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/network/ipam.go"
+    },
+    {
+      "bytes": 2132,
+      "localFile": "moby2516-api-types-volume-volume.go",
+      "path": "api/types/volume/volume.go",
+      "sha256": "fd22ac2cf54fdff0b03d9f5a33032240bdd9a4578df2b7d611b9e4c33051d0c3",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/api/types/volume/volume.go"
+    },
+    {
+      "bytes": 47793,
+      "localFile": "docker-compose-v5.5.0-pkg-compose-create.go",
+      "path": "docker-compose-v5.5.0-pkg-compose-create.go",
+      "sha256": "5bf9fbeaade155073ae03ecacdfd31fe91cb1154364bf90c7694b586b6a47b55",
+      "source": "COMPOSE_FIXED_COMMIT",
+      "url": "https://raw.githubusercontent.com/docker/compose/870908cc8f07f5e90acdf5d34dd1b96a4fe51d16/pkg/compose/create.go"
+    },
+    {
+      "bytes": 38785,
+      "localFile": "compose-spec-compose-go-v2.14.0-types-types.go",
+      "path": "compose-spec-compose-go-v2.14.0-types-types.go",
+      "sha256": "d8d1c389734d4907f6d42c94f5e6947d863eead724685bc538b8915a113ae857",
+      "source": "COMPOSE_FIXED_COMMIT",
+      "url": "https://raw.githubusercontent.com/compose-spec/compose-go/d70c053ec9cbd7180c7881ba769d277f5cfc6fb5/types/types.go"
+    },
+    {
+      "bytes": 3046,
+      "localFile": "compose-spec-compose-go-v2.14.0-types-command.go",
+      "path": "compose-spec-compose-go-v2.14.0-types-command.go",
+      "sha256": "faf039c11274666874e42be60a0d99dbd1c3783170fae5a9d8740216153727be",
+      "source": "COMPOSE_FIXED_COMMIT",
+      "url": "https://raw.githubusercontent.com/compose-spec/compose-go/d70c053ec9cbd7180c7881ba769d277f5cfc6fb5/types/command.go"
+    },
+    {
+      "bytes": 9273,
+      "localFile": "moby2516-volume-service-service.go",
+      "path": "volume/service/service.go",
+      "sha256": "a99b0c70bcf7fc682da7d4f8bd3f09348f3671e597251eda46971a5302aba25c",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/volume/service/service.go"
+    },
+    {
+      "bytes": 3282,
+      "localFile": "moby2516-volume-service-convert.go",
+      "path": "volume/service/convert.go",
+      "sha256": "e05c68d348d443ce6440354dc3b7cc2792dacd312e6471de281b6a4f6b32aee3",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/volume/service/convert.go"
+    },
+    {
+      "bytes": 12024,
+      "localFile": "moby2516-volume-local-local.go",
+      "path": "volume/local/local.go",
+      "sha256": "7d879cccb28ea139534f904dd0520c49d57e23e1e99e7a7ada9c3387916cc705",
+      "source": "MOBY_FIXED_ARCHIVE",
+      "url": "https://raw.githubusercontent.com/moby/moby/6fdf0a663f15d71b6944cb0b2bc3abac221ff15c/volume/local/local.go"
+    }
+  ]
+}

@@ -1,0 +1,158 @@
+[
+  {
+    "dockerdBinarySha256": "05ba54e4ba99a3018891bc190f8be6ccdb2d483b4da715140f34ad73c5d6a1f3",
+    "kind": "ENGINE25_RUNTIME_QUALIFICATION_PROFILE_V1",
+    "poolMode": "REVIEWED_BUILTIN_ZERO_INPUTS",
+    "reviewedCollectionToolSha256": {
+      "/usr/bin/rpm": "412059160caea91ba8a32506fb60b17bb2755f1b13bce6b3469c875443e12516",
+      "/usr/bin/systemctl": "c6becb0141c72c25c89e9ac626606d5b625104c1d9a82b12a12062ea29b9a95b"
+    },
+    "rpm": {
+      "architecture": "x86_64",
+      "epoch": "0",
+      "name": "docker",
+      "release": "1.amzn2023.0.4",
+      "version": "25.0.16"
+    },
+    "runtimeConfigurationRuleSha256": "22d1fe523e1d12760491ff1bcb9598b9b27b0b42b6df80181509b64208f1e909",
+    "sourceInputs": {
+      "binaryRpmSha256": "6aea3822bcd5494f5067b9750c60976684b55e8ef51be4945189774f8f02b273",
+      "cliCommit": "0bab007417226f0c43a897216c4e40471b9d70d1",
+      "cliSourceArchiveSha256": "25c98349fb669054b051beb91235a5041a195bbdbefaaf14930a2f1ca152bf06",
+      "completePatchReviewSha256": "e71029fb56ee736d4993a66f8215019d2d4eb89eba56bc0728587021e04cae89",
+      "composeAssetSha256": "c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b",
+      "engineCommit": "6fdf0a663f15d71b6944cb0b2bc3abac221ff15c",
+      "enginePatchSeriesSha256": "859aeabb9f6b7add1603f67a83495e4e17459545536ff73a2e2deb31cb469ec4",
+      "engineSourceArchiveSha256": "e4b09862eca79992b4a11df0f7f661d364949637a71560281a5321f8985c5971",
+      "officialFileTableSha256": "3f72add415bd70975840a51024d9065308f60c054d791819c192e859aaaad122",
+      "poolSourceReviewSha256": "81d1315cbc648ad83fcdb566093d389c04b87b69641e84c0bd3e7992bf6f2965",
+      "srpmSha256": "8a26cc9bf2a2188c5641a6aac791ae5b0188b03a62f43912df83de96b4cc0f3e",
+      "unitPatchSeriesSha256": "51fb0d117049c18d2c9739256bb62d87650b655de32e517469c2f4a8b97a587f"
+    },
+    "sourceReviewReportSha256": "75d5c22723c703cc788cfec9dcdc7da6fe288fa626fc21737cd936f1b2312472",
+    "spec": {
+      "actualEndpointFields": [
+        "Aliases",
+        "DNSNames",
+        "DriverOpts",
+        "EndpointID",
+        "Gateway",
+        "GlobalIPv6Address",
+        "GlobalIPv6PrefixLen",
+        "IPAMConfig",
+        "IPAddress",
+        "IPPrefixLen",
+        "IPv6Gateway",
+        "Links",
+        "MacAddress",
+        "NetworkID"
+      ],
+      "composeCliSha256": "c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b",
+      "composePath": "/usr/local/lib/docker/cli-plugins/docker-compose",
+      "composeVersion": "5.5.0",
+      "defaultPools": [
+        {
+          "base": "172.17.0.0/16",
+          "size": 16
+        },
+        {
+          "base": "172.18.0.0/16",
+          "size": 16
+        },
+        {
+          "base": "172.19.0.0/16",
+          "size": 16
+        },
+        {
+          "base": "172.20.0.0/14",
+          "size": 16
+        },
+        {
+          "base": "172.24.0.0/14",
+          "size": 16
+        },
+        {
+          "base": "172.28.0.0/14",
+          "size": 16
+        },
+        {
+          "base": "192.168.0.0/16",
+          "size": 20
+        }
+      ],
+      "defaultPoolsStatement": "UNDECLARED",
+      "dockerCliSha256": "bd00a70e8981680dd96f2d923e85a43644e87a7b998a83fe8eb8f5b318a6e594",
+      "dockerCliVersion": "25.0.14",
+      "dockerPath": "/usr/bin/docker",
+      "enableIpv4Field": "ABSENT",
+      "engineApiVersion": "1.44",
+      "engineVersion": "25.0.16",
+      "kind": "FROZEN_PRODUCTION_GENERATOR_V2",
+      "nativePlatform": "linux/x86_64",
+      "networkCreatorVersion": "5.5.0",
+      "networkFields": [
+        "Attachable",
+        "ConfigFrom",
+        "ConfigOnly",
+        "Containers",
+        "Created",
+        "Driver",
+        "EnableIPv6",
+        "IPAM",
+        "Id",
+        "Ingress",
+        "Internal",
+        "Labels",
+        "Name",
+        "Options",
+        "Scope"
+      ],
+      "poolSourceSha256": "81d1315cbc648ad83fcdb566093d389c04b87b69641e84c0bd3e7992bf6f2965",
+      "referenceEndpointFields": [
+        "Aliases",
+        "DNSNames",
+        "DriverOpts",
+        "EndpointID",
+        "Gateway",
+        "GlobalIPv6Address",
+        "GlobalIPv6PrefixLen",
+        "IPAMConfig",
+        "IPAddress",
+        "IPPrefixLen",
+        "IPv6Gateway",
+        "Links",
+        "MacAddress",
+        "NetworkID"
+      ],
+      "referenceGateway": "FIRST_ADDRESS",
+      "referenceIpamRowFields": ["Gateway", "Subnet"],
+      "referenceNetworkPolicy": "OWNED_INTERNAL_IPV4_DEFAULT_POOL_V1",
+      "referenceSubnetPrefix": null,
+      "renderedDependencies": {
+        "media-resolver": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "migrate": {
+          "condition": "service_completed_successfully",
+          "required": true
+        }
+      },
+      "renderedExternalNetworkExtra": {
+        "ipam": {}
+      },
+      "renderedNetworkEntry": {},
+      "renderedVolumeRow": {
+        "source": "auto_registration_data",
+        "target": "/app/.runtime/auto-registration",
+        "type": "volume",
+        "volume": {}
+      },
+      "sourceIpamRowFields": ["Gateway", "Subnet"],
+      "sourceSha256": "e931bee86deda110beea85be444afb82119f62b37be7f6d8b81f683621b8c4f9",
+      "volumeCreatorVersion": "5.5.0",
+      "volumeFields": ["CreatedAt", "Driver", "Labels", "Mountpoint", "Name", "Options", "Scope"]
+    },
+    "zeroConfigurationEncodings": ["ABSENT"]
+  }
+]

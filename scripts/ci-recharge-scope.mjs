@@ -9,6 +9,45 @@ export const onlineRechargeRecoveryPolicy =
   'scripts/production-release/online-recharge-recovery.json';
 export const productionDatabaseAccessHelper = 'scripts/lib/v2-production-database-access.mjs';
 export const productionDatabaseAccessTest = 'scripts/production-database-access.test.mjs';
+export const formalRuntimePackageControlPaths = Object.freeze([
+  'scripts/production-release/formal-runtime-package.test.py',
+  'scripts/production-release/formal-runtime-package/driver.py',
+  'scripts/production-release/formal-runtime-package/manifest.json',
+  'scripts/production-release/formal-runtime-package/package_io.py',
+  'scripts/production-release/formal-runtime-package/pure.py',
+  'scripts/production-release/formal-runtime-package/collector.py',
+  'scripts/production-release/formal-runtime-package/constructor.py',
+  'scripts/production-release/formal-runtime-package/reader.py',
+  'scripts/production-release/formal-runtime-package/qualified.py',
+  'scripts/production-release/formal-runtime-package/contract.json',
+  'scripts/production-release/formal-runtime-package/reviewed-source-table.json',
+  'scripts/production-release/formal-runtime-package/bootstrap-boundary.test.py',
+  'scripts/production-release/formal-runtime-package/package.test.py',
+  'scripts/production-release/formal-runtime-package/package-source.test.py',
+  'scripts/production-release/formal-runtime-package/qualified.test.py',
+  'scripts/production-release/formal-runtime-package/collector.test.py',
+  'scripts/production-release/formal-runtime-package/collector-schema.test.py',
+  'scripts/production-release/formal-runtime-package/collector-fixture.test-support.py',
+  'scripts/production-release/formal-runtime-package/fixture-compose.test.yml',
+  'scripts/production-release/formal-runtime-package/source-inputs.json',
+  'scripts/production-release/formal-runtime-package/finite-profile-source-fields.json',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-api-types-network-endpoint.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-daemon-container_operations.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-internal-sliceutil-sliceutil.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-pkg-stringid-stringid.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-daemon-inspect.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-api-types-types.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-api-types-network-ipam.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-api-types-volume-volume.go',
+  'scripts/production-release/formal-runtime-package/sources/docker-compose-v5.5.0-pkg-compose-create.go',
+  'scripts/production-release/formal-runtime-package/sources/compose-spec-compose-go-v2.14.0-types-types.go',
+  'scripts/production-release/formal-runtime-package/sources/compose-spec-compose-go-v2.14.0-types-command.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-volume-service-service.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-volume-service-convert.go',
+  'scripts/production-release/formal-runtime-package/sources/moby2516-volume-local-local.go',
+  'scripts/production-release/formal-runtime-package/sources/LICENSE',
+  'scripts/production-release/formal-runtime-package/sources/SOURCE_NOTICES.md'
+]);
 const onlineRecoveryControls = new Set([
   onlineRechargeRecoveryPolicy,
   productionDatabaseAccessTest
@@ -96,7 +135,26 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/remote-deploy.py',
   'scripts/production-release/remote-deploy.test.py',
   'scripts/production-release/maintain-image-cache.py',
-  'scripts/production-release/maintain-image-cache.test.py'
+  'scripts/production-release/maintain-image-cache.test.py',
+  'scripts/production-release/api-admin-pending-projection.py',
+  'scripts/production-release/api-admin-pending-projection.test.py',
+  'scripts/production-release/api-admin-pending-online.test.py',
+  'scripts/production-release/api-admin-pending-receipt-wire.py',
+  'scripts/production-release/api-admin-pending-receipt-wire.test.py',
+  'scripts/production-release/api-workspace-declaration-readonly.py',
+  'scripts/production-release/api-workspace-declaration-readonly.test.py',
+  'scripts/production-release/api-workspace-declaration-artifacts.py',
+  'scripts/production-release/api-workspace-declaration-artifacts.test.py',
+  'scripts/production-release/online-recharge-declaration-measurement.py',
+  'scripts/production-release/online-recharge-declaration-measurement.test.py',
+  'scripts/production-release/online-recharge-daemon-identity.py',
+  'scripts/production-release/online-recharge-daemon-identity.test.py',
+  'scripts/production-release/online-recharge-daemon-listener.py',
+  'scripts/production-release/online-recharge-daemon-listener.test.py',
+  'scripts/production-release/online-recharge-daemon-socket.py',
+  'scripts/production-release/online-recharge-daemon-socket.test.py',
+  'scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py',
+  ...formalRuntimePackageControlPaths
 ]);
 const recharge4cProfile = 'deploy/aws/recharge-pro-4c-20261008.json';
 const recharge4cSources = new Set([

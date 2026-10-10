@@ -12,7 +12,8 @@ import {
   checkMode,
   isCiOnly,
   selectedParts,
-  registrationOnboardingControls
+  registrationOnboardingControls,
+  formalRuntimePackageControlPaths
 } from './ci-recharge-scope.mjs';
 
 function fixture(run, outputDirectory = '.deploy') {
@@ -99,6 +100,48 @@ const workflowPredicate = (expression) => (inputs) =>
     () => false
   );
 
+test('declaration inventory requires its actual failed workspace preflight and grants no release', () => {
+  const workflow = loadYaml(readFileSync('.github/workflows/production-release.yml', 'utf8'));
+  const steps = workflow.jobs.release.steps;
+  const preflight = steps.find((step) => step.id === 'api_admin_preflight');
+  const inventory = steps.find(
+    (step) =>
+      step.run === 'python3 -B scripts/production-release/api-workspace-declaration-readonly.py'
+  );
+  assert.equal(
+    preflight.run,
+    'python3 -B scripts/production-release/api-admin-readonly.py preflight'
+  );
+  assert.equal(inventory['continue-on-error'], undefined);
+  const enabled = new Function('inputs', 'failure', 'steps', `return (${inventory.if});`);
+  for (const operation of ['verify_api_workspace', 'release_api_workspace']) {
+    assert.equal(
+      enabled({ operation }, () => true, { api_admin_preflight: { outcome: 'failure' } }),
+      true
+    );
+    for (const outcome of ['success', 'skipped', 'cancelled']) {
+      assert.equal(
+        enabled({ operation }, () => true, { api_admin_preflight: { outcome } }),
+        false
+      );
+    }
+    assert.equal(
+      enabled({ operation }, () => false, { api_admin_preflight: { outcome: 'failure' } }),
+      false
+    );
+  }
+  for (const operation of [
+    'release_online_recharge',
+    'release_api_admin',
+    'release_api_admin_migration'
+  ]) {
+    assert.equal(
+      enabled({ operation }, () => true, { api_admin_preflight: { outcome: 'failure' } }),
+      false
+    );
+  }
+});
+
 function guardCommands(
   paths,
   {
@@ -108,6 +151,7 @@ function guardCommands(
     failArchivePolicy = false,
     failRetirement = false,
     failPrepared = false,
+    failFormalPackage = false,
     part = 'guards'
   } = {}
 ) {
@@ -123,7 +167,7 @@ function guardCommands(
           file === 'node'
             ? 'if [ "$TASK_FAIL_HISTORY" = true ] && [ "$*" = "--test scripts/v2-release-history-policy.test.mjs" ]; then exit 23; fi\nif [ "$TASK_FAIL_MAINTENANCE" = true ] && [ "$*" = "--test scripts/v2-release-maintenance-policy.test.mjs" ]; then exit 24; fi\nif [ "$TASK_FAIL_MAILBOX" = true ] && [ "$*" = "--test scripts/v2-release-mailbox-audit.test.mjs" ]; then exit 27; fi\nif [ "$TASK_FAIL_ARCHIVE_POLICY" = true ] && [ "$*" = "--test scripts/v2-order-archive-release-policy.test.mjs" ]; then exit 26; fi\n'
             : file === 'python3'
-              ? 'if [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\n'
+              ? 'if [ "$TASK_FAIL_RETIREMENT" = true ] && [ "$*" = "-B scripts/production-release/retire-orphan-retention.test.py" ]; then exit 24; fi\nif [ "$TASK_FAIL_PREPARED" = true ] && [ "$*" = "-B scripts/production-release/prepared-images.test.py" ]; then exit 25; fi\nif [ "$TASK_FAIL_FORMAL_PACKAGE" = true ] && [ "$*" = "-B scripts/production-release/formal-runtime-package.test.py" ]; then exit 28; fi\n'
               : ''
         }`,
         { mode: 0o755 }
@@ -142,7 +186,8 @@ function guardCommands(
           TASK_FAIL_MAILBOX: String(failMailbox),
           TASK_FAIL_ARCHIVE_POLICY: String(failArchivePolicy),
           TASK_FAIL_RETIREMENT: String(failRetirement),
-          TASK_FAIL_PREPARED: String(failPrepared)
+          TASK_FAIL_PREPARED: String(failPrepared),
+          TASK_FAIL_FORMAL_PACKAGE: String(failFormalPackage)
         },
         stdio: 'pipe'
       }
@@ -189,6 +234,122 @@ const onlineReleaseRegressionCommands = [
   'node --test scripts/production-release/online-recharge-entry.test.mjs'
 ];
 
+const formalRuntimePackageCommand =
+  'python3 -B scripts/production-release/formal-runtime-package.test.py';
+
+test('formal runtime package CI controls admit only its fixed execution and test files', () => {
+  assert.equal(formalRuntimePackageControlPaths.length, 37);
+  assert.equal(new Set(formalRuntimePackageControlPaths).size, 37);
+  for (const path of formalRuntimePackageControlPaths) {
+    assert.equal(checkMode([path], '', ''), 'ci-only', path);
+    assert.deepEqual(selectedParts([path]), ['guards'], path);
+    for (const alias of [path + '.backup', path + '/extra.py'])
+      assert.equal(checkMode([alias], '', ''), 'full', alias);
+  }
+  for (const path of [
+    'scripts/production-release/formal-runtime-package/extra.py',
+    'scripts/production-release/formal-runtime-package/sources/extra.go',
+    'scripts/production-release/formal-runtime-package.test-other.py',
+    'scripts/production-release/formal-runtime-package/reviewed-source-table-extra.json'
+  ])
+    assert.equal(checkMode([path], '', ''), 'full', path);
+  assert.equal(
+    checkMode(
+      [...formalRuntimePackageControlPaths, 'apps/api/src/id-business-v2/orders/example.ts'],
+      '',
+      ''
+    ),
+    'full'
+  );
+});
+
+test('formal runtime package aggregate runs once in both control gates and failures stop them', () => {
+  const runsBusinessOrDatabase = (command) =>
+    /(?:^| )(?:[^ ]*\/)?(?:prisma(?: |:|$)|mysql(?: |$))|acceptance:v2-|--workspace @apple-business\/(?:api|admin)/.test(
+      command
+    );
+  for (const part of ['guards', 'release-controls']) {
+    const commands = guardCommands(formalRuntimePackageControlPaths, { part });
+    assert.equal(commands.filter((command) => command === formalRuntimePackageCommand).length, 1);
+    assert.ok(
+      commands.includes(
+        'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py'
+      )
+    );
+    assert.equal(commands.some(runsBusinessOrDatabase), false);
+    assert.throws(
+      () => guardCommands(formalRuntimePackageControlPaths, { part, failFormalPackage: true }),
+      (error) => error.status === 1 && String(error.stderr).includes(formalRuntimePackageCommand)
+    );
+  }
+});
+
+test('formal runtime package aggregate executes six fixed project-local entries across five suites', () => {
+  const harness = `
+import json, runpy, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+module = runpy.run_path('scripts/production-release/formal-runtime-package.test.py')
+root, package, calls = module['ROOT'], module['PACKAGE'], []
+def child(args, **kwargs):
+    assert args[0] == sys.executable and args[1] == '-B' and len(args) == 3
+    file = Path(args[2])
+    assert file.parent == package and package == root / 'scripts' / 'production-release' / 'formal-runtime-package'
+    assert kwargs == {'cwd': root, 'check': False, 'timeout': 120}
+    calls.append(file.name)
+    return SimpleNamespace(returncode=0)
+with patch.object(Path, 'is_file', return_value=True), patch.object(Path, 'is_symlink', return_value=False), patch.object(module['subprocess'], 'run', child):
+    assert module['main']() == 0
+assert len(module['SUITES']) == 5
+print(json.dumps(calls))
+`;
+  assert.deepEqual(
+    JSON.parse(execFileSync('python3', ['-B', '-c', harness], { encoding: 'utf8' })),
+    [
+      'bootstrap-boundary.test.py',
+      'package.test.py',
+      'package-source.test.py',
+      'qualified.test.py',
+      'collector.test.py',
+      'collector-schema.test.py'
+    ]
+  );
+});
+
+test('formal runtime package aggregate rejects every failed child and missing entry without fallback', () => {
+  const harness = `
+import runpy
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+module = runpy.run_path('scripts/production-release/formal-runtime-package.test.py')
+for ordinal in range(6):
+    calls = []
+    def child(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=1 if len(calls) == ordinal + 1 else 0)
+    with patch.object(Path, 'is_file', return_value=True), patch.object(Path, 'is_symlink', return_value=False), patch.object(module['subprocess'], 'run', child):
+        assert module['main']() == 1 and len(calls) == ordinal + 1
+for method in ('is_file', 'is_symlink'):
+    with patch.object(Path, 'is_file', return_value=method != 'is_file'), patch.object(Path, 'is_symlink', return_value=method == 'is_symlink'), patch.object(module['subprocess'], 'run') as child:
+        assert module['main']() == 1
+        child.assert_not_called()
+`;
+  execFileSync('python3', ['-B', '-c', harness], { stdio: 'pipe' });
+  assert.throws(
+    () =>
+      execFileSync(
+        'python3',
+        ['-B', 'scripts/production-release/formal-runtime-package.test.py', 'extra.py'],
+        {
+          stdio: 'pipe'
+        }
+      ),
+    (error) => error.status === 1 && String(error.stderr).includes('accepts no arguments')
+  );
+});
+
 test('actual source entry rejects failed evidence on Bash before emitting reusable proof and remains control-only', () => {
   const path = 'scripts/production-release/check-source.sh';
   assert.equal(checkMode([path], '', ''), 'ci-only');
@@ -199,6 +360,17 @@ test('actual source entry rejects failed evidence on Bash before emitting reusab
     'node --test scripts/ci-recharge-release.test.mjs',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
     'python3 -B scripts/production-release/api-admin-readonly.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+    'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
+    'python3 -B scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
+    'python3 -B scripts/production-release/formal-runtime-package.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs'
   ]);
   for (const changed of [
@@ -1440,6 +1612,17 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/remote-deploy.test.py ReleaseScopeTests',
     'python3 -B scripts/production-release/api-admin-scope.test.py',
     'python3 -B scripts/production-release/api-admin-readonly.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+    'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+    'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+    'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
+    'python3 -B scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py',
+    'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
+    'python3 -B scripts/production-release/formal-runtime-package.test.py',
     ...onlineReleaseRegressionCommands,
     'python3 -B scripts/production-release/retire-orphan-retention.test.py',
     'python3 -B scripts/production-release/prepared-images.test.py',
@@ -1480,7 +1663,18 @@ test('actual full-mode release controls preserve exact maintenance selection and
         ? []
         : [
             'python3 -B scripts/production-release/api-admin-scope.test.py',
-            'python3 -B scripts/production-release/api-admin-readonly.test.py'
+            'python3 -B scripts/production-release/api-admin-readonly.test.py',
+            'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+            'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+            'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+            'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+            'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+            'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+            'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+            'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
+            'python3 -B scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py',
+            'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
+            'python3 -B scripts/production-release/formal-runtime-package.test.py'
           ]),
       ...(path === 'scripts/ci-recharge-check.mjs' ? onlineReleaseRegressionCommands : []),
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
@@ -1494,6 +1688,17 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'node --test scripts/ci-recharge-release.test.mjs',
       'python3 -B scripts/production-release/api-admin-scope.test.py',
       'python3 -B scripts/production-release/api-admin-readonly.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+      'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
+      'python3 -B scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
+      'python3 -B scripts/production-release/formal-runtime-package.test.py',
       'python3 -B scripts/production-release/retire-orphan-retention.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]
@@ -1504,6 +1709,17 @@ test('actual full-mode release controls preserve exact maintenance selection and
       'node --test scripts/ci-recharge-release.test.mjs',
       'python3 -B scripts/production-release/api-admin-scope.test.py',
       'python3 -B scripts/production-release/api-admin-readonly.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-projection.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-online.test.py',
+      'python3 -B scripts/production-release/api-admin-pending-receipt-wire.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-readonly.test.py',
+      'python3 -B scripts/production-release/online-recharge-declaration-measurement.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-identity.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-listener.test.py',
+      'python3 -B scripts/production-release/online-recharge-daemon-socket.test.py',
+      'python3 -B scripts/production-release/online-recharge-runtime-socket-diagnostic.test.py',
+      'python3 -B scripts/production-release/api-workspace-declaration-artifacts.test.py',
+      'python3 -B scripts/production-release/formal-runtime-package.test.py',
       'python3 -B scripts/production-release/prepared-images.test.py',
       'node --test scripts/v2-order-archive-release-policy.test.mjs'
     ]

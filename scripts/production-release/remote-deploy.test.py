@@ -536,6 +536,19 @@ class CommandFailureSummaryTests(unittest.TestCase):
                 self.assertNotIn('candidateCommit', result)
                 self.assertNotIn(code, json.dumps(result))
 
+    def test_pending_build_origin_failure_has_one_exact_controlled_code(self):
+        receipt, invocation = self.online_fixture()
+        code = 'API_ADMIN_PENDING_ONLINE_BUILD_ORIGIN_CHANGED'
+        self.assertIn(code, deployment.ONLINE_RECHARGE_FAILURE_CODES)
+        result = self.online_summary({**receipt, 'code': code}, invocation)
+        self.assertEqual(result['code'], code)
+        self.assertNotIn('fixture-sensitive', json.dumps(result))
+        for changed in (code + '_DO_NOT_EMIT_SENTINEL', code.lower(), code + '\nDO_NOT_EMIT_SENTINEL'):
+            with self.subTest(changed=changed):
+                result = self.online_summary({**receipt, 'code': changed}, invocation)
+                self.assertNotIn('candidateCommit', result)
+                self.assertNotIn('DO_NOT_EMIT_SENTINEL', json.dumps(result))
+
     def test_online_failure_requires_valid_requested_command_and_ended_failed_status(self):
         receipt, invocation = self.online_fixture()
         for field, values in (

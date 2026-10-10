@@ -66,6 +66,11 @@ build_image() {
   if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge || "${RELEASE_OPERATION:-release}" == release_api_workspace || "${RELEASE_OPERATION:-release}" == release_api_admin || "${RELEASE_OPERATION:-release}" == release_api_admin_migration || "${RELEASE_OPERATION:-release}" == release_api_registration ]]; then
     options+=(--label "id-business-v2.source-tree=$SOURCE_TREE")
   fi
+  if [[ "${RELEASE_OPERATION:-release}" == release_api_workspace && -n "${pending_online_record_sha256:-}" ]]; then
+    [[ "$service" == api || "$service" == admin ]] || exit 1
+    [[ "$pending_online_record_sha256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+    options+=(--label "id-business-v2.pending-online-projection-sha256=$pending_online_record_sha256")
+  fi
   if [[ -n "$target" ]]; then options+=(--target "$target"); fi
   if [[ ( "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-2f-20261007 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-4c-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-6f5-20261008 || "${HISTORICAL_EXCEPTION:-none}" == recharge-pro-pricing-045-20261008 ) && "$service" == auto-recharge ]]; then
     [[ "${recharge_worker_projection:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
@@ -133,6 +138,9 @@ build_image() {
 }
 
 if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+  if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
+    python3 -B scripts/production-release/online-recharge-readonly.py after-bit-build-input
+  fi
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image api apps/api/Dockerfile.mysql runtime
   build_image admin apps/admin/Dockerfile runtime
@@ -154,8 +162,23 @@ fi
 
 if [[ "${RELEASE_OPERATION:-release}" == release_api_workspace ]]; then
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
-  build_image api apps/api/Dockerfile.mysql runtime
-  build_image admin apps/admin/Dockerfile runtime
+  python3 -B scripts/production-release/remote-deploy.py --prepare-api-workspace-build
+  pending_context=.deploy/production-release/api-admin-pending-build-context
+  if [[ -f .deploy/production-release/api-admin-pending-build-projection.json ]]; then
+    pending_online_record_sha256="$(python3 - <<'PY_PENDING_RECORD'
+import hashlib,json
+from pathlib import Path
+record=json.loads(Path('.deploy/production-release/api-admin-pending-build-projection.json').read_text())
+assert record['contextPath']=='.deploy/production-release/api-admin-pending-build-context'
+print(hashlib.sha256(json.dumps(record,sort_keys=True,separators=(',',':')).encode()).hexdigest())
+PY_PENDING_RECORD
+    )"
+    build_image api "$pending_context/apps/api/Dockerfile.mysql" runtime "$pending_context"
+    build_image admin "$pending_context/apps/admin/Dockerfile" runtime "$pending_context"
+  else
+    build_image api apps/api/Dockerfile.mysql runtime
+    build_image admin apps/admin/Dockerfile runtime
+  fi
   python3 -B scripts/production-release/remote-deploy.py --write-api-workspace-build-proof
   exit 0
 fi

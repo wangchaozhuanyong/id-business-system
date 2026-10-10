@@ -59,6 +59,30 @@ PRIVATE_INSPECT_ORIGINAL = workspace.workspace_private_inspect
 SUMMARY_READER_ORIGINAL = workspace.WorkspaceSqliteProtection.summary_reader
 REGISTRATION_FIXTURE_COMMIT = '4042b5f2c673344409e329607bd43a893ba521bb'
 
+
+@contextmanager
+def tracked_online_source():
+    """Use real tracked bytes; ignored local executor installs are not source."""
+    paths = (*workspace.ONLINE_SOURCE_SEALS, workspace.MIGRATION_ROOT,
+             *workspace.CONFIG_FILES, workspace.MIGRATION_SEED,
+             'scripts/production-release/online-recharge-recovery.json')
+    names = subprocess.check_output(['git', 'ls-files', '-z', '--', *paths], cwd=ROOT)
+    with tempfile.TemporaryDirectory(prefix='tracked-online-source-', dir=RUNTIME) as temporary:
+        directory = Path(temporary)
+        for name in names.decode().split('\0'):
+            if not name:
+                continue
+            relative = Path(name)
+            if relative.is_absolute() or '..' in relative.parts:
+                raise RuntimeError('INVALID_TRACKED_FIXTURE')
+            original = ROOT / relative
+            if not original.is_file() or original.is_symlink():
+                raise RuntimeError('INVALID_TRACKED_FIXTURE')
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original.read_bytes())
+        yield directory
+
 # Workspace publication has its own reviewed historical Compose and edge seal.
 # New checkout services must not redefine that scope. Keep only its configuration
 # and auto-registration source structure, never a second copy of this repository.
@@ -1023,7 +1047,8 @@ class ReleaseFailureTests(unittest.TestCase):
                     selected_scope=scope, handoff_check=None, idle_check=None, after_api=None, archive_pair_mode=0o664,
                     migration_preapplied=False, migration_failure=None, migration_task_changed=False, migration_window_changed=False,
                     migration_origin=None, migration_origin_guard=None, workspace_busy=False, candidate_workspace=False,
-                    sqlite_gate=None, sqlite_prepare_error=False, online_origin_context=None, online_fail=None, workspace_admission_failure=None):
+                    sqlite_gate=None, sqlite_prepare_error=False, online_origin_context=None, online_fail=None, workspace_admission_failure=None,
+                    pending_origin=None, pending_proof_origin_sha=None, pending_origin_after_build=None):
         scope = selected_scope
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, ExitStack() as stack:
             if failure_receipt_unwritable:
@@ -1044,6 +1069,16 @@ class ReleaseFailureTests(unittest.TestCase):
             if scope.MIGRATION_MODE:
                 migration_fixture(previous, old=True)
             candidate = migration_proof() if scope.MIGRATION_MODE else registration_proof() if scope.REGISTRATION else workspace_proof() if scope.WORKSPACE else proof()
+            if pending_origin is not None:
+                candidate['pendingOnlineProjection'] = {'fixture': 'separately-tested-projection'}
+                if pending_proof_origin_sha != 'MISSING':
+                    candidate['pendingOnlineOriginSha256'] = (scope.fingerprint(pending_origin)
+                        if pending_proof_origin_sha is None else pending_proof_origin_sha)
+                projection = scope.pending_projection()
+                stack.enter_context(patch.object(scope, 'pending_projection', return_value=SimpleNamespace(
+                    __file__=projection.__file__, validate_record=MagicMock())))
+                controller_projection = stack.enter_context(patch.object(scope, 'apply_pending_runtime_projection'))
+                stack.enter_context(patch.object(scope, 'pending_online_guard'))
             args = SimpleNamespace(admin_only=False, image_commit=None, image_run_id=None, image_run_attempt=None,
                 post_cleanup_seal_sha256=None, order_archive_seal_sha256=None, order_archive_prepared_images_sha256=None,
                 api_admin_build_proof=base64.b64encode(json.dumps(candidate).encode()).decode(), api_admin_migration_only=scope.MIGRATION_MODE,
@@ -1092,7 +1127,9 @@ class ReleaseFailureTests(unittest.TestCase):
             controller.run = run
             archive_data = io.BytesIO()
             with tarfile.open(fileobj=archive_data, mode='w:gz') as archive:
-                for name in ('remote-deploy.py', 'api-admin-scope.py'):
+                for name in ('remote-deploy.py', 'api-admin-scope.py',
+                             *(('online-recharge-scope.py',) if online_origin_context is not None else ()),
+                             *(('api-admin-pending-projection.py',) if pending_origin is not None else ())):
                     path = Path(__file__).with_name(name)
                     raw = path.read_bytes(); info = tarfile.TarInfo(f'id-business-system-{COMMIT}/scripts/production-release/{name}')
                     info.size = len(raw); archive.addfile(info, io.BytesIO(raw))
@@ -1130,6 +1167,11 @@ class ReleaseFailureTests(unittest.TestCase):
             stack.enter_context(patch.object(scope, 'source_tree', return_value=TREE))
             stack.enter_context(patch.object(scope, 'configuration_hashes', return_value={'config': 'hash'}))
             evidence = {'manifestSha256': scope.hashlib.sha256(b'{}').hexdigest(), 'environmentSha256': 'env'}
+            if pending_origin is not None:
+                if pending_origin_after_build is not None:
+                    pending_origin = pending_origin_after_build
+                evidence.update(pendingOnlineMigrationOrigin=pending_origin, onlinePublished=False, migrationPerformed=False)
+                controller._pendingOnlineMigrationOrigin = pending_origin
             if scope.WORKSPACE:
                 controller.workspace_admission = SimpleNamespace(acquire=MagicMock(), before_stop=MagicMock(),
                     check_idle=MagicMock(), stop=MagicMock(), close=MagicMock())
@@ -1214,6 +1256,11 @@ class ReleaseFailureTests(unittest.TestCase):
             manifests = list((base / 'releases').glob('*/release-manifest.json'))
             new_manifest = next((json.loads(p.read_text()) for p in manifests if p.parent != previous), None)
             failure_files = list((base / 'releases').glob('*/' + scope.FAILURE_FILE))
+            if pending_origin is not None:
+                controller.pending_projection = controller_projection
+                controller.pending_build_proof = candidate
+                records = list((base / 'releases').glob('*/' + scope.STATE_FILE))
+                controller.pending_record = json.loads(records[-1].read_text()) if records else None
             return code, result, controller, new_manifest, bool(failure_files)
 
     def test_success_updates_only_api_admin_and_drops_historical_classification(self):
@@ -3373,7 +3420,8 @@ class WorkspaceScopeTests(unittest.TestCase):
 
     def test_pinned_transport_and_selection_do_not_admit_history_reuse_or_cache(self):
         names = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
-                 'online-recharge-recovery.json')
+                 'online-recharge-recovery.json', 'api-admin-pending-projection.py',
+                 'api-admin-readonly.py', 'api-admin-pending-receipt-wire.py')
         for mode in ('preflight', 'readback'):
             with self.subTest(mode=mode):
                 commands = transport.parameters(COMMIT, OLD, mode, 'API_ADMIN_WORKSPACE')['commands']
@@ -3423,35 +3471,48 @@ class WorkspaceScopeTests(unittest.TestCase):
                     transport.validate_receipt({**receipt, field: changed}, COMMIT, 'readback', 'API_ADMIN_WORKSPACE')
 
     def test_workspace_dispatch_uses_only_new_scope_and_exact_runner_proof(self):
+        import ast
+        import gzip
+        import shlex
         text = (ROOT / 'scripts/production-release/dispatch.sh').read_text()
         program = text.split('python3 - "$parameters_file" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
         environment = {'RELEASE_COMMIT': COMMIT, 'SOURCE_TREE': TREE, 'EXPECTED_CURRENT': OLD,
             'RELEASE_REPOSITORY': REPOSITORY, 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
             'QUALITY_RUN_ID': '456', 'RELEASE_OPERATION': 'release_api_workspace', 'HISTORICAL_EXCEPTION': 'none'}
         original_read = Path.read_bytes
-        def read_candidate(path):
-            return json.dumps(workspace_proof()).encode() if str(path).startswith('.deploy/production-release/') else original_read(path)
+        def local_proof(path):
+            return json.dumps(workspace_proof()).encode() if path.name == 'api-workspace-build-proof.json' else original_read(path)
         with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary, patch.dict(os.environ, environment, clear=True), \
              patch.object(sys, 'argv', ['generate', str(Path(temporary) / 'parameters.json')]), \
-             patch.object(Path, 'read_bytes', side_effect=read_candidate, autospec=True):
+             patch.object(Path, 'read_bytes', local_proof):
             exec(compile(program, 'workspace-dispatch', 'exec'), {'__name__': '__test__'})
-            commands = json.loads((Path(temporary) / 'parameters.json').read_text())['commands']
-        joined = '\n'.join(commands)
-        self.assertIn('--api-workspace-only --api-admin-build-proof ', joined)
-        self.assertNotIn('--image-commit', joined)
-        self.assertNotIn('--historical-', joined)
-        downloads = [line for line in commands if line.startswith('curl ')]
-        checksums = [line for line in commands if 'sha256sum -c -' in line]
-        names = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
-                 'online-recharge-recovery.json')
-        self.assertEqual(len(downloads), len(names))
-        self.assertEqual(len(checksums), len(names))
-        self.assertEqual([line.rsplit('/', 1)[-1] for line in downloads], list(names))
-        for name, download, checksum in zip(names, downloads, checksums):
-            digest = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            self.assertIn('/' + COMMIT + '/scripts/production-release/' + name, download)
-            self.assertIn(digest + '  ', checksum)
-            self.assertNotIn('/' + OLD + '/', download)
+            lines = json.loads((Path(temporary) / 'parameters.json').read_text())['commands']
+            commands = '\n'.join(lines)
+        self.assertIn('--api-workspace-only --api-admin-build-proof ', commands)
+        self.assertNotIn('--image-commit', commands)
+        self.assertNotIn('--historical-', commands)
+        self.assertEqual(commands.count('sha256sum -c -'), 0)
+        carrier = next(line for line in lines if line.startswith('python3 -B -c '))
+        bootstrap = ast.parse(shlex.split(carrier)[3])
+        payload = next(node.args[0].value for node in ast.walk(bootstrap)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'b85decode')
+        parsed = ast.parse(gzip.decompress(base64.b85decode(payload)).decode())
+        stores = [node for node in ast.walk(parsed) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == '_store_files']
+        self.assertEqual(len(stores), 2)
+        self.assertEqual([ast.literal_eval(node.args[1]) for node in stores], [COMMIT, COMMIT])
+        self.assertEqual([ast.literal_eval(node.args[3]) for node in stores], [False, True])
+        self.assertEqual([ast.literal_eval(node.args[0]) for node in stores],
+            ['/opt/id-business-v2/.staging/oidc-' + COMMIT,
+             '/opt/id-business-v2/.staging/oidc-' + COMMIT + '/formal-runtime-package'])
+        self.assertNotIn('--reuse-image-run', commands)
+        controllers, package = [ast.literal_eval(node.args[2]) for node in stores]
+        self.assertEqual(set(controllers), set(transport.FORMAL_RUNTIME_CONTROLLERS))
+        self.assertEqual(set(package), set(transport.FORMAL_RUNTIME_FILES))
+        for name, digest in controllers.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release' / name).read_bytes()).hexdigest())
+        for name, digest in package.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / 'scripts/production-release/formal-runtime-package' / name).read_bytes()).hexdigest())
 
     def test_workspace_origin_still_rechecks_original_migration_proof_and_fails_on_task_drift(self):
         with MigrationSuccessorTests().fixture() as (controller, current, manifest, candidate, before, task, private, handoff, stack):
@@ -4080,6 +4141,98 @@ class WorkspaceSqliteProtectionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'BACKUP_CHANGED'):
                 workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
 
+    def test_v4_real_restore_receipt_rejects_resigned_private_restore_hash_identity_and_lease_changes(self):
+        with self.fixture() as f:
+            f.gate.lock();original=f.gate.backup_restore()
+            path=f.target/workspace.WORKSPACE_SQLITE_RECEIPT
+            def bound(value):
+                digest=workspace.fingerprint(value)
+                record={'sqliteProtectionSha256':digest,'workspaceVolumeBefore':f.gate.volume,
+                    'workspaceVolumeAfter':f.gate.volume,'before':{'api':dict(f.state)}}
+                manifest={'apiWorkspacePublication':{'version':4,'sqliteProtectionSha256':digest}}
+                return record,manifest
+            record,manifest=bound(original)
+            result=workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+            self.assertEqual(set(result),{'backupVerified','restoreVerified','sqliteProtectionSha256','backupSha256','backupSize'})
+            self.assertTrue(result['backupVerified']);self.assertTrue(result['restoreVerified'])
+            for variation in ('private','restore','restore-volume','backup-hash','source-hash','maintenance-hash',
+                    'container','image','started-at','candidate-image','volume','lease','inspection-private','legacy-audit'):
+                value=copy.deepcopy(original)
+                if variation=='private':value['privateData']='PRIVATE_SENTINEL'
+                elif variation=='restore':value['restoreVerified']=False
+                elif variation=='restore-volume':value['temporaryRestoreVolumeRemoved']=False
+                elif variation=='backup-hash':value['backupSha256']='not-a-hash'
+                elif variation=='source-hash':value['sourceDatabaseIdentitySha256']='not-a-hash'
+                elif variation=='maintenance-hash':value['maintenanceSha256']='not-a-hash'
+                elif variation=='container':value['sourceApiIdentity']['containerId']='d'*64
+                elif variation=='image':value['sourceApiIdentity']['image']='sha256:'+'d'*64
+                elif variation=='started-at':value['sourceApiIdentity']['startedAtSha256']='d'*64
+                elif variation=='candidate-image':value['candidateImageId']='sha256:'+'d'*64
+                elif variation=='volume':value['volume']['identitySha256']='d'*64
+                elif variation=='lease':value['inspection']['activeAppleLeaseCount']=1
+                elif variation=='inspection-private':value['inspection']['privateData']='PRIVATE_SENTINEL'
+                else:value['legacyAudit']['legacyMutationCount']=1
+                # Rebind both outer seals so rejection must come from the real
+                # closed receipt/safety checks, not a stale digest alone.
+                path.write_text(json.dumps(value))
+                record,manifest=bound(value)
+                with self.subTest(variation=variation),self.assertRaisesRegex(RuntimeError,'SQLITE_'):
+                    workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+            path.write_text(json.dumps(original))
+            record,manifest=bound(original)
+            self.assertEqual(workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest),result)
+
+    def test_v4_real_restore_receipt_rejects_private_file_permission_and_outer_seal_changes(self):
+        with self.fixture() as f:
+            f.gate.lock();value=f.gate.backup_restore()
+            digest=workspace.fingerprint(value)
+            record={'sqliteProtectionSha256':digest,'workspaceVolumeBefore':f.gate.volume,
+                'workspaceVolumeAfter':f.gate.volume,'before':{'api':dict(f.state)}}
+            manifest={'apiWorkspacePublication':{'version':4,'sqliteProtectionSha256':digest}}
+            backup=f.target/value['backupName']
+            for path,mode in ((f.target/workspace.WORKSPACE_SQLITE_RECEIPT,0o644),
+                    (backup,0o644),(backup.parent,0o755),(backup.parent.parent,0o755)):
+                original_mode=path.stat().st_mode & 0o777
+                try:
+                    path.chmod(mode)
+                    with self.subTest(path=path.relative_to(f.target)),self.assertRaisesRegex(RuntimeError,'SQLITE_'):
+                        workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+                finally:path.chmod(original_mode)
+            for target,key in ((record,'sqliteProtectionSha256'),(manifest['apiWorkspacePublication'],'sqliteProtectionSha256')):
+                original=target[key]
+                try:
+                    target[key]='d'*64
+                    with self.assertRaisesRegex(RuntimeError,'SQLITE_RECEIPT_CHANGED'):
+                        workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)
+                finally:target[key]=original
+            self.assertTrue(workspace.workspace_sqlite_receipt(f.controller,f.target,f.candidate,record,manifest)['restoreVerified'])
+
+    def test_pending_v4_producer_binds_sqlite_gate_and_switches_only_api_admin(self):
+        pending_fixtures=load('merged_pending_v4_producer_fixtures','api-admin-pending-online.test.py')
+        pending=pending_fixtures.context()
+        gate=self.fake_release_gate()
+        code,result,controller,manifest,persisted=ReleaseFailureTests().run_release(selected_scope=workspace,
+            pending_origin=pending,sqlite_gate=gate)
+        self.assertEqual(code,0);self.assertFalse(persisted)
+        self.assertEqual(result['status'],'API_ADMIN_WORKSPACE_VERIFIED')
+        self.assertEqual([call.args[-1] for call in controller.compose.call_args_list],['admin','api'])
+        self.assertEqual(manifest['servicesUpdated'],['api','admin'])
+        publication=manifest['apiWorkspacePublication']
+        self.assertEqual(publication['version'],4)
+        self.assertEqual(publication['sqliteProtectionSha256'],workspace.fingerprint(gate.record))
+        self.assertEqual(publication['pendingOnlineMigration'],workspace.pending_online_marker(pending))
+        self.assertIs(publication['onlinePublished'],False);self.assertIs(publication['migrationPerformed'],False)
+        self.assertNotIn('workspaceBackupSha256',publication)
+        self.assertNotIn('workspaceBackup',controller.pending_record)
+        self.assertNotIn('workspacePreparation',controller.pending_record)
+        self.assertEqual(controller.pending_record['sqliteProtectionSha256'],workspace.fingerprint(gate.record))
+        self.assertEqual(controller.pending_record['pendingOnlineMigrationOrigin'],pending)
+        controller.pending_projection.assert_called_once()
+        gate.stop_previous.assert_called_once();gate.finish.assert_called_once();gate.abort.assert_not_called()
+        controller.rollback_service.assert_not_called()
+        # This mock tests producer field binding and switch selection only. The
+        # two real-gate tests above exercise workspace_sqlite_receipt authority.
+
     def test_safe_receipt_rejects_extra_data_bad_types_or_unproven_lease(self):
         with self.fixture() as f:
             original={'version':1,'status':'PASS',**f.summary(f.writer),
@@ -4271,14 +4424,10 @@ class MergedWorkspaceAdmissionTests(unittest.TestCase):
 
     def test_online_sources_bind_fixed_engine_frontend_schema_compose_and_policy_without_fourteen_receipt_fields(self):
         online,_=d.online_recharge_scope()
+        self.assertEqual(online.fingerprint(online.recovery_policy(d)),online.RECOVERY_POLICY_SHA256)
+        self.assertIn('scripts/production-release/online-recharge-recovery.json',workspace.ONLINE_ORIGIN_FILES)
         with patch.object(workspace,'online_reader',return_value=online):
-            workspace.online_source_guard(d,ROOT)
-            with tempfile.TemporaryDirectory(dir=RUNTIME) as temporary:
-                folder=Path(temporary)
-                for name in (*workspace.ONLINE_SOURCE_SEALS,workspace.MIGRATION_ROOT):
-                    path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copytree(ROOT/name,path)
-                for name in (*workspace.CONFIG_FILES,workspace.MIGRATION_SEED,'scripts/production-release/'+online.RECOVERY_FILE):
-                    path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+            with tracked_online_source() as folder:
                 workspace.online_source_guard(d,folder)
                 path=folder/'scripts/production-release'/online.RECOVERY_FILE;path.write_bytes(path.read_bytes()+b'\n')
                 with self.assertRaisesRegex(RuntimeError,'RECOVERY_POLICY_CHANGED'):workspace.online_source_guard(d,folder)
@@ -4290,10 +4439,21 @@ class MergedWorkspaceAdmissionTests(unittest.TestCase):
             folders=(*workspace.ONLINE_SOURCE_SEALS,workspace.MIGRATION_ROOT)
             files=(*workspace.CONFIG_FILES,workspace.MIGRATION_SEED,*workspace.ONLINE_ADMISSION_FILES,
                 'scripts/production-release/'+online.RECOVERY_FILE)
+            archive=subprocess.check_output(['git','archive','HEAD','--',*folders],cwd=ROOT)
             for directory in (previous,candidate):
                 directory.mkdir()
-                for name in folders:
-                    path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);shutil.copytree(ROOT/name,path)
+                with tarfile.open(fileobj=io.BytesIO(archive),mode='r:') as tracked:
+                    for member in tracked.getmembers():
+                        path=Path(member.name)
+                        self.assertFalse(path.is_absolute() or '..' in path.parts)
+                        self.assertTrue(member.isdir() or member.isfile())
+                        target=directory/path
+                        if member.isdir():
+                            target.mkdir(parents=True,exist_ok=True)
+                        else:
+                            target.parent.mkdir(parents=True,exist_ok=True)
+                            target.write_bytes(tracked.extractfile(member).read())
+                            target.chmod(member.mode)
                 for name in files:
                     path=directory/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
                 (directory/'.env.aws.production').write_bytes(b'synthetic-only')
@@ -4374,6 +4534,65 @@ class MergedWorkspaceAdmissionTests(unittest.TestCase):
                             if variation=='restored-failure':documents[online.FAILURE_FILE]['rollbackOk']=True;save()
         finally:
             fixtures.RestoredRecoveryTests.tearDownClass();fixtures.RecoveryTests.tearDownClass()
+
+
+class WorkspaceDeclarationProofVersionTests(unittest.TestCase):
+    def declaration(self):
+        result = workspace_proof()
+        result.update(version=2, pendingOnlineProjection={'fixture': 'projection'},
+            pendingOnlineOriginSha256='1' * 64, pendingOnlinePreflightSha256='2' * 64,
+            declarationEquivalenceSeal={'kind': 'API_FIXED_DECLARATION_EQUIVALENCE', 'version': 3,
+                'preflightProofSha256': '3' * 64, 'semanticSha256': '4' * 64})
+        return result
+
+    def test_explicit_v2_preserves_original_image_configuration_and_acceptance_checks(self):
+        controller = SimpleNamespace(require=d.require)
+        helper = SimpleNamespace(validate_record=MagicMock())
+        value = self.declaration()
+        with patch.object(workspace, 'pending_projection', return_value=helper):
+            self.assertIs(workspace.validate_proof(controller, value, COMMIT, TREE), value)
+            helper.validate_record.assert_called_once_with(controller, value['pendingOnlineProjection'], COMMIT, TREE)
+            for mutate in ('acceptance', 'image', 'configuration', 'source', 'run'):
+                changed = copy.deepcopy(value)
+                if mutate == 'acceptance': changed['acceptance']['businessActions'] = 1
+                elif mutate == 'image': changed['images']['api']['imageId'] = 'not-an-image'
+                elif mutate == 'configuration': changed['configuration']['volume'] = 'other'
+                elif mutate == 'source': changed['sourceTree'] = '0' * 40
+                else: changed['images']['api']['reference'] = changed['images']['api']['reference'].replace('-123-', '-999-')
+                with self.subTest(mutate=mutate), self.assertRaises(RuntimeError):
+                    workspace.validate_proof(controller, changed, COMMIT, TREE, REPOSITORY, '123', '1')
+
+    def test_partial_unknown_or_wrong_version_declaration_seals_are_rejected(self):
+        controller = SimpleNamespace(require=d.require)
+        helper = SimpleNamespace(validate_record=MagicMock())
+        for mutate in ('missing-f', 'missing-seal', 'missing-projection', 'extra', 'outer-bool',
+                       'outer-three', 'seal-bool', 'seal-two', 'seal-extra', 'bad-kind', 'bad-f', 'bad-p', 'bad-semantic'):
+            value = self.declaration()
+            if mutate == 'missing-f': value.pop('pendingOnlinePreflightSha256')
+            elif mutate == 'missing-seal': value.pop('declarationEquivalenceSeal')
+            elif mutate == 'missing-projection':
+                value.pop('pendingOnlineProjection'); value.pop('pendingOnlineOriginSha256')
+            elif mutate == 'extra': value['sourceMeasured'] = True
+            elif mutate == 'outer-bool': value['version'] = True
+            elif mutate == 'outer-three': value['version'] = 3
+            elif mutate == 'seal-bool': value['declarationEquivalenceSeal']['version'] = True
+            elif mutate == 'seal-two': value['declarationEquivalenceSeal']['version'] = 2
+            elif mutate == 'seal-extra': value['declarationEquivalenceSeal']['authority'] = True
+            elif mutate == 'bad-kind': value['declarationEquivalenceSeal']['kind'] = 'OTHER'
+            elif mutate == 'bad-f': value['pendingOnlinePreflightSha256'] = 'hash-only'
+            elif mutate == 'bad-p': value['declarationEquivalenceSeal']['preflightProofSha256'] = 'hash-only'
+            else: value['declarationEquivalenceSeal']['semanticSha256'] = 'hash-only'
+            with self.subTest(mutate=mutate), patch.object(workspace, 'pending_projection', return_value=helper):
+                with self.assertRaises(RuntimeError): workspace.validate_proof(controller, value, COMMIT, TREE)
+
+    def test_v1_cannot_silently_admit_new_fields_or_other_scopes_v2(self):
+        value = self.declaration(); value['version'] = 1
+        controller = SimpleNamespace(require=d.require)
+        for consumer in (scope, registration, migration, workspace):
+            with self.subTest(scope=consumer.SCOPE), self.assertRaisesRegex(RuntimeError, '^API_ADMIN_BUILD_PROOF_INVALID$'):
+                consumer.validate_proof(controller, value, COMMIT, TREE)
+        ordinary = workspace_proof()
+        self.assertIs(workspace.validate_proof(controller, ordinary, COMMIT, TREE), ordinary)
 
 
 if __name__ == '__main__':

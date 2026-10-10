@@ -2173,5 +2173,814 @@ class ReleaseSequenceTests(unittest.TestCase):
         self.assertFalse(any(e.startswith(('remove:', 'restore:')) for e in events))
 
 
+class DeclarationEquivalencePureTests(unittest.TestCase):
+    """Synthetic publication bytes; real immutable Git source and fixed policy.
+
+    No producer/run/payment/production equivalence is claimed by these fixtures.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
+        cls.tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT).decode().strip()
+        cls.archive = subprocess.check_output(['git', 'archive', '--format=tar.gz',
+            '--prefix=id-business-system-' + cls.commit + '/', cls.commit], cwd=ROOT)
+        cls.inventory = scope.archive_inventory(controller(), cls.archive, cls.commit, cls.tree)
+        cls.policy_raw = (ROOT / 'scripts/production-release/online-recharge-recovery.json').read_bytes()
+        cls.policy = scope.closed_recovery_json(controller(), cls.policy_raw)
+        cls.completed = {name.split('/')[-2]: row['sha256'] for name, row in cls.inventory.items()
+                         if name.startswith(scope.MIGRATION_ROOT + '/') and name.endswith('/migration.sql')}
+
+    @staticmethod
+    def raw(value):
+        return (json.dumps(value, indent=2) + '\n').encode()
+
+    @staticmethod
+    def sha(value):
+        return hashlib.sha256(value).hexdigest()
+
+    def fixture(self):
+        h = lambda label: self.sha(('SYNTHETIC:' + label).encode())
+        original = copy.deepcopy(self.policy['preflight']['services'])
+        actual = copy.deepcopy(original)
+        candidate = copy.deepcopy(original)
+        workspace_before = copy.deepcopy(original)
+        for name in ('api', 'admin'):
+            workspace_before[name]['containerId'] = h(name + '-prior-cid')
+            candidate[name]['containerId'] = h(name + '-296-cid')
+            for key in ('containerId', 'startedAtSha256', 'configurationSha256'):
+                actual[name][key] = h(name + '-restored-' + key)
+        state = {'name': scope.MIGRATION_NAME, 'sha256': scope.MIGRATION_IDENTITY['sha256'],
+            'status': 'APPLIED', 'schemaVerified': True, 'appliedMigrationsSha256': scope.fingerprint(self.completed)}
+        common = {'errorType': 'RuntimeError', 'rollbackOk': True, 'previousCommit': scope.BASELINE_COMMIT,
+            'inverseMigrationPerformed': False, 'mediaVolumeDeleted': False,
+            'currentPointsToCandidate': False, 'receiptPersisted': True}
+        one = {**common, 'status': 'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH', 'step': 'migration',
+            'code': 'ONLINE_RECHARGE_STEP_FAILED', 'rollback': {}, 'servicesAttempted': [],
+            'candidateCommit': scope.RECOVERY_COMMIT, 'migration': {**state, 'performed': True}, 'migrationAttempted': True}
+        two = {**common, 'status': 'ONLINE_RECHARGE_FAILED_RESTORED', 'step': 'audit-after',
+            'code': 'ONLINE_RECHARGE_WORKSPACE_ORIGIN_CHANGED', 'rollback': {n: 'RESTORED' for n in scope.SWITCH_ORDER},
+            'servicesAttempted': list(scope.SWITCH_ORDER), 'candidateCommit': scope.RESTORED_COMMIT,
+            'migration': {**state, 'performed': False}, 'migrationAttempted': False}
+        self.assertEqual(scope.fingerprint(one), scope.RECOVERY_FAILURE_SHA256)
+        self.assertEqual(scope.fingerprint(two), scope.RESTORED_FAILURE_SHA256)
+        history = {'workspaceManifestBytesSha256': self.raw({'commit': scope.BASELINE_COMMIT}),
+            'workspaceRecordBytesSha256': self.raw({'before': workspace_before, 'after': original}),
+            'workspaceBuildProofBytesSha256': self.raw({'commit': scope.BASELINE_COMMIT}),
+            'restoredManifestBytesSha256': self.raw({'commit': scope.RESTORED_COMMIT}),
+            'restoredRecordBytesSha256': self.raw({'before': original, 'after': candidate}),
+            'restoredBuildProofBytesSha256': self.raw({'commit': scope.RESTORED_COMMIT}),
+            'firstFailure': self.raw(one), 'secondFailure': self.raw(two), 'recoveryPolicy': self.policy_raw}
+        producer = {'commit': self.commit, 'sourceTree': self.tree, 'workflowRunId': '70000000001',
+            'workflowRunAttempt': '1', 'archiveInventorySha256': scope.fingerprint(self.inventory),
+            'helpers': {n: self.inventory[n]['sha256'] for n in scope.DECLARATION_EQUIVALENCE_HELPERS}}
+        source = {n: h(n) for n in scope.DECLARATION_EQUIVALENCE_FIELDS['sourceBindings']}
+        source.update(apiImageId=actual['api']['image'], apiImageReference=actual['api']['reference'],
+                      expectedEnvironmentSha256=actual['api']['environmentSha256'])
+        observation = {'snapshotSha256': scope.fingerprint(actual), 'sourceFilesSha256': h('files'),
+            'workspaceVolumeSha256': h('volume'), 'actualResourceSha256': source['actualResourceSha256']}
+        semantic = {'producer': producer,
+            'fixedRecovery': {**scope.DECLARATION_EQUIVALENCE_FIXED,
+                             'recoveryMarkerSha256': scope.fingerprint(scope.recovery_marker(self.policy))},
+            'historicalFiles': {n: self.sha(history[n]) for n in scope.DECLARATION_EQUIVALENCE_FIELDS['historicalFiles']},
+            'anchors': {n: {'oldBeforeContainerId': workspace_before[n]['containerId'],
+                           'candidateAfterContainerId': candidate[n]['containerId']} for n in ('api', 'admin')},
+            'original': original, 'actual': actual, 'sourceBindings': source,
+            'apiEquivalence': {'rulesSha256': h('synthetic-rules'),
+                'oldRawConfigurationSha256': original['api']['configurationSha256'],
+                'actualRawConfigurationSha256': actual['api']['configurationSha256'],
+                'normalizedActualSha256': h('normalized'), 'normalizedReferenceSha256': h('normalized')},
+            'adminProjection': {'kind': 'ADMIN_OLD_COMPLETE_CONFIGURATION_MATCH',
+                'originalConfigurationSha256': original['admin']['configurationSha256'],
+                'actualConfigurationSha256': actual['admin']['configurationSha256'],
+                'projectedConfigurationSha256': original['admin']['configurationSha256'],
+                'helperSha256': producer['helpers'][scope.DECLARATION_EQUIVALENCE_HELPERS[2]]},
+            'stableObservation': observation}
+        measurement = {n: h(n) for n in scope.DECLARATION_EQUIVALENCE_FIELDS['measurement']}
+        measurement.update(purpose='INDEPENDENT_PREFLIGHT', executionNonce='1' * 32,
+            neverStarted=True, cleanupVerified=True, realEnvironmentPersisted=False,
+            referenceCounts={'containers': 1, 'networks': 4, 'volumes': 1},
+            stableBefore=copy.deepcopy(observation), stableAfter=copy.deepcopy(observation),
+            priorIndependentPreflightBytesSha256=None, priorProofSha256=None)
+        first = {'kind': scope.DECLARATION_EQUIVALENCE_KIND, 'version': 3, 'service': 'api',
+                 'semantic': semantic, 'measurement': measurement}
+        origin = {'version': 2, 'scope': 'PENDING_ONLINE_MIGRATION', 'baselineRelease': '/synthetic/0a',
+            'baselineManifestSha256': semantic['historicalFiles']['workspaceManifestBytesSha256'],
+            'migrationState': state, 'recoveryMarker': scope.recovery_marker(self.policy),
+            'restoredOrigin': {'source': '/synthetic/296',
+                'manifestSha256': semantic['historicalFiles']['restoredManifestBytesSha256'],
+                'recordSha256': semantic['historicalFiles']['restoredRecordBytesSha256']},
+            'services': actual, 'priorPublications': [], 'restoredConfigurationProof': first}
+        f = self.raw({'commandId': '00000000-0000-0000-0000-000000000001', 'mode': 'preflight',
+            'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': scope.BASELINE_COMMIT,
+            'releaseCandidateCommit': self.commit, 'workflowRunId': '70000000001', 'workflowRunAttempt': '1',
+            'services': actual, 'pendingOnlineMigrationOrigin': origin, 'existingFullReceiptField': 'retained'})
+        second = copy.deepcopy(first)
+        second['measurement'].update(purpose='DEPLOYMENT_REMEASURE', executionNonce='2' * 32,
+            referenceRegistrySha256=h('new-owner-cid'), referenceRawConfigurationSha256=h('new-reference'),
+            referenceModelSha256=h('new-model'), priorIndependentPreflightBytesSha256=self.sha(f),
+            priorProofSha256=scope.fingerprint(first))
+        pair = scope.declaration_equivalence_pair_seal(controller(), first, second, f)
+        after = copy.deepcopy(actual)
+        for n in ('api', 'admin'):
+            after[n]['containerId'] = h('published-' + n)
+            after[n]['image'] = 'sha256:' + h('new-' + n)
+            after[n]['reference'] = 'synthetic-' + n
+        configuration = {n: h(n) for n in ('docker-compose.aws-mysql.yml', 'deploy/caddy/Caddyfile.aws',
+                                         scope.SCHEMA_FILE, 'compose.release.json')}
+        build = self.raw({'commit': self.commit, 'sourceTree': self.tree,
+            'pendingOnlineOriginSha256': scope.fingerprint(origin), 'pendingOnlinePreflightSha256': self.sha(f),
+            'declarationEquivalenceSeal': {k: pair[k] for k in ('kind', 'version', 'preflightProofSha256', 'semanticSha256')}})
+        record = self.raw({'before': actual, 'after': after, 'configurationAfter': configuration,
+            'pendingOnlineMigrationOrigin': origin, 'pendingOnlineConfigurationMeasurement': second})
+        manifest = self.raw({'commit': self.commit, 'sourceTree': self.tree,
+            'pendingOnlineMigration': {'originSha256': scope.fingerprint(origin), 'configurationEquivalenceSeal': pair}})
+        return {'origin': origin, 'second': second, 'preflight_raw': f, 'build_raw': build,
+            'record_raw': record, 'manifest_raw': manifest, 'producer': producer,
+            'archive_bytes': self.archive, 'historical_files': history}
+
+    def publication(self, fixture):
+        return scope.declaration_equivalence_publication_binding(controller(), **fixture)
+
+    @staticmethod
+    def decode_wire(output, *, scope):
+        # The plain-only fixture supplies a pure decoder capability; it does not
+        # establish real AWS/source authority. Framing is covered separately.
+        if scope != 'API_ADMIN_WORKSPACE':
+            raise RuntimeError('SYNTHETIC_SCOPE_INVALID')
+        return json.loads(output)
+
+    def invocation(self, publication):
+        issued = scope.declaration_equivalence_issuer_binding(controller(), publication,
+            live_services=publication['afterServices'], live_configuration=publication['configurationAfter'],
+            execution_producer=publication['producer'])
+        return self.raw({'CommandId': '00000000-0000-0000-0000-000000000002', 'Status': 'Success', 'ResponseCode': 0,
+            'StandardOutputContent': json.dumps({'status': 'API_ADMIN_WORKSPACE_VERIFIED',
+                                               'declarationEquivalencePublication': issued})})
+
+    def test_structure_pair_real_git_and_synthetic_artifact_bindings(self):
+        fixture = self.fixture(); before = copy.deepcopy(fixture)
+        pub = self.publication(fixture)
+        self.assertEqual(fixture, before)
+        self.assertEqual(pub['configurationEquivalenceSeal']['semanticSha256'],
+                         scope.fingerprint(fixture['origin']['restoredConfigurationProof']['semantic']))
+        result = scope.declaration_equivalence_receipt_binding(controller(), pub, self.invocation(pub),
+            command_id='00000000-0000-0000-0000-000000000002', wire_decoder=self.decode_wire)
+        self.assertEqual(result['recordBytesSha256'], self.sha(fixture['record_raw']))
+
+    def test_kind_version_unknown_fields_full8_and_expected_env_are_closed(self):
+        f = self.fixture(); first = f['origin']['restoredConfigurationProof']
+        cases = []
+        for key, wrong in (('kind', 'OLD_FULL_HASH_WITNESS'), ('version', 2), ('version', True), ('extra', 'SECRET')):
+            v = copy.deepcopy(first); v[key] = wrong; cases.append(v)
+        v = copy.deepcopy(first); v['semantic']['sourceBindings']['expectedEnvironmentSha256'] = '9' * 64; cases.append(v)
+        v = copy.deepcopy(first); v['semantic']['adminProjection']['projectedConfigurationSha256'] = '9' * 64; cases.append(v)
+        v = copy.deepcopy(first); v['semantic']['producer']['helpers']['scripts/production-release/online-recharge-readonly.py'] = '9' * 64; cases.append(v)
+        v = copy.deepcopy(first); v['semantic']['fixedRecovery']['recoveryMarkerSha256'] = '9' * 64; cases.append(v)
+        for n in scope.PRESERVED:
+            for key in scope.SERVICE_IDENTITY_KEYS:
+                v = copy.deepcopy(first); v['semantic']['actual'][n][key] = 'SECRET'; cases.append(v)
+        for value in cases:
+            with self.subTest(index=cases.index(value)), self.assertRaises(RuntimeError):
+                scope.validate_declaration_equivalence_proof(controller(), value)
+
+    def test_pair_rejects_p1_wrong_phase_crossrun_drift_and_exactbyte_change(self):
+        f = self.fixture(); first = f['origin']['restoredConfigurationProof']
+        for phase in (True, False):
+            one, two = copy.deepcopy(first), copy.deepcopy(f['second'])
+            (one if phase else two)['measurement']['purpose'] = 'DEPLOYMENT_REMEASURE' if phase else 'INDEPENDENT_PREFLIGHT'
+            with self.assertRaises(RuntimeError):scope.declaration_equivalence_pair_seal(controller(), one, two, f['preflight_raw'])
+        for raw in (f['preflight_raw'] + b' ', b'{"pendingOnlineMigrationOrigin":null}',
+                    b'{"x":1,"x":1}', b'x' * (256 * 1024 + 1)):
+            with self.assertRaises(RuntimeError):scope.declaration_equivalence_pair_seal(controller(), first, f['second'], raw)
+        changed = copy.deepcopy(f['second']); changed['semantic']['apiEquivalence']['rulesSha256'] = '9' * 64
+        with self.assertRaises(RuntimeError):scope.declaration_equivalence_pair_seal(controller(), first, changed, f['preflight_raw'])
+
+    def test_source_missing_archive_file_tree_helper_policy_or_anchor_blocks(self):
+        f = self.fixture(); first = f['origin']['restoredConfigurationProof']
+        for what in ('archive', 'file', 'tree', 'helper', 'policy', 'anchor'):
+            x = copy.deepcopy(f)
+            if what == 'archive':x['archive_bytes'] = None
+            elif what == 'file':del x['historical_files']['firstFailure']
+            elif what == 'tree':x['producer']['sourceTree'] = '9' * 40
+            elif what == 'helper':x['producer']['helpers'][scope.DECLARATION_EQUIVALENCE_HELPERS[3]] = '9' * 64
+            elif what == 'policy':x['historical_files']['recoveryPolicy'] = b'{}'
+            else:x['historical_files']['workspaceRecordBytesSha256'] = b'{}'
+            with self.subTest(what=what), self.assertRaises(RuntimeError):self.publication(x)
+
+    def test_malformed_origin_or_proof_does_not_invoke_normal_gate(self):
+        f = self.fixture()
+        for value in (None, True, {'version': 3}, {**f['origin'], 'unknown': 'SECRET'}):
+            x = copy.deepcopy(f);x['origin'] = value
+            with self.assertRaises(RuntimeError):self.publication(x)
+
+    def test_issuer_bootstrap_no_q_but_requires_actual_new_runtime_source_and_run(self):
+        pub = self.publication(self.fixture())
+        scope.declaration_equivalence_issuer_binding(controller(), pub, live_services=pub['afterServices'],
+            live_configuration=pub['configurationAfter'], execution_producer=pub['producer'])
+        for role in ('services', 'source', 'producer'):
+            live, config, producer = copy.deepcopy(pub['afterServices']), copy.deepcopy(pub['configurationAfter']), copy.deepcopy(pub['producer'])
+            if role == 'services':live['api']['containerId'] = '9' * 64
+            elif role == 'source':config['compose.release.json'] = '9' * 64
+            else:producer['workflowRunId'] = '70000000002'
+            with self.assertRaises(RuntimeError):scope.declaration_equivalence_issuer_binding(controller(), pub,
+                live_services=live, live_configuration=config, execution_producer=producer)
+        with self.assertRaises(TypeError):scope.declaration_equivalence_issuer_binding(controller(), pub, trusted=True)
+
+    def test_later_cold_missing_failed_crosscommand_or_bad_bytes_cannot_issue_q(self):
+        pub = self.publication(self.fixture()); invocation = json.loads(self.invocation(pub))
+        for role in ('missing', 'status', 'code', 'boolcode', 'command', 'output', 'proof'):
+            v = copy.deepcopy(invocation)
+            if role == 'missing':raw = None
+            else:
+                if role == 'status':v['Status'] = 'InProgress'
+                elif role == 'code':v['ResponseCode'] = 1
+                elif role == 'boolcode':v['ResponseCode'] = False
+                elif role == 'command':v['CommandId'] = '00000000-0000-0000-0000-000000000003'
+                elif role == 'output':v['StandardOutputContent'] = 'SECRET'
+                else:
+                    result = json.loads(v['StandardOutputContent']);result['declarationEquivalencePublication']['recordBytesSha256'] = '9' * 64
+                    v['StandardOutputContent'] = json.dumps(result)
+                raw = self.raw(v)
+            with self.subTest(role=role), self.assertRaises(RuntimeError):scope.declaration_equivalence_receipt_binding(controller(), pub, raw,
+                command_id='00000000-0000-0000-0000-000000000002', wire_decoder=self.decode_wire)
+
+    def test_actual_wire_helper_roundtrip_preserves_invocation_bytes_and_rejects_bad_frames(self):
+        wire = load('declaration_equivalence_receipt_wire_tests', 'api-admin-pending-receipt-wire.py')
+        fixture = self.fixture(); pub = self.publication(fixture)
+        invocation = json.loads(self.invocation(pub))
+        receipt = json.loads(invocation['StandardOutputContent'])
+        receipt['pendingOnlineMigrationOrigin'] = fixture['origin']
+        invocation['StandardOutputContent'] = wire.receipt_output(receipt, scope='API_ADMIN_WORKSPACE')
+        raw = self.raw(invocation); original = bytes(raw)
+        command = '00000000-0000-0000-0000-000000000002'
+        result = scope.declaration_equivalence_receipt_binding(controller(), pub, raw,
+            command_id=command, wire_decoder=wire.decode_receipt_output)
+        self.assertEqual(raw, original)
+        self.assertEqual(result['recordBytesSha256'], self.sha(fixture['record_raw']))
+        self.assertEqual(json.loads(raw)['StandardOutputContent'], invocation['StandardOutputContent'])
+        for role in ('kind', 'length', 'hash', 'payload', 'extra', 'seal', 'unframed_declared'):
+            value = copy.deepcopy(invocation); envelope = json.loads(value['StandardOutputContent'])
+            if role == 'kind': envelope['kind'] = 'UNKNOWN_SECRET'
+            elif role == 'length': envelope['decodedLength'] += 1
+            elif role == 'hash': envelope['decodedSha256'] = '9' * 64
+            elif role == 'payload': envelope['payload'] += '!'
+            elif role == 'extra': envelope['SECRET'] = 'SECRET'
+            elif role == 'seal':
+                wrong = copy.deepcopy(receipt)
+                wrong['declarationEquivalencePublication']['recordBytesSha256'] = '9' * 64
+                value['StandardOutputContent'] = wire.receipt_output(wrong, scope='API_ADMIN_WORKSPACE')
+            else: value['StandardOutputContent'] = json.dumps(receipt)
+            if role not in ('seal', 'unframed_declared'):
+                value['StandardOutputContent'] = json.dumps(envelope)
+            with self.subTest(role=role), self.assertRaises(RuntimeError) as caught:
+                scope.declaration_equivalence_receipt_binding(controller(), pub, self.raw(value),
+                    command_id=command, wire_decoder=wire.decode_receipt_output)
+            self.assertNotIn('SECRET', str(caught.exception))
+        def malicious_decoder(unused, **kwargs):
+            raise ValueError('SECRET_EXCEPTION')
+        with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_PROOF_INVALID$'):
+            scope.declaration_equivalence_receipt_binding(controller(), pub, raw,
+                command_id=command, wire_decoder=malicious_decoder)
+        with self.assertRaises(TypeError):
+            scope.declaration_equivalence_receipt_binding(controller(), pub, raw, command_id=command)
+
+    def test_successor_b_uses_a_after_and_new_run_without_new_p2(self):
+        f = self.fixture();pub = self.publication(f)
+        context = copy.deepcopy(f['origin']);context['services'] = pub['afterServices']
+        context['priorPublications'] = [{'release': '/synthetic/A', 'commit': self.commit, 'sourceTree': self.tree,
+            'manifestSha256': pub['manifestBytesSha256'], 'recordSha256': pub['recordBytesSha256'],
+            'buildProofSha256': pub['buildProofCanonicalSha256']}]
+        producer = copy.deepcopy(f['producer']);producer['workflowRunId'] = '70000000002'
+        before = {'mode': 'preflight', 'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': self.commit,
+            'releaseCandidateCommit': producer['commit'], 'workflowRunId': producer['workflowRunId'], 'workflowRunAttempt': '1',
+            'services': pub['afterServices'], 'pendingOnlineMigrationOrigin': context}
+        kwargs = {'initial_origin': f['origin'], 'initial_publication': pub, 'current_producer': producer,
+            'current_services': pub['afterServices'], 'current_archive_bytes': self.archive,
+            'initial_invocation_raw': self.invocation(pub), 'initial_command_id': '00000000-0000-0000-0000-000000000002',
+            'wire_decoder': self.decode_wire}
+        result = scope.declaration_equivalence_successor_preflight_binding(controller(), self.raw(before), **kwargs)
+        self.assertEqual(result['initialProofSha256'], scope.fingerprint(context['restoredConfigurationProof']))
+        for role in ('run', 'oldstates', 'prior', 'q'):
+            x = copy.deepcopy(before);values = copy.deepcopy(kwargs)
+            if role == 'run':x['workflowRunId'] = '70000000001'
+            elif role == 'oldstates':x['services'] = f['origin']['services']
+            elif role == 'prior':x['pendingOnlineMigrationOrigin']['priorPublications'][0]['buildProofSha256'] = '9' * 64
+            else:values['initial_invocation_raw'] = None
+            with self.assertRaises(RuntimeError):scope.declaration_equivalence_successor_preflight_binding(controller(), self.raw(x), **values)
+
+    def test_old_all_functions_classes_and_constants_remain_exact_ast(self):
+        import ast
+        # The preservation witness is the reviewed pre-capability baseline.
+        # HEAD is the fixture's producer archive and changes after committing.
+        old_commit = 'd8466a58cc577ed83189503f260a9c914fcac3be'
+        old = ast.parse(subprocess.check_output(['git', 'show', old_commit + ':scripts/production-release/online-recharge-scope.py'], cwd=ROOT))
+        current = ast.parse((ROOT / 'scripts/production-release/online-recharge-scope.py').read_text())
+        by_name = {n.name: n for n in current.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        for node in old.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                actual = copy.deepcopy(by_name[node.name])
+                if node.name == 'measure_declaration_equivalence':
+                    # This previously closed stub is the sole replaced entry.
+                    # Its ABI and two purpose/input guards remain exact; the
+                    # source-bound delegate is exercised below with the reviewed singleton.
+                    self.assertEqual(ast.dump(node.args), ast.dump(actual.args))
+                    self.assertEqual([ast.dump(n) for n in node.body[1:3]],
+                                     [ast.dump(n) for n in actual.body[1:3]])
+                    continue
+                if node.name == 'declaration_equivalence_materials':
+                    # Only three fixed actually-executed capabilities are added;
+                    # all historical/owner/path/version predicates stay exact.
+                    previous_names = next(n for n in node.body if isinstance(n, ast.Assign)
+                                          and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'names')
+                    current_names = next(n for n in actual.body if isinstance(n, ast.Assign)
+                                         and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'names')
+                    self.assertEqual([ast.dump(n) for n in current_names.value.elts],
+                        [ast.dump(n) for n in previous_names.value.elts] + [ast.dump(ast.Constant(value='scripts/production-release/' + name))
+                            for name in ('online-recharge-daemon-identity.py', 'online-recharge-daemon-listener.py',
+                                         'online-recharge-daemon-socket.py')])
+                    current_names.value = previous_names.value
+                self.assertEqual(ast.dump(node), ast.dump(actual))
+        old_assigns = [ast.dump(n) for n in old.body if isinstance(n, ast.Assign)]
+        current_assigns = [ast.dump(n) for n in current.body if isinstance(n, ast.Assign)
+                           and not any(isinstance(t, ast.Name) and t.id == 'FORMAL_RUNTIME_DRIVER_SHA256'
+                                       for t in n.targets)]
+        self.assertEqual(current_assigns[:len(old_assigns)], old_assigns)
+
+
+class DeclarationEquivalenceMaterialsTests(unittest.TestCase):
+    """Real temporary Git/helper bytes; synthetic historical files and F/Q only.
+
+    The fixed 641 policy and two canonical failure models are reused. These
+    fixtures never claim an actual producer, AWS command, or production proof.
+    """
+    @classmethod
+    def setUpClass(cls):
+        DeclarationEquivalencePureTests.setUpClass()
+        cls.pure = DeclarationEquivalencePureTests('test_structure_pair_real_git_and_synthetic_artifact_bindings')
+        cls.fixture = cls.pure.fixture()
+        cls.history = copy.deepcopy(cls.fixture['historical_files'])
+        cls.policy = copy.deepcopy(DeclarationEquivalencePureTests.policy)
+        cls.history['restoredBuildProofBytesSha256'] = cls.pure.raw(cls.policy['restoredAttempt']['buildProof'])
+        cls.output = ROOT / '.runtime/online-recharge-release-20261009/build/declaration-materials-tests'
+        cls.output.mkdir(parents=True, exist_ok=True)
+        cls.class_temp = tempfile.TemporaryDirectory(prefix='git-fixture-', dir=cls.output)
+        cls.repo = Path(cls.class_temp.name)
+        cls.names = (*scope.DECLARATION_EQUIVALENCE_HELPERS,
+            'scripts/production-release/online-recharge-declaration-measurement.py',
+            'scripts/production-release/api-admin-pending-receipt-wire.py',
+            'scripts/production-release/online-recharge-daemon-identity.py',
+            'scripts/production-release/online-recharge-daemon-listener.py',
+            'scripts/production-release/online-recharge-daemon-socket.py')
+        cls.helper_bytes = {name: (ROOT / name).read_bytes() for name in cls.names}
+        cls.commit, cls.tree, cls.archive = cls.make_archive(cls.repo, cls.helper_bytes)
+        cls.inventory = scope.archive_inventory(controller(), cls.archive, cls.commit, cls.tree)
+        cls.wire = load('materials_actual_wire_tests', 'api-admin-pending-receipt-wire.py')
+        cls.identity_reader = staticmethod(scope._declaration_instance_id)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.class_temp.cleanup()
+
+    @classmethod
+    def make_archive(cls, directory, helpers):
+        directory.mkdir(parents=True, exist_ok=True)
+        for name, raw in {**helpers, 'scripts/production-release/online-recharge-recovery.json': cls.history['recoveryPolicy']}.items():
+            path = directory / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+        def git(*args):
+            return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null',
+                '-c', 'commit.gpgsign=false', '-c', 'user.name=Local Synthetic Fixture',
+                '-c', 'user.email=fixture@example.invalid', *args], cwd=directory, stderr=subprocess.DEVNULL)
+        git('init', '-q'); git('add', 'scripts')
+        git('commit', '-q', '-m', 'Local synthetic helper source fixture')
+        commit = git('rev-parse', 'HEAD').decode().strip(); tree = git('rev-parse', 'HEAD^{tree}').decode().strip()
+        archive = git('archive', '--format=tar.gz', '--prefix=id-business-system-' + commit + '/', commit)
+        return commit, tree, archive
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='materials-', dir=self.output)
+        self.base = Path(self.temp.name); self.d = controller(BASE=self.base,
+            run=MagicMock(side_effect=AssertionError('COLD_RUNTIME_ACCESS_FORBIDDEN')),
+            service_state=MagicMock(side_effect=AssertionError('COLD_RETIRED_INSPECT_FORBIDDEN')))
+        releases = self.base / 'releases'; releases.mkdir(mode=0o700)
+        self.previous = releases / ('20261010T000000Z-' + scope.BASELINE_COMMIT[:12])
+        self.first = releases / ('20261010T000000Z-' + scope.RECOVERY_COMMIT[:12])
+        self.second = releases / ('20261010T000000Z-' + scope.RESTORED_COMMIT[:12])
+        for folder in (self.previous, self.first, self.second): folder.mkdir(mode=0o700)
+        self.paths = {
+            'workspaceManifestBytesSha256': self.previous / 'release-manifest.json',
+            'workspaceRecordBytesSha256': self.previous / shared.STATE_FILE,
+            'workspaceBuildProofBytesSha256': self.previous / shared.PROOF_FILE,
+            'restoredManifestBytesSha256': self.second / 'release-manifest.json',
+            'restoredRecordBytesSha256': self.second / scope.STATE_FILE,
+            'restoredBuildProofBytesSha256': self.second / scope.PROOF_FILE,
+            'firstFailure': self.first / scope.FAILURE_FILE, 'secondFailure': self.second / scope.FAILURE_FILE}
+        for name, path in self.paths.items(): self.write(path, self.history[name])
+        self.helpers = self.base / 'executing-helpers'; self.helpers.mkdir(mode=0o700)
+        for name, raw in self.helper_bytes.items(): self.write(self.helpers / Path(name).name, raw)
+        self.write(self.helpers / scope.RECOVERY_FILE, self.history['recoveryPolicy'])
+        old_files = {self.paths[name].name: self.pure.sha(self.history[name]) for name in
+            ('workspaceManifestBytesSha256', 'workspaceRecordBytesSha256', 'workspaceBuildProofBytesSha256')}
+        old_files.update({name: self.pure.sha(('SYNTHETIC:' + name).encode()) for name in
+                          ('backup-verification.json', 'before-audit.json', 'after-audit.json')})
+        self.recovery = {'source': self.first, 'policy': copy.deepcopy(self.policy),
+            'marker': scope.recovery_marker(self.policy), 'restored': {'source': self.second,
+                'manifestSha256': self.pure.sha(self.history['restoredManifestBytesSha256']),
+                'recordSha256': self.pure.sha(self.history['restoredRecordBytesSha256']),
+                'workspaceOriginFiles': old_files}}
+        self.producer = {'commit': self.commit, 'sourceTree': self.tree,
+                         'workflowRunId': '80000000001', 'workflowRunAttempt': '1'}
+        self.stack = ExitStack()
+        self.stack.enter_context(patch.object(scope, '__file__', str(self.helpers / 'online-recharge-scope.py')))
+        self.download = self.stack.enter_context(patch.object(scope.urllib.request, 'urlopen',
+            side_effect=lambda *args, **kwargs: io.BytesIO(self.archive)))
+        self.instance_id = 'i-0123456789abcdef0'
+        self.identity = self.stack.enter_context(patch.object(scope, '_declaration_instance_id',
+            return_value=self.instance_id))
+        self.stack.enter_context(patch.object(scope.urllib.request, 'build_opener',
+            side_effect=AssertionError('UNMOCKED_METADATA_NETWORK_FORBIDDEN')))
+
+    def tearDown(self):
+        self.stack.close(); self.temp.cleanup()
+
+    @staticmethod
+    def write(path, raw):
+        path.write_bytes(raw); path.chmod(0o600)
+
+    def materials(self, phase='LIVE', **changes):
+        return scope.declaration_equivalence_materials(self.d, changes.get('directory', self.previous),
+            changes.get('recovery', self.recovery), producer=changes.get('producer', self.producer), phase=phase)
+
+    def artifact_folder(self, producer=None):
+        p = producer or self.producer
+        folder = self.base / '.staging' / ('api-workspace-preflight-' + p['commit'] + '-'
+            + p['workflowRunId'] + '-' + p['workflowRunAttempt'])
+        folder.mkdir(parents=True, mode=0o700, exist_ok=True); folder.chmod(0o700)
+        return folder
+
+    def preflight(self):
+        value = json.loads(self.fixture['preflight_raw'])
+        value.update(releaseCandidateCommit=self.producer['commit'], workflowRunId=self.producer['workflowRunId'],
+                     workflowRunAttempt=self.producer['workflowRunAttempt'])
+        raw = self.pure.raw(value); path = self.artifact_folder() / 'api-workspace-preflight-result.json'
+        self.write(path, raw); return path, raw
+
+    def invocation(self):
+        publication = self.pure.publication(self.fixture)
+        value = json.loads(self.pure.invocation(publication)); receipt = json.loads(value['StandardOutputContent'])
+        receipt['pendingOnlineMigrationOrigin'] = self.fixture['origin']
+        value['StandardOutputContent'] = self.wire.receipt_output(receipt, scope='API_ADMIN_WORKSPACE') + '\n'
+        value['StandardErrorContent'] = ''
+        value.update(InstanceId=self.instance_id, DocumentName='AWS-RunShellScript',
+            PluginName='aws:runShellScript', ExecutionEndDateTime='2026-01-01T00:00:00Z')
+        raw = self.pure.raw(value); path = self.artifact_folder() / 'api-workspace-readback-invocation.json'
+        self.write(path, raw); return path, raw, publication
+
+    def test_live_acquires_real_git_tree_and_exact_executing_six_helper_bytes(self):
+        result = self.materials()
+        self.assertEqual(result['archive_bytes'], self.archive)
+        self.assertEqual(result['historical_files'], self.history)
+        self.assertEqual(result['producer']['archiveInventorySha256'], scope.fingerprint(self.inventory))
+        self.assertEqual(result['producer']['helpers'], {n: self.inventory[n]['sha256'] for n in scope.DECLARATION_EQUIVALENCE_HELPERS})
+        self.download.assert_called_once_with('https://github.com/wangchaozhuanyong/id-business-system/archive/'
+                                              + self.commit + '.tar.gz', timeout=60)
+        self.d.run.assert_not_called(); self.d.service_state.assert_not_called()
+
+    def test_live_cache_rechecks_executing_helper_tamper_and_missing_file(self):
+        self.materials(); helper = self.helpers / 'online-recharge-declaration-measurement.py'
+        original = helper.read_bytes(); self.write(helper, original + b'\n# LOCAL_SYNTHETIC_TAMPER\n')
+        with self.assertRaises(RuntimeError): self.materials()
+        self.download.assert_called_once()
+        self.write(helper, original); helper.unlink()
+        with self.assertRaises(OSError): self.materials()
+
+    def test_archive_wrong_tree_and_missing_required_helper_cannot_claim_source(self):
+        with self.assertRaises(RuntimeError): self.materials(producer={**self.producer, 'sourceTree': '9' * 40})
+        missing = {n: raw for n, raw in self.helper_bytes.items() if not n.endswith('/api-admin-readonly.py')}
+        commit, tree, archive = self.make_archive(self.base / 'missing-helper-git', missing)
+        with patch.object(scope.urllib.request, 'urlopen', side_effect=lambda *a, **k: io.BytesIO(archive)):
+            with self.assertRaises(RuntimeError): self.materials(producer={**self.producer, 'commit': commit, 'sourceTree': tree})
+
+    def test_historical_source_drift_rejects_every_role_without_rewriting_capture(self):
+        for name in (*self.paths, 'recoveryPolicy'):
+            path = self.paths.get(name, self.helpers / scope.RECOVERY_FILE); original = path.read_bytes()
+            changed = json.loads(original); changed['LOCAL_SYNTHETIC_EXTRA'] = True
+            self.write(path, self.pure.raw(changed))
+            with self.subTest(role=name), self.assertRaises(RuntimeError): self.materials()
+            self.write(path, original)
+
+    def test_private_fixed_directories_and_closed_producer_are_required(self):
+        for folder in (self.previous, self.first, self.second):
+            folder.chmod(0o750)
+            with self.assertRaises(RuntimeError): self.materials()
+            folder.chmod(0o700)
+        alias = self.base / 'alias'; alias.symlink_to(self.previous)
+        with self.assertRaises(RuntimeError): self.materials(directory=alias)
+        for producer in ({**self.producer, 'workflowRunAttempt': True}, {**self.producer, 'trusted': True}):
+            with self.assertRaises(RuntimeError): self.materials(producer=producer)
+        with self.assertRaises(RuntimeError): self.materials(phase='UNREVIEWED')
+
+    def test_cold_uses_real_archive_and_private_history_without_retired_runtime_reads(self):
+        (self.helpers / 'api-admin-readonly.py').unlink()
+        with patch.object(scope, 'snapshot', side_effect=AssertionError('COLD_SNAPSHOT_FORBIDDEN')):
+            result = self.materials('COLD')
+        self.assertEqual(result['archive_bytes'], self.archive)
+        self.assertEqual(result['historical_files'], self.history)
+        self.d.run.assert_not_called(); self.d.service_state.assert_not_called()
+
+    def test_preflight_exact_bytes_sha_and_run_metadata_bound(self):
+        path, raw = self.preflight()
+        self.assertEqual(scope.declaration_equivalence_preflight_bytes(self.d, producer=self.producer,
+                         expected_sha=self.pure.sha(raw)), raw)
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_preflight_bytes(self.d,
+            producer=self.producer, expected_sha='9' * 64)
+        wrong = json.loads(raw); wrong['workflowRunId'] = '80000000002'; changed = self.pure.raw(wrong); self.write(path, changed)
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_preflight_bytes(self.d,
+            producer=self.producer, expected_sha=self.pure.sha(changed))
+        self.write(path, raw)
+        with self.assertRaises((OSError, RuntimeError)): scope.declaration_equivalence_preflight_bytes(self.d,
+            producer={**self.producer, 'workflowRunAttempt': '2'}, expected_sha=self.pure.sha(raw))
+
+    def test_private_f_and_q_files_reject_mode_symlink_and_hardlink(self):
+        for filename in ('api-workspace-preflight-result.json', 'api-workspace-readback-invocation.json'):
+            folder = self.artifact_folder(); path = folder / filename; self.write(path, b'{}')
+            path.chmod(0o644)
+            with self.assertRaises(RuntimeError): scope._declaration_saved_artifact(self.d, self.producer, filename)
+            path.chmod(0o600); alias = folder / 'link'; os.link(path, alias)
+            with self.assertRaises(RuntimeError): scope._declaration_saved_artifact(self.d, self.producer, filename)
+            alias.unlink(); path.unlink(); path.symlink_to(self.helpers / scope.RECOVERY_FILE)
+            with self.assertRaises(RuntimeError): scope._declaration_saved_artifact(self.d, self.producer, filename)
+            path.unlink()
+        path, raw = self.preflight(); path.parent.chmod(0o750)
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_preflight_bytes(self.d,
+            producer=self.producer, expected_sha=self.pure.sha(raw))
+
+    def test_q_loader_keeps_raw_framed_stdout_bytes_for_independent_decoder(self):
+        path, raw, publication = self.invocation()
+        result = scope.declaration_equivalence_saved_invocation(self.d, producer=self.producer)
+        self.assertEqual(result['raw_bytes'], raw); self.assertEqual(path.read_bytes(), raw)
+        bound = scope.declaration_equivalence_receipt_binding(self.d, publication, result['raw_bytes'],
+            command_id=result['command_id'], wire_decoder=self.wire.decode_receipt_output)
+        self.assertEqual(bound['readbackCommandId'], '00000000-0000-0000-0000-000000000002')
+
+    def test_q_failed_boolean_code_stderr_or_crossrun_rejects(self):
+        path, raw, _publication = self.invocation()
+        for key, value in (('Status', 'Failed'), ('ResponseCode', False),
+                           ('StandardErrorContent', 'LOCAL_SYNTHETIC_PRIVATE_SENTINEL'), ('CommandId', 'invalid')):
+            changed = json.loads(raw); changed[key] = value; self.write(path, self.pure.raw(changed))
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                scope.declaration_equivalence_saved_invocation(self.d, producer=self.producer)
+        self.write(path, raw)
+        with self.assertRaises((OSError, RuntimeError)): scope.declaration_equivalence_saved_invocation(self.d,
+            producer={**self.producer, 'workflowRunId': '80000000002'})
+
+    def test_q_completion_metadata_is_bound_to_actual_host_and_utc_completion(self):
+        import datetime
+        path, raw, _publication = self.invocation()
+        future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).isoformat()
+        invalid = [('InstanceId', 'i-11111111111111111'), ('InstanceId', None),
+            ('DocumentName', 'LOCAL_SYNTHETIC_OTHER_DOCUMENT'), ('PluginName', 'otherPlugin'),
+            ('ExecutionEndDateTime', future), ('ExecutionEndDateTime', '2026-01-01T00:00:00+08:00'),
+            ('ExecutionEndDateTime', '2026-01-01T00:00:00'), ('ExecutionEndDateTime', '2026-99-99T00:00:00Z')]
+        for key in ('InstanceId', 'DocumentName', 'PluginName', 'ExecutionEndDateTime'):
+            changed = json.loads(raw); del changed[key]; self.write(path, self.pure.raw(changed))
+            with self.subTest(missing=key), self.assertRaises(RuntimeError):
+                scope.declaration_equivalence_saved_invocation(self.d, producer=self.producer)
+        for key, value in invalid:
+            changed = json.loads(raw); changed[key] = value; self.write(path, self.pure.raw(changed))
+            with self.subTest(key=key, value_type=type(value).__name__), self.assertRaises((RuntimeError, ValueError)):
+                scope.declaration_equivalence_saved_invocation(self.d, producer=self.producer)
+        # A self-claimed host cannot replace the independently read instance ID.
+        changed = json.loads(raw); changed['trustedInstanceId'] = changed['InstanceId']
+        self.write(path, self.pure.raw(changed))
+        with patch.object(scope, '_declaration_instance_id', return_value='i-11111111111111111'):
+            with self.assertRaises(RuntimeError): scope.declaration_equivalence_saved_invocation(self.d, producer=self.producer)
+        changed = json.loads(raw); changed['ExecutionEndDateTime'] = '2026-01-01T00:00:00+00:00'
+        self.write(path, self.pure.raw(changed))
+        self.assertEqual(scope.declaration_equivalence_saved_invocation(self.d, producer=self.producer)['raw_bytes'], path.read_bytes())
+        self.identity.assert_called()
+
+    def test_imdsv2_uses_fixed_local_endpoint_without_proxy_or_redirect(self):
+        token = b'LOCAL_SYNTHETIC_PUBLIC_TOKEN'
+        opener = MagicMock(); opener.open.side_effect = [io.BytesIO(token), io.BytesIO(self.instance_id.encode())]
+        with patch.object(scope.urllib.request, 'build_opener', return_value=opener) as build:
+            self.assertEqual(self.identity_reader(), self.instance_id)
+        handlers = build.call_args.args
+        self.assertEqual(handlers[0].proxies, {})
+        self.assertIsInstance(handlers[1], scope.urllib.request.HTTPRedirectHandler)
+        self.assertIsNone(handlers[1].redirect_request(None, None, 302, None, None, 'https://example.invalid'))
+        first, second = opener.open.call_args_list
+        self.assertEqual(first.args[0].full_url, 'http://169.254.169.254/latest/api/token')
+        self.assertEqual(first.args[0].method, 'PUT')
+        self.assertEqual(first.args[0].get_header('X-aws-ec2-metadata-token-ttl-seconds'), '60')
+        self.assertEqual(first.kwargs, {'timeout': 3})
+        self.assertEqual(second.args[0].full_url, 'http://169.254.169.254/latest/meta-data/instance-id')
+        self.assertEqual(second.args[0].get_header('X-aws-ec2-metadata-token'), token.decode())
+        self.assertEqual(second.kwargs, {'timeout': 3})
+        for bad_token in (b'', b'x' * 4097, b'a\n', b'a\r', b'\xff'):
+            opener = MagicMock(); opener.open.side_effect = [io.BytesIO(bad_token), io.BytesIO(self.instance_id.encode())]
+            with patch.object(scope.urllib.request, 'build_opener', return_value=opener):
+                with self.subTest(token_length=len(bad_token)), self.assertRaises((RuntimeError, UnicodeDecodeError)):
+                    self.identity_reader()
+            self.assertEqual(opener.open.call_count, 1)
+        for bad_id in (b'LOCAL_SYNTHETIC_PRIVATE_SENTINEL', b'i-0123456789abcdef0\n', b'i-' + b'a' * 18, b'x' * 129):
+            opener = MagicMock(); opener.open.side_effect = [io.BytesIO(token), io.BytesIO(bad_id)]
+            with patch.object(scope.urllib.request, 'build_opener', return_value=opener):
+                with self.subTest(id_length=len(bad_id)), self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_PROOF_INVALID$'):
+                    self.identity_reader()
+
+    def test_live_only_remote_source_may_use_two_mib_literal_limit(self):
+        cases = [('remote-deploy.py', 2 * 1024 * 1024, True),
+                 ('remote-deploy.py', 2 * 1024 * 1024 + 1, False),
+                 ('api-admin-scope.py', 1024 * 1024 + 1, False)]
+        for index, (name, length, allowed) in enumerate(cases):
+            helpers = dict(self.helper_bytes); key = 'scripts/production-release/' + name
+            helpers[key] += b'\n#' + b'x' * (length - len(helpers[key]) - 2)
+            commit, tree, archive = self.make_archive(self.base / ('cap-git-' + str(index)), helpers)
+            self.write(self.helpers / name, helpers[key])
+            producer = {**self.producer, 'commit': commit, 'sourceTree': tree}
+            with patch.object(scope.urllib.request, 'urlopen', side_effect=lambda *a, **k: io.BytesIO(archive)):
+                if allowed:
+                    with self.subTest(helper=name, length=length):
+                        self.assertEqual(self.materials(producer=producer)['archive_bytes'], archive)
+                else:
+                    with self.subTest(helper=name, length=length), self.assertRaises(RuntimeError):
+                        self.materials(producer=producer)
+            self.write(self.helpers / name, self.helper_bytes[key])
+
+    def test_source_bytes_exact_limit_soft_hard_link_fifo_and_owner_modes(self):
+        path = self.base / 'ordinary'; self.write(path, b'LOCAL_SYNTHETIC_PUBLIC_BYTES')
+        self.assertEqual(scope._declaration_source_bytes(path), path.read_bytes())
+        alias = self.base / 'alias-file'; alias.symlink_to(path)
+        with self.assertRaises(RuntimeError): scope._declaration_source_bytes(alias)
+        alias.unlink(); os.link(path, alias)
+        with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path)
+        alias.unlink(); path.chmod(0o666)
+        with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path)
+        path.chmod(0o600)
+        with patch.object(scope.os, 'geteuid', return_value=os.geteuid() + 1):
+            with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path)
+        fifo = self.base / 'fifo'; os.mkfifo(fifo, 0o600)
+        with patch.object(scope.os, 'open', side_effect=AssertionError('FIFO_MUST_NOT_OPEN')):
+            with self.assertRaises(RuntimeError): scope._declaration_source_bytes(fifo)
+        path.write_bytes(b'x' * (2 * 1024 * 1024)); path.chmod(0o600)
+        self.assertEqual(len(scope._declaration_source_bytes(path, limit=2 * 1024 * 1024)), 2 * 1024 * 1024)
+        with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path, limit=1024 * 1024)
+        path.write_bytes(b'x' * (2 * 1024 * 1024 + 1))
+        with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path, limit=2 * 1024 * 1024)
+
+    def test_source_bytes_real_inode_replacement_after_open_rejects(self):
+        path = self.base / 'ordinary'; self.write(path, b'LOCAL_SYNTHETIC_PUBLIC_BYTES')
+        replacement = self.base / 'replacement'; self.write(replacement, path.read_bytes())
+        original_open = os.open
+        def replace_after_open(filename, flags):
+            self.assertTrue(flags & os.O_NOFOLLOW); self.assertTrue(flags & os.O_NONBLOCK)
+            descriptor = original_open(filename, flags); os.replace(replacement, path); return descriptor
+        with patch.object(scope.os, 'open', side_effect=replace_after_open):
+            with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path)
+
+    def test_reviewed_source_still_requires_archive_and_runtime_authority(self):
+        for purpose, raw in (('INDEPENDENT_PREFLIGHT', None), ('DEPLOYMENT_REMEASURE', b'{}')):
+            # This test's synthetic helper directory still has no trusted package.
+            with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
+                scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
+                    producer=self.producer, purpose=purpose, preflight_raw=raw)
+            with patch.object(scope, '__file__', str(ROOT / 'scripts/production-release/online-recharge-scope.py')):
+                driver = scope._declaration_runtime_driver()
+                selected = driver._local_package().load_leaf('qualified.py')
+                self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+                # Root entry is simulated only after ordinary bytes are owner-verified.
+                with patch.object(scope, '_declaration_runtime_driver', return_value=driver), \
+                        patch.object(scope.os, 'geteuid', return_value=0), \
+                        patch.object(scope.urllib.request, 'urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE')) as archive:
+                    with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
+                        scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
+                            producer=self.producer, purpose=purpose, preflight_raw=raw)
+                    archive.assert_called_once()
+        self.d.run.assert_not_called(); self.download.assert_not_called()
+
+
+class DeclarationSuccessorPureTests(unittest.TestCase):
+    """Synthetic A/B artifacts, real immutable source; no production authority."""
+    @classmethod
+    def setUpClass(cls):
+        DeclarationEquivalencePureTests.setUpClass()
+        cls.pure = DeclarationEquivalencePureTests()
+        cls.wire = load('successor_actual_wire', 'api-admin-pending-receipt-wire.py')
+
+    def fixture(self):
+        f = self.pure.fixture(); a = self.pure.publication(f)
+        origin = copy.deepcopy(f['origin']); origin['services'] = a['afterServices']
+        origin['priorPublications'] = [{'release': '/synthetic/A', 'commit': a['producer']['commit'],
+            'sourceTree': a['producer']['sourceTree'], 'manifestSha256': a['manifestBytesSha256'],
+            'recordSha256': a['recordBytesSha256'], 'buildProofSha256': a['buildProofCanonicalSha256']}]
+        producer = copy.deepcopy(f['producer']); producer['workflowRunId'] = '70000000002'
+        before = {'mode': 'preflight', 'commandId': '00000000-0000-0000-0000-000000000003',
+            'status': 'API_ADMIN_WORKSPACE_BASELINE_VERIFIED', 'commit': a['producer']['commit'],
+            'releaseCandidateCommit': producer['commit'], 'workflowRunId': producer['workflowRunId'],
+            'workflowRunAttempt': '1', 'services': a['afterServices'], 'pendingOnlineMigrationOrigin': origin}
+        raw = self.pure.raw(before)
+        inputs = {'initial_origin': f['origin'], 'initial_publication': a, 'current_producer': producer,
+            'current_services': a['afterServices'], 'current_configuration': a['configurationAfter'],
+            'current_archive_bytes': f['archive_bytes'], 'initial_invocation_raw': self.pure.invocation(a),
+            'initial_command_id': '00000000-0000-0000-0000-000000000002', 'wire_decoder': self.wire.decode_receipt_output}
+        seal = scope.declaration_equivalence_successor_seal(controller(), raw, **inputs)
+        build = json.loads(f['build_raw']); build.update(version=2, pendingOnlineOriginSha256=scope.fingerprint(origin),
+            pendingOnlinePreflightSha256=self.pure.sha(raw))
+        after = copy.deepcopy(a['afterServices'])
+        for name in ('api', 'admin'): after[name]['containerId'] = self.pure.sha(('B-' + name).encode())
+        record = {'before': a['afterServices'], 'after': after, 'configurationBefore': a['configurationAfter'],
+            'configurationAfter': a['configurationAfter'], 'pendingOnlineMigrationOrigin': origin,
+            'pendingOnlineSuccessorPreflight': seal}
+        manifest = {'commit': producer['commit'], 'sourceTree': producer['sourceTree'],
+            'pendingOnlineMigration': {'originSha256': scope.fingerprint(origin), 'successorConfigurationSeal': seal}}
+        return {'origin': origin, 'preflight_raw': raw, 'build_raw': self.pure.raw(build),
+            'record_raw': self.pure.raw(record), 'manifest_raw': self.pure.raw(manifest), **inputs}
+
+    def test_distinct_b_kind_inherits_real_byte_a_seal_without_p2_b(self):
+        f = self.fixture(); unchanged = copy.deepcopy(f)
+        b = scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+        self.assertEqual(f, unchanged)
+        self.assertEqual((b['kind'], b['version']), (scope.DECLARATION_SUCCESSOR_KIND, 1))
+        self.assertEqual(b['successorConfigurationSeal']['initialReadbackInvocationBytesSha256'],
+                         self.pure.sha(f['initial_invocation_raw']))
+        self.assertEqual(b['successorConfigurationSeal']['initialPublication']['configurationEquivalenceSeal'],
+                         f['initial_publication']['configurationEquivalenceSeal'])
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_issuer_binding(controller(), b,
+            live_services=b['afterServices'], live_configuration=b['configurationAfter'], execution_producer=b['producer'])
+
+    def test_stale_cross_run_missing_a_q_and_source_artifact_drift_reject(self):
+        for change in ('q', 'fb-run', 'helpers', 'configuration', 'old-states', 'third', 'p2-b', 'state-seal', 'old-f', 'kind'):
+            with self.subTest(change=change):
+                f = self.fixture()
+                if change == 'q': f['initial_invocation_raw'] = None
+                elif change == 'fb-run':
+                    before = json.loads(f['preflight_raw']); before['workflowRunId'] = '70000000001'; f['preflight_raw'] = self.pure.raw(before)
+                elif change == 'helpers': f['current_producer']['helpers'][scope.DECLARATION_EQUIVALENCE_HELPERS[0]] = '0' * 64
+                elif change == 'configuration': f['current_configuration']['compose.release.json'] = '0' * 64
+                elif change == 'old-states': f['current_services'] = f['initial_origin']['services']
+                elif change == 'third': f['origin']['priorPublications'].append(copy.deepcopy(f['origin']['priorPublications'][0]))
+                elif change in ('p2-b', 'state-seal'):
+                    record = json.loads(f['record_raw'])
+                    if change == 'p2-b': record['pendingOnlineConfigurationMeasurement'] = f['origin']['restoredConfigurationProof']
+                    else: record['pendingOnlineSuccessorPreflight']['initialReadbackInvocationBytesSha256'] = '0' * 64
+                    f['record_raw'] = self.pure.raw(record)
+                elif change == 'old-f':
+                    build = json.loads(f['build_raw']); build['pendingOnlinePreflightSha256'] = f['initial_publication']['preflightBytesSha256']; f['build_raw'] = self.pure.raw(build)
+                else:
+                    manifest = json.loads(f['manifest_raw']); manifest['pendingOnlineMigration']['configurationEquivalenceSeal'] = {}; f['manifest_raw'] = self.pure.raw(manifest)
+                with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+
+    def test_b_fixed_issuer_actual_wire_cold_and_malicious_receipts(self):
+        f = self.fixture(); b = scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+        issued = scope.declaration_equivalence_successor_issuer_binding(controller(), b, live_services=b['afterServices'],
+            live_configuration=b['configurationAfter'], execution_producer=b['producer'])
+        command = '00000000-0000-0000-0000-000000000004'
+        receipt = {'status': 'API_ADMIN_WORKSPACE_VERIFIED', 'pendingOnlineMigrationOrigin': f['origin'],
+                   'declarationEquivalenceSuccessorPublication': issued}
+        invocation = {'CommandId': command, 'Status': 'Success', 'ResponseCode': 0,
+                      'StandardOutputContent': self.wire.receipt_output(receipt, scope='API_ADMIN_WORKSPACE')}
+        raw = self.pure.raw(invocation)
+        result = scope.declaration_equivalence_successor_receipt_binding(controller(), b, raw,
+            command_id=command, wire_decoder=self.wire.decode_receipt_output)
+        self.assertEqual(result['readbackCommandId'], command)
+        for field in ('command', 'status', 'bool', 'initial-only', 'extra-seal', 'bad-wire', 'origin'):
+            value = copy.deepcopy(invocation); output = copy.deepcopy(receipt)
+            if field == 'command': value['CommandId'] = '00000000-0000-0000-0000-000000000099'
+            elif field == 'status': value['Status'] = 'Failed'
+            elif field == 'bool': value['ResponseCode'] = False
+            elif field == 'initial-only': output = {'status': receipt['status'], 'declarationEquivalencePublication': issued}
+            elif field == 'extra-seal': output['declarationEquivalenceSuccessorPublication']['trusted'] = True
+            elif field == 'origin': output['pendingOnlineMigrationOrigin']['services']['api']['containerId'] = '0' * 64
+            else: value['StandardOutputContent'] = 'SECRET_INVALID_FRAME'
+            if field != 'bad-wire': value['StandardOutputContent'] = self.wire.receipt_output(output, scope='API_ADMIN_WORKSPACE')
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_PROOF_INVALID$'):
+                scope.declaration_equivalence_successor_receipt_binding(controller(), b, self.pure.raw(value), command_id=command,
+                    wire_decoder=self.wire.decode_receipt_output)
+        wrong = copy.deepcopy(b['afterServices']); wrong['mysql']['containerId'] = '0' * 64
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_issuer_binding(controller(), b,
+            live_services=wrong, live_configuration=b['configurationAfter'], execution_producer=b['producer'])
+
+    def test_closed_b_schema_and_reused_preflight_command_cannot_issue(self):
+        f = self.fixture(); b = scope.declaration_equivalence_successor_publication_binding(controller(), **f)
+        for change in ('extra', 'bool', 'seal-extra', 'a-extra', 'unknown-kind', 'duplicate-command', 'producer-helpers'):
+            value = copy.deepcopy(b)
+            if change == 'extra': value['trusted'] = True
+            elif change == 'bool': value['version'] = True
+            elif change == 'seal-extra': value['successorConfigurationSeal']['unmeasured'] = True
+            elif change == 'a-extra': value['successorConfigurationSeal']['initialPublication']['rawEnv'] = 'SECRET_NEVER_OUTPUT'
+            elif change == 'unknown-kind': value['kind'] = scope.DECLARATION_EQUIVALENCE_KIND
+            elif change == 'duplicate-command':
+                value['preflightCommandId'] = value['successorConfigurationSeal']['initialPublication']['readbackCommandId']
+                value['successorConfigurationSeal']['preflightCommandId'] = value['preflightCommandId']
+            else: value['producer']['helpers']['unknown'] = '0' * 64
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_PROOF_INVALID$') as error:
+                scope.declaration_equivalence_successor_issuer_binding(controller(), value, live_services=value['afterServices'],
+                    live_configuration=value['configurationAfter'], execution_producer=value['producer'])
+            self.assertNotIn('SECRET', str(error.exception))
+        before = json.loads(f['preflight_raw']); before['commandId'] = f['initial_command_id']
+        with self.assertRaises(RuntimeError): scope.declaration_equivalence_successor_publication_binding(controller(),
+            **{**f, 'preflight_raw': self.pure.raw(before)})
+
+
 if __name__ == '__main__':
     unittest.main()

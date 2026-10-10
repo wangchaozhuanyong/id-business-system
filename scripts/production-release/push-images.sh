@@ -4,6 +4,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/validate-release-selection.sh"
 [[ "${RELEASE_OPERATION:-release}" != verify_api_admin_migration && "${RELEASE_OPERATION:-release}" != verify_online_recharge && "${RELEASE_OPERATION:-release}" != verify_api_workspace ]] || exit 1
 
 if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+  if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
+    python3 -B scripts/production-release/online-recharge-readonly.py after-bit-build-proof
+  fi
   services=(api admin migrate online-recharge)
 elif [[ "${RELEASE_OPERATION:-release}" == release_api_admin_migration ]]; then
   services=(api admin migrate)
