@@ -1252,6 +1252,8 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
             'verify_api_workspace',
             'release_api_workspace',
             'repair_online_source_permissions',
+            'diagnose_online_backup_source',
+            'restore_online_backup_source',
             'verify_api_admin',
             'release_api_admin',
             'verify_api_admin_migration',
@@ -1633,7 +1635,9 @@ test('actual full-mode release controls select each missing suite once without r
     'python3 -B scripts/production-release/maintain-image-cache.test.py',
     'node --test scripts/v2-order-archive-release-policy.test.mjs',
     'python3 -B scripts/production-release/online-recharge-source-permission-repair.test.py',
-    'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py'
+    'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
+    'python3 -B scripts/production-release/online-recharge-backup-source-recovery.test.py',
+    'python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.test.py'
   ]);
   const recharge = guardCommands(paths);
   for (const command of [
@@ -1684,7 +1688,9 @@ test('actual full-mode release controls preserve exact maintenance selection and
       ...(path === 'scripts/ci-recharge-check.mjs'
         ? [
             'python3 -B scripts/production-release/online-recharge-source-permission-repair.test.py',
-            'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py'
+            'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
+            'python3 -B scripts/production-release/online-recharge-backup-source-recovery.test.py',
+            'python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.test.py'
           ]
         : [])
     ]);

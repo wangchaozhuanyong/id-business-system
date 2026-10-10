@@ -153,6 +153,27 @@ const onlineSourcePermissionRepairControls = () => {
     ]);
   }
 };
+const onlineBackupSourceRecoveryControls = () => {
+  const paths = [
+    'scripts/production-release/online-recharge-backup-source-recovery.py',
+    'scripts/production-release/online-recharge-backup-source-recovery.test.py',
+    'scripts/production-release/online-recharge-backup-source-recovery-transport.py',
+    'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  if (changed.some((path) => paths.includes(path))) {
+    run('python3', [
+      '-B',
+      'scripts/production-release/online-recharge-backup-source-recovery.test.py'
+    ]);
+    run('python3', [
+      '-B',
+      'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py'
+    ]);
+  }
+};
 const onlineRecoveryGrantControls = () => {
   if (
     changed.some((path) =>
@@ -263,6 +284,7 @@ if (part === 'guards') {
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
+  onlineBackupSourceRecoveryControls();
   if (
     changed.some((path) =>
       [
@@ -408,6 +430,7 @@ if (part === 'guards') {
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
+  onlineBackupSourceRecoveryControls();
 } else if (part === 'admin') {
   for (const args of adminCheckCommands(mode, changed)) npm(...args);
 } else if (part === 'api') {

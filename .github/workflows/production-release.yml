@@ -13,6 +13,8 @@ on:
           - verify_online_recharge
           - release_online_recharge
           - repair_online_source_permissions
+          - diagnose_online_backup_source
+          - restore_online_backup_source
           - verify_api_admin
           - verify_api_workspace
           - release_api_workspace
@@ -517,6 +519,13 @@ jobs:
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
           DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
         run: python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.py
+
+      - name: Independently diagnose or restore missing historical backup files
+        if: inputs.operation == 'diagnose_online_backup_source' || inputs.operation == 'restore_online_backup_source'
+        env:
+          CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
+          DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
+        run: python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.py
 
       - name: Verify build-only ECR target
         if: inputs.operation == 'prepare_post_cleanup_release' || inputs.operation == 'prepare_order_archive_release'
@@ -2271,6 +2280,16 @@ jobs:
         with:
           name: online-source-permission-repair-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/production-release/online-source-permission-repair-result.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Save only the historical backup recovery safe receipt
+        if: always() && (inputs.operation == 'diagnose_online_backup_source' || inputs.operation == 'restore_online_backup_source')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: online-backup-source-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/production-release/online-backup-source-recovery-result.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 14
