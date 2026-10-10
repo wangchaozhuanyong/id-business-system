@@ -256,6 +256,110 @@ class CollectorTests(unittest.TestCase):
         with self.assertRaisesRegex(a.Rejected,'^ACTUAL_INSPECT_CHANGED$'):self.measure()
         self.assertTrue(changed);self.assertFalse(self.d.created_networks)
         self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
+    def test_internal_gateway_projection_is_exact_and_keeps_network_ipam_gateway(self):
+        meta=json.loads(self.d.run(FIX['policy']()['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        for role,net in self.d.source_networks.items():
+            endpoint=meta['NetworkSettings']['Networks'][net['Name']]
+            pool_gateway=net['IPAM']['Config'][0]['Gateway']
+            self.assertEqual(endpoint['Gateway'],'' if net['Internal'] else pool_gateway)
+            self.assertNotEqual(pool_gateway,'');self.assertEqual(net['Internal'],role.endswith('control'))
+        original=copy.deepcopy(meta)
+        a.actual_endpoints(meta,self.d.source_networks,self.d.services,FIX['policy']())
+        self.assertEqual(meta,original)
+    def test_internal_and_external_gateway_opposites_and_nonstrings_are_refused(self):
+        meta=json.loads(self.d.run(FIX['policy']()['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        for role,net in self.d.source_networks.items():
+            opposite=net['IPAM']['Config'][0]['Gateway'] if net['Internal'] else ''
+            for value in (opposite,None,False,{},[],'10.65.1.1'):
+                changed=copy.deepcopy(meta);changed['NetworkSettings']['Networks'][net['Name']]['Gateway']=value
+                with self.subTest(role=role,value=value),self.assertRaisesRegex(a.Rejected,'^ACTUAL_NETWORK_ADDRESS$'):
+                    a.actual_endpoints(changed,self.d.source_networks,self.d.services,FIX['policy']())
+            changed=copy.deepcopy(net);changed['Internal']=not net['Internal']
+            with self.subTest(role=role),self.assertRaisesRegex(a.Rejected,'^RESOURCE_PROPERTIES_INVALID$'):
+                a.network_validate(changed,role,FIX['PROJECT'],FIX['policy']())
+    def test_gateway_compat_keeps_ipv4_prefix_and_ipv6_predicates(self):
+        meta=json.loads(self.d.run(FIX['policy']()['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        for role,net in self.d.source_networks.items():
+            subnet=net['IPAM']['Config'][0]['Subnet'];prefix=int(subnet.split('/')[1]);base=subnet.split('/')[0]
+            for field,value in (('IPAddress',None),('IPAddress','CONTROL_BAD_IP'),('IPAddress',base),
+                ('IPAddress',base.rsplit('.',1)[0]+'.255'),('IPAddress','10.65.1.2'),('IPAddress','fd00::2'),
+                ('IPPrefixLen',prefix-1),('IPPrefixLen',True),('IPPrefixLen',str(prefix)),
+                ('GlobalIPv6Address','fd00::2'),('GlobalIPv6PrefixLen',1),('GlobalIPv6PrefixLen',False),
+                ('IPv6Gateway','fd00::1')):
+                changed=copy.deepcopy(meta);changed['NetworkSettings']['Networks'][net['Name']][field]=value
+                with self.subTest(role=role,field=field,value=value),self.assertRaisesRegex(a.Rejected,'^ACTUAL_NETWORK_ADDRESS$'):
+                    a.actual_endpoints(changed,self.d.source_networks,self.d.services,FIX['policy']())
+    def test_gateway_compat_keeps_member_and_self_interface_cross_checks(self):
+        spec=FIX['policy']();meta=json.loads(self.d.run(spec['dockerPath'],'container','inspect',FIX['API_ID']))[0]
+        for role,net in self.d.source_networks.items():
+            endpoint=meta['NetworkSettings']['Networks'][net['Name']]
+            other_ip=endpoint['IPAddress'].rsplit('.',1)[0]+'.3/'+str(endpoint['IPPrefixLen'])
+            for field,value,code in (('IPv4Address',other_ip,'ACTUAL_NETWORK_ADDRESS'),
+                ('EndpointID','f'*64,'ACTUAL_NETWORK_ADDRESS'),('MacAddress','02:00:00:00:ff:ff','ACTUAL_NETWORK_ADDRESS'),
+                ('IPv4Address','CONTROL_BAD_IP','ACTUAL_NETWORK_MEMBERS'),
+                ('IPv4Address',endpoint['IPAddress']+'/16','ACTUAL_NETWORK_MEMBERS'),
+                ('IPv6Address','fd00::2/64','ACTUAL_NETWORK_MEMBERS'),
+                ('MacAddress','CONTROL_BAD_MAC','ACTUAL_NETWORK_MEMBERS'),('Name','CONTROL_WRONG_NAME','ACTUAL_NETWORK_MEMBERS')):
+                changed=copy.deepcopy(self.d.source_networks);changed[role]['Containers'][FIX['API_ID']][field]=value
+                with self.subTest(role=role,field=field),self.assertRaisesRegex(a.Rejected,'^'+code+'$'):
+                    a.actual_endpoints(meta,changed,self.d.services,spec)
+    def test_official_network_projection_complete_measurement_and_validate_facts(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        self.d.source_api.update({'command':None,'entrypoint':None})
+        self.empty_network_source({r:None for r in a.NETWORK_ROLES})
+        for row in self.d.source_model['networks'].values():row['ipam']={}
+        for index,(role,net) in enumerate(self.d.source_networks.items(),1):
+            for order,(service,identity) in enumerate(self.d.services.items(),3):
+                if service=='api' or role not in a.DECLARED_SERVICE_ROLES[service]:continue
+                net['Containers'][identity['containerId']]={'Name':FIX['PROJECT']+'-'+service+'-1',
+                    'EndpointID':a.sha((role+'-'+service).encode()),'MacAddress':'02:00:00:'+str(index).zfill(2)+':00:'+str(order).zfill(2),
+                    'IPv4Address':'10.64.'+str(index)+'.'+str(order)+'/24','IPv6Address':''}
+        self.managed_labels_source(spec)
+        stored=copy.deepcopy(self.d.actual);model=copy.deepcopy(self.d.source_model);resources=copy.deepcopy(self.raw['actualResource'])
+        original_run=self.d.run;inspected=[]
+        def run(*args,**kwargs):
+            raw=original_run(*args,**kwargs)
+            if args[0]==spec['composePath'] and 'config' in args and '--format' in args:
+                rendered=json.loads(raw)
+                for row in rendered['networks'].values():row['ipam']={}
+                return json.dumps(rendered)
+            if args[0] in ('docker',spec['dockerPath']) and args[1:3]==('container','inspect'):
+                row=json.loads(raw)[0];inspected.append(copy.deepcopy(row))
+                for role,net in self.d.source_networks.items():
+                    if net['Name'] in row['NetworkSettings']['Networks']:
+                        endpoint=row['NetworkSettings']['Networks'][net['Name']]
+                        self.assertEqual(endpoint['Gateway'],'' if net['Internal'] else net['IPAM']['Config'][0]['Gateway'])
+            return raw
+        self.d.run=run
+        with patch.dict(a.REVIEWED_GENERATORS,{('25.0.16','5.5.0'):spec}):
+            result=a.measure(self.d,self.directory,services=self.d.services,image_reference='source-api',
+                image_id=FIX['IMAGE'],source_seal=self.d.seal,stability_reader=self.read_stability)
+        self.assertEqual(self.calls,3);self.assertEqual(len(self.d.removed),6)
+        self.assertEqual(set().union(*(set(net['Containers']) for net in resources['networks'].values())),
+            {row['containerId'] for row in self.d.services.values()})
+        self.assertEqual(self.d.actual,stored);self.assertEqual(self.d.source_model,model)
+        self.assertEqual(self.observed()['actualResource'],resources)
+        actual=next(row for row in inspected if row['Id']==FIX['API_ID'])
+        self.assertTrue(all(row==actual for row in inspected if row['Id']==FIX['API_ID']))
+        self.assertEqual(result['facts']['source']['renderedDeclarationSha256'],a.fingerprint(model))
+        self.assertEqual(result['measured']['actualResourceSha256'],a.fingerprint(resources))
+        self.assertEqual(result['facts']['stableBefore'],result['facts']['stableAfter'])
+        root=self.validation_root(result);root['generatorRulesSha256']=a.fingerprint(spec)
+        C['validate_facts'](result['measured'],result['facts'],root)
+        self.assertFalse(result['measured']['authority']);self.assertFalse(result['measured']['productionEligible'])
+        self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
+    def test_gateway_drift_after_preparation_keeps_full_actual_snapshot_refusal(self):
+        original_run=self.d.run;changed=False
+        def run(*args,**kwargs):
+            nonlocal changed
+            raw=original_run(*args,**kwargs)
+            if not changed and args[:3]==(FIX['policy']()['dockerPath'],'network','create'):
+                changed=True;self.d.actual['NetworkSettings']['Networks'][self.d.source_networks['recharge-control']['Name']]['Gateway']='10.64.3.1'
+            return raw
+        self.d.run=run
+        with self.assertRaisesRegex(a.Rejected,'^ACTUAL_INSPECT_CHANGED$'):self.measure()
+        self.assertTrue(changed);self.assertFalse(self.d.created_networks)
+        self.assertIsNone(self.d.created_volume);self.assertIsNone(self.d.created_container)
     def test_managed_resource_hash_matches_independent_go_golden_preimages(self):
         spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
         goldens={
