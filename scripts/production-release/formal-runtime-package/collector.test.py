@@ -23,6 +23,7 @@ class CollectorTests(unittest.TestCase):
         (self.directory/M.FILES[2]).chmod(0o600)
         self.d=FIX['FakeDocker'](self.base,self.directory)
         self.binary=patch.object(M,'binary_hash',return_value='e'*64);self.binary.start()
+        self.which=patch.object(M.shutil,'which',return_value=FIX['policy']()['dockerPath']);self.which.start();self.addCleanup(self.which.stop)
         self.permissions=patch.object(a,'native_permissions',return_value=None);self.permissions.start()
         self.calls=0
         self.raw=self.observed()
@@ -268,6 +269,30 @@ class CollectorTests(unittest.TestCase):
         def mutation(row,index):row['Internal']=False
         self.mutate_created_network(mutation)
         self.assertEqual(len(self.d.removed),1)
+
+
+class FixtureDockerPathIsolationTests(unittest.TestCase):
+    def test_host_missing_or_noncanonical_path_is_ignored_and_restored(self):
+        original_which=M.shutil.which
+        for host_path in (None,'/synthetic-host/bin/docker'):
+            with self.subTest(host_missing=host_path is None):
+                with patch.object(M.shutil,'which',return_value=host_path) as host_lookup:
+                    case=CollectorTests('test_full_facts_exact_constructor_validation')
+                    case.setUp()
+                    try:
+                        case.test_full_facts_exact_constructor_validation()
+                        fixture_lookup=M.shutil.which
+                        fixture_lookup.assert_called_once_with('docker')
+                        self.assertEqual(fixture_lookup.return_value,FIX['policy']()['dockerPath'])
+                        self.assertEqual(a.REVIEWED_GENERATORS,{})
+                    finally:
+                        case.doCleanups()
+                        case.tearDown()
+                    self.assertIs(M.shutil.which,host_lookup)
+                    host_lookup.assert_not_called()
+                self.assertIs(M.shutil.which,original_which)
+        for capability in (M.daemon_identity_capability,M.daemon_socket_capability):
+            with self.assertRaisesRegex(RuntimeError,'^MOCK_RUNTIME_NOT_MEASURED$'):capability()
 
 
 class NativePermissionDiagnosticTests(unittest.TestCase):
