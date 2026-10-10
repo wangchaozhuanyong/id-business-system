@@ -2962,7 +2962,73 @@ def declaration_equivalence_saved_invocation(d, *, producer):
     return {'raw_bytes': raw, 'command_id': value['CommandId']}
 
 
-FORMAL_RUNTIME_DRIVER_SHA256 = 'd1be26d54d7284e321d5510e068ce2c3d963d229b930f97bb0f5f586597415b2'
+FORMAL_RUNTIME_DRIVER_SHA256 = '9cbe7f9919feee286a2719d97ea48ff0f45592b111f483666caca95494bd03a0'
+
+
+class DeclarationDriverError(RuntimeError):
+    """Non-authorizing bounded cause from the captured fixed driver only."""
+
+DECLARATION_DIAGNOSTIC_STAGES = frozenset((
+    'PACKAGE_BIND','LOCAL_PACKAGE','SOURCE_PROFILE',
+    'ARCHIVE_BIND','CONFIGURE','ENTRY',
+    'ACQUISITION','RULES','ACQUIRE',
+    'MEASURE','AFTER','CONSTRUCT',
+    'CLOSE','REGISTRY',
+))
+DECLARATION_DIAGNOSTIC_CODES = frozenset((
+    'ACTUAL_IDENTITY','ACTUAL_IDENTITY_CHANGED','ACTUAL_INSPECT_CHANGED',
+    'ACTUAL_NETWORK_ADDRESS','ACTUAL_NETWORK_DECLARATION','ACTUAL_NETWORK_ID_OR_MEMBERS',
+    'ACTUAL_NETWORK_INSPECT_CHANGED','ACTUAL_NETWORK_MEMBERS','ACTUAL_NETWORK_SET',
+    'ACTUAL_PRIMARY_NETWORK','ACTUAL_STATE_OR_ENV','ACTUAL_VOLUME_INSPECT_CHANGED',
+    'BOUND_LABEL','CLEANUP_FAILED','CLEANUP_REMAINING',
+    'CLEANUP_SEAL_CHANGED','CLIENT_DEFAULT_INJECTION','CLIENT_SOURCE_CHANGED',
+    'CLI_SOURCE_CHANGED','COMPLETE_CONFIGURATION_DIFFERENCE','CONFIGURATION_INVALID',
+    'DAEMON_CHANGED','DAEMON_SOURCE_NOT_MEASURED','DEPENDENCY_LABEL',
+    'ENV_INVALID','EXISTING_REFERENCE_REFUSED','GENERATOR_SOURCE_CHANGED',
+    'HOST_MOUNTS_SHAPE','HTTP_ERROR','IMAGE_INSPECT_CHANGED',
+    'MEASUREMENT_FAILED','MOUNT_BINDING','NATIVE_TOOL_CHANGED',
+    'ORIGIN_CHANGED','PACKAGE_ARCHIVE_CHANGED','PACKAGE_FILE_CHANGED',
+    'PACKAGE_INPUT_INVALID','PACKAGE_SCHEMA_CHANGED','PACKAGE_SOURCE_CHANGED',
+    'PACK_IMAGE_OR_NATIVE_IDENTITY','PACK_INVALID','POOL_SOURCE_CHANGED',
+    'PRIMARY_NETWORK','PRIMARY_NETWORK_OR_IMAGE','QUALIFIER_FROZEN_INPUT_CHANGED',
+    'QUALIFIER_UNAVAILABLE','REFERENCE_ID_CHANGED','REFERENCE_MODEL_CHANGED',
+    'REFERENCE_NETWORK_OVERLAP','REFERENCE_NETWORK_SET','REFERENCE_PATH_INVALID',
+    'REFERENCE_PENDING_ENDPOINT','REFERENCE_RESOURCE_CHANGED','REFERENCE_STARTED_OR_OWNER_CHANGED',
+    'REFERENCE_STATE_OWNER_OR_ENV','REPLACE_LABEL','RESOURCE_DEFAULT_POOL_INVALID',
+    'RESOURCE_INVENTORY_INVALID','RESOURCE_IPAM_INVALID','RESOURCE_OWNER_OR_MEMBERS_INVALID',
+    'RESOURCE_PROPERTIES_INVALID','RESOURCE_READ_INVALID','RESOURCE_SCHEMA_INVALID',
+    'RESOURCE_VOLUME_INVALID','ROOT_ACQUISITION_UNAVAILABLE','ROOT_ADMIN_PROJECTION_FAILED',
+    'ROOT_DRIVER_SOURCE_UNMEASURED','ROOT_DRIVER_UNAVAILABLE','ROOT_ENTRY_INVALID',
+    'ROOT_GENERATOR_SOURCE_UNMEASURED','ROOT_HISTORY_CHANGED','ROOT_MEASUREMENT_INVALID',
+    'ROOT_OBSERVATION_CHANGED','ROOT_PREFLIGHT_CHANGED','ROOT_PRODUCER_CHANGED',
+    'ROOT_REGISTRY_CHANGED','ROOT_REGISTRY_EXISTS','ROOT_REGISTRY_INVALID',
+    'ROOT_REGISTRY_MISSING','ROOT_SOURCE_CHANGED','RUNTIME_BINARY_CHANGED',
+    'RUNTIME_CAPABILITY_REQUIRED','RUNTIME_IDENTITY_INVALID','RUNTIME_PACKAGE_CHANGED',
+    'SOCKET_BINDING_CHANGED','SOCKET_BINDING_INVALID','SOURCE_DECLARATION_INVALID',
+    'SOURCE_ENV_INVALID','SOURCE_ENV_SEAL_CHANGED','SOURCE_FILES_CHANGED',
+    'SOURCE_FILE_INVALID','SOURCE_FILE_PERMISSIONS','SOURCE_IMAGE_INVALID',
+    'SOURCE_MODEL_HASH_INVALID','SOURCE_NETWORK_DECLARATION','SOURCE_NOT_MEASURED',
+    'SOURCE_PATH_INVALID','SOURCE_PROFILE_INVALID','SOURCE_PROJECT_INVALID',
+    'SOURCE_REPLACE_ANCHOR_INVALID','SOURCE_SEAL_INVALID','SOURCE_VOLUME_DECLARATION',
+    'TIMEOUT','UNKNOWN','URL_ERROR','VFS_BOUND_CAPABILITY_REQUIRED',
+))
+
+def declaration_failure_diagnostic(error):
+    if type(error) is DeclarationDriverError:
+        value=error.__dict__.get('_declaration_failure')
+        if (type(value) is tuple and len(value)==2 and type(value[0]) is str and type(value[1]) is str
+                and value[0] in DECLARATION_DIAGNOSTIC_STAGES and value[1] in DECLARATION_DIAGNOSTIC_CODES):
+            return {'stage':value[0],'code':value[1]}
+    return None
+
+def _declaration_driver_failure(message,failure):
+    error=DeclarationDriverError(message)
+    if (type(failure) is dict and set(failure)=={'stage','code'} and type(failure['stage']) is str
+            and type(failure['code']) is str and failure['stage'] in DECLARATION_DIAGNOSTIC_STAGES
+            and failure['code'] in DECLARATION_DIAGNOSTIC_CODES):
+        error._declaration_failure=(failure['stage'],failure['code'])
+    else:error._declaration_failure=('PACKAGE_BIND','UNKNOWN')
+    return error
 
 
 def _declaration_runtime_driver():
@@ -2977,7 +3043,8 @@ def _declaration_runtime_driver():
         exec(compile(raw, str(path), 'exec'), module.__dict__)
         return module
     except Exception:
-        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE') from None
+        raise _declaration_driver_failure('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE',
+            {'stage':'LOCAL_PACKAGE','code':'UNKNOWN'}) from None
 
 
 def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose, preflight_raw=None):
@@ -2990,6 +3057,8 @@ def measure_declaration_equivalence(d, directory, recovery, *, producer, purpose
         return driver.measure_declaration_equivalence(d, directory, recovery,
             producer=producer, purpose=purpose, preflight_raw=preflight_raw)
     except Exception as error:
-        if isinstance(error, driver.Rejected) and str(error) == 'ROOT_GENERATOR_SOURCE_UNMEASURED':
-            raise RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED') from None
-        raise RuntimeError('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE') from None
+        failure=driver.failure_diagnostic(error)
+        message='ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE'
+        if type(error) is driver.Rejected and BaseException.args.__get__(error)==('ROOT_GENERATOR_SOURCE_UNMEASURED',):
+            message='ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
+        raise _declaration_driver_failure(message,failure) from None

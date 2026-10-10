@@ -147,7 +147,7 @@ class PackageSourceTests(unittest.TestCase):
    archive.assert_called_once()
  def test_public_singleton_full_archive_reaches_runtime_vfs_before_any_execution(self):
   from unittest.mock import Mock
-  package=self.package();module=load('full_archive_public_driver',self.folder/'driver.py')
+  module=load('full_archive_public_driver',self.folder/'driver.py');package=module._local_package()
   selected=package.load_leaf('qualified.py');self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE),1);selected._reviewed_profile()
   (self.parent/'.runtime').mkdir(mode=0o700)
   def need(value,code):
