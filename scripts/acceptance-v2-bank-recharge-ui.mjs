@@ -282,14 +282,7 @@ async function assertDrawerLayout(page, title) {
 mkdirSync(outputDir, { recursive: true });
 const server = spawn(
   process.execPath,
-  [
-    resolveViteCli(),
-    '--host',
-    '127.0.0.1',
-    '--port',
-    String(port),
-    '--strictPort'
-  ],
+  [resolveViteCli(), '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
   {
     cwd: adminDir,
     env: {
