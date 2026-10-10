@@ -18,7 +18,7 @@
     "online-recharge-declaration-measurement.py": "236fe431cc1f3cd5142fb020a4aa0357d0c3917ec8e7fd4cd5c5e9aa9767e1cf"
   },
   "files": {
-    "collector.py": "43cca9a2ab0d41c90d1e96e8afd8a68173e5cd46faeb6669d03b7643e9ba24b0",
+    "collector.py": "d27537c2da5edd5779c3e8b6c2ceafd1a4f78352335f49935ee310c176542688",
     "constructor.py": "fcab46eea82ea426225276ddd0506634ea36742ea44c7b3c952544d3975f7d9d",
     "contract.json": "7d45bd738b254a2e56b49a5e307cd417c769becfb62ea4d589e90a75d34f29c8",
     "package_io.py": "6f768257a7ed002aed923392b9f73ad6276e636410da1ea49eb8f6ad1f4bc477",

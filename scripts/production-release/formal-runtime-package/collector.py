@@ -127,19 +127,64 @@ def _file_parent(path):
         return fd,chain
     except Exception:os.close(fd);raise
 
+# Private observation only: original check values, order, and exception stay intact.
+_SOURCE_FILE_PERMISSION_REASON = None
+_SOURCE_FILE_PERMISSION_FAILURE = None
+_SOURCE_FILE_PERMISSION_PAIRS = frozenset((
+    ('COMPOSE','PARENT_UID'),('COMPOSE','PARENT_WRITABLE'),('COMPOSE','PUBLIC_WRITABLE'),
+    ('RELEASE','PARENT_UID'),('RELEASE','PARENT_WRITABLE'),('RELEASE','PUBLIC_WRITABLE'),
+    ('CLIENT','PARENT_UID'),('CLIENT','PARENT_WRITABLE'),('CLIENT','PRIVATE_MODE'),
+))
+
+def _source_file_permission_predicate(ok,reason):
+    global _SOURCE_FILE_PERMISSION_REASON
+    if ok is False:_SOURCE_FILE_PERMISSION_REASON=reason
+    return ok
+
+def _source_file_permission_original_error(error):
+    if type(error) is not Rejected:return False
+    args=BaseException.args.__get__(error)
+    return type(args) is tuple and len(args)==1 and type(args[0]) is str and args[0]=='SOURCE_FILE_PERMISSIONS'
+
+def _source_file_permission_channel():
+    # Mutable observation state alone cannot issue a diagnostic. The closure
+    # keeps the one tuple identity produced by the original rejection branch.
+    issued=None
+    def clear():
+        nonlocal issued
+        issued=None
+    def issue(error,role,reason):
+        nonlocal issued
+        issued=(error,role,reason)
+        return issued
+    def source_file_permission_failure(error):
+        row=_SOURCE_FILE_PERMISSION_FAILURE
+        if row is not issued or not _source_file_permission_original_error(error):return None
+        if (type(row) is tuple and len(row)==3 and row[0] is error
+                and type(row[1]) is str and type(row[2]) is str
+                and (row[1],row[2]) in _SOURCE_FILE_PERMISSION_PAIRS):return row[1:]
+        return None
+    return clear,issue,source_file_permission_failure
+
+_source_file_permission_clear,_source_file_permission_issue,source_file_permission_failure=_source_file_permission_channel()
+
 def _sealed_file(path,*,private=False):
     # Keep the original file_seal owner/mode/size rules, with captured bounded
     # bytes and complete descriptor/path/ancestor seals. No public admission API.
+    global _SOURCE_FILE_PERMISSION_REASON,_SOURCE_FILE_PERMISSION_FAILURE
+    _SOURCE_FILE_PERMISSION_REASON=None;_SOURCE_FILE_PERMISSION_FAILURE=None
+    _source_file_permission_clear()
     path=Path(path);parent=None;fd=None
     try:
         parent,chain=_file_parent(path);info=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
         check(stat.S_ISREG(info.st_mode) and info.st_nlink==1 and info.st_uid==os.getuid()
               and 0<=info.st_size<=1024**2,'SOURCE_FILE_INVALID')
         directory_info=os.fstat(parent)
-        check(directory_info.st_uid==os.getuid() and stat.S_IMODE(directory_info.st_mode)&0o022==0,
+        check(_source_file_permission_predicate(directory_info.st_uid==os.getuid(),'PARENT_UID')
+              and _source_file_permission_predicate(stat.S_IMODE(directory_info.st_mode)&0o022==0,'PARENT_WRITABLE'),
               'SOURCE_FILE_PERMISSIONS')
-        if private:check(stat.S_IMODE(info.st_mode) in (0o400,0o600),'SOURCE_FILE_PERMISSIONS')
-        else:check(stat.S_IMODE(info.st_mode)&0o022==0,'SOURCE_FILE_PERMISSIONS')
+        if private:check(_source_file_permission_predicate(stat.S_IMODE(info.st_mode) in (0o400,0o600),'PRIVATE_MODE'),'SOURCE_FILE_PERMISSIONS')
+        else:check(_source_file_permission_predicate(stat.S_IMODE(info.st_mode)&0o022==0,'PUBLIC_WRITABLE'),'SOURCE_FILE_PERMISSIONS')
         fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,dir_fd=parent)
         check(_file_identity(os.fstat(fd))==_file_identity(info),'SOURCE_FILE_INVALID');raw=b''
         while len(raw)<=1024**2:
@@ -156,9 +201,24 @@ def _sealed_file(path,*,private=False):
         return raw,{'sha256':sha(raw),'identitySha256':fingerprint({
             'device':info.st_dev,'inode':info.st_ino,'uid':info.st_uid,'gid':info.st_gid,
             'mode':info.st_mode,'size':info.st_size,'links':info.st_nlink})}
-    except Rejected:raise
+    except Rejected as error:
+        # Classify only after the unchanged check rejected; no extra success-path reads.
+        try:
+            if _source_file_permission_original_error(error):
+                name=path.name;role=None
+                if type(name) is str:
+                    if private is False:
+                        if name=='docker-compose.aws-mysql.yml':role='COMPOSE'
+                        elif name=='compose.release.json':role='RELEASE'
+                    elif private is True and name=='config.json':role='CLIENT'
+                reason=_SOURCE_FILE_PERMISSION_REASON
+                if type(role) is str and type(reason) is str and (role,reason) in _SOURCE_FILE_PERMISSION_PAIRS:
+                    _SOURCE_FILE_PERMISSION_FAILURE=_source_file_permission_issue(error,role,reason)
+        except Exception:pass
+        raise
     except Exception:raise Rejected('SOURCE_FILE_INVALID') from None
     finally:
+        _SOURCE_FILE_PERMISSION_REASON=None
         if fd is not None:os.close(fd)
         if parent is not None:os.close(parent)
 
