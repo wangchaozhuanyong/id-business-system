@@ -92,6 +92,39 @@ test('unrelated control edits do not execute database grant tests', () => {
   }
 });
 
+test('diagnosed workspace permission repair runs its combined suite once for exact control inputs', () => {
+  const suite = 'scripts/production-release/api-workspace-public-permission-repair.test.py';
+  const paths = [
+    'scripts/production-release/api-workspace-public-permission-repair.py',
+    'scripts/production-release/api-workspace-public-permission-repair-transport.py',
+    suite,
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  for (const part of ['guards', 'release-controls']) {
+    for (const path of paths) {
+      const calls = recordGuardCommands('ci-only', [path], part);
+      assert.equal(
+        calls.filter((call) => JSON.stringify(call) === JSON.stringify(['python3', '-B', suite]))
+          .length,
+        1,
+        part + ': ' + path
+      );
+      assert.ok(calls.every((call) => !call.some((arg) => /(?:prisma:|acceptance:)/.test(arg))));
+    }
+    for (const path of [
+      'docs/ONLINE_RECHARGE_RELEASE_20261009.md',
+      'scripts/production-release/api-workspace-public-permission-repair.py.backup',
+      'scripts/production-release/api-workspace-public-permission-repair-transport-other.py'
+    ])
+      assert.equal(
+        recordGuardCommands('ci-only', [path], part).some((call) => call.includes(suite)),
+        false
+      );
+  }
+});
+
 test('fixed source permission repair runs both dedicated suites in each control dispatcher only for its inputs', () => {
   const suites = [
     'scripts/production-release/online-recharge-source-permission-repair.test.py',

@@ -154,6 +154,21 @@ const onlineSourcePermissionRepairControls = () => {
     ]);
   }
 };
+const workspacePublicPermissionRepairControls = () => {
+  const paths = [
+    'scripts/production-release/api-workspace-public-permission-repair.py',
+    'scripts/production-release/api-workspace-public-permission-repair-transport.py',
+    'scripts/production-release/api-workspace-public-permission-repair.test.py',
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/validate-release-selection.sh',
+    'scripts/ci-recharge-check.mjs'
+  ];
+  if (changed.some((path) => paths.includes(path)))
+    run('python3', [
+      '-B',
+      'scripts/production-release/api-workspace-public-permission-repair.test.py'
+    ]);
+};
 const onlineBackupSourceRecoveryControls = () => {
   const paths = [
     'scripts/production-release/online-recharge-backup-source-recovery.py',
@@ -312,6 +327,7 @@ if (part === 'guards') {
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
+  workspacePublicPermissionRepairControls();
   onlineBackupSourceRecoveryControls();
   backupRetentionProtectionControls();
   if (
@@ -459,6 +475,7 @@ if (part === 'guards') {
   releaseMaintenanceControls();
   archiveReleaseControls();
   onlineSourcePermissionRepairControls();
+  workspacePublicPermissionRepairControls();
   onlineBackupSourceRecoveryControls();
   backupRetentionProtectionControls();
 } else if (part === 'admin') {
