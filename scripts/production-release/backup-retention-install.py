@@ -1,5 +1,6 @@
 """Install one reviewed backup entry without switching the running application."""
 import base64
+import errno
 import gzip
 import hashlib
 import inspect
@@ -33,6 +34,40 @@ FIELDS = frozenset(('kind', 'producer', 'source21Sha256', 'maintenanceSourceSha2
 CODES = frozenset(('OK', 'INPUT_INVALID', 'SOURCE_INVALID', 'SERVICES_CHANGED',
                    'ENTRY_CHANGED', 'TIMER_CHANGED', 'SERVICE_BUSY', 'SYSTEMD_FAILED',
                    'IO_FAILURE'))
+DIAGNOSTIC_STAGES = ('SOURCE_INITIAL', 'AUTHORITY_OPEN', 'CLIENT_SETUP', 'AUTHORITY_INITIAL',
+    'SNAPSHOT_INITIAL', 'CURRENT_SCRIPTS', 'BACKUP_SCRIPT', 'NORMALIZER', 'ENV_LIMITS', 'COMPOSE',
+    'SERVICE_ENTRY', 'DROPINS', 'TIMER_STATE', 'SERVICE_IDLE', 'AUTHORITY_RECHECK',
+    'SOURCE_RECHECK', 'SNAPSHOT_RECHECK', 'MAINTENANCE', 'ENTRY_VERIFY', 'POSTCHECK')
+TRANSPORT_STAGE_REASONS = {
+    'AUTHORITY_OPEN': ('CURRENT_INVALID',) + tuple('ANCESTOR_' + role + '_' + reason
+        for role in ('ROOT', 'BASE_PARENT', 'BASE', 'RELEASES', 'CURRENT_RELEASE', 'BACKUPS', 'MYSQL')
+        for reason in ('TYPE', 'OWNER', 'WRITABLE', 'IDENTITY')),
+    'CURRENT_SCRIPTS': tuple('ANCESTOR_CURRENT_RELEASE_' + reason
+        for reason in ('TYPE', 'OWNER', 'WRITABLE', 'IDENTITY')),
+    'AUTHORITY_INITIAL': ('AUTHORITY_CHANGED', 'CURRENT_INVALID'),
+    'AUTHORITY_RECHECK': ('AUTHORITY_CHANGED', 'CURRENT_INVALID'),
+    **{stage: ('SOURCE_INVALID', 'AUTHORITY_CHANGED')
+       for stage in ('BACKUP_SCRIPT', 'NORMALIZER', 'ENV_LIMITS', 'COMPOSE')}}
+FILE_REASONS = ('SOURCE_TYPE', 'SOURCE_OWNER', 'SOURCE_LINKS', 'SOURCE_WRITABLE', 'SOURCE_SIZE')
+NATIVE_STAGE_REASONS = {
+    **{stage: ('MISSING', 'NOT_DIRECTORY', 'LINK_REJECTED', 'ACCESS_DENIED', 'IO_FAILURE')
+       for stage in ('CURRENT_SCRIPTS', 'BACKUP_SCRIPT', 'NORMALIZER', 'COMPOSE')},
+    'ENV_LIMITS': ('MISSING', 'NOT_DIRECTORY', 'LINK_REJECTED', 'ACCESS_DENIED', 'IO_FAILURE', 'UTF8_INVALID'),
+    **{stage: ('TIMEOUT', 'UTF8_INVALID', 'IO_FAILURE')
+       for stage in ('SERVICE_ENTRY', 'DROPINS', 'TIMER_STATE', 'SERVICE_IDLE')}}
+SNAPSHOT_POINTS = ('CURRENT_IDS', 'CURRENT_ANCHORS', 'PROJECT_IDS', 'PROJECT_ROLES', 'ORIGINAL_SNAPSHOT', 'UNKNOWN')
+SNAPSHOT_REASONS = ('NATIVE_EXECUTION', 'NATIVE_OUTPUT', 'IDS_INVALID', 'LABELS_INVALID',
+    'LABELS_JSON_INVALID', 'LABELS_SHAPE_INVALID', 'LABELS_ID_INVALID', 'LABELS_TYPES_INVALID',
+    'LABELS_PROJECT_INVALID', 'LABELS_ROLE_INVALID', 'LABELS_PARENT_INVALID', 'LABELS_BASENAME_INVALID',
+    'LABELS_LITERAL_INVALID', 'LABELS_FILES_INVALID', 'ANCHOR_MISSING', 'ANCHOR_AMBIGUOUS',
+    'ROLE_DUPLICATE', 'ROLES_INCOMPLETE', 'ROLES_EXTRA', 'SEED_CHANGED', 'SET_CHANGED',
+    'ORIGINAL_SNAPSHOT', 'SNAPSHOT_FIELDS', 'UNKNOWN')
+CODES |= frozenset(stage + '_' + reason for stage, reasons in TRANSPORT_STAGE_REASONS.items() for reason in reasons)
+CODES |= frozenset(stage + '_' + reason for stage in ('BACKUP_SCRIPT', 'NORMALIZER', 'ENV_LIMITS', 'COMPOSE')
+                  for reason in FILE_REASONS)
+CODES |= frozenset(stage + '_' + reason for stage, reasons in NATIVE_STAGE_REASONS.items() for reason in reasons)
+CODES |= frozenset(stage + '_' + reason for stage in ('SNAPSHOT_INITIAL', 'SNAPSHOT_RECHECK', 'POSTCHECK')
+                  for reason in SNAPSHOT_REASONS)
 CONTROLLERS = ('remote-deploy.py', 'api-admin-scope.py', 'online-recharge-scope.py',
     'online-recharge-recovery.json', 'api-admin-pending-projection.py', 'api-admin-readonly.py',
     'api-admin-pending-receipt-wire.py', 'online-recharge-declaration-measurement.py',
@@ -54,6 +89,69 @@ class Rejected(RuntimeError):
 def need(ok, code='INPUT_INVALID'):
     if not ok:
         raise Rejected(code)
+
+
+def failure_code(error, stage, *, transport=None, diagnostic=None, snapshot_validate=None):
+    """Only fixed literals from exact loaded exception classes/issued capabilities."""
+    if type(stage) is not str or stage not in DIAGNOSTIC_STAGES:
+        return 'IO_FAILURE'
+    args = BaseException.args.__get__(error)
+    if type(error) is Rejected and len(args) == 1 and type(args[0]) is str and args[0] in CODES - {'OK'}:
+        return args[0]
+    if (transport is not None and type(error) is transport.Rejected and len(args) == 1
+            and type(args[0]) is str and args[0] in TRANSPORT_STAGE_REASONS.get(stage, ())):
+        return stage + '_' + args[0]
+    if stage in ('SNAPSHOT_INITIAL', 'SNAPSHOT_RECHECK', 'POSTCHECK') and diagnostic is not None:
+        try:
+            if type(error) is RuntimeError and args == () and diagnostic.owns(error):
+                row = diagnostic.get()
+                snapshot_validate(row)
+                if (type(row) is dict and row.get('status') == 'FAILED'
+                        and all(type(row.get(n)) is str for n in ('status', 'stage', 'code'))
+                        and row['stage'] in SNAPSHOT_POINTS and row['code'] in SNAPSHOT_REASONS):
+                    return stage + '_' + row['code']
+        except Exception:
+            pass
+    reason = None
+    if type(error) is subprocess.TimeoutExpired:
+        reason = 'TIMEOUT'
+    elif type(error) is UnicodeDecodeError:
+        reason = 'UTF8_INVALID'
+    elif type(error) in (OSError, FileNotFoundError, PermissionError, NotADirectoryError,
+                       IsADirectoryError, BlockingIOError, InterruptedError):
+        reason = {errno.ENOENT: 'MISSING', errno.ENOTDIR: 'NOT_DIRECTORY', errno.ELOOP: 'LINK_REJECTED',
+                  errno.EACCES: 'ACCESS_DENIED', errno.EPERM: 'ACCESS_DENIED'}.get(error.errno, 'IO_FAILURE')
+        if stage in ('SERVICE_ENTRY', 'DROPINS', 'TIMER_STATE', 'SERVICE_IDLE'):
+            reason = 'IO_FAILURE'
+    if reason in NATIVE_STAGE_REASONS.get(stage, ()):
+        return stage + '_' + reason
+    return 'IO_FAILURE'
+
+
+def read_original(authority, parent, name, *, stage, transport, limit=256*1024):
+    """Unchanged original read; diagnose a refusal only through its already-held FD."""
+    count = len(authority.fds)
+    try:
+        return authority.read(parent, name, limit=limit)
+    except Exception as error:
+        args = BaseException.args.__get__(error)
+        if (transport is not None and type(error) is transport.Rejected
+                and len(args) == 1 and type(args[0]) is str and args[0] == 'SOURCE_INVALID'
+                and len(authority.fds) == count + 1):
+            try:
+                row = os.fstat(authority.fds[-1])
+                reason = ('SOURCE_TYPE' if not stat.S_ISREG(row.st_mode) else
+                          'SOURCE_OWNER' if row.st_uid != 0 else
+                          'SOURCE_LINKS' if row.st_nlink != 1 else
+                          'SOURCE_WRITABLE' if stat.S_IMODE(row.st_mode) & 0o022 else
+                          'SOURCE_SIZE' if not 0 < row.st_size <= limit else None)
+                if reason is not None:
+                    raise Rejected(stage + '_' + reason) from None
+            except Rejected:
+                raise
+            except Exception:
+                pass
+        raise
 
 
 def sha(raw):
@@ -284,10 +382,12 @@ def empty_result(binding):
             'rawOutputSuppressed': True}
 
 
-def install(binding, scripts, authority, snapshot_read, *, source_check, clock=time.monotonic, pause=time.sleep, deadline=None):
+def install(binding, scripts, authority, snapshot_read, *, source_check, clock=time.monotonic, pause=time.sleep, deadline=None,
+            transport=None, diagnostic=None, snapshot_validate=None):
     """Install exact maintenance files; the original timer always remains running."""
     result = empty_result(binding)
     timer_state = None
+    stage = 'SOURCE_INITIAL'
     deadline = clock() + 760 if deadline is None else deadline
     def remaining():
         seconds = deadline - clock()
@@ -308,29 +408,44 @@ def install(binding, scripts, authority, snapshot_read, *, source_check, clock=t
         need(all(type(raw) is bytes and sha(raw) == binding['scriptPins'][name]
                  for name, raw in scripts.items()), 'SOURCE_INVALID')
         source_check()
+        stage = 'AUTHORITY_INITIAL'
         authority.check()
+        stage = 'SNAPSHOT_INITIAL'
         before = snapshot_read(authority.current)
         need(type(before) is str and HEX.fullmatch(before), 'SERVICES_CHANGED')
         result['servicesBeforeSha256'] = before
+        stage = 'CURRENT_SCRIPTS'
         original_scripts = authority.child(authority.current_fd, 'scripts', role='CURRENT_RELEASE')
-        authority.read(original_scripts, 'backup-aws-mysql.sh')
-        authority.read(original_scripts, 'mysql-dump-restore-normalizer.sed')
-        limits = retention_limits(authority.read(authority.current_fd, '.env.aws.production'))
-        authority.read(authority.current_fd, 'docker-compose.aws-mysql.yml', limit=1024**2)
+        stage = 'BACKUP_SCRIPT'
+        read_original(authority, original_scripts, 'backup-aws-mysql.sh', stage=stage, transport=transport)
+        stage = 'NORMALIZER'
+        read_original(authority, original_scripts, 'mysql-dump-restore-normalizer.sed', stage=stage, transport=transport)
+        stage = 'ENV_LIMITS'
+        limits = retention_limits(read_original(authority, authority.current_fd, '.env.aws.production', stage=stage, transport=transport))
+        stage = 'COMPOSE'
+        read_original(authority, authority.current_fd, 'docker-compose.aws-mysql.yml', stage=stage, transport=transport, limit=1024**2)
         destination = BASE / 'maintenance' / ('mysql-backup-' + binding['maintenanceSourceSha256'][:16])
         entry = destination / 'backup-aws-mysql.sh'
+        stage = 'SERVICE_ENTRY'
         prior_entry = control('show', SERVICE, '--property=ExecStart', '--value')
         need(entry_matches(prior_entry, BASE / 'current/scripts/backup-aws-mysql.sh')
              or entry_matches(prior_entry, entry), 'ENTRY_CHANGED')
+        stage = 'DROPINS'
         need(control('show', SERVICE, '--property=DropInPaths', '--value') in ('', str(DROPIN)), 'ENTRY_CHANGED')
+        stage = 'TIMER_STATE'
         timer_state = control('show', TIMER, '--property=ActiveState', '--value')
         need(timer_state in ('active', 'inactive'), 'TIMER_CHANGED')
+        stage = 'SERVICE_IDLE'
         wait_idle()
+        stage = 'AUTHORITY_RECHECK'
         authority.check()
+        stage = 'SOURCE_RECHECK'
         source_check()
+        stage = 'SNAPSHOT_RECHECK'
         need(snapshot_read(authority.current) == before, 'SERVICES_CHANGED')
         remaining()
         result['mutationAttempted'] = True
+        stage = 'MAINTENANCE'
         parent = checked_parent(destination.parent, create_leaf=True)
         os.close(parent)
         for name, raw in scripts.items():
@@ -339,23 +454,32 @@ def install(binding, scripts, authority, snapshot_read, *, source_check, clock=t
         references_plan(destination / 'backup-retention-protection.py', limits, timeout=remaining())
         for name, raw in scripts.items():
             store_exact(destination / name, raw, 0o700 if name.endswith('.sh') else 0o600, create=False)
+        stage = 'AUTHORITY_RECHECK'
         authority.check()
+        stage = 'SOURCE_RECHECK'
         source_check()
+        stage = 'SNAPSHOT_RECHECK'
         need(snapshot_read(authority.current) == before, 'SERVICES_CHANGED')
         # This drop-in applies to both the timer and fresh_backup's explicit start.
         configuration = ('[Service]\nExecStart=\nExecStart=' + str(entry) + '\n').encode()
+        stage = 'MAINTENANCE'
         store_exact(DROPIN, configuration, 0o600)
         control('daemon-reload')
         # A timer firing before reload may still have started the original oneshot.
+        stage = 'SERVICE_IDLE'
         wait_idle()
+        stage = 'ENTRY_VERIFY'
         need(entry_matches(control('show', SERVICE, '--property=ExecStart', '--value'), entry), 'ENTRY_CHANGED')
         need(control('show', SERVICE, '--property=DropInPaths', '--value') == str(DROPIN), 'ENTRY_CHANGED')
         result['entryVerified'] = True
         for name, raw in scripts.items():
             store_exact(destination / name, raw, 0o700 if name.endswith('.sh') else 0o600, create=False)
         store_exact(DROPIN, configuration, 0o600, create=False)
+        stage = 'AUTHORITY_RECHECK'
         authority.check()
+        stage = 'SOURCE_RECHECK'
         source_check()
+        stage = 'POSTCHECK'
         after = snapshot_read(authority.current)
         need(type(after) is str and HEX.fullmatch(after), 'SERVICES_CHANGED')
         result['servicesAfterSha256'] = after
@@ -365,8 +489,8 @@ def install(binding, scripts, authority, snapshot_read, *, source_check, clock=t
         result.update(currentUnchanged=True, servicesUnchanged=True, originalSourcePreserved=True,
                       status='COMPLETED', code='OK')
     except Exception as error:
-        if type(error) is Rejected and len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in CODES:
-            result['code'] = error.args[0]
+        result['code'] = failure_code(error, stage, transport=transport, diagnostic=diagnostic,
+                                      snapshot_validate=snapshot_validate)
         if result['mutationAttempted']:
             result['status'] = 'FAILED_MUTATED_UNVERIFIED'
     finally:
@@ -394,13 +518,16 @@ def remote_execute(binding, scripts, directory, snapshot, transport):
         except Exception:
             raise Rejected('SOURCE_INVALID') from None
     authority = None
+    stage = 'SOURCE_INITIAL'
     try:
         raw = source_check()
         modules = {name: snapshot.literal_module(raw[name],
                    'retention_' + name.replace('-', '_').replace('.', '_'), directory / name)
                    for name in ('online-recharge-scope.py', 'api-admin-scope.py', 'remote-deploy.py')}
         diagnostic = snapshot.snapshot_state()
+        stage = 'AUTHORITY_OPEN'
         authority = transport.Authority()
+        stage = 'CLIENT_SETUP'
         with tempfile.TemporaryDirectory(prefix='backup-retention-client-', dir=directory) as temporary:
             client = Path(temporary)
             client.chmod(0o700)
@@ -413,11 +540,11 @@ def remote_execute(binding, scripts, directory, snapshot, transport):
                 need(seconds > 0, 'SERVICE_BUSY')
                 return original_native(*arguments, timeout=min(timeout, 30, seconds))
             driver.native = bounded_native
-            return install(binding, scripts, authority, driver.snapshot, source_check=source_check, deadline=deadline)
+            return install(binding, scripts, authority, driver.snapshot, source_check=source_check, deadline=deadline,
+                           transport=transport, diagnostic=diagnostic, snapshot_validate=getattr(snapshot, 'snapshot_validate', None))
     except Exception as error:
         result = empty_result(binding)
-        if type(error) is Rejected and len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in CODES:
-            result['code'] = error.args[0]
+        result['code'] = failure_code(error, stage, transport=transport)
         return result
     finally:
         if authority is not None:
