@@ -278,8 +278,8 @@ validate_release_selection() {
     return 0
   fi
   local policy="${HISTORICAL_EXCEPTION:-none}"
-  if [[ "${RELEASE_OPERATION:-release}" == diagnose_online_backup_source* || "${RELEASE_OPERATION:-release}" == restore_online_backup_source* ]]; then
-    [[ "${RELEASE_OPERATION:-release}" == diagnose_online_backup_source || "${RELEASE_OPERATION:-release}" == restore_online_backup_source ]] || return 1
+  if [[ "${RELEASE_OPERATION:-release}" == diagnose_online_backup_source* || "${RELEASE_OPERATION:-release}" == restore_online_backup_source* || "${RELEASE_OPERATION:-release}" == repair_online_backup_parent_owner* ]]; then
+    [[ "${RELEASE_OPERATION:-release}" == diagnose_online_backup_source || "${RELEASE_OPERATION:-release}" == restore_online_backup_source || "${RELEASE_OPERATION:-release}" == repair_online_backup_parent_owner ]] || return 1
     [[ "$policy" == none && "${RELEASE_ADMIN_ONLY:-false}" == false ]] || return 1
     [[ "${EXPECTED_CURRENT:-}" == 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]] || return 1
     [[ "${RELEASE_COMMIT:-}" =~ ^[a-f0-9]{40}$ && "${GITHUB_REF:-}" == refs/heads/main ]] || return 1

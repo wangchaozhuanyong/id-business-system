@@ -162,6 +162,8 @@ export const historicalReleaseControlPaths = Object.freeze([
   'scripts/production-release/online-recharge-backup-source-recovery.test.py',
   'scripts/production-release/online-recharge-backup-source-recovery-transport.py',
   'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
+  'scripts/production-release/online-recharge-backup-parent-owner-repair.py',
+  'scripts/production-release/online-recharge-backup-parent-owner-repair.test.py',
   ...formalRuntimePackageControlPaths
 ]);
 const recharge4cProfile = 'deploy/aws/recharge-pro-4c-20261008.json';

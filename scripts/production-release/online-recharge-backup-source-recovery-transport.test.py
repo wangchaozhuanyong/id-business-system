@@ -286,7 +286,7 @@ class DirectoryDiagnosticTests(unittest.TestCase):
 
 
 class WireTests(unittest.TestCase):
-    def test_selection_is_two_exact_operations_and_fixed_baseline(self):
+    def test_selection_is_three_exact_operations_and_fixed_baseline(self):
         env = {'RELEASE_OPERATION': 'diagnose_online_backup_source', 'EXPECTED_CURRENT': t.BASELINE,
                'GITHUB_REF': 'refs/heads/main', 'RELEASE_COMMIT': PRODUCER['commit'],
                'SOURCE_TREE': PRODUCER['sourceTree'], 'GITHUB_RUN_ID': PRODUCER['workflowRunId'],
@@ -321,11 +321,12 @@ class WireTests(unittest.TestCase):
         for operation in t.OPERATIONS:
             payload, binding = t.parameters(operation, PRODUCER, source=SOURCE)
             self.assertLess(len(t.canonical(payload)), 20480)
-            self.assertEqual(binding['coreSha256'], t.sha((SOURCE / t.CORE_NAME).read_bytes()))
+            self.assertEqual(binding['coreSha256'], t.sha((SOURCE / t.operation_core(operation)).read_bytes()))
+            self.assertEqual(binding['origin'], t.operation_origin(operation))
             self.assertEqual(binding['snapshotSourceSha256'], t.sha((SOURCE / t.SNAPSHOT_NAME).read_bytes()))
             self.assertEqual(len(binding['controllerPins']), 11)
             self.assertEqual(len(binding['packagePins']), 10)
-            self.assertNotIn(t.CORE_NAME, binding['controllerPins'])
+            self.assertNotIn(t.operation_core(operation), binding['controllerPins'])
             body = unpack(payload['commands'][-1]).decode(); ast.parse(body)
             self.assertIn('DIRECTORY_ROLES=frozenset(', body)
             snapshot_source = (SOURCE / t.SNAPSHOT_NAME).read_text()
@@ -406,6 +407,94 @@ class WireTests(unittest.TestCase):
         unsafe = copy.deepcopy(value); unsafe['producer'] = {**PRODUCER, 'sourceTree': 'f' * 40}
         with self.assertRaises(t.Rejected):
             t.validate_remote(unsafe, value['operation'], binding, core, snapshot)
+
+
+class ParentRepairTransportTests(unittest.TestCase):
+    setUp = FixtureTests.setUp
+    tearDown = FixtureTests.tearDown
+    tree = FixtureTests.tree
+
+    def owner_core(self):
+        return t.module_from_bytes((SOURCE / t.OWNER_CORE_NAME).read_bytes(),
+                                   'fixture_owner_transport_core', SOURCE / t.OWNER_CORE_NAME)
+
+    def receipt(self, status='REPAIRED'):
+        return {'kind': 'BACKUP_PARENT_OWNER_REPAIR_V1', 'mode': 'repair_owner',
+                'status': status, 'code': 'OK' if status in ('NO_CHANGE', 'REPAIRED') else 'IO_FAILURE',
+                'localStateBefore': 'MATCH' if status == 'NO_CHANGE' else 'OWNER',
+                'localStateAfter': 'MATCH' if status in ('NO_CHANGE', 'REPAIRED') else 'NOT_MEASURED',
+                'mutationAttempted': status != 'NO_CHANGE', 'installed': False,
+                'rawOutputSuppressed': True}
+
+    def test_parent_operation_never_reads_mysql_history_environment_or_network(self):
+        owner = self.owner_core(); before = self.tree(); calls = []
+        def repair(parent, target, *, guard):
+            self.assertEqual(os.fstat(target).st_ino, (self.base / 'backups').stat().st_ino)
+            self.assertEqual(os.fstat(parent).st_ino, self.base.stat().st_ino)
+            guard(); calls.append(1); guard()
+            return self.receipt('NO_CHANGE')
+        with patch.object(t, 'Authority', side_effect=AssertionError('historical authority')), \
+                patch.object(t.ParentOwnerAuthority, 'expected', side_effect=AssertionError('history')), \
+                patch.object(t.ParentOwnerAuthority, 'read', side_effect=AssertionError('file read')), \
+                patch.object(t, 'head_read', side_effect=AssertionError('network')), \
+                patch.object(t, 'download', side_effect=AssertionError('network')), \
+                patch.object(owner, 'repair', repair):
+            value = t.execute_action('repair_online_backup_parent_owner', owner, self.read)
+        self.assertEqual(value['status'], 'COMPLETED')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([row['sourceRole'] for row in value['backups']], ['BACKUPS'])
+        self.assertFalse(value['installed'])
+        self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(self.tree(), before)
+
+    def test_parent_operation_preserves_mutation_on_core_and_post_guard_failures(self):
+        owner = self.owner_core()
+        with patch.object(owner, 'repair', return_value=self.receipt('FAILED_MUTATED_UNVERIFIED')):
+            value = t.execute_action('repair_online_backup_parent_owner', owner, self.read)
+        self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
+        self.assertTrue(value['mutationAttempted']); self.assertFalse(value['installed'])
+        calls = []
+        def changed(unused):
+            calls.append(1)
+            return ('a' if len(calls) == 1 else 'b') * 64
+        with patch.object(owner, 'repair', return_value=self.receipt()):
+            value = t.execute_action('repair_online_backup_parent_owner', owner, changed)
+        self.assertEqual(value['code'], 'SERVICES_CHANGED')
+        self.assertEqual(value['status'], 'FAILED_MUTATED_UNVERIFIED')
+        self.assertTrue(value['mutationAttempted'])
+
+    def test_parent_closed_wire_requires_actual_origin_one_role_and_separate_core(self):
+        owner = self.owner_core(); operation = 'repair_online_backup_parent_owner'
+        with patch.object(t, 'BASE', Path('/opt/id-business-v2')):
+            unused, binding = t.parameters(operation, PRODUCER, source=SOURCE)
+        self.assertEqual(binding['origin'], t.OWNER_ORIGIN)
+        self.assertNotEqual(binding['origin'], t.ORIGIN)
+        value = {'kind': 'ONLINE_BACKUP_SOURCE_EXECUTION_V1', 'operation': operation,
+                 'producer': PRODUCER, 'origin': t.OWNER_ORIGIN, 'source21Sha256': binding['source21Sha256'],
+                 'coreSha256': binding['coreSha256'], 'snapshotSourceSha256': binding['snapshotSourceSha256'],
+                 'status': 'COMPLETED', 'code': 'OK', 'currentUnchanged': True, 'servicesUnchanged': True,
+                 'servicesBeforeSha256': 'a' * 64, 'servicesAfterSha256': 'a' * 64,
+                 'snapshotDiagnostic': {'status': 'PASSED', 'stage': 'COMPLETE', 'code': 'NONE',
+                    'currentAnchorCount': 2, 'retainedServiceCount': 5, 'rawOutputSuppressed': True},
+                 'clientCleanupVerified': True, 'mutationAttempted': True, 'installed': False,
+                 'backups': [{'sourceRole': 'BACKUPS', 'receipt': self.receipt()}],
+                 'rawOutputSuppressed': True}
+        self.assertEqual(t.validate_remote(value, operation, binding, owner, snapshot), value)
+        changes = [('origin', t.ORIGIN), ('coreSha256', 'b' * 64), ('installed', True),
+                   ('backups', value['backups'] * 2), ('mutationAttempted', False)]
+        for key, item in changes:
+            with self.subTest(key=key), self.assertRaises(t.Rejected):
+                t.validate_remote({**value, key: item}, operation, binding, owner, snapshot)
+        for changed in ('RECOVERY', 'MYSQL', 'untrusted-path'):
+            altered = copy.deepcopy(value); altered['backups'][0]['sourceRole'] = changed
+            with self.subTest(role=changed), self.assertRaises(t.Rejected):
+                t.validate_remote(altered, operation, binding, owner, snapshot)
+        unsafe = copy.deepcopy(value); unsafe['backups'][0]['receipt']['owner'] = 'private-value'
+        with self.assertRaises(t.Rejected):
+            t.validate_remote(unsafe, operation, binding, owner, snapshot)
+        unsafe = copy.deepcopy(value); unsafe['producer'] = {**PRODUCER, 'sourceTree': 'f' * 40}
+        with self.assertRaises(t.Rejected):
+            t.validate_remote(unsafe, value['operation'], binding, owner, snapshot)
 
 
 if __name__ == '__main__':

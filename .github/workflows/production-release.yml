@@ -15,6 +15,7 @@ on:
           - repair_online_source_permissions
           - diagnose_online_backup_source
           - restore_online_backup_source
+          - repair_online_backup_parent_owner
           - verify_api_admin
           - verify_api_workspace
           - release_api_workspace
@@ -520,8 +521,8 @@ jobs:
           DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
         run: python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.py
 
-      - name: Independently diagnose or restore missing historical backup files
-        if: inputs.operation == 'diagnose_online_backup_source' || inputs.operation == 'restore_online_backup_source'
+      - name: Independently diagnose backup files or repair their fixed source
+        if: inputs.operation == 'diagnose_online_backup_source' || inputs.operation == 'restore_online_backup_source' || inputs.operation == 'repair_online_backup_parent_owner'
         env:
           CACHE_PLAN_SHA256: ${{ inputs.cache_plan_sha256 }}
           DIAGNOSTIC_COMMAND_ID: ${{ inputs.diagnostic_command_id }}
@@ -2285,7 +2286,7 @@ jobs:
           retention-days: 14
 
       - name: Save only the historical backup recovery safe receipt
-        if: always() && (inputs.operation == 'diagnose_online_backup_source' || inputs.operation == 'restore_online_backup_source')
+        if: always() && (inputs.operation == 'diagnose_online_backup_source' || inputs.operation == 'restore_online_backup_source' || inputs.operation == 'repair_online_backup_parent_owner')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: online-backup-source-recovery-${{ github.run_id }}-${{ github.run_attempt }}
