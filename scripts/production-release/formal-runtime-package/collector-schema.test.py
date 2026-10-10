@@ -50,6 +50,7 @@ class EndpointSchemaTests(unittest.TestCase):
         self.d.seal['stabilitySha256'] = a.fingerprint(a.derive.observation(
             raw, self.d.services, self.d.seal['files'], raw['actualResource']))
         with patch.object(M, 'binary_hash', return_value='e' * 64), \
+                patch.object(M.shutil, 'which', return_value=FIX['policy']()['dockerPath']), \
                 patch.object(a, 'native_permissions', return_value=None), \
                 patch.dict(a.REVIEWED_GENERATORS, {('25.0.16', '5.5.0'): FIX['policy']()}):
             return a.measure(self.d, self.directory, services=self.d.services,
@@ -181,6 +182,25 @@ class EndpointSchemaTests(unittest.TestCase):
             a.measure(self.d, self.directory, services=self.d.services, image_reference='source-api',
                       image_id=FIX['IMAGE'], source_seal=self.d.seal, stability_reader=self.observed)
         self.assertFalse(any('create' in command for command, _ in self.d.calls))
+
+
+class FixtureDockerPathIsolationTests(unittest.TestCase):
+    def test_host_missing_or_noncanonical_path_is_ignored_and_restored(self):
+        original_which=M.shutil.which
+        for host_path in (None,'/synthetic-host/bin/docker'):
+            with self.subTest(host_missing=host_path is None):
+                with patch.object(M.shutil,'which',return_value=host_path) as host_lookup:
+                    case=EndpointSchemaTests('test_reference_null_only_and_success_output_non_authorizing')
+                    case.setUp()
+                    try:case.test_reference_null_only_and_success_output_non_authorizing()
+                    finally:
+                        case.doCleanups()
+                        case.tearDown()
+                    self.assertIs(M.shutil.which,host_lookup)
+                    host_lookup.assert_not_called()
+                self.assertIs(M.shutil.which,original_which)
+        for capability in (M.daemon_identity_capability,M.daemon_socket_capability):
+            with self.assertRaisesRegex(RuntimeError,'^MOCK_RUNTIME_NOT_MEASURED$'):capability()
 
 
 class PinnedPrimarySourceTests(unittest.TestCase):
