@@ -669,7 +669,7 @@ class DeclarationFailureProjectionTests(unittest.TestCase):
         cls.online=SimpleNamespace(**S)
 
     def test_closed_enums_equal_captured_existing_fixed_codes(self):
-        expected=m.CODES|self.loader.CODES|self.qualified.DIAGNOSTIC_CODES|self.collector.ERROR_CODES|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
+        expected=m.CODES|self.loader.CODES|self.qualified.DIAGNOSTIC_CODES|self.collector.ERROR_CODES|frozenset(m._SOURCE_FILE_PERMISSION_CODES.values())|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
         self.assertEqual(m.DIAGNOSTIC_CODES,expected)
         self.assertEqual(S['DECLARATION_DIAGNOSTIC_CODES'],expected)
         self.assertEqual(S['DECLARATION_DIAGNOSTIC_STAGES'],m.DIAGNOSTIC_STAGES)
@@ -1097,5 +1097,135 @@ class LiveMaterialsAdapterTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):self.materials()
         self.mock_download.assert_not_called()
 
+
+
+class SourceFilePermissionDriverTests(unittest.TestCase):
+    # Reuse the existing local fixture helpers without inheriting its test methods.
+    base_fd=DriverTests.base_fd
+    file_hashes=DriverTests.file_hashes
+    raw=DriverTests.raw
+    make_reader=DriverTests.make_reader
+    assert_stable=DriverTests.assert_stable
+    source_binding=DriverTests.source_binding
+    measure=DriverTests.measure
+    run_driver=DriverTests.run_driver
+    registry_path=DriverTests.registry_path
+    diagnostic_failure=DriverTests.diagnostic_failure
+    def setUp(self):
+        DriverTests.setUp(self)
+        self.package=m._local_package()
+        self.inventory=load('source_permission_inventory',HERE.parent/'online-recharge-declaration-measurement.py')
+        self.collector=self.package.load_leaf('collector.py')
+        self.collector._configure(self.inventory,DERIVE,self.package.contract)
+        self.caps._diagnostic_errors=[(self.inventory.Rejected,self.collector.ERROR_CODES)]
+        self.binding=m._source_file_permission_binding(self.collector,self.inventory.Rejected)
+        self.assertIsNotNone(self.binding)
+        self.caps._source_file_permission_bindings=[self.binding]
+        self.source_directory=self.base/'source-permission';self.source_directory.mkdir(mode=0o700)
+
+    def fail_source(self,name,private,reason):
+        c=self.collector;path=self.source_directory/name
+        path.write_bytes(SENTINEL.encode());path.chmod(0o644 if reason=='PRIVATE_MODE' else 0o666 if reason=='PUBLIC_WRITABLE' else 0o600)
+        self.source_directory.chmod(0o770 if reason=='PARENT_WRITABLE' else 0o700)
+        parent=c._file_parent;fstat=os.fstat;parents=[]
+        def opened(value):
+            fd,chain=parent(value);parents.append(fd);return fd,chain
+        class OwnerMismatch:
+            st_uid=os.getuid()+1
+            @property
+            def st_mode(self):raise AssertionError('PARENT_UID_AND_MUST_SHORT_CIRCUIT')
+        def info(fd):return OwnerMismatch() if reason=='PARENT_UID' and fd in parents else fstat(fd)
+        with patch.object(c,'_file_parent',side_effect=opened),patch.object(c.os,'fstat',side_effect=info):
+            return c._sealed_file(path,private=private)
+
+    def test_actual_inner_acquire_nine_codes_reach_exact_six_field_api_projection(self):
+        fn=S['measure_declaration_equivalence'];api=W['_pending_online_declaration_measure']
+        rows=(('COMPOSE','docker-compose.aws-mysql.yml',False,'PUBLIC_WRITABLE'),('RELEASE','compose.release.json',False,'PUBLIC_WRITABLE'),('CLIENT','config.json',True,'PRIVATE_MODE'))
+        for role,name,private,leaf in rows:
+            for reason in ('PARENT_UID','PARENT_WRITABLE',leaf):
+                with self.subTest(role=role,reason=reason):
+                    self.online.snapshot=lambda *a:self.fail_source(name,private,reason)
+                    with patch.dict(fn.__globals__,{'_declaration_runtime_driver':lambda:m}):
+                        with self.assertRaises(S['DeclarationDriverError']) as caught:
+                            fn(self.controller,self.directory,self.recovery,producer=self.p,purpose='INDEPENDENT_PREFLIGHT')
+                    code=m._SOURCE_FILE_PERMISSION_CODES[(role,reason)]
+                    self.assertEqual(S['declaration_failure_diagnostic'](caught.exception),{'stage':'ACQUIRE','code':code})
+                    probe=DeclarationFailureProjectionTests();probe.online=SimpleNamespace(**S)
+                    projected,diagnostic=probe.api_failure(caught.exception)
+                    self.assertEqual(projected.args,('API_ADMIN_PENDING_ONLINE_DRIVER_'+code,))
+                    self.assertEqual(diagnostic,{'phase':'MANIFEST','step':'DECLARATION_ACQUIRE','service':'none','scope':'API_ADMIN_WORKSPACE','errorType':'RuntimeError','rawOutputSuppressed':True})
+                    raw=json.dumps({'code':projected.args[0],'workspaceDiagnostic':diagnostic})
+                    for secret in (str(self.source_directory),SENTINEL,'st_uid','st_mode','config.json','docker-compose.aws-mysql.yml','compose.release.json'):
+                        self.assertNotIn(secret,raw)
+                    self.assertFalse(self.registry_path().exists());self.assertEqual(self.measure_calls,0)
+        self.assertEqual(self.exit_calls,9);self.assertEqual(self.material_calls,9)
+
+    def test_other_stage_and_unissued_source_failures_stay_original_generic(self):
+        self.action=lambda:self.fail_source('config.json',True,'PRIVATE_MODE')
+        self.diagnostic_failure('MEASURE','SOURCE_FILE_PERMISSIONS','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.measure_calls,1)
+        self.action=None
+        alias=self.inventory.Rejected('SOURCE_FILE_PERMISSIONS');alias._source_file_permission_failure=('CLIENT','PRIVATE_MODE')
+        # Reproduce the corrupt-state gap through the actual inner catch: a
+        # caller-installed legal tuple for a fresh alias still stays generic.
+        self.collector._SOURCE_FILE_PERMISSION_FAILURE=(alias,'CLIENT','PRIVATE_MODE')
+        self.online.snapshot=lambda *a:(_ for _ in ()).throw(alias)
+        self.diagnostic_failure('ACQUIRE','SOURCE_FILE_PERMISSIONS','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.measure_calls,1)
+
+    def test_first_acquire_detail_survives_actual_qualified_cleanup_wrapper(self):
+        qualified=self.package.load_leaf('qualified.py');delivered=[]
+        self.caps.qualified=qualified
+        self.caps._diagnostic_errors.append((qualified.Rejected,qualified.CODES))
+        @contextmanager
+        def inner(d,session):
+            try:yield self.session
+            except Exception as error:delivered.append(error);raise
+            finally:
+                self.exit_calls+=1
+                raise qualified.Rejected('CLIENT_SOURCE_CHANGED')
+        with patch.object(qualified,'_reviewed_profile',return_value={'LOCAL_MOCK_ONLY':True}), \
+             patch.object(qualified,'_load_base',return_value=object()),patch.object(qualified,'_Session',return_value=SimpleNamespace()), \
+             patch.object(qualified,'_load_socket',return_value=object()),patch.object(qualified,'_acquisition_context',inner):
+            self.online.snapshot=lambda *a:self.fail_source('config.json',True,'PRIVATE_MODE')
+            self.diagnostic_failure('ACQUIRE','SOURCE_CLIENT_PRIVATE_MODE','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(len(delivered),1);self.assertEqual(delivered[0].args,('SOURCE_FILE_PERMISSIONS',))
+        self.assertEqual(self.exit_calls,1);self.assertEqual(self.measure_calls,0)
+
+    def test_binding_rejects_foreign_module_function_globals_alias_and_getter_failures(self):
+        import types
+        c=self.collector;cls=self.inventory.Rejected;getter=c.source_file_permission_failure
+        self.assertIsNone(m._source_file_permission_binding(SimpleNamespace(**vars(c)),cls))
+        self.assertIsNone(m._source_file_permission_binding(c,type('FreshAlias',(RuntimeError,),{})))
+        foreign=types.FunctionType(getter.__code__,dict(getter.__globals__),getter.__name__,None,getter.__closure__)
+        for value in (lambda error:('CLIENT','PRIVATE_MODE'),foreign,SimpleNamespace(__call__=getter)):
+            with patch.object(c,'source_file_permission_failure',value):self.assertIsNone(m._source_file_permission_binding(c,cls))
+        base={'stage':'ACQUIRE','code':'SOURCE_FILE_PERMISSIONS'};error=cls('SOURCE_FILE_PERMISSIONS')
+        for value in (lambda error:(_ for _ in ()).throw(ValueError(SENTINEL)),lambda error:['CLIENT','PRIVATE_MODE'],lambda error:('CLIENT','PUBLIC_WRITABLE'),lambda error:('CLIENT','PRIVATE_MODE','EXTRA')):
+            self.assertIs(m._source_file_permission_reason(base,error,[(cls,value)]),base)
+        class Derived(cls):pass
+        self.assertIs(m._source_file_permission_reason(base,Derived('SOURCE_FILE_PERMISSIONS'),[(cls,lambda error:('CLIENT','PRIVATE_MODE'))]),base)
+
+    def test_actual_factory_binds_final_configured_pinned_collector(self):
+        # Exercise the actual factory instead of injecting a caller-owned getter.
+        package=self.package;leaf=package.load_leaf;factories=[]
+        def load_leaf(name):
+            result=leaf(name)
+            if name=='qualified.py':result._configure=lambda external,pure,factory:factories.append(factory)
+            return result
+        external=SimpleNamespace(online=SimpleNamespace(**S),workspace=SimpleNamespace(**W),inventory=self.inventory,
+            paths={'api-admin-scope.py':HERE.parent/'api-admin-scope.py'})
+        with patch.object(m,'_local_package',return_value=package),patch.object(package,'load_leaf',side_effect=load_leaf), \
+             patch.object(package,'bind_consumers',return_value=external):
+            # The normal fixture patches _capabilities; stop it only for this factory check.
+            self.cap_patch.stop()
+            try:caps=m._capabilities(self.p)
+            finally:self.cap_patch.start()
+            self.assertEqual(caps._source_file_permission_bindings,[])
+            collected=factories[0]()
+        self.assertIs(collected.Rejected,self.inventory.Rejected)
+        self.assertEqual(caps._source_file_permission_bindings,[(self.inventory.Rejected,collected.source_file_permission_failure)])
+        self.assertIs(collected.source_file_permission_failure.__globals__,vars(collected))
+        self.assertEqual(caps._diagnostic_failure,[])
 
 if __name__=='__main__':unittest.main()

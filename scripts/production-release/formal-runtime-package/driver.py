@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 PARENT_FORMAL_TABLE = '1d090ebf96ad9186587f78c99842fce4503abc1fa710f1e4b1be82fca310706e'
 FORMAL_TABLE = '6e67c5dd29b7535604460c54ad726120e4c288a71e5debb59361d52ffb523f79'
-PACKAGE_MANIFEST_SHA = 'c0620c990b7bec7d906ab9e387bd8044945448da721adb45101da63adbdbaa76'
+PACKAGE_MANIFEST_SHA = '667a0de8fc6d6827a0b31e789ea9b8ba7ad8fda95ae2f991c8601b0d9cf047ad'
 MAX_REGISTRY = 32768
 HEX = re.compile(r'[a-f0-9]{64}\Z')
 PRODUCER_KEYS = ('commit','sourceTree','workflowRunId','workflowRunAttempt')
@@ -98,7 +98,49 @@ DIAGNOSTIC_CODES = frozenset((
     'CLI_COMPOSE_WRITABLE','CLI_DOCKER_LEAF_SYMLINK','CLI_DOCKER_NLINK',
     'CLI_DOCKER_NOT_REGULAR','CLI_DOCKER_OWNER_EXEC','CLI_DOCKER_SPECIAL_MODE',
     'CLI_DOCKER_UID','CLI_DOCKER_WRITABLE',
+    'SOURCE_COMPOSE_PARENT_UID',
+    'SOURCE_COMPOSE_PARENT_WRITABLE',
+    'SOURCE_COMPOSE_PUBLIC_WRITABLE',
+    'SOURCE_RELEASE_PARENT_UID',
+    'SOURCE_RELEASE_PARENT_WRITABLE',
+    'SOURCE_RELEASE_PUBLIC_WRITABLE',
+    'SOURCE_CLIENT_PARENT_UID',
+    'SOURCE_CLIENT_PARENT_WRITABLE',
+    'SOURCE_CLIENT_PRIVATE_MODE',
 ))
+
+_SOURCE_FILE_PERMISSION_CODES = {
+    ('COMPOSE','PARENT_UID'):'SOURCE_COMPOSE_PARENT_UID',
+    ('COMPOSE','PARENT_WRITABLE'):'SOURCE_COMPOSE_PARENT_WRITABLE',
+    ('COMPOSE','PUBLIC_WRITABLE'):'SOURCE_COMPOSE_PUBLIC_WRITABLE',
+    ('RELEASE','PARENT_UID'):'SOURCE_RELEASE_PARENT_UID',
+    ('RELEASE','PARENT_WRITABLE'):'SOURCE_RELEASE_PARENT_WRITABLE',
+    ('RELEASE','PUBLIC_WRITABLE'):'SOURCE_RELEASE_PUBLIC_WRITABLE',
+    ('CLIENT','PARENT_UID'):'SOURCE_CLIENT_PARENT_UID',
+    ('CLIENT','PARENT_WRITABLE'):'SOURCE_CLIENT_PARENT_WRITABLE',
+    ('CLIENT','PRIVATE_MODE'):'SOURCE_CLIENT_PRIVATE_MODE',
+}
+
+def _source_file_permission_binding(collector,rejected):
+    # Bind only the configured, byte-pinned collector's own exact function.
+    if type(collector) is not types.ModuleType:return None
+    namespace=vars(collector);getter=namespace.get('source_file_permission_failure')
+    if (namespace.get('Rejected') is rejected and type(getter) is types.FunctionType
+            and getter.__globals__ is namespace and getter.__name__=='source_file_permission_failure'):
+        return rejected,getter
+    return None
+
+def _source_file_permission_reason(failure,error,bindings):
+    if failure!={'stage':'ACQUIRE','code':'SOURCE_FILE_PERMISSIONS'}:return failure
+    for binding in bindings:
+        if type(binding) is not tuple or len(binding)!=2 or type(error) is not binding[0]:continue
+        try:
+            pair=binding[1](error)
+            if (type(pair) is tuple and len(pair)==2 and type(pair[0]) is str and type(pair[1]) is str
+                    and pair in _SOURCE_FILE_PERMISSION_CODES):
+                return {'stage':'ACQUIRE','code':_SOURCE_FILE_PERMISSION_CODES[pair]}
+        except Exception:pass
+    return failure
 
 def _literal_error(error,cls,codes):
     # Only the exact captured exception class may contribute its fixed literal.
@@ -266,7 +308,7 @@ def _local_package():
     except Exception as error:raise _rejected(error,'LOCAL_PACKAGE',bindings) from None
 
 def _capabilities(producer_value=None):
-    stage='LOCAL_PACKAGE';bindings=[];failures=[]
+    stage='LOCAL_PACKAGE';bindings=[];failures=[];source_permissions=[]
     try:
         package=_local_package();bindings=package._diagnostic_errors
         stage='SOURCE_PROFILE'
@@ -283,13 +325,17 @@ def _capabilities(producer_value=None):
             try:
                 collector=package.load_leaf('collector.py')
                 bindings.append((external.inventory.Rejected,collector.ERROR_CODES))
-                collector._configure(external.inventory,pure,package.contract);return collector
+                collector._configure(external.inventory,pure,package.contract)
+                binding=_source_file_permission_binding(collector,external.inventory.Rejected)
+                if binding is not None:source_permissions.append(binding)
+                return collector
             except Exception as error:
                 if not failures:failures.append(_reason(error,'CONFIGURE',bindings))
                 raise
         qualified._configure(external,pure,factory)
         return types.SimpleNamespace(online=external.online,workspace=external.workspace,qualified=qualified,
-            reader=reader,constructor=constructor,package=package,_diagnostic_errors=bindings,_diagnostic_failure=failures)
+            reader=reader,constructor=constructor,package=package,_diagnostic_errors=bindings,_diagnostic_failure=failures,
+            _source_file_permission_bindings=source_permissions)
     except Exception as error:raise _rejected(error,stage,bindings) from None
 
 
@@ -586,6 +632,7 @@ def measure_declaration_equivalence(d,directory,recovery,*,producer:dict,purpose
                     need(_read_registry(runner.BASE,p,caps.constructor)==prior,'ROOT_REGISTRY_CHANGED')
             except Exception as error:
                 failure=_reason(error,stage,getattr(caps,'_diagnostic_errors',()))
+                failure=_source_file_permission_reason(failure,error,getattr(caps,'_source_file_permission_bindings',()))
                 raise
             stage='CLOSE'
         # Private client cleanup/runtime exit must have succeeded before P1 is

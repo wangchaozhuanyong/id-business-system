@@ -380,4 +380,122 @@ class NativePermissionDiagnosticTests(unittest.TestCase):
             unittest.mock.call(True,'CLI_SOURCE_CHANGED'),unittest.mock.call(True,'DAEMON_SOURCE_NOT_MEASURED'),
             unittest.mock.call(True,'DAEMON_SOURCE_NOT_MEASURED')])
 
+
+class SourceFilePermissionDiagnosticTests(unittest.TestCase):
+    """Real sealed-file reads in a local owned fixture; no host/runtime tool calls."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='source-permission-',dir=HERE)
+        self.addCleanup(self.temp.cleanup);self.directory=Path(self.temp.name)
+        self.directory.chmod(0o700)
+        self.collector=FIX['load']('source_permission_collector',HERE/'collector.py')
+        self.collector._configure(M,D,json.loads((HERE/'contract.json').read_bytes()))
+
+    @staticmethod
+    def roles():
+        return (('COMPOSE','docker-compose.aws-mysql.yml',False,'PUBLIC_WRITABLE'),
+                ('RELEASE','compose.release.json',False,'PUBLIC_WRITABLE'),
+                ('CLIENT','config.json',True,'PRIVATE_MODE'))
+
+    def failure(self,name,private,reason):
+        # UID mismatch is synthesized because tests must not change actual ownership.
+        # Writable/mode predicates operate on actual local file/directory modes.
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        import os
+        c=self.collector;path=self.directory/name;path.write_bytes(b'LOCAL_CONTROL_ONLY')
+        path.chmod(0o644 if reason=='PRIVATE_MODE' else 0o666 if reason=='PUBLIC_WRITABLE' else 0o600)
+        self.directory.chmod(0o770 if reason=='PARENT_WRITABLE' else 0o700)
+        real_parent=c._file_parent;real_fstat=os.fstat;real_check=c.check;parents=[];issued=[]
+        def parent(value):
+            fd,chain=real_parent(value);parents.append(fd);return fd,chain
+        class OwnerMismatch:
+            st_uid=os.getuid()+1
+            @property
+            def st_mode(self):raise AssertionError('PARENT_UID_AND_MUST_SHORT_CIRCUIT')
+        def fstat(fd):
+            return OwnerMismatch() if reason=='PARENT_UID' and fd in parents else real_fstat(fd)
+        def check(ok,code):
+            try:return real_check(ok,code)
+            except c.Rejected as error:issued.append(error);raise
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(c,'_file_parent',side_effect=parent))
+                stack.enter_context(patch.object(c.os,'fstat',side_effect=fstat))
+                stack.enter_context(patch.object(c,'check',side_effect=check))
+                predicates=stack.enter_context(patch.object(c,'_source_file_permission_predicate',wraps=c._source_file_permission_predicate))
+                with self.assertRaises(c.Rejected) as caught:c._sealed_file(path,private=private)
+            self.assertEqual(caught.exception.args,('SOURCE_FILE_PERMISSIONS',))
+            self.assertIs(caught.exception,issued[-1]);self.assertIsNone(c._SOURCE_FILE_PERMISSION_REASON)
+            for fd in parents:
+                with self.assertRaises(OSError):real_fstat(fd)
+            return caught.exception,[call.args for call in predicates.call_args_list]
+        finally:self.directory.chmod(0o700)
+
+    def test_real_sealed_file_nine_roles_reasons_and_original_short_circuit(self):
+        for role,name,private,leaf in self.roles():
+            for reason in ('PARENT_UID','PARENT_WRITABLE',leaf):
+                with self.subTest(role=role,reason=reason):
+                    error,trace=self.failure(name,private,reason)
+                    self.assertEqual(self.collector.source_file_permission_failure(error),(role,reason))
+                    expected=[(False,'PARENT_UID')] if reason=='PARENT_UID' else [(True,'PARENT_UID'),(False,'PARENT_WRITABLE')] if reason=='PARENT_WRITABLE' else [(True,'PARENT_UID'),(True,'PARENT_WRITABLE'),(False,leaf)]
+                    self.assertEqual(trace,expected)
+
+    def test_original_leaf_type_owner_link_size_guards_remain_generic(self):
+        import os,stat
+        from types import SimpleNamespace
+        c=self.collector;path=self.directory/'config.json';path.write_bytes(b'LOCAL_CONTROL_ONLY');path.chmod(0o600)
+        real_stat=os.stat;fields=('st_dev','st_ino','st_uid','st_gid','st_mode','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+        variants=({'st_mode':stat.S_IFDIR|0o700},{'st_uid':os.getuid()+1},{'st_nlink':2},{'st_size':1024**2+1})
+        for bad in variants:
+            with self.subTest(guard=tuple(bad)):
+                def info(name,*args,**kwargs):
+                    value=real_stat(name,*args,**kwargs)
+                    return SimpleNamespace(**{**{field:getattr(value,field) for field in fields},**bad}) if name==path.name and kwargs.get('dir_fd') is not None else value
+                with patch.object(c.os,'stat',side_effect=info),patch.object(c,'_source_file_permission_predicate',wraps=c._source_file_permission_predicate) as observer:
+                    with self.assertRaises(c.Rejected) as caught:c._sealed_file(path,private=True)
+                self.assertEqual(caught.exception.args,('SOURCE_FILE_INVALID',));observer.assert_not_called()
+                self.assertIsNone(c.source_file_permission_failure(caught.exception))
+
+    def test_unknown_roles_private_identity_and_falsey_values_cannot_issue(self):
+        for name,private in (('unknown.yml',False),('config.json',False),('compose.release.json',True),('docker-compose.aws-mysql.yml',0),('config.json',1)):
+            with self.subTest(name=name,private=private):
+                error,_=self.failure(name,private,'PARENT_UID')
+                self.assertIsNone(self.collector.source_file_permission_failure(error))
+        c=self.collector
+        class Falsey:
+            def __bool__(self):raise AssertionError('OBSERVER_MUST_NOT_COERCE')
+        c._SOURCE_FILE_PERMISSION_REASON=None;value=Falsey()
+        self.assertIs(c._source_file_permission_predicate(value,'PARENT_UID'),value)
+        self.assertIsNone(c._SOURCE_FILE_PERMISSION_REASON)
+
+    def test_exact_issued_identity_args_alias_subclass_and_stale_are_closed(self):
+        c=self.collector;error,_=self.failure('config.json',True,'PRIVATE_MODE')
+        original=c._SOURCE_FILE_PERMISSION_FAILURE
+        alias=c.Rejected('SOURCE_FILE_PERMISSIONS');alias._source_file_permission_failure=('CLIENT','PRIVATE_MODE')
+        class Derived(c.Rejected):pass
+        for foreign in (alias,Derived('SOURCE_FILE_PERMISSIONS'),RuntimeError('SOURCE_FILE_PERMISSIONS')):
+            self.assertIsNone(c.source_file_permission_failure(foreign))
+            # A fresh exception plus a caller-replaced legal slot must not issue.
+            c._SOURCE_FILE_PERMISSION_FAILURE=(foreign,'CLIENT','PRIVATE_MODE')
+            self.assertIsNone(c.source_file_permission_failure(foreign))
+        copied=tuple(list(original));self.assertIsNot(copied,original)
+        for row in ((alias,'CLIENT','PRIVATE_MODE'),(error,'CLIENT','PARENT_UID'),copied,(error,'CLIENT','PUBLIC_WRITABLE'),[error,'CLIENT','PRIVATE_MODE'],(error,'CLIENT','PRIVATE_MODE','EXTRA'),(error,'UNKNOWN','PRIVATE_MODE')):
+            c._SOURCE_FILE_PERMISSION_FAILURE=row;self.assertIsNone(c.source_file_permission_failure(error))
+        c._SOURCE_FILE_PERMISSION_FAILURE=original
+        error.args=('SOURCE_FILE_PERMISSIONS','EXTRA');self.assertIsNone(c.source_file_permission_failure(error))
+        error.args=('SOURCE_FILE_PERMISSIONS',);self.assertEqual(c.source_file_permission_failure(error),('CLIENT','PRIVATE_MODE'))
+        path=self.directory/'config.json';path.chmod(0o600)
+        raw,_=c._sealed_file(path,private=True);self.assertEqual(raw,b'LOCAL_CONTROL_ONLY')
+        self.assertIsNone(c.source_file_permission_failure(error));self.assertIsNone(c._SOURCE_FILE_PERMISSION_FAILURE)
+
+    def test_failed_role_classification_cannot_replace_original_exception(self):
+        # A classification-only failure is diagnostic, never a new admission decision.
+        c=self.collector;error,_=self.failure('config.json',True,'PRIVATE_MODE')
+        self.assertEqual(error.args,('SOURCE_FILE_PERMISSIONS',))
+        path=self.directory/'config.json';path.chmod(0o644)
+        with patch.object(c,'_source_file_permission_original_error',side_effect=ValueError('LOCAL_CONTROL_ONLY')):
+            with self.assertRaises(c.Rejected) as caught:c._sealed_file(path,private=True)
+        self.assertEqual(caught.exception.args,('SOURCE_FILE_PERMISSIONS',))
+        self.assertIsNone(c._SOURCE_FILE_PERMISSION_FAILURE)
+
 if __name__=='__main__':unittest.main(verbosity=2)
