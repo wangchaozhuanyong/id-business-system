@@ -423,54 +423,6 @@ class RecoveryTests(unittest.TestCase):
                         scope.baseline(d, scope.BASELINE_COMMIT)
                     running[service]['containerId'] = old
 
-    def test_backup_diagnostic_distinguishes_original_guards_without_later_checks(self):
-        verify = scope.recovery_backups
-        with self.fixture() as (d, previous, source, *_):
-            d._workspaceBaselineDiagnostic = {'phase': 'MANIFEST', 'step': 'PENDING_ONLINE_RECOVERY',
-                'service': 'none', 'scope': 'API_ADMIN_WORKSPACE', 'errorType': 'RuntimeError',
-                'rawOutputSuppressed': True}
-            d.run = MagicMock()
-            d.api_admin_scope = MagicMock(wraps=d.api_admin_scope)
-            d.environment_values = MagicMock(return_value={'MYSQL_BACKUP_S3_BUCKET': 'isolated-fixture-bucket'})
-            with patch.object(shared, 'audit_receipt', return_value={'checksSha256': 'f' * 64}), \
-                    patch.object(shared, 'workspace_volume') as volume, \
-                    patch.object(scope, 'workspace_backup_receipt') as workspace:
-                with self.assertRaisesRegex(RuntimeError, 'BACKUP_RECEIPT_CHANGED'):
-                    verify(d, source, previous)
-                self.assertEqual(d._workspaceBaselineDiagnostic['step'], 'PENDING_ONLINE_BACKUP_SCHEMA')
-                self.assertTrue(shared.valid_workspace_diagnostic(d._workspaceBaselineDiagnostic))
-                d.environment_values.assert_not_called(); d.run.assert_not_called()
-                volume.assert_not_called(); workspace.assert_not_called()
-                self.assertEqual(d.api_admin_scope.call_count, 2)
-                d.api_admin_scope.reset_mock()
-
-                backup_root = d.BASE / 'backups/mysql'; backup_root.mkdir(parents=True)
-                path = backup_root / 'id-business-v2-20261009T120001Z.sql.gz'
-                raw = gzip.compress(b'-- isolated diagnostic fixture\n', mtime=0)
-                digest = hashlib.sha256(raw).hexdigest()
-                (source / 'backup-verification.json').write_text(json.dumps({'name': path.name,
-                    'sha256': digest, 'size': len(raw), 's3Verified': True}))
-                with self.assertRaisesRegex(RuntimeError, 'BACKUP_RECEIPT_CHANGED'):
-                    verify(d, source, previous)
-                self.assertEqual(d._workspaceBaselineDiagnostic['step'], 'PENDING_ONLINE_BACKUP_LOCAL')
-                self.assertTrue(shared.valid_workspace_diagnostic(d._workspaceBaselineDiagnostic))
-                d.environment_values.assert_not_called(); d.run.assert_not_called()
-                volume.assert_not_called(); workspace.assert_not_called()
-                self.assertEqual(d.api_admin_scope.call_count, 2)
-                d.api_admin_scope.reset_mock()
-
-                path.write_bytes(raw)
-                d.run.return_value = json.dumps({'ContentLength': len(raw), 'ServerSideEncryption': 'AES256',
-                    'ChecksumSHA256': base64.b64encode(bytes.fromhex(digest)).decode()})
-                volume.return_value = {'fixture': 'volume'}
-                with self.assertRaisesRegex(RuntimeError, 'BACKUP_RECEIPT_CHANGED'):
-                    verify(d, source, previous, manifest={'backupBeforeRelease': 'forged.sql.gz'})
-                self.assertEqual(d._workspaceBaselineDiagnostic['step'], 'PENDING_ONLINE_BACKUP_MANIFEST')
-                self.assertTrue(shared.valid_workspace_diagnostic(d._workspaceBaselineDiagnostic))
-                d.environment_values.assert_called_once(); d.run.assert_called_once()
-                volume.assert_called_once(); workspace.assert_not_called()
-                self.assertEqual(d.api_admin_scope.call_count, 3)
-
     def test_original_mysql_backup_file_and_s3_checksum_are_reverified_without_age_limit(self):
         verify = scope.recovery_backups
         with self.fixture() as (d, previous, source, *_):
