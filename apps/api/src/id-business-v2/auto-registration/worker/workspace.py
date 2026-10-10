@@ -29,6 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import Text, text
 from sqlalchemy.types import TypeDecorator
+from release_safety import maintenance_active
 
 WORKER_DIR = Path(__file__).resolve().parent
 UPSTREAM_DIR = WORKER_DIR.parent / "upstream"
@@ -56,7 +57,7 @@ def redact_text(value: Any) -> str:
             line = re.sub(r"(?<![\w-])eyJ[\w-]+\.[\w-]+\.[\w-]+", "[令牌已隐藏]", line)
             line = re.sub(r"([?&](?:code|state|code_verifier|key)\s*=)[^&#\s]+", r"\1[凭据已隐藏]", line, flags=re.I)
             safe.append(line)
-    return "\n".join(safe)
+    return "\n".join(safe).replace("apple_hidden", "苹果隐藏邮箱")
 
 
 def sanitize_payload(value: Any, *, log_context: bool = False, mask_secrets: bool = False) -> Any:
@@ -221,6 +222,9 @@ def transform_asset(source: str, *, html: bool = False, asset_name: str = "") ->
     source = re.sub(r"(?P<quote>[\"'`])/(?P<path>api|static)(?=[/\"'`])", lambda match: match["quote"] + WORKSPACE_PREFIX + "/" + match["path"], source)
     source = re.sub(r"(?P<attribute>href|src|action)=(?P<quote>[\"'])/(?P<path>(?!/)[^\"']*)", lambda match: match["attribute"] + "=" + match["quote"] + ("/" + match["path"] if match["path"].startswith(WORKSPACE_PREFIX.lstrip("/")) else WORKSPACE_PREFIX + "/" + match["path"]), source)
     source = source.replace("${window.location.host}/api/", "${window.location.host}" + WORKSPACE_PREFIX + "/api/")
+    if asset_name == "utils.js":
+        # Extend only the served display map; retain the upstream stored value.
+        source += "\nstatusMap.service.apple_hidden = '苹果隐藏邮箱';\n"
     if asset_name in {"accounts.js", "app.js"}:
         source = source.replace('data-pwd="${escapeHtml(account.password)}"', 'data-account-id="${account.id}"')
         source = source.replace("copyToClipboard(btn.dataset.pwd);", "window.idWorkspaceCopyPassword(btn.dataset.accountId);")
@@ -259,9 +263,10 @@ window.idWorkspaceTogglePassword = async function(element, id) {
 
 
 class WorkspaceGatewayBoundary:
-    def __init__(self, app: Any, internal_token: str):
+    def __init__(self, app: Any, internal_token: str, runtime_dir: Path):
         self.app = app
         self.internal_token = internal_token
+        self.runtime_dir = runtime_dir
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -279,12 +284,34 @@ class WorkspaceGatewayBoundary:
             else:
                 await JSONResponse({"detail": "请通过系统登录后访问"}, status_code=401)(scope, receive, send)
             return
+        if scope["type"] == "http" and scope.get("method", "GET") not in {"GET", "HEAD", "OPTIONS"} and maintenance_active(self.runtime_dir):
+            await JSONResponse({"detail": "自动注册正在维护，请稍后重试"}, status_code=503)(scope, receive, send)
+            return
         path = scope["path"]
         if requires_sensitive_access(path, scope.get("method", "GET")) and headers.get("x-id-workspace-sensitive-access") != "audited":
             await JSONResponse({"detail": "敏感资料必须经过系统权限校验和审计"}, status_code=403)(scope, receive, send)
             return
         if scope["type"] == "websocket":
+            ws_closed = False
+
+            async def safe_ws_receive() -> dict[str, Any]:
+                nonlocal ws_closed
+                message = await receive()
+                if message["type"] == "websocket.receive" and maintenance_active(self.runtime_dir):
+                    try:
+                        payload = json.loads(message.get("text") or message.get("bytes") or "")
+                        heartbeat = isinstance(payload, dict) and payload.get("type") == "ping"
+                    except (ValueError, TypeError):
+                        heartbeat = False
+                    if not heartbeat:
+                        ws_closed = True
+                        await send({"type": "websocket.close", "code": 1013, "reason": "自动注册正在维护，请稍后重试"})
+                        return {"type": "websocket.disconnect", "code": 1013}
+                return message
+
             async def safe_ws_send(message: dict[str, Any]) -> None:
+                if ws_closed:
+                    return
                 if message["type"] == "websocket.accept" and protocol_auth:
                     message = {**message, "subprotocol": self.internal_token}
                 if message["type"] == "websocket.send" and message.get("text"):
@@ -293,7 +320,7 @@ class WorkspaceGatewayBoundary:
                     except (ValueError, TypeError):
                         message = {**message, "text": redact_text(message["text"])}
                 await send(message)
-            await self.app(scope, receive, safe_ws_send)
+            await self.app(scope, safe_ws_receive, safe_ws_send)
             return
         start = None
         chunks = []
@@ -359,6 +386,8 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
 
     def verify_resources() -> None:
         required = [
+            WORKER_DIR / "apple_mailboxes.py",
+            WORKER_DIR / "release_safety.py",
             WORKER_DIR / "id-workspace.js",
             WORKER_DIR / "id-workspace.css",
             PROJECT_ROOT / "apps/admin/src/v2/styles/base.css",
@@ -385,7 +414,9 @@ def create_workspace_app(config: dict[str, Any]) -> FastAPI:
     for handler in logging.getLogger().handlers:
         handler.addFilter(SecretLogFilter())
     app = FastAPI(title=BRAND, docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(WorkspaceGatewayBoundary, internal_token=internal_token)
+    app.add_middleware(WorkspaceGatewayBoundary, internal_token=internal_token, runtime_dir=runtime_dir)
+    from apple_mailboxes import install_apple_mailboxes
+    install_apple_mailboxes(app, models, sessions, task_manager, redact_text)
     api_router = importlib.import_module("src.web.routes").api_router
     ws_router = importlib.import_module("src.web.routes.websocket").router
 

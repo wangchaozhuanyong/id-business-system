@@ -4,6 +4,8 @@
       v-model="accountId"
       filterable
       aria-label="选择 ChatGPT 账号"
+      name="recharge-account-entry"
+      autocomplete="off"
       placeholder="从 ChatGPT 账号资料中选择"
       :loading="loading"
       :disabled="disabled"

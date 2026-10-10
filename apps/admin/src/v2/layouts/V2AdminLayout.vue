@@ -288,7 +288,7 @@
               </section>
               <section v-if="isAdmin" class="v2-notification__section">
                 <header>
-                  <strong>银充续费提醒</strong>
+                  <strong>比特充值续费提醒</strong>
                   <small v-if="bankRenewalSummary"
                     >提前 {{ bankRenewalSummary.warningDays }} 天</small
                   >
@@ -317,12 +317,12 @@
                       >
                     </li>
                   </ul>
-                  <p v-else>当前没有银充续费提醒。</p>
+                  <p v-else>当前没有比特充值续费提醒。</p>
                   <AppButton variant="primary" size="small" @click="openRenewalWarnings"
                     >打开续费操作台</AppButton
                   >
                 </template>
-                <p v-else>银充提醒暂时无法加载。</p>
+                <p v-else>比特充值提醒暂时无法加载。</p>
               </section>
             </div>
           </div>

@@ -455,7 +455,10 @@ function isRegistrationHydrationOnly(paths) {
 
 const adminInteractionAcceptance = new Set([
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
-  'scripts/acceptance-v2-refresh-interaction.mjs'
+  'scripts/acceptance-v2-refresh-interaction.mjs',
+  'scripts/acceptance-v2-auto-recharge.mjs',
+  'scripts/acceptance-v2-bank-recharge-ui.mjs',
+  'scripts/lib/vite-cli.mjs'
 ]);
 export function isAdminOnly(paths) {
   return (
@@ -612,7 +615,7 @@ export function adminCheckCommands(mode, paths) {
     'test',
     '--workspace',
     '@apple-business/admin',
-    ...(mode === 'admin'
+    ...(mode === 'admin' || hasAppleMailboxScope(paths)
       ? []
       : [
           '--',
@@ -672,6 +675,25 @@ const migration =
 const schema = 'apps/api/prisma-mysql/schema.prisma';
 const allowed =
   /^(?:apps\/admin\/src\/v2\/features\/auto-recharge\/|apps\/api\/src\/id-business-v2\/auto-recharge\/|packages\/shared\/src\/v2\/auto-recharge\.ts$|docs\/|scripts\/ci-recharge-[\w.-]+$|scripts\/check-v2-(?:decimal-standard|ui-language)\.mjs$|scripts\/acceptance-v2-auto-recharge\.mjs$|\.github\/workflows\/quality\.yml$)/;
+const appleMailboxApiPaths = new Set([
+  'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.controller.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.spec.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+  'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts',
+  'apps/api/src/id-business-v2/auto-registration/auto-registration.module.ts',
+  'apps/api/src/id-business-v2/auto-registration/auto-registration.service.ts',
+  'apps/api/src/id-business-v2/auto-registration/worker/apple_mailboxes.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/release_safety.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_apple_mailboxes.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_release_safety.py',
+  'apps/api/src/id-business-v2/auto-registration/worker/workspace.py'
+]);
+const bitOrdersAcceptancePaths = new Set([
+  'scripts/acceptance-v2-bank-recharge-ui.mjs',
+  'scripts/acceptance-v2-bit-orders-mysql.mjs',
+  'scripts/acceptance-v2-table-layout.mjs'
+]);
+export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
   if (paths.includes(rechargePricingProfile))
@@ -742,6 +764,15 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
     return isRechargeOnly(paths, oldSchema, newSchema);
   if (paths.includes(registrationProfileObservationProfile))
     return isRechargeOnly(paths, oldSchema, newSchema);
+  if (hasAppleMailboxScope(paths))
+    return paths.every(
+      (path) =>
+        appleMailboxApiPaths.has(path) ||
+        allowed.test(path) ||
+        isAdminOnly([path]) ||
+        isCiOnly([path]) ||
+        bitOrdersAcceptancePaths.has(path)
+    );
   return (
     isRegistrationHydrationOnly(paths) ||
     isRechargeOnly(paths, oldSchema, newSchema) ||

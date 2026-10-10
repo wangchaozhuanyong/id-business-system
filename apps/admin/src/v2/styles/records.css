@@ -194,10 +194,10 @@
 }
 
 .v2-records-list > .v2-unified-table-shell {
-  /* 空状态基础高度加上共享表格实际列设置栏，少量数据切换为空时保持原框架。 */
+  /* 表头可包含问号等控件，按共享表格实测高度预留空状态和列设置栏。 */
   min-height: max(
     var(--v2-records-list-body-min-height, 0px),
-    calc(272px + var(--v2-table-toolbar-height, 0px))
+    calc(230px + var(--v2-table-header-height, 42px) + var(--v2-table-toolbar-height, 0px))
   );
 }
 

@@ -26,6 +26,26 @@ beforeEach(() => {
   mock.callback.mockResolvedValue({ ok: true });
 });
 describe('网页直连登录任务生命周期', () => {
+  it('自动验证码的有效期沿原任务传递给官网提交执行器', async () => {
+    const scope = effectScope();
+    const controller = scope.run(() => useBitBrowserDirectOpen(async () => undefined, vi.fn()))!;
+    let received: unknown;
+    mock.run.mockImplementation(async (_settings, _credential, _name, _signal, hooks) => {
+      received = await hooks.code();
+      return { status: 'session_ready', account_matched: true };
+    });
+    await controller.start(
+      launch(),
+      { login: { email: 'fixture@example.com', password: 'fixture-password' } },
+      '窗口'
+    );
+    await vi.waitFor(() => expect(mock.run).toHaveBeenCalledOnce());
+    const expiresAt = new Date(Date.now() + 30_000).toISOString();
+    controller.submitCode('job-fixture', '123456', expiresAt);
+    await vi.waitFor(() => expect(controller.running.value).toBe(false));
+    expect(received).toEqual({ token: '123456', expiresAt });
+    scope.stop();
+  });
   it('通过原任务授权回调取得归属证明，再把原窗口编号写回执行状态', async () => {
     const ownedProfile = {
       sourceJobId: 'source-job',

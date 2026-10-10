@@ -1,11 +1,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
-import {
-  divideDecimalStrings,
-  multiplyDecimalStrings,
-  roundDecimalString
-} from '@apple-business/shared';
+import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -17,6 +13,7 @@ import { bankRechargeApi, type BankRechargeOrder } from './bank-recharge-api';
 import { emptyForm, emptyRefundForm } from './bank-recharge-order-form';
 import { bankRechargePlanLabel as planLabel } from './recharge-plan-options';
 import { bankRechargeOrderStatusLabel as statusLabel } from './recharge-presentation';
+import { useBitOrderPricing } from './useBitOrderPricing';
 
 export function useBankRechargeOrdersPage() {
   const route = useRoute();
@@ -27,7 +24,11 @@ export function useBankRechargeOrdersPage() {
   const linkedOrderNo = computed(() =>
     typeof route.query.orderNo === 'string' && accountIdFilter.value ? route.query.orderNo : ''
   );
-  const financeCurrencies = ['CNY', 'MYR', 'USD', 'USDT'];
+  const financeCurrencies = V2_FINANCE_CURRENCIES;
+  const pricing = useBitOrderPricing();
+  const executionSource = useV2SessionDraft('bit-orders:execution-source', () =>
+    ref<'' | 'bitbrowser'>('bitbrowser')
+  );
   const page = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:page', () => ref(1));
   const pageSize = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:pageSize', () =>
     ref(20)
@@ -45,6 +46,7 @@ export function useBankRechargeOrdersPage() {
   const status = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:status', () => ref(''));
   const expiry = useV2SessionDraft('bank-orders:expiry', () => ref<'all' | 'expired'>('all'));
   watch(expiry, () => (page.value = 1));
+  watch(executionSource, () => (page.value = 1));
   const drawerOpen = ref(false);
   const quickCustomerOpen = ref(false);
   const cardOpen = ref(false);
@@ -113,7 +115,8 @@ export function useBankRechargeOrdersPage() {
     status: status.value,
     expiry: expiry.value,
     deleted: deletedFilter.value,
-    accountId: accountIdFilter.value
+    accountId: accountIdFilter.value,
+    executionSource: executionSource.value || undefined
   });
   const ordersQuery = useV2ModuleQuery<Awaited<ReturnType<typeof bankRechargeApi.listOrders>>>({
     moduleKey: 'bank-recharge-orders',
@@ -124,9 +127,12 @@ export function useBankRechargeOrdersPage() {
       Date.now() + Math.max(1000, Date.parse(result.revalidateAt) - Date.parse(result.evaluatedAt)),
     query: ({ signal }) => bankRechargeApi.listOrders(listQuery(), { signal })
   });
-  watch([page, pageSize, keyword, status, expiry, accountIdFilter, deletedFilter], () => {
-    void ordersQuery.ensureFresh();
-  });
+  watch(
+    [page, pageSize, keyword, status, expiry, accountIdFilter, deletedFilter, executionSource],
+    () => {
+      void ordersQuery.ensureFresh();
+    }
+  );
   watch([accountIdFilter, linkedOrderNo], () => {
     keywordInput.value = linkedOrderNo.value;
     keyword.value = linkedOrderNo.value;
@@ -205,21 +211,6 @@ export function useBankRechargeOrdersPage() {
   const newFeeMode = computed(
     () => selected.value?.accountingVersion === 'subscription_cost_v2' || form.confirmFeeConversion
   );
-  const feePreview = computed(() => {
-    try {
-      const fee = divideDecimalStrings(
-        multiplyDecimalStrings(form.chargeAmount, form.customerFeeRate),
-        '100'
-      );
-      const precision =
-        activeCurrencies.value.find((item) => item.code === form.chargeCurrencyCode)?.minorUnits ??
-        2;
-      return roundDecimalString(fee, precision);
-    } catch {
-      return '—';
-    }
-  });
-
   function applyFilters() {
     keyword.value = keywordInput.value.trim();
     status.value = statusInput.value;
@@ -301,6 +292,14 @@ export function useBankRechargeOrdersPage() {
     correcting.value = true;
     correctionReason.value = correctionReasons.get(row.id) ?? '';
   }
+  function applyPricingDefaults() {
+    if (!selected.value || readonly.value || !newFeeMode.value) return;
+    try {
+      ElMessage.info(pricing.applyDefaults(form, selected.value));
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '请核对金额与汇率');
+    }
+  }
   function customerCreated(customer: { id: string; name: string }) {
     customers.value = [customer, ...customers.value.filter((item) => item.id !== customer.id)];
     form.customerId = customer.id;
@@ -332,7 +331,8 @@ export function useBankRechargeOrdersPage() {
         drawerOpen.value = false;
         await ordersQuery.refresh();
         openEdit(created);
-        ElMessage.success('银充订单已建立，请继续补全手续费、收款和到期时间');
+        executionSource.value = '';
+        ElMessage.success('比特订单已建立，请继续补全手续费、收款和到期时间');
       } else if (selected.value) {
         const payload = {
           ...(selected.value.source === 'manual'
@@ -399,7 +399,7 @@ export function useBankRechargeOrdersPage() {
         completeFormDraft();
         if (selected.value) correctionReasons.delete(selected.value.id);
         drawerOpen.value = false;
-        ElMessage.success(correcting.value ? '银充订单已更正并重新入账' : '银充订单已保存');
+        ElMessage.success(correcting.value ? '比特订单已更正并重新入账' : '比特订单已保存');
         await ordersQuery.refresh();
       }
     } catch (error) {
@@ -412,7 +412,7 @@ export function useBankRechargeOrdersPage() {
     working.value = true;
     try {
       await bankRechargeApi.completeOrder(row.id, row.updatedAt);
-      ElMessage.success('银充订单已完成并入账');
+      ElMessage.success('比特订单已完成并入账');
       await ordersQuery.refresh();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
@@ -488,7 +488,7 @@ export function useBankRechargeOrdersPage() {
       currencyOpen.value = false;
       Object.assign(currencyForm, { code: '', name: '', minorUnits: 2 });
       await currenciesQuery.refresh();
-      ElMessage.success('银充币种已新增');
+      ElMessage.success('比特充值币种已新增');
     } catch (error) {
       saveError.value = getApiErrorMessage(error);
     } finally {
@@ -524,6 +524,9 @@ export function useBankRechargeOrdersPage() {
   }
 
   return {
+    pricing,
+    executionSource,
+    applyPricingDefaults,
     deletedFilter,
     expiry,
     financeCurrencies,
@@ -568,7 +571,6 @@ export function useBankRechargeOrdersPage() {
     availableCards,
     fundingAccounts,
     receivedAccounts,
-    feePreview,
     feeAccounts,
     newFeeMode,
     emptyForm,

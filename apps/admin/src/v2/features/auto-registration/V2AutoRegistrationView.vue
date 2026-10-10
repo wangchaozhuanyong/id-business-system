@@ -1,16 +1,20 @@
 <template>
   <section class="v2-page-layout v2-auto-registration-page">
-    <V2PageContext description="管理注册任务、账号、邮箱服务、订阅与系统设置。">
+    <V2PageContext description="管理注册任务、账号、苹果隐藏邮箱、邮箱服务、订阅与系统设置。">
       <template #filters>
         <div class="v2-auto-registration-tabs" role="tablist" aria-label="自动注册功能">
           <AppButton
-            v-for="page in autoRegistrationPages"
+            v-for="page in parentPages"
             :id="`registration-tab-${page.path.slice(1) || 'console'}`"
             :key="page.path"
             role="tab"
             :variant="activePage === page.path ? 'primary' : 'soft'"
             :aria-selected="activePage === page.path"
-            aria-controls="registration-workspace"
+            :aria-controls="
+              page.path === appleMailboxPage.path
+                ? 'registration-apple-mailboxes'
+                : 'registration-workspace'
+            "
             :disabled="!canAccess"
             @click="navigateWorkspace(page.path)"
           >
@@ -19,13 +23,24 @@
         </div>
       </template>
       <template #actions>
-        <AppButton variant="soft" :disabled="!canAccess" @click="workspaceQuery.refresh">
+        <AppButton
+          v-if="activePage !== appleMailboxPage.path"
+          variant="soft"
+          :disabled="!canAccess"
+          @click="workspaceQuery.refresh"
+        >
           刷新
         </AppButton>
       </template>
     </V2PageContext>
 
+    <V2AppleMailboxes
+      v-if="activePage === appleMailboxPage.path && canAccess"
+      id="registration-apple-mailboxes"
+      role="tabpanel"
+    />
     <V2AsyncRegion
+      v-else
       skeleton="form"
       :phase="queryPhase"
       :error="errorMessage"
@@ -65,8 +80,10 @@ import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { autoRegistrationApi } from './api';
 import {
   autoRegistrationPages,
+  appleMailboxPage,
   type AutoRegistrationDraft,
   type AutoRegistrationPage,
+  type AutoRegistrationParentPage,
   type AutoRegistrationStatus
 } from './contracts';
 import {
@@ -75,6 +92,9 @@ import {
   registrationWorkspaceUrl,
   sanitizeRegistrationDraft
 } from './bridge';
+import V2AppleMailboxes from './V2AppleMailboxes.vue';
+
+const parentPages = [autoRegistrationPages[0], appleMailboxPage, ...autoRegistrationPages.slice(1)];
 
 const auth = useAuthStore();
 const identityChanged = ref(false);
@@ -82,10 +102,12 @@ const canAccess = computed(
   () => !identityChanged.value && auth.writesAllowed && !!auth.user?.roles.includes('admin')
 );
 const activePage = useV2SessionDraft('auto-registration:active-page', () =>
-  ref<AutoRegistrationPage>('/')
+  ref<AutoRegistrationParentPage>('/')
 );
 // 只控制父页面发起的导航，子页面内部跳转不重设 iframe 地址。
-const frameEntryPage = ref(activePage.value);
+const frameEntryPage = ref<AutoRegistrationPage>(
+  activePage.value === appleMailboxPage.path ? '/' : activePage.value
+);
 const pageDrafts = useV2SessionDraft(
   'auto-registration:page-drafts',
   () => new Map<AutoRegistrationPage, AutoRegistrationDraft>()
@@ -101,7 +123,7 @@ const workspaceQuery = useV2ModuleQuery<AutoRegistrationStatus & { expiresAt?: s
   moduleKey: 'auto-registration',
   scope: 'auto-registration',
   key: 'workspace',
-  enabled: () => canAccess.value,
+  enabled: () => canAccess.value && activePage.value !== appleMailboxPage.path,
   getRevalidateAt: (data) => {
     const expiresAt = data.expiresAt ? Date.parse(data.expiresAt) : NaN;
     return Number.isFinite(expiresAt) ? Math.max(Date.now() + 1_000, expiresAt - 30_000) : null;
@@ -120,18 +142,19 @@ const errorMessage = computed(() =>
 );
 const workspaceUrl = computed(() => {
   const status = workspaceQuery.data.value;
-  return canAccess.value && status?.ready
+  return canAccess.value && activePage.value !== appleMailboxPage.path && status?.ready
     ? registrationWorkspaceUrl(status.workspacePath, frameEntryPage.value)
     : '';
 });
 const activePageTitle = computed(
-  () => autoRegistrationPages.find((page) => page.path === activePage.value)?.title ?? '自动注册'
+  () => parentPages.find((page) => page.path === activePage.value)?.title ?? '自动注册'
 );
 let themeObserver: MutationObserver | undefined;
 
-function navigateWorkspace(page: AutoRegistrationPage) {
+function navigateWorkspace(page: AutoRegistrationParentPage) {
   if (!canAccess.value || activePage.value === page) return;
   activePage.value = page;
+  if (page === appleMailboxPage.path) return;
   if (frameEntryPage.value === page && workspaceFrame.value) {
     const status = workspaceQuery.data.value;
     if (status?.ready) {
@@ -143,7 +166,7 @@ function navigateWorkspace(page: AutoRegistrationPage) {
 }
 
 function sendWorkspaceState() {
-  if (!canAccess.value) return;
+  if (!canAccess.value || activePage.value === appleMailboxPage.path) return;
   const root = document.documentElement;
   workspaceFrame.value?.contentWindow?.postMessage(
     registrationThemeState(root, getComputedStyle(root), pageDrafts.get(activePage.value) ?? {}),
@@ -152,7 +175,7 @@ function sendWorkspaceState() {
 }
 
 function receiveWorkspaceMessage(event: MessageEvent) {
-  if (!canAccess.value) return;
+  if (!canAccess.value || activePage.value === appleMailboxPage.path) return;
   const message = readRegistrationChildMessage(
     event,
     workspaceFrame.value?.contentWindow ?? null,

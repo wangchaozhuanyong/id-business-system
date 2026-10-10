@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import copy
+import hashlib
 import importlib.util
 import io
 import os
@@ -88,13 +89,98 @@ class PendingProjectionTests(unittest.TestCase):
 
     def test_generated_inputs_use_exact_online_inverse_and_preserve_all_other_files(self):
         for name in projection.FILE_SEALS:
-            self.assertEqual(self.output[name], self.baseline[name])
+            if name == 'apps/admin/src/v2/layouts/V2AdminLayout.vue':
+                raw, mode = self.baseline[name]
+                for previous, current in (('银充续费提醒', '比特充值续费提醒'),
+                        ('当前没有银充续费提醒。', '当前没有比特充值续费提醒。'),
+                        ('银充提醒暂时无法加载。', '比特充值提醒暂时无法加载。')):
+                    raw = raw.replace(previous.encode(), current.encode())
+                self.assertEqual(self.output[name], (raw, mode))
+            elif name not in projection._INITIAL_WORKSPACE_APPLE_CONTEXT:
+                self.assertEqual(self.output[name], self.baseline[name])
         for name, row in self.candidate.items():
             if name not in projection.FILE_SEALS and name not in self.record['removedFiles']:
                 self.assertEqual(self.output[name], row, name)
         for root in projection.ONLINE_SOURCE_SEALS:
             self.assertFalse(any(name.startswith(root + '/') for name in self.output))
         self.assertTrue(all(name not in self.output for name in projection.REMOVED_FILE_SEALS))
+
+    def test_real_unified_archive_preserves_apple_and_bit_order_bytes_at_both_intersections(self):
+        registry = 'apps/admin/src/v2/features/registry.spec.ts'
+        tables = 'apps/admin/src/v2/features/tableSchemas.ts'
+        for name in (registry, tables):
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'DELTA_INTERSECTION'):
+                projection._inverse_delta(self.candidate[name][0], self.baseline[name][0], self.online[name][0])
+        start = b"  it('registers all fifteen online recharge pages immediately after automatic recharge', () => {\n"
+        end = b"  it('registers recharge as an administrator-only form under its own navigation group', () => {\n"
+        online_test = start + self.online[registry][0].split(start, 1)[1].split(end, 1)[0]
+        expected_registry = self.candidate[registry][0].replace(online_test, b'', 1).replace(
+            b'.toHaveLength(48);', b'.toHaveLength(33);')
+        expected_tables = self.candidate[tables][0].replace(
+            b"import { onlineTablesByFeature } from './online-recharge/tableSchemas';\n", b'', 1).replace(
+            b'  ...onlineTablesByFeature,\n', b'', 1)
+        self.assertEqual(self.output[registry], (expected_registry, '100644'))
+        self.assertEqual(self.output[tables], (expected_tables, '100644'))
+        self.assertIn(b"auto-registration.apple-mailboxes", expected_registry)
+        self.assertIn(b"'auto-registration': [v2TableSchemas.autoRegistration.appleMailboxes]", expected_tables)
+        self.assertIn("label: '比特订单'".encode(), expected_tables)
+        self.assertIn("{ key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'wide' }".encode(), expected_tables)
+
+    def test_exact_apple_context_cannot_authorize_an_extra_online_marker_or_edited_hunk(self):
+        cases = {
+            'apps/admin/src/v2/features/registry.spec.ts': (
+                lambda raw: raw + b'\n// unknown online-recharge page\n',
+                lambda raw: raw.replace(b"'online-recharge-login-logs'", b"'online-recharge-other-logs'"),
+                lambda raw: raw.replace(b'auto-registration.apple-mailboxes', b'auto-registration.unknown'),
+            ),
+            'apps/admin/src/v2/features/tableSchemas.ts': (
+                lambda raw: raw + b'\n// unknown onlineTablesByFeature\n',
+                lambda raw: raw.replace(b'...onlineTablesByFeature,', b'...onlineTablesByFeature /* changed */,'),
+                lambda raw: raw.replace(b'v2TableSchemas.autoRegistration.appleMailboxes],', b'v2TableSchemas.autoRegistration.unknown],'),
+            ),
+        }
+        for name, transforms in cases.items():
+            for index, transform in enumerate(transforms):
+                with self.subTest(name=name, variant=index), self.assertRaisesRegex(RuntimeError, 'DELTA_INTERSECTION'):
+                    self.project(self.changed_file(name, transform))
+
+    def test_generated_output_losing_apple_or_bit_order_semantics_is_rejected(self):
+        cases = (
+            ('apps/admin/src/v2/features/registry.spec.ts', lambda raw: raw.replace(b'auto-registration.apple-mailboxes', b'unknown')),
+            ('apps/admin/src/v2/features/tableSchemas.ts', lambda raw: raw.replace(
+                b"  'auto-registration': [v2TableSchemas.autoRegistration.appleMailboxes],\n", b"  'auto-registration': [],\n")),
+            ('apps/admin/src/v2/features/tableSchemas.ts', lambda raw: raw.replace("label: '比特订单'".encode(), "label: '银充订单'".encode())),
+            ('apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py', lambda raw: raw + b'\n# lost original bytes\n'),
+        )
+        for name, transform in cases:
+            changed = dict(self.output); raw, mode = changed[name]; changed[name] = (transform(raw), mode)
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'OUTPUT_CHANGED'):
+                projection.verify_output(changed, self.record)
+
+    def test_ordinary_fixed_projection_and_unknown_intersections_keep_original_boundary(self):
+        fixed = dict(self.online)
+        output, _record = projection.project_files(fixed, self.baseline, self.online,
+            self.commit, projection.source_tree(fixed))
+        for name in projection.FILE_SEALS:
+            self.assertEqual(output[name], self.baseline[name])
+        name = 'apps/admin/src/v2/features/registry.spec.ts'
+        partial = self.changed_file(name, lambda raw: raw.replace(b'auto-registration.apple-mailboxes', b'auto-registration.unknown'))
+        with self.assertRaisesRegex(RuntimeError, 'DELTA_INTERSECTION'):
+            self.project(partial)
+
+    def test_reviewed_context_bytes_match_local_frozen_apple_source(self):
+        # Exact snippets measured from reviewed d34946c14bebe6efcc9bd4912a6cae75d2d64d70.
+        # Clean CI verifies those bytes without requiring that local-only Git object.
+        expected = {
+            'apps/admin/src/v2/features/registry.spec.ts':
+                'ab5757645d5919a09deb6f7e1de50edfdf5129f4f26a823b88df7ed67bce4c9c',
+            'apps/admin/src/v2/features/tableSchemas.ts':
+                '5b6b215e2330575399ac71ce09357b41196296087cc8de386ee040ae3e45e8f9',
+        }
+        self.assertEqual(set(projection._INITIAL_WORKSPACE_APPLE_CONTEXT), set(expected))
+        for name, (_old, apple, _marker) in projection._INITIAL_WORKSPACE_APPLE_CONTEXT.items():
+            self.assertEqual(hashlib.sha256(apple).hexdigest(), expected[name])
+            self.assertEqual(self.candidate[name][0].count(apple), 1)
 
     def test_real_bitbrowser_worker_and_table_improvements_are_not_reverted(self):
         names = ('apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',

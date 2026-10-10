@@ -10,7 +10,7 @@ import type {
 export const recycleEntityLabels: Record<V2GovernanceRecycleEntity, string> = {
   account: 'ID 资料',
   chatgpt_account: 'ChatGPT 账号',
-  bank_recharge_order: '银充误录订单',
+  bank_recharge_order: '比特充值误录订单',
   customer: '客户',
   option: '业务选项',
   order: '订单'

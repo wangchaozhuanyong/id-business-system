@@ -151,6 +151,7 @@ class InstallerTests(unittest.TestCase):
     def run_install(self, **kwargs):
         authority = t.Authority()
         try:
+            kwargs.setdefault('transport', t)
             result = i.install(self.binding, self.scripts, authority, self.snapshot,
                                source_check=self.source_check, **kwargs)
             self.assertEqual(i.validate_result(result, self.binding), result)
@@ -476,6 +477,144 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(value['mutationAttempted'])
         self.assertEqual(self.calls, [])
         self.assertNotIn('synthetic raw forbidden', i.canonical(value).decode())
+        i.validate_result(value, self.binding)
+
+    def test_diagnostic_original_leaf_owner_is_only_finite_reason(self):
+        cases = (('BACKUP_SCRIPT', self.current / 'scripts/backup-aws-mysql.sh'),
+                 ('NORMALIZER', self.current / 'scripts/mysql-dump-restore-normalizer.sed'),
+                 ('ENV_LIMITS', self.current / '.env.aws.production'),
+                 ('COMPOSE', self.current / 'docker-compose.aws-mysql.yml'))
+        for stage, path in cases:
+            with self.subTest(stage=stage):
+                item = path.stat(); self.wrong_owners.add((item.st_dev, item.st_ino))
+                value = self.run_install()
+                self.wrong_owners.clear()
+                self.assertEqual(value['code'], stage + '_SOURCE_OWNER')
+                self.assertFalse(value['mutationAttempted'])
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.native_calls, [])
+                self.assertFalse(self.destination.exists())
+                self.assertNotIn(str(path), i.canonical(value).decode())
+                self.assertEqual(set(value), i.FIELDS)
+
+    def test_diagnostic_original_leaf_existing_fd_type_links_mode_size(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'
+        raw = path.read_bytes()
+        path.unlink(); path.mkdir(mode=0o700)
+        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_TYPE')
+        path.rmdir(); path.write_bytes(raw); path.chmod(0o600)
+        extra = self.current / 'synthetic-hardlink'; os.link(path, extra)
+        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_LINKS')
+        extra.unlink(); path.chmod(0o622)
+        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_WRITABLE')
+        path.chmod(0o600); path.write_bytes(b'')
+        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_SOURCE_SIZE')
+        self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(self.calls, [])
+
+    def test_diagnostic_missing_link_utf8_and_directory_rejection_are_finite(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'; raw = path.read_bytes()
+        path.unlink()
+        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_MISSING')
+        path.symlink_to(self.current / 'scripts/mysql-dump-restore-normalizer.sed')
+        value = self.run_install(); self.assertEqual(value['code'], 'BACKUP_SCRIPT_LINK_REJECTED')
+        path.unlink(); path.write_bytes(raw); path.chmod(0o600)
+        env = self.current / '.env.aws.production'; env.write_bytes(b'\xffSYNTHETIC_OPAQUE')
+        value = self.run_install(); self.assertEqual(value['code'], 'ENV_LIMITS_UTF8_INVALID')
+        env.write_bytes(self.original[env])
+        item = (self.current / 'scripts').stat(); self.wrong_owners.add((item.st_dev, item.st_ino))
+        value = self.run_install(); self.assertEqual(value['code'], 'CURRENT_SCRIPTS_ANCESTOR_CURRENT_RELEASE_OWNER')
+        self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(self.calls, [])
+        self.assertNotIn('SYNTHETIC_OPAQUE', i.canonical(value).decode())
+
+    def test_diagnostic_rejection_fd_only_no_second_open_or_content_read(self):
+        path = self.current / 'scripts/backup-aws-mysql.sh'; item = path.stat()
+        self.wrong_owners.add((item.st_dev, item.st_ino))
+        authority = t.Authority()
+        try:
+            scripts = authority.child(authority.current_fd, 'scripts', role='CURRENT_RELEASE')
+            original_open, original_read, original_fstat = os.open, os.read, os.fstat
+            calls = {'open': 0, 'read': 0, 'fstat': 0}
+            def opened(*args, **kwargs):
+                calls['open'] += 1; return original_open(*args, **kwargs)
+            def read(*args, **kwargs):
+                calls['read'] += 1; return original_read(*args, **kwargs)
+            def measured(*args, **kwargs):
+                calls['fstat'] += 1; return original_fstat(*args, **kwargs)
+            with patch.object(os, 'open', opened), patch.object(os, 'read', read), patch.object(os, 'fstat', measured):
+                with self.assertRaisesRegex(i.Rejected, '^BACKUP_SCRIPT_SOURCE_OWNER$'):
+                    i.read_original(authority, scripts, path.name, stage='BACKUP_SCRIPT', transport=t)
+            self.assertEqual(calls, {'open': 1, 'read': 0, 'fstat': 2})
+        finally:
+            authority.close()
+
+    def test_diagnostic_snapshot_requires_original_issued_empty_exception(self):
+        snapshot = i.load((SOURCE / 'online-recharge-source-permission-repair-transport.py').read_bytes(),
+            'synthetic_installer_snapshot', SOURCE / 'online-recharge-source-permission-repair-transport.py')
+        diagnostic = snapshot.snapshot_state()
+        def failed(count):
+            if count == 2:
+                diagnostic.mark('PROJECT_IDS'); diagnostic.fail('IDS_INVALID')
+            return 'a' * 64
+        self.snapshot_hook = failed
+        value = self.run_install(diagnostic=diagnostic, snapshot_validate=snapshot.snapshot_validate)
+        self.assertEqual(value['code'], 'SNAPSHOT_RECHECK_IDS_INVALID')
+        self.assertFalse(value['mutationAttempted'])
+        self.assertTrue(value['timerRestored'])
+        self.assertFalse(self.destination.exists())
+        for error in (RuntimeError(), RuntimeError('IDS_INVALID'), t.Rejected('IDS_INVALID')):
+            self.assertEqual(i.failure_code(error, 'SNAPSHOT_RECHECK', transport=t,
+                diagnostic=diagnostic, snapshot_validate=snapshot.snapshot_validate), 'IO_FAILURE')
+
+    def test_diagnostic_exact_classes_literal_args_only_and_owned_schema_closed(self):
+        class Foreign(RuntimeError): pass
+        class OwnSub(i.Rejected): pass
+        class ForeignSub(t.Rejected): pass
+        class Text(str): pass
+        self.assertEqual(i.failure_code(i.Rejected('SOURCE_INVALID'), 'SOURCE_INITIAL', transport=t), 'SOURCE_INVALID')
+        self.assertEqual(i.failure_code(t.Rejected('SOURCE_INVALID'), 'BACKUP_SCRIPT', transport=t), 'BACKUP_SCRIPT_SOURCE_INVALID')
+        for error in (Foreign('SOURCE_INVALID'), OwnSub('SOURCE_INVALID'), ForeignSub('SOURCE_INVALID'),
+                      i.Rejected(Text('SOURCE_INVALID')), t.Rejected(Text('SOURCE_INVALID')),
+                      i.Rejected('SOURCE_INVALID','extra'), t.Rejected('SOURCE_INVALID','extra'),
+                      i.Rejected('SYNTHETIC_SECRET'), t.Rejected('SYNTHETIC_SECRET'),
+                      i.Rejected('OK'), t.Rejected('CURRENT_INVALID')):
+            self.assertEqual(i.failure_code(error, 'BACKUP_SCRIPT', transport=t), 'IO_FAILURE')
+        snapshot = i.load((SOURCE / 'online-recharge-source-permission-repair-transport.py').read_bytes(),
+            'synthetic_installer_snapshot_schema', SOURCE / 'online-recharge-source-permission-repair-transport.py')
+        diagnostic = snapshot.snapshot_state(); diagnostic.mark('CURRENT_IDS')
+        try: diagnostic.fail('IDS_INVALID')
+        except RuntimeError as caught: error = caught
+        row = diagnostic.get()
+        for changed in ({**row,'raw':'SYNTHETIC_SECRET'}, {**row,'code':Text('IDS_INVALID')},
+                        {**row,'stage':'SYNTHETIC_SECRET'}):
+            with patch.object(diagnostic, 'get', return_value=changed):
+                self.assertEqual(i.failure_code(error, 'SNAPSHOT_RECHECK', transport=t,
+                    diagnostic=diagnostic, snapshot_validate=snapshot.snapshot_validate), 'IO_FAILURE')
+
+    def test_diagnostic_native_timeout_keeps_timer_running_and_suppresses_details(self):
+        original = self.systemctl
+        def control(*args, **kwargs):
+            if args[:3] == ('show', i.SERVICE, '--property=ExecStart'):
+                raise i.subprocess.TimeoutExpired('SYNTHETIC_SECRET_PATH', 30)
+            return original(*args, **kwargs)
+        with patch.object(i, 'systemctl', control):
+            value = self.run_install()
+        self.assertEqual(value['code'], 'SERVICE_ENTRY_TIMEOUT')
+        self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(self.timer, 'active')
+        self.assertNotIn('SYNTHETIC_SECRET_PATH', i.canonical(value).decode())
+
+    def test_diagnostic_authority_constructor_loaded_rejection_keeps_source_rules(self):
+        directory = self.base / '.staging' / ('api-workspace-verify-' + PRODUCER['commit'])
+        directory.mkdir(mode=0o700)
+        snapshot = types.SimpleNamespace(read_fixed=lambda *unused: b'synthetic public source',
+            literal_module=lambda *unused: object(), snapshot_state=lambda: object())
+        with patch.object(t, 'Authority', side_effect=t.Rejected('ANCESTOR_MYSQL_OWNER')):
+            value = i.remote_execute(self.binding, self.scripts, directory, snapshot, t)
+        self.assertEqual(value['code'], 'AUTHORITY_OPEN_ANCESTOR_MYSQL_OWNER')
+        self.assertFalse(value['mutationAttempted'])
+        self.assertEqual(self.calls, [])
         i.validate_result(value, self.binding)
 
 

@@ -27,6 +27,7 @@ import { currencyOptions } from './recharge-presentation';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
 import { parseDirectCredential } from './bitbrowser-direct-credential';
+import { isV2TotpCodeCurrent } from '@/v2/components/workspace/totp';
 
 const activeStates = new Set([
   'running',
@@ -449,7 +450,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       : Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
   );
   const automaticCodeReady = computed(
-    () => loginMethod.value === 'password' && Boolean(selectedBankAccount.value?.hasTotp)
+    () =>
+      loginMethod.value === 'password' &&
+      selected.value?.chatgptAccountId === selectedBankAccountId.value &&
+      Boolean(selectedBankAccount.value?.hasTotp)
   );
   const nameMatch = useRechargeNameMatch(
     details,
@@ -557,6 +561,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const autoCodeFailureJobId = ref('');
   const autoCodeSubmittedJobId = ref('');
   const autoCodeAttempted = new Set<string>();
+  let autoCodeController: AbortController | undefined;
   const needsManualCode = computed(
     () =>
       needsCode.value &&
@@ -667,6 +672,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   });
 
   watch(loginMethod, () => {
+    importGeneration++;
+    importing.value = false;
     details.value.email =
       loginMethod.value === 'password'
         ? selectedBankAccountEmail.value
@@ -812,9 +819,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   }
 
   function acceptSession(reportInvalid = true) {
+    if (formLocked.value || loginMethod.value !== 'json') return;
     importGeneration++;
     importing.value = false;
-    if (formLocked.value) return;
     sessionJson.value = '';
     details.value.email = '';
     if (!jsonInput.value.trim()) {
@@ -844,7 +851,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   }
 
   function updateJsonInput(value: string) {
-    if (formLocked.value) return;
+    if (formLocked.value || loginMethod.value !== 'json') return;
     importGeneration++;
     importing.value = false;
     jsonInput.value = value;
@@ -854,14 +861,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       jsonError.value = '';
       return;
     }
-    acceptSession(false);
+    acceptSession();
   }
 
   async function importJson(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
+    if (!file || formLocked.value || loginMethod.value !== 'json') return;
     const generation = ++importGeneration;
-    if (!file || formLocked.value) return;
     jsonInput.value = '';
     sessionJson.value = '';
     details.value.email = '';
@@ -871,6 +878,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (file.size > 65_000) throw new Error();
       const value = await file.text();
       if (!disposed && generation === importGeneration) {
+        if (formLocked.value || loginMethod.value !== 'json') {
+          jsonError.value = '任务执行中或登录方式已改变，未载入新的授权 JSON，请重新导入';
+          return;
+        }
         jsonInput.value = value;
         acceptSession();
       }
@@ -1215,6 +1226,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     }
     busy.value = true;
     error.value = '';
+    autoCodeController?.abort();
     try {
       if (selected.value && directOpen.owns(selected.value.id)) {
         directOpen.submitCode(selected.value.id, loginCode.value.trim());
@@ -1240,46 +1252,91 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   }
 
   async function submitAutomaticCode(jobId: string) {
+    const accountId = selected.value?.chatgptAccountId;
+    if (!accountId || selectedBankAccountId.value !== accountId) return;
+    autoCodeController?.abort();
+    const controller = new AbortController();
+    autoCodeController = controller;
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
+    const currentCodeRequest = () =>
+      !disposed &&
+      !signal.aborted &&
+      needsCode.value &&
+      selected.value?.id === jobId &&
+      selected.value.chatgptAccountId === accountId &&
+      selectedBankAccountId.value === accountId &&
+      automaticCodeReady.value;
     autoCodeBusy.value = true;
     error.value = '';
     const releaseSkippedAttempt = () => {
       if (autoCodeSubmittedJobId.value !== jobId) autoCodeAttempted.delete(jobId);
     };
     try {
-      const code = (await bankRechargeApi.totpCode(selectedBankAccountId.value)).token;
-      if (!/^[0-9]{6,8}$/.test(code)) throw new Error('2FA 验证码格式无效');
-      if (disposed || !needsCode.value || selected.value?.id !== jobId) {
+      let generated = await bankRechargeApi.totpCode(accountId, { signal });
+      if (!currentCodeRequest()) {
         releaseSkippedAttempt();
         return;
       }
+      if (!isV2TotpCodeCurrent(generated.token, generated.expiresAt, Date.now()))
+        throw new Error('2FA 验证码已过期或格式无效，请重新取码');
+      if (!isV2TotpCodeCurrent(generated.token, generated.expiresAt, Date.now() + 8000)) {
+        const waitMs = Date.parse(generated.expiresAt) - Date.now() + 1000;
+        generated.token = '';
+        await new Promise<void>((resolve, reject) => {
+          signal.throwIfAborted();
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new Error('本次自动取码已停止'));
+          };
+          const timer = setTimeout(
+            () => {
+              signal.removeEventListener('abort', abort);
+              resolve();
+            },
+            Math.min(9000, Math.max(1, waitMs))
+          );
+          signal.addEventListener('abort', abort, { once: true });
+        });
+        if (!currentCodeRequest()) {
+          releaseSkippedAttempt();
+          return;
+        }
+        generated = await bankRechargeApi.totpCode(accountId, { signal });
+      }
+      if (!currentCodeRequest()) {
+        releaseSkippedAttempt();
+        return;
+      }
+      if (!isV2TotpCodeCurrent(generated.token, generated.expiresAt, Date.now() + 8000))
+        throw new Error('2FA 验证码有效时间不足，请重新取码或在原窗口完成验证');
       if (autoCodeSubmittedJobId.value === jobId) return;
       if (directOpen.owns(jobId)) {
-        directOpen.submitCode(jobId, code);
+        directOpen.submitCode(jobId, generated.token, generated.expiresAt);
         autoCodeSubmittedJobId.value = jobId;
         await refresh();
         return;
       }
       const current = await access();
-      if (
-        current.job.id !== jobId ||
-        disposed ||
-        !needsCode.value ||
-        selected.value?.id !== jobId
-      ) {
+      if (current.job.id !== jobId || !currentCodeRequest()) {
         releaseSkippedAttempt();
         return;
       }
       if (autoCodeSubmittedJobId.value === jobId) return;
+      if (!isV2TotpCodeCurrent(generated.token, generated.expiresAt, Date.now() + 3000))
+        throw new Error('2FA 验证码有效时间不足，请重新取码');
       await rechargeConnectorApi.submitCode(
         current.connectorUrl,
         current.connectorToken,
         jobId,
-        code
+        generated.token,
+        generated.expiresAt,
+        { signal }
       );
       autoCodeSubmittedJobId.value = jobId;
       await refresh();
     } catch (cause) {
       if (
+        !controller.signal.aborted &&
         !disposed &&
         selected.value?.id === jobId &&
         needsCode.value &&
@@ -1289,7 +1346,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         error.value = getApiErrorMessage(cause);
       } else releaseSkippedAttempt();
     } finally {
-      autoCodeBusy.value = false;
+      if (autoCodeController === controller) {
+        autoCodeController = undefined;
+        autoCodeBusy.value = false;
+      }
     }
   }
 
@@ -1309,8 +1369,13 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   }
 
   watch(
-    () => (needsCode.value ? selected.value?.id : undefined),
-    (jobId) => {
+    [
+      () => (needsCode.value ? selected.value?.id : undefined),
+      selectedBankAccountId,
+      automaticCodeReady
+    ],
+    ([jobId]) => {
+      autoCodeController?.abort();
       if (!jobId || disposed || !automaticCodeReady.value || autoCodeAttempted.has(jobId)) return;
       autoCodeAttempted.add(jobId);
       void submitAutomaticCode(jobId);
@@ -1320,6 +1385,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
 
   async function cancel() {
     if (!canCancel.value || busy.value || !selected.value) return;
+    autoCodeController?.abort();
     busy.value = true;
     error.value = '';
     const id = selected.value.id;
@@ -1384,6 +1450,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
 
   onScopeDispose(() => {
     disposed = true;
+    autoCodeController?.abort();
     importGeneration++;
     paymentCardGeneration++;
     loginCode.value = '';

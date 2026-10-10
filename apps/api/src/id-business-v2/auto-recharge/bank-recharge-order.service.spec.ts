@@ -85,6 +85,140 @@ function fixture() {
 }
 
 describe('银充付款入单', () => {
+  it('GO 开通与 Plus 升级分别记录菲律宾币当次实付，升级重放和复查不重复建单', async () => {
+    const { service, tx, job, order, repository } = fixture();
+    const stored: Array<typeof order> = [];
+    repository.findOrderByPaymentEvidence.mockImplementation((...args: unknown[]) =>
+      Promise.resolve(
+        stored.find(
+          (item) =>
+            item.rechargeJobId === args[1] ||
+            item.checkoutIdentifier === args[2] ||
+            item.paymentEvidenceId === args[3]
+        ) ?? null
+      )
+    );
+    tx.idBusinessV2BankRechargeOrder.create.mockImplementation(async (input) => {
+      const { data } = input as {
+        data: {
+          rechargeJobId: string;
+          checkoutIdentifier: string;
+          paymentEvidenceId: string;
+          chargeCurrencyCode: string;
+          chargeAmount: string;
+          plan: string;
+        };
+      };
+      const saved = {
+        ...order,
+        ...data,
+        id: `order-${stored.length + 1}`,
+        chargeAmount: { toString: () => data.chargeAmount }
+      };
+      stored.push(saved);
+      return saved;
+    });
+    const goJob = { ...job, id: 'go-job', plan: 'go' };
+    const go = {
+      ...verified,
+      checkout_identifier: 'cs_syntheticgo',
+      payment_evidence: {
+        ...verified.payment_evidence,
+        identifier: 'pi_syntheticgo',
+        amount_minor: 50000
+      },
+      quote: {
+        plan: 'go',
+        today: { amount: '500.00', amount_minor: 50000, currency: 'PHP' },
+        renewal: { amount: '500.00', amount_minor: 50000, currency: 'PHP' }
+      }
+    };
+    const plusJob = { ...job, id: 'plus-upgrade-job', plan: 'plus' };
+    const upgrade = {
+      ...verified,
+      operation: 'subscription_upgrade',
+      upgrade_identifier: `upg_${'c'.repeat(32)}`,
+      current_plan_before: 'go',
+      target_plan: 'plus',
+      quote_authority: 'official_upgrade_preview',
+      upgrade_invoice_identifier: 'in_syntheticgoplus',
+      checkout_identifier: undefined,
+      quote: {
+        plan: 'plus',
+        today: { amount: '699.75', amount_minor: 69975, currency: 'PHP' },
+        credit: { amount: '300.25', amount_minor: 30025, currency: 'PHP' },
+        renewal: { amount: '1000.00', amount_minor: 100000, currency: 'PHP' }
+      },
+      payment_evidence: {
+        kind: 'invoice',
+        identifier: 'in_syntheticgoplus',
+        amount_minor: 69975,
+        currency: 'PHP'
+      }
+    };
+    await service.recordVerifiedSuccess(tx as never, goJob as never, go);
+    const upgradeOrder = await service.recordVerifiedSuccess(
+      tx as never,
+      plusJob as never,
+      upgrade
+    );
+    expect(
+      stored.map((item) => [item.plan, item.chargeAmount.toString(), item.chargeCurrencyCode])
+    ).toEqual([
+      ['go', '500', 'PHP'],
+      ['plus', '699.75', 'PHP']
+    ]);
+    expect(await service.recordVerifiedSuccess(tx as never, plusJob as never, upgrade)).toBe(
+      upgradeOrder
+    );
+
+    repository.findRechargeJob.mockResolvedValue({ ...plusJob, result: upgrade });
+    const recheckJob = {
+      ...plusJob,
+      id: 'readonly-recheck-job',
+      action: 'recheck',
+      result: { recheck_only: true, source_job_id: plusJob.id }
+    };
+    expect(
+      await service.recordVerifiedSuccess(tx as never, recheckJob as never, {
+        ...upgrade,
+        recheck_only: true,
+        payment_requests_sent: 0,
+        // 复查回包即使混入续费价，也只能沿用原任务当次实付报价。
+        quote: { ...upgrade.quote, today: upgrade.quote.renewal }
+      })
+    ).toBe(upgradeOrder);
+    expect(repository.createOrder).toHaveBeenCalledTimes(2);
+    expect(stored[1].rechargeJobId).toBe(plusJob.id);
+    expect(stored[1].chargeAmount.toString()).toBe('699.75');
+  });
+
+  it('GO→Plus 发票只有原价而非升级当次补付时拒绝建单', async () => {
+    const { service, tx, job, repository } = fixture();
+    const result = {
+      ...verified,
+      operation: 'subscription_upgrade',
+      upgrade_identifier: `upg_${'d'.repeat(32)}`,
+      current_plan_before: 'go',
+      target_plan: 'plus',
+      quote_authority: 'official_upgrade_preview',
+      upgrade_invoice_identifier: 'in_syntheticwrongfullprice',
+      quote: {
+        plan: 'plus',
+        today: { amount: '699.75', amount_minor: 69975, currency: 'PHP' },
+        renewal: { amount: '1000.00', amount_minor: 100000, currency: 'PHP' }
+      },
+      payment_evidence: {
+        kind: 'invoice',
+        identifier: 'in_syntheticwrongfullprice',
+        amount_minor: 100000,
+        currency: 'PHP'
+      }
+    };
+    expect(await service.recordVerifiedSuccess(tx as never, job as never, result)).toBeNull();
+    expect(repository.createOrder).not.toHaveBeenCalled();
+  });
+
   it('Plus升级使用本次已绑定实际发票建单，不伪造新结算编号', async () => {
     const { service, tx, job, repository } = fixture();
     const upgrade = {

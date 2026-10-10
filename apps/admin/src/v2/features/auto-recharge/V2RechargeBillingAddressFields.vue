@@ -3,6 +3,8 @@
     <el-select
       v-model="addressId"
       aria-label="选择真实账单地址"
+      name="recharge-billing-entry"
+      autocomplete="off"
       filterable
       :loading="loading"
       placeholder="选择与银行卡相符的账单地址"

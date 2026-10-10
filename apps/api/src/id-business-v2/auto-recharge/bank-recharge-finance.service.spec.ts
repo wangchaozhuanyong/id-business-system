@@ -1,4 +1,5 @@
 import { BankRechargeFeesService } from './bank-recharge-fees.service';
+import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { Amount4 } from '../runtime/public-api';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
@@ -57,6 +58,32 @@ function fixture() {
 }
 
 describe('银充预存资金卡入账', () => {
+  it.each(V2_FINANCE_CURRENCIES)('客户实收 %s 沿用原币账户及汇率完成财务', async (currency) => {
+    const { service, order, repository, posting } = fixture();
+    Object.assign(order, { receivedCurrencyCode: currency, receivedFxRateToCny: '1' });
+    repository.findFinanceAccount
+      .mockResolvedValueOnce({ id: financeAccountId, status: 'active', currency })
+      .mockResolvedValueOnce({ id: financeAccountId, status: 'active', currency: 'CNY' });
+    await service.complete(id, { expectedUpdatedAt: updatedAt.toISOString() }, operator as never);
+    expect(posting.post).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ accountCode: 'cash', direction: 'debit', currency })
+        ])
+      })
+    );
+  });
+
+  it('未知客户实收币种仍拒绝且不写财务凭证', async () => {
+    const { service, order, posting } = fixture();
+    Object.assign(order, { receivedCurrencyCode: 'XYZ', receivedFxRateToCny: '1' });
+    await expect(
+      service.complete(id, { expectedUpdatedAt: updatedAt.toISOString() }, operator as never)
+    ).rejects.toThrow('选择系统支持的币种');
+    expect(posting.post).not.toHaveBeenCalled();
+  });
+
   it('完成订单时直接从代付资金账户扣除代付金额和银行手续费', async () => {
     const { service, tx, posting } = fixture();
     await service.complete(id, { expectedUpdatedAt: updatedAt.toISOString() }, operator as never);

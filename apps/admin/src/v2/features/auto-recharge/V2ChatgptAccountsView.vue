@@ -64,7 +64,7 @@
           <template #empty>
             <div class="v2-records-empty">
               <strong>暂无 ChatGPT 账号</strong>
-              <span>新增账号后可关联到银充订单</span>
+              <span>新增账号后可关联到比特订单</span>
             </div>
           </template>
           <V2TableColumn

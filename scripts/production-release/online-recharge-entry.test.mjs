@@ -15,7 +15,9 @@ const workflow = loadYaml(
 const steps = workflow.jobs.release.steps;
 const commit = 'a'.repeat(40);
 const tree = 'b'.repeat(40);
-const predecessor = '554eaff77d67cce4b760d24a5c358ccabf2b3a4c';
+const predecessor = JSON.parse(
+  readFileSync(join(scripts, 'online-recharge-recovery.json'), 'utf8')
+).previousCommit;
 
 function predicate(expression, inputs, failed = false) {
   if (!expression) return true;
@@ -241,7 +243,7 @@ def release(d,args):
  return 0
 def intercepted(path,*a,**kw):
  if Path(path).name=='online-recharge-scope.py':
-  return {'release':release,'build_proof':lambda d:calls.append({'method':'build_proof'}),'preflight':read('preflight'),'readback':read('readback'),'projection_diagnostic':read('diagnostic')}
+  return {'BASELINE_COMMIT':real.BASELINE_COMMIT,'release':release,'build_proof':lambda d:calls.append({'method':'build_proof'}),'preflight':read('preflight'),'readback':read('readback'),'projection_diagnostic':read('diagnostic')}
  if Path(path).name=='api-admin-scope.py':raise RuntimeError('UNEXPECTED_LEGACY_CONTROLLER')
  return original(path,*a,**kw)
 runpy.run_path=intercepted
@@ -291,13 +293,20 @@ test('read-only and release transports seal controllers and recovery policy and 
   );
   assert.match(
     dispatch,
-    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py',\n {24}'online-recharge-daemon-identity\.py', 'online-recharge-daemon-listener\.py',\n {24}'online-recharge-daemon-socket\.py'\)\n {4}if workspace_transport:\n {8}import runpy\n {8}carrier = runpy\.run_path\('scripts\/production-release\/api-admin-readonly\.py'\)\['formal_runtime_commands'\]\n {8}commands\[2:3\] = carrier\(controller_directory, sha,\n {12}Path\('scripts\/production-release\/formal-runtime-package'\), Path\('scripts\/production-release'\)\)\n {4}else:\n {8}for name in controllers:\n {12}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
+    /controllers = \('remote-deploy\.py', 'api-admin-scope\.py'\)\n {4}if online_recharge or os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('online-recharge-scope\.py', 'online-recharge-recovery\.json'\)\n {4}if os\.environ\.get\('RELEASE_OPERATION'\) == 'release_api_workspace':\n {8}controllers \+= \('api-admin-pending-projection\.py', 'api-admin-pending-receipt-wire\.py',\n {24}'online-recharge-declaration-measurement\.py', 'api-admin-readonly\.py',\n {24}'online-recharge-daemon-identity\.py', 'online-recharge-daemon-listener\.py',\n {24}'online-recharge-daemon-socket\.py'\)\n {4}if workspace_transport or pending_workspace_transport:\n {8}import runpy\n {8}carrier = runpy\.run_path\('scripts\/production-release\/api-admin-readonly\.py'\)\['formal_runtime_commands'\]\n {8}commands\[2:3\] = carrier\(controller_directory, sha,\n {12}Path\('scripts\/production-release\/formal-runtime-package'\), Path\('scripts\/production-release'\)\)\n {4}else:\n {8}for name in controllers:\n {12}digest = hashlib\.sha256\(Path\('scripts\/production-release', name\)\.read_bytes\(\)\)\.hexdigest\(\)/
   );
   assert.match(
     dispatch,
     / {12}target_path = f'\/opt\/id-business-v2\/\.staging\/oidc-\{sha\}\/\{name\}'\n {12}pinned\.extend\(\[f'curl [^\n]+\{sha\}\/scripts\/production-release\/\{name\} -o \{target_path\}',\n {27}f'echo "\{digest\} {2}\{target_path\}" \| sha256sum -c - >\/dev\/null'\]\)\n {8}commands\[2:3\] = pinned/
   );
-  assert.equal((dispatch.match(/online-recharge-readonly\.py filter-deploy/g) || []).length, 2);
+  assert.equal(
+    (
+      dispatch.match(
+        /online_filter_args=\(filter-deploy\)\n {8}if \[\[ "\$\{EXPECTED_CURRENT:-\}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 \]\]; then\n {10}online_filter_args\+=\("\$command_id"\)\n {8}fi\n {8}aws ssm get-command-invocation [^\n]+--output json \\\n {10}\| python3 -B scripts\/production-release\/online-recharge-readonly\.py "\$\{online_filter_args\[@\]\}"/g
+      ) || []
+    ).length,
+    2
+  );
   assert.match(helper, /closed_json\(value\.get\('StandardOutputContent'/);
   assert.match(helper, /validate_proof\(controller, proof, commit/);
   assert.match(helper, /for n in scope\.PRESERVED/);

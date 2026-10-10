@@ -5,8 +5,13 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { resolveViteCli } from './lib/vite-cli.mjs';
 
-const origin = 'http://127.0.0.1:5397',
+const port = Number(
+  process.argv.find((arg) => arg.startsWith('--port='))?.slice('--port='.length) ?? '5397'
+);
+assert.ok(Number.isInteger(port) && port > 0 && port <= 65535, '验收端口必须有效');
+const origin = `http://127.0.0.1:${port}`,
   connector = 'http://127.0.0.1:55322';
 const evidence = resolve(
   process.argv.find((arg) => arg.startsWith('--evidence-dir='))?.slice('--evidence-dir='.length) ??
@@ -16,12 +21,12 @@ mkdirSync(evidence, { recursive: true });
 const server = spawn(
   process.execPath,
   [
-    resolve('node_modules/vite/bin/vite.js'),
+    resolveViteCli(),
     ...(process.argv.includes('--built') ? ['preview'] : []),
     '--host',
     '127.0.0.1',
     '--port',
-    '5397',
+    String(port),
     '--strictPort'
   ],
   { cwd: resolve('apps/admin'), stdio: 'ignore' }
@@ -166,6 +171,8 @@ try {
           });
         if (path.endsWith('/bank-recharge/cards') || path.endsWith('/workspace-totp-accounts'))
           return success(route, { items: [] });
+        if (path.endsWith(`/bank-recharge/accounts/${id.account}/identity`))
+          return success(route, { id: id.account, email: 'fixture@example.test' });
         if (path.endsWith('/login-credential'))
           return success(route, {
             email: 'fixture@example.test',
@@ -429,17 +436,32 @@ try {
       .click();
     await page.getByRole('option', { name: /fixture@example.test/ }).click();
     assert.equal(await page.getByLabel('登录密码', { exact: true }).count(), 0);
-    const loadJson = async () => {
+    const jsonInput = page.getByPlaceholder(/粘贴完整授权 JSON|授权已自动载入，可粘贴新 JSON 替换/);
+    const loadJson = async (email = 'fixture@example.test', token = 'synthetic-only') => {
       await page
         .getByRole('radio', { name: '授权 JSON', exact: true })
         .locator('xpath=ancestor::label')
         .click();
-      await page
-        .getByPlaceholder('粘贴完整授权 JSON，将自动载入')
-        .fill('{"sessionToken":"synthetic-only","user":{"email":"fixture@example.test"}}');
+      await jsonInput.fill(JSON.stringify({ sessionToken: token, user: { email } }));
       await page.getByText('授权已自动载入', { exact: false }).waitFor();
     };
     await loadJson();
+    await loadJson('replacement@example.test', 'replacement-synthetic-only');
+    await form.getByText('replacement@example.test', { exact: true }).waitFor();
+    assert.equal(await jsonInput.inputValue(), '', '第二份授权载入后清空粘贴框');
+    await jsonInput.fill('{"sessionToken":');
+    await page.getByText('请提供有效的单账户 JSON（不超过 65 KB）', { exact: true }).waitFor();
+    assert.equal(
+      await form.getByText('replacement@example.test', { exact: true }).count(),
+      0,
+      '错误授权不能保留旧账号'
+    );
+    await loadJson();
+    assert.equal(await jsonInput.getAttribute('type'), 'text');
+    assert.equal(
+      await jsonInput.evaluate((input) => getComputedStyle(input).webkitTextSecurity),
+      'disc'
+    );
     await form.getByLabel('窗口名称', { exact: true }).fill('充值离线验收');
     assert.equal(await form.getByLabel('最高付款', { exact: true }).count(), 0);
     assert.equal(await page.getByText(/付款安全上限|付款上限设置/).count(), 0);
@@ -448,8 +470,9 @@ try {
       .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
       .click();
     await page.getByRole('option', { name: address.line1, exact: true }).click();
-    await page
-      .getByRole('combobox', { name: '选择代理国家', exact: true })
+    const proxyCountry = page.getByRole('combobox', { name: '选择代理国家', exact: true });
+    assert.equal(await proxyCountry.getAttribute('readonly'), '', '国家选择不触发地址文本输入');
+    await proxyCountry
       .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
       .click();
     await page.getByRole('option', { name: '菲律宾', exact: true }).click();
@@ -476,6 +499,37 @@ try {
     };
     await choosePlan('ChatGPT Go');
     await fillPayment();
+    const cardNumber = form.getByLabel('银行卡号', { exact: true });
+    const cvc = form.getByLabel('安全码', { exact: true });
+    for (const input of [cardNumber, cvc]) {
+      assert.equal(await input.getAttribute('type'), 'text');
+      assert.equal(
+        await input.evaluate((node) => getComputedStyle(node).webkitTextSecurity),
+        'disc'
+      );
+    }
+    const cardField = form.locator('.recharge-card-number');
+    await cardField.getByRole('button', { name: '显示内容', exact: true }).click();
+    assert.equal(
+      await cardNumber.evaluate((input) => getComputedStyle(input).webkitTextSecurity),
+      'none'
+    );
+    assert.equal(await cardNumber.inputValue(), '5555555555554444', '切换遮蔽不修改银行卡输入');
+    await cardField.getByRole('button', { name: '隐藏内容', exact: true }).press('Space');
+    assert.equal(
+      await cardNumber.evaluate((input) => getComputedStyle(input).webkitTextSecurity),
+      'disc'
+    );
+    assert.equal(
+      await form.locator('input[type="password"]').count(),
+      0,
+      '充值资料不构成本站密码表单'
+    );
+    await cardNumber.focus();
+    await page.screenshot({
+      path: resolve(evidence, `masked-inputs-${width}.png`),
+      fullPage: true
+    });
     const start = page.getByRole('button', { name: '在比特浏览器执行', exact: true });
     assert.equal(await start.isEnabled(), true);
     version = 3;
@@ -628,6 +682,10 @@ try {
       draftRouteRetention: 'PASS',
       oneTimeSecretsClearedOnRoute: 'PASS',
       refreshRetainsSuccess: 'PASS',
+      consecutiveJsonReplacement: 'PASS',
+      invalidJsonClearsOldSession: 'PASS',
+      sensitiveInputMaskAndReveal: 'PASS',
+      countrySelectionReadonly: 'PASS',
       result: 'PASS'
     });
     await context.close();

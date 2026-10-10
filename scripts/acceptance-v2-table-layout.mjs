@@ -19,6 +19,8 @@ const viewportWidths = [2141, 1920, 1600, 1440, 1024, 901, 900, 768, 390];
 const stabilityCheckpoints = [50, 100, 260, 500];
 const mobileBreakpoint = 900;
 const routeScrollRestoreTolerancePx = 8;
+const headerStabilityResults = [];
+const blockedNetworkRequests = [];
 const registeredSchemaIds = loadRegisteredSchemaIds();
 const permissionScenarios = [
   {
@@ -97,6 +99,7 @@ try {
   await warmCustomerPage(browser);
   await verifyLayoutFixture(browser);
   await verifyRecordsSectionSpacing(browser);
+  await verifyHeaderAndEmptyStability(browser);
   await verifyMailboxRelayWorkbench(browser);
   await verifyPublicPageScroll(browser);
   for (const scenario of permissionScenarios) {
@@ -110,7 +113,9 @@ try {
       permissionScenarios: permissionScenarios.map(({ key }) => key),
       viewportWidths,
       stabilityCheckpoints: ['2rAF', ...stabilityCheckpoints.map((value) => `${value}ms`)],
-      registeredSchemas: registeredSchemaIds.length
+      registeredSchemas: registeredSchemaIds.length,
+      headerStabilityResults,
+      blockedNetworkRequests
     })
   );
 } finally {
@@ -205,8 +210,171 @@ async function stopAdminServer(child) {
   ]);
 }
 
+async function createLocalContext(browserInstance, options) {
+  const context = await browserInstance.newContext({ ...options, serviceWorkers: 'block' });
+  await context.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin !== adminUrl.origin) {
+      blockedNetworkRequests.push(`${route.request().method()} ${url.origin}${url.pathname}`);
+      await route.abort();
+      return;
+    }
+    if (url.pathname.startsWith('/api/')) {
+      // Page-level fixture handlers take precedence; unmatched calls never reach a real API.
+      blockedNetworkRequests.push(`${route.request().method()} ${url.pathname}`);
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: false, message: '布局夹具未模拟此请求' })
+      });
+      return;
+    }
+    await route.continue();
+  });
+  return context;
+}
+
+async function verifyHeaderAndEmptyStability(browserInstance) {
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 900 }
+  });
+  const page = await context.newPage();
+  const runtimeErrors = collectRuntimeErrors(page);
+  try {
+    for (const theme of ['light', 'dark']) {
+      for (const width of [1440, 901, 900, 390]) {
+        await page.setViewportSize({ width, height: width <= mobileBreakpoint ? 844 : 900 });
+        await warmPage(page, '/accounts-design-fixture.html', '.v2-records-list');
+        await page.evaluate((value) => {
+          document.documentElement.dataset.v2Theme = value;
+        }, theme);
+        await settleLayout(page);
+        const first = await measureHeaderFrame(page);
+        const help = page
+          .locator('.el-table__header-wrapper')
+          .getByRole('button', { name: /^来源订单：/, includeHidden: true });
+        assert.equal(await help.count(), 1, `${theme} ${width}px 未渲染实际账号来源订单问号`);
+        if (width > mobileBreakpoint) {
+          assert.ok(first.headerHeight > 0, `${theme} ${width}px 账号表头不可见`);
+          assertMeasuredHeaderFrame(first, `${theme} ${width}px 账号首屏`);
+        }
+        assert.equal(
+          await page.locator('.el-table__body-wrapper .el-table__row').count(),
+          10,
+          `${theme} ${width}px 账号第一页未显示 10 条夹具资料`
+        );
+        await page
+          .locator('.v2-records-pagination .el-pager li')
+          .filter({ hasText: /^3$/ })
+          .click();
+        await page.waitForFunction(
+          () => document.querySelectorAll('.el-table__body-wrapper .el-table__row').length === 3
+        );
+        await settleLayout(page);
+        const last = await measureHeaderFrame(page);
+        assert.ok(
+          Math.abs(first.listHeight - last.listHeight) <= 1,
+          `${theme} ${width}px 账号第一页切末页外框跳动：${first.listHeight}→${last.listHeight}`
+        );
+        if (width > mobileBreakpoint)
+          assertMeasuredHeaderFrame(last, `${theme} ${width}px 账号末页`);
+        await page
+          .getByRole('textbox', { name: '搜索 ID 资料' })
+          .fill('no-synthetic-account-matches');
+        await page.getByRole('textbox', { name: '搜索 ID 资料' }).press('Enter');
+        await page.waitForFunction(
+          () => document.querySelectorAll('.el-table__body-wrapper .el-table__row').length === 0
+        );
+        await settleLayout(page);
+        const empty = await measureHeaderFrame(page);
+        assert.ok(
+          Math.abs(first.listHeight - empty.listHeight) <= 1,
+          `${theme} ${width}px 账号首屏切空状态外框跳动：${first.listHeight}→${empty.listHeight}`
+        );
+        if (width > mobileBreakpoint)
+          assertMeasuredHeaderFrame(empty, `${theme} ${width}px 账号空状态`);
+        assert.equal(
+          await getDocumentOverflow(page),
+          0,
+          `${theme} ${width}px 账号空状态页面横向溢出`
+        );
+        headerStabilityResults.push({
+          fixture: 'accounts-source-order-help',
+          theme,
+          width,
+          first,
+          last,
+          empty
+        });
+        if (screenshotDirectory && [1440, 390].includes(width)) {
+          await page.screenshot({
+            path: path.join(screenshotDirectory, `accounts-${theme}-empty-${width}.png`),
+            fullPage: true
+          });
+        }
+        await warmPage(page, '/accounts-design-fixture.html?state=empty', '.v2-records-list');
+        await page.evaluate((value) => {
+          document.documentElement.dataset.v2Theme = value;
+        }, theme);
+        await settleLayout(page);
+        const freshEmpty = await measureHeaderFrame(page);
+        if (width > mobileBreakpoint)
+          assertMeasuredHeaderFrame(freshEmpty, `${theme} ${width}px 账号初始空状态`);
+        headerStabilityResults.push({
+          fixture: 'accounts-source-order-help-fresh-empty',
+          theme,
+          width,
+          freshEmpty
+        });
+      }
+    }
+    assert.deepEqual(
+      runtimeErrors,
+      [],
+      `账号表头及空状态出现浏览器错误：${runtimeErrors.join('\n')}`
+    );
+  } finally {
+    await context.close();
+  }
+}
+
+async function measureHeaderFrame(page) {
+  return page
+    .locator('.v2-records-list')
+    .first()
+    .evaluate((list) => {
+      const shell = list.querySelector('.v2-unified-table-shell');
+      const header = shell?.querySelector('.el-table__header-wrapper');
+      const toolbar = shell?.querySelector('.v2-table-preference-toolbar');
+      const style = shell ? getComputedStyle(shell) : null;
+      return {
+        listHeight: list.getBoundingClientRect().height,
+        shellHeight: shell?.getBoundingClientRect().height ?? 0,
+        headerHeight: header?.getBoundingClientRect().height ?? 0,
+        toolbarHeight: toolbar?.getBoundingClientRect().height ?? 0,
+        measuredHeader: Number.parseFloat(
+          style?.getPropertyValue('--v2-table-header-height') || '0'
+        ),
+        shellMinHeight: Number.parseFloat(style?.minHeight || '0')
+      };
+    });
+}
+
+function assertMeasuredHeaderFrame(frame, label) {
+  assert.ok(
+    Math.abs(frame.measuredHeader - Math.ceil(frame.headerHeight)) <= 1,
+    `${label} 共享表头高度未同步：${JSON.stringify(frame)}`
+  );
+  assert.ok(
+    frame.shellMinHeight >= 230 + Math.ceil(frame.headerHeight) + frame.toolbarHeight - 1,
+    `${label} 空状态最低框高没有包括实际表头：${JSON.stringify(frame)}`
+  );
+}
+
 async function warmLayoutFixture(browserInstance) {
-  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 1000 }
+  });
   const page = await context.newPage();
   try {
     await warmPage(page, '/table-layout-fixture.html', '[data-layout-fixture]');
@@ -216,7 +384,9 @@ async function warmLayoutFixture(browserInstance) {
 }
 
 async function warmCustomerPage(browserInstance) {
-  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 900 }
+  });
   const page = await context.newPage();
   const user = createUser(permissionScenarios[0]);
   const unexpectedRequests = [];
@@ -253,7 +423,9 @@ async function warmPage(page, pathname, readySelector) {
 }
 
 async function verifyLayoutFixture(browserInstance) {
-  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 1000 }
+  });
   const page = await context.newPage();
   const runtimeErrors = collectRuntimeErrors(page);
   try {
@@ -293,7 +465,9 @@ async function verifyLayoutFixture(browserInstance) {
 }
 
 async function verifyRecordsSectionSpacing(browserInstance) {
-  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 900 }
+  });
   const page = await context.newPage();
   const runtimeErrors = collectRuntimeErrors(page);
   try {
@@ -396,7 +570,9 @@ async function assertRecordsSectionSpacing(page, label) {
 }
 
 async function verifyMailboxRelayWorkbench(browserInstance) {
-  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 900 }
+  });
   const page = await context.newPage();
   const runtimeErrors = collectRuntimeErrors(page);
   try {
@@ -508,7 +684,9 @@ async function verifyPrimaryVerticalScroll(page, label) {
 }
 
 async function verifyPublicPageScroll(browserInstance) {
-  const context = await browserInstance.newContext({ viewport: { width: 390, height: 844 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 390, height: 844 }
+  });
   const page = await context.newPage();
   const runtimeErrors = collectRuntimeErrors(page, new URL('/api/auth/session', adminUrl).href);
   let sessionRestoreRequests = 0;
@@ -616,7 +794,9 @@ async function verifyPublicPageScroll(browserInstance) {
 }
 
 async function verifyCustomerPage(browserInstance, scenario) {
-  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await createLocalContext(browserInstance, {
+    viewport: { width: 1440, height: 900 }
+  });
   const page = await context.newPage();
   const runtimeErrors = collectRuntimeErrors(page);
   const unexpectedRequests = [];

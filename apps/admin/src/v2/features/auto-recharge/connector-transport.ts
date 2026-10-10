@@ -11,6 +11,9 @@ const failureMessages = {
     '连接器已连通，但比特浏览器接口不可用。请检查比特浏览器是否启动、接口地址和接口密钥。',
   rejected: '本机连接器拒绝了请求，请检查连接配置。',
   missing: '本机连接器中没有此任务。',
+  codeExpiryUnsupported:
+    '当前本机充值助手不支持验证码有效期校验，请更新本机助手；也可在原比特窗口完成验证或手动输入当前验证码。',
+  codeExpired: '验证码已过期，请在原比特窗口完成验证或手动输入当前验证码。',
   cancelled: '本次连接检测已取消。'
 };
 type FailureCode = keyof typeof failureMessages;
@@ -31,7 +34,8 @@ const reasons: Record<string, FailureCode> = {
   recharge_process_required: 'version',
   confirmation_nonce_invalid: 'rejected',
   confirmation_quote_changed: 'rejected',
-  invalid_bitbrowser_configuration: 'rejected'
+  invalid_bitbrowser_configuration: 'rejected',
+  login_code_expired: 'codeExpired'
 };
 
 export async function connectorRequest(
@@ -75,6 +79,13 @@ export async function connectorRequest(
     throw new RechargeConnectorError(timeout.aborted ? 'timeout' : 'protocol');
   }
   if (!response.ok || result.ok !== true) {
+    if (
+      result.reason === 'invalid_login_code' &&
+      /^\/jobs\/[^/]+\/code$/.test(path) &&
+      options.body &&
+      Object.hasOwn(options.body, 'expiresAt')
+    )
+      throw new RechargeConnectorError('codeExpiryUnsupported');
     const reason =
       typeof result.reason === 'string' && Object.hasOwn(reasons, result.reason)
         ? reasons[result.reason]
