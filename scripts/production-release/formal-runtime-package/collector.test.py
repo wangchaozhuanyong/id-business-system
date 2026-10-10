@@ -6,6 +6,7 @@ from pathlib import Path
 import runpy
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 HERE=Path(__file__).resolve().parent
@@ -47,6 +48,139 @@ class CollectorTests(unittest.TestCase):
             'adminProjection':{},'configurationFiles':{},'workspaceFiles':{},'environmentFileSha256':a.sha(b''),
             'stableObservation':result['facts']['stableBefore'],'sourceArchiveBytesSha256':a.sha(b'SYNTHETIC ARCHIVE'),
             'generatorRulesSha256':a.fingerprint(FIX['policy']())}
+    def test_complete_difference_fixed_fields_are_closed_through_all_diagnostics(self):
+        driver=FIX['load']('complete_difference_driver',HERE/'driver.py')
+        qualified=FIX['load']('complete_difference_qualified',HERE/'qualified.py')
+        fields=dict(a.CONFIGURATION_DIFFERENCE_FIELDS)
+        self.assertEqual(tuple(fields),('Config','HostConfig'))
+        self.assertEqual([len(fields[k]) for k in fields],[25,71])
+        codes={code for rows in fields.values() for _,code in rows}
+        codes.update(('COMPLETE_CONFIG_OTHER','COMPLETE_HOSTCONFIG_OTHER','COMPLETE_MOUNTS_DIFFERENCE'))
+        self.assertEqual(len(codes),99)
+        self.assertTrue(codes <= a.ERROR_CODES)
+        self.assertTrue(codes <= driver.DIAGNOSTIC_CODES)
+        self.assertTrue(codes <= qualified.DIAGNOSTIC_CODES)
+        self.assertTrue(codes <= consumer.DECLARATION_DIAGNOSTIC_CODES)
+        self.assertEqual(driver.DIAGNOSTIC_CODES,consumer.DECLARATION_DIAGNOSTIC_CODES)
+        self.assertIn(('Dns','COMPLETE_HOSTCONFIG_DNS'),fields['HostConfig'])
+        self.assertIn(('NanoCpus','COMPLETE_HOSTCONFIG_NANOCPUS'),fields['HostConfig'])
+        self.assertIn(('CpuRealtimeRuntime','COMPLETE_HOSTCONFIG_CPUREALTIMERUNTIME'),fields['HostConfig'])
+        self.assertNotIn('Resources',{key for key,_ in fields['HostConfig']})
+        for code in codes:
+            self.assertEqual(a.bounded_error(a.Rejected(code)),code)
+        self.assertEqual(a.bounded_error(a.Rejected('COMPLETE_CONFIG_'+FIX['PRIVATE'])),'MEASUREMENT_FAILED')
+    def test_complete_difference_each_fixed_field_presence_and_json_type_are_exact(self):
+        baseline={'Config':{},'HostConfig':{},'Mounts':[]}
+        for group,fields in a.CONFIGURATION_DIFFERENCE_FIELDS:
+            for key,code in fields:
+                with self.subTest(group=group,key=key):
+                    left=copy.deepcopy(baseline);right=copy.deepcopy(baseline)
+                    left[group][key]=None
+                    self.assertEqual(a.configuration_difference(left,right),code)
+                    self.assertEqual(a.configuration_difference(right,left),code)
+                    for before,after in ((True,1),(None,[]),([],{}),('',False),
+                                         ({'private':FIX['PRIVATE']},{'private':'CHANGED'})):
+                        left[group][key]=before;right[group][key]=after
+                        self.assertNotEqual(a.fingerprint(left),a.fingerprint(right))
+                        self.assertEqual(a.configuration_difference(left,right),code)
+        self.assertEqual(a.configuration_difference(baseline,baseline),'COMPLETE_CONFIGURATION_DIFFERENCE')
+    def test_complete_difference_exact_class_codes_reach_api_original_safe_failure(self):
+        driver=FIX['load']('complete_difference_wire_driver',HERE/'driver.py')
+        qualified=FIX['load']('complete_difference_wire_qualified',HERE/'qualified.py')
+        workspace=runpy.run_path(str(FIX['ROOT']/'scripts/production-release/api-admin-scope.py'),
+            init_globals={'SCOPE':'API_ADMIN_WORKSPACE'})
+        readonly=FIX['load']('complete_difference_wire_readonly',FIX['ROOT']/'scripts/production-release/api-admin-readonly.py')
+        codes={code for _,fields in a.CONFIGURATION_DIFFERENCE_FIELDS for _,code in fields}
+        codes.update(('COMPLETE_CONFIG_OTHER','COMPLETE_HOSTCONFIG_OTHER','COMPLETE_MOUNTS_DIFFERENCE'))
+        def require(ok,code):
+            if not ok:raise AssertionError(code)
+        producer={'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
+        for code in sorted(codes):
+            with self.subTest(code=code):
+                state=qualified._DiagnosticState();state.stage='YIELD';state.bind_base(a)
+                state.capture(a.Rejected(code))
+                qerror=state.mark(qualified.Rejected('QUALIFIER_UNAVAILABLE'))
+                detail=driver._qualified_reason(qerror,SimpleNamespace(qualified=qualified))
+                self.assertEqual(detail,{'stage':'YIELD','code':code})
+                derror=driver._rejected(qerror,'ACQUIRE',failure=detail)
+                error=consumer._declaration_driver_failure('ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE',
+                    driver.failure_diagnostic(derror))
+                self.assertEqual(consumer.declaration_failure_diagnostic(error),detail)
+                # The real pending API wrapper preserves only the closed stage/code.
+                globals_=workspace['_pending_online_declaration_measure'].__globals__
+                with patch.dict(globals_,{'pending_online_equivalence':lambda:consumer}),\
+                        patch.object(consumer,'_declaration_runtime_driver',return_value=driver),\
+                        patch.object(driver,'measure_declaration_equivalence',side_effect=derror):
+                    with self.assertRaisesRegex(RuntimeError,'^API_ADMIN_PENDING_ONLINE_DRIVER_'+code+'$') as caught:
+                        workspace['_pending_online_declaration_measure'](SimpleNamespace(require=require),
+                            self.directory,{},producer=producer,purpose='INDEPENDENT_PREFLIGHT')
+                row={'status':'API_ADMIN_WORKSPACE_VERIFICATION_FAILED','code':str(caught.exception),'errorType':'RuntimeError'}
+                self.assertEqual(readonly.safe_failure(row,'API_ADMIN_WORKSPACE'),row)
+                self.assertNotIn(FIX['PRIVATE'],json.dumps(row))
+        class Fake(RuntimeError):pass
+        class Subclass(a.Rejected):pass
+        class Text(str):pass
+        code='COMPLETE_HOSTCONFIG_PRIVILEGED'
+        for error in (Fake(code),Subclass(code),a.Rejected(code,'EXTRA'),a.Rejected(Text(code)),
+                      a.Rejected('COMPLETE_HOSTCONFIG_'+FIX['PRIVATE'])):
+            state=qualified._DiagnosticState();state.stage='YIELD';state.bind_base(a);state.capture(error)
+            self.assertEqual(state.first,('YIELD','UNKNOWN'))
+    def test_complete_difference_unknown_keys_and_private_groups_never_escape_values(self):
+        baseline={'Config':{},'HostConfig':{},'Mounts':[]}
+        for group,code in (('Config','COMPLETE_CONFIG_OTHER'),('HostConfig','COMPLETE_HOSTCONFIG_OTHER')):
+            left=copy.deepcopy(baseline);right=copy.deepcopy(baseline)
+            right[group][FIX['PRIVATE']]={'token':FIX['PRIVATE']}
+            self.assertEqual(a.configuration_difference(left,right),code)
+            right[group]['WorkingDir' if group=='Config' else 'Privileged']=FIX['PRIVATE']
+            self.assertEqual(a.configuration_difference(left,right),
+                'COMPLETE_CONFIG_WORKINGDIR' if group=='Config' else 'COMPLETE_HOSTCONFIG_PRIVILEGED')
+        for key,code in (('Env','COMPLETE_CONFIG_ENV'),('Labels','COMPLETE_CONFIG_LABELS')):
+            left=copy.deepcopy(baseline);right=copy.deepcopy(baseline)
+            right['Config'][key]={FIX['PRIVATE']:'token='+FIX['PRIVATE']}
+            self.assertEqual(a.configuration_difference(left,right),code)
+            self.assertNotIn(FIX['PRIVATE'],code)
+        right=copy.deepcopy(baseline);right['Mounts']=[{'Secret':FIX['PRIVATE']}]
+        self.assertEqual(a.configuration_difference(baseline,right),'COMPLETE_MOUNTS_DIFFERENCE')
+    def test_complete_difference_compares_full_normalized_hashes_without_mutating_raw(self):
+        captured=[];original_compare=a.compare
+        def capture(source,reference,spec):
+            captured.append((copy.deepcopy(source),copy.deepcopy(reference),copy.deepcopy(spec)))
+            return original_compare(source,reference,spec)
+        with patch.object(a,'compare',side_effect=capture):self.measure()
+        source,reference,spec=captured[0]
+        original_source=copy.deepcopy(source);original_reference=copy.deepcopy(reference)
+        equal=original_compare(source,reference,spec)
+        self.assertEqual(equal['reason'],'COMPLETE_EQUAL');self.assertTrue(equal['matched'])
+        self.assertEqual(set(equal),{'matched','reason','actualRawConfigurationSha256',
+            'referenceRawConfigurationSha256','actualDeclarationNormalizedSha256',
+            'referenceDeclarationNormalizedSha256','historicalRawHashMatchClaimed','authority','productionEligible'})
+        for group,key,value,code in (('Config','WorkingDir','/SYNTHETIC_CHANGED','COMPLETE_CONFIG_WORKINGDIR'),
+                ('HostConfig','Privileged',True,'COMPLETE_HOSTCONFIG_PRIVILEGED'),
+                ('Config','Labels',{**reference['metadata']['Config']['Labels'],FIX['PRIVATE']:FIX['PRIVATE']},
+                 'COMPLETE_CONFIG_LABELS'),('HostConfig',FIX['PRIVATE'],{'secret':FIX['PRIVATE']},'COMPLETE_HOSTCONFIG_OTHER')):
+            changed=copy.deepcopy(reference);changed['metadata'][group][key]=value
+            result=original_compare(source,changed,spec)
+            self.assertFalse(result['matched']);self.assertEqual(result['reason'],code)
+            self.assertNotEqual(result['actualDeclarationNormalizedSha256'],result['referenceDeclarationNormalizedSha256'])
+            self.assertEqual(result['actualRawConfigurationSha256'],a.fingerprint(a.configuration(source['metadata'])))
+            self.assertEqual(result['referenceRawConfigurationSha256'],a.fingerprint(a.configuration(changed['metadata'])))
+            self.assertFalse(result['authority']);self.assertFalse(result['productionEligible'])
+            self.assertNotIn(FIX['PRIVATE'],json.dumps(result))
+        self.assertEqual(source,original_source);self.assertEqual(reference,original_reference)
+    def test_complete_difference_full_measurement_failure_keeps_owned_cleanup_and_private_values(self):
+        original_run=self.d.run;source=copy.deepcopy(self.d.actual);model=copy.deepcopy(self.d.source_model)
+        def mismatch(*args,**kwargs):
+            raw=original_run(*args,**kwargs)
+            if args[0]==FIX['policy']()['composePath'] and 'create' in args:
+                self.d.created_container['HostConfig']['Privileged']={'secret':FIX['PRIVATE']}
+            return raw
+        self.d.run=mismatch
+        with self.assertRaisesRegex(a.Rejected,'^COMPLETE_HOSTCONFIG_PRIVILEGED$') as caught:self.measure()
+        self.assertNotIn(FIX['PRIVATE'],str(caught.exception))
+        self.assertEqual(len(self.d.removed),6);self.assertFalse(self.d.created_networks)
+        self.assertIsNone(self.d.created_container);self.assertIsNone(self.d.created_volume)
+        self.assertEqual(self.d.actual,source);self.assertEqual(self.d.source_model,model)
+        self.assertEqual(list((self.base/'.runtime/online-recharge-declaration-measurement').iterdir()),[])
     def test_source_absent_and_null_defaults_keep_complete_model(self):
         for key in ('command','entrypoint'):self.d.source_api[key]=None
         self.d.actual=FIX['metadata'](self.directory,self.d.source_api,self.d.source_networks,self.d.source_volume)
