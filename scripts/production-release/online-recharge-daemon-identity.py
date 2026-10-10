@@ -51,6 +51,13 @@ def file_identity(value):
             value.st_size, value.st_mtime_ns, value.st_ctime_ns, value.st_nlink)
 
 
+def _proc_net_unix_path_identity(value):
+    # Proc-net lookup can recreate inode timestamps. Keep all other fields;
+    # descriptor stability and returned seals still use the full identity.
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+            value.st_size, value.st_nlink)
+
+
 def directory_identity(value):
     # /proc contains unrelated live PIDs: its time/size changes are not authority.
     return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid)
@@ -124,7 +131,11 @@ class _Reader:
                 last = os.fstat(fd)
                 check(file_identity(first) == file_identity(last), 'RUNTIME_DRIFT')
                 path_now = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
-                check(file_identity(first) == file_identity(path_now), 'RUNTIME_DRIFT')
+                path_identity = file_identity
+                if (type(self.root) is str and self.root == '/' and executable is False
+                        and type(path) is str and re.fullmatch(r'/proc/[1-9][0-9]*/net/unix', path)):
+                    path_identity = _proc_net_unix_path_identity
+                check(path_identity(first) == path_identity(path_now), 'RUNTIME_DRIFT')
                 if executable:
                     check(raw[:4] == b'\x7fELF' and length > 4, 'EXECUTABLE_INVALID')
                 return raw, {'file': file_identity(first), 'parents': parents}

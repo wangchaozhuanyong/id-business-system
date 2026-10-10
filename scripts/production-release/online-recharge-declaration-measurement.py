@@ -71,8 +71,8 @@ ACTUAL_SHAPE_KEYS = frozenset(('status', 'apiCreatorVersion', 'networkCreatorVer
     'bindsEncoding', 'bindsCount', 'mountsEncoding', 'mountsCount', 'hostMountFieldNames', 'hostMountUnknownFieldCount'))
 HOST_MOUNT_FIELDS = frozenset(('Type', 'Source', 'Target', 'ReadOnly', 'Consistency', 'BindOptions',
                               'VolumeOptions', 'TmpfsOptions'))
-DAEMON_IDENTITY_SOURCE_SHA256 = '32d4b45c936685ffc46a876007796027bb8f9ef7f5ac43ca8b243c05c9b23b4f'
-DAEMON_SOCKET_SOURCE_SHA256 = '5e502626c2e6dea0efd3dd218ed31f4bc853d67475e61e98da1db2aabf53498e'
+DAEMON_IDENTITY_SOURCE_SHA256 = '2b3698ed515d5428535e16190e7ca32f92e02493d2e498f39c22753921eb1ecb'
+DAEMON_SOCKET_SOURCE_SHA256 = 'cba4b37317e8f48778c0dbc59f2c3131340f7d769b2807d0e03fe7c4d37e511a'
 
 
 class Rejected(RuntimeError):

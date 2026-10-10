@@ -63,7 +63,7 @@ class SocketInventoryDiagnosticsTests(unittest.TestCase):
 
     def test_same_sample_pinned_socket_capability_and_literal_enum_sets(self):
         self.assertEqual(m.DAEMON_SOCKET_SOURCE_SHA256,hashlib.sha256((HERE/'online-recharge-daemon-socket.py').read_bytes()).hexdigest())
-        self.assertEqual(m.DAEMON_SOCKET_SOURCE_SHA256,'5e502626c2e6dea0efd3dd218ed31f4bc853d67475e61e98da1db2aabf53498e')
+        self.assertEqual(m.DAEMON_SOCKET_SOURCE_SHA256,'cba4b37317e8f48778c0dbc59f2c3131340f7d769b2807d0e03fe7c4d37e511a')
         self.assertEqual(set(m.SOCKET_DIAGNOSTIC_REASON_CODES),set(socket.CODES))
         self.assertEqual(set(m.SOCKET_DIAGNOSTIC_PHASE_CODES),set(socket.DIAGNOSTIC_PHASES)|set(m.SOCKET_DIAGNOSTIC_COLLECTOR_PHASES))
         tree=ast.parse((HERE/'online-recharge-declaration-measurement.py').read_bytes())
@@ -171,7 +171,7 @@ class SocketInventoryDiagnosticsTests(unittest.TestCase):
         def assignments(tree):return {t.id:ast.dump(n.value) for n in tree.body if isinstance(n,ast.Assign) for t in n.targets if isinstance(t,ast.Name)}
         old=assignments(a);new=assignments(b)
         for name,value in old.items():
-            if name not in ('CODES','DAEMON_SOCKET_SOURCE_SHA256'):self.assertEqual(value,new[name],name)
+            if name not in ('CODES','DAEMON_IDENTITY_SOURCE_SHA256','DAEMON_SOCKET_SOURCE_SHA256'):self.assertEqual(value,new[name],name)
 
     def test_affected_existing_failed_read_summary_keeps_legacy_and_fixed_pair(self):
         report=self.fixture(failed={'generator','image','source','resource'})
