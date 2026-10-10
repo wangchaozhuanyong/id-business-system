@@ -570,6 +570,15 @@ class DriverTests(unittest.TestCase):
         self.diagnostic_failure('ACQUISITION','VFS_BOUND_CAPABILITY_REQUIRED','ROOT_DRIVER_UNAVAILABLE')
         self.assertEqual(self.material_calls,0);self.assertEqual(self.measure_calls,0)
 
+    def test_diagnostic_qualified_initialization_retains_original_rejection(self):
+        package=m._local_package();qualified=package.load_leaf('qualified.py')
+        self.caps.qualified=qualified
+        with patch.object(qualified,'_reviewed_profile',side_effect=RuntimeError(SENTINEL)), \
+             patch.object(qualified,'_load_base',side_effect=AssertionError('FACTORY_MUST_NOT_RUN')):
+            self.diagnostic_failure('QUALIFIER_PROFILE','RUNTIME_ERROR','ROOT_DRIVER_UNAVAILABLE')
+        self.assertEqual(self.material_calls,0);self.assertEqual(self.measure_calls,0)
+        self.assertEqual(self.exit_calls,0)
+
     def test_diagnostic_rules_and_original_closed_fields_still_reject(self):
         self.session.reviewed_rules=lambda:{'spec':{'LOCAL_ONLY':True}}
         self.diagnostic_failure('RULES','ROOT_SOURCE_CHANGED','ROOT_SOURCE_CHANGED')
@@ -597,7 +606,7 @@ class DriverTests(unittest.TestCase):
             finally:self.exit_calls+=1
         patches=[patch.object(qualified,'_reviewed_profile',return_value={'LOCAL_MOCK_ONLY':True}),
                  patch.object(qualified,'_load_base',return_value=object()),
-                 patch.object(qualified,'_Session',return_value=object()),
+                 patch.object(qualified,'_Session',return_value=SimpleNamespace()),
                  patch.object(qualified,'_load_socket',return_value=object()),
                  patch.object(qualified,'_acquisition_context',inner)]
         for item in patches:item.start();self.addCleanup(item.stop)
@@ -660,10 +669,41 @@ class DeclarationFailureProjectionTests(unittest.TestCase):
         cls.online=SimpleNamespace(**S)
 
     def test_closed_enums_equal_captured_existing_fixed_codes(self):
-        expected=m.CODES|self.loader.CODES|self.qualified.CODES|self.collector.ERROR_CODES|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
+        expected=m.CODES|self.loader.CODES|self.qualified.DIAGNOSTIC_CODES|self.collector.ERROR_CODES|{'UNKNOWN','HTTP_ERROR','URL_ERROR','TIMEOUT'}
         self.assertEqual(m.DIAGNOSTIC_CODES,expected)
         self.assertEqual(S['DECLARATION_DIAGNOSTIC_CODES'],expected)
         self.assertEqual(S['DECLARATION_DIAGNOSTIC_STAGES'],m.DIAGNOSTIC_STAGES)
+
+    def test_qualified_marker_only_from_exact_captured_class_and_closed_getter(self):
+        cls=self.qualified.Rejected;error=cls('QUALIFIER_UNAVAILABLE')
+        error._qualified_failure=('DAEMON_INFO','RUNTIME_ERROR')
+        caps=SimpleNamespace(qualified=self.qualified)
+        self.assertEqual(m._qualified_reason(error,caps),{'stage':'DAEMON_INFO','code':'RUNTIME_ERROR'})
+        class Derived(cls):pass
+        for unknown in (RuntimeError(SENTINEL),Derived('QUALIFIER_UNAVAILABLE')):
+            unknown._qualified_failure=('DAEMON_INFO','RUNTIME_ERROR')
+            self.assertIsNone(m._qualified_reason(unknown,caps))
+        for value in ({'stage':SENTINEL,'code':'RUNTIME_ERROR'},
+                      {'stage':'DAEMON_INFO','code':SENTINEL},
+                      {'stage':'DAEMON_INFO','code':'RUNTIME_ERROR','extra':SENTINEL},
+                      ['DAEMON_INFO','RUNTIME_ERROR']):
+            with patch.object(self.qualified,'failure_diagnostic',return_value=value):
+                self.assertIsNone(m._qualified_reason(error,caps))
+        self.assertIsNone(m._qualified_reason(error,SimpleNamespace(qualified=SimpleNamespace())))
+
+    def test_qualified_diagnostic_reaches_online_and_api_with_no_extra_payload(self):
+        driver=S['_declaration_runtime_driver']()
+        rejected=driver._rejected(RuntimeError(SENTINEL),'ACQUISITION',
+            failure={'stage':'DAEMON_INFO','code':'RUNTIME_ERROR'})
+        function=S['measure_declaration_equivalence']
+        with patch.dict(function.__globals__,{'_declaration_runtime_driver':lambda:driver}), \
+             patch.object(driver,'measure_declaration_equivalence',side_effect=rejected):
+            with self.assertRaises(S['DeclarationDriverError']) as caught:
+                function(object(),Path('/LOCAL_ONLY'),{},producer={'LOCAL_SYNTHETIC_ONLY':True},purpose='INDEPENDENT_PREFLIGHT')
+        error,diagnostic=self.api_failure(caught.exception)
+        self.assertEqual(error.args,('API_ADMIN_PENDING_ONLINE_DRIVER_RUNTIME_ERROR',))
+        self.assertEqual(diagnostic['step'],'DECLARATION_DAEMON_INFO')
+        self.assertEqual(diagnostic['phase'],'MANIFEST')
 
     def test_trusted_exact_classes_and_unknown_messages_never_leak(self):
         bindings=[(self.loader.Rejected,self.loader.CODES),(self.qualified.Rejected,self.qualified.CODES),
