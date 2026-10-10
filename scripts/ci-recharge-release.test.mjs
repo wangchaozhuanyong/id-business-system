@@ -1254,6 +1254,7 @@ test('workflow wires a separate empty-by-default seal and rejects all non-releas
             'verify_api_workspace',
             'release_api_workspace',
             'repair_online_source_permissions',
+            'repair_api_workspace_public_permissions',
             'diagnose_online_backup_source',
             'restore_online_backup_source',
             'repair_online_backup_parent_owner',
@@ -1640,6 +1641,7 @@ test('actual full-mode release controls select each missing suite once without r
     'node --test scripts/v2-order-archive-release-policy.test.mjs',
     'python3 -B scripts/production-release/online-recharge-source-permission-repair.test.py',
     'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
+    'python3 -B scripts/production-release/api-workspace-public-permission-repair.test.py',
     'python3 -B scripts/production-release/online-recharge-backup-source-recovery.test.py',
     'python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
     'python3 -B scripts/production-release/online-recharge-backup-parent-owner-repair.test.py',
@@ -1696,6 +1698,7 @@ test('actual full-mode release controls preserve exact maintenance selection and
         ? [
             'python3 -B scripts/production-release/online-recharge-source-permission-repair.test.py',
             'python3 -B scripts/production-release/online-recharge-source-permission-repair-transport.test.py',
+            'python3 -B scripts/production-release/api-workspace-public-permission-repair.test.py',
             'python3 -B scripts/production-release/online-recharge-backup-source-recovery.test.py',
             'python3 -B scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
             'python3 -B scripts/production-release/online-recharge-backup-parent-owner-repair.test.py',
