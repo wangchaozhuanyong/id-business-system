@@ -527,6 +527,48 @@ test('unreviewed registration paths do not receive the Apple scoped worker runne
   }
 });
 
+test('exact Vite runner classification keeps joint UI and backend guards without business execution', () => {
+  const paths = [
+    'scripts/acceptance-v2-auto-recharge.mjs',
+    'scripts/acceptance-v2-bank-recharge-ui.mjs',
+    'scripts/lib/vite-cli.mjs',
+    'apps/admin/src/v2/features/auto-registration/V2AppleMailboxes.vue',
+    'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py'
+  ];
+  const calls = recordGuardCommands('recharge', paths);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard'
+  ])
+    assert.equal(calls.filter((call) => call.join(' ') === 'npm run ' + name).length, 1, name);
+  assert.ok(calls.every((call) => !call.some((arg) => /^(?:acceptance:|prisma:)/.test(arg))));
+  assert.ok(
+    calls.every(
+      (call) =>
+        !call.includes('scripts/acceptance-v2-auto-recharge.mjs') ||
+        call.includes('prettier') ||
+        call.includes('eslint')
+    )
+  );
+  assert.ok(
+    calls.every(
+      (call) =>
+        !call.includes('scripts/acceptance-v2-bank-recharge-ui.mjs') ||
+        call.includes('prettier') ||
+        call.includes('eslint')
+    )
+  );
+});
+
 test('removed registration transport paths select retirement checks without executing deleted scripts', () => {
   for (const part of ['guards', 'release-controls']) {
     const calls = recordGuardCommands(

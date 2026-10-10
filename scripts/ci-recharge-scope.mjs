@@ -450,7 +450,10 @@ function isRegistrationHydrationOnly(paths) {
 
 const adminInteractionAcceptance = new Set([
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
-  'scripts/acceptance-v2-refresh-interaction.mjs'
+  'scripts/acceptance-v2-refresh-interaction.mjs',
+  'scripts/acceptance-v2-auto-recharge.mjs',
+  'scripts/acceptance-v2-bank-recharge-ui.mjs',
+  'scripts/lib/vite-cli.mjs'
 ]);
 export function isAdminOnly(paths) {
   return (
