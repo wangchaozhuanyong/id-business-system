@@ -265,10 +265,21 @@ class NativeSnapshotDriver:
         self.diagnostic.require(re.fullmatch('[a-z0-9][a-z0-9_-]{0,127}', value['project']), 'LABELS_PROJECT_INVALID')
         self.diagnostic.require(value['role'] in ROLES, 'LABELS_ROLE_INVALID')
         self.diagnostic.require(directory.parent == BASE / 'releases', 'LABELS_PARENT_INVALID')
-        self.diagnostic.require(re.fullmatch('[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}', directory.name), 'LABELS_BASENAME_INVALID')
+        current = directory == self.directory
+        # Retained labels are hashed metadata, never paths opened by this driver.
+        # Keep current's exact source contract; older releases used a single YAML.
+        try:
+            retained_name = (directory.name not in ('', '.', '..')
+                             and len(directory.name.encode('utf-8')) <= 255
+                             and all(not (ord(c) < 32 or 127 <= ord(c) <= 159) for c in directory.name))
+        except UnicodeEncodeError:
+            retained_name = False
+        self.diagnostic.require(re.fullmatch('[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}', directory.name)
+                                if current else retained_name, 'LABELS_BASENAME_INVALID')
         self.diagnostic.require(str(directory) == value['directory'], 'LABELS_LITERAL_INVALID')
         self.diagnostic.require(value['files'] == ','.join(
-                str(directory / n) for n in ('docker-compose.aws-mysql.yml', 'compose.release.json')), 'LABELS_FILES_INVALID')
+                str(directory / n) for n in ('docker-compose.aws-mysql.yml', 'compose.release.json'))
+                or (not current and value['files'] == str(directory / 'docker-compose.aws-mysql.yml')), 'LABELS_FILES_INVALID')
         return value
 
     def list_ids(self, *filters):
