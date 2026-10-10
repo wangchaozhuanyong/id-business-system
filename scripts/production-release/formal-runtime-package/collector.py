@@ -297,7 +297,10 @@ def source_api_validate(api, directory, spec):
           and re.fullmatch('[1-9][0-9]{0,8}[kKmMgG]', log['options']['max-size']), 'SOURCE_DECLARATION_INVALID')
     check(api['depends_on'] == spec['renderedDependencies'] and isinstance(api['networks'], dict)
           and set(api['networks']) == set(NETWORK_ROLES)
-          and all(row == spec['renderedNetworkEntry'] for row in api['networks'].values())
+          # compose-go's nil *ServiceNetworkConfig renders as null; an exact
+          # empty object is the same attribute-free declaration, not a mask.
+          and all(row is None or type(row) is dict and row == {}
+                  for row in api['networks'].values())
           and api['volumes'] == [spec['renderedVolumeRow']], 'SOURCE_DECLARATION_INVALID')
 
 
@@ -577,7 +580,8 @@ def prepare_source(d, directory, services, image_reference, image_id, source_sea
     for role in NETWORK_ROLES:
         rendered = model.get('networks',{}).get(role)
         expected = {'name':project+'_'+role, **({'internal':True} if role.endswith('control') else {})}
-        check(rendered == expected, 'SOURCE_NETWORK_DECLARATION')
+        check(rendered in (expected, {**expected, **spec['renderedExternalNetworkExtra']}),
+              'SOURCE_NETWORK_DECLARATION')
         endpoint = rows.get(rendered['name'])
         check(isinstance(endpoint,dict) and frozen.HEX.fullmatch(endpoint.get('NetworkID','')), 'ACTUAL_NETWORK_ID_OR_MEMBERS')
         net = read_one(d,'network',endpoint['NetworkID'])

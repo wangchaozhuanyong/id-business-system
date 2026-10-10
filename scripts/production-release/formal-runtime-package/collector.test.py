@@ -55,6 +55,105 @@ class CollectorTests(unittest.TestCase):
         self.raw=self.observed();self.d.seal['stabilitySha256']=a.fingerprint(D.observation(self.raw,self.d.services,self.d.seal['files'],self.raw['actualResource']))
         result=self.measure();self.assertEqual(result['facts']['source']['renderedDeclarationSha256'],a.fingerprint(self.d.source_model))
         C['validate_facts'](result['measured'],result['facts'],self.validation_root(result))
+    def empty_network_source(self,rows):
+        self.d.source_api['networks']=copy.deepcopy(rows)
+        self.d.actual=FIX['metadata'](self.directory,self.d.source_api,self.d.source_networks,self.d.source_volume)
+        self.d.services['api']=a.identity(self.d.actual)
+        self.d.seal['servicesSha256']=a.fingerprint(self.d.services)
+        self.raw=self.observed();self.d.seal['stabilitySha256']=a.fingerprint(D.observation(
+            self.raw,self.d.services,self.d.seal['files'],self.raw['actualResource']))
+    def test_attribute_free_null_and_empty_networks_preserve_complete_source_hashes(self):
+        hashes=[]
+        for rows in ({r:None for r in a.NETWORK_ROLES},{r:{} for r in a.NETWORK_ROLES},
+                     {r:None if r=='default' else {} for r in a.NETWORK_ROLES}):
+            with self.subTest(rows=rows):
+                self.empty_network_source(rows);original=copy.deepcopy(self.d.source_model)
+                result=self.measure();facts=result['facts']
+                self.assertEqual(self.d.source_model,original)
+                self.assertEqual(facts['source']['renderedDeclarationSha256'],a.fingerprint(original))
+                self.assertEqual(facts['source']['apiDeclaredHash'],a.fingerprint(self.d.source_api))
+                C['validate_facts'](result['measured'],facts,self.validation_root(result))
+                hashes.append((facts['source']['renderedDeclarationSha256'],facts['source']['normalizedModelSha256']))
+                self.assertFalse(result['measured']['authority']);self.assertFalse(result['measured']['productionEligible'])
+        self.assertEqual(len({raw for raw,_ in hashes}),3)
+        self.assertEqual(len({normalized for _,normalized in hashes}),3)
+    def test_service_network_attributes_and_nonobjects_remain_refused(self):
+        class EmptyDict(dict):pass
+        for value in ({'priority':0},{'aliases':[]},{'ipv4_address':''},{'CONTROL_UNKNOWN':None},
+                      [],False,'',0,EmptyDict()):
+            with self.subTest(value=value):
+                api=copy.deepcopy(self.d.source_api);api['networks']['default']=value
+                with self.assertRaisesRegex(a.Rejected,'^SOURCE_DECLARATION_INVALID$'):
+                    a.source_api_validate(api,self.directory,FIX['policy']())
+        self.assertFalse(self.d.created_networks)
+    def test_service_network_missing_or_unknown_role_remains_refused(self):
+        for unknown in (False,True):
+            api=copy.deepcopy(self.d.source_api);api['networks'].pop('default')
+            if unknown:api['networks']['CONTROL_UNKNOWN']=None
+            with self.assertRaisesRegex(a.Rejected,'^SOURCE_DECLARATION_INVALID$'):
+                a.source_api_validate(api,self.directory,FIX['policy']())
+    def test_source_network_empty_ipam_uses_reviewed_shape_and_preserves_full_model(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        for present in (False,True):
+            for row in self.d.source_model['networks'].values():
+                row.pop('ipam',None)
+                if present:row['ipam']={}
+            original=copy.deepcopy(self.d.source_model)
+            _,_,model=a.prepare_source(self.d,self.directory,self.d.services,'source-api',FIX['IMAGE'],self.d.seal,spec)
+            self.assertEqual(model,original);self.assertEqual(self.d.source_model,original)
+        self.assertFalse(self.d.created_networks)
+    def test_actual_null_networks_and_empty_ipam_complete_measurement_and_cleanup(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        self.d.source_api.update({'command':None,'entrypoint':None})
+        self.empty_network_source({r:None for r in a.NETWORK_ROLES})
+        for row in self.d.source_model['networks'].values():row['ipam']={}
+        original=copy.deepcopy(self.d.source_model);original_run=self.d.run
+        def official_shape(*args,**kwargs):
+            raw=original_run(*args,**kwargs)
+            if args[0]==spec['composePath'] and 'config' in args and '--format' in args:
+                model=json.loads(raw)
+                for row in model['networks'].values():row['ipam']={}
+                return json.dumps(model)
+            return raw
+        self.d.run=official_shape
+        with patch.dict(a.REVIEWED_GENERATORS,{('25.0.16','5.5.0'):spec}):
+            result=a.measure(self.d,self.directory,services=self.d.services,image_reference='source-api',
+                image_id=FIX['IMAGE'],source_seal=self.d.seal,stability_reader=self.read_stability)
+        self.assertEqual(self.calls,3);self.assertEqual(len(self.d.removed),6)
+        self.assertEqual(self.d.created_networks,{})
+        self.assertIsNone(self.d.created_container);self.assertIsNone(self.d.created_volume)
+        self.assertEqual(self.d.source_model,original)
+        self.assertEqual(result['facts']['source']['renderedDeclarationSha256'],a.fingerprint(original))
+        self.assertTrue(all(row is None for row in self.d.source_api['networks'].values()))
+        root=self.validation_root(result);root['generatorRulesSha256']=a.fingerprint(spec)
+        C['validate_facts'](result['measured'],result['facts'],root)
+        self.assertFalse(result['measured']['authority']);self.assertFalse(result['measured']['productionEligible'])
+    def test_source_network_ipam_unknown_fields_name_and_internal_still_refused(self):
+        spec=FIX['policy']();spec['renderedExternalNetworkExtra']={'ipam':{}}
+        original=copy.deepcopy(self.d.source_model['networks'])
+        mutations=({'ipam':{'config':[]}},{'ipam':None},{'ipam':[]},{'CONTROL_UNKNOWN':False},
+                   {'name':'CONTROL_OTHER_NETWORK'},{'internal':True})
+        for update in mutations:
+            with self.subTest(update=update):
+                self.d.source_model['networks']=copy.deepcopy(original)
+                self.d.source_model['networks']['default'].update(update)
+                with self.assertRaisesRegex(a.Rejected,'^SOURCE_NETWORK_DECLARATION$'):
+                    a.prepare_source(self.d,self.directory,self.d.services,'source-api',FIX['IMAGE'],self.d.seal,spec)
+        self.assertFalse(self.d.created_networks)
+    def test_reference_empty_network_representation_or_attribute_drift_is_not_normalized(self):
+        self.empty_network_source({r:None for r in a.NETWORK_ROLES});original_run=self.d.run
+        for value in ({},{'priority':0},{'aliases':[]},{'ipv4_address':''}):
+            def altered(*args,**kwargs):
+                raw=original_run(*args,**kwargs)
+                if args[0]==FIX['policy']()['composePath'] and 'config' in args and '--format' in args:
+                    model=json.loads(raw);model['services']['api']['networks']['default']=value
+                    return json.dumps(model)
+                return raw
+            self.d.run=altered
+            with self.subTest(value=value),self.assertRaisesRegex(a.Rejected,'^REFERENCE_MODEL_CHANGED$'):
+                self.measure()
+            self.assertFalse(self.d.created_networks);self.assertIsNone(self.d.created_container)
+        self.d.run=original_run
     def test_no_model_or_resource_digest_can_replace_normalized_source(self):
         result=self.measure();f=result['facts']
         self.assertNotEqual(f['source']['normalizedModelSha256'],f['source']['renderedDeclarationSha256'])
