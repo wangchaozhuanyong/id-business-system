@@ -2962,7 +2962,7 @@ def declaration_equivalence_saved_invocation(d, *, producer):
     return {'raw_bytes': raw, 'command_id': value['CommandId']}
 
 
-FORMAL_RUNTIME_DRIVER_SHA256 = '4d6d8b4575cd1ea259942f75890093595fe54cbd44fc240f34ab7a895226336b'
+FORMAL_RUNTIME_DRIVER_SHA256 = 'd1be26d54d7284e321d5510e068ce2c3d963d229b930f97bb0f5f586597415b2'
 
 
 def _declaration_runtime_driver():

@@ -192,13 +192,46 @@ class SocketTests(unittest.TestCase):
         self.reject('PROC_ALIAS_INVALID')
 
     def test_duplicate_listener_same_path_or_both_aliases_rejected(self):
-        for rows in ([self.row, self.row], [self.row, self.row.replace('/run/', '/var/run/')]):
+        for rows in ([self.row, self.row], [self.row, self.row.replace('12345', '55555')],
+                     [self.row, self.row.replace('/run/', '/var/run/')]):
             self.set_table(rows)
             self.reject('LISTENER_INVALID')
 
-    def test_nonlistener_row_at_same_path_rejected_even_if_listener_also_exists(self):
-        self.set_table([self.row, self.row.replace('00010000', '00000000')])
-        self.reject('LISTENER_INVALID')
+    def test_connected_rows_at_both_path_aliases_are_not_extra_listeners(self):
+        connected = self.row.replace('00010000', '00000000').replace('0001 01', '0001 03').replace('12345', '55555')
+        for selected in (self.row, self.row.replace('/run/', '/var/run/')):
+            for accepted in (connected, connected.replace('/run/', '/var/run/')):
+                with self.subTest(selectedAlias=selected.endswith('/var/run/docker.sock'),
+                                  connectedAlias=accepted.endswith('/var/run/docker.sock')):
+                    self.set_table([accepted, selected, accepted.replace('55555', '66666')])
+                    parsed = m.listener(self.table.read_bytes())
+                    self.assertEqual(parsed['kernelInode'], '12345')
+                    self.assertEqual(parsed['flags'], '00010000')
+                    self.assertEqual(parsed['pathKind'], 'VAR_RUN' if selected.endswith('/var/run/docker.sock') else 'RUN')
+                    self.assertEqual(self.collect()['listenerRowCount'], 1)
+
+    def test_zero_listeners_connected_only_and_other_path_listener_cannot_supply_target(self):
+        connected = self.row.replace('00010000', '00000000').replace('0001 01', '0001 03')
+        for rows in ([], [connected], [connected.replace('/run/', '/var/run/')],
+                     [connected, connected.replace('/run/', '/var/run/')],
+                     [connected, self.row.replace('/run/docker.sock', '/other/docker.sock')]):
+            self.set_table(rows); self.reject('LISTENER_INVALID')
+
+    def test_selected_listener_malformed_fields_not_replaced_by_valid_connected_row(self):
+        connected = self.row.replace('00010000', '00000000').replace('0001 01', '0001 03').replace('12345', '55555')
+        invalid = (self.row.replace('0000000000000000:', 'malformed:'),
+            self.row.replace('00000002', 'unknown'), self.row.replace('00000000 00010000', '00000001 00010000'),
+            self.row.replace('0001 01', '0002 01'), self.row.replace('0001 01', '0001 03'),
+            self.row.replace('12345', '0'), self.row.replace('12345', '1' * 21))
+        for row in invalid:
+            self.set_table([connected, row]); self.reject('LISTENER_INVALID')
+
+    def test_connected_other_path_does_not_change_listener_or_leak_path(self):
+        connected = self.row.replace('00010000', '00000000').replace('0001 01', '0001 03').replace('12345', '55555')
+        self.set_table([self.row]); before = self.collect()
+        self.set_table([connected.replace('/run/docker.sock', '/private/' + SENTINEL), self.row])
+        after = self.collect(); self.assertEqual(before, after)
+        self.assertNotIn(SENTINEL, json.dumps(after))
 
     def test_unknown_flags_type_state_protocol_inode_or_path_rejected(self):
         for row in (self.row.replace('00010000', '00000000'), self.row.replace('0001 01', '0002 01'),

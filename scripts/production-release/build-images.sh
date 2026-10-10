@@ -138,6 +138,9 @@ build_image() {
 }
 
 if [[ "${RELEASE_OPERATION:-release}" == release_online_recharge ]]; then
+  if [[ "${EXPECTED_CURRENT:-}" != 0a03fa28e6b844a18833d5c63f1de700f091fc64 ]]; then
+    python3 -B scripts/production-release/online-recharge-readonly.py after-bit-build-input
+  fi
   echo 'RELEASE_ADMIN_ONLY=false' >> "$GITHUB_ENV"
   build_image api apps/api/Dockerfile.mysql runtime
   build_image admin apps/admin/Dockerfile runtime

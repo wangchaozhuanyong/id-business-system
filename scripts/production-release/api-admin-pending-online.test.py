@@ -1119,34 +1119,36 @@ class DeclarationConsumerBinding(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_RECOVERY_REQUIRED$'):
                 s.pending_online_declaration_call(controller, 'declaration_equivalence_issuer_binding', {})
 
-    def test_actual_formal_initial_and_remeasure_stay_source_not_measured_before_io(self):
+    @patch('urllib.request.urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE'))
+    def test_reviewed_formal_initial_and_remeasure_still_require_archive_or_runtime(self, archive):
         controller = SimpleNamespace(require=need)
         value = declaration_context()
         producer = {name: value['restoredConfigurationProof']['semantic']['producer'][name]
                     for name in ('commit', 'sourceTree', 'workflowRunId', 'workflowRunAttempt')}
-        # Use the real source-bound entry. Actual nonroot local/CI calls fail
-        # before acquisition; table0 is tested separately inside the package.
+        # Capture actual singleton bytes with the real local file owner first.
+        driver = online._declaration_runtime_driver()
+        selected = driver._local_package().load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
         materials = MagicMock(side_effect=AssertionError('unmeasured source I/O'))
-        helper = SimpleNamespace(measure_declaration_equivalence=online.measure_declaration_equivalence,
-            declaration_equivalence_materials=materials,
-            declaration_equivalence_source_binding=online.declaration_equivalence_source_binding)
-        with patch.object(s, 'pending_online_equivalence', return_value=helper):
-            with self.assertRaisesRegex(RuntimeError, '^' + ('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
-                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$'):
-                s.pending_online_declaration_initial_measure(controller, Path('/unused'), {}, producer=producer)
-            materials.assert_not_called()
-        with self.private_fixture() as (controller, before, output, projection):
-            raw = output.joinpath('api-workspace-preflight-result.json').read_bytes()
-            # Origin validation uses the actual pure module before the shared
-            # measuring helper is selected; neither branch enables publication.
-            with self.assertRaisesRegex(RuntimeError, '^' + ('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
-                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$'):
+        helper = SimpleNamespace(**vars(online))
+        helper.declaration_equivalence_materials = materials
+        # Only entry uid is simulated; captured file ownership was already verified.
+        with patch.object(online, '_declaration_runtime_driver', return_value=driver), \
+                patch('os.geteuid', return_value=0):
+            with patch.object(s, 'pending_online_equivalence', return_value=helper):
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):
+                    s.pending_online_declaration_initial_measure(controller, Path('/unused'), {}, producer=producer)
+                materials.assert_not_called(); archive.assert_called_once()
+            with self.private_fixture() as (controller, before, output, projection), \
+                    patch.object(s, 'pending_online_equivalence', return_value=helper):
+                raw = output.joinpath('api-workspace-preflight-result.json').read_bytes()
+                with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):
+                    s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
+                        producer=producer, origin=value, preflight_raw=raw)
+                self.assert_no_image_reads(controller); self.assertEqual(archive.call_count, 2)
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_CHAIN_CHANGED$'):
                 s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
-                    producer=producer, origin=value, preflight_raw=raw)
-            self.assert_no_image_reads(controller)
-        with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_CHAIN_CHANGED$'):
-            s.pending_online_declaration_remeasure(controller, Path('/unused'), {},
-                producer=producer, origin=declaration_context(2), preflight_raw=b'{}')
+                    producer=producer, origin=declaration_context(2), preflight_raw=b'{}')
 
     def test_actual_prepare_and_build_bind_exact_private_f_for_a_and_b(self):
         for stage in (1, 2):
@@ -1388,14 +1390,21 @@ class DeclarationEntryFoundation(unittest.TestCase):
             stack.enter_context(patch.object(s, 'snapshot', return_value=value['services']))
             yield controller, directory, value, module, recovery
 
-    def test_known_initial_mismatch_reaches_actual_closed_generator_before_any_create(self):
-        with self.initial_fixture() as (controller, directory, value, module, recovery):
-            with self.assertRaisesRegex(RuntimeError, '^' + ('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED'
-                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$'):
+    @patch('urllib.request.urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE'))
+    def test_known_initial_mismatch_with_source1_still_cannot_create(self, archive):
+        driver = online._declaration_runtime_driver()
+        selected = driver._local_package().load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+        with self.initial_fixture() as (controller, directory, value, module, recovery), \
+                patch.object(s, 'pending_online_equivalence', return_value=module), \
+                patch.object(online, '_declaration_runtime_driver', return_value=driver), \
+                patch('os.geteuid', return_value=0):
+            with self.assertRaisesRegex(RuntimeError, '^API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED$'):
                 s.pending_online_first(controller, directory)
             module.verify_permission_seed.assert_called_once()
             module.require_fresh_resources.assert_called_once()
             module.jobs_idle.assert_called_once_with(controller, directory, migrated=True)
+            archive.assert_called_once()
             self.assertEqual(list(directory.iterdir()), [directory / 'release-manifest.json'])
 
     def test_unknown_error_and_nonpreflight_entry_cannot_select_measurement(self):
@@ -1407,9 +1416,13 @@ class DeclarationEntryFoundation(unittest.TestCase):
                 measure.assert_not_called()
 
     def test_baseline_reports_only_the_exact_fixed_source_not_measured_literal(self):
-        with self.initial_fixture() as (controller, directory, value, module, recovery):
-            with self.assertRaisesRegex(s.WorkspaceBaselineError, '^' + ('API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED'
-                    if os.geteuid() == 0 else 'API_ADMIN_PENDING_ONLINE_ORIGIN_CHANGED') + '$') as rejected:
+        # Bounded error translation remains a consumer-only contract, not table0 admission.
+        selected = online._declaration_runtime_driver()._local_package().load_leaf('qualified.py')
+        self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+        with self.initial_fixture() as (controller, directory, value, module, recovery), \
+                patch.object(s, 'pending_online_declaration_initial_measure',
+                    side_effect=RuntimeError('ONLINE_RECHARGE_DECLARATION_SOURCE_NOT_MEASURED')):
+            with self.assertRaisesRegex(s.WorkspaceBaselineError, '^' + 'API_ADMIN_PENDING_ONLINE_SOURCE_NOT_MEASURED' + '$') as rejected:
                 s.baseline(controller, online.BASELINE_COMMIT)
             self.assertEqual(rejected.exception.workspaceDiagnostic['phase'], 'MANIFEST')
             self.assertTrue(rejected.exception.workspaceDiagnostic['rawOutputSuppressed'])

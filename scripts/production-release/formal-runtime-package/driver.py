@@ -1,4 +1,4 @@
-"""Runtime-only root acquisition candidate; no admitted generator or formal entry.
+"""Fixed runtime acquisition bound to reviewed source and the formal entry.
 
 All source acquisition/measurement uses the qualified private client session.
 P1 registries contain only closed hashes/resource identities, never Env/inspect.
@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 PARENT_FORMAL_TABLE = '1d090ebf96ad9186587f78c99842fce4503abc1fa710f1e4b1be82fca310706e'
 FORMAL_TABLE = '6e67c5dd29b7535604460c54ad726120e4c288a71e5debb59361d52ffb523f79'
-PACKAGE_MANIFEST_SHA = 'fb5dc7a89c628fbcd151f91dd1ea1b48c7c2ebd0c46641eb910503b04ce1a771'
+PACKAGE_MANIFEST_SHA = '792d8a9977800a332a29fe45d3e6818b76a06cb50959ecd32eae3e37cdb839da'
 MAX_REGISTRY = 32768
 HEX = re.compile(r'[a-f0-9]{64}\Z')
 PRODUCER_KEYS = ('commit','sourceTree','workflowRunId','workflowRunAttempt')
@@ -143,7 +143,7 @@ def _local_package():
 def _capabilities(producer_value=None):
     package=_local_package()
     qualified=package.load_leaf('qualified.py')
-    # Public zero table refuses BEFORE source archive/file acquisition or tools.
+    # Fixed literal source selection precedes archive and runtime/tool acquisition.
     qualified._reviewed_profile()
     external=package.bind_consumers(producer(producer_value))
     pure=package.load_leaf('pure.py')

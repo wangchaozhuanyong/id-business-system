@@ -47,7 +47,7 @@ try:
  elif kind=='verified_table_fifo':
   package=io.Package(folder,manifest);q=package.load_leaf('qualified.py')
   table=folder/'reviewed-source-table.json';table.unlink();os.mkfifo(table,0o600)
-  q._reviewed_profile()
+  q._reviewed_profile();package.assert_stable()
  elif kind=='initial_package_table_fifo':
   table=folder/'reviewed-source-table.json';table.unlink();os.mkfifo(table,0o600)
   io.Package(folder,manifest)
@@ -116,7 +116,7 @@ class BootstrapBoundaryTests(unittest.TestCase):
  def test_regular_to_fifo_loader_rejects_bounded(self):self.bounded('race_loader','ROOT_DRIVER_SOURCE_UNMEASURED')
  def test_initial_manifest_fifo_rejects_bounded(self):self.bounded('initial_manifest','ROOT_DRIVER_SOURCE_UNMEASURED')
  def test_regular_to_fifo_manifest_rejects_bounded(self):self.bounded('race_manifest','ROOT_DRIVER_SOURCE_UNMEASURED')
- def test_verified_table_fifo_no_second_read_rejects_bounded(self):self.bounded('verified_table_fifo','SOURCE_NOT_MEASURED')
+ def test_verified_table_fifo_no_second_read_rejects_bounded(self):self.bounded('verified_table_fifo','PACKAGE_FILE_CHANGED')
  def test_initial_package_table_fifo_rejects_bounded(self):self.bounded('initial_package_table_fifo','PACKAGE_FILE_CHANGED')
  def test_unbound_qualified_table_fifo_rejects_without_read(self):self.bounded('direct_unbound_table_fifo','SOURCE_NOT_MEASURED')
  def test_parent_rename_even_with_same_leaf_inode_rejected(self):
@@ -163,9 +163,9 @@ class BootstrapBoundaryTests(unittest.TestCase):
   self.assertEqual(module.VALUE,'LOCAL_NON_SECRET')
  def test_verified_table_binding_private_closed_bytes_and_no_path_reread(self):
   package=IO.Package(self.folder,M);q=package.load_leaf('qualified.py')
-  self.assertIs(type(q._SOURCE_TABLE_BYTES),bytes);self.assertEqual(q._SOURCE_TABLE_BYTES,b'[]\n')
+  self.assertIs(type(q._SOURCE_TABLE_BYTES),bytes);self.assertEqual(q._SOURCE_TABLE_BYTES,(HERE/'reviewed-source-table.json').read_bytes())
   with patch.object(Path,'read_bytes',side_effect=AssertionError('SECOND_PATH_READ_FORBIDDEN')):
-   with self.assertRaisesRegex(q.Rejected,'^SOURCE_NOT_MEASURED$'):q._reviewed_profile()
+   self.assertEqual(q._reviewed_profile(),json.loads(q._SOURCE_TABLE_BYTES)[0])
   for kw in ('source_table','profile','sourceReviewed','path'):
    with self.subTest(kw=kw),self.assertRaises(TypeError):q._reviewed_profile(**{kw:True})
  def test_table_fifo_or_bytes_drift_rechecked_before_archive_download(self):
@@ -178,7 +178,7 @@ class BootstrapBoundaryTests(unittest.TestCase):
      with self.assertRaisesRegex(IO.Rejected,'^PACKAGE_FILE_CHANGED$'):
       package.bind_consumers({'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'})
      self.assertFalse(download.called)
-    table.unlink();table.write_bytes(b'[]\n');table.chmod(0o600)
+    table.unlink();table.write_bytes((HERE/'reviewed-source-table.json').read_bytes());table.chmod(0o600)
  def test_initial_collector_public_fifo_rejects_bounded(self):self.bounded('collector_initial_public','SOURCE_FILE_INVALID')
  def test_initial_collector_private_fifo_rejects_bounded(self):self.bounded('collector_initial_private','SOURCE_FILE_INVALID')
  def test_regular_to_fifo_collector_public_rejects_bounded(self):self.bounded('collector_race_public','SOURCE_FILE_INVALID')
@@ -212,13 +212,13 @@ class BootstrapBoundaryTests(unittest.TestCase):
     moved=self.base/'relocated';self.folder.rename(moved);self.folder.mkdir(mode=0o700);(moved/'leaf.py').rename(self.leaf);changed=True
    return raw
   with patch.object(c.os,'read',side_effect=reading),self.assertRaisesRegex(i.Rejected,'^SOURCE_FILE_INVALID$'):c.file_seal(self.leaf)
- def test_fixed_package_manifest_execution_closure_and_zero_admission(self):
+ def test_fixed_package_manifest_execution_closure_and_reviewed_singleton(self):
   # Historical V1->V2 AST evidence is local-only. CI verifies the current
   # complete byte-pinned executable closure and the actual closed entry.
-  self.assertEqual(D.PACKAGE_MANIFEST_SHA,'fb5dc7a89c628fbcd151f91dd1ea1b48c7c2ebd0c46641eb910503b04ce1a771')
+  self.assertEqual(D.PACKAGE_MANIFEST_SHA,'792d8a9977800a332a29fe45d3e6818b76a06cb50959ecd32eae3e37cdb839da')
   self.assertEqual(hashlib.sha256((HERE/'manifest.json').read_bytes()).hexdigest(),D.PACKAGE_MANIFEST_SHA)
   self.assertEqual(hashlib.sha256((HERE/'driver.py').read_bytes()).hexdigest(),
-   '4d6d8b4575cd1ea259942f75890093595fe54cbd44fc240f34ab7a895226336b')
+   'd1be26d54d7284e321d5510e068ce2c3d963d229b930f97bb0f5f586597415b2')
   self.assertEqual(set(M),{'version','kind','files','externalLeafPins','consumerFiles','packageRole'})
   self.assertEqual((type(M['version']),M['version'],M['kind'],M['packageRole']),
    (int,2,'FORMAL_RUNTIME_PACKAGE_V2','formal-runtime-package'))
@@ -236,11 +236,11 @@ class BootstrapBoundaryTests(unittest.TestCase):
    with self.subTest(external=name):self.assertEqual(hashlib.sha256((HERE.parent/name).read_bytes()).hexdigest(),pin)
   with patch.object(D,'HERE',self.folder):package=D._local_package()
   self.assertEqual(set(package.raw),set(M['files']))
-  self.assertEqual(package.raw['reviewed-source-table.json'],b'[]\n')
+  self.assertEqual(len(json.loads(package.raw['reviewed-source-table.json'])),1)
   with patch.object(D,'_local_package',return_value=package),patch.object(package,'bind_consumers',
     side_effect=AssertionError('ARCHIVE_ACQUISITION_FORBIDDEN')) as acquire:
-   with self.assertRaisesRegex(Exception,'^SOURCE_NOT_MEASURED$'):
+   with self.assertRaisesRegex(AssertionError,'^ARCHIVE_ACQUISITION_FORBIDDEN$'):
     D._capabilities({'commit':'a'*40,'sourceTree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'})
-   self.assertFalse(acquire.called)
+   acquire.assert_called_once()
 
 if __name__=='__main__':unittest.main(verbosity=2)

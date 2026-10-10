@@ -9,10 +9,124 @@ from types import MappingProxyType,SimpleNamespace,ModuleType
 import uuid
 
 HERE=Path(__file__).resolve().parent
-TABLE_BYTES=b'[]\n'
+REVIEWED_SOURCE_TABLE_SHA256='021dc4e4e54cbffe84200c41abc938b761383dbe81e3735f4ed609433da589c4'
+REVIEWED_PROFILE_CANONICAL_SHA256='2e459113762e616f2007f1bc6328b25b4e13d8abdffc4ea9e556ea48cfda4dea'
+_FIXED_REVIEWED_PROFILE={'dockerdBinarySha256': '05ba54e4ba99a3018891bc190f8be6ccdb2d483b4da715140f34ad73c5d6a1f3',
+ 'kind': 'ENGINE25_RUNTIME_QUALIFICATION_PROFILE_V1',
+ 'poolMode': 'REVIEWED_BUILTIN_ZERO_INPUTS',
+ 'reviewedCollectionToolSha256': {'/usr/bin/rpm': '412059160caea91ba8a32506fb60b17bb2755f1b13bce6b3469c875443e12516',
+                                  '/usr/bin/systemctl': 'c6becb0141c72c25c89e9ac626606d5b625104c1d9a82b12a12062ea29b9a95b'},
+ 'rpm': {'architecture': 'x86_64',
+         'epoch': '0',
+         'name': 'docker',
+         'release': '1.amzn2023.0.4',
+         'version': '25.0.16'},
+ 'runtimeConfigurationRuleSha256': '22d1fe523e1d12760491ff1bcb9598b9b27b0b42b6df80181509b64208f1e909',
+ 'sourceInputs': {'binaryRpmSha256': '6aea3822bcd5494f5067b9750c60976684b55e8ef51be4945189774f8f02b273',
+                  'cliCommit': '0bab007417226f0c43a897216c4e40471b9d70d1',
+                  'cliSourceArchiveSha256': '25c98349fb669054b051beb91235a5041a195bbdbefaaf14930a2f1ca152bf06',
+                  'completePatchReviewSha256': 'e71029fb56ee736d4993a66f8215019d2d4eb89eba56bc0728587021e04cae89',
+                  'composeAssetSha256': 'c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b',
+                  'engineCommit': '6fdf0a663f15d71b6944cb0b2bc3abac221ff15c',
+                  'enginePatchSeriesSha256': '859aeabb9f6b7add1603f67a83495e4e17459545536ff73a2e2deb31cb469ec4',
+                  'engineSourceArchiveSha256': 'e4b09862eca79992b4a11df0f7f661d364949637a71560281a5321f8985c5971',
+                  'officialFileTableSha256': '3f72add415bd70975840a51024d9065308f60c054d791819c192e859aaaad122',
+                  'poolSourceReviewSha256': '81d1315cbc648ad83fcdb566093d389c04b87b69641e84c0bd3e7992bf6f2965',
+                  'srpmSha256': '8a26cc9bf2a2188c5641a6aac791ae5b0188b03a62f43912df83de96b4cc0f3e',
+                  'unitPatchSeriesSha256': '51fb0d117049c18d2c9739256bb62d87650b655de32e517469c2f4a8b97a587f'},
+ 'sourceReviewReportSha256': '75d5c22723c703cc788cfec9dcdc7da6fe288fa626fc21737cd936f1b2312472',
+ 'spec': {'actualEndpointFields': ['Aliases',
+                                   'DNSNames',
+                                   'DriverOpts',
+                                   'EndpointID',
+                                   'Gateway',
+                                   'GlobalIPv6Address',
+                                   'GlobalIPv6PrefixLen',
+                                   'IPAMConfig',
+                                   'IPAddress',
+                                   'IPPrefixLen',
+                                   'IPv6Gateway',
+                                   'Links',
+                                   'MacAddress',
+                                   'NetworkID'],
+          'composeCliSha256': 'c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b',
+          'composePath': '/usr/libexec/docker/cli-plugins/docker-compose',
+          'composeVersion': '5.5.0',
+          'defaultPools': [{'base': '172.17.0.0/16', 'size': 16},
+                           {'base': '172.18.0.0/16', 'size': 16},
+                           {'base': '172.19.0.0/16', 'size': 16},
+                           {'base': '172.20.0.0/14', 'size': 16},
+                           {'base': '172.24.0.0/14', 'size': 16},
+                           {'base': '172.28.0.0/14', 'size': 16},
+                           {'base': '192.168.0.0/16', 'size': 20}],
+          'defaultPoolsStatement': 'UNDECLARED',
+          'dockerCliSha256': 'bd00a70e8981680dd96f2d923e85a43644e87a7b998a83fe8eb8f5b318a6e594',
+          'dockerCliVersion': '25.0.14',
+          'dockerPath': '/usr/bin/docker',
+          'enableIpv4Field': 'ABSENT',
+          'engineApiVersion': '1.44',
+          'engineVersion': '25.0.16',
+          'kind': 'FROZEN_PRODUCTION_GENERATOR_V2',
+          'nativePlatform': 'linux/x86_64',
+          'networkCreatorVersion': '5.5.0',
+          'networkFields': ['Attachable',
+                            'ConfigFrom',
+                            'ConfigOnly',
+                            'Containers',
+                            'Created',
+                            'Driver',
+                            'EnableIPv6',
+                            'IPAM',
+                            'Id',
+                            'Ingress',
+                            'Internal',
+                            'Labels',
+                            'Name',
+                            'Options',
+                            'Scope'],
+          'poolSourceSha256': '81d1315cbc648ad83fcdb566093d389c04b87b69641e84c0bd3e7992bf6f2965',
+          'referenceEndpointFields': ['Aliases',
+                                      'DNSNames',
+                                      'DriverOpts',
+                                      'EndpointID',
+                                      'Gateway',
+                                      'GlobalIPv6Address',
+                                      'GlobalIPv6PrefixLen',
+                                      'IPAMConfig',
+                                      'IPAddress',
+                                      'IPPrefixLen',
+                                      'IPv6Gateway',
+                                      'Links',
+                                      'MacAddress',
+                                      'NetworkID'],
+          'referenceGateway': 'FIRST_ADDRESS',
+          'referenceIpamRowFields': ['Gateway', 'Subnet'],
+          'referenceNetworkPolicy': 'OWNED_INTERNAL_IPV4_DEFAULT_POOL_V1',
+          'referenceSubnetPrefix': None,
+          'renderedDependencies': {'media-resolver': {'condition': 'service_healthy',
+                                                      'required': True},
+                                   'migrate': {'condition': 'service_completed_successfully',
+                                               'required': True}},
+          'renderedExternalNetworkExtra': {'ipam': {}},
+          'renderedNetworkEntry': {},
+          'renderedVolumeRow': {'source': 'auto_registration_data',
+                                'target': '/app/.runtime/auto-registration',
+                                'type': 'volume',
+                                'volume': {}},
+          'sourceIpamRowFields': ['Gateway', 'Subnet'],
+          'sourceSha256': 'e931bee86deda110beea85be444afb82119f62b37be7f6d8b81f683621b8c4f9',
+          'volumeCreatorVersion': '5.5.0',
+          'volumeFields': ['CreatedAt',
+                           'Driver',
+                           'Labels',
+                           'Mountpoint',
+                           'Name',
+                           'Options',
+                           'Scope']},
+ 'zeroConfigurationEncodings': ['ABSENT']}
+REVIEWED_SOURCE_TABLE=(_FIXED_REVIEWED_PROFILE,)
 _SOURCE_TABLE_BYTES=None
 REVIEWED_GENERATORS={}
-REVIEWED_SOURCE_TABLE=()
 IDENTITY=None
 DERIVE=None
 _EXTERNAL=None
@@ -84,7 +198,7 @@ def _source_profile(profile,base):
         and source['cliCommit']==CLI_FULL_GIT and source['composeAssetSha256']==COMPOSE_SHA
         and source['binaryRpmSha256']==BINARY_RPM_SHA)
     # Hash syntax alone is NOT source qualification: the entire profile can only
-    # be selected from the new immutable reviewed table. It is empty in public.
+    # be selected from the one fixed immutable reviewed table; no caller admission.
     hash_fields(profile,('sourceReviewReportSha256','runtimeConfigurationRuleSha256','dockerdBinarySha256'))
     need(profile['dockerdBinarySha256']==DOCKERD_SHA and profile['rpm']==RPM)
     need(profile['poolMode'] in ('REVIEWED_BUILTIN_ZERO_INPUTS','REVIEWED_EXPLICIT_COMPLETE_INPUTS'))
@@ -331,7 +445,7 @@ def _acquisition_context(d,session):
 
 @contextmanager
 def acquisition_session(d):
-    """No caller admission/bool/profile override; empty table denies all reads."""
+    """No caller admission/bool/profile override; runtime qualification remains live."""
     try:
         profile=_reviewed_profile();base=_load_base();session=_Session(base,profile,_load_socket())
         with _acquisition_context(d,session) as acquired:yield acquired
@@ -427,13 +541,18 @@ class _ControlledDriver:
         return result
 
 def _reviewed_profile():
-    # Do not expose source/profile/registry override. Currently always refuses.
-    need(type(_SOURCE_TABLE_BYTES) is bytes and _SOURCE_TABLE_BYTES==TABLE_BYTES,'SOURCE_NOT_MEASURED')
-    need(len(REVIEWED_SOURCE_TABLE)==1,'SOURCE_NOT_MEASURED')
+    # Only the fixed literal row and captured Package table bytes may select a source.
+    need(type(_SOURCE_TABLE_BYTES) is bytes and sha(_SOURCE_TABLE_BYTES)==REVIEWED_SOURCE_TABLE_SHA256,
+        'SOURCE_NOT_MEASURED')
+    need(type(REVIEWED_SOURCE_TABLE) is tuple and len(REVIEWED_SOURCE_TABLE)==1
+        and type(REVIEWED_SOURCE_TABLE[0]) is dict,'SOURCE_NOT_MEASURED')
+    need(sha(json.dumps(REVIEWED_SOURCE_TABLE[0],sort_keys=True,separators=(',',':'),allow_nan=False).encode())
+        ==REVIEWED_PROFILE_CANONICAL_SHA256,'SOURCE_NOT_MEASURED')
+    need(json.loads(_SOURCE_TABLE_BYTES)==list(REVIEWED_SOURCE_TABLE),'SOURCE_NOT_MEASURED')
     return copy.deepcopy(REVIEWED_SOURCE_TABLE[0])
 
 def measure(d,directory,*,services,image_reference,image_id,source_seal,stability_reader):
-    """No production row/capability yet. Empty table rejects BEFORE any create."""
+    """Fixed source row does not bypass live runtime/resources or allow caller admission."""
     try:
         with acquisition_session(d) as acquired:
             return acquired.measure(directory,services=services,image_reference=image_reference,image_id=image_id,
@@ -443,7 +562,7 @@ def measure(d,directory,*,services,image_reference,image_id,source_seal,stabilit
     except Exception:raise Rejected('QUALIFIER_UNAVAILABLE') from None
 
 def reviewed_rules():
-    """Read-only fixed-source rules; no row currently admitted or caller override."""
+    """Read-only singleton source rules; no runtime qualification or caller override."""
     profile=_source_profile(_reviewed_profile(),_load_base())
     return {'spec':copy.deepcopy(profile['spec']),'rulesSha256':digest(profile['spec']),
         'sourceInputsSha256':digest(profile['sourceInputs']),

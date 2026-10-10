@@ -125,7 +125,7 @@ class Package:
   self.raw={};self.seals={};self.external={};self.external_seals={};self.bound=None
   for name,h in manifest['files'].items():
    raw,seal=read_owned(self.directory/name);need(sha(raw)==h,'PACKAGE_FILE_CHANGED');self.raw[name]=raw;self.seals[name]=seal
-  need(self.raw['reviewed-source-table.json']==b'[]\n','PACKAGE_SCHEMA_CHANGED')
+  need(sha(self.raw['reviewed-source-table.json'])=='021dc4e4e54cbffe84200c41abc938b761383dbe81e3735f4ed609433da589c4','PACKAGE_SCHEMA_CHANGED')
   self.contract=unique(self.raw['contract.json']);need(set(self.contract)=={'version','kind','baselineCommit','formalTableSha256','parentFormalTableSha256','fields'}
    and self.contract['version']==1 and self.contract['kind']=='FORMAL_RUNTIME_PACKAGE_CONTRACT','PACKAGE_SCHEMA_CHANGED')
  def load_leaf(self,name):

@@ -2482,7 +2482,7 @@ class DeclarationEquivalencePureTests(unittest.TestCase):
                 if node.name == 'measure_declaration_equivalence':
                     # This previously closed stub is the sole replaced entry.
                     # Its ABI and two purpose/input guards remain exact; the
-                    # source-bound delegate is exercised below with table0.
+                    # source-bound delegate is exercised below with the reviewed singleton.
                     self.assertEqual(ast.dump(node.args), ast.dump(actual.args))
                     self.assertEqual([ast.dump(n) for n in node.body[1:3]],
                                      [ast.dump(n) for n in actual.body[1:3]])
@@ -2838,19 +2838,24 @@ class DeclarationEquivalenceMaterialsTests(unittest.TestCase):
         with patch.object(scope.os, 'open', side_effect=replace_after_open):
             with self.assertRaises(RuntimeError): scope._declaration_source_bytes(path)
 
-    def test_formal_measurement_is_closed_before_source_or_runtime_authority(self):
+    def test_reviewed_source_still_requires_archive_and_runtime_authority(self):
         for purpose, raw in (('INDEPENDENT_PREFLIGHT', None), ('DEPLOYMENT_REMEASURE', b'{}')):
-            # This test's synthetic helper directory has no trusted package.
+            # This test's synthetic helper directory still has no trusted package.
             with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
                 scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
                     producer=self.producer, purpose=purpose, preflight_raw=raw)
             with patch.object(scope, '__file__', str(ROOT / 'scripts/production-release/online-recharge-scope.py')):
-                # Native acquisition requires actual root; nonroot local/CI
-                # callers fail before the package's separately tested table0.
-                code = ('SOURCE_NOT_MEASURED' if os.geteuid() == 0 else 'DRIVER_UNAVAILABLE')
-                with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_' + code + '$'):
-                    scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
-                        producer=self.producer, purpose=purpose, preflight_raw=raw)
+                driver = scope._declaration_runtime_driver()
+                selected = driver._local_package().load_leaf('qualified.py')
+                self.assertEqual(len(selected.REVIEWED_SOURCE_TABLE), 1); selected._reviewed_profile()
+                # Root entry is simulated only after ordinary bytes are owner-verified.
+                with patch.object(scope, '_declaration_runtime_driver', return_value=driver), \
+                        patch.object(scope.os, 'geteuid', return_value=0), \
+                        patch.object(scope.urllib.request, 'urlopen', side_effect=RuntimeError('SYNTHETIC_ARCHIVE_UNAVAILABLE')) as archive:
+                    with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_DECLARATION_DRIVER_UNAVAILABLE$'):
+                        scope.measure_declaration_equivalence(self.d, self.previous, self.recovery,
+                            producer=self.producer, purpose=purpose, preflight_raw=raw)
+                    archive.assert_called_once()
         self.d.run.assert_not_called(); self.download.assert_not_called()
 
 

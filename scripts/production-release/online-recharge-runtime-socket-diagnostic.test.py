@@ -63,7 +63,7 @@ class SocketInventoryDiagnosticsTests(unittest.TestCase):
 
     def test_same_sample_pinned_socket_capability_and_literal_enum_sets(self):
         self.assertEqual(m.DAEMON_SOCKET_SOURCE_SHA256,hashlib.sha256((HERE/'online-recharge-daemon-socket.py').read_bytes()).hexdigest())
-        self.assertEqual(m.DAEMON_SOCKET_SOURCE_SHA256,'90d5fadf031d19c318fa790f202ca93b054c6e672ba2ef38ec213be236a4035e')
+        self.assertEqual(m.DAEMON_SOCKET_SOURCE_SHA256,'5e502626c2e6dea0efd3dd218ed31f4bc853d67475e61e98da1db2aabf53498e')
         self.assertEqual(set(m.SOCKET_DIAGNOSTIC_REASON_CODES),set(socket.CODES))
         self.assertEqual(set(m.SOCKET_DIAGNOSTIC_PHASE_CODES),set(socket.DIAGNOSTIC_PHASES)|set(m.SOCKET_DIAGNOSTIC_COLLECTOR_PHASES))
         tree=ast.parse((HERE/'online-recharge-declaration-measurement.py').read_bytes())
