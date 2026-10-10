@@ -1533,6 +1533,15 @@ class DeclarationEntryFoundation(unittest.TestCase):
         import ast
         tree = ast.parse(Path(__file__).with_name('online-recharge-scope.py').read_bytes())
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        captures = [index for index, node in enumerate(tree.body)
+                    if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                    and target.id == '_PENDING_WORKSPACE_FIRST' for target in node.targets)]
+        self.assertEqual(len(captures), 1)
+        # The ordinary recovery path uses the function objects saved at this real
+        # capture boundary. Later same-name wrappers do not replace that graph.
+        for node in tree.body[:captures[0]]:
+            if isinstance(node, ast.FunctionDef):
+                functions[node.name] = node
         pending = {'release_recovery', 'recovery_services', 'verify_permission_seed', 'require_fresh_resources', 'jobs_idle'}
         closure = set()
         while pending:

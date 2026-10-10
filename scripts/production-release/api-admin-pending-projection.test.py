@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import copy
+import hashlib
 import importlib.util
 import io
 import os
@@ -168,9 +169,18 @@ class PendingProjectionTests(unittest.TestCase):
             self.project(partial)
 
     def test_reviewed_context_bytes_match_local_frozen_apple_source(self):
+        # Exact snippets measured from reviewed d34946c14bebe6efcc9bd4912a6cae75d2d64d70.
+        # Clean CI verifies those bytes without requiring that local-only Git object.
+        expected = {
+            'apps/admin/src/v2/features/registry.spec.ts':
+                'ab5757645d5919a09deb6f7e1de50edfdf5129f4f26a823b88df7ed67bce4c9c',
+            'apps/admin/src/v2/features/tableSchemas.ts':
+                '5b6b215e2330575399ac71ce09357b41196296087cc8de386ee040ae3e45e8f9',
+        }
+        self.assertEqual(set(projection._INITIAL_WORKSPACE_APPLE_CONTEXT), set(expected))
         for name, (_old, apple, _marker) in projection._INITIAL_WORKSPACE_APPLE_CONTEXT.items():
-            frozen = subprocess.check_output(['git', 'show', 'd34946c14bebe6efcc9bd4912a6cae75d2d64d70:' + name], cwd=ROOT)
-            self.assertEqual(frozen.count(apple), 1)
+            self.assertEqual(hashlib.sha256(apple).hexdigest(), expected[name])
+            self.assertEqual(self.candidate[name][0].count(apple), 1)
 
     def test_real_bitbrowser_worker_and_table_improvements_are_not_reverted(self):
         names = ('apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_connector.py',
