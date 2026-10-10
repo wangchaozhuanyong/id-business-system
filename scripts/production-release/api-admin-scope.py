@@ -195,6 +195,7 @@ PENDING_ONLINE_BASELINE_FAILURE_CODES = frozenset((
 WORKSPACE_DIAGNOSTIC_STEPS = frozenset((
     'NOT_STARTED','CURRENT_PROOF','CURRENT_RECORD',
     'PENDING_ONLINE_RECOVERY','PENDING_ONLINE_SNAPSHOT','PENDING_ONLINE_NATIVE',
+    'PENDING_ONLINE_BACKUP_SCHEMA','PENDING_ONLINE_BACKUP_LOCAL','PENDING_ONLINE_BACKUP_MANIFEST',
     'PENDING_ONLINE_PERMISSION','PENDING_ONLINE_RESOURCES','PENDING_ONLINE_JOBS',
     'RUNTIME_IMAGE','RUNTIME_CONTENT','ORIGIN_PROOF',
     'ORIGIN_RECORD','ORIGIN_CONFIG','ORIGIN_AUDIT',
@@ -977,6 +978,49 @@ def pending_online_successor(d, pending, previous, manifest, raw, proof, states)
     return validate_pending_online_origin(result)
 
 
+def pending_online_backup_failure_step(online, error):
+    """Identify one original guard from loaded bytecode; never inspect frame locals."""
+    if type(error) is not RuntimeError:
+        return None
+    args = BaseException.args.__get__(error, type(error))
+    if (len(args) != 1 or type(args[0]) is not str
+            or args[0] != 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED'):
+        return None
+    try:
+        import dis
+        from types import FunctionType
+        reader = getattr(online, 'recovery_backups', None)
+        if type(reader) is not FunctionType:
+            return None
+        instructions = list(dis.get_instructions(reader))
+        calls = []
+        for index, instruction in enumerate(instructions):
+            if (instruction.opname != 'LOAD_CONST' or type(instruction.argval) is not str
+                    or instruction.argval != args[0]):
+                continue
+            following = index + 1
+            while following < len(instructions) and instructions[following].opname in ('PRECALL', 'EXTENDED_ARG'):
+                following += 1
+            if (following + 1 >= len(instructions)
+                    or instructions[following].opname not in ('CALL', 'CALL_FUNCTION', 'CALL_METHOD')):
+                return None
+            calls.append((instructions[following].offset, instructions[following + 1].offset))
+        if len(calls) != 3:
+            return None
+        trace = error.__traceback__
+        while trace is not None:
+            if trace.tb_frame.f_code is reader.__code__:
+                matched = [n for n, (start, end) in enumerate(calls) if start <= trace.tb_lasti < end]
+                if len(matched) == 1:
+                    return ('PENDING_ONLINE_BACKUP_SCHEMA', 'PENDING_ONLINE_BACKUP_LOCAL',
+                            'PENDING_ONLINE_BACKUP_MANIFEST')[matched[0]]
+                return None
+            trace = trace.tb_next
+    except Exception:
+        return None
+    return None
+
+
 def pending_online_recovery(d, original):
     from types import SimpleNamespace
     online, _ = d.online_recharge_scope()
@@ -984,7 +1028,13 @@ def pending_online_recovery(d, original):
     # reader, never through this successor's pending context (or recursively).
     original_reader = SimpleNamespace(**{k: v for k, v in vars(d).items()
         if k not in ('_pendingOnlineMigrationOrigin', '_pendingOnlineHistoryProjected')})
-    recovery = online.release_recovery(original_reader, original)
+    try:
+        recovery = online.release_recovery(original_reader, original)
+    except Exception as error:
+        step = pending_online_backup_failure_step(online, error)
+        if step is not None:
+            workspace_probe_step(d, step)
+        raise
     for name in ('_onlineRechargeVerifiedOrigin', '_onlineRechargeVerifiedRestored'):
         if hasattr(original_reader, name):
             setattr(d, name, getattr(original_reader, name))

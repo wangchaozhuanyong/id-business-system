@@ -1420,6 +1420,83 @@ class DeclarationEntryFoundation(unittest.TestCase):
                 self.assertEqual((controller.BASE / 'current').resolve(), directory)
                 self.assertFalse(hasattr(controller, '_workspaceBaselineDiagnostic'))
 
+    def test_original_backup_guards_report_their_callsite_without_changing_reader(self):
+        import dis
+        reader = online.recovery_backups
+        def recovery_backups(d):
+            d.require(False, 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+            d.require(False, 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+            d.require(False, 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+        for case in ('SCHEMA', 'LOCAL', 'MANIFEST', 'LAYOUT', 'READER'):
+            stage = 'LOCAL' if case in ('LAYOUT', 'READER') else case
+            with self.subTest(case=case), tempfile.TemporaryDirectory(dir=OUTPUT) as temporary, ExitStack() as stack:
+                base = Path(temporary).resolve(); source = base / 'source'; source.mkdir()
+                previous = base / 'previous'; previous.mkdir()
+                path = base / 'backups/mysql/id-business-v2-20261009T120001Z.sql.gz'
+                raw = gzip.compress(b'-- isolated original backup fixture\n', mtime=0)
+                digest = hashlib.sha256(raw).hexdigest()
+                backup = {'name': path.name, 'sha256': digest, 'size': len(raw), 's3Verified': True}
+                (source / 'backup-verification.json').write_text(json.dumps({} if stage == 'SCHEMA' else backup))
+                (source / online.WORKSPACE_BACKUP_FILE).write_text('{}')
+                if stage == 'MANIFEST':
+                    path.parent.mkdir(parents=True); path.write_bytes(raw)
+                controller = SimpleNamespace(BASE=base, require=need,
+                    api_admin_scope=MagicMock(return_value=(s, None)),
+                    online_recharge_scope=MagicMock(return_value=(online, None)),
+                    environment_values=MagicMock(return_value={'MYSQL_BACKUP_S3_BUCKET': 'isolated-fixture-bucket'}),
+                    run=MagicMock(return_value=json.dumps({'ContentLength': len(raw), 'ServerSideEncryption': 'AES256',
+                        'ChecksumSHA256': base64.b64encode(bytes.fromhex(digest)).decode()})),
+                    _workspaceBaselineDiagnostic={'phase': 'MANIFEST', 'step': 'PENDING_ONLINE_RECOVERY',
+                        'service': 'none', 'scope': 'API_ADMIN_WORKSPACE', 'errorType': 'RuntimeError',
+                        'rawOutputSuppressed': True})
+                manifest = {'backupBeforeRelease': 'forged.sql.gz'}
+                if case == 'LAYOUT':
+                    instructions = list(dis.get_instructions(reader))
+                    index = next(n for n, i in enumerate(instructions)
+                        if i.opname == 'LOAD_CONST' and i.argval == 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+                    instructions[index + 1] = instructions[index + 1]._replace(opname='NOP')
+                    stack.enter_context(patch('dis.get_instructions', return_value=instructions))
+                elif case == 'READER':
+                    stack.enter_context(patch.object(online, 'recovery_backups', recovery_backups))
+                with patch.object(online, 'release_recovery', side_effect=lambda d, _: reader(
+                        d, source, previous, manifest=manifest)), \
+                        patch.object(s, 'audit_receipt', return_value={'checksSha256': 'f' * 64}), \
+                        patch.object(s, 'workspace_volume', return_value={'fixture': 'volume'}) as volume, \
+                        patch.object(online, 'workspace_backup_receipt') as workspace:
+                    with self.assertRaisesRegex(RuntimeError, '^ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED$') as failed:
+                        s.pending_online_recovery(controller, previous)
+                    self.assertIs(type(failed.exception), RuntimeError)
+                    self.assertEqual(controller._workspaceBaselineDiagnostic['step'], 'PENDING_ONLINE_RECOVERY'
+                        if case in ('LAYOUT', 'READER') else 'PENDING_ONLINE_BACKUP_' + stage)
+                    self.assertTrue(s.valid_workspace_diagnostic(controller._workspaceBaselineDiagnostic))
+                    controller.online_recharge_scope.assert_called_once()
+                    self.assertEqual(controller.api_admin_scope.call_count, 3 if stage == 'MANIFEST' else 2)
+                    workspace.assert_not_called()
+                    if stage == 'MANIFEST':
+                        controller.run.assert_called_once(); volume.assert_called_once()
+                    else:
+                        controller.environment_values.assert_not_called(); controller.run.assert_not_called()
+                        volume.assert_not_called()
+
+    def test_backup_callsite_diagnostic_ignores_other_frames_and_unsafe_errors(self):
+        class Derived(RuntimeError):
+            pass
+        class DerivedText(str):
+            pass
+        for error in (RuntimeError('ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED'),
+                      Derived('ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED'),
+                      RuntimeError(DerivedText('ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')),
+                      RuntimeError('ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED', 'SENTINEL_PRIVATE'),
+                      RuntimeError('SENTINEL_PRIVATE'), ValueError('ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')):
+            with self.subTest(error=type(error).__name__):
+                self.assertIsNone(s.pending_online_backup_failure_step(online, error))
+        try:
+            need(False, 'ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')
+        except RuntimeError as error:
+            self.assertIsNone(s.pending_online_backup_failure_step(online, error))
+        with patch('dis.get_instructions', side_effect=ValueError('SENTINEL_PRIVATE')):
+            self.assertIsNone(s.pending_online_backup_failure_step(online, RuntimeError('ONLINE_RECHARGE_BACKUP_RECEIPT_CHANGED')))
+
     def test_pending_baseline_preserves_only_known_plain_single_argument_errors(self):
         class Derived(RuntimeError):
             pass
