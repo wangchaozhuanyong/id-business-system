@@ -159,6 +159,8 @@ const onlineBackupSourceRecoveryControls = () => {
     'scripts/production-release/online-recharge-backup-source-recovery.test.py',
     'scripts/production-release/online-recharge-backup-source-recovery-transport.py',
     'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
+    'scripts/production-release/online-recharge-backup-parent-owner-repair.py',
+    'scripts/production-release/online-recharge-backup-parent-owner-repair.test.py',
     '.github/workflows/production-release.yml',
     'scripts/production-release/validate-release-selection.sh',
     'scripts/ci-recharge-check.mjs'
@@ -171,6 +173,10 @@ const onlineBackupSourceRecoveryControls = () => {
     run('python3', [
       '-B',
       'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py'
+    ]);
+    run('python3', [
+      '-B',
+      'scripts/production-release/online-recharge-backup-parent-owner-repair.test.py'
     ]);
   }
 };

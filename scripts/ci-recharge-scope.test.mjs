@@ -1631,7 +1631,9 @@ test('pending online bridge control names are finite and preserve business scope
     'scripts/production-release/online-recharge-backup-source-recovery.py',
     'scripts/production-release/online-recharge-backup-source-recovery.test.py',
     'scripts/production-release/online-recharge-backup-source-recovery-transport.py',
-    'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py'
+    'scripts/production-release/online-recharge-backup-source-recovery-transport.test.py',
+    'scripts/production-release/online-recharge-backup-parent-owner-repair.py',
+    'scripts/production-release/online-recharge-backup-parent-owner-repair.test.py'
   ];
   for (const path of paths) {
     assert.equal(isCiOnly([path]), true);
@@ -1649,7 +1651,9 @@ test('pending online bridge control names are finite and preserve business scope
     'scripts/production-release/online-recharge-source-permission-repair.py.backup',
     'scripts/production-release/online-recharge-source-permission-repair-transport-other.py',
     'scripts/production-release/online-recharge-backup-source-recovery.py.backup',
-    'scripts/production-release/online-recharge-backup-source-recovery-transport-other.py'
+    'scripts/production-release/online-recharge-backup-source-recovery-transport-other.py',
+    'scripts/production-release/online-recharge-backup-parent-owner-repair.py.backup',
+    'scripts/production-release/online-recharge-backup-parent-owner-repair-other.py'
   ]) {
     assert.equal(isCiOnly([unknown]), false);
     assert.equal(checkMode([unknown], schema, schema), 'full');

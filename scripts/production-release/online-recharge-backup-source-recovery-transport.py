@@ -1,4 +1,4 @@
-"""Runtime candidate: two fixed historical MySQL backup leaves, never qualification."""
+"""Fixed backup diagnosis/recovery and one parent owner repair; never qualification."""
 import ast
 import base64
 import gzip
@@ -21,9 +21,11 @@ BASE = Path('/opt/id-business-v2')
 ROOT_UID = 0
 BASELINE = '0a03fa28e6b844a18833d5c63f1de700f091fc64'
 OPERATIONS = {'diagnose_online_backup_source': 'diagnose',
-              'restore_online_backup_source': 'restore_missing'}
+              'restore_online_backup_source': 'restore_missing',
+              'repair_online_backup_parent_owner': 'repair_owner'}
 PREFIX = 'ONLINE_BACKUP_SOURCE '
 CORE_NAME = 'online-recharge-backup-source-recovery.py'
+OWNER_CORE_NAME = 'online-recharge-backup-parent-owner-repair.py'
 SNAPSHOT_NAME = 'online-recharge-source-permission-repair-transport.py'
 ORIGIN = {'workflowRunId': '38051602854', 'workflowRunAttempt': '1',
           'candidateCommit': 'c3cda13d39ef2235c2dcdfd6a2ec352197a5eeb0',
@@ -32,6 +34,13 @@ ORIGIN = {'workflowRunId': '38051602854', 'workflowRunAttempt': '1',
           'receiptBytes': 462,
           'receiptSha256': '126360cd6aec28337db2fc90570c349eda5e802bb09b199ae3acecab8758a6ff',
           'step': 'LOCAL'}
+OWNER_ORIGIN = {'workflowRunId': '38058689277', 'workflowRunAttempt': '1',
+                'candidateCommit': '27286ffd2514ad9ef91c7b8b92b36c71b85f442f',
+                'sourceTree': 'd7a34627145fcb9a3e6e4428dd34ec1160dda3f4',
+                'commandId': 'e4ec8e93-9271-42c1-adef-f8f8f6c009ac',
+                'receiptBytes': 2079,
+                'receiptSha256': '6b4b5c2723a3a332f1fb1f07817cec698bf140a7771bb73b765b51c95686f05e',
+                'code': 'ANCESTOR_BACKUPS_OWNER'}
 HISTORY = (('RECOVERY', '28a3ba4ffd17d36001b1104c97394f5ae871d73d',
             '1959377acd78e7160fec0f85666982d4ea4efbb40dab199b7dcc04ba288ddd5a',
             'ONLINE_RECHARGE_FAILED_BEFORE_SWITCH', 'migration'),
@@ -72,6 +81,16 @@ def sha(raw):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+
+
+def operation_core(operation):
+    need(operation in OPERATIONS)
+    return OWNER_CORE_NAME if OPERATIONS[operation] == 'repair_owner' else CORE_NAME
+
+
+def operation_origin(operation):
+    need(operation in OPERATIONS)
+    return OWNER_ORIGIN if OPERATIONS[operation] == 'repair_owner' else ORIGIN
 
 
 def closed(raw, limit=256 * 1024):
@@ -256,6 +275,31 @@ class Authority:
         self.fds = []
 
 
+class ParentOwnerAuthority(Authority):
+    """Hold the original trusted chain, opening only the fixed repair target below it."""
+    def __init__(self):
+        self.fds, self.directories, self.files = [], [], []
+        try:
+            root = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            self.fds.append(root); directory_safe(os.fstat(root), 'ROOT')
+            fd = root
+            for index, part in enumerate(BASE.parts[1:]):
+                role = 'BASE' if index == len(BASE.parts) - 2 else 'BASE_PARENT'
+                fd = self.child(fd, part, role=role)
+            self.base = fd
+            self.releases = self.child(fd, 'releases', role='RELEASES')
+            self.current, self.current_anchor = self.current_read()
+            self.current_fd = self.child(self.releases, self.current.name, role='CURRENT_RELEASE')
+            # The core validates the visible target and held FD before and after fchown.
+            # It deliberately never opens MYSQL or any backup file.
+            self.backups = os.open('backups', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                   dir_fd=self.base)
+            self.fds.append(self.backups)
+        except BaseException:
+            self.close()
+            raise
+
+
 def head_read(expected):
     raw = bounded_process(
         ['aws', 's3api', 'head-object', '--bucket', expected.bucket, '--key', expected.key,
@@ -313,6 +357,23 @@ def bounded_process(command, limit, timeout, fd=None):
 
 
 def core_validate(value, mode, core):
+    if mode == 'repair_owner':
+        need(type(value) is dict and set(value) == core.FIELDS
+             and value['kind'] == 'BACKUP_PARENT_OWNER_REPAIR_V1' and value['mode'] == mode
+             and value['status'] in core.STATUSES and value['code'] in core.CODES
+             and value['localStateBefore'] in core.LOCAL_STATES
+             and value['localStateAfter'] in core.LOCAL_STATES
+             and all(type(value[n]) is bool for n in ('mutationAttempted', 'installed', 'rawOutputSuppressed'))
+             and value['installed'] is False and value['rawOutputSuppressed'] is True)
+        if value['status'] in ('REPAIRED', 'NO_CHANGE'):
+            need(value['code'] == 'OK' and value['localStateAfter'] == 'MATCH')
+            need(value['mutationAttempted'] == (value['status'] == 'REPAIRED'))
+            need(value['localStateBefore'] == ('OWNER' if value['status'] == 'REPAIRED' else 'MATCH'))
+        if value['status'] == 'FAILED_MUTATED_UNVERIFIED':
+            need(value['mutationAttempted'])
+        if value['status'] == 'FAILED':
+            need(not value['mutationAttempted'])
+        return value
     need(type(value) is dict and set(value) == core.FIELDS
          and value['kind'] == 'MYSQL_BACKUP_LOCAL_RECOVERY_V1' and value['mode'] == mode
          and value['status'] in core.STATUSES and value['code'] in core.CODES
@@ -339,8 +400,9 @@ def execute_action(operation, core, snapshot_read):
               'backups': backups, 'rawOutputSuppressed': True}
     try:
         need(os.getuid() == ROOT_UID and os.geteuid() == ROOT_UID)
-        authority = Authority()
-        expected = authority.expected(core)
+        owner_repair = mode == 'repair_owner'
+        authority = ParentOwnerAuthority() if owner_repair else Authority()
+        expected = [] if owner_repair else authority.expected(core)
         before = snapshot_read(authority.current)
         need(type(before) is str and HEX.fullmatch(before))
         result['servicesBeforeSha256'] = before
@@ -356,6 +418,14 @@ def execute_action(operation, core, snapshot_read):
             guard()
             download(value, fd)
             guard()
+        if owner_repair:
+            receipt = core_validate(core.repair(authority.base, authority.backups, guard=guard), mode, core)
+            backups.append({'sourceRole': 'BACKUPS', 'receipt': receipt})
+            result['mutationAttempted'] = receipt['mutationAttempted']
+            need(receipt['status'] in ('NO_CHANGE', 'REPAIRED'), 'CORE_REJECTED')
+            guard()
+            result.update(status='COMPLETED', code='OK', currentUnchanged=True, servicesUnchanged=True)
+            return result
         binding = core.DirectoryBinding(authority.backups, authority.mysql)
         for role, value in expected:
             guard()
@@ -373,7 +443,7 @@ def execute_action(operation, core, snapshot_read):
         args = BaseException.args.__get__(error)
         if type(error) is Rejected and type(args) is tuple and len(args) == 1 and type(args[0]) is str and args[0] in TRANSPORT_CODES:
             result['code'] = args[0]
-        if result['installed']:
+        if result['installed'] or mode == 'repair_owner' and result['mutationAttempted']:
             result['status'] = 'FAILED_MUTATED_UNVERIFIED'
     finally:
         if authority is not None:
@@ -384,8 +454,9 @@ def execute_action(operation, core, snapshot_read):
 def remote_execute(operation, producer, binding, directory, snapshot):
     producer_validate(producer); need(operation in OPERATIONS)
     need(directory == BASE / '.staging' / ('api-workspace-verify-' + producer['commit']))
-    core = snapshot.literal_module(snapshot.read_fixed(directory / CORE_NAME, binding['coreSha256']),
-                                   'backup_source_core', directory / CORE_NAME)
+    core_name = operation_core(operation)
+    core = snapshot.literal_module(snapshot.read_fixed(directory / core_name, binding['coreSha256']),
+                                   'backup_source_core', directory / core_name)
     modules = {name: snapshot.literal_module(snapshot.read_fixed(directory / name, binding['controllerPins'][name]),
                'backup_source_' + name.replace('-', '_').replace('.', '_'), directory / name)
                for name in ('online-recharge-scope.py', 'api-admin-scope.py', 'remote-deploy.py')}
@@ -405,7 +476,7 @@ def remote_execute(operation, producer, binding, directory, snapshot):
             return drivers[0].snapshot(current)
         result = execute_action(operation, core, snapshot_read)
     return {'kind': 'ONLINE_BACKUP_SOURCE_EXECUTION_V1', 'operation': operation,
-            'producer': producer, 'origin': ORIGIN, 'source21Sha256': binding['source21Sha256'],
+            'producer': producer, 'origin': operation_origin(operation), 'source21Sha256': binding['source21Sha256'],
             'coreSha256': binding['coreSha256'], 'snapshotSourceSha256': binding['snapshotSourceSha256'],
             'snapshotDiagnostic': diagnostic.get(), 'clientCleanupVerified': True, **result}
 
@@ -432,21 +503,22 @@ def parameters(operation, producer, source=None, core_path=None):
     """Local assembly only; optional directories are for isolated runtime tests."""
     need(operation in OPERATIONS); producer_validate(producer)
     source = Path(__file__).parent if source is None else Path(source)
-    core_path = source / CORE_NAME if core_path is None else Path(core_path)
+    core_name = operation_core(operation)
+    core_path = source / core_name if core_path is None else Path(core_path)
     helper = module_from_bytes((source / 'api-admin-readonly.py').read_bytes(), 'backup_carrier', source / 'api-admin-readonly.py')
     snapshot_raw = (source / SNAPSHOT_NAME).read_bytes()
     core_raw = core_path.read_bytes(); need(0 < len(core_raw) <= 1024**2)
     controllers = {n: sha((source / n).read_bytes()) for n in helper.FORMAL_RUNTIME_CONTROLLERS}
     packages = {n: sha((source / 'formal-runtime-package' / n).read_bytes()) for n in helper.FORMAL_RUNTIME_FILES}
     need(len(controllers) == 11 and len(packages) == 10)
-    binding = {'producer': producer, 'origin': ORIGIN, 'coreSha256': sha(core_raw),
+    binding = {'producer': producer, 'origin': operation_origin(operation), 'coreSha256': sha(core_raw),
                'snapshotSourceSha256': sha(snapshot_raw), 'controllerPins': controllers, 'packagePins': packages,
                'source21Sha256': sha(canonical({'controllers': controllers, 'package': packages}))}
     directory = BASE / '.staging' / ('api-workspace-verify-' + producer['commit'])
     commands = ['set -eu', 'umask 077']
     commands += helper.formal_runtime_commands(str(directory), producer['commit'], source / 'formal-runtime-package', source)
     # Original installer copied byte-for-byte; its extra two pins are separate from formal 21.
-    extra = inspect.getsource(helper._store_files) + '\n_store_files(' + repr(str(directory)) + ',' + repr(producer['commit']) + ',' + repr({CORE_NAME: binding['coreSha256'], SNAPSHOT_NAME: binding['snapshotSourceSha256']}) + ',False)\n'
+    extra = inspect.getsource(helper._store_files) + '\n_store_files(' + repr(str(directory)) + ',' + repr(producer['commit']) + ',' + repr({core_name: binding['coreSha256'], SNAPSHOT_NAME: binding['snapshotSourceSha256']}) + ',False)\n'
     commands.append(packed_command(extra.encode(), 16384))
     snap_lines = snapshot_raw.decode().splitlines(keepends=True)
     snap_nodes = {n.name: n for n in ast.parse(snapshot_raw).body if isinstance(n, ast.FunctionDef)}
@@ -457,12 +529,14 @@ def parameters(operation, producer, source=None, core_path=None):
     own = Path(__file__).read_text(); own_lines = own.splitlines(keepends=True)
     own_nodes = {n.name: n for n in ast.parse(own).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
     body += 'import selectors,subprocess,tempfile,time\n'
-    for name in ('BASE', 'ROOT_UID', 'BASELINE', 'OPERATIONS', 'PREFIX', 'CORE_NAME', 'ORIGIN', 'HISTORY', 'DIRECTORY_ROLES', 'TRANSPORT_CODES'):
+    for name in ('BASE', 'ROOT_UID', 'BASELINE', 'OPERATIONS', 'PREFIX', 'CORE_NAME', 'OWNER_CORE_NAME',
+                 'ORIGIN', 'OWNER_ORIGIN', 'HISTORY', 'DIRECTORY_ROLES', 'TRANSPORT_CODES'):
         value = globals()[name]
         body += name + '=' + ('Path(' + repr(str(value)) + ')' if name == 'BASE' else
             'frozenset(' + repr(tuple(sorted(value))) + ')' if type(value) is frozenset else repr(value)) + '\n'
-    for name in ('Rejected', 'need', 'sha', 'canonical', 'closed', 'producer_validate', 'identity',
-                 'directory_identity', 'directory_safe', 'Authority', 'head_read', 'download', 'bounded_process',
+    for name in ('Rejected', 'need', 'sha', 'canonical', 'operation_core', 'operation_origin',
+                 'closed', 'producer_validate', 'identity',
+                 'directory_identity', 'directory_safe', 'Authority', 'ParentOwnerAuthority', 'head_read', 'download', 'bounded_process',
                  'core_validate', 'execute_action', 'remote_execute'):
         node = own_nodes[name]; body += ''.join(own_lines[node.lineno - 1:node.end_lineno]) + '\n'
     body += 'value=remote_execute(' + repr(operation) + ',' + repr(producer) + ',' + repr(binding) + ',Path(' + repr(str(directory)) + '),snapshot)\n'
@@ -478,7 +552,7 @@ def parameters(operation, producer, source=None, core_path=None):
 def validate_remote(value, operation, binding, core, snapshot):
     need(type(value) is dict and set(value) == REMOTE_FIELDS
          and value['kind'] == 'ONLINE_BACKUP_SOURCE_EXECUTION_V1' and value['operation'] == operation
-         and value['producer'] == binding['producer'] and value['origin'] == ORIGIN
+         and value['producer'] == binding['producer'] and value['origin'] == operation_origin(operation)
          and all(value[n] == binding[n] for n in ('source21Sha256', 'coreSha256', 'snapshotSourceSha256'))
          and value['status'] in ('COMPLETED', 'FAILED', 'FAILED_MUTATED_UNVERIFIED')
          and value['code'] in TRANSPORT_CODES)
@@ -487,19 +561,22 @@ def validate_remote(value, operation, binding, core, snapshot):
          and value['rawOutputSuppressed'] and value['clientCleanupVerified'])
     need(all(type(value[n]) is str and (value[n] == 'NOT_MEASURED' or HEX.fullmatch(value[n]))
              for n in ('servicesBeforeSha256', 'servicesAfterSha256')))
-    need(type(value['backups']) is list and len(value['backups']) <= 2)
+    owner_repair = OPERATIONS[operation] == 'repair_owner'
+    roles = ('BACKUPS',) if owner_repair else tuple(row[0] for row in HISTORY)
+    need(type(value['backups']) is list and len(value['backups']) <= len(roles))
     for index, row in enumerate(value['backups']):
-        need(type(row) is dict and set(row) == {'sourceRole', 'receipt'} and row['sourceRole'] == HISTORY[index][0])
+        need(type(row) is dict and set(row) == {'sourceRole', 'receipt'} and row['sourceRole'] == roles[index])
         core_validate(row['receipt'], OPERATIONS[operation], core)
     need(value['mutationAttempted'] == any(n['receipt']['mutationAttempted'] for n in value['backups'])
          and value['installed'] == any(n['receipt']['installed'] for n in value['backups']))
     snapshot.snapshot_validate(value['snapshotDiagnostic'])
     if value['status'] == 'COMPLETED':
-        need(value['code'] == 'OK' and len(value['backups']) == 2 and value['currentUnchanged']
+        need(value['code'] == 'OK' and len(value['backups']) == len(roles) and value['currentUnchanged']
              and value['servicesUnchanged'] and HEX.fullmatch(value['servicesBeforeSha256'])
              and value['servicesBeforeSha256'] == value['servicesAfterSha256']
              and value['snapshotDiagnostic']['status'] == 'PASSED')
-        statuses = ('DIAGNOSED',) if OPERATIONS[operation] == 'diagnose' else ('NO_CHANGE', 'RESTORED')
+        statuses = (('NO_CHANGE', 'REPAIRED') if owner_repair else
+                    ('DIAGNOSED',) if OPERATIONS[operation] == 'diagnose' else ('NO_CHANGE', 'RESTORED'))
         need(all(row['receipt']['status'] in statuses for row in value['backups']))
     return value
 
@@ -531,7 +608,8 @@ def main():
     operation, producer = selection(os.environ)
     payload, binding = parameters(operation, producer)
     source = Path(__file__).parent
-    core = module_from_bytes((source / CORE_NAME).read_bytes(), 'backup_result_core', source / CORE_NAME)
+    core_name = operation_core(operation)
+    core = module_from_bytes((source / core_name).read_bytes(), 'backup_result_core', source / core_name)
     snapshot = module_from_bytes((source / SNAPSHOT_NAME).read_bytes(), 'backup_result_snapshot', source / SNAPSHOT_NAME)
     command_id = None; value = None
     try:
@@ -555,7 +633,7 @@ def main():
     except Exception:
         value = None
     record = {'kind': 'ONLINE_BACKUP_SOURCE_ARTIFACT_V1', 'operation': operation, 'producer': producer,
-              'origin': ORIGIN, 'commandId': command_id if command_id and UUID.fullmatch(command_id) else None,
+              'origin': operation_origin(operation), 'commandId': command_id if command_id and UUID.fullmatch(command_id) else None,
               'status': 'OPERATION_COMPLETED' if value and value['status'] == 'COMPLETED' else 'OPERATION_FAILED',
               'code': value['code'] if value else 'TRANSPORT_UNAVAILABLE', 'result': value}
     helper = module_from_bytes((source / 'api-admin-readonly.py').read_bytes(), 'backup_artifact', source / 'api-admin-readonly.py')
